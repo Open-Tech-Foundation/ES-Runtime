@@ -384,6 +384,42 @@ error: 2 declarations could not be derived:
 
 `--no-types` skips them.
 
+### CommonJS output
+
+`esrun` loads ES modules and nothing else, and that does not move. This is an
+**output**, for the consumers of your package who are still on `require()`:
+
+```sh
+esdev build --lib src --format=esm,cjs   # dist/**.js + .d.ts, dist/**.cjs + .d.cts
+esdev build --lib src --format=cjs       # CommonJS alone
+```
+
+| | |
+| --- | --- |
+| **`.cjs`, whatever `"type"` says** | Both trees in one directory, told apart by extension. |
+| **`.d.cts` beside each `.cjs`** | Under `node16` a `.cjs` is typed by that and by nothing else. |
+| **Relative specifiers follow** | `./pool.js` inside a `.d.cts` becomes `./pool.cjs`. |
+| **Named exports** | `require()` returns the namespace, so a default export is `.default`. |
+| **All or nothing** | One pass per format, and none of them lands unless every one succeeds. |
+
+`types` goes **inside** each condition. Beside them it matches first, and a
+`require()` gets the ES module's declarations:
+
+```json
+{
+  "exports": {
+    ".": {
+      "import":  { "types": "./dist/index.d.ts",  "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  }
+}
+```
+
+Top-level `await` has no CommonJS form and stops the build, naming the pass. A
+`runtime:` import stays external in both trees and no `require()` outside
+`esrun` resolves one, so the build says when it wrote one.
+
 ### One declaration file
 
 A package whose `exports` map has a single entry wants one `index.d.ts`, not a
@@ -419,6 +455,7 @@ nothing runs it and no test covers it, so a wrong one is worse than none.
 | Flag | |
 | --- | --- |
 | `--lib` | Build a library |
+| `--format=<list>` | `--lib` only: `esm` (default), `cjs`, or `esm,cjs` |
 | `--no-types` | `--lib` only: skip the `.d.ts` |
 | `--dts-bundle[=<entry>]` | `--lib` only: one `.d.ts` instead of one per module. Default entry `<srcdir>/index.ts` |
 | `--out=<dir>` | Where to write it (default `dist`) |

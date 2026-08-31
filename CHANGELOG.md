@@ -71,6 +71,44 @@ namespace) is unstable and may change between minor releases until the API freez
 
   Needs `FileWrite` alone: creating a link stores a string and reads nothing.
 
+- **`esdev build --lib --format=cjs` publishes to consumers who are not on this
+  runtime.** The runtime loads ES modules only and that has not moved — this is
+  an *output*, for the Node programs that will `require()` a package built here.
+
+  ```sh
+  esdev build --lib src --format=esm,cjs   # dist/**.js + .d.ts, dist/**.cjs + .d.cts
+  esdev build --lib src --format=cjs       # CommonJS alone
+  ```
+
+  Both trees go in one directory, told apart by extension rather than by the
+  package's `"type"` field, so flipping that field cannot change which files an
+  `exports` map has to name. A `.cjs` is typed by the `.d.cts` beside it and by
+  nothing else under `node16` resolution, so one is emitted for each — with its
+  relative specifiers pointed at the `.cjs` siblings, since a `.d.cts` that
+  imports `./pool.js` resolves to the ES module's declarations and does not
+  typecheck (TS1479). `types` belongs inside each condition:
+
+  ```json
+  "exports": {
+    ".": {
+      "import":  { "types": "./dist/index.d.ts",  "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  }
+  ```
+
+  One pass per format, and none of them lands unless every one succeeds — a
+  failure names the pass it happened in. A top-level `await` has no CommonJS
+  form and stops the build; that module publishes as ESM only. A `runtime:`
+  import stays external in both trees and nothing outside `esrun` can resolve
+  the `require` it becomes, so the build says when it wrote one.
+
+  `--format` is `--lib` only: an application's output is loaded by `esrun`.
+
+- **`runtime:build` takes an `exports` output option** (`"auto"` | `"named"` |
+  `"default"` | `"none"`) — how a non-ESM `format` assigns what a module
+  exports. The same option `--lib`'s CommonJS output sets to `"named"`.
+
 ### Fixed
 
 - **`runtime:watch`'s `add()` no longer watches one tree twice.** It refused a

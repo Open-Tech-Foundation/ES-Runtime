@@ -3033,9 +3033,11 @@ serve(output[0].code);          // never written to disk
 | `minify` / `treeshake` | `boolean` | `false` / `true` | |
 | `cwd` | `string` | the entry's directory | Where the build runs. Resolved through the run's own filesystem view. |
 
-Output options — `format`, `dir`, `file`, `codeSplitting`, `sourcemap`,
-`entryFileNames`, `chunkFileNames`, `assetFileNames`, `banner`, `footer` — may
-be given here or per call; the per-call ones win.
+Output options — `format`, `exports`, `dir`, `file`, `codeSplitting`,
+`sourcemap`, `entryFileNames`, `chunkFileNames`, `assetFileNames`, `banner`,
+`footer` — may be given here or per call; the per-call ones win. `exports`
+(`"auto"` | `"named"` | `"default"` | `"none"`) decides how a non-ESM `format`
+assigns what a module exports; an ES module states its own and ignores it.
 
 **Resolution defaults are the same ones `esdev build` asserts**, from the same
 place, because a project that builds one way through the subcommand and another

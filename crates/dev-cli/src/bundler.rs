@@ -30,7 +30,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use rolldown::{
-    BundlerOptions, InputItem, IsExternal, OutputFormat, Platform, RawMinifyOptions,
+    BundlerOptions, InputItem, IsExternal, OutputExports, OutputFormat, Platform, RawMinifyOptions,
     ResolveOptions, SourceMapType, TreeshakeOptions,
 };
 use rolldown_common::CodeSplittingMode;
@@ -243,6 +243,16 @@ pub struct Options {
 #[derive(Clone, Default)]
 pub struct OutputOptions {
     pub format: Option<String>,
+    /// How a non-ESM format assigns what a module exports: `named`, `default`,
+    /// `none`, or the bundler's own `auto`.
+    ///
+    /// Only `cjs` and `iife` have anything to decide here — an ES module states
+    /// its exports and there is no object to put them on. `auto` picks per
+    /// chunk, and a module with a default export *and* named ones is the case
+    /// it cannot pick: it assigns both and warns, because `require(…)` then
+    /// hands back the namespace rather than the default. `named` is that same
+    /// output without the warning, and it is what a `.d.cts` describes.
+    pub exports: Option<String>,
     pub dir: Option<String>,
     pub file: Option<String>,
     pub entry_filenames: Option<String>,
@@ -262,6 +272,7 @@ impl OutputOptions {
     pub fn over(self, base: &OutputOptions) -> OutputOptions {
         OutputOptions {
             format: self.format.or_else(|| base.format.clone()),
+            exports: self.exports.or_else(|| base.exports.clone()),
             dir: self.dir.or_else(|| base.dir.clone()),
             file: self.file.or_else(|| base.file.clone()),
             entry_filenames: self
@@ -353,6 +364,13 @@ pub fn translate(
             Some("iife") => Some(OutputFormat::Iife),
             Some("umd") => Some(OutputFormat::Umd),
             _ => Some(OutputFormat::Esm),
+        },
+        exports: match output.exports.as_deref() {
+            Some("named") => Some(OutputExports::Named),
+            Some("default") => Some(OutputExports::Default),
+            Some("none") => Some(OutputExports::None),
+            Some("auto") => Some(OutputExports::Auto),
+            _ => None,
         },
         dir: output.dir,
         file: output.file,

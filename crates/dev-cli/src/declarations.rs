@@ -39,17 +39,30 @@ use oxc::span::SourceType;
 /// in its source tree, not in the output, which the build empties.
 const TYPED_EXTENSIONS: &[&str] = &["ts", "mts", "cts", "tsx"];
 
-/// Every `.js` file under `dir`, as paths relative to it.
+/// Every emitted module under `dir`, as paths relative to it — one entry per
+/// module, whatever module systems it was written in.
 ///
 /// The emitted tree *is* the module list: `--lib` preserves module structure, so
 /// one output file is one module. Reading it back from disk rather than from the
 /// bundler's result is deliberate — it means a declaration is emitted for
 /// exactly the modules that were emitted, with no second opinion about which
 /// those were.
+///
+/// A build emitting both module systems writes `pool.js` **and** `pool.cjs`, and
+/// those are one module with two spellings rather than two modules: the `.js` is
+/// the one listed, and the `.cjs` is left out so it cannot be counted twice or
+/// have a declaration derived for it twice. A CommonJS-only build has no `.js`
+/// to list, so its `.cjs` files are the modules.
 pub fn emitted_modules(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     collect(dir, dir, &mut found);
-    found.sort();
+    found.sort_by(|a, b| {
+        a.with_extension("")
+            .cmp(&b.with_extension(""))
+            // `.js` before `.cjs`, so the dedup below keeps the ES module.
+            .then_with(|| b.cmp(a))
+    });
+    found.dedup_by_key(|module| module.with_extension(""));
     found
 }
 
@@ -61,8 +74,10 @@ fn collect(root: &Path, dir: &Path, found: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             collect(root, &path, found);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("js")
-            && let Ok(relative) = path.strip_prefix(root)
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("js" | "cjs")
+        ) && let Ok(relative) = path.strip_prefix(root)
         {
             found.push(relative.to_path_buf());
         }
@@ -92,6 +107,7 @@ fn source_of(module: &Path, root: &Path) -> Option<PathBuf> {
 pub fn generate(
     modules: &[PathBuf],
     root: &Path,
+    format: crate::build::Format,
 ) -> Result<std::collections::HashMap<PathBuf, String>, String> {
     let mut generated = std::collections::HashMap::new();
     let mut problems: Vec<String> = Vec::new();
@@ -101,7 +117,7 @@ pub fn generate(
         };
         let source = std::fs::read_to_string(&source_path)
             .map_err(|e| format!("cannot read {}: {e}", source_path.display()))?;
-        match declarations_for(&source_path, &source) {
+        match declarations_for(&source_path, &source, format) {
             Ok(text) => {
                 // Both spellings, so a lookup by either the path as written or
                 // the canonical one finds it.
@@ -131,32 +147,51 @@ pub fn generate(
     ))
 }
 
-/// Writes a `.d.ts` beside every emitted module that came from TypeScript, and
-/// reports how many were written.
-pub fn emit(modules: &[PathBuf], out_dir: &Path, root: &Path) -> Result<usize, String> {
-    let generated = generate(modules, root)?;
+/// Writes a declaration beside every emitted module that came from TypeScript —
+/// one per module system the build emitted — and reports how many were written.
+///
+/// A `.d.ts` for the `.js` and a `.d.cts` for the `.cjs`, because that is how
+/// TypeScript finds them: under `node16`/`nodenext` a declaration types the
+/// module file whose extension it mirrors, so a CommonJS output beside an
+/// ESM-only declaration is an untyped package to a `require()` of it.
+pub fn emit(
+    modules: &[PathBuf],
+    out_dir: &Path,
+    root: &Path,
+    formats: &[crate::build::Format],
+) -> Result<usize, String> {
     let mut written = 0usize;
-    for module in modules {
-        let Some(source_path) = source_of(module, root) else {
-            continue;
-        };
-        let Some(text) = generated.get(&source_path) else {
-            continue;
-        };
-        let target = out_dir.join(module).with_extension("d.ts");
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    for format in formats {
+        let generated = generate(modules, root, *format)?;
+        for module in modules {
+            let Some(source_path) = source_of(module, root) else {
+                continue;
+            };
+            let Some(text) = generated.get(&source_path) else {
+                continue;
+            };
+            let target = out_dir
+                .join(module)
+                .with_extension(format.declaration_extension());
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+            }
+            std::fs::write(&target, text)
+                .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+            written += 1;
         }
-        std::fs::write(&target, text)
-            .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
-        written += 1;
     }
     Ok(written)
 }
 
-/// The `.d.ts` text for one TypeScript source file, or the reasons it has none.
-fn declarations_for(path: &Path, source: &str) -> Result<String, Vec<String>> {
+/// The declaration text for one TypeScript source file, in one module system,
+/// or the reasons it has none.
+fn declarations_for(
+    path: &Path,
+    source: &str,
+    format: crate::build::Format,
+) -> Result<String, Vec<String>> {
     let source_type = SourceType::from_path(path)
         .map_err(|e| {
             vec![format!(
@@ -188,7 +223,61 @@ fn declarations_for(path: &Path, source: &str) -> Result<String, Vec<String>> {
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok(Codegen::new().build(&result.program).code)
+    let mut program = result.program;
+    if format == crate::build::Format::Cjs {
+        point_at_cjs(&mut program, &allocator);
+    }
+    Ok(Codegen::new().build(&program).code)
+}
+
+/// Points a declaration's own imports at the CommonJS half of the output:
+/// `./pool.js` becomes `./pool.cjs`.
+///
+/// **A `.d.cts` that imports `./pool.js` describes the wrong module.** The
+/// specifier is resolved by the consumer's TypeScript, which maps it to
+/// `pool.d.ts` — the declaration of the *ES* module — and then reports that a
+/// CommonJS file cannot import one (TS1479). The types are right and the package
+/// still does not typecheck, which is the worst of the outcomes available.
+///
+/// Only relative specifiers are touched. A bare one names a package, and which
+/// of its builds a `require` resolves to is decided by that package's `exports`
+/// map and TypeScript's conditions, not by anything spelled here.
+fn point_at_cjs<'a>(program: &mut oxc::ast::ast::Program<'a>, allocator: &'a Allocator) {
+    use oxc::ast::ast::Statement;
+    for statement in &mut program.body {
+        let source = match statement {
+            Statement::ImportDeclaration(import) => &mut import.source,
+            Statement::ExportFromDeclaration(export) => &mut export.source,
+            Statement::ExportAllDeclaration(export) => &mut export.source,
+            _ => continue,
+        };
+        let Some(rewritten) = cjs_specifier(source.value.as_str()) else {
+            continue;
+        };
+        source.value = oxc::str::Str::from_str_in(&rewritten, &allocator);
+        // The printer prefers the raw text it was parsed from, which is still
+        // the specifier as written.
+        source.raw = None;
+    }
+}
+
+/// `./pool.js` → `./pool.cjs`, and `None` for a specifier that names something
+/// other than a sibling module of this library.
+///
+/// The extension has to be there to be replaced. A source that wrote `./pool`
+/// left the resolution to a resolver that guesses, and neither `node16`
+/// TypeScript nor an ES module runtime is one — so there is no CommonJS spelling
+/// of it to reach for, and rewriting it would invent one.
+fn cjs_specifier(specifier: &str) -> Option<String> {
+    if !specifier.starts_with("./") && !specifier.starts_with("../") {
+        return None;
+    }
+    for extension in [".js", ".jsx", ".mjs", ".ts", ".tsx", ".mts"] {
+        if let Some(stem) = specifier.strip_suffix(extension) {
+            return Some(format!("{stem}.cjs"));
+        }
+    }
+    None
 }
 
 /// A diagnostic as `path:line:column  message`.
@@ -230,7 +319,11 @@ mod tests {
     use super::*;
 
     fn declare(source: &str) -> Result<String, Vec<String>> {
-        declarations_for(Path::new("lib.ts"), source)
+        declarations_for(Path::new("lib.ts"), source, crate::build::Format::Esm)
+    }
+
+    fn declare_cjs(source: &str) -> Result<String, Vec<String>> {
+        declarations_for(Path::new("lib.ts"), source, crate::build::Format::Cjs)
     }
 
     #[test]
@@ -290,6 +383,50 @@ mod tests {
         // Past the end rather than panicking: a diagnostic's span is not this
         // module's to validate.
         assert_eq!(position("ab", 99), (1, 3));
+    }
+
+    /// The `.d.cts` has to point at the `.cjs` beside it. Pointing at the `.js`
+    /// resolves to the ES module's declaration, which a CommonJS file may not
+    /// import (TS1479) — types that are right and a package that does not
+    /// typecheck.
+    #[test]
+    fn a_commonjs_declaration_points_at_its_commonjs_siblings() {
+        let source = "import type { Pool } from './pool.js';\n\
+                      export { Row } from './row.js';\n\
+                      export * from './rows.js';\n\
+                      export function open(): Pool { return null as never; }\n";
+        let esm = declare(source).expect("declarations");
+        assert!(esm.contains("\"./pool.js\""), "{esm}");
+        assert!(esm.contains("\"./row.js\""), "{esm}");
+        assert!(esm.contains("\"./rows.js\""), "{esm}");
+
+        let cjs = declare_cjs(source).expect("declarations");
+        assert!(cjs.contains("\"./pool.cjs\""), "{cjs}");
+        assert!(cjs.contains("\"./row.cjs\""), "{cjs}");
+        assert!(cjs.contains("\"./rows.cjs\""), "{cjs}");
+        assert!(!cjs.contains(".js\""), "{cjs}");
+    }
+
+    /// A bare specifier names a package, and which of its builds a `require`
+    /// arrives at is that package's `exports` map to decide.
+    #[test]
+    fn a_commonjs_declaration_leaves_a_dependency_alone() {
+        let source = "import type { Context } from 'hono';\n\
+                      export declare function handler(c: Context): Response;\n";
+        let cjs = declare_cjs(source).expect("declarations");
+        assert!(cjs.contains("\"hono\""), "{cjs}");
+    }
+
+    /// Nothing to replace, so nothing is replaced: an extensionless specifier
+    /// was already left to a resolver that guesses, and inventing `.cjs` for it
+    /// would name a file the source never referred to.
+    #[test]
+    fn an_extensionless_specifier_is_not_given_one() {
+        assert_eq!(cjs_specifier("./pool"), None);
+        assert_eq!(cjs_specifier("./pool.js").as_deref(), Some("./pool.cjs"));
+        assert_eq!(cjs_specifier("../a/b.mjs").as_deref(), Some("../a/b.cjs"));
+        assert_eq!(cjs_specifier("hono"), None);
+        assert_eq!(cjs_specifier("runtime:fs"), None);
     }
 
     #[test]

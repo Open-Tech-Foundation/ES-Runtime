@@ -1061,6 +1061,291 @@ fn lib_emits_declarations_and_no_types_skips_them() {
     assert!(!dir.join("nodts/index.d.ts").exists());
 }
 
+// ---------------------------------------------------------------------------
+// `--format=cjs`: the same library, for consumers who are not on this runtime
+//
+// The runtime loads ES modules and nothing else, and that does not move: this
+// is an *output*, for the Node programs that will `require()` a package built
+// here. What each of these guards is a package that installs cleanly and then
+// fails in somebody else's project — an unloadable `require`, or types that
+// resolve to the wrong half of the package.
+// ---------------------------------------------------------------------------
+
+/// Node, for the one question only it can answer: whether what was written for
+/// a `require()` actually loads under one. Absent on a machine without it, and
+/// the test then checks the text alone.
+fn node_binary() -> Option<&'static str> {
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|_| "node")
+}
+
+/// Both trees in one directory, because that is what a dual `exports` map
+/// names: `./dist/index.js` for an `import` and `./dist/index.cjs` for a
+/// `require`, with the module structure preserved in both.
+#[test]
+fn lib_writes_both_module_systems_into_one_tree() {
+    let dir = lib_project("l_dual");
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert!(dir.join("dist/index.js").exists(), "{}", stdout(&out));
+    assert!(dir.join("dist/index.cjs").exists(), "{}", stdout(&out));
+    assert!(dir.join("dist/protocol/codec.cjs").exists());
+
+    // The module boundary survives the conversion, pointed at the CommonJS
+    // sibling rather than the ES one — a `require` of `./protocol/codec.js`
+    // would load the module the other half of the package is made of.
+    let index = std::fs::read_to_string(dir.join("dist/index.cjs")).expect("read index.cjs");
+    assert!(
+        index.contains("require(\"./protocol/codec.cjs\")"),
+        "{index}"
+    );
+    // …and a dependency is still a dependency, now spelled as a require.
+    assert!(index.contains("require(\"some-dependency\")"), "{index}");
+
+    // A module is one module however many spellings of it were written: the
+    // count is of modules, and the formats are named because they are not the
+    // default.
+    let report = stdout(&out);
+    assert!(report.contains("2 modules"), "{report}");
+    assert!(report.contains("esm + cjs"), "{report}");
+}
+
+/// The half that text cannot prove: `require()` of the output returns the
+/// library's exports, under the runtime it was built for.
+#[test]
+fn a_commonjs_output_loads_under_node() {
+    let Some(node) = node_binary() else {
+        return;
+    };
+    let dir = build_dir("l_cjs_runs");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/greeting.ts",
+        "export const greet = (name: string): string => `hi ${name}`;\n",
+    );
+    write_in(
+        &dir,
+        "src/index.ts",
+        "import { greet } from './greeting.js';\n\
+         export const version: string = '1';\n\
+         export function hello(name: string): string {\n  return greet(name);\n}\n\
+         export default hello;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let ran = Command::new(node)
+        .current_dir(&dir)
+        .arg("-e")
+        .arg(
+            "const m = require('./dist/index.cjs');\n\
+             console.log(m.hello('you'), m.version, typeof m.default);",
+        )
+        .output()
+        .expect("spawn node");
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    // `default` is a property rather than the module: named exports and a
+    // default one cannot both be the value `require` returns.
+    assert_eq!(stdout(&ran).trim(), "hi you 1 function");
+}
+
+/// A `.cjs` is typed by the `.d.cts` beside it and by nothing else, and that
+/// declaration has to import its siblings by the names *it* can load.
+#[test]
+fn lib_types_the_commonjs_output_with_declarations_of_its_own() {
+    let dir = build_dir("l_dcts");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/row.ts",
+        "export type Row = { readonly id: string };\n",
+    );
+    write_in(
+        &dir,
+        "src/index.ts",
+        "export type { Row } from './row.js';\n\
+         export declare const table: string;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let esm = std::fs::read_to_string(dir.join("dist/index.d.ts")).expect("read d.ts");
+    assert!(esm.contains("\"./row.js\""), "{esm}");
+
+    let cjs = std::fs::read_to_string(dir.join("dist/index.d.cts")).expect("read d.cts");
+    assert!(cjs.contains("\"./row.cjs\""), "{cjs}");
+    assert!(dir.join("dist/row.d.cts").exists());
+
+    // Two module systems, so two declarations per module rather than two
+    // modules — the count says which.
+    let report = stdout(&out);
+    assert!(report.contains("2 modules"), "{report}");
+    assert!(report.contains("4 declarations"), "{report}");
+}
+
+/// CommonJS alone is a package for consumers who are only on Node. There is no
+/// `.js` in it, and the declarations follow the output rather than the default.
+#[test]
+fn lib_can_write_commonjs_alone() {
+    let dir = lib_project("l_cjs_only");
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert!(dir.join("dist/index.cjs").exists(), "{}", stdout(&out));
+    assert!(dir.join("dist/index.d.cts").exists());
+    assert!(!dir.join("dist/index.js").exists(), "{}", stdout(&out));
+    assert!(!dir.join("dist/index.d.ts").exists());
+    let report = stdout(&out);
+    assert!(report.contains("2 modules"), "{report}");
+    assert!(report.contains("2 declarations"), "{report}");
+}
+
+/// `--dts-bundle` collapses the tree into one declaration — one per module
+/// system, since a `require` resolves types by the extension too.
+#[test]
+fn dts_bundle_writes_one_declaration_per_module_system() {
+    let dir = lib_project("l_dual_bundle");
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs", "--dts-bundle"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert!(dir.join("dist/index.d.ts").exists(), "{}", stdout(&out));
+    assert!(dir.join("dist/index.d.cts").exists(), "{}", stdout(&out));
+    // The per-module declarations are what a bundle replaces, in both.
+    assert!(!dir.join("dist/protocol/codec.d.ts").exists());
+    assert!(!dir.join("dist/protocol/codec.d.cts").exists());
+}
+
+/// A `runtime:` import is served by esrun and by nothing else. The CommonJS
+/// output keeps it — it has no file behind it to inline — so the build says so
+/// rather than leaving a `require` nobody can resolve to be found on install.
+#[test]
+fn lib_says_when_a_commonjs_output_imports_a_runtime_module() {
+    let dir = build_dir("l_cjs_runtime");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/index.ts",
+        "import { readFile } from 'runtime:fs';\n\
+         export async function read(path: string): Promise<string> {\n  \
+         return readFile(path);\n}\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report = stdout(&out);
+    assert!(report.contains("runtime:fs"), "{report}");
+
+    // The ES half says nothing, because there is nothing wrong with it.
+    let esm_only = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--out=esmonly"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(esm_only.status.success(), "{}", stderr(&esm_only));
+    assert!(
+        !stdout(&esm_only).contains("runtime:fs"),
+        "{}",
+        stdout(&esm_only)
+    );
+}
+
+/// CommonJS has no asynchronous module, so a top-level `await` cannot be
+/// converted. The build stops with the position, names the pass it stopped in —
+/// the two write the same source and their diagnostics are otherwise identical
+/// — and lands nothing, the ES half included.
+#[test]
+fn lib_refuses_a_top_level_await_in_the_commonjs_output() {
+    let dir = build_dir("l_cjs_tla");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/index.ts",
+        "export const ready: number = await Promise.resolve(1);\n",
+    );
+    std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+    write_in(&dir, "dist/previous.js", "export const old = 1;\n");
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let message = stderr(&out);
+    assert!(message.contains("Top-level await"), "{message}");
+    assert!(message.contains("src/index.ts"), "{message}");
+    assert!(message.contains("cjs output"), "{message}");
+
+    // Nothing landed: not the ES module the first pass built, and not over the
+    // output that was already there.
+    assert!(dir.join("dist/previous.js").exists(), "{message}");
+    assert!(!dir.join("dist/index.js").exists(), "{message}");
+    assert!(!dir.join("dist/index.cjs").exists(), "{message}");
+
+    // …and ESM alone is still buildable, which is what makes the message
+    // actionable rather than a dead end.
+    let esm_only = esdev_in(&dir)
+        .args(["build", "--lib", "src"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(esm_only.status.success(), "{}", stderr(&esm_only));
+}
+
+/// An application's output is loaded by esrun, which loads ES modules and
+/// nothing else. `--format` there would be a flag with one legal value.
+#[test]
+fn format_is_refused_without_lib_and_for_a_module_system_this_does_not_write() {
+    let dir = build_dir("l_format_args");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/index.ts", "export const x: number = 1;\n");
+
+    let application = esdev_in(&dir)
+        .args(["build", "src/index.ts", "--format=cjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(!application.status.success(), "{}", stdout(&application));
+    assert!(
+        stderr(&application).contains("--lib"),
+        "{}",
+        stderr(&application)
+    );
+
+    let unknown = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=umd"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(!unknown.status.success(), "{}", stdout(&unknown));
+    let message = stderr(&unknown);
+    assert!(message.contains("esm or cjs"), "{message}");
+}
+
 /// A guessed declaration would be believed. The build stops instead, and names
 /// every signature that has to say its type rather than only the first.
 #[test]

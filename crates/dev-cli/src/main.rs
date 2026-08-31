@@ -270,6 +270,8 @@ OPTIONS:
     --conditions=<list>         Extra `exports` conditions, comma-separated
     --lib                       Build a library: keep the module structure,
                                 leave dependencies external, emit .d.ts
+    --format=<list>             --lib only: the module systems to write.
+                                esm (default), cjs, or esm,cjs
     --no-types                  --lib only: skip the .d.ts files
     --dts-bundle[=<entry>]      --lib only: link every declaration into one
                                 .d.ts (default entry: <srcdir>/index.ts)
@@ -300,6 +302,19 @@ AN APPLICATION vs A LIBRARY
     file, dependencies stay external, nothing is defined, no condition is
     asserted, and a .d.ts is emitted from the annotations the source carries —
     derived, never inferred, so an unannotated export fails the build.
+
+    A library may also be published for consumers who are not on this runtime.
+    --format=esm,cjs writes both trees into one directory — dist/**.js with a
+    .d.ts, dist/**.cjs with a .d.cts — which a dual `exports` map names. The
+    types go *inside* each condition; a \"types\" key beside them matches first
+    and hands a require() the ES module's declarations:
+
+        \"exports\": {
+          \".\": {
+            \"import\":  { \"types\": \"./dist/index.d.ts\",  \"default\": \"./dist/index.js\" },
+            \"require\": { \"types\": \"./dist/index.d.cts\", \"default\": \"./dist/index.cjs\" }
+          }
+        }
 
     Targets, an HTML entry, --lib and --dts-bundle in full:
         https://esrun.opentechf.org/docs/esdev/build
@@ -548,6 +563,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     let mut out = None;
     let mut minify = false;
     let mut lib = false;
+    let mut formats: Vec<build::Format> = Vec::new();
     let mut no_types = false;
     let mut dts_bundle: Option<Option<String>> = None;
     let mut conditions = Vec::new();
@@ -568,6 +584,21 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             "--lib" => {
                 reject_value(flag, value)?;
                 lib = true;
+            }
+            "--format" => {
+                for name in require_value(flag, value)?.split(',') {
+                    let name = name.trim();
+                    let Some(format) = build::Format::parse(name) else {
+                        return Err(format!(
+                            "{flag}={} is not a module system this writes — esm or cjs.\n\n\
+                             Both at once is a comma: --format=esm,cjs.",
+                            value.unwrap_or_default()
+                        ));
+                    };
+                    if !formats.contains(&format) {
+                        formats.push(format);
+                    }
+                }
             }
             "--no-types" => {
                 reject_value(flag, value)?;
@@ -750,6 +781,13 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             }
         }
     };
+    if !formats.is_empty() && !lib {
+        return Err("--format only means something with --lib.\n\n\
+             An application build's output is loaded by esrun, which loads ES \
+             modules and nothing else (D22). A library is an input to somebody \
+             else's build, and that build may still be a CommonJS one."
+            .to_string());
+    }
     if no_types && !lib {
         return Err("--no-types only means something with --lib.\n\n\
              An application build emits no declarations to skip: a bundle is \
@@ -780,6 +818,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         conditions,
         defines,
         lib,
+        formats,
         types: !no_types,
         dts_bundle,
         // A command line names an entry, not a project, so there is no

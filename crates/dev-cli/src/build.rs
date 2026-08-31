@@ -58,10 +58,86 @@
 //! * **`.d.ts` travels with the `.js`** ([`crate::declarations`]). A library is
 //!   a typed contract; a build that emitted only JavaScript would leave every
 //!   author reaching for a second tool.
+//!
+//! # `--format=cjs`: the same library, for a consumer who is not on this runtime
+//!
+//! And one decision that is *not* the consumer's, because it is about who the
+//! consumers can be at all. A published package is imported by builds this one
+//! will never see, and a great many of them still end in a `require()` — so
+//! `--lib` writes CommonJS beside the ES modules when asked ([`Format`]): the
+//! same tree, one pass per module system, `dist/**.cjs` beside `dist/**.js`
+//! with a `.d.cts` beside each `.cjs`.
+//!
+//! Nothing about D22 moves. The runtime loads ES modules only, this build is
+//! the developer's machine, and what it writes for a `require()` is for other
+//! people's runtimes — the CommonJS-to-ESM conversion above, in the other
+//! direction.
 
 use std::path::{Path, PathBuf};
 
 use rolldown::InputItem;
+
+/// A module system a `--lib` build writes its output in.
+///
+/// **CommonJS is an output, never an input.** The runtime loads ES modules only
+/// (D22) and nothing about that moves: `require` is not being taught to `esrun`,
+/// and `--format=cjs` is not a way to run CommonJS. It is a way to *publish* to
+/// the half of the registry's consumers who are still on it — a package built
+/// here is an input to somebody else's build, and a great many of those builds
+/// are a `require()` in a Node program that will never be an ES module.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Format {
+    /// `dist/**.js`, with a `.d.ts` beside each.
+    Esm,
+    /// `dist/**.cjs`, with a `.d.cts` beside each.
+    Cjs,
+}
+
+impl Format {
+    /// What `--format` calls it.
+    pub fn parse(name: &str) -> Option<Format> {
+        match name {
+            "esm" => Some(Format::Esm),
+            "cjs" => Some(Format::Cjs),
+            _ => None,
+        }
+    }
+
+    /// The name it was written under, and the one the bundler knows.
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Esm => "esm",
+            Format::Cjs => "cjs",
+        }
+    }
+
+    /// The extension the output takes.
+    ///
+    /// **Fixed, rather than read off the package's `type` field.** `.js` is the
+    /// ES module and `.cjs` is the CommonJS one, in a package that declares
+    /// `"type": "module"` and in one that does not — so an `exports` map written
+    /// against this output keeps working when somebody flips that field, and a
+    /// reader of the tree can tell the two apart without opening a second file.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Format::Esm => "js",
+            Format::Cjs => "cjs",
+        }
+    }
+
+    /// The extension its declaration takes.
+    ///
+    /// TypeScript resolves types by the *module file's* extension under
+    /// `node16`/`nodenext`: a `.cjs` is typed by the `.d.cts` beside it and by
+    /// nothing else, so a CommonJS output whose only declaration is a `.d.ts`
+    /// is an untyped package to the consumers it was built for.
+    pub fn declaration_extension(self) -> &'static str {
+        match self {
+            Format::Esm => "d.ts",
+            Format::Cjs => "d.cts",
+        }
+    }
+}
 
 /// What `esdev build` was asked to do.
 pub struct BuildConfig {
@@ -115,6 +191,10 @@ pub struct BuildConfig {
     pub defines: Vec<(String, String)>,
     /// Build a library rather than a deployable application.
     pub lib: bool,
+    /// The module systems a `--lib` build writes, from `--format`. ESM alone
+    /// unless the command line asked for more; ignored by an application build,
+    /// which has one consumer and it is `esrun`.
+    pub formats: Vec<Format>,
     /// Whether a `--lib` build emits `.d.ts` files. On unless `--no-types`.
     pub types: bool,
     /// The entry whose declarations are linked into one file, from
@@ -492,81 +572,147 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     };
 
     let lib = config.lib;
-    let options = crate::bundler::Options {
-        input: inputs.into_iter().map(|i| (i.name, i.import)).collect(),
-        cwd: Some(cwd.clone()),
-        platform: target,
-        conditions: config.conditions.clone(),
-        define,
-        minify: config.minify,
-        // **A library keeps every export it wrote.** Tree-shaking asks "what
-        // does the entry use?", and for an application that is the whole
-        // question — nothing else will ever run. For a library it is the wrong
-        // question: the code that will use these modules has not been written
-        // yet, so an export no *current* caller reaches is not dead, it is the
-        // API.
-        //
-        // Found by building this repository's own Redis driver with it: shaking
-        // removed `BLOCKING_COMMANDS` from `protocol/blocking.js` because only a
-        // test imported it, and the failure was a SyntaxError at import time in
-        // the consumer rather than anything the build said. Whatever really is
-        // dead here, the consumer's own build removes — it can only shake what
-        // it was given.
-        treeshake: lib.then_some(false),
-        // Only meaningful for `--lib`, where a module that is not an entry is
-        // still a file somebody may import.
-        preserve_modules: lib.then_some(true),
-        preserve_modules_root: preserve_root
-            .as_ref()
-            .map(|root| root.to_string_lossy().into_owned()),
-        // The setting a hand-written config gets wrong. `runtime:fs` is served
-        // by the runtime and has no file behind it; inlining it would produce a
-        // bundle that dies on its first import.
-        //
-        // A library externalises everything that is not its own source as well.
-        // That is the difference between publishing a package and publishing a
-        // private copy of the registry: a consumer can dedupe, override or patch
-        // a dependency they still have, and can do none of those to one that was
-        // inlined into a file they did not write.
-        external: Some(crate::bundler::External::when(move |specifier, _, _| {
-            specifier.starts_with("runtime:") || (lib && !is_local(specifier))
-        })),
-        output: crate::bundler::OutputOptions {
-            dir: Some(out_dir.to_string_lossy().into_owned()),
-            entry_filenames: Some(filenames.clone()),
-            // Left at the same pattern as an entry so the emitted tree mirrors
-            // the source tree exactly, with no hashes in it — a hashed filename
-            // is unimportable and unpublishable.
-            chunk_filenames: lib.then(|| filenames.clone()),
-            ..crate::bundler::OutputOptions::default()
-        },
-        ..crate::bundler::Options::default()
+    // One pass per module system, because the bundler's `write()` renders the
+    // options it was built with — there is no per-output override to hand a
+    // second format to. A library is small and its passes are independent, so
+    // the cost is a second walk over the same source tree rather than anything
+    // that has to be shared between them.
+    let formats: Vec<Format> = if lib && !config.formats.is_empty() {
+        config.formats.clone()
+    } else {
+        vec![Format::Esm]
     };
 
-    // The same CSS Modules plugin the browser build runs, and for the same
-    // reason the *server* needs it: a component importing `./x.module.css`
-    // renders `className={styles.button}`, so the server has to resolve that to
-    // the identical scoped name or the markup it sends will not match the
-    // stylesheet the browser fetched.
+    // Recorded here rather than read back off the output: a `runtime:` import is
+    // resolved in every pass, and the resolver is the one place that sees all of
+    // them — including the ones in a module no entry of this build reaches.
+    let runtime_imports = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::<
+        String,
+    >::new()));
+    let recorded = std::sync::Arc::clone(&runtime_imports);
+    // The setting a hand-written config gets wrong. `runtime:fs` is served
+    // by the runtime and has no file behind it; inlining it would produce a
+    // bundle that dies on its first import.
     //
-    // Its CSS output is discarded here. The name is derived from the file's
-    // path relative to the project root, so both builds arrive at it
-    // independently and neither has to tell the other. What the browser build
-    // writes is the one copy.
-    let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
-    let mut bundler = rolldown::BundlerBuilder::default()
-        .with_options(translated)
-        .with_plugins(installed(
-            std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                &cwd,
-                crate::cssmodules::Collected::new(),
-                config.minify,
-            )),
-            &config.plugins,
-        ))
-        .build()
-        .map_err(reported!())?;
-    bundler.write().await.map_err(reported!())?;
+    // A library externalises everything that is not its own source as well.
+    // That is the difference between publishing a package and publishing a
+    // private copy of the registry: a consumer can dedupe, override or patch
+    // a dependency they still have, and can do none of those to one that was
+    // inlined into a file they did not write.
+    let external = crate::bundler::External::when(move |specifier, _, _| {
+        if specifier.starts_with("runtime:") {
+            if let Ok(mut seen) = recorded.lock() {
+                seen.insert(specifier.to_string());
+            }
+            return true;
+        }
+        lib && !is_local(specifier)
+    });
+
+    for format in &formats {
+        // A library's output tree is named after its module system: `[name].js`
+        // for the ES modules and `[name].cjs` for the CommonJS ones, so both can
+        // sit in one directory and an `exports` map can name either. An
+        // application build writes the one file `--out` asked for.
+        let filenames = if lib {
+            format!("[name].{}", format.extension())
+        } else {
+            filenames.clone()
+        };
+        let options = crate::bundler::Options {
+            input: inputs
+                .iter()
+                .map(|i| (i.name.clone(), i.import.clone()))
+                .collect(),
+            cwd: Some(cwd.clone()),
+            platform: target,
+            conditions: config.conditions.clone(),
+            define: define.clone(),
+            minify: config.minify,
+            // **A library keeps every export it wrote.** Tree-shaking asks "what
+            // does the entry use?", and for an application that is the whole
+            // question — nothing else will ever run. For a library it is the wrong
+            // question: the code that will use these modules has not been written
+            // yet, so an export no *current* caller reaches is not dead, it is the
+            // API.
+            //
+            // Found by building this repository's own Redis driver with it: shaking
+            // removed `BLOCKING_COMMANDS` from `protocol/blocking.js` because only a
+            // test imported it, and the failure was a SyntaxError at import time in
+            // the consumer rather than anything the build said. Whatever really is
+            // dead here, the consumer's own build removes — it can only shake what
+            // it was given.
+            treeshake: lib.then_some(false),
+            // Only meaningful for `--lib`, where a module that is not an entry is
+            // still a file somebody may import.
+            preserve_modules: lib.then_some(true),
+            preserve_modules_root: preserve_root
+                .as_ref()
+                .map(|root| root.to_string_lossy().into_owned()),
+            external: Some(external.clone()),
+            output: crate::bundler::OutputOptions {
+                format: Some(format.name().to_string()),
+                // Named exports, rather than the bundler's `auto`. `auto` cannot
+                // decide for a module that has a default export *and* named ones:
+                // it emits both and warns, once per module, because `require(…)`
+                // then hands back the namespace and the default is `.default`.
+                // Saying `named` is that same output with the shape settled — and
+                // it is the shape the `.d.cts` beside it describes.
+                exports: matches!(format, Format::Cjs).then(|| "named".to_string()),
+                dir: Some(out_dir.to_string_lossy().into_owned()),
+                entry_filenames: Some(filenames.clone()),
+                // Left at the same pattern as an entry so the emitted tree mirrors
+                // the source tree exactly, with no hashes in it — a hashed filename
+                // is unimportable and unpublishable.
+                chunk_filenames: lib.then(|| filenames.clone()),
+                ..crate::bundler::OutputOptions::default()
+            },
+            ..crate::bundler::Options::default()
+        };
+
+        // The same CSS Modules plugin the browser build runs, and for the same
+        // reason the *server* needs it: a component importing `./x.module.css`
+        // renders `className={styles.button}`, so the server has to resolve that to
+        // the identical scoped name or the markup it sends will not match the
+        // stylesheet the browser fetched.
+        //
+        // Its CSS output is discarded here. The name is derived from the file's
+        // path relative to the project root, so both builds arrive at it
+        // independently and neither has to tell the other. What the browser build
+        // writes is the one copy.
+        let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
+        let mut bundler = rolldown::BundlerBuilder::default()
+            .with_options(translated)
+            .with_plugins(installed(
+                std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                    &cwd,
+                    crate::cssmodules::Collected::new(),
+                    config.minify,
+                )),
+                &config.plugins,
+            ))
+            .build()
+            .map_err(reported!())?;
+        // Which pass failed, when there is more than one. The two write the
+        // same source tree and their diagnostics are identical apart from this:
+        // a top-level `await` is a module in CommonJS's case and nothing at all
+        // in ESM's, and without the line a reader has no way to tell which of
+        // the two they are looking at.
+        bundler
+            .write()
+            .await
+            .map_err(reported!())
+            .map_err(|failed| {
+                if formats.len() == 1 {
+                    return failed;
+                }
+                format!(
+                    "{failed}\n\nThat is the {} output. A build writes one tree per \
+                 --format and lands none of them unless every one succeeds.",
+                    format.name()
+                )
+            })?;
+    }
 
     if !config.lib {
         // `[name].js` is a pattern, not a filename, so the directory case is
@@ -600,14 +746,31 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         modules.len(),
         if modules.len() == 1 { "" } else { "s" }
     );
+    // Named only when there is something to say: an ESM-only build is the
+    // default, and a report that spells the default out is noise on every line.
+    if formats != [Format::Esm] {
+        counted.push_str(&format!(
+            ", {}",
+            formats
+                .iter()
+                .map(|format| format.name())
+                .collect::<Vec<_>>()
+                .join(" + ")
+        ));
+    }
     if config.types {
         counted.push_str(&match &config.dts_bundle {
             Some(entry) => {
-                let written = bundle_declarations(entry, &modules, &out_dir, &root)?;
-                format!(", 1 declaration ({written})")
+                let written = bundle_declarations(entry, &modules, &out_dir, &root, &formats)?;
+                format!(
+                    ", {} declaration{} ({})",
+                    written.len(),
+                    if written.len() == 1 { "" } else { "s" },
+                    written.join(", ")
+                )
             }
             None => {
-                let declared = crate::declarations::emit(&modules, &out_dir, &root)?;
+                let declared = crate::declarations::emit(&modules, &out_dir, &root, &formats)?;
                 format!(
                     ", {declared} declaration{}",
                     if declared == 1 { "" } else { "s" }
@@ -615,7 +778,47 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             }
         });
     }
+    warn_about_runtime_imports(&formats, &runtime_imports);
     Ok(format!("{}/ ({counted})", out_dir.display()))
+}
+
+/// Says so when a CommonJS build carries an import only `esrun` can serve.
+///
+/// `runtime:fs` stays external in every build, which is right — there is no file
+/// behind it and inlining it would produce an artifact that dies on its first
+/// import. In the CommonJS output it becomes `require("runtime:fs")`, and the
+/// consumers CommonJS was built for cannot load that: Node has no `runtime:`
+/// scheme, and the package it names is not on npm.
+///
+/// A note rather than a refusal, because a library may reach for one behind a
+/// capability check and still be perfectly usable elsewhere — and because what
+/// to do about it (drop the module from the `require` half of the `exports` map,
+/// or import it dynamically) is the author's call, not the build's.
+fn warn_about_runtime_imports(
+    formats: &[Format],
+    imports: &std::sync::Mutex<std::collections::BTreeSet<String>>,
+) {
+    if !formats.contains(&Format::Cjs) {
+        return;
+    }
+    let Ok(seen) = imports.lock() else {
+        return;
+    };
+    if seen.is_empty() {
+        return;
+    }
+    let paint = crate::style::Palette::stdout();
+    println!(
+        "{} the CommonJS output imports {}, which only esrun serves — a\n     \
+         require() of it from Node cannot resolve",
+        paint.dim("note"),
+        paint.cyan(
+            seen.iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    );
 }
 
 /// Bundles the module scripts an HTML file names, and reports what each of them
@@ -1333,6 +1536,7 @@ async fn build_targets(
             conditions,
             defines,
             lib: false,
+            formats: Vec::new(),
             types: false,
             dts_bundle: None,
             plugins,
@@ -1449,7 +1653,8 @@ fn bundle_declarations(
     modules: &[PathBuf],
     out_dir: &Path,
     root: &Path,
-) -> Result<String, String> {
+    formats: &[Format],
+) -> Result<Vec<String>, String> {
     let entry_path = Path::new(entry);
     if !entry_path.is_file() {
         return Err(format!(
@@ -1458,16 +1663,27 @@ fn bundle_declarations(
              importing your package arrives at."
         ));
     }
-    let generated = crate::declarations::generate(modules, root)?;
-    let text = crate::dts::bundle(entry_path, &generated)?;
-
     let stem = entry_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("index");
-    let target = out_dir.join(format!("{stem}.d.ts"));
-    std::fs::write(&target, text).map_err(|e| format!("cannot write {}: {e}", target.display()))?;
-    Ok(target.display().to_string())
+
+    let mut written = Vec::new();
+    for format in formats {
+        // Generated per format for the same reason the per-module declarations
+        // are: a linked declaration still imports the packages it did not
+        // inline, and the `.d.cts` has to point at the CommonJS half of them.
+        // Every *local* specifier is gone by then — that is what linking is —
+        // so the two files usually differ in nothing, and where they differ it
+        // is the difference that matters.
+        let generated = crate::declarations::generate(modules, root, *format)?;
+        let text = crate::dts::bundle(entry_path, &generated)?;
+        let target = out_dir.join(format!("{stem}.{}", format.declaration_extension()));
+        std::fs::write(&target, text)
+            .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+        written.push(target.display().to_string());
+    }
+    Ok(written)
 }
 
 #[cfg(test)]

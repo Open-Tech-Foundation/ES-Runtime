@@ -577,6 +577,7 @@ fn output_options(value: Option<&Value>) -> OutputOptions {
     };
     OutputOptions {
         format: text("format"),
+        exports: text("exports"),
         dir: text("dir"),
         file: text("file"),
         entry_filenames: text("entryFileNames"),

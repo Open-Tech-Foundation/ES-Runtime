@@ -661,6 +661,30 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D84 — CommonJS is an output of `--lib`, never an input · *Proposed (2026-08-31)* · *extends D59; holds D22*
+
+**Context:** `esdev build --lib` publishes one tree — `dist/**.js`, ES modules, a `.d.ts` beside each — and for a large share of the registry's consumers that is the tree they cannot use. A library is an input to somebody else's build (D59), and a great many of those builds end in a `require()`: a Node service that has not moved, a Jest suite, an Electron main process. Publishing to them today means a second toolchain beside this one, which is the thing `--lib` exists to remove; this repository's own drivers are the first two packages it would remove it for.
+
+D22 is not in tension with this, and its wording is the reason: **the runtime loads ES modules only.** Nothing here teaches `esrun` `require`, and nothing here is loadable by it that was not before. What is added is an *output* — bytes for other people's runtimes, produced on a developer's machine, which is exactly what the application build's CommonJS-to-ESM conversion already is in the other direction.
+
+**Decision (maintainer sign-off pending):**
+
+- **`--format=<list>`, on `--lib` only: `esm` (the default), `cjs`, or both.** An application build refuses it, because its output is loaded by `esrun` and the flag would have one legal value. CommonJS alone is allowed rather than treated as an add-on to ESM: a package for Node consumers only is a real package, and the machinery is symmetric once the declarations follow the output instead of assuming a `.js`.
+
+- **`.js` is the ES module and `.cjs` the CommonJS one, whatever the package's `"type"` says.** Rejected: deriving the pair of extensions from that field, as tsup does (`.js`/`.cjs` under `"module"`, `.js`/`.mjs` otherwise). It makes what a build writes depend on a field nobody edits with the build in mind, so flipping it changes which files an `exports` map has to name — silently, and after the map was written.
+
+- **One bundler pass per format; nothing lands unless every pass succeeds.** rolldown's `write()` renders the options its bundler was built with, so a second format is a second pass rather than a second output of one. D78's staging already makes the commit all-or-nothing; what this adds is that a failure **names its pass**, because the two passes read the same source and their diagnostics are otherwise identical. Top-level `await` is the one that will actually stop a build: CommonJS has no asynchronous module, and the bundler refuses it with the position.
+
+- **A `.d.cts` beside every `.cjs`, with its relative specifiers pointed at the `.cjs` siblings.** Under `node16`/`nodenext` a `.cjs` is typed by the `.d.cts` and by nothing else, and a `.d.cts` that imports `./pool.js` resolves to the *ES* module's declarations — TS1479, a package whose types are right and which does not typecheck. Only relative specifiers with an extension are rewritten: a bare one names a package, whose own `exports` map decides which half a `require` reaches. Verified with `tsc` under `node16` against a dual `exports` map, both halves green.
+
+- **Named exports rather than the bundler's `auto`.** `auto` cannot decide for a module with a default export *and* named ones: it emits both and warns, once per module, and `preserve_modules` makes every module an entry. `named` is that same output with the question settled, and it is what the `.d.cts` beside it describes — `require(pkg).default` is the default export.
+
+- **A `runtime:` import is a note, not a refusal.** It stays external in both trees, because there is no file behind it, and in CommonJS it becomes `require("runtime:fs")`, which nothing outside `esrun` resolves. A library may reach for one behind a capability check and be perfectly usable elsewhere, and what to do about it — drop that module from the `require` half of the map, or import it dynamically — is the author's call, not the build's.
+
+**Consequences:** one command publishes a dual package, `import` and `require` with types on both sides. The `lib` scaffold stays ESM-only on purpose: the default writes no `.cjs`, and a template whose `exports` map named files the default build does not produce would be a broken package out of the box. The costs are a source tree walked once per format, and a module using top-level `await` being publishable as ESM only. **Not solved here:** an ESM-only *dependency* is still ESM-only in the consumer's CommonJS process — `--lib` inlines nothing, by D59's rule, so what a `require` of your package then fails on is the dependency, not this output. Verified by 8 CLI tests and 4 unit tests: both trees in one directory with cross-module `require`s rewritten to `.cjs`, a `require()` of the output under Node returning the exports and `.default`, the `.d.cts` specifiers, CommonJS alone, `--dts-bundle` per module system, the `runtime:` note (and its absence from an ESM build), a top-level `await` refused with the pass named and nothing landed, and both argument refusals. Documented per D27 (`docs/API.md` and site `api/build` for the `exports` output option, site `docs/esdev/build`, `--help`, `CHANGELOG`).
+
+---
+
 ### D83 — The jail acts by descriptor, not by name · *Proposed (2026-08-20)* · *hardens D25*
 
 **Context:** every jailed operation was two lookups of one name. `confine()` resolved the path and proved it sat under a root; the syscall then resolved the same *string* again. Between them the filesystem is mutable, and a name is not a file — so a guest running two operations at once could replace a directory component with a symlink after the check and before the use, and the write followed the new one. The jail reported success and the bytes landed outside it.
