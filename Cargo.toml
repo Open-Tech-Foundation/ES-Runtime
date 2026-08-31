@@ -286,6 +286,13 @@ oxc = { version = "0.144.0", features = [
     "semantic",
     "codegen",
     "isolated_declarations",
+    # A declaration's module specifiers are rewritten to name the files the
+    # build wrote (`crates/dev-cli/src/declarations.rs`), and one of the places
+    # they hide is an `import("./x")` type, which can sit anywhere in a type.
+    # Walking the tree by hand would mean matching every type node to find it.
+    # The crate is already in the graph — `isolated_declarations` depends on it —
+    # so this re-exports what is compiled either way.
+    "ast_visit",
 ] }
 # The bundler behind `esdev build` (DECISIONS D59), and confined to `dev-cli`
 # for the same reason `oxc` is: bundling happens on the developer's machine, and

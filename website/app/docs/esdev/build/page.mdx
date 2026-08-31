@@ -382,6 +382,12 @@ error: 2 declarations could not be derived:
   src/pool.ts:41:14    TS9010: Variable must have an explicit type annotation.
 ```
 
+A declaration's own imports are rewritten to name the files the build wrote, the
+way the JavaScript beside them already is: `./pool` and `./pool.ts` both become
+`./pool.js`, and `./pool.cjs` in a `.d.cts`. Repeating the source's spelling is
+TS2835 for a `node16` consumer, and a `.d.cts` naming a `.js` resolves to the ES
+module's declarations (TS1479).
+
 `--no-types` skips them.
 
 ### CommonJS output
@@ -398,7 +404,7 @@ esdev build --lib src --format=cjs       # CommonJS alone
 | --- | --- |
 | **`.cjs`, whatever `"type"` says** | Both trees in one directory, told apart by extension. |
 | **`.d.cts` beside each `.cjs`** | Under `node16` a `.cjs` is typed by that and by nothing else. |
-| **Relative specifiers follow** | `./pool.js` inside a `.d.cts` becomes `./pool.cjs`. |
+| **Declarations name the output** | A specifier in a `.d.cts` points at the `.cjs` sibling — `./pool` and `./pool.js` alike. |
 | **Named exports** | `require()` returns the namespace, so a default export is `.default`. |
 | **All or nothing** | One pass per format, and none of them lands unless every one succeeds. |
 

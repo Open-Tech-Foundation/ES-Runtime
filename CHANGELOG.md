@@ -83,10 +83,8 @@ namespace) is unstable and may change between minor releases until the API freez
   Both trees go in one directory, told apart by extension rather than by the
   package's `"type"` field, so flipping that field cannot change which files an
   `exports` map has to name. A `.cjs` is typed by the `.d.cts` beside it and by
-  nothing else under `node16` resolution, so one is emitted for each — with its
-  relative specifiers pointed at the `.cjs` siblings, since a `.d.cts` that
-  imports `./pool.js` resolves to the ES module's declarations and does not
-  typecheck (TS1479). `types` belongs inside each condition:
+  nothing else under `node16` resolution, so one is emitted for each. `types`
+  belongs inside each condition:
 
   ```json
   "exports": {
@@ -104,6 +102,23 @@ namespace) is unstable and may change between minor releases until the API freez
   the `require` it becomes, so the build says when it wrote one.
 
   `--format` is `--lib` only: an application's output is loaded by `esrun`.
+
+- **A `--lib` build's declarations name the files it wrote.** They used to
+  repeat the specifier the source wrote while the JavaScript beside them named
+  the emitted file — so a library whose source imports a sibling as `./pool`,
+  which is how a source written for a bundler spells it, shipped declarations a
+  `node16` consumer rejects (TS2835), and a `.d.cts` importing `./pool.js`
+  resolved to the ES module's declarations and could not be required (TS1479).
+  Both halves are now rewritten to their own format's sibling — `./pool.js`
+  beside a `.js`, `./pool.cjs` beside a `.cjs` — including the `import("./x")`
+  types that can sit anywhere in a type. An extensionless specifier is resolved
+  against the source tree rather than guessed at, since `./pool` is either
+  `pool.ts` or `pool/index.ts`.
+
+  Found by building `@opentf/std` with it: 334 modules, 717 `tsc` errors under
+  `node16` with `skipLibCheck` off, and 0 after. Its 1642-test suite passes
+  against the built ES modules and against the CommonJS output loaded through
+  `require()`.
 
 - **`runtime:build` takes an `exports` output option** (`"auto"` | `"named"` |
   `"default"` | `"none"`) — how a non-ESM `format` assigns what a module

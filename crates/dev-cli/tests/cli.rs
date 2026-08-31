@@ -1201,6 +1201,57 @@ fn lib_types_the_commonjs_output_with_declarations_of_its_own() {
     assert!(report.contains("4 declarations"), "{report}");
 }
 
+/// A library written for a bundler spells a sibling `./pool`, with no
+/// extension — and a declaration that repeats that spelling is TS2835 in the ESM
+/// half and resolves to the *ESM* declaration in the CommonJS half. Both are
+/// errors only the consumer sees. Found by building `@opentf/std`: 717 errors
+/// across its 334 modules, none of them visible to the build that wrote them.
+#[test]
+fn a_declaration_names_the_files_the_build_wrote() {
+    let dir = build_dir("l_specifiers");
+    std::fs::create_dir_all(dir.join("src/colors")).expect("create src");
+    write_in(
+        &dir,
+        "src/pool.ts",
+        "export type Pool = { size: number };\n",
+    );
+    write_in(
+        &dir,
+        "src/colors/index.ts",
+        "export type Rgb = readonly [number, number, number];\n",
+    );
+    write_in(
+        &dir,
+        "src/index.ts",
+        // Extensionless: a file, and a directory reached through its index.
+        "export type { Pool } from './pool';\n\
+         export type { Rgb } from './colors';\n\
+         export interface Options {\n  \
+         readonly pool?: import('./pool').Pool;\n}\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let esm = std::fs::read_to_string(dir.join("dist/index.d.ts")).expect("read d.ts");
+    assert!(esm.contains("\"./pool.js\""), "{esm}");
+    assert!(esm.contains("\"./colors/index.js\""), "{esm}");
+    assert!(esm.contains("import(\"./pool.js\")"), "{esm}");
+
+    let cjs = std::fs::read_to_string(dir.join("dist/index.d.cts")).expect("read d.cts");
+    assert!(cjs.contains("\"./pool.cjs\""), "{cjs}");
+    assert!(cjs.contains("\"./colors/index.cjs\""), "{cjs}");
+    assert!(cjs.contains("import(\"./pool.cjs\")"), "{cjs}");
+
+    // Which is what the JavaScript beside them says: the declarations were the
+    // only half of the output still spelling a module the source's way.
+    let module = std::fs::read_to_string(dir.join("dist/index.js")).expect("read index.js");
+    assert!(!module.contains("\"./pool\""), "{module}");
+}
+
 /// CommonJS alone is a package for consumers who are only on Node. There is no
 /// `.js` in it, and the declarations follow the output rather than the default.
 #[test]

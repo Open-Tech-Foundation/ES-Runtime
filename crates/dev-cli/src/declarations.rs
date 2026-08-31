@@ -24,6 +24,7 @@
 use std::path::{Path, PathBuf};
 
 use oxc::allocator::Allocator;
+use oxc::ast_visit::VisitMut;
 use oxc::codegen::Codegen;
 use oxc::diagnostics::OxcDiagnostic;
 use oxc::isolated_declarations::{IsolatedDeclarations, IsolatedDeclarationsOptions};
@@ -224,60 +225,133 @@ fn declarations_for(
         return Err(errors);
     }
     let mut program = result.program;
-    if format == crate::build::Format::Cjs {
-        point_at_cjs(&mut program, &allocator);
-    }
+    point_at_output(&mut program, &allocator, path, format);
     Ok(Codegen::new().build(&program).code)
 }
 
-/// Points a declaration's own imports at the CommonJS half of the output:
-/// `./pool.js` becomes `./pool.cjs`.
+/// Points a declaration's own imports at the files this build actually wrote:
+/// `./pool` and `./pool.js` both become `./pool.js` beside a `.js`, and
+/// `./pool.cjs` beside a `.cjs`.
 ///
-/// **A `.d.cts` that imports `./pool.js` describes the wrong module.** The
-/// specifier is resolved by the consumer's TypeScript, which maps it to
-/// `pool.d.ts` — the declaration of the *ES* module — and then reports that a
-/// CommonJS file cannot import one (TS1479). The types are right and the package
-/// still does not typecheck, which is the worst of the outcomes available.
+/// **A declaration whose specifiers differ from its module's is a declaration of
+/// something else**, and under `node16`/`nodenext` resolution both ways of
+/// getting it wrong are an error a consumer sees and the author does not:
+///
+/// * A `.d.cts` importing `./pool.js` resolves to `pool.d.ts`, the *ES* module's
+///   declaration, and a CommonJS file may not import one — TS1479.
+/// * A declaration importing `./pool` — an extensionless specifier, which is how
+///   a source written for a bundler spells it — is TS2835 in the ESM half, and
+///   in the CommonJS half resolves to the ESM declaration again: extensionless
+///   lookup finds `pool.d.ts` and never `pool.d.cts`.
+///
+/// The emitted JavaScript has neither problem, because the bundler rewrites
+/// every specifier as it writes the file. This is that same rewrite, for the
+/// declaration beside it.
 ///
 /// Only relative specifiers are touched. A bare one names a package, and which
 /// of its builds a `require` resolves to is decided by that package's `exports`
 /// map and TypeScript's conditions, not by anything spelled here.
-fn point_at_cjs<'a>(program: &mut oxc::ast::ast::Program<'a>, allocator: &'a Allocator) {
-    use oxc::ast::ast::Statement;
-    for statement in &mut program.body {
-        let source = match statement {
-            Statement::ImportDeclaration(import) => &mut import.source,
-            Statement::ExportFromDeclaration(export) => &mut export.source,
-            Statement::ExportAllDeclaration(export) => &mut export.source,
-            _ => continue,
+fn point_at_output<'a>(
+    program: &mut oxc::ast::ast::Program<'a>,
+    allocator: &'a Allocator,
+    from: &Path,
+    format: crate::build::Format,
+) {
+    let mut rewrite = Rewrite {
+        allocator,
+        dir: from.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        format,
+    };
+    rewrite.visit_program(program);
+}
+
+/// The walk `point_at_output` runs.
+///
+/// A visitor rather than a loop over the top-level statements, because a
+/// specifier is not only ever in an `import`: `import("./x").Foo` is a *type*,
+/// and a type sits wherever a type may sit — a property, a union, a type
+/// argument six levels down. isolated-declarations emits one whenever the source
+/// referred to another module's type inline, and one missed specifier is the
+/// same broken package as all of them.
+struct Rewrite<'a> {
+    allocator: &'a Allocator,
+    dir: PathBuf,
+    format: crate::build::Format,
+}
+
+impl<'a> Rewrite<'a> {
+    fn point(&self, source: &mut oxc::ast::ast::StringLiteral<'a>) {
+        let Some(rewritten) = output_specifier(source.value.as_str(), &self.dir, self.format)
+        else {
+            return;
         };
-        let Some(rewritten) = cjs_specifier(source.value.as_str()) else {
-            continue;
-        };
-        source.value = oxc::str::Str::from_str_in(&rewritten, &allocator);
+        source.value = oxc::str::Str::from_str_in(&rewritten, &self.allocator);
         // The printer prefers the raw text it was parsed from, which is still
         // the specifier as written.
         source.raw = None;
     }
 }
 
-/// `./pool.js` → `./pool.cjs`, and `None` for a specifier that names something
-/// other than a sibling module of this library.
+impl<'a> oxc::ast_visit::VisitMut<'a> for Rewrite<'a> {
+    fn visit_import_declaration(&mut self, it: &mut oxc::ast::ast::ImportDeclaration<'a>) {
+        self.point(&mut it.source);
+    }
+
+    fn visit_export_from_declaration(&mut self, it: &mut oxc::ast::ast::ExportFromDeclaration<'a>) {
+        self.point(&mut it.source);
+    }
+
+    fn visit_export_all_declaration(&mut self, it: &mut oxc::ast::ast::ExportAllDeclaration<'a>) {
+        self.point(&mut it.source);
+    }
+
+    fn visit_ts_import_type(&mut self, it: &mut oxc::ast::ast::TSImportType<'a>) {
+        self.point(&mut it.source);
+        // Its own type arguments may hold another one.
+        oxc::ast_visit::walk_mut::walk_ts_import_type(self, it);
+    }
+}
+
+/// The extensions a relative specifier may carry that name a module of this
+/// library — the ones an output file is written for.
 ///
-/// The extension has to be there to be replaced. A source that wrote `./pool`
-/// left the resolution to a resolver that guesses, and neither `node16`
-/// TypeScript nor an ES module runtime is one — so there is no CommonJS spelling
-/// of it to reach for, and rewriting it would invent one.
-fn cjs_specifier(specifier: &str) -> Option<String> {
+/// `.cjs` is not among them: a source that imported one meant that file, and a
+/// build emitting ES modules has not got a different name for it.
+const REWRITABLE_EXTENSIONS: &[&str] = &[".js", ".jsx", ".mjs", ".ts", ".tsx", ".mts"];
+
+/// One specifier as the output spells it, or `None` for one this build has no
+/// say over.
+///
+/// An **extensionless** specifier is the case that has to look at the disk. It
+/// is how a source written for a bundler spells a sibling, and the file it names
+/// is either `./pool.ts` or `./pool/index.ts` — a difference no rule about the
+/// string can decide. The probe is against the *source* tree, which is what the
+/// bundler resolved too, so the answer is the file it emitted.
+fn output_specifier(specifier: &str, dir: &Path, format: crate::build::Format) -> Option<String> {
     if !specifier.starts_with("./") && !specifier.starts_with("../") {
         return None;
     }
-    for extension in [".js", ".jsx", ".mjs", ".ts", ".tsx", ".mts"] {
-        if let Some(stem) = specifier.strip_suffix(extension) {
-            return Some(format!("{stem}.cjs"));
+    let extension = format.extension();
+    for known in REWRITABLE_EXTENSIONS {
+        if let Some(stem) = specifier.strip_suffix(known) {
+            let rewritten = format!("{stem}.{extension}");
+            return (rewritten != specifier).then_some(rewritten);
         }
     }
-    None
+    // Extensionless. `./pool` is `pool.ts` or `pool/index.ts`, and which one it
+    // is decides what the emitted tree calls it.
+    if resolves_to_a_module(&dir.join(specifier)) {
+        return Some(format!("{specifier}.{extension}"));
+    }
+    let index = format!("{}/index", specifier.trim_end_matches('/'));
+    resolves_to_a_module(&dir.join(&index)).then(|| format!("{index}.{extension}"))
+}
+
+/// Whether a path without an extension names a source module of this library.
+fn resolves_to_a_module(base: &Path) -> bool {
+    ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs"]
+        .iter()
+        .any(|extension| base.with_extension(extension).is_file())
 }
 
 /// A diagnostic as `path:line:column  message`.
@@ -407,6 +481,23 @@ mod tests {
         assert!(!cjs.contains(".js\""), "{cjs}");
     }
 
+    /// `import("./x").Foo` is a **type**, so it sits wherever a type sits rather
+    /// than at the top of the file — and isolated-declarations emits one for
+    /// every inline reference to another module's type. Found in
+    /// `@opentf/std`'s `datetime/types.ts`, where it was the last two errors in
+    /// a package whose other 332 modules typechecked.
+    #[test]
+    fn an_import_type_is_a_specifier_too() {
+        let source = "export interface Options {\n\
+                      \treadonly at?: import('./DateTime.js').default;\n\
+                      }\n";
+        let cjs = declare_cjs(source).expect("declarations");
+        assert!(cjs.contains("import(\"./DateTime.cjs\")"), "{cjs}");
+
+        let esm = declare(source).expect("declarations");
+        assert!(esm.contains("import(\"./DateTime.js\")"), "{esm}");
+    }
+
     /// A bare specifier names a package, and which of its builds a `require`
     /// arrives at is that package's `exports` map to decide.
     #[test]
@@ -417,16 +508,55 @@ mod tests {
         assert!(cjs.contains("\"hono\""), "{cjs}");
     }
 
-    /// Nothing to replace, so nothing is replaced: an extensionless specifier
-    /// was already left to a resolver that guesses, and inventing `.cjs` for it
-    /// would name a file the source never referred to.
+    /// The extension a specifier carries is the *source's*, and the file beside
+    /// the declaration is the build's. `.ts` in a declaration would name a file
+    /// nothing published.
     #[test]
-    fn an_extensionless_specifier_is_not_given_one() {
-        assert_eq!(cjs_specifier("./pool"), None);
-        assert_eq!(cjs_specifier("./pool.js").as_deref(), Some("./pool.cjs"));
-        assert_eq!(cjs_specifier("../a/b.mjs").as_deref(), Some("../a/b.cjs"));
-        assert_eq!(cjs_specifier("hono"), None);
-        assert_eq!(cjs_specifier("runtime:fs"), None);
+    fn a_specifier_takes_the_extension_the_build_wrote() {
+        let nowhere = Path::new("/nonexistent");
+        let cjs = |s: &str| output_specifier(s, nowhere, crate::build::Format::Cjs);
+        let esm = |s: &str| output_specifier(s, nowhere, crate::build::Format::Esm);
+
+        assert_eq!(cjs("./pool.js").as_deref(), Some("./pool.cjs"));
+        assert_eq!(cjs("../a/b.mjs").as_deref(), Some("../a/b.cjs"));
+        assert_eq!(cjs("./pool.ts").as_deref(), Some("./pool.cjs"));
+        assert_eq!(esm("./pool.ts").as_deref(), Some("./pool.js"));
+        // Already what the output calls it.
+        assert_eq!(esm("./pool.js"), None);
+
+        // A package, not a module of this library.
+        assert_eq!(cjs("hono"), None);
+        assert_eq!(cjs("runtime:fs"), None);
+        assert_eq!(esm("runtime:fs"), None);
+    }
+
+    /// The case that has to look at the disk, and the one a library written for
+    /// a bundler is full of. `./pool` is `pool.ts` or `pool/index.ts`, and no
+    /// rule about the string can tell which — while getting it wrong is TS2835
+    /// in the `.d.ts` and a resolution to the *ESM* declaration in the `.d.cts`.
+    #[test]
+    fn an_extensionless_specifier_is_resolved_against_the_source_tree() {
+        let dir = std::env::temp_dir().join("esdev_declarations_extensionless");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("colors")).expect("create dir");
+        std::fs::write(dir.join("pool.ts"), "export const a = 1;").expect("write");
+        std::fs::write(dir.join("colors/index.ts"), "export const b = 2;").expect("write");
+
+        let cjs = |s: &str| output_specifier(s, &dir, crate::build::Format::Cjs);
+        let esm = |s: &str| output_specifier(s, &dir, crate::build::Format::Esm);
+
+        assert_eq!(cjs("./pool").as_deref(), Some("./pool.cjs"));
+        assert_eq!(esm("./pool").as_deref(), Some("./pool.js"));
+        // A directory resolves through its index, and the declaration has to
+        // name the file rather than the directory.
+        assert_eq!(cjs("./colors").as_deref(), Some("./colors/index.cjs"));
+        assert_eq!(esm("./colors").as_deref(), Some("./colors/index.js"));
+        // Nothing there: left as written rather than pointed at a file this
+        // build did not produce.
+        assert_eq!(cjs("./missing"), None);
+        assert_eq!(esm("./missing"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
