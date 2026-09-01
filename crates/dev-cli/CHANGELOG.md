@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-01
+
 ### Added
 
 - **`esdev test --setup=<path>`, `--timeout=<ms>` and `--reporter=json`**, each

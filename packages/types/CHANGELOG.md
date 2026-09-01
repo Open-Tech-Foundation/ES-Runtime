@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-01
+
 ### Added
 
 - **`runtime:test`'s `it`, `suite`, and the table forms** — `Each`, `TestFn`,
