@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-09-01
+
 ### Added
 
 - **`runtime:test` grows the vocabulary a suite written elsewhere expects** —
