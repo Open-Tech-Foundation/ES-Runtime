@@ -222,9 +222,15 @@ rather than timers, so a file that forgets `clock.release()` still reports.
 is what `esdev build` already does, so a source tree written for a build step
 runs under the runner without being rewritten first.
 
-`esrun` resolves only what the module spec says. The artifact you deploy has
-been through a build, which resolved all of it — so ship the build, not the
-source.
+`esrun` resolves only what the module spec says — which is **Node's** answer
+too, since an extensionless specifier was never valid ESM and extension guessing
+is a bundler convention. The artifact you deploy has been through a build, which
+resolved all of it, so ship the build rather than the source.
+
+| `import { two } from "./util"` | |
+| --- | --- |
+| `esdev`, Bun, a bundler | resolves `util.ts` |
+| `esrun`, Node | `ERR_MODULE_NOT_FOUND` |
 
 <Callout type="note" title="Not yet">
   Per-file timeouts, coverage, and a machine-readable reporter. Module mocking
