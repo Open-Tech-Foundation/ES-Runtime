@@ -607,6 +607,89 @@ fn a_javascript_file_keeps_its_own_line_numbers() {
 // when wrong.
 // ---------------------------------------------------------------------------
 
+/// A library is describable in `esdev.json`, and the file and the flags build
+/// the same thing.
+///
+/// This is the property, not a convenience: everything else about a build lives
+/// in that file, so a library that could only be described on a command line
+/// could describe only *part* of itself. `assets` is the case that proves it —
+/// the README and LICENSE a package ships are a target key, and a `--lib` build
+/// driven by flags alone had no way to name them.
+#[test]
+fn a_library_target_builds_the_same_thing_the_flags_do() {
+    let dir = build_dir("b_libtarget");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/index.ts", "export const two: number = 2;\n");
+    write_in(&dir, "README.md", "# a package\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "lib": {
+             "entry": "src", "lib": true, "outdir": "dist",
+             "format": ["esm", "cjs"], "assets": ["README.md"] } } }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    // The verb a library gets from the flags, not an application's.
+    assert!(stdout(&out).contains("built"), "{}", stdout(&out));
+
+    for name in ["index.js", "index.cjs", "index.d.ts", "index.d.cts"] {
+        assert!(
+            dir.join("dist").join(name).is_file(),
+            "dist/{name} is missing:\n{}",
+            stdout(&out)
+        );
+    }
+    // The half the flags could never do.
+    assert!(
+        dir.join("dist/README.md").is_file(),
+        "a library target did not copy its assets:\n{}",
+        stdout(&out)
+    );
+
+    // …and the same build, asked for the other way, writes the same tree.
+    let flags = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--out=dist2", "--format=esm,cjs"])
+        .output()
+        .expect("spawn esdev");
+    assert!(flags.status.success(), "{}", stderr(&flags));
+    for name in ["index.js", "index.cjs", "index.d.ts", "index.d.cts"] {
+        assert_eq!(
+            std::fs::read(dir.join("dist").join(name)).ok(),
+            std::fs::read(dir.join("dist2").join(name)).ok(),
+            "the file and the flags disagree about {name}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The keys that mean nothing off a library are refused by the file, in the
+/// words the flags use — so a reader who moved a build from a script into
+/// `esdev.json` gets the same answer either way.
+#[test]
+fn the_library_keys_are_refused_on_an_application_target() {
+    let dir = build_dir("b_libkeys");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.ts", "export const x = 1;\n");
+    for (key, value) in [("format", "\"cjs\""), ("types", "false")] {
+        write_in(
+            &dir,
+            "esdev.json",
+            &format!(
+                r#"{{ "targets": {{ "app": {{ "entry": "src/app.ts",
+                     "out": "dist/app.js", "{key}": {value} }} }} }}"#
+            ),
+        );
+        let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+        assert!(!out.status.success(), "{key} was accepted");
+        let err = stderr(&out);
+        assert!(err.contains(key) && err.contains("lib"), "{err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A directory of its own per test: `build` writes files, and two tests sharing
 /// `dist/` would race.
 fn build_dir(name: &str) -> PathBuf {
@@ -2366,7 +2449,9 @@ fn dts_bundle_refuses_an_import_type_it_cannot_link() {
     // directory: `src/./index.ts` is what that produces.
     assert!(message.contains("src/index.ts"), "{message}");
     assert!(!message.contains("/./"), "{message}");
-    assert!(message.contains("--dts-bundle"), "{message}");
+    // Surface-neutral: the same refusal reaches a reader who wrote
+    // `--dts-bundle` and one who wrote `"dts-bundle": true`.
+    assert!(message.contains("declaration bundle"), "{message}");
 
     // A package is not this library's to link, and is left alone.
     write_in(
@@ -2583,7 +2668,9 @@ fn dts_bundle_refuses_a_construct_it_cannot_link_rather_than_guessing() {
     assert!(!out.status.success(), "{}", stdout(&out));
     let message = stderr(&out);
     assert!(message.contains("import * as everything"), "{message}");
-    assert!(message.contains("--dts-bundle"), "{message}");
+    // Surface-neutral: the same refusal reaches a reader who wrote
+    // `--dts-bundle` and one who wrote `"dts-bundle": true`.
+    assert!(message.contains("declaration bundle"), "{message}");
 
     // …and the per-module build, which the message points at, still works.
     let per_module = esdev_in(&dir)

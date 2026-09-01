@@ -602,7 +602,8 @@ const DECLARE: &str = "declare ";
 fn unsupported(label: &str, construct: &str, why: &str) -> String {
     format!(
         "{label}: `{construct}` cannot be bundled into one declaration file — {why}.\n\n\
-         Build without --dts-bundle to get one .d.ts per module, where the construct \
+         Build without the declaration bundle to get one .d.ts per module, where \
+         the construct \
          stands as written."
     )
 }
@@ -723,7 +724,9 @@ mod tests {
         ] {
             let err = analyze("test.d.ts", source).expect_err(source);
             assert!(err.contains(needle), "{err}");
-            assert!(err.contains("--dts-bundle"), "{err}");
+            // Surface-neutral: the same refusal reaches a reader who wrote
+            // `--dts-bundle` and one who wrote `"dts-bundle": true`.
+            assert!(err.contains("declaration bundle"), "{err}");
         }
     }
 }

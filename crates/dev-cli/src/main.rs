@@ -351,6 +351,11 @@ AN APPLICATION vs A LIBRARY
     asserted, and a .d.ts is emitted from the annotations the source carries —
     derived, never inferred, so an unannotated export fails the build.
 
+    Each of --lib, --format, --no-types and --dts-bundle is also a target key
+    — \"lib\", \"format\", \"types\", \"dts-bundle\" — so a library is describable in
+    esdev.json, where its \"assets\" (the README and LICENSE a package ships) can
+    be named. A flag and a key are two spellings of one build.
+
     A library may also be published for consumers who are not on this runtime.
     --format=esm,cjs writes both trees into one directory — dist/**.js with a
     .d.ts, dist/**.cjs with a .d.cts — which a dual `exports` map names. The

@@ -10,6 +10,42 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **A library is describable in `esdev.json`** — `"lib"`, `"format"`, `"types"`
+  and `"dts-bundle"` are target keys, matching the flags of the same names.
+
+  ```json
+  {
+    "targets": {
+      "lib": {
+        "entry": "src",
+        "lib": true,
+        "format": ["esm", "cjs"],
+        "outdir": "dist",
+        "minify": true,
+        "sourcemap": true,
+        "assets": ["README.md", "LICENSE"]
+      }
+    }
+  }
+  ```
+
+  They were flags only, and that was a hole rather than an omission: everything
+  else about a build lives in that file, so a library describable only on a
+  command line could describe only *part* of itself. `assets` is a target key —
+  the README and LICENSE a package ships — so a `--lib` build had no way to name
+  them, **and the `--lib` path never copied them either**. Both halves are fixed.
+
+  A library target is refused where the flags are refused and in the same words:
+  `format`/`types`/`dts-bundle` off a library, a library writing one `out` file,
+  a library rooted at a document, a library with `"then": "run"`. And
+  `"dts-bundle": true` resolves its entry when the file is *read*, so a missing
+  `index.ts` names what was looked for rather than failing later from inside a
+  build.
+
+  The rule, for what comes next: an option that shapes a build belongs on both
+  surfaces. The two disagreeing is how a project gets built one way from a
+  script and another from the file.
+
 - **`expect`, `mock` and `clock` in `runtime:test`** — the assertion vocabulary
   the ecosystem writes tests in, plus the two subsystems that stand in for
   something real.

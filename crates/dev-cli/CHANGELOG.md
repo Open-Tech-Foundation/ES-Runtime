@@ -26,6 +26,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`esdev.json` describes a library** — `"lib"`, `"format"`, `"types"` and
+  `"dts-bundle"` as target keys, so `esdev build` publishes a package with its
+  `assets` (the README and LICENSE) copied. A `--lib` build now copies them too;
+  it never did.
+
 - **Imports resolve the way `esdev build` resolves them.** `./util` finds
   `util.ts`, a directory finds its `index.*`, and `./util.js` finds the
   `util.ts` TypeScript tells you to spell that way.

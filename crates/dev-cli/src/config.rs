@@ -167,6 +167,29 @@ pub struct Target {
     /// name is what a plugin reads (as `ctx.refresh`) to know which scheme it is
     /// installing, and that this build is the hot one.
     pub refresh: Option<String>,
+    /// `"lib": true` — this target publishes a library rather than deploying an
+    /// application, exactly as `esdev build --lib` does.
+    ///
+    /// It is a key on a target and not only a flag because everything else
+    /// about a build lives in this file, and a library that had to be described
+    /// on a command line could describe only *part* of itself: `assets` — the
+    /// README and LICENSE a package ships — is a target key, so a library built
+    /// from flags alone could not copy them.
+    pub lib: bool,
+    /// `"format"` — the module systems a `--lib` target writes: `"esm"`
+    /// (the default), `"cjs"`, or both. A string or a list.
+    pub formats: Vec<String>,
+    /// `"types": false` — skip the declarations, as `--no-types` does.
+    /// Meaningless off a library, and refused there.
+    pub types: bool,
+    /// `"dts-bundle"` — link every declaration into one file, as
+    /// `--dts-bundle` does. `true` takes this target's `index.ts`; a string
+    /// names the entry.
+    ///
+    /// Resolved to a path at parse time, so a `true` with no `index.ts` beside
+    /// it is a config error naming what was looked for rather than a build that
+    /// fails later.
+    pub dts_bundle: Option<String>,
     /// Compile-time replacements, as `--define` makes them.
     pub define: Vec<(String, String)>,
     /// Extra `exports` conditions, as `--conditions` adds them.
@@ -248,6 +271,10 @@ const TARGET_KEYS: &[&str] = &[
     "conditions",
     "then",
     "refresh",
+    "lib",
+    "format",
+    "types",
+    "dts-bundle",
 ];
 
 /// The keys the file may carry at the top level.
@@ -349,7 +376,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
 
     let mut targets = targets
         .iter()
-        .map(|(target_name, value)| target(target_name, value, name, &shared, &mut plugins))
+        .map(|(target_name, value)| target(target_name, value, name, &dir, &shared, &mut plugins))
         .collect::<Result<Vec<_>, _>>()?;
     // Sorted here rather than taken as they came. `serde_json` keeps insertion
     // order only when a feature enables it, and that feature is currently on
@@ -381,6 +408,7 @@ fn target(
     name: &str,
     value: &Value,
     file: &str,
+    dir: &Path,
     shared: &[usize],
     plugins: &mut Vec<PluginSpec>,
 ) -> Result<Target, String> {
@@ -491,6 +519,81 @@ fn target(
         plugins.push(spec);
     }
 
+    let lib = flag(map.get("lib"), file, &format!("{at}'s `lib`"))?;
+    let formats = library_formats(map.get("format"), file, &at)?;
+    let types = match map.get("types") {
+        None => true,
+        Some(value) => flag(Some(value), file, &format!("{at}'s `types`"))?,
+    };
+
+    // The refusals come **before** `dts-bundle` is resolved. Resolving it means
+    // looking for an index under the entry, and on a target whose entry is a
+    // module rather than a directory that reports a missing
+    // `src/app.ts/index.ts` — an answer to a question the reader never asked.
+    // What they need to hear is that the key needs `"lib": true`.
+    //
+    // The same refusals `esdev build` makes for the same flags, in the same
+    // words. A key that means nothing here is a belief about the build that is
+    // wrong, and the two surfaces disagreeing about which is which is how a
+    // project ends up built one way from the file and another from a flag.
+    if !lib {
+        if !formats.is_empty() {
+            return Err(format!(
+                "{file}: {at} has `format` without \"lib\": true.\n\n\
+                 An application build's output is loaded by esrun, which loads ES \
+                 modules and nothing else (D22). A library is an input to somebody \
+                 else's build, and that build may still be a CommonJS one."
+            ));
+        }
+        if map.contains_key("types") {
+            return Err(format!(
+                "{file}: {at} has `types` without \"lib\": true.\n\n\
+                 An application build emits no declarations to skip: a bundle is \
+                 deployed and run, not imported and type-checked."
+            ));
+        }
+        if map.contains_key("dts-bundle") {
+            return Err(format!(
+                "{file}: {at} has `dts-bundle` without \"lib\": true.\n\n\
+                 An application build emits no declarations to link."
+            ));
+        }
+    }
+    let dts_bundle = dts_bundle(map.get("dts-bundle"), file, &at, dir, &entry)?;
+    if lib {
+        if !types && dts_bundle.is_some() {
+            return Err(format!(
+                "{file}: {at} sets `dts-bundle` and \"types\": false, which ask for \
+                 opposite things.\n\n\
+                 One links every declaration into a file; the other emits none."
+            ));
+        }
+        if is_html_entry(&entry) {
+            return Err(format!(
+                "{file}: {at} is a library whose `entry` is a document.\n\n\
+                 A library's entry is the **source directory** its modules are \
+                 under — \"entry\": \"src\" — because a published tree has no one \
+                 root: which module a consumer imports is its `exports` map's \
+                 decision, not this build's."
+            ));
+        }
+        if let Output::File(out) = &output {
+            return Err(format!(
+                "{file}: {at} is a library with \"out\": \"{out}\", which names one \
+                 file.\n\n\
+                 A library keeps its module structure, so its output is a \
+                 directory: \"outdir\": \"dist\"."
+            ));
+        }
+        if run_after_build {
+            return Err(format!(
+                "{file}: {at} is a library with \"then\": \"run\".\n\n\
+                 A library is imported by somebody else's build, not executed by \
+                 this one."
+            ));
+        }
+    }
+
     let built = Target {
         name: name.to_string(),
         entry,
@@ -504,6 +607,10 @@ fn target(
         refresh: refresh(map.get("refresh"), file, &at, !mine.is_empty())?,
         plugins: mine,
         run_after_build,
+        lib,
+        formats,
+        types,
+        dts_bundle,
     };
 
     // An HTML target's shape is decided by the document, so the keys that would
@@ -903,6 +1010,98 @@ fn sourcemap(value: Option<&Value>, file: &str, at: &str) -> Result<Option<Strin
     }
 }
 
+/// Parses a library target's `format`: which module systems it writes.
+///
+/// A string or a list, so the common case reads as one — `"format": "cjs"` —
+/// and both is a list. The names are `--format`'s, because they are the same
+/// answer to the same question.
+fn library_formats(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<String>, String> {
+    let named = match value {
+        None => return Ok(Vec::new()),
+        Some(Value::String(one)) => vec![one.clone()],
+        Some(Value::Array(many)) => many
+            .iter()
+            .map(|entry| match entry {
+                Value::String(name) => Ok(name.clone()),
+                other => Err(format!(
+                    "{file}: {at}'s `format` holds {}, and each entry is a module \
+                     system's name.",
+                    kind(other)
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(other) => {
+            return Err(format!(
+                "{file}: {at}'s `format` is {}, and it names the module systems this \
+                 library writes.\n\n  \
+                 \"esm\"            — ES modules, the default\n  \
+                 \"cjs\"            — CommonJS, for a require() consumer\n  \
+                 [\"esm\", \"cjs\"]   — both, into one directory",
+                kind(other)
+            ));
+        }
+    };
+    let mut formats: Vec<String> = Vec::new();
+    for name in named {
+        if !matches!(name.as_str(), "esm" | "cjs") {
+            return Err(format!(
+                "{file}: {at}'s `format` names \"{name}\".\n\n\
+                 It is \"esm\" (ES modules) or \"cjs\" (CommonJS)."
+            ));
+        }
+        if formats.contains(&name) {
+            return Err(format!(
+                "{file}: {at}'s `format` names \"{name}\" twice."
+            ));
+        }
+        formats.push(name);
+    }
+    Ok(formats)
+}
+
+/// Parses `dts-bundle`, resolving `true` to the entry it would take.
+///
+/// Resolved **here** rather than in the build, for the reason the flag resolves
+/// it in the argument parser: a `true` with no `index.ts` under the source
+/// directory should say so while naming what was looked for and how to name a
+/// different one — not fail later, from inside a build, about a file the config
+/// never mentioned.
+fn dts_bundle(
+    value: Option<&Value>,
+    file: &str,
+    at: &str,
+    dir: &Path,
+    entry: &str,
+) -> Result<Option<String>, String> {
+    match value {
+        None | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::String(named)) => Ok(Some(named.clone())),
+        Some(Value::Bool(true)) => {
+            let found = ["ts", "tsx", "mts", "cts"]
+                .iter()
+                .map(|extension| Path::new(entry).join(format!("index.{extension}")))
+                .find(|candidate| dir.join(candidate).is_file());
+            match found {
+                Some(found) => Ok(Some(found.to_string_lossy().into_owned())),
+                None => Err(format!(
+                    "{file}: {at} has \"dts-bundle\": true, and there is no index.ts \
+                     in {entry}.\n\n\
+                     One declaration file is built from one entry. Name it: \
+                     \"dts-bundle\": \"{entry}/main.ts\"."
+                )),
+            }
+        }
+        Some(other) => Err(format!(
+            "{file}: {at}'s `dts-bundle` is {}, and it says whether every \
+             declaration is linked into one file.\n\n  \
+             true             — from this target's index.ts\n  \
+             \"src/main.ts\"    — from the entry you name\n  \
+             false            — one .d.ts per module, the default",
+            kind(other)
+        )),
+    }
+}
+
 /// Parses `alias`: what a specifier is rewritten to before it is resolved.
 ///
 /// A **path** replacement is resolved against the project directory and kept
@@ -1045,6 +1244,142 @@ mod tests {
         assert!(matches!(&target.output, Output::File(out) if out == "dist/server.js"));
         assert_eq!(target.platform, Platform::Server);
         assert!(!target.run_after_build);
+    }
+
+    /// A library target says the same things `--lib` says, in the same words.
+    #[test]
+    fn a_library_target_carries_what_the_flags_carry() {
+        let project = read(
+            r#"{ "targets": { "std": {
+                 "entry": "src", "lib": true, "outdir": "dist",
+                 "format": ["esm", "cjs"], "minify": true,
+                 "assets": ["README.md", "LICENSE"] } } }"#,
+        )
+        .expect("parsed");
+        let target = &project.targets[0];
+        assert!(target.lib);
+        assert_eq!(target.formats, ["esm", "cjs"]);
+        assert!(target.minify);
+        // The default, and the one that matters: a library emits declarations
+        // unless it says otherwise.
+        assert!(target.types);
+        assert_eq!(target.dts_bundle, None);
+        assert_eq!(target.assets, ["README.md", "LICENSE"]);
+        assert!(matches!(&target.output, Output::Dir(dir) if dir == "dist"));
+    }
+
+    /// One format is a string, because the common case should read as one.
+    #[test]
+    fn a_single_format_needs_no_list() {
+        let project = read(
+            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
+                 "format": "cjs" } } }"#,
+        )
+        .expect("parsed");
+        assert_eq!(project.targets[0].formats, ["cjs"]);
+    }
+
+    /// The keys that mean nothing off a library are refused rather than
+    /// ignored — the same answer `esdev build` gives the same flags, because a
+    /// file and a command line disagreeing about that is how a project gets
+    /// built one way from each.
+    #[test]
+    fn the_library_keys_are_refused_on_an_application() {
+        for (key, value) in [
+            ("format", "\"cjs\""),
+            ("types", "false"),
+            ("dts-bundle", "true"),
+        ] {
+            let err = read(&format!(
+                r#"{{ "targets": {{ "app": {{ "entry": "src/app.ts",
+                     "out": "dist/app.js", "{key}": {value} }} }} }}"#
+            ))
+            .expect_err("refused");
+            assert!(err.contains(key), "{err}");
+            assert!(err.contains("lib"), "{err}");
+        }
+    }
+
+    /// A library keeps its module structure, so its output is a directory.
+    #[test]
+    fn a_library_writing_one_file_is_refused() {
+        let err = read(
+            r#"{ "targets": { "std": { "entry": "src", "lib": true,
+                 "out": "dist/std.js" } } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("outdir"), "{err}");
+    }
+
+    /// A document is not a library's entry: a published tree has no one root.
+    #[test]
+    fn a_library_rooted_at_a_document_is_refused() {
+        let err = read(
+            r#"{ "targets": { "std": { "entry": "index.html", "lib": true,
+                 "outdir": "dist" } } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("source directory"), "{err}");
+    }
+
+    /// `"then": "run"` executes what was built, and a library is imported by
+    /// somebody else's build rather than run by this one.
+    #[test]
+    fn a_library_that_runs_afterwards_is_refused() {
+        let err = read(
+            r#"{ "targets": { "std": { "entry": "src", "lib": true,
+                 "outdir": "dist", "then": "run" } } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("imported"), "{err}");
+    }
+
+    /// The module systems are named, so a typo is an error rather than a
+    /// silently missing half of the package.
+    #[test]
+    fn an_unknown_format_is_named() {
+        let err = read(
+            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
+                 "format": ["esm", "umd"] } } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("umd"), "{err}");
+        assert!(err.contains("\"cjs\""), "{err}");
+
+        let twice = read(
+            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
+                 "format": ["esm", "esm"] } } }"#,
+        )
+        .expect_err("refused");
+        assert!(twice.contains("twice"), "{twice}");
+    }
+
+    /// `"dts-bundle": true` needs an index to bundle from, and says so while
+    /// naming what it looked for — resolved when the file is read rather than
+    /// from inside a build, which is where the flag resolves it too.
+    #[test]
+    fn dts_bundle_true_with_no_index_says_where_to_look() {
+        let err = read(
+            r#"{ "targets": { "std": { "entry": "nowhere", "lib": true,
+                 "outdir": "dist", "dts-bundle": true } } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("index.ts"), "{err}");
+        assert!(err.contains("nowhere/main.ts"), "{err}");
+    }
+
+    /// …and a named entry is taken as written.
+    #[test]
+    fn dts_bundle_takes_the_entry_it_is_given() {
+        let project = read(
+            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
+                 "dts-bundle": "src/public.ts" } } }"#,
+        )
+        .expect("parsed");
+        assert_eq!(
+            project.targets[0].dts_bundle.as_deref(),
+            Some("src/public.ts")
+        );
     }
 
     /// The project's plugins are every target's, and a target's own are added

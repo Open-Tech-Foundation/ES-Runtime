@@ -165,6 +165,10 @@ esdev build src/app.ts           # ignores the file entirely
 | `platform` | `server` (default) or `browser` |
 | `assets` | Copied into the output: a file by name, a directory by its **contents** |
 | `then` | `"run"` — execute the output once built |
+| `lib` | `true` — publish a library instead of deploying a bundle ([below](#a-library)) |
+| `format` | A library's module systems: `"esm"`, `"cjs"`, or both as a list |
+| `types` | `false` — skip the declarations |
+| `dts-bundle` | `true`, or the entry to link from |
 | `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
 | `alias` (top level) | Specifier rewrites for every target ([below](#aliases)) |
 | `plugins` | Plugins for this target, **added** to the project's ([below](#plugins)) |
@@ -559,13 +563,43 @@ nothing runs it and no test covers it, so a wrong one is worse than none.
 
 ### Library options
 
-| Flag | |
-| --- | --- |
-| `--lib` | Build a library |
-| `--format=<list>` | `--lib` only: `esm` (default), `cjs`, or `esm,cjs` |
-| `--no-types` | `--lib` only: skip the `.d.ts` |
-| `--dts-bundle[=<entry>]` | `--lib` only: one `.d.ts` instead of one per module. Default entry `<srcdir>/index.ts` |
-| `--out=<dir>` | Where to write it (default `dist`) |
+Every one of these is a flag **and** a target key, because a build belongs in
+the file that describes the project. A library described only on a command line
+could describe only part of itself — `assets` is a target key, so the README and
+LICENSE a package ships had nowhere to be named.
+
+| Flag | In `esdev.json` | |
+| --- | --- | --- |
+| `--lib` | `"lib": true` | Build a library |
+| `--format=<list>` | `"format": ["esm", "cjs"]` | `esm` (default), `cjs`, or both. A single one may be a string |
+| `--no-types` | `"types": false` | Skip the `.d.ts` |
+| `--dts-bundle[=<entry>]` | `"dts-bundle": true` or `"src/main.ts"` | One `.d.ts` instead of one per module. `true` takes `<entry>/index.ts` |
+| `--out=<dir>` | `"outdir": "dist"` | Where to write it (default `dist`) |
+
+```json
+{
+  "targets": {
+    "lib": {
+      "entry": "src",
+      "lib": true,
+      "format": ["esm", "cjs"],
+      "outdir": "dist",
+      "minify": true,
+      "sourcemap": true,
+      "assets": ["README.md", "LICENSE"]
+    }
+  }
+}
+```
+
+```sh
+esdev build                      # …and the whole package is one command
+```
+
+The library keys mean nothing on an application target and are **refused**
+there rather than ignored, in the same words the flags use: an application
+build emits no declarations to skip or link, and its output is loaded by
+`esrun`, which loads ES modules and nothing else.
 
 <Callout type="note" title="Types are never checked">
   `esdev` erases and derives; it does not typecheck. That is your editor's job

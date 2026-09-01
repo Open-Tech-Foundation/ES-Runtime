@@ -933,6 +933,13 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             }
         });
     }
+    // The README and the LICENSE a package ships, and whatever else it carries
+    // verbatim. Copied here rather than nowhere: a library is the artifact that
+    // most needs them — npm shows the README on the package page — and until
+    // `esdev.json` could describe a library build, a `--lib` target had no way
+    // to name them at all.
+    let copied = copy_assets(&config.assets, &cwd, &out_dir)?;
+    counted.push_str(&copied);
     warn_about_runtime_imports(&formats, &runtime_imports);
     Ok(format!("{}/ ({counted})", out_dir.display()))
 }
@@ -1726,18 +1733,29 @@ async fn build_targets(
             // it wants them, since a `.map` beside a deployed bundle is a
             // decision (about size, and about what the file discloses).
             sourcemap: sourcemap_for(target, project.dev.is_some()),
-            lib: false,
-            formats: Vec::new(),
-            types: false,
-            dts_bundle: None,
+            // A library target builds exactly as `--lib` does — the flags and
+            // the file are two spellings of one build, and a project that can
+            // be described in `esdev.json` is one whose `assets` a library
+            // build can finally copy.
+            lib: target.lib,
+            // The names were validated when the file was parsed — anything
+            // but `esm`/`cjs` is refused there, with the spellings — so this
+            // cannot silently drop one.
+            formats: target.formats.iter().filter_map(|name| Format::parse(name)).collect(),
+            types: target.lib && target.types,
+            dts_bundle: target.dts_bundle.clone(),
             plugins,
         })
         .await
         .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
         let paint = crate::style::Palette::stdout();
+        // The same word the flags produce for the same build: a library is
+        // *built*, an application is *bundled*, and a project that says which it
+        // is should not read differently from the command line that says it.
+        let verb = if target.lib { "built" } else { "bundled" };
         println!(
             "{} {} {}",
-            paint.green("bundled"),
+            paint.green(verb),
             paint.dim("→"),
             staging.reveal(&written)
         );
