@@ -15,6 +15,14 @@ itself.
 
 ### Added
 
+- **`runtime:test`'s `expect`, `mock` and `clock`** — `Matchers`,
+  `AwaitedMatchers` and `Assertion` for the matcher vocabulary (including
+  `.not`, `.resolves`/`.rejects` and the asymmetric factories on `expect`
+  itself), and `Mock`/`MockRecord` for a recording function. Without these a
+  `.ts` test file referenced undeclared names and `tsc --noEmit` failed on a
+  suite that ran perfectly — the failure `runtime:test` was made a module to
+  avoid.
+
 - **`runtime:test`'s `describe`**, and `.skip`/`.only` on it and on `test`.
   `test` becomes a callable object rather than a function declaration so the two
   can hang off it.

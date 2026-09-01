@@ -69,6 +69,10 @@ pub fn jobs() -> usize {
 }
 
 /// Suffixes that make a file a test.
+///
+/// `.spec.` as well as `.test.`, because both conventions are everywhere and a
+/// runner that knows only one silently runs no tests in half the projects it is
+/// pointed at — which looks exactly like a suite that passes.
 const TEST_SUFFIXES: &[&str] = &[
     ".test.js",
     ".test.mjs",
@@ -76,6 +80,12 @@ const TEST_SUFFIXES: &[&str] = &[
     ".test.tsx",
     ".test.jsx",
     ".test.mts",
+    ".spec.js",
+    ".spec.mjs",
+    ".spec.ts",
+    ".spec.tsx",
+    ".spec.jsx",
+    ".spec.mts",
 ];
 
 /// Directories discovery never descends into.
@@ -263,6 +273,9 @@ mod tests {
 
     #[test]
     fn test_files_are_recognised_by_suffix() {
+        assert!(is_test_file("app.spec.ts"));
+        assert!(is_test_file("app.spec.tsx"));
+        assert!(!is_test_file("spec.ts"));
         assert!(is_test_file("app.test.ts"));
         assert!(is_test_file("app.test.mjs"));
         assert!(is_test_file("deep.name.test.tsx"));

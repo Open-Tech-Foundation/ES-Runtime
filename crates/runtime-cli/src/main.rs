@@ -176,6 +176,10 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    // Strict: a deployment runs a bundle, and a specifier that
+                    // names no file is a mistake rather than something to
+                    // search for.
+                    bundler_style_resolution: false,
                     // Nothing is added to the `runtime:` namespace here. A
                     // production binary offers the standard modules and only
                     // those, so `runtime:build` and `runtime:watch` — `esdev`'s
@@ -218,6 +222,10 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    // Strict: a deployment runs a bundle, and a specifier that
+                    // names no file is a mistake rather than something to
+                    // search for.
+                    bundler_style_resolution: false,
                     // Nothing is added to the `runtime:` namespace here. A
                     // production binary offers the standard modules and only
                     // those, so `runtime:build` and `runtime:watch` — `esdev`'s

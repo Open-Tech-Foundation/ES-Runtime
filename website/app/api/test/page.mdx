@@ -1,6 +1,6 @@
 ---
 title: runtime:test
-description: test() and the assertions esdev test runs — imported, not ambient. esdev only.
+description: test(), expect, mock and clock — the API esdev test runs, imported, not ambient. esdev only.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -16,14 +16,20 @@ The test API, as a module you import.
 </Callout>
 
 ```js
-import { test, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
+import { test, expect } from "runtime:test";
 
-test("adds", () => assertEquals(add(2, 3), 5));
-test("fetches", async () => assertEquals((await get("/")).status, 200));
+test("adds", () => expect(add(2, 3)).toBe(5));
+test("fetches", async () => await expect(get("/")).resolves.toMatchObject({ status: 200 }));
 ```
 
-These were five **globals** until now, prepended to every test file's own
-source. Importing them fixes three things at once:
+Everything is imported, including `expect`, `mock` and `clock`. There is no
+global `test` and no global `expect`: this runtime hands out no ambient names
+anywhere, and a test file is not the place to make an exception — a suite
+written elsewhere gets an import line, which is a line, and keeps the guarantee
+that a program is handed only what it asked for.
+
+The assertions were five **globals** until D71, prepended to every test file's
+own source. Importing them fixes three things at once:
 
 - the runtime hands out no ambient names anywhere else — everything is a
   `runtime:` module;
@@ -173,6 +179,143 @@ assertThrows(() => parse(bad), "field number 0");
 assertThrows(() => parse(bad), /number 0 is not/, "the parser accepted it");
 await assertRejects(() => fetchIt(), "TimeoutError");
 ```
+
+## expect(value)
+
+The ecosystem's spelling of the same assertions. `assertEquals(a, b)` and
+`expect(a).toEqual(b)` share one comparison — this is a second spelling, not a
+second implementation, and the reason to have it is that a suite written for
+another runner should need an import rather than a rewrite.
+
+`.not` inverts any matcher. `.resolves` and `.rejects` settle a promise first
+and match on what came out, so a rejection is reported as one rather than as a
+mismatched `Promise` — `await` them.
+
+| | |
+| --- | --- |
+| `toBe` | `Object.is` — identity, and `NaN` equals `NaN` |
+| `toEqual` / `toStrictEqual` | Structural, the `assertEquals` walk |
+| `toBeTruthy` / `toBeFalsy` / `toBeNull` / `toBeUndefined` / `toBeDefined` / `toBeNaN` | |
+| `toBeInstanceOf` / `toBeTypeOf` | |
+| `toContain` / `toContainEqual` | A member, a substring, a `Set`/`Map` key |
+| `toHaveLength` / `toHaveProperty` | `toHaveProperty("a.b", 1)` |
+| `toMatch` / `toMatchObject` | String or `RegExp`; a subset of keys |
+| `toBeGreaterThan` / `…OrEqual` / `toBeLessThan` / `…OrEqual` / `toBeCloseTo` | |
+| `toThrow` / `toThrowError` | Calls it; takes the same expectation `assertThrows` does |
+| `toHaveBeenCalled` / `…Times` / `…With` / `…LastCalledWith` / `…NthCalledWith` | Needs a `mock.fn()` |
+| `toHaveReturned` / `…Times` / `…With` / `toHaveLastReturnedWith` / `toHaveNthReturnedWith` | |
+
+The shorter jest spellings — `toBeCalled`, `toBeCalledWith`, `lastCalledWith`,
+`toReturnWith` — are aliases of the same matchers, not variants of them.
+
+```js
+expect(list).toHaveLength(3);
+expect(list).not.toContain(9);
+await expect(load()).resolves.toMatchObject({ ok: true });
+await expect(load()).rejects.toThrow(/timed out/);
+```
+
+### Asymmetric matchers
+
+A value that says what it will accept, usable wherever a value goes — including
+several levels inside an expected object, which is the case that cannot be
+written as an assertion of its own.
+
+```js
+expect(row).toEqual({
+  id: expect.any(Number),
+  name: expect.stringContaining("ada"),
+  at: expect.anything(),
+});
+```
+
+`expect.anything()`, `expect.any(Ctor)`, `expect.stringContaining`,
+`expect.stringMatching`, `expect.arrayContaining`, `expect.objectContaining`.
+
+## mock
+
+Functions that stand in for real ones. `mock.fn()` records; `mock.spyOn()`
+installs a recorder over a real method and **still calls the original**, because
+a spy is usually installed to watch something work.
+
+```js
+import { test, expect, mock } from "runtime:test";
+
+test("posts once per item", async () => {
+  const post = mock.spyOn(client, "post");
+  await sync([1, 2]);
+  expect(post).toHaveBeenCalledTimes(2);
+  expect(post).toHaveBeenLastCalledWith("/items", 2);
+  post.mockRestore();
+});
+```
+
+| | |
+| --- | --- |
+| `mock.fn(impl?)` | A recording function |
+| `mock.spyOn(object, key)` | …installed over a method; `mockRestore()` puts it back |
+| `mock.is(value)` | Whether it is one |
+| `mock.global(name, value)` | Replaces a global for the file |
+| `mock.clearAll()` / `resetAll()` / `restoreAll()` | Forget the calls / the answers / everything |
+
+On the mock itself: `mock.calls`, `mock.results`, `mock.instances`,
+`mock.lastCall`; `mockImplementation`, `mockReturnValue`, `mockReturnThis`,
+`mockResolvedValue`, `mockRejectedValue` — each with a `…Once` — and
+`mockClear`, `mockReset`, `mockRestore`, `mockName`.
+
+Those method names are the ecosystem's, deliberately: they are the vocabulary
+the matchers read.
+
+## clock
+
+Time, stopped. `clock.freeze()` replaces `setTimeout`, `setInterval`, their
+cancels and `Date` on `globalThis`, and everything scheduled through them then
+moves only when the test says so.
+
+```js
+import { test, expect, mock, clock } from "runtime:test";
+
+test("polls every second until it answers", async () => {
+  clock.freeze();
+  const ask = mock.fn().mockResolvedValueOnce(null).mockResolvedValue("ok");
+
+  const answer = poll(ask, 1000);
+  await clock.advanceAsync(2000);
+
+  expect(ask).toHaveBeenCalledTimes(2);
+  await expect(answer).resolves.toBe("ok");
+  clock.release();
+});
+```
+
+| | |
+| --- | --- |
+| `clock.freeze(at?)` | Stops time, optionally at a moment |
+| `clock.release()` | Real timers back |
+| `clock.advance(ms)` / `advanceAsync(ms)` | Move it |
+| `clock.next()` / `nextAsync()` | Jump to the next timer and run it |
+| `clock.runAll()` / `runAllAsync()` | Drain the queue |
+| `clock.runPending()` / `runPendingAsync()` | Fire what is waiting once — an interval does not repeat |
+| `clock.pending()` / `clock.clear()` | How many are waiting; drop them |
+| `clock.setSystemTime(t)` / `clock.realNow()` | |
+
+**`advanceAsync` is the one to reach for when the code under test `await`s.**
+The synchronous form fires every callback with nothing in between, so a
+`sleep(10).then(…)` has been *resolved* but its continuation has not run — and
+the assertion after it sees the state from before.
+
+`Date` moves with the clock rather than being frozen separately, because the two
+are one question: a stopped `setTimeout` beside a running `Date.now()` describes
+a machine that does not exist.
+
+<Callout type="warning" title="It replaces globals for the whole process">
+  Not for one test. That is safe here because a test file **is** a process — the
+  swap cannot reach the next file — and because the runner drains on microtasks
+  rather than timers, so a file that forgets `clock.release()` still reports.
+
+  These are standards-defined names being replaced at the test's own explicit
+  request, which is the opposite of the runtime handing out a vocabulary.
+</Callout>
 
 <Callout type="note" title="Sharing test code">
   Because the assertions are imported, a helper module can use them:

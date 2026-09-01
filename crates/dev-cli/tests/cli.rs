@@ -504,6 +504,86 @@ fn esrun_still_refuses_the_typescript_that_esdev_runs() {
     );
 }
 
+/// The specifiers a bundler answers and a strict resolver does not: no
+/// extension, a directory, and TypeScript's own `./x.js`-means-`./x.ts`.
+///
+/// This is what lets `esdev` be pointed at a source tree that was written for a
+/// build step, which is most of them — and every one of these is a *miss* under
+/// the strict rules, so the file could not be loaded at all before.
+#[test]
+fn esdev_resolves_the_specifiers_a_bundler_would() {
+    let dir = build_dir("t_resolve");
+    write_in(&dir, "util.ts", "export const two = 2;\n");
+    std::fs::create_dir_all(dir.join("nested")).expect("mkdir");
+    write_in(&dir, "nested/index.ts", "export const three = 3;\n");
+    write_in(&dir, "helper.ts", "export const four = 4;\n");
+    let app = write_in(
+        &dir,
+        "app.ts",
+        "import { two } from './util';\n\
+         import { three } from './nested';\n\
+         import { four } from './helper.js';\n\
+         console.log(two + three + four);\n",
+    );
+    let out = esdev_in(&dir)
+        .arg(app.file_name().expect("entry"))
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "9");
+}
+
+/// …and the other half of that boundary: `esrun` still refuses them.
+///
+/// Deployment resolution stays exactly what the module spec says, because the
+/// artifact `esrun` runs has been through a build — a production binary that
+/// guessed at filenames would be reading the disk to decide what a program
+/// means.
+#[test]
+fn esrun_still_refuses_the_specifiers_esdev_resolves() {
+    let dir = build_dir("t_resolve_prod");
+    write_in(&dir, "util.ts", "export const two = 2;\n");
+    let app = write_in(
+        &dir,
+        "app.mjs",
+        "import { two } from './util';\nconsole.log(two);\n",
+    );
+    let Some(esrun) = sibling_binary("esrun") else {
+        eprintln!("skipping: esrun is not built beside esdev");
+        return;
+    };
+    let out = Command::new(esrun)
+        .current_dir(&dir)
+        .arg(app.file_name().expect("entry"))
+        .output()
+        .expect("spawn esrun");
+    assert!(
+        !out.status.success(),
+        "esrun resolved an extensionless specifier — bundler-style resolution \
+         has leaked into production"
+    );
+}
+
+/// A miss still reports the specifier that was written, not the last spelling
+/// tried: "cannot resolve ./nope.ts" for `import "./nope"` sends the reader
+/// looking for a file they never mentioned.
+#[test]
+fn an_unresolvable_import_names_what_the_file_said() {
+    let dir = build_dir("t_resolve_miss");
+    let app = write_in(&dir, "app.ts", "import './nope';\n");
+    let out = esdev_in(&dir)
+        .arg(app.file_name().expect("entry"))
+        .output()
+        .expect("spawn esdev");
+    assert!(!out.status.success());
+    let text = stderr(&out);
+    assert!(text.contains("nope"), "{text}");
+    assert!(
+        !text.contains("nope.mjs") && !text.contains("nope/index"),
+        "the error named a spelling the file never wrote:\n{text}"
+    );
+}
+
 /// A `.js` file must not be reprinted on its way through: every byte the
 /// stripper changed would be a byte the stack traces no longer match.
 #[test]
@@ -2766,6 +2846,307 @@ fn a_typescript_test_file_runs_with_its_imports() {
         .expect("spawn esdev test");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
     assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+}
+
+/// `expect` is a second spelling of the assertions, not a second
+/// implementation — so this drives the whole vocabulary through one file and
+/// checks the tally, rather than trusting that a matcher nobody ran works.
+///
+/// Every matcher appears, in both directions where negation means anything,
+/// because a matcher that forgot to consult `not` passes its positive test
+/// perfectly.
+#[test]
+fn the_expect_vocabulary_holds_in_both_directions() {
+    let dir = build_dir("t_expect");
+    write_in(
+        &dir,
+        "expect.test.ts",
+        r#"
+import { test, expect } from "runtime:test";
+
+test("values", () => {
+  expect(2 + 2).toBe(4);
+  expect({ a: [1, { b: 2 }] }).toEqual({ a: [1, { b: 2 }] });
+  expect({ a: 1 }).toStrictEqual({ a: 1 });
+  expect(1).not.toBe(2);
+  expect("").toBeFalsy();
+  expect("x").toBeTruthy();
+  expect(null).toBeNull();
+  expect(undefined).toBeUndefined();
+  expect(0).toBeDefined();
+  expect(Number.NaN).toBeNaN();
+  expect(new Error("x")).toBeInstanceOf(Error);
+  expect("x").toBeTypeOf("string");
+  expect(0.1 + 0.2).toBeCloseTo(0.3);
+  expect(3).toBeGreaterThan(2);
+  expect(3).toBeGreaterThanOrEqual(3);
+  expect(2).toBeLessThan(3);
+  expect(2).toBeLessThanOrEqual(2);
+});
+
+test("collections and text", () => {
+  expect([1, 2, 3]).toContain(2);
+  expect([{ a: 1 }]).toContainEqual({ a: 1 });
+  expect([1, 2]).toHaveLength(2);
+  expect("hello").toHaveLength(5);
+  expect({ a: { b: 1 } }).toHaveProperty("a.b", 1);
+  expect("hello").toMatch(/ell/);
+  expect("hello").toMatch("ell");
+  expect({ a: 1, b: 2 }).toMatchObject({ a: 1 });
+  expect([1, 2]).not.toContain(9);
+});
+
+test("throwing, and the alias", () => {
+  const boom = () => {
+    throw new TypeError("bad input");
+  };
+  expect(boom).toThrow();
+  expect(boom).toThrow("bad input");
+  expect(boom).toThrow(/bad/);
+  expect(boom).toThrow(TypeError);
+  expect(boom).toThrowError("bad input");
+  expect(() => {}).not.toThrow();
+});
+
+test("promises", async () => {
+  await expect(Promise.resolve(7)).resolves.toBe(7);
+  await expect(Promise.reject(new Error("no"))).rejects.toThrow("no");
+  await expect(Promise.resolve(7)).resolves.not.toBe(8);
+});
+
+test("asymmetric matchers, including nested", () => {
+  expect({ id: 1, name: "a", at: new Date() }).toEqual({
+    id: expect.any(Number),
+    name: expect.stringContaining("a"),
+    at: expect.anything(),
+  });
+  expect([1, 2, 3]).toEqual(expect.arrayContaining([3, 1]));
+  expect({ a: 1, b: 2 }).toEqual(expect.objectContaining({ a: 1 }));
+  expect("hello").toEqual(expect.stringMatching(/^he/));
+});
+
+// A matcher that does not fail when it should is the failure this whole file
+// is about, so each direction is provoked once.
+test("a matcher that should fail, does", () => {
+  const refused = (fn: () => void) => {
+    let threw = false;
+    try {
+      fn();
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("that assertion should have failed");
+  };
+  refused(() => expect(1).toBe(2));
+  refused(() => expect(1).not.toBe(1));
+  refused(() => expect([1]).toHaveLength(2));
+  refused(() => expect("a").toMatch(/b/));
+  refused(() => expect(() => {}).toThrow());
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("6 passed, 0 failed"), "{text}");
+}
+
+/// `mock` and `clock` — the two subsystems that stand in for something real.
+///
+/// The clock is the half worth driving end to end: it replaces `setTimeout`,
+/// `setInterval` and `Date` on `globalThis` for the whole process, and the
+/// property that makes that safe is that a test file is a process. Freezing it
+/// here and never releasing it in the last case is deliberate — the runner
+/// drains on microtasks, so it must still print a tally.
+#[test]
+fn mocks_record_calls_and_the_clock_moves_only_when_told() {
+    let dir = build_dir("t_mock");
+    write_in(
+        &dir,
+        "mock.test.ts",
+        r#"
+import { test, expect, mock, clock } from "runtime:test";
+
+test("a mock records what it was asked", () => {
+  const add = mock.fn((a: number, b: number) => a + b);
+  expect(add(1, 2)).toBe(3);
+  add(4, 5);
+  expect(add).toHaveBeenCalled();
+  expect(add).toHaveBeenCalledTimes(2);
+  expect(add).toHaveBeenCalledWith(1, 2);
+  expect(add).toHaveBeenLastCalledWith(4, 5);
+  expect(add).toHaveBeenNthCalledWith(1, 1, 2);
+  expect(add).toHaveReturnedWith(9);
+  expect(add).toHaveReturnedTimes(2);
+  expect(add).not.toHaveBeenCalledWith(9, 9);
+  // The short spellings are the same matchers.
+  expect(add).toBeCalledTimes(2);
+  expect(add).lastCalledWith(4, 5);
+  expect(add.mock.calls).toEqual([[1, 2], [4, 5]]);
+});
+
+test("it answers however it was told, once and then always", () => {
+  const f = mock.fn().mockReturnValueOnce("first").mockReturnValue("rest");
+  expect([f(), f(), f()]).toEqual(["first", "rest", "rest"]);
+  const g = mock.fn().mockResolvedValue("ok");
+  expect(g()).resolves;
+  const boom = mock.fn(() => {
+    throw new Error("boom");
+  });
+  expect(boom).toThrow("boom");
+  expect(boom.mock.results[0].type).toBe("throw");
+});
+
+test("clear, reset, restore", () => {
+  const f = mock.fn(() => 1).mockReturnValue(2);
+  f();
+  f.mockClear();
+  expect(f).not.toHaveBeenCalled();
+  f.mockReset();
+  expect(f()).toBe(1);
+});
+
+test("a call matcher refuses anything that is not a mock", () => {
+  expect(() => expect(() => {}).toHaveBeenCalled()).toThrow("needs a mock");
+});
+
+test("the failure names the mock", () => {
+  const send = mock.fn().mockName("send");
+  expect(() => expect(send).toHaveBeenCalled()).toThrow("send");
+});
+
+test("a spy calls through, and gives the method back", () => {
+  const object = { double: (n: number) => n * 2 };
+  const spy = mock.spyOn(object, "double");
+  expect(object.double(4)).toBe(8);
+  expect(spy).toHaveBeenCalledWith(4);
+  spy.mockRestore();
+  expect(mock.is(object.double)).toBe(false);
+  expect(object.double(4)).toBe(8);
+});
+
+test("an inherited method goes back to the prototype", () => {
+  class Greeter {
+    hello() {
+      return "hi";
+    }
+  }
+  const greeter = new Greeter();
+  const spy = mock.spyOn(greeter, "hello");
+  expect(greeter.hello()).toBe("hi");
+  spy.mockRestore();
+  expect(Object.hasOwn(greeter, "hello")).toBe(false);
+});
+
+test("a replaced global is put back by restoreAll", () => {
+  const before = globalThis.fetch;
+  mock.global("fetch", mock.fn());
+  expect(mock.is(globalThis.fetch)).toBe(true);
+  mock.restoreAll();
+  expect(globalThis.fetch).toBe(before);
+});
+
+test("nothing fires until the clock is moved", () => {
+  clock.freeze();
+  const ran = mock.fn();
+  setTimeout(ran, 100);
+  expect(clock.pending()).toBe(1);
+  clock.advance(99);
+  expect(ran).not.toHaveBeenCalled();
+  clock.advance(1);
+  expect(ran).toHaveBeenCalledTimes(1);
+  clock.release();
+});
+
+test("an interval repeats, and clearing it from inside stops it", () => {
+  clock.freeze();
+  let seen = 0;
+  const id = setInterval(() => {
+    seen += 1;
+    if (seen === 3) clearInterval(id);
+  }, 10);
+  clock.advance(100);
+  expect(seen).toBe(3);
+  expect(clock.pending()).toBe(0);
+  clock.release();
+});
+
+test("Date moves with the clock", () => {
+  clock.freeze(new Date("2020-01-01T00:00:00Z"));
+  expect(Date.now()).toBe(1577836800000);
+  expect(new Date().toISOString()).toBe("2020-01-01T00:00:00.000Z");
+  clock.advance(1000);
+  expect(Date.now()).toBe(1577836801000);
+  clock.release();
+});
+
+// The distinction the async form exists for.
+test("the async form resumes a chain of awaits; the sync form does not", async () => {
+  clock.freeze();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const twice = () => {
+    let done = false;
+    void (async () => {
+      await sleep(50);
+      await sleep(50);
+      done = true;
+    })();
+    return () => done;
+  };
+
+  const synchronous = twice();
+  clock.advance(100);
+  expect(synchronous()).toBe(false);
+
+  const asynchronous = twice();
+  await clock.advanceAsync(100);
+  expect(asynchronous()).toBe(true);
+  clock.release();
+});
+
+test("runAll drains, and refuses a queue that never will", () => {
+  clock.freeze();
+  const ran = mock.fn();
+  setTimeout(() => setTimeout(ran, 10), 10);
+  clock.runAll();
+  expect(ran).toHaveBeenCalled();
+  setInterval(() => {}, 1);
+  expect(() => clock.runAll()).toThrow("not draining");
+  clock.clear();
+  clock.release();
+});
+
+test("runPending fires an interval once rather than for ever", () => {
+  clock.freeze();
+  const tick = mock.fn();
+  setInterval(tick, 10);
+  clock.runPending();
+  expect(tick).toHaveBeenCalledTimes(1);
+  clock.release();
+});
+
+test("advancing a clock that is not frozen says which verb to call", () => {
+  expect(() => clock.advance(1)).toThrow("clock.freeze()");
+});
+
+// Left frozen on purpose: the runner drains on microtasks, so a file that
+// forgets to release the clock must still report.
+test("a file may end with time stopped", () => {
+  clock.freeze();
+  expect(clock.isFrozen()).toBe(true);
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("16 passed, 0 failed"), "{text}");
 }
 
 /// The property that makes a failure actionable: the frame names the line the

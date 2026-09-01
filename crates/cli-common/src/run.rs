@@ -66,6 +66,13 @@ pub struct Config {
     /// directly (before a loader exists), so a transform that only wrapped the
     /// loader would silently miss the one file the user named.
     pub transform: Option<Arc<dyn SourceTransform>>,
+    /// Whether a specifier that names no file is retried the way a bundler
+    /// resolves one — `./util` and `./util.js` finding `util.ts`.
+    ///
+    /// `esdev` sets it and `esrun` does not. See [`BundlerStyleLoader`] for why
+    /// the two binaries differ here, and why they still agree about every
+    /// specifier that resolves under both.
+    pub bundler_style_resolution: bool,
     /// Watches what the run actually reaches for — how `esdev` serves
     /// `--trace-permissions` (D59).
     ///
@@ -118,6 +125,158 @@ pub trait SourceTransform: Send + Sync {
     /// reports why it could not. Returning `source` unchanged is the correct
     /// answer for a file this transform has nothing to do with.
     fn transform(&self, specifier: &str, source: String) -> Result<String, String>;
+}
+
+/// Wraps a [`ModuleLoader`] so a specifier that names no file is retried the
+/// way a bundler would resolve it.
+///
+/// # Why a development binary resolves differently from a production one
+///
+/// `esrun` resolves strictly: a specifier names the file that exists, extension
+/// and all. That is right for a deployment — it is unambiguous, it does no
+/// filesystem probing per import, and what it runs is a bundle whose specifiers
+/// the build already settled.
+///
+/// It is wrong for the file a developer is editing. Source written for *any*
+/// bundler — which is most of the ecosystem, and every project with
+/// `"moduleResolution": "bundler"` — spells a sibling `./util`, and TypeScript's
+/// own `node16` convention spells `./util.ts` as `./util.js`, a file that does
+/// not exist until a build makes it. `esdev build` resolves both, because the
+/// bundler does. So without this the same project *builds* and cannot be *run*,
+/// and `esdev test` cannot run a test that imports its own source tree — which
+/// is the whole of what a development binary is for.
+///
+/// **Strict resolution is tried first and always wins**, so this can only ever
+/// answer a specifier that would otherwise have been an error. What it does with
+/// one is what `esdev build` does with it:
+///
+/// * `./util` → `./util.ts`, `.tsx`, `.mts`, `.js`, `.jsx`, `.mjs`
+/// * `./util` → `./util/index.*`, for a directory
+/// * `./util.js` → `./util.ts`, `.tsx`, `.mts` — TypeScript's rewrite, in
+///   reverse, for source that has not been through a build yet
+///
+/// A bare specifier is untouched: `node_modules` resolution is the loader's own
+/// and already answers those.
+struct BundlerStyleLoader {
+    inner: Arc<dyn ModuleLoader>,
+}
+
+impl BundlerStyleLoader {
+    /// Whether a resolved id names a directory rather than a module.
+    ///
+    /// The strict resolver confines a path and checks that it is *there*, and a
+    /// directory is there — so `./src` resolves, and then fails at load with
+    /// "is a directory". That answer is a miss, not a hit: what the specifier
+    /// means is the directory's index, which is what the candidates below find.
+    fn is_a_directory(id: &str) -> bool {
+        url::Url::parse(id)
+            .ok()
+            .filter(|url| url.scheme() == "file")
+            .and_then(|url| url.to_file_path().ok())
+            .is_some_and(|path| path.is_dir())
+    }
+
+    /// The spellings to try for a specifier that named nothing, in order.
+    ///
+    /// Empty for anything this must not guess at — a bare name, a URL, a
+    /// specifier that already carries an extension this runtime loads.
+    fn candidates(specifier: &str) -> Vec<String> {
+        const SOURCE: &[&str] = &["ts", "tsx", "mts", "js", "jsx", "mjs"];
+        const TYPESCRIPT: &[&str] = &["ts", "tsx", "mts"];
+
+        if !(specifier.starts_with("./")
+            || specifier.starts_with("../")
+            || specifier.starts_with('/'))
+        {
+            return Vec::new();
+        }
+        let last = specifier.rsplit('/').next().unwrap_or_default();
+        // `./util.js` is what TypeScript tells you to write for `util.ts`, and
+        // it is also a real file in a built tree. The strict attempt covered the
+        // second; this is the first.
+        for extension in ["js", "mjs", "jsx"] {
+            if let Some(stem) = specifier.strip_suffix(&format!(".{extension}")) {
+                return TYPESCRIPT
+                    .iter()
+                    .map(|typescript| format!("{stem}.{typescript}"))
+                    .collect();
+            }
+        }
+        if last.contains('.') {
+            // An extension this runtime knows and did not find, or a name with a
+            // dot in it. Either way, guessing would be inventing a file.
+            return Vec::new();
+        }
+        let directory = specifier.trim_end_matches('/');
+        SOURCE
+            .iter()
+            .map(|extension| format!("{specifier}.{extension}"))
+            .chain(
+                SOURCE
+                    .iter()
+                    .map(|extension| format!("{directory}/index.{extension}")),
+            )
+            .collect()
+    }
+}
+
+impl ModuleLoader for BundlerStyleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<String, ProviderError>> {
+        let inner = self.inner.clone();
+        let specifier = specifier.to_string();
+        let referrer = referrer.to_string();
+        Box::pin(async move {
+            let strict = match inner.resolve(&specifier, &referrer).await {
+                Ok(id) if !Self::is_a_directory(&id) => return Ok(id),
+                Ok(id) => ProviderError::Other(format!("cannot read {id}: it is a directory")),
+                Err(strict) => strict,
+            };
+            for candidate in Self::candidates(&specifier) {
+                if let Ok(id) = inner.resolve(&candidate, &referrer).await
+                    && !Self::is_a_directory(&id)
+                {
+                    return Ok(id);
+                }
+            }
+            // The strict error, not one about the last thing tried: what the
+            // developer wrote is what they want to read about.
+            Err(strict)
+        })
+    }
+
+    /// The same answer, synchronously — `import.meta.resolve` has nowhere to
+    /// await, and a loader whose two resolutions disagree is worse than one that
+    /// refuses (D41).
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        let strict = match self.inner.resolve_sync(specifier, referrer)? {
+            Ok(id) if !Self::is_a_directory(&id) => return Some(Ok(id)),
+            Ok(id) => ProviderError::Other(format!("cannot read {id}: it is a directory")),
+            Err(strict) => strict,
+        };
+        for candidate in Self::candidates(specifier) {
+            if let Some(Ok(id)) = self.inner.resolve_sync(&candidate, referrer)
+                && !Self::is_a_directory(&id)
+            {
+                return Some(Ok(id));
+            }
+        }
+        Some(Err(strict))
+    }
+
+    fn load(
+        &self,
+        specifier: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<ModuleSource, ProviderError>> {
+        self.inner.load(specifier)
+    }
 }
 
 /// Wraps a [`ModuleLoader`] so every module it returns passes through a
@@ -388,12 +547,19 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     if let Some(file) = &options.import_policy {
         loader_impl = loader_impl.with_policy(ImportPolicy::from_file(std::path::Path::new(file))?);
     }
+    let resolved: Arc<dyn ModuleLoader> = if config.bundler_style_resolution {
+        Arc::new(BundlerStyleLoader {
+            inner: Arc::new(loader_impl),
+        })
+    } else {
+        Arc::new(loader_impl)
+    };
     let loader: Arc<dyn ModuleLoader> = match &config.transform {
         Some(transform) => Arc::new(TransformingLoader {
-            inner: Arc::new(loader_impl),
+            inner: resolved,
             transform: transform.clone(),
         }),
-        None => Arc::new(loader_impl),
+        None => resolved,
     };
 
     // Workers. Each gets its own thread and its own isolate, built by this
@@ -747,5 +913,72 @@ fn heap_limits(max_heap_bytes: Option<usize>) -> es_runtime_common::Limits {
     match max_heap_bytes {
         Some(bytes) => limits.with_heap_limit_bytes(bytes),
         None => limits.with_system_heap_limit(),
+    }
+}
+
+#[cfg(test)]
+mod bundler_style {
+    use super::BundlerStyleLoader as Loader;
+
+    /// A relative specifier with no extension is the whole reason this exists.
+    #[test]
+    fn an_extensionless_relative_specifier_gets_the_source_spellings() {
+        let tried = Loader::candidates("./util");
+        assert_eq!(tried.first().map(String::as_str), Some("./util.ts"));
+        assert!(tried.contains(&"./util.tsx".to_string()));
+        assert!(tried.contains(&"./util.js".to_string()));
+        // …and then the directory it might be.
+        assert!(tried.contains(&"./util/index.ts".to_string()));
+        // TypeScript first: a project mid-migration has both, and the source
+        // is the file being edited.
+        let ts = tried.iter().position(|c| c == "./util.ts");
+        let js = tried.iter().position(|c| c == "./util.js");
+        assert!(ts < js, "{tried:?}");
+    }
+
+    /// `../../src` — a directory, which the strict resolver *finds* and then
+    /// fails to read. Its index is what the specifier meant.
+    #[test]
+    fn a_directory_is_tried_as_its_index() {
+        let tried = Loader::candidates("../../src");
+        assert!(tried.contains(&"../../src/index.ts".to_string()), "{tried:?}");
+        assert!(
+            Loader::candidates("./src/").contains(&"./src/index.ts".to_string()),
+            "a trailing slash must not double up"
+        );
+    }
+
+    /// TypeScript's own advice is to import `./util.js` for `util.ts`, so
+    /// source that has not been built yet says `.js` and means `.ts`.
+    #[test]
+    fn a_js_specifier_falls_back_to_the_typescript_that_will_become_it() {
+        assert_eq!(
+            Loader::candidates("./util.js"),
+            vec!["./util.ts", "./util.tsx", "./util.mts"]
+        );
+        assert_eq!(
+            Loader::candidates("./util.mjs"),
+            vec!["./util.ts", "./util.tsx", "./util.mts"]
+        );
+    }
+
+    /// What it must **not** answer. A bare name is the loader's own business,
+    /// and a typo with an extension is an error rather than an invitation to
+    /// invent a file.
+    #[test]
+    fn nothing_else_is_guessed_at() {
+        assert!(Loader::candidates("lodash").is_empty());
+        assert!(Loader::candidates("runtime:fs").is_empty());
+        assert!(Loader::candidates("https://example.com/m.js").is_empty());
+        // `./util.tsx` was tried strictly and was not there.
+        assert!(Loader::candidates("./util.tsx").is_empty());
+        // A name with a dot in it is a name, not an extension to strip.
+        assert!(Loader::candidates("./v1.2/thing.css").is_empty());
+    }
+
+    /// An absolute path is as relative as a relative one, for this purpose.
+    #[test]
+    fn an_absolute_path_is_answered_too() {
+        assert!(Loader::candidates("/p/src/util").contains(&"/p/src/util.ts".to_string()));
     }
 }

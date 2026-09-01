@@ -10,6 +10,70 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`expect`, `mock` and `clock` in `runtime:test`** — the assertion vocabulary
+  the ecosystem writes tests in, plus the two subsystems that stand in for
+  something real.
+
+  ```js
+  import { test, expect, mock, clock } from "runtime:test";
+
+  test("polls every second until it answers", async () => {
+    clock.freeze();
+    const ask = mock.fn().mockResolvedValueOnce(null).mockResolvedValue("ok");
+
+    const answer = poll(ask, 1000);
+    await clock.advanceAsync(2000);
+
+    expect(ask).toHaveBeenCalledTimes(2);
+    await expect(answer).resolves.toBe("ok");
+    clock.release();
+  });
+  ```
+
+  `expect` is a **second spelling, not a second implementation** —
+  `assertEquals(a, b)` and `expect(a).toEqual(b)` share one comparison — with
+  `.not`, `.resolves`/`.rejects`, the asymmetric matchers (`expect.any`,
+  `expect.objectContaining`, …) and the call matchers that read a mock's record.
+
+  `mock.fn()` records `calls`, `results`, `instances` and `lastCall` and answers
+  however it was told to; `mock.spyOn(o, k)` installs one over a real method and
+  **still calls the original**, because a spy is usually installed to watch
+  something work. `clock.freeze()` replaces `setTimeout`, `setInterval`, their
+  cancels and `Date`, so code that waits can be tested without waiting.
+
+  `clock.advanceAsync(ms)` is the one to reach for when the code under test
+  `await`s: the synchronous form fires every callback with nothing in between,
+  so a `sleep(10).then(…)` has been resolved but its continuation has not run.
+
+  **Still imported, never ambient.** There is no global `test` and no global
+  `expect`, here or anywhere — the guarantee this project's API reference opens
+  with has no exception for test files. A suite written for another runner gets
+  an import line, which is a line. Freezing the clock does replace globals, but
+  they are standards-defined names replaced at the test's own explicit request,
+  and a test file is a process, so the swap cannot reach the next file.
+
+  Named `mock` and `clock` rather than borrowing another runner's namespace.
+
+- **`esdev` resolves imports the way `esdev build` does** — `./util` finds
+  `util.ts`, a directory finds its `index.*`, and `./util.js` finds the
+  `util.ts` TypeScript tells you to spell that way.
+
+  The two halves of `esdev` disagreed: `esdev build src/app.ts` bundled a source
+  tree written for a build step without complaint, while `esdev src/app.ts`
+  refused to run the same tree. Most published TypeScript is written that way,
+  so the runner could not be pointed at it at all.
+
+  `esrun` is **unchanged** and still resolves only what the module spec says: a
+  production binary that guessed at filenames would be reading the disk to
+  decide what a program means. What you deploy has been through a build, which
+  resolved all of it — so ship the build, not the source. A miss still reports
+  the specifier the file wrote, not the last spelling tried.
+
+- **`esdev test` discovers `*.spec.*` as well as `*.test.*`** — both conventions
+  are everywhere, and a runner that knows only one silently runs no tests in
+  half the projects it is pointed at, which looks exactly like a suite that
+  passes.
+
 - **`runtime:test` groups its tests, and can skip or focus one** — `describe`,
   `test.skip`, `test.only`, and `.skip`/`.only` on a group.
 

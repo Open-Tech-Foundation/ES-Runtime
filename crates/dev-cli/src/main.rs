@@ -148,9 +148,10 @@ RUN OPTIONS (esrun's, with one deliberate difference):
     --env-override              ...and let them override the OS environment
     --shutdown-grace=<ms>       Drain time for in-flight requests on ^C (10000)
 
-TypeScript and JSX are stripped as they load — types erased, never checked. An
-import specifier must name the file that exists (`./app.ts`), because
-resolution here is esrun's.
+TypeScript and JSX are stripped as they load — types erased, never checked.
+Imports resolve the way `esdev build` resolves them: `./util` finds util.ts,
+a directory finds its index, and `./util.js` finds util.ts. esrun resolves
+only what the module spec says, so ship a build rather than the source.
 
 esdev is for your machine. It is not a deployment target: ship the artifact and
 run it under esrun, which has no development surface to attack.
@@ -165,7 +166,7 @@ const TEST_USAGE: &str = "\
 esdev test — run the test files
 
 USAGE:
-    esdev test [filter...]      Run every *.test.{js,mjs,ts,tsx,jsx} whose path
+    esdev test [filter...]      Run every *.test.* / *.spec.* whose path
                                 contains a filter — or all of them, given none
     esdev test --file=<path>    Run exactly one file
     esdev test -h, --help       Show this help
@@ -183,11 +184,15 @@ them one at a time and lets each write straight to the terminal. The file itself
 entry — it keeps its own path, its module resolution and its TypeScript — and
 imports what it uses from runtime:test:
 
-    import { test, assert, assertEquals, assertThrows, assertRejects } from \"runtime:test\";
+    import { test, expect } from \"runtime:test\";
 
     test(\"it adds\", () => {
-      assertEquals(1 + 1, 2);
+      expect(1 + 1).toBe(2);
     });
+
+Also exported: describe, the before*/after* hooks, assert/assertEquals/
+assertThrows/assertRejects, mock (mock.fn, mock.spyOn) and clock (clock.freeze,
+clock.advance).
 
 Nothing is ambient: there is no global `test`, and a file that calls one fails
 with a ReferenceError. Types come from @opentf/esrun-types
@@ -475,6 +480,9 @@ fn parse_args() -> Result<Command, String> {
                         scopes: permissions.scopes()?,
                         options,
                         transform: Some(std::sync::Arc::new(TypeStripper)),
+                        // The file being edited resolves the way the build
+                        // that bundles it does.
+                        bundler_style_resolution: true,
                         extensions: guest::extensions(),
                         // The deploy line is printed with the entry as it was
                         // named, so it is one a reader can copy. For `-e` there
@@ -530,6 +538,9 @@ fn parse_args() -> Result<Command, String> {
                         scopes: permissions.scopes()?,
                         options,
                         transform: Some(std::sync::Arc::new(TypeStripper)),
+                        // The file being edited resolves the way the build
+                        // that bundles it does.
+                        bundler_style_resolution: true,
                         extensions: guest::extensions(),
                         observer: permission_trace(tracing_permissions, path),
                         inspector: None,
@@ -1177,6 +1188,7 @@ async fn run_tests(config: TestConfig) -> ExitCode {
             scopes: std::collections::HashMap::new(),
             options: RunOptions::default(),
             transform: Some(std::sync::Arc::new(TypeStripper)),
+            bundler_style_resolution: true,
             extensions: guest::extensions(),
             observer: None,
             inspector: None,

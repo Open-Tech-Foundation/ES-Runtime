@@ -8,10 +8,15 @@ import { Callout } from "@opentf/web-docs";
 # esdev test
 
 ```sh
-esdev test                    # every *.test.{js,mjs,ts,tsx,jsx}
+esdev test                    # every *.test.* and *.spec.*
 esdev test math               # ...whose path contains "math"
 esdev test --file=x.test.ts   # exactly one file
 ```
+
+Both `.test.` and `.spec.` are discovered, in `.js`, `.mjs`, `.ts`, `.tsx`,
+`.jsx` and `.mts`. A runner that knew only one convention would silently run no
+tests in half the projects it is pointed at — which looks exactly like a suite
+that passes.
 
 Exits non-zero if any file fails.
 
@@ -21,16 +26,20 @@ The API comes from [`runtime:test`](/api/test), like everything else on this
 runtime.
 
 ```ts
-import { test, assertEquals, assertRejects } from "runtime:test";
+import { test, expect } from "runtime:test";
 
 test("adds", () => {
-  assertEquals(1 + 1, 2);
+  expect(1 + 1).toBe(2);
 });
 
 test("rejects", async () => {
-  await assertRejects(() => fetch("http://127.0.0.1:1/"));
+  await expect(fetch("http://127.0.0.1:1/")).rejects.toThrow();
 });
 ```
+
+`expect` and the `assert*` family are two spellings of the same assertions —
+`assertEquals(a, b)` and `expect(a).toEqual(b)` share one comparison — so a
+suite written for another runner needs an import line rather than a rewrite.
 
 Because it is an import, a **helper module** beside your test file can use the
 assertions too:
@@ -52,6 +61,9 @@ export const assertSorted = (xs: number[]) => assertEquals(xs, [...xs].sort());
 | `assertEquals(actual, expected, msg?)` | Structural |
 | `assertThrows(fn, expected?, msg?)` | |
 | `assertRejects(fn, expected?, msg?)` | |
+| `expect(value)` | The matcher vocabulary — see [`runtime:test`](/api/test) |
+| `mock.fn()` / `mock.spyOn(o, k)` | A function that records what it was asked |
+| `clock.freeze()` / `clock.advance(ms)` | Time, stopped |
 
 The same vocabulary the runtime's own conformance suite uses: reading its tests
 and writing your own should not mean learning two.
@@ -162,6 +174,60 @@ The runner knows a case started and never settled. It used to await every
 pending promise, so a test waiting on something that never happened hung the
 file forever.
 
+## Mocks, and a clock
+
+`mock` and `clock` are the two subsystems that stand in for something real: a
+function you want to assert about, and code that waits.
+
+```ts
+import { test, expect, mock, clock } from "runtime:test";
+
+test("gives up after a minute", async () => {
+  const send = mock.fn().mockRejectedValueOnce(new Error("nope"));
+  clock.freeze();
+
+  const gone = deliver(send);
+  await clock.advanceAsync(60_000);
+
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(gone).resolves.toBe(false);
+  clock.release();
+});
+```
+
+| | |
+| --- | --- |
+| `mock.fn(impl?)` | Records `mock.calls`, `mock.results`; `mockReturnValue`, `mockResolvedValue`, `mockImplementation`, each with a `…Once` |
+| `mock.spyOn(o, k)` | Replaces a method and **still calls the original**; `mockRestore()` puts it back |
+| `mock.global(name, v)` | Replaces a global for the file |
+| `mock.restoreAll()` | Every spy's method and every replaced global, back |
+| `clock.freeze(at?)` | Stops time — and `setTimeout`, `setInterval`, `Date` |
+| `clock.advance(ms)` | Moves it, running what comes due |
+| `clock.advanceAsync(ms)` | …pausing after each callback, so an `await` resumes |
+| `clock.runAll()` / `runPending()` | Drain, or fire what is waiting once |
+| `clock.release()` | Real time again |
+
+`clock.advanceAsync` is the one to reach for when the code under test `await`s.
+The synchronous form resolves the promise and returns before anything waiting on
+it has run, so the assertion after it sees the state from before.
+
+Freezing the clock replaces globals for the **whole process**, which is safe
+here only because a test file *is* a process. The runner drains on microtasks
+rather than timers, so a file that forgets `clock.release()` still reports.
+
+## Imports the way a bundler resolves them
+
+`esdev` finds `./util` for `util.ts`, a directory for its `index.ts`, and
+`./util.js` for the `util.ts` that TypeScript tells you to spell that way. That
+is what `esdev build` already does, so a source tree written for a build step
+runs under the runner without being rewritten first.
+
+`esrun` resolves only what the module spec says. The artifact you deploy has
+been through a build, which resolved all of it — so ship the build, not the
+source.
+
 <Callout type="note" title="Not yet">
-  Per-file timeouts, coverage, and a machine-readable reporter.
+  Per-file timeouts, coverage, and a machine-readable reporter. Module mocking
+  (`mock.module`) — a mock installed here replaces a method on an object, not a
+  module in the graph.
 </Callout>

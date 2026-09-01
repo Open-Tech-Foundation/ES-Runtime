@@ -134,6 +134,267 @@ declare module "runtime:test" {
     message?: string,
   ): Promise<void>;
 
+  /**
+   * The matchers `expect(value)` answers with.
+   *
+   * The same comparisons the `assert*` functions use — this is a second
+   * spelling, not a second implementation — so that a suite written against
+   * another runner needs an import line rather than a rewrite.
+   */
+  export interface Matchers<T = unknown> {
+    /** `Object.is` — reference identity, and `NaN` equals `NaN`. */
+    toBe(expected: T): void;
+    /** Structural equality, the same one {@link assertEquals} uses. */
+    toEqual(expected: unknown): void;
+    /** {@link Matchers.toEqual}. This runner draws no stricter distinction. */
+    toStrictEqual(expected: unknown): void;
+    toBeTruthy(): void;
+    toBeFalsy(): void;
+    toBeNull(): void;
+    toBeUndefined(): void;
+    toBeDefined(): void;
+    toBeNaN(): void;
+    toBeInstanceOf(constructor: new (...args: never[]) => unknown): void;
+    toBeTypeOf(type: string): void;
+    /** A member of an array, a substring, or a `Set`/`Map` key — by identity. */
+    toContain(wanted: unknown): void;
+    /** …and by structural equality. */
+    toContainEqual(wanted: unknown): void;
+    toHaveLength(length: number): void;
+    /** `"a.b.c"` or `["a", "b"]`; with a value, that value must match too. */
+    toHaveProperty(path: string | string[], value?: unknown): void;
+    toMatch(pattern: string | RegExp): void;
+    /** Every key in `expected` matches; keys outside it are not looked at. */
+    toMatchObject(expected: object): void;
+    toBeGreaterThan(n: number | bigint): void;
+    toBeGreaterThanOrEqual(n: number | bigint): void;
+    toBeLessThan(n: number | bigint): void;
+    toBeLessThanOrEqual(n: number | bigint): void;
+    /** Within half of `10 ** -digits`. Two digits by default. */
+    toBeCloseTo(n: number, digits?: number): void;
+    /** Calls the function and fails unless it throws — and matches `want`. */
+    toThrow(want?: ErrorExpectation): void;
+    /** {@link Matchers.toThrow}, under the name jest gave it. */
+    toThrowError(want?: ErrorExpectation): void;
+
+    /** Needs a {@link Mock}: `mock.fn()` or `mock.spyOn()`. */
+    toHaveBeenCalled(): void;
+    toHaveBeenCalledTimes(n: number): void;
+    toHaveBeenCalledWith(...args: unknown[]): void;
+    toHaveBeenLastCalledWith(...args: unknown[]): void;
+    /** 1-based: the first call is `1`. */
+    toHaveBeenNthCalledWith(n: number, ...args: unknown[]): void;
+    /** Returned at least once **without throwing**. */
+    toHaveReturned(): void;
+    toHaveReturnedTimes(n: number): void;
+    toHaveReturnedWith(value: unknown): void;
+    toHaveLastReturnedWith(value: unknown): void;
+    toHaveNthReturnedWith(n: number, value: unknown): void;
+
+    /** The shorter spellings of the call matchers. Aliases, not variants. */
+    toBeCalled(): void;
+    toBeCalledTimes(n: number): void;
+    toBeCalledWith(...args: unknown[]): void;
+    lastCalledWith(...args: unknown[]): void;
+    nthCalledWith(n: number, ...args: unknown[]): void;
+    toReturn(): void;
+    toReturnTimes(n: number): void;
+    toReturnWith(value: unknown): void;
+    lastReturnedWith(value: unknown): void;
+    nthReturnedWith(n: number, value: unknown): void;
+  }
+
+  /** Every matcher, awaited — what `.resolves` and `.rejects` answer with. */
+  export type AwaitedMatchers<T> = {
+    [K in keyof Matchers<T>]: Matchers<T>[K] extends (...args: infer A) => void
+      ? (...args: A) => Promise<void>
+      : never;
+  } & { not: AwaitedMatchers<T> };
+
+  export interface Assertion<T = unknown> extends Matchers<T> {
+    /** The same matchers, inverted. */
+    not: Matchers<T>;
+    /**
+     * Settles the promise first and matches on what came out, so a rejection
+     * is reported as one rather than as a mismatched `Promise`. `await` it.
+     */
+    resolves: AwaitedMatchers<Awaited<T>>;
+    /**
+     * The mirror: fails unless it rejects. `.rejects.toThrow(...)` asserts
+     * about the error itself; every other matcher treats it as a value.
+     */
+    rejects: AwaitedMatchers<unknown>;
+  }
+
+  /**
+   * The ecosystem's assertion vocabulary. `assertEquals(a, b)` and
+   * `expect(a).toEqual(b)` are the same assertion.
+   *
+   * ```ts
+   * import { test, expect } from "runtime:test";
+   *
+   * test("adds", () => expect(add(2, 3)).toBe(5));
+   * test("fetches", async () => {
+   *   await expect(get("/")).resolves.toMatchObject({ status: 200 });
+   * });
+   * ```
+   *
+   * The static members are the **asymmetric** matchers: a value that says what
+   * it will accept, usable wherever a value goes — including several levels
+   * inside an expected object, which is the case that cannot be written as an
+   * assertion of its own.
+   */
+  export const expect: {
+    <T>(actual: T): Assertion<T>;
+    /** Anything but `null` or `undefined`. */
+    anything(): any;
+    /** `expect.any(Number)` — matches by constructor, primitives included. */
+    any(constructor: unknown): any;
+    stringContaining(part: string): any;
+    stringMatching(pattern: string | RegExp): any;
+    /** An array holding at least these, in any order. */
+    arrayContaining(wanted: unknown[]): any;
+    /** An object matching at least these keys. */
+    objectContaining(wanted: object): any;
+  };
+
+  /** What a {@link Mock} remembers. */
+  export interface MockRecord<A extends unknown[], R> {
+    /** The arguments of every call, in order. */
+    calls: A[];
+    /** What each call did — returned a value, or threw one. */
+    results: Array<{ type: "return"; value: R } | { type: "throw"; value: unknown }>;
+    /** `this` for each call made with `new`. */
+    instances: unknown[];
+    /** The arguments of the most recent call, or `undefined`. */
+    lastCall: A | undefined;
+  }
+
+  /**
+   * A function that records what it was called with, and answers however it
+   * was told to. The method names are the ecosystem's, because they are the
+   * vocabulary the matchers read.
+   */
+  export interface Mock<A extends unknown[] = any[], R = any> {
+    (...args: A): R;
+    /** The record. Cleared by {@link Mock.mockClear}. */
+    mock: MockRecord<A, R>;
+
+    mockImplementation(fn: (...args: A) => R): this;
+    /** Used for the next call only. Queued: several may be set. */
+    mockImplementationOnce(fn: (...args: A) => R): this;
+    mockReturnValue(value: R): this;
+    mockReturnValueOnce(value: R): this;
+    mockReturnThis(): this;
+    mockResolvedValue(value: Awaited<R>): this;
+    mockResolvedValueOnce(value: Awaited<R>): this;
+    mockRejectedValue(error: unknown): this;
+    mockRejectedValueOnce(error: unknown): this;
+
+    /** Forgets the calls. */
+    mockClear(): this;
+    /** …and how it was told to answer, back to what it was created with. */
+    mockReset(): this;
+    /** …and, for a spy, puts the original method back. */
+    mockRestore(): this;
+
+    /** Names it, so a failure says which mock. */
+    mockName(name: string): this;
+    getMockName(): string;
+  }
+
+  /**
+   * Functions that stand in for real ones.
+   *
+   * ```ts
+   * import { test, expect, mock } from "runtime:test";
+   *
+   * test("retries", async () => {
+   *   const send = mock.fn().mockRejectedValueOnce(new Error("nope"));
+   *   await deliver(send);
+   *   expect(send).toHaveBeenCalledTimes(2);
+   * });
+   * ```
+   */
+  export const mock: {
+    /** A recording function, answering with `implementation` if given. */
+    fn<A extends unknown[] = any[], R = any>(implementation?: (...args: A) => R): Mock<A, R>;
+    /**
+     * Replaces one method with a mock that **still calls the original** — a
+     * spy is usually installed to watch something work.
+     * `.mockImplementation(...)` is how a test says otherwise, and
+     * `.mockRestore()` puts the property back exactly as it was.
+     */
+    spyOn<T extends object, K extends keyof T>(object: T, key: K): Mock;
+    /** Whether a value is one of these. */
+    is(value: unknown): boolean;
+    /** Identity — for telling a type checker that a real function is a mock. */
+    typed<T>(value: T): T;
+    /** Replaces a global for the file. Undone by {@link mock.restoreAll}. */
+    global(name: string, value: unknown): typeof mock;
+    /** Forgets every mock's calls. */
+    clearAll(): typeof mock;
+    /** …and how each was told to answer. */
+    resetAll(): typeof mock;
+    /** Puts it all back: every spy's method, and every replaced global. */
+    restoreAll(): typeof mock;
+  };
+
+  /**
+   * Time, stopped.
+   *
+   * `freeze()` replaces `setTimeout`, `setInterval`, their cancels and `Date`
+   * on `globalThis`, so everything scheduled through them moves only when the
+   * test says so. It is safe because a test file is a **process**: the swap
+   * cannot reach the next file, and the runner drains on microtasks rather
+   * than timers, so a file that forgets {@link clock.release} still reports.
+   *
+   * ```ts
+   * import { test, expect, mock, clock } from "runtime:test";
+   *
+   * test("gives up after a minute", async () => {
+   *   clock.freeze();
+   *   const gone = mock.fn();
+   *   waitFor(gone, 60_000);
+   *   await clock.advanceAsync(60_000);
+   *   expect(gone).toHaveBeenCalled();
+   *   clock.release();
+   * });
+   * ```
+   */
+  export const clock: {
+    /** Stops time — at `at`, or wherever it is now. */
+    freeze(at?: Date | number | string): typeof clock;
+    /** Starts it again, and puts the real timers back. */
+    release(): typeof clock;
+    isFrozen(): boolean;
+    /** Moves forward, running whatever comes due on the way. */
+    advance(ms: number): typeof clock;
+    /**
+     * …pausing after each callback so whatever it resolved gets to run. The
+     * one to use when the code under test `await`s: the synchronous form
+     * resolves a promise but returns before anything waiting on it has run.
+     */
+    advanceAsync(ms: number): Promise<typeof clock>;
+    /** Jumps to whenever the next timer is due, and runs it. */
+    next(): typeof clock;
+    nextAsync(): Promise<typeof clock>;
+    /** Runs the queue until it is empty, or refuses one that never drains. */
+    runAll(): typeof clock;
+    runAllAsync(): Promise<typeof clock>;
+    /** Only what is waiting now — an interval fires once, not for ever. */
+    runPending(): typeof clock;
+    runPendingAsync(): Promise<typeof clock>;
+    /** How many timers are waiting. */
+    pending(): number;
+    /** Drops them all without running any. */
+    clear(): typeof clock;
+    /** Where the frozen clock stands. */
+    setSystemTime(time: Date | number | string): typeof clock;
+    /** The real time, while the clock is frozen. */
+    realNow(): number;
+  };
+
   const _default: {
     test: typeof test;
     describe: typeof describe;
@@ -145,6 +406,9 @@ declare module "runtime:test" {
     assertEquals: typeof assertEquals;
     assertThrows: typeof assertThrows;
     assertRejects: typeof assertRejects;
+    expect: typeof expect;
+    mock: typeof mock;
+    clock: typeof clock;
   };
   export default _default;
 }

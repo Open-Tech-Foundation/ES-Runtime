@@ -24,6 +24,28 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **Imports resolve the way `esdev build` resolves them.** `./util` finds
+  `util.ts`, a directory finds its `index.*`, and `./util.js` finds the
+  `util.ts` TypeScript tells you to spell that way.
+
+  The two halves of this binary disagreed: `esdev build src/app.ts` bundled a
+  source tree written for a build step without complaint, while `esdev
+  src/app.ts` refused to run the same tree — and most published TypeScript is
+  written that way. `esrun` is unchanged and still resolves only what the module
+  spec says, so ship a build rather than the source. A miss reports the
+  specifier the file wrote, not the last spelling tried.
+
+- **`esdev test` discovers `*.spec.*` as well as `*.test.*`.** Both conventions
+  are everywhere, and a runner that knows only one silently runs no tests in
+  half the projects it is pointed at — which looks exactly like a suite that
+  passes.
+
+- **`runtime:test` gains `expect`, `mock` and `clock`.** See the root
+  [CHANGELOG.md](../../CHANGELOG.md); the module is `esdev`'s, but the API is
+  documented with the rest of the standard modules.
+
 ## [0.5.0] - 2026-08-19
 
 ### Added

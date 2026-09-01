@@ -186,6 +186,9 @@ async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost
                 scopes: std::collections::HashMap::new(),
                 options: es_runtime_cli_common::args::RunOptions::default(),
                 transform: Some(Arc::new(crate::transform::TypeStripper)),
+                // A plugin is source somebody is editing, like everything else
+                // this binary runs.
+                bundler_style_resolution: true,
                 extensions: crate::guest::extensions_hosting(hosted),
                 observer: None,
                 inspector: None,

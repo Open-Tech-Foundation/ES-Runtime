@@ -12,13 +12,14 @@
 //! critical path of every run for a diagnostic you have already seen. What
 //! arrives at the engine is the same program with the annotations removed.
 //!
-//! **A specifier names a file that exists.** `import "./app.ts"` loads
-//! `app.ts`; there is no extension guessing, and `./app.js` does not silently
-//! resolve to `app.ts`. Node's strip-types mode draws the line in the same
-//! place, and for the same reason: resolution is the loader's contract (D21/D40)
-//! and a transform must not quietly widen it — a rewrite that guessed would make
-//! `esdev` resolve differently from `esrun`, which is the one thing these two
-//! binaries must never do.
+//! **This transform rewrites no specifiers.** Resolution is the loader's
+//! contract (D21/D40), and a transform that rewrote an import would be deciding
+//! what a program means from inside the step that is only supposed to erase
+//! types. Where `esdev` is wider than `esrun` — extensionless imports, a
+//! directory's index, `./x.js` meaning `x.ts` — that widening lives in the
+//! loader `esdev` installs and nowhere else, so this file's output is the same
+//! program with the annotations removed and not a byte more
+//! ([`es_runtime_cli_common::run::BundlerStyleLoader`]).
 
 use std::path::Path;
 
