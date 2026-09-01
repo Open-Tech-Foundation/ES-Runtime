@@ -4662,11 +4662,58 @@ fn start_in(dir: &Path) -> Supervisor {
 
 /// A port unlikely to collide with anything else on the machine, derived from
 /// the test's own name so two tests never pick the same one.
+/// A port derived from the test's own name, **below the ephemeral range**.
+///
+/// The upper bound is the load-bearing part. Linux hands out source ports for
+/// outbound connections from `net.ipv4.ip_local_port_range`, 32768–60999 by
+/// default, so a fixed port chosen from inside that window is one the kernel
+/// may already have given to somebody else's socket — and `bind` then fails
+/// with `AddrInUse`. This range was 20000–39999, whose top third overlapped it;
+/// under `cargo test --workspace`, where hundreds of short-lived connections
+/// are opened at once, that came back as an occasional unexplained failure in
+/// whichever test happened to draw the collided number.
+///
+/// 20000–29999 sits entirely below the floor, and is disjoint from the range
+/// `tests/hot.rs` takes for the same reason.
 fn test_port(name: &str) -> u16 {
     let hash = name.bytes().fold(0u32, |acc, b| {
         acc.wrapping_mul(31).wrapping_add(u32::from(b))
     });
-    20000 + u16::try_from(hash % 20000).unwrap_or(0)
+    20000 + u16::try_from(hash % 10000).unwrap_or(0)
+}
+
+/// The port scheme's own invariant — see [`test_port`].
+///
+/// Two names hashing together is a *permanent* failure in whichever test binds
+/// second, and it reads as that test being broken rather than as a name clash.
+/// Asserted here so a new one fails with the reason.
+#[test]
+fn every_named_port_is_its_own_and_below_the_ephemeral_range() {
+    // Every name passed to `test_port` in this file.
+    const NAMED: &[&str] = &[
+        "preview",
+        "s_asset",
+        "s_broken_app",
+        "s_frontend",
+        "s_norestart_app",
+        "s_plugins",
+        "s_refresh",
+        "s_takenport",
+    ];
+
+    let mut taken: Vec<(u16, &str)> = Vec::new();
+    for name in NAMED {
+        let port = test_port(name);
+        assert!(
+            port < 32768,
+            "{name}'s port {port} is inside the ephemeral range, where the \
+             kernel may already have handed it out to an outbound socket"
+        );
+        if let Some((_, other)) = taken.iter().find(|(held, _)| *held == port) {
+            panic!("{name} and {other} both want port {port} — change the range or a name");
+        }
+        taken.push((port, name));
+    }
 }
 
 /// One HTTP GET, spoken by hand — the same shape the dev server answers.

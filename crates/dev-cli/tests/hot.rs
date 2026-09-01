@@ -85,12 +85,33 @@ impl Drop for Fixture {
     }
 }
 
-/// A port unlikely to collide, derived from the test's own name.
+/// A port derived from the test's own name, and the one after it for the
+/// browser — **both below the ephemeral range**.
+///
+/// This was 41000–44999, which is entirely inside the window Linux allocates
+/// outbound source ports from (`net.ipv4.ip_local_port_range`, 32768–60999 by
+/// default). A dev server or a debugger that cannot bind leaves the page never
+/// loading, and the symptom is not a bind error — it is [`Page::open`] polling
+/// for thirty seconds and the assertion after it failing, which reads like
+/// hot replacement being broken. It only showed up under
+/// `cargo test --workspace`, because that is where enough connections are open
+/// at once for the kernel to have taken one of these numbers.
+///
+/// Even numbers in 30000–31998, with the browser on the odd one after, stays
+/// under the 32768 floor and clear of the 20000–29999 that `tests/cli.rs`
+/// takes. Stepping by two is what keeps one fixture's server off another
+/// fixture's debugger.
+///
+/// Two names can still hash to one port, and that would be a *permanent*
+/// failure rather than an occasional one — so
+/// [`every_fixture_gets_a_port_of_its_own`] asserts they do not, and a new
+/// fixture that collides fails there with the reason rather than in whichever
+/// test lost the race.
 fn port_for(name: &str) -> u16 {
     let hash = name.bytes().fold(0u32, |acc, b| {
         acc.wrapping_mul(31).wrapping_add(u32::from(b))
     });
-    41000 + u16::try_from(hash % 4000).unwrap_or(0)
+    30000 + u16::try_from((hash % 1000) * 2).unwrap_or(0)
 }
 
 impl Fixture {
@@ -470,6 +491,34 @@ async fn a_replaced_module_s_listeners_are_aborted() {
         "three module instances registered a listener and more than one survived"
     );
     assert_eq!(page.eval("window.__esdev_test_marker").await, "here");
+}
+
+/// The port scheme's own invariant.
+///
+/// Fixed ports derived from a name are fine until two names hash together, and
+/// the failure then is a fixture that can never bind — indistinguishable, from
+/// the outside, from hot replacement being broken. Cheaper to assert here.
+#[test]
+fn every_fixture_gets_a_port_of_its_own() {
+    // Every name passed to `Fixture::start` in this file.
+    const FIXTURES: &[&str] = &["accept", "reload", "css", "dep", "signal", "keep"];
+
+    let mut taken: Vec<(u16, &str)> = Vec::new();
+    for name in FIXTURES {
+        let port = port_for(name);
+        // The browser sits on the port after the server's.
+        for (port, role) in [(port, "server"), (port + 1, "browser")] {
+            assert!(
+                port < 32768,
+                "{name}'s {role} port {port} is inside the ephemeral range, \
+                 where the kernel may already have handed it out"
+            );
+            if let Some((_, other)) = taken.iter().find(|(held, _)| *held == port) {
+                panic!("{name} and {other} both want port {port} — change the range or a name");
+            }
+            taken.push((port, name));
+        }
+    }
 }
 
 /// State carried across a replacement, in one call site rather than the two
