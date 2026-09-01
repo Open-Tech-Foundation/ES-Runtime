@@ -941,7 +941,10 @@ mod bundler_style {
     #[test]
     fn a_directory_is_tried_as_its_index() {
         let tried = Loader::candidates("../../src");
-        assert!(tried.contains(&"../../src/index.ts".to_string()), "{tried:?}");
+        assert!(
+            tried.contains(&"../../src/index.ts".to_string()),
+            "{tried:?}"
+        );
         assert!(
             Loader::candidates("./src/").contains(&"./src/index.ts".to_string()),
             "a trailing slash must not double up"

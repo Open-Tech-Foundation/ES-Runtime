@@ -8,6 +8,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Security
+
+- **`h2` is bumped past RUSTSEC-2026-0258**, which let a peer queue empty DATA
+  frames without limit — unbounded memory, or a panic if the length overflowed
+  — on a stream nothing was draining. It reaches the binary through `hyper`, so
+  `runtime:http`'s server and `esrun upgrade`'s client both carried it. Yanked
+  `chacha20` 0.10.1 goes with it, which had failed `cargo deny` on its own.
+
+### Testing / CI
+
+- **Three gates that could not pass on a fresh checkout, fixed.** `tsr fuzz`
+  named a gitignored corpus directory, and libFuzzer refuses to start when a
+  directory it was given does not exist — so every CI fuzz run died on the first
+  target while a local one, holding a corpus from an earlier run, passed. It is
+  created now. `test:protocol` still matched `packages = ["*"]` after
+  `packages/types` and `crates/runtime/js` joined the workspace, and reached for
+  a `test/unit/run.sh` neither owns; it names the two drivers that have one.
+  Rust formatting and Biome's import order had both drifted.
+
 ## [0.28.0] - 2026-09-01
 
 ### Added

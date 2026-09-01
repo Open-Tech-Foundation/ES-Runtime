@@ -1,4 +1,4 @@
-import { test, assertEquals } from "runtime:test";
+import { assertEquals, test } from "runtime:test";
 import { Reader } from "../serialization/protobuf/reader.ts";
 import { Writer } from "../serialization/protobuf/writer.ts";
 

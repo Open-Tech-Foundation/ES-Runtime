@@ -1168,15 +1168,18 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
             "--timeout" | "-t" => {
                 let text = require_value(flag, value)?;
-                timeout = Some(text.parse::<u64>().ok().filter(|ms| *ms > 0).ok_or_else(
-                    || {
-                        format!(
-                            "{flag}={text} is not a number of milliseconds.\n\n\
+                timeout = Some(
+                    text.parse::<u64>()
+                        .ok()
+                        .filter(|ms| *ms > 0)
+                        .ok_or_else(|| {
+                            format!(
+                                "{flag}={text} is not a number of milliseconds.\n\n\
                              How long one file may take before it is stopped and \
                              failed: --timeout=5000."
-                        )
-                    },
-                )?);
+                            )
+                        })?,
+                );
             }
             "--reporter" => {
                 let name = require_value(flag, value)?;
@@ -1283,9 +1286,8 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         let stripper = if config.setup.is_empty() {
             TypeStripper::new()
         } else {
-            let entry = std::fs::canonicalize(&file).unwrap_or_else(|_| {
-                std::env::current_dir().unwrap_or_default().join(&file)
-            });
+            let entry = std::fs::canonicalize(&file)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
             TypeStripper::before(&entry, config.setup.clone())
         };
         let run = Config {

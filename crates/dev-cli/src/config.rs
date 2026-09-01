@@ -1144,9 +1144,7 @@ fn library_formats(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<St
             ));
         }
         if formats.contains(&name) {
-            return Err(format!(
-                "{file}: {at}'s `format` names \"{name}\" twice."
-            ));
+            return Err(format!("{file}: {at}'s `format` names \"{name}\" twice."));
         }
         formats.push(name);
     }

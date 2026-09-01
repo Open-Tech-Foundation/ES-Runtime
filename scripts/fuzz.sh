@@ -22,6 +22,11 @@ for target in "${targets[@]}"; do
   echo "::group::fuzz $target"
   # New coverage-increasing inputs go to the (gitignored) corpus directory; the
   # seeds are read-only, so a run cannot bloat them.
+  #
+  # Created here because it is gitignored: naming a corpus directory explicitly
+  # means libFuzzer expects it to already exist, and on a fresh checkout — which
+  # is every CI run — none of them do.
+  mkdir -p "fuzz/corpus/$target"
   cargo +nightly fuzz run "$target" \
     "fuzz/corpus/$target" "fuzz/seeds/$target" \
     -- "-max_total_time=$seconds" -rss_limit_mb=4096

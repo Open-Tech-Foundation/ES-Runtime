@@ -105,9 +105,14 @@ run = "biome ci"
 # --- test suites -------------------------------------------------------------
 
 # The protocol halves, which need nothing running.
+#
+# Named rather than "*": the two drivers are the only members that own a
+# `test/unit/run.sh`. Under "*" tsr reaches for one in `@opentf/esrun-types` and
+# `esrun-serialization` too, and a member with no such file fails the task
+# rather than being passed over.
 [tasks."test:protocol"]
 run = "./test/unit/run.sh"
-packages = ["*"]
+packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
 parallel = true
 
 # Run with our own `esdev`, not bun — the same reasoning as `build` above. This

@@ -1741,7 +1741,11 @@ async fn build_targets(
             // The names were validated when the file was parsed — anything
             // but `esm`/`cjs` is refused there, with the spellings — so this
             // cannot silently drop one.
-            formats: target.formats.iter().filter_map(|name| Format::parse(name)).collect(),
+            formats: target
+                .formats
+                .iter()
+                .filter_map(|name| Format::parse(name))
+                .collect(),
             types: target.lib && target.types,
             dts_bundle: target.dts_bundle.clone(),
             plugins,

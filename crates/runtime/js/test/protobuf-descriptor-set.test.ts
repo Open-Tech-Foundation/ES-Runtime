@@ -1,5 +1,5 @@
-import { test, assertEquals } from "runtime:test";
 import { file } from "runtime:fs";
+import { assertEquals, test } from "runtime:test";
 import { Schema } from "../serialization/protobuf/schema.ts";
 
 // The .proto the fixture was compiled from (protoc --descriptor_set_out
