@@ -192,19 +192,14 @@ jobs:
 
       # TLS, from a private authority — which is what an internal deployment
       # looks like, and the case the public roots cannot cover. The script mints
-      # a CA and a certificate and prints the environment the test wants.
+      # a CA and a certificate and writes the environment the test wants.
+      #
+      # Redirected into $GITHUB_ENV the way the two steps below are, rather than
+      # `eval`ed: command substitution discards the script's exit status, so a
+      # server that never came up used to leave the variables empty and this
+      # step green, and the tls case skipped itself without saying why.
       - name: start the TLS server
-        run: |
-          eval "$(./test/tls-server.sh)"
-          # `$GITHUB_ENV` takes `NAME=value`, not the `export NAME=value` the
-          # script prints for a shell — and the CA is a multi-line PEM, which
-          # needs the heredoc form or only its first line would survive.
-          {
-            echo "REDIS_TLS_URL=$REDIS_TLS_URL"
-            echo "REDIS_CA<<PEM_EOF"
-            echo "$REDIS_CA"
-            echo "PEM_EOF"
-          } >> "$GITHUB_ENV"
+        run: ./test/tls-server.sh >> "$GITHUB_ENV"
 
       # A three-primary cluster, for the slot map and the redirects. All three
       # nodes share one container so that `--cluster-announce-ip 127.0.0.1` is

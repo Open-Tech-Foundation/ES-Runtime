@@ -32,7 +32,15 @@ for test in smoke db commands timeout conformance errors auth pubsub blocking mu
   # esrun grants nothing by default (DECISIONS D65). These tests load the
   # built package (imports), open a connection to the server (net) and read
   # the URL and PG*/REDIS* variables from the environment (env). No
-  # subprocess, no filesystem: the grant stays at three.
-  "$esrun" --allow-imports --allow-net --allow-env "$here/$test.mjs" || status=1
+  # subprocess, no filesystem: three, for all but one of them.
+  grants=(--allow-imports --allow-net --allow-env)
+  # `reconnect` also binds a socket of its own. One of its cases needs a server
+  # that goes away and stays away, which is not something a container can be
+  # asked to be on cue — so it stands up a socket that speaks just enough RESP
+  # and then stops listening. The grant goes to the one test that listens rather
+  # than to all sixteen: a capability every test holds is one no test is
+  # checking the absence of.
+  if [ "$test" = reconnect ]; then grants+=(--allow-listen); fi
+  "$esrun" "${grants[@]}" "$here/$test.mjs" || status=1
 done
 exit $status

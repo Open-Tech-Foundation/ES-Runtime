@@ -66,5 +66,23 @@ if [ -z "$ready" ]; then
   exit 1
 fi
 
-echo "export REDIS_TLS_URL='rediss://localhost:$port'"
-echo "export REDIS_CA='$(cat "$dir/ca.crt")'"
+url="rediss://localhost:$port"
+# Both spellings, as the cluster and sentinel scripts do: `eval` wants the
+# export, $GITHUB_ENV wants a bare assignment. The CA needs the heredoc form
+# there — it is a multi-line PEM, and the plain `NAME=value` line would keep
+# only its first line.
+#
+# Writing the file itself, rather than being `eval`ed by the workflow, is also
+# what makes a failure above visible. `eval "$(script)"` reports the status of
+# the text it ran, not of the command that produced it — so this script exiting
+# non-zero left the variables empty, the step green, and the tls case skipping
+# itself with nobody told a server had failed to start.
+if [ -n "${GITHUB_ENV:-}" ]; then
+  echo "REDIS_TLS_URL=$url"
+  echo "REDIS_CA<<PEM_EOF"
+  cat "$dir/ca.crt"
+  echo "PEM_EOF"
+else
+  echo "export REDIS_TLS_URL='$url'"
+  echo "export REDIS_CA='$(cat "$dir/ca.crt")'"
+fi

@@ -45,6 +45,23 @@ namespace) is unstable and may change between minor releases until the API freez
   now, and all three scripts fail loudly instead of handing the suite a server
   that was never up.
 
+  The driver suites granted every test the same three capabilities, and three
+  tests need a fourth: redis's `reconnect`, and postgres's `timeouts` and
+  `lost`, each of which binds a socket of its own to be a server that hangs,
+  drops a connection mid-query, or goes away for good — none of which a real
+  server can be asked to do on cue. They were failing on
+  `capability denied: NetListen`. `--allow-listen` goes to those three by name
+  rather than to the suites, so the tests with no business listening still
+  cannot. (Postgres's `listen` test is LISTEN/NOTIFY and needs nothing extra.)
+
+  The Redis TLS case had been skipping itself in CI. The workflow ran
+  `eval "$(./test/tls-server.sh)"`, and command substitution discards the
+  script's exit status — `eval` reports on the text it ran, not on the command
+  that produced it — so a server that failed to start left `REDIS_TLS_URL`
+  empty, the step green, and the one case all that certificate machinery exists
+  for quietly not running. The script writes `$GITHUB_ENV` itself now, as the
+  cluster and sentinel scripts already did, and a failure fails the step.
+
   Rust formatting and Biome's import order had both drifted.
 
 ## [0.28.0] - 2026-09-01

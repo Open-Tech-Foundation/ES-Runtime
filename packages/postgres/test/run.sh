@@ -37,7 +37,17 @@ for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays
   # esrun grants nothing by default (DECISIONS D65). These tests load the
   # built package (imports), open a connection to the server (net) and read
   # the URL and PG*/REDIS* variables from the environment (env). No
-  # subprocess, no filesystem: the grant stays at three.
-  "$esrun" --allow-imports --allow-net --allow-env "$here/$test.mjs" || status=1
+  # subprocess, no filesystem: three, for all but two of them.
+  grants=(--allow-imports --allow-net --allow-env)
+  # `timeouts` and `lost` stand up sockets of their own — a blackhole that
+  # accepts and never answers, and a proxy that can cut a connection mid-query.
+  # Neither is something a real server can be asked to do on cue. Named
+  # individually rather than granted to the suite, so the tests that have no
+  # business listening still cannot. (`listen` is LISTEN/NOTIFY, which is the
+  # server's own pub/sub and needs nothing extra.)
+  case "$test" in
+    timeouts | lost) grants+=(--allow-listen) ;;
+  esac
+  "$esrun" "${grants[@]}" "$here/$test.mjs" || status=1
 done
 exit $status
