@@ -38,12 +38,22 @@ docker run -d --name "$name" \
   ' >/dev/null
 
 # Ready means a sentinel can name the master, not merely that a port answers.
+#
+# The probe's stdout goes into `grep` rather than through, for the reason the
+# cluster script gives: this output is `eval`ed or appended to $GITHUB_ENV.
+ready=
 for _ in $(seq 1 120); do
   if docker exec "$name" redis-cli -p 7301 sentinel get-master-addr-by-name mymaster 2>/dev/null | grep -q 7201; then
+    ready=1
     break
   fi
   sleep 0.5
 done
+if [ -z "$ready" ]; then
+  echo "no sentinel could name the master" >&2
+  docker logs "$name" >&2 2>&1 || true
+  exit 1
+fi
 
 sentinels='redis://127.0.0.1:7301,redis://127.0.0.1:7302,redis://127.0.0.1:7303'
 if [ -n "${GITHUB_ENV:-}" ]; then

@@ -30,19 +30,41 @@ docker rm -f "$name" >/dev/null 2>&1 || true
 # `--tls-port` with `--port 0` means TLS only: a test that could fall back to
 # the plaintext port would not be testing TLS.
 docker run -d --name "$name" -v "$dir:/certs:ro" \
-  -p "127.0.0.1:$port:$port" redis:latest \
+  -p "127.0.0.1:$port:$port" redis:8 \
   redis-server --port 0 --tls-port "$port" \
   --tls-cert-file /certs/server.crt \
   --tls-key-file /certs/server.key \
   --tls-ca-cert-file /certs/ca.crt \
   --tls-auth-clients no >/dev/null
 
-# The port answering is the only readiness signal that means anything here:
-# `redis-cli ping` would need the TLS flags too.
+# Ready means a TLS handshake completes and the server answers — which is what
+# the certificate above exists to make happen. `redis-cli` needs the TLS flags
+# to ask, and it has them: the CA is mounted in the container beside the key.
+#
+# The probe's stdout is piped into `grep`, and that is load-bearing rather than
+# tidy. This script's stdout is `eval`ed by its caller, so a docker diagnostic
+# that reaches it is run as a command: an unredirected `docker exec` here put
+# "OCI runtime exec failed..." through `eval`, and the step died on
+# `OCI: command not found` having said nothing about Redis. Nothing between here
+# and the two `echo`s at the end may write to stdout.
+#
+# The previous probe asked `sh` for `exec 3<>/dev/tcp/...`, which is a bash
+# feature and this image's `sh` is dash — so it never succeeded, spent the whole
+# timeout, and then reported ready anyway.
+ready=
 for _ in $(seq 1 60); do
-  if docker exec "$name" sh -c "exec 3<>/dev/tcp/127.0.0.1/$port" 2>/dev/null; then break; fi
+  if docker exec "$name" redis-cli --tls --cacert /certs/ca.crt \
+      -h 127.0.0.1 -p "$port" ping 2>/dev/null | grep -q PONG; then
+    ready=1
+    break
+  fi
   sleep 0.5
 done
+if [ -z "$ready" ]; then
+  echo "the TLS server never answered on $port" >&2
+  docker logs "$name" >&2 2>&1 || true
+  exit 1
+fi
 
 echo "export REDIS_TLS_URL='rediss://localhost:$port'"
 echo "export REDIS_CA='$(cat "$dir/ca.crt")'"

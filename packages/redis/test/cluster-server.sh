@@ -31,12 +31,23 @@ docker run -d --name "$name" \
 
 # Ready means every slot is covered, not merely that a port answers: a client
 # connecting mid-formation would read a topology the cluster is about to change.
+#
+# The probe's stdout goes into `grep` rather than through: this script's output
+# is `eval`ed or appended to $GITHUB_ENV, so a docker diagnostic reaching stdout
+# is executed or written into the job's environment.
+ready=
 for _ in $(seq 1 120); do
   if docker exec "$name" redis-cli -p 7001 cluster info 2>/dev/null | grep -q "cluster_state:ok"; then
+    ready=1
     break
   fi
   sleep 0.5
 done
+if [ -z "$ready" ]; then
+  echo "the cluster never reached cluster_state:ok" >&2
+  docker logs "$name" >&2 2>&1 || true
+  exit 1
+fi
 
 urls='redis://127.0.0.1:7001,redis://127.0.0.1:7002,redis://127.0.0.1:7003'
 # Both spellings: `eval` wants the export, and $GITHUB_ENV wants a bare

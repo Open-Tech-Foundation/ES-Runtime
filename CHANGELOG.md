@@ -18,13 +18,33 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
-- **Three gates that could not pass on a fresh checkout, fixed.** `tsr fuzz`
-  named a gitignored corpus directory, and libFuzzer refuses to start when a
-  directory it was given does not exist — so every CI fuzz run died on the first
-  target while a local one, holding a corpus from an earlier run, passed. It is
-  created now. `test:protocol` still matched `packages = ["*"]` after
-  `packages/types` and `crates/runtime/js` joined the workspace, and reached for
-  a `test/unit/run.sh` neither owns; it names the two drivers that have one.
+- **The gates that could not pass on a fresh checkout, fixed.** Each had been
+  passing locally, for a different reason than it was failing in CI.
+
+  `tsr fuzz` failed twice over. It named a corpus directory under the gitignored
+  `fuzz/corpus/`, and libFuzzer refuses to start when a directory it was handed
+  does not exist — so CI died on the first target while a local run, holding a
+  corpus from an earlier one, went green. Past that, cargo-fuzz defaults
+  `--target` to the triple *it* was compiled for: built from source that is the
+  host, but the release artifact CI installs is a static musl binary, and ASan
+  cannot instrument a statically linked libc. The target now comes from
+  `rustc -vV`, so how the tool was packaged no longer decides what it builds.
+
+  `test:protocol` still matched `packages = ["*"]` after `packages/types` and
+  `crates/runtime/js` joined the workspace, and reached for a `test/unit/run.sh`
+  neither owns. It names the two drivers that have one. This ran ahead of the
+  server-backed steps in both driver jobs, so it was failing them too.
+
+  The Redis TLS server's readiness probe let docker write to stdout, and that
+  stdout is `eval`ed by the caller — so a container diagnostic was executed as a
+  command and the step died on `OCI: command not found`, having said nothing
+  about Redis. The probe now goes through `grep`, as the cluster and sentinel
+  scripts already did. It had also been asking `sh` for `/dev/tcp`, a bash
+  feature this image's dash does not have, so it never once succeeded: it spent
+  its whole timeout and reported ready regardless. It asks `redis-cli` over TLS
+  now, and all three scripts fail loudly instead of handing the suite a server
+  that was never up.
+
   Rust formatting and Biome's import order had both drifted.
 
 ## [0.28.0] - 2026-09-01
