@@ -11,7 +11,7 @@
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
-members = ["packages/postgres", "packages/redis", "crates/runtime/js"]
+members = ["packages/postgres", "packages/redis", "packages/types", "crates/runtime/js"]
 
 # --- the runtime (Rust) ------------------------------------------------------
 
@@ -65,17 +65,31 @@ run = "bun install --frozen-lockfile"
 
 # `packages` auto-detects each member's native runner, so this is the one script
 # left in their package.json — `npm publish` needs it, and nothing else does.
+#
+# Named rather than "*": `@opentf/esrun-types` is a workspace member (it is
+# typechecked) and has nothing to build — it ships the `.d.ts` files as they are
+# written. Under "*" tsr would run `npm run build` there and npm would fail on
+# the missing script, so the alternative is a no-op script that exists to be
+# skipped, which is a worse thing to leave in a published manifest.
 [tasks.build]
-packages = ["*"]
+packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis", "esrun-serialization"]
 parallel = true
 
 # Not "*": `crates/runtime/js` has 25 standing type errors and has never been
 # typechecked standalone (its tsconfig sets `types: []` and drives the editor).
 # Wiring it up would ship a task red on arrival. Matched by manifest name, which
 # is the other thing `packages` accepts.
+#
+# `@opentf/esrun-types` is here for a different reason from the other two. It
+# describes a surface it does not implement, so nothing else can catch it being
+# wrong — the runtime's suite proves the code works and would go on passing
+# while the types beside it said something else. Its tsconfig sets
+# `skipLibCheck: false`, which is what makes the declarations themselves the
+# thing being checked, and `test/` holds the `@ts-expect-error` cases that fail
+# when a declaration quietly widens to `any`.
 [tasks.typecheck]
 run = "tsc --noEmit"
-packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
+packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis", "@opentf/esrun-types"]
 parallel = true
 
 [tasks.lint]
@@ -93,7 +107,7 @@ run = "biome ci"
 # The protocol halves, which need nothing running.
 [tasks."test:protocol"]
 run = "./test/unit/run.sh"
-packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
+packages = ["*"]
 parallel = true
 
 # Run with our own `esdev`, not bun — the same reasoning as `build` above. This

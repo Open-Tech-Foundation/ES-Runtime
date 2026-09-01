@@ -29,6 +29,21 @@ itself.
 
 - **`runtime:fs`'s `symlink(target, path, options?)`**, with `SymlinkOptions`.
 
+### Fixed
+
+- **`PooledConnection` declared that it implements `Connection` and did not.**
+  It was missing `subscribe`, `unsubscribe`, `subscribed`, `subscriptions`,
+  `usable` and `reusable` — all six of which the implementation has — so the
+  class was a `TS2420` for anyone who type-checked this package's declarations
+  rather than skipping them. `subscribe` and `unsubscribe` return `Promise<never>`,
+  because a pool refuses both: a subscription needs a connection of its own.
+
+  Found by giving the package a `tsconfig.json` with `skipLibCheck: false` and
+  a `test/` of `@ts-expect-error` cases, now run by `tsr typecheck`. These
+  declarations describe a surface they do not implement, so nothing else could
+  catch them being wrong — the runtime's own suite proves the code works and
+  would go on passing while the types beside it said something else.
+
 ### Changed
 
 - **`HookFilter` names `id`, `code` or both.** It was an interface with two

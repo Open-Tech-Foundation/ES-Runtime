@@ -708,6 +708,23 @@ declare module "runtime:db" {
     readonly idle: number;
     /** Callers queued behind a full pool. */
     readonly pending: number;
+    /** True while the pool is open — what code holding "a connection" asks. */
+    readonly usable: boolean;
+    readonly reusable: boolean;
+    /**
+     * Always `false`, and `subscriptions` is always empty: a pool subscribes to
+     * nothing, because a subscription needs a connection of its own.
+     */
+    readonly subscribed: boolean;
+    readonly subscriptions: readonly string[];
+    /**
+     * **Refused**, and by name. Subscribing gives a connection over to
+     * delivering messages, and a pool's premise is that its connections come
+     * back. Open one without `pool`, which is how you would deploy a subscriber
+     * anyway.
+     */
+    subscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<never>;
+    unsubscribe(channels?: string | readonly string[]): Promise<never>;
     query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<Row<unknown>>>;
     execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;

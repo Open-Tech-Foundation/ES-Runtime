@@ -16,6 +16,9 @@
     "directory": "packages/types"
   },
   "homepage": "https://esrun.opentechf.org/api",
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
   "publishConfig": {
     "access": "public"
   }
