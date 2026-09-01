@@ -83,6 +83,8 @@ pub struct Project {
     /// alias that means something different depending on where the build was
     /// started from would be worse than not having one.
     pub alias: Vec<(String, String)>,
+    /// What `esdev test` does here, if the file says.
+    pub test: TestSettings,
     /// Every plugin this project loads, in the order they are loaded — the
     /// top-level ones first, then each target's own.
     ///
@@ -131,6 +133,25 @@ pub struct Start {
     /// output itself, it is esdev's listener. Either way it is the address a
     /// developer types, which is why it has the plain name.
     pub port: Option<u16>,
+}
+
+/// What `esdev test` is configured to do in this project.
+///
+/// A section rather than flags-only for the reason the build has one: a
+/// project's setup files and its per-test budget are properties *of the
+/// project*, and a flag that has to be repeated in every `package.json` script
+/// is one that will be repeated differently in two of them.
+#[derive(Debug, Default)]
+pub struct TestSettings {
+    /// Modules imported before each test file runs — a polyfill, a global stub,
+    /// a fixture registry. In the order written.
+    pub setup: Vec<String>,
+    /// How long a single file may take, in milliseconds. `None` is no limit.
+    pub timeout: Option<u64>,
+    /// How many files run at once. `None` is the machine's parallelism.
+    pub jobs: Option<usize>,
+    /// `"human"` (the default) or `"json"`.
+    pub reporter: Option<String>,
 }
 
 /// One thing a project builds.
@@ -285,6 +306,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "permissions",
     "plugins",
     "alias",
+    "test",
 ];
 
 /// The keys `start` may carry.
@@ -294,6 +316,9 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// `start` should be reported by the build that read the file, not held until
 /// the day somebody runs the other command.
 const START_KEYS: &[&str] = &["run", "watch", "serve", "port"];
+
+/// The keys `test` may carry.
+const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "reporter"];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
 ///
@@ -393,6 +418,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         None => Vec::new(),
     };
     let alias = aliases(root.get("alias"), name, &dir)?;
+    let test = read_test(root.get("test"), name)?;
     Ok(Some(Project {
         dir,
         targets,
@@ -400,7 +426,75 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         permissions,
         plugins,
         alias,
+        test,
     }))
+}
+
+/// Parses the `test` section.
+///
+/// Every key here has a flag of the same name on `esdev test`, and the flag
+/// wins — the same rule the build uses, so a project whose day to day is four
+/// jobs can still be run one at a time to watch a hang.
+fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> {
+    let Some(value) = value else {
+        return Ok(TestSettings::default());
+    };
+    let map = object(value, file, "`test`")?;
+    known_keys(map, file, "`test`", TEST_KEYS)?;
+
+    let setup = match map.get("setup") {
+        // A single setup file is the common case and reads better as one.
+        Some(Value::String(one)) => vec![one.clone()],
+        other => string_array(other, file, "`test`'s `setup`")?,
+    };
+    let timeout = match map.get("timeout") {
+        None => None,
+        Some(Value::Number(ms)) if ms.as_u64().is_some_and(|ms| ms > 0) => ms.as_u64(),
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `timeout` is {}, and it is how many milliseconds one \
+                 file may take.\n\n\
+                 A whole number above zero: \"timeout\": 5000.",
+                kind(other)
+            ));
+        }
+    };
+    let jobs = match map.get("jobs") {
+        None => None,
+        Some(Value::Number(n)) if n.as_u64().is_some_and(|n| n > 0) => {
+            n.as_u64().and_then(|n| usize::try_from(n).ok())
+        }
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `jobs` is {}, and it is how many files run at \
+                 once.\n\n\
+                 One or more; 1 runs them one at a time and lets each write straight \
+                 to the terminal.",
+                kind(other)
+            ));
+        }
+    };
+    let reporter = match map.get("reporter") {
+        None => None,
+        Some(Value::String(name)) if matches!(name.as_str(), "human" | "json") => {
+            Some(name.clone())
+        }
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `reporter` is {}, and it says how the run reports \
+                 itself.\n\n  \
+                 \"human\"  — what a person reads, the default\n  \
+                 \"json\"   — one JSON object per line, for a machine",
+                kind(other)
+            ));
+        }
+    };
+    Ok(TestSettings {
+        setup,
+        timeout,
+        jobs,
+        reporter,
+    })
 }
 
 /// Parses one entry of `targets`.

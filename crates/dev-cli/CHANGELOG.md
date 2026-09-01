@@ -26,6 +26,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`esdev test --setup=<path>`, `--timeout=<ms>` and `--reporter=json`**, each
+  also an `esdev.json` key under `"test"` (with `jobs`). A flag beats the file.
+  See the root [CHANGELOG.md](../../CHANGELOG.md).
+
 - **`esdev.json` describes a library** — `"lib"`, `"format"`, `"types"` and
   `"dts-bundle"` as target keys, so `esdev build` publishes a package with its
   `assets` (the README and LICENSE) copied. A `--lib` build now copies them too;

@@ -51,6 +51,13 @@ pub struct TestConfig {
     pub jobs: Option<usize>,
     /// Keep running, re-running the files when a source file changes.
     pub watch: bool,
+    /// Modules imported before the file under test, from `--setup` or the
+    /// project's `test.setup`. Absolute by the time they get here.
+    pub setup: Vec<String>,
+    /// How long one file may take before it is stopped and failed.
+    pub timeout: Option<u64>,
+    /// `"json"` for one object per line, or `None` for what a person reads.
+    pub reporter: Option<String>,
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -100,8 +107,23 @@ const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "target", ".cache"]
 /// above it into two things a reader has to reassemble. With `--jobs=1` nothing
 /// is buffered and the child writes straight through — which is what you want
 /// from the run where you are watching a test hang.
-pub async fn run_all(exe: &Path, root: &Path, files: &[PathBuf], jobs: usize) -> usize {
+pub async fn run_all(
+    exe: &Path,
+    root: &Path,
+    files: &[PathBuf],
+    jobs: usize,
+    config: &TestConfig,
+) -> usize {
     use futures_util::StreamExt;
+
+    // What the parent hands down. A child runs one file and must run it the way
+    // the parent was asked to, or the run reports something nobody configured.
+    let flags: Vec<String> = config
+        .setup
+        .iter()
+        .map(|module| format!("--setup={module}"))
+        .chain(config.reporter.iter().map(|r| format!("--reporter={r}")))
+        .collect();
 
     let named = |file: &Path| {
         file.strip_prefix(root)
@@ -109,18 +131,29 @@ pub async fn run_all(exe: &Path, root: &Path, files: &[PathBuf], jobs: usize) ->
             .display()
             .to_string()
     };
+    // In JSON the child's lines are the report; a filename printed above them
+    // is chrome that would have to be skipped by whatever is parsing.
+    let quiet = config.reporter.as_deref() == Some("json");
 
     if jobs <= 1 {
         let mut failed = 0usize;
         for file in files {
-            println!("{}", named(file));
-            let status = tokio::process::Command::new(exe)
+            if !quiet {
+                println!("{}", named(file));
+            }
+            let mut child = tokio::process::Command::new(exe);
+            child
                 .arg("test")
                 .arg(format!("--file={}", file.display()))
-                .status()
-                .await;
-            match status {
-                Ok(status) if status.success() => {}
+                .args(&flags);
+            // Not captured: with one job the child writes straight through,
+            // which is the run to reach for when a test is hanging.
+            match supervise(child, config.timeout, false).await {
+                Ok(done) if done.expired => {
+                    eprintln!("{}", timed_out(config.timeout));
+                    failed += 1;
+                }
+                Ok(done) if done.output.status.success() => {}
                 Ok(_) => failed += 1,
                 Err(e) => {
                     eprintln!("  cannot run it: {e}");
@@ -135,22 +168,35 @@ pub async fn run_all(exe: &Path, root: &Path, files: &[PathBuf], jobs: usize) ->
         let exe = exe.to_path_buf();
         let name = named(file);
         let file = file.clone();
+        let flags = flags.clone();
+        let timeout = config.timeout;
         async move {
-            let output = tokio::process::Command::new(&exe)
+            let mut child = tokio::process::Command::new(&exe);
+            child
                 .arg("test")
                 .arg(format!("--file={}", file.display()))
-                .output()
-                .await;
-            (name, output)
+                .args(&flags);
+            (name, supervise(child, timeout, true).await)
         }
     });
 
     let mut failed = 0usize;
     let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
     while let Some((name, output)) = results.next().await {
-        println!("{name}");
+        if !quiet {
+            println!("{name}");
+        }
         match output {
-            Ok(output) => {
+            Ok(done) if done.expired => {
+                // What it managed to print before it was ended: a file that
+                // hangs on its ninth test has eight results worth reading.
+                print!("{}", String::from_utf8_lossy(&done.output.stdout));
+                eprint!("{}", String::from_utf8_lossy(&done.output.stderr));
+                eprintln!("{}", timed_out(config.timeout));
+                failed += 1;
+            }
+            Ok(done) => {
+                let output = done.output;
                 // The child's two streams, in the order a reader expects them:
                 // what the test printed, then what went wrong. Written through
                 // rather than re-formatted — a harness's output is its own.
@@ -167,6 +213,73 @@ pub async fn run_all(exe: &Path, root: &Path, files: &[PathBuf], jobs: usize) ->
         }
     }
     failed
+}
+
+/// Runs the child to completion, or **kills it** after `timeout` milliseconds.
+///
+/// The parent enforces the budget, because the case it exists for is a file
+/// that wedges: a limit the child kept for itself is one it never gets round to
+/// noticing. `None` is no limit, which stays the default — a test suite is not
+/// a place to guess at how long a machine takes.
+///
+/// **Killing is the part that has to be explicit.** Dropping the future that
+/// was waiting on the process does not end the process: the first version of
+/// this abandoned the wait and left the child running, holding the inherited
+/// stdout, so the run appeared to hang *after* the timeout had already fired.
+/// So a watchdog holds the pid and signals it, and the flag it sets is how the
+/// caller tells "it finished" from "we ended it".
+async fn supervise(
+    mut command: tokio::process::Command,
+    timeout: Option<u64>,
+    capture: bool,
+) -> Result<Finished, std::io::Error> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    if capture {
+        command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+    }
+    let child = command.spawn()?;
+    let pid = child.id();
+    let expired = std::sync::Arc::new(AtomicBool::new(false));
+    let watchdog = timeout.map(|ms| {
+        let expired = expired.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            expired.store(true, Ordering::SeqCst);
+            if let Some(pid) = pid {
+                crate::watch::end(pid);
+            }
+        })
+    });
+
+    let output = child.wait_with_output().await;
+    if let Some(watchdog) = watchdog {
+        watchdog.abort();
+    }
+    let output = output?;
+    Ok(Finished {
+        expired: expired.load(Ordering::SeqCst),
+        output,
+    })
+}
+
+/// How a child ended.
+struct Finished {
+    /// Whether it was still running when its budget ran out.
+    expired: bool,
+    output: std::process::Output,
+}
+
+/// What a file that ran out of time is told.
+fn timed_out(timeout: Option<u64>) -> String {
+    let ms = timeout.unwrap_or_default();
+    format!(
+        "  FAIL the file took longer than {ms}ms and was stopped\n    \
+         Something in it never finished. Raise the budget with --timeout, or \
+         run it alone with --jobs=1 to watch where it stops."
+    )
 }
 
 /// Runs the files, then runs them again on every change, until interrupted.
@@ -206,8 +319,12 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
             eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
         } else {
             let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
-            let failed = run_all(exe, root, &files, jobs).await;
-            report(files.len(), failed);
+            let failed = run_all(exe, root, &files, jobs, config).await;
+            if config.reporter.as_deref() == Some("json") {
+                report_as_json(files.len(), failed);
+            } else {
+                report(files.len(), failed);
+            }
         }
         eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
 
@@ -221,6 +338,11 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
         }
         println!();
     }
+}
+
+/// The tally a run ends with, as one more JSON object.
+pub fn report_as_json(total: usize, failed: usize) {
+    println!(r#"{{"type":"summary","files":{total},"failed":{failed}}}"#);
 }
 
 /// The tally a run ends with.

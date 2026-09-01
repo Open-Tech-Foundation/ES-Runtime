@@ -34,7 +34,53 @@ declare module "runtime:test" {
      * in a commit is visible rather than being a suite that got faster.
      */
     only(name: string, fn: () => void | Promise<void>): void;
+    /**
+     * A name with no body yet. Reported as **skipped**, never silently absent
+     * — a to-do that vanished from the tally is the one missing case nobody
+     * notices.
+     */
+    todo(name: string, fn?: () => void | Promise<void>): void;
+    /** Registers the case only when the condition is false, and skips it otherwise. */
+    skipIf(condition: unknown): TestFn;
+    /** The mirror: registers it only when the condition holds. */
+    runIf(condition: unknown): TestFn;
+    /**
+     * One case per row, named by substituting the row into the name.
+     *
+     * `%s`/`%d`/`%i`/`%f`/`%j`/`%o` take the next value positionally, `%#` is
+     * the row's index, and `$key` takes a named property when the row is an
+     * object. An array row is spread into the body's arguments, so the
+     * parameters read like the table's header. A name that does not vary per
+     * row gets an index appended, because six cases sharing one identity is a
+     * report where a failure names none of them.
+     *
+     * ```ts
+     * test.each([
+     *   [1, 1, 2],
+     *   [2, 3, 5],
+     * ])("adds %d + %d = %d", (a, b, want) => expect(a + b).toBe(want));
+     * ```
+     */
+    each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
   };
+
+  /** What `test` is, for the conditional forms that hand it back. */
+  export type TestFn = {
+    (name: string, fn: () => void | Promise<void>): void;
+    each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
+  };
+
+  /**
+   * A table-driven registrar: `.each(rows)(name, body)`.
+   *
+   * A row that is an array is spread into the body's parameters; any other row
+   * is passed as the single argument.
+   */
+  export type Each<Register> = <Row>(
+    table: readonly Row[],
+  ) => Row extends readonly unknown[]
+    ? (name: string, fn: (...row: Row) => void | Promise<void>) => void
+    : (name: string, fn: (row: Row) => void | Promise<void>) => void;
 
   /**
    * A group of tests: a name that composes into theirs (`"db > inserts > …"`),
@@ -62,7 +108,25 @@ declare module "runtime:test" {
     skip(name: string, body: () => void): void;
     /** Runs this group and skips everything outside it. */
     only(name: string, body: () => void): void;
+    /** A group planned and not written. Its name is reported as skipped. */
+    todo(name: string, body?: () => void): void;
+    /** Registers the group only when the condition is false. */
+    skipIf(condition: unknown): (name: string, body: () => void) => void;
+    /** …and only when it holds. */
+    runIf(condition: unknown): (name: string, body: () => void) => void;
+    /** One group per row — see {@link test.each}. */
+    each: Each<(name: string, body: (...row: never[]) => void) => void>;
   };
+
+  /**
+   * `test`, under the name most of the ecosystem writes. The same function,
+   * not a second one: two implementations of a registrar is how they end up
+   * disagreeing about `.only`.
+   */
+  export const it: typeof test;
+
+  /** `describe`, under vitest's name for it. */
+  export const suite: typeof describe;
 
   /** A lifecycle hook. Several of a kind may be registered; all of them run. */
   export type Hook = () => void | Promise<void>;
@@ -397,7 +461,9 @@ declare module "runtime:test" {
 
   const _default: {
     test: typeof test;
+    it: typeof it;
     describe: typeof describe;
+    suite: typeof suite;
     beforeAll: typeof beforeAll;
     afterAll: typeof afterAll;
     beforeEach: typeof beforeEach;

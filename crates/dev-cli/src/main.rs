@@ -176,6 +176,16 @@ OPTIONS:
                                 machine's parallelism, at most 8 — each file is
                                 a process holding a V8 heap
     --watch                     Run them again whenever a source file changes
+    --setup=<path>              Import this before each test file. Repeatable
+    --timeout=<ms>              Stop a file that takes longer, and fail it
+    --reporter=<fmt>            human (default) or json — one object per line
+
+Everything but --file and --watch is also an esdev.json key, under \"test\":
+
+    { \"test\": { \"setup\": [\"./test/setup.ts\"], \"timeout\": 5000,
+                \"jobs\": 4, \"reporter\": \"json\" } }
+
+A flag beats the file.
 
 Each file runs in its own process, so one that wedges, exhausts its heap or
 calls exit() cannot decide the fate of the others. Files run in parallel, and
@@ -190,9 +200,10 @@ imports what it uses from runtime:test:
       expect(1 + 1).toBe(2);
     });
 
-Also exported: describe, the before*/after* hooks, assert/assertEquals/
-assertThrows/assertRejects, mock (mock.fn, mock.spyOn) and clock (clock.freeze,
-clock.advance).
+Also exported: describe (and it/suite), the before*/after* hooks,
+assert/assertEquals/assertThrows/assertRejects, mock (mock.fn, mock.spyOn) and
+clock (clock.freeze, clock.advance). test and describe carry .skip, .only,
+.todo, .each(table), .skipIf(cond) and .runIf(cond).
 
 Nothing is ambient: there is no global `test`, and a file that calls one fails
 with a ReferenceError. Types come from @opentf/esrun-types
@@ -484,7 +495,7 @@ fn parse_args() -> Result<Command, String> {
                         capabilities: permissions.resolve()?,
                         scopes: permissions.scopes()?,
                         options,
-                        transform: Some(std::sync::Arc::new(TypeStripper)),
+                        transform: Some(std::sync::Arc::new(TypeStripper::new())),
                         // The file being edited resolves the way the build
                         // that bundles it does.
                         bundler_style_resolution: true,
@@ -542,7 +553,7 @@ fn parse_args() -> Result<Command, String> {
                         capabilities: permissions.resolve()?,
                         scopes: permissions.scopes()?,
                         options,
-                        transform: Some(std::sync::Arc::new(TypeStripper)),
+                        transform: Some(std::sync::Arc::new(TypeStripper::new())),
                         // The file being edited resolves the way the build
                         // that bundles it does.
                         bundler_style_resolution: true,
@@ -1123,6 +1134,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut filters = Vec::new();
     let mut jobs = None;
     let mut watch = false;
+    let mut setup: Vec<String> = Vec::new();
+    let mut timeout = None;
+    let mut reporter = None;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1151,6 +1165,30 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 reject_value(flag, value)?;
                 watch = true;
             }
+            "--setup" => setup.push(require_value(flag, value)?.to_string()),
+            "--timeout" | "-t" => {
+                let text = require_value(flag, value)?;
+                timeout = Some(text.parse::<u64>().ok().filter(|ms| *ms > 0).ok_or_else(
+                    || {
+                        format!(
+                            "{flag}={text} is not a number of milliseconds.\n\n\
+                             How long one file may take before it is stopped and \
+                             failed: --timeout=5000."
+                        )
+                    },
+                )?);
+            }
+            "--reporter" => {
+                let name = require_value(flag, value)?;
+                if !matches!(name, "human" | "json") {
+                    return Err(format!(
+                        "{flag}={name} is not a reporter.\n\n  \
+                         human  — what a person reads, the default\n  \
+                         json   — one JSON object per line, for a machine"
+                    ));
+                }
+                reporter = Some(name.to_string());
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{TEST_USAGE}"));
             }
@@ -1171,7 +1209,50 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         filters,
         jobs,
         watch,
+        setup,
+        timeout,
+        reporter,
     })
+}
+
+/// Fills in what `esdev.json`'s `test` section says and the flags did not.
+///
+/// **A flag beats the file**, the same rule the build uses. Setup modules are
+/// resolved against the project directory and made absolute, because a child
+/// process is started from wherever the parent was and a relative path would
+/// otherwise mean two different files.
+fn test_settings(config: &mut TestConfig) -> Result<(), String> {
+    let Some(project) = crate::config::load(None)? else {
+        return Ok(());
+    };
+    if config.setup.is_empty() {
+        config.setup = project
+            .test
+            .setup
+            .iter()
+            .map(|module| {
+                let path = project.dir.join(module);
+                // A bare specifier stays one: `"setup": "my-preset/register"`
+                // names a package, and where that lives is the resolver's
+                // question rather than this file's.
+                if path.exists() {
+                    path.to_string_lossy().into_owned()
+                } else {
+                    module.clone()
+                }
+            })
+            .collect();
+    }
+    if config.timeout.is_none() {
+        config.timeout = project.test.timeout;
+    }
+    if config.jobs.is_none() {
+        config.jobs = project.test.jobs;
+    }
+    if config.reporter.is_none() {
+        config.reporter = project.test.reporter.clone();
+    }
+    Ok(())
 }
 
 /// Runs one test file, or discovers and runs them all.
@@ -1179,27 +1260,51 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
 /// The parent spawns a child per file rather than looping in-process, so a file
 /// that hangs or exits takes only itself down. `--file` is what a child is
 /// invoked with, and is equally a supported way to run one file by hand.
-async fn run_tests(config: TestConfig) -> ExitCode {
+async fn run_tests(mut config: TestConfig) -> ExitCode {
+    // The file's `test` section, where a flag did not already answer. Read here
+    // rather than in the parser because the parser has no project: a `--file`
+    // child is invoked from wherever the parent was, and the settings have to
+    // mean the same thing in both.
+    match test_settings(&mut config) {
+        Ok(()) => {}
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    }
+
     if let Some(file) = config.file {
-        // Nothing is added to the file. It is an ordinary run of an ordinary
+        // Nothing is added to the file, unless `--setup` named something to
+        // import ahead of it. It is otherwise an ordinary run of an ordinary
         // module — the same transform any `.ts` gets — and the test API comes
         // from the `runtime:test` the file imported. What makes this a *test*
         // run is what `finish()` finds afterwards, not anything done to the
         // source.
+        let stripper = if config.setup.is_empty() {
+            TypeStripper::new()
+        } else {
+            let entry = std::fs::canonicalize(&file).unwrap_or_else(|_| {
+                std::env::current_dir().unwrap_or_default().join(&file)
+            });
+            TypeStripper::before(&entry, config.setup.clone())
+        };
         let run = Config {
             source: Source::File(file.clone()),
             args: Vec::new(),
             capabilities: es_runtime_common::CapabilitySet::all(),
             scopes: std::collections::HashMap::new(),
             options: RunOptions::default(),
-            transform: Some(std::sync::Arc::new(TypeStripper)),
+            transform: Some(std::sync::Arc::new(stripper)),
             bundler_style_resolution: true,
             extensions: guest::extensions(),
             observer: None,
             inspector: None,
         };
         return match es_runtime_cli_common::run("esdev", run).await {
-            Ok(()) => guest::test::finish(),
+            Ok(()) => match config.reporter.as_deref() {
+                Some("json") => guest::test::finish_as_json(&file),
+                _ => guest::test::finish(),
+            },
             Err(err) => {
                 print_error(&err);
                 ExitCode::FAILURE
@@ -1236,9 +1341,13 @@ async fn run_tests(config: TestConfig) -> ExitCode {
         .unwrap_or_else(test::jobs)
         .min(files.len())
         .max(1);
-    let failed = test::run_all(&exe, &root, &files, jobs).await;
+    let failed = test::run_all(&exe, &root, &files, jobs, &config).await;
     let total = files.len();
-    test::report(total, failed);
+    if config.reporter.as_deref() == Some("json") {
+        test::report_as_json(total, failed);
+    } else {
+        test::report(total, failed);
+    }
     if failed == 0 {
         ExitCode::SUCCESS
     } else {

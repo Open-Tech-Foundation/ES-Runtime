@@ -256,6 +256,25 @@ fn request_termination(_pid: u32) -> bool {
     false
 }
 
+/// Ends a process by pid, asking first and insisting after.
+///
+/// The pid form, for a caller that has already given the `Child` away — the
+/// test runner's watchdog holds one while the future that owns the child is
+/// still being awaited.
+pub fn end(pid: u32) {
+    if !request_termination(pid) {
+        return;
+    }
+    // A test that ignores SIGTERM is a test that has stopped responding, which
+    // is what the budget is for.
+    #[cfg(unix)]
+    if let Ok(raw) = i32::try_from(pid)
+        && let Some(pid) = rustix::process::Pid::from_raw(raw)
+    {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+    }
+}
+
 /// The directory to watch: the working directory, which is the root the child
 /// runs under (D79) — the supervisor shares it with the process it starts.
 ///

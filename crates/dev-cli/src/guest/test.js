@@ -227,6 +227,92 @@ test.only = (name, fn) => test(name, fn, "only");
 describe.skip = (name, body) => describe(name, body, "skip");
 describe.only = (name, body) => describe(name, body, "only");
 
+// A case with a name and no body: work that is planned and not written.
+//
+// **Counted as skipped, and never silently absent.** The whole runner is
+// arranged so a report says what did not run, and a to-do that vanished from
+// the tally would be the one kind of missing case nobody notices.
+test.todo = (name, fn) => test(name, fn ?? (() => {}), "skip");
+describe.todo = (name, body) => describe(name, body ?? (() => {}), "skip");
+
+// `test.skipIf(cond)(...)` / `test.runIf(cond)(...)` — a case that depends on
+// where it is running. A suite that needs a Postgres to be up has to say so
+// somehow, and the alternative is an `if` around the registration, which
+// removes the case from the report entirely rather than reporting it skipped.
+test.skipIf = (condition) => (condition ? test.skip : test);
+test.runIf = (condition) => (condition ? test : test.skip);
+describe.skipIf = (condition) => (condition ? describe.skip : describe);
+describe.runIf = (condition) => (condition ? describe : describe.skip);
+
+/// One case per row of `table`, named by substituting the row into `name`.
+///
+/// `%s`/`%d`/`%i`/`%f`/`%j`/`%o` take the next value positionally and `%#` is
+/// the row's index, as the ecosystem spells them; `$key` takes a named property
+/// when the row is an object. A row that is an array is spread into the body's
+/// arguments, so `(a, b, want)` reads like the table's header.
+///
+/// **The name has to differ per row.** A table whose rows all produce one name
+/// is a report where six cases share an identity and a failure names none of
+/// them — so an index is appended when the substitution left the name unchanged.
+function each(register) {
+  return (table) => {
+    if (!Array.isArray(table)) {
+      throw new TypeError("each(...) needs an array of rows");
+    }
+    return (name, fn, ...rest) => {
+      table.forEach((row, index) => {
+        const args = Array.isArray(row) ? row : [row];
+        let title = format(String(name), args, index);
+        if (title === String(name) && table.length > 1) title = `${title} [${index}]`;
+        register(title, () => fn(...args), ...rest);
+      });
+    };
+  };
+}
+
+/// The substitution `each` performs on a row's name.
+function format(name, args, index) {
+  let next = 0;
+  let out = name.replace(/%[sdifjo#%]/g, (token) => {
+    if (token === "%%") return "%";
+    if (token === "%#") return String(index);
+    const value = args[next++];
+    switch (token) {
+      case "%s":
+        return typeof value === "string" ? value : show(value);
+      case "%d":
+      case "%i":
+        return String(Number.parseInt(value, 10));
+      case "%f":
+        return String(Number(value));
+      default:
+        return show(value);
+    }
+  });
+  // `$key`, for a table of objects — the spelling that makes a row readable.
+  const first = args[0];
+  if (first !== null && typeof first === "object" && !Array.isArray(first)) {
+    out = out.replace(/\$([A-Za-z_$][\w$]*)/g, (whole, key) =>
+      key in first ? show(first[key]).replace(/^"|"$/g, "") : whole,
+    );
+  }
+  return out;
+}
+
+test.each = each(test);
+test.skip.each = each(test.skip);
+test.only.each = each(test.only);
+test.todo.each = each(test.todo);
+describe.each = each(describe);
+describe.skip.each = each(describe.skip);
+describe.only.each = each(describe.only);
+
+// `it` and `suite` — the same functions under the names the rest of the
+// ecosystem writes. Aliases, not variants: two implementations of one thing is
+// how they end up disagreeing about `.only`.
+const it = test;
+const suite = describe;
+
 function schedule() {
   if (draining) return;
   draining = true;
@@ -1377,7 +1463,9 @@ const clock = {
 
 export {
   test,
+  it,
   describe,
+  suite,
   beforeAll,
   afterAll,
   beforeEach,
@@ -1392,7 +1480,9 @@ export {
 };
 export default {
   test,
+  it,
   describe,
+  suite,
   beforeAll,
   afterAll,
   beforeEach,

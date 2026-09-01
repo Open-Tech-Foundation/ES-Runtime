@@ -32,7 +32,59 @@ use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 
 /// Strips TypeScript types and compiles JSX, leaving everything else alone.
-pub struct TypeStripper;
+///
+/// It may also carry a **prelude** for one named module — the setup files
+/// `esdev test --setup` was given. See [`TypeStripper::before`].
+#[derive(Default)]
+pub struct TypeStripper {
+    /// The module the prelude belongs to, as a `file:` URL, and the specifiers
+    /// to import ahead of it.
+    prelude: Option<(String, Vec<String>)>,
+}
+
+impl TypeStripper {
+    /// The stripper everything but a `--setup` test run uses.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A stripper that imports `modules` before `entry` runs.
+    ///
+    /// **Prepended, and on the entry's own first line.** A setup file exists to
+    /// have happened *before* anything else — a global stubbed, a polyfill
+    /// installed — and an import appended at the end evaluates after the test
+    /// file's own imports, which is after the module under test has already
+    /// read whatever the setup was going to change. Prepending puts it first.
+    ///
+    /// It costs no line numbers, which is the property D71 is built on: the
+    /// prelude carries no newline, so the file's line 1 is still line 1 and a
+    /// failing assertion still names the line the developer wrote. Only the
+    /// columns on that one line move.
+    pub fn before(entry: &Path, modules: Vec<String>) -> Self {
+        Self {
+            prelude: Some((format!("file://{}", entry.display()), modules)),
+        }
+    }
+
+    /// The prelude for this module, or empty for every other module.
+    fn prelude_for(&self, specifier: &str, path: &str) -> String {
+        let Some((entry, modules)) = &self.prelude else {
+            return String::new();
+        };
+        let mine = entry == specifier
+            || entry
+                .strip_prefix("file://")
+                .is_some_and(|file| file == path);
+        if !mine {
+            return String::new();
+        }
+        modules
+            .iter()
+            .map(|module| format!("import {};", serde_json::Value::String(module.clone())))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
 
 /// Whether a module id names a file this transform has anything to do with.
 ///
@@ -65,8 +117,18 @@ impl SourceTransform for TypeStripper {
             Some(rest) => rest.split(['?', '#']).next().unwrap_or(rest),
             None => specifier,
         };
+        // Applied to the *output* below, never to the input. Prepending it here
+        // would put it through the printer, which lays a statement out on a
+        // line of its own — and the file would run one line lower than it was
+        // written, which is the property D71 is built on. A plain `.js` is not
+        // reprinted at all, so it takes the prelude directly.
+        let prelude = self.prelude_for(specifier, path);
         if !needs_transform(path) {
-            return Ok(source);
+            return Ok(if prelude.is_empty() {
+                source
+            } else {
+                format!("{prelude}{source}")
+            });
         }
 
         let path = Path::new(path);
@@ -107,7 +169,9 @@ impl SourceTransform for TypeStripper {
             return Err(error);
         }
 
-        Ok(Codegen::new().build(&program).code)
+        // No newline between them: the prelude shares line 1 with whatever the
+        // printer put there, so every line below keeps the number it had.
+        Ok(format!("{prelude}{}", Codegen::new().build(&program).code))
     }
 }
 
@@ -116,7 +180,7 @@ mod tests {
     use super::*;
 
     fn strip(name: &str, source: &str) -> Result<String, String> {
-        TypeStripper.transform(&format!("file:///{name}"), source.to_string())
+        TypeStripper::new().transform(&format!("file:///{name}"), source.to_string())
     }
 
     #[test]

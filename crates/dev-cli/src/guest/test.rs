@@ -204,6 +204,24 @@ impl HostExtension for TestExtension {
 /// one that did not has nothing to print. That is what makes
 /// `esdev app.test.ts` work on its own, with the same output the runner gives.
 pub fn finish() -> ExitCode {
+    report(None)
+}
+
+/// The same tally, as one JSON object per line.
+///
+/// **For a machine, and shaped for one that reads a stream.** A CI job wants
+/// each case as it lands rather than a document it can only parse once the run
+/// is over — and a run that dies half way through then still leaves behind
+/// everything that had happened, which a single trailing object would not.
+///
+/// `file` is the path the child was given, repeated on every line: the parent
+/// runs a process per file and their output interleaves, so a line that does
+/// not say which file it belongs to cannot be attributed to one.
+pub fn finish_as_json(file: &str) -> ExitCode {
+    report(Some(file))
+}
+
+fn report(as_json: Option<&str>) -> ExitCode {
     let (passed, skipped, held, failures) = CASES.with_borrow(|cases| {
         let mut passed = 0usize;
         let mut skipped = 0usize;
@@ -243,6 +261,10 @@ pub fn finish() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    if let Some(file) = as_json {
+        return json(file, passed, skipped + held, &failures);
+    }
+
     for (name, detail) in &failures {
         println!("  FAIL {name}");
         for line in detail.lines() {
@@ -264,6 +286,34 @@ pub fn finish() -> ExitCode {
     }
     println!("{tally}");
 
+    if failures.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// One object per case, then one for the file.
+///
+/// Written by hand rather than through a serializer: the only values that need
+/// escaping are a test's name and an error's text, `serde_json` is already in
+/// the graph for exactly that, and a schema this small is easier to read as the
+/// lines it produces.
+fn json(file: &str, passed: usize, skipped: usize, failures: &[(String, String)]) -> ExitCode {
+    let string = |text: &str| serde_json::Value::String(text.to_string()).to_string();
+    for (name, detail) in failures {
+        println!(
+            r#"{{"type":"case","file":{},"name":{},"status":"failed","detail":{}}}"#,
+            string(file),
+            string(name),
+            string(detail)
+        );
+    }
+    println!(
+        r#"{{"type":"file","file":{},"passed":{passed},"failed":{},"skipped":{skipped}}}"#,
+        string(file),
+        failures.len()
+    );
     if failures.is_empty() {
         ExitCode::SUCCESS
     } else {

@@ -10,6 +10,52 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:test` grows the vocabulary a suite written elsewhere expects** —
+  `it` and `suite`, `test.each` / `describe.each`, `test.todo`, and
+  `test.skipIf` / `test.runIf`.
+
+  ```js
+  test.each([
+    [1, 1, 2],
+    [2, 3, 5],
+  ])("adds %d + %d = %d", (a, b, want) => expect(a + b).toBe(want));
+  ```
+
+  `%s`/`%d`/`%i`/`%f`/`%j`/`%o` take the next value positionally, `%#` is the
+  row's index, `$key` reads a property when the row is an object, and an array
+  row is spread into the body's parameters. A name that does not vary per row
+  gets its index appended — six cases sharing one identity is a report where a
+  failure names none of them.
+
+  `todo`, `skipIf` and `runIf` are all **counted as skipped** rather than left
+  out. A case that vanishes from the tally is the failure this runner is
+  arranged against.
+
+- **`esdev test --setup`, `--timeout` and `--reporter`**, each also an
+  `esdev.json` key under `"test"` — with `jobs` — because a project's setup
+  files and its per-file budget are properties of the project. A flag beats the
+  file.
+
+  ```json
+  { "test": { "setup": ["./test/setup.ts"], "timeout": 5000,
+              "jobs": 4, "reporter": "json" } }
+  ```
+
+  A **setup module is imported before the file under test**, so a global it
+  stubs is in place before anything reads it — and it costs no line numbers,
+  which is the property D71 is built on. (The first version prepended it to the
+  *source*, which goes through the printer, and every frame in every failure
+  pointed one line off.)
+
+  **`--timeout` ends the process.** The case it exists for is a file that
+  wedges, and a budget the file kept for itself is one it never gets round to
+  noticing. There is no default: a suite is not a place to guess how long a
+  machine takes.
+
+  **`--reporter=json`** writes one object per line — a `case` per failure, a
+  `file` per file, a `summary` at the end — so a CI job reads results as they
+  land instead of parsing a document once the run is over.
+
 - **A library is describable in `esdev.json`** — `"lib"`, `"format"`, `"types"`
   and `"dts-bundle"` are target keys, matching the flags of the same names.
 

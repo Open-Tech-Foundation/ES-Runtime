@@ -3236,6 +3236,236 @@ test("a file may end with time stopped", () => {
     assert!(text.contains("16 passed, 0 failed"), "{text}");
 }
 
+/// The vocabulary a suite written elsewhere reaches for: `it`/`suite`, a table,
+/// a to-do, and the conditional forms.
+///
+/// Driven end to end rather than unit-tested, because what matters is the
+/// **tally** — a table that registered one case instead of three, or a to-do
+/// that vanished rather than being counted as skipped, both look like a passing
+/// file from the inside.
+#[test]
+fn the_table_and_alias_forms_register_what_they_say() {
+    let dir = build_dir("t_vocab");
+    write_in(
+        &dir,
+        "vocab.test.ts",
+        r#"
+import { it, suite, test, describe, expect } from "runtime:test";
+
+suite("aliases", () => {
+  it("it is test", () => expect(1).toBe(1));
+});
+
+test.each([
+  [1, 1, 2],
+  [2, 3, 5],
+])("adds %d + %d = %d", (a: number, b: number, want: number) => {
+  expect(a + b).toBe(want);
+});
+
+test.each([{ name: "ada" }, { name: "alan" }])("$name is named", (row: { name: string }) => {
+  expect(row.name.length).toBeGreaterThan(0);
+});
+
+// Rows whose name does not vary still get distinct identities.
+test.each([1, 2, 3])("same name", (n: number) => expect(n).toBeGreaterThan(0));
+
+describe.each([["a"], ["b"]])("group %s", (letter: string) => {
+  test("has a letter", () => expect(letter).toHaveLength(1));
+});
+
+test.todo("written later");
+test.skipIf(true)("not here", () => expect(1).toBe(2));
+test.runIf(true)("but here", () => expect(1).toBe(1));
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    // 1 alias + 2 table + 2 object table + 3 same-name + 2 groups + 1 runIf.
+    assert!(text.contains("11 passed"), "{text}");
+    // The to-do and the skipIf, counted rather than missing from the report.
+    assert!(text.contains("2 skipped"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--setup` imports a module before the file, and **does not move a line**.
+///
+/// The second half is the one that could regress silently. A prelude prepended
+/// to the *source* goes through the printer, which lays a statement on a line
+/// of its own — so the file runs one line lower than it was written, and every
+/// frame in every failure points one line off (D71). It is applied to the
+/// printer's output instead.
+#[test]
+fn a_setup_module_runs_first_and_costs_no_line_numbers() {
+    let dir = build_dir("t_setup");
+    write_in(
+        &dir,
+        "setup.ts",
+        "(globalThis as unknown as { __ready: string }).__ready = \"yes\";\n",
+    );
+    write_in(
+        &dir,
+        "s.test.ts",
+        r#"import { test, expect } from "runtime:test";
+test("the setup ran first", () => {
+  expect((globalThis as unknown as { __ready?: string }).__ready).toBe("yes");
+});
+test("and the line is the one written", () => {
+  const err = new Error("x");
+  expect(String(err.stack)).toContain("s.test.ts:6");
+});
+"#,
+    );
+
+    // Without it the first case fails: nothing put the global there.
+    let bare = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(!bare.status.success(), "the setup was not needed");
+
+    let out = esdev_in(&dir)
+        .args(["test", "--setup=./setup.ts"])
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("2 passed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file that never finishes is **ended**, not waited on.
+///
+/// The failure this pins is subtle: cancelling the future that waits on a child
+/// does not end the child. The first version of the budget did exactly that and
+/// left the process running, holding the inherited stdout — so the run appeared
+/// to hang after the timeout had already fired.
+#[test]
+fn a_file_that_runs_too_long_is_stopped_and_failed() {
+    let dir = build_dir("t_timeout");
+    write_in(
+        &dir,
+        "hang.test.mjs",
+        "import { test } from 'runtime:test';\n\
+         setInterval(() => {}, 1000);\n\
+         test('passes, but the file never exits', () => {});\n",
+    );
+    for jobs in ["--jobs=1", "--jobs=2"] {
+        let started = std::time::Instant::now();
+        let out = esdev_in(&dir)
+            .args(["test", "--timeout=1500", jobs])
+            .output()
+            .expect("spawn esdev test");
+        let text = format!("{}{}", stdout(&out), stderr(&out));
+        assert!(!out.status.success(), "{jobs}: {text}");
+        assert!(text.contains("longer than 1500ms"), "{jobs}: {text}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "{jobs}: the child outlived its budget — it was abandoned, not ended"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--reporter=json` is one object per line, and every line parses.
+#[test]
+fn the_json_reporter_emits_one_object_per_line() {
+    let dir = build_dir("t_reporter");
+    write_in(
+        &dir,
+        "ok.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('passes', () => expect(1).toBe(1));\n\
+         test.skip('skipped', () => {});\n",
+    );
+    write_in(
+        &dir,
+        "bad.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('fails \"quoted\"', () => expect(1).toBe(2));\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--reporter=json"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    let text = stdout(&out);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(lines.len() >= 4, "{lines:?}");
+    for line in &lines {
+        // A quoted test name and a multi-line stack both have to survive.
+        assert!(
+            serde_json::from_str::<serde_json::Value>(line).is_ok(),
+            "not JSON: {line}"
+        );
+    }
+    let last = lines.last().expect("a summary");
+    assert!(last.contains("\"type\":\"summary\""), "{last}");
+    assert!(last.contains("\"failed\":1"), "{last}");
+    // No human chrome: a filename printed above the objects would have to be
+    // skipped by whatever is parsing them.
+    assert!(!text.contains("files passed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `test` section says the same things the flags say, and a flag wins.
+#[test]
+fn the_test_section_configures_the_run_and_a_flag_beats_it() {
+    let dir = build_dir("t_testcfg");
+    write_in(
+        &dir,
+        "setup.ts",
+        "(globalThis as unknown as { __cfg: boolean }).__cfg = true;\n",
+    );
+    write_in(
+        &dir,
+        "c.test.ts",
+        r#"import { test, expect } from "runtime:test";
+test("the file's setup ran", () => {
+  expect((globalThis as unknown as { __cfg?: boolean }).__cfg).toBe(true);
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "app": { "entry": "c.test.ts", "out": "dist/app.js" } },
+             "test": { "setup": "./setup.ts", "reporter": "json", "jobs": 1 } }"#,
+    );
+
+    let from_file = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        from_file.status.success(),
+        "{}{}",
+        stdout(&from_file),
+        stderr(&from_file)
+    );
+    assert!(
+        stdout(&from_file).contains("\"type\":\"summary\""),
+        "the file's reporter was ignored:\n{}",
+        stdout(&from_file)
+    );
+
+    let overridden = esdev_in(&dir)
+        .args(["test", "--reporter=human"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(overridden.status.success(), "{}", stderr(&overridden));
+    assert!(
+        stdout(&overridden).contains("1 file passed"),
+        "a flag did not beat the file:\n{}",
+        stdout(&overridden)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The property that makes a failure actionable: the frame names the line the
 /// developer wrote. It used to be the interesting test, because a harness was
 /// prepended to the file and had to be folded onto one line to avoid moving

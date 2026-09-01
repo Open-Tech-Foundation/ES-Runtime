@@ -15,6 +15,12 @@ itself.
 
 ### Added
 
+- **`runtime:test`'s `it`, `suite`, and the table forms** — `Each`, `TestFn`,
+  and `.todo`/`.skipIf`/`.runIf`/`.each` on both `test` and `describe`. A row
+  written `as const` is a tuple and its body's parameters are checked against
+  it; a plain array row infers as an array, which is TypeScript's rule rather
+  than a looseness here, and the type test pins both.
+
 - **`runtime:test`'s `expect`, `mock` and `clock`** — `Matchers`,
   `AwaitedMatchers` and `Assertion` for the matcher vocabulary (including
   `.not`, `.resolves`/`.rejects` and the asymmetric factories on `expect`

@@ -3399,6 +3399,49 @@ already drained. (TypeScript will not catch it — every function is assignable
 where `void` is expected — so the refusal is at runtime, with a message saying
 where to put the `await` instead.)
 
+### `it` and `suite`
+
+`test` and `describe` under the names most of the ecosystem writes. The same
+functions, not second implementations: two registrars is how they end up
+disagreeing about `.only`.
+
+### `test.todo`, `test.skipIf`, `test.runIf`
+
+| | |
+| --- | --- |
+| `test.todo(name, fn?)` | Planned, not written. **Counted as skipped**, never silently absent — a to-do missing from the tally is the one kind of absent case nobody notices. |
+| `test.skipIf(cond)(name, fn)` | Registers the case and skips it when `cond` holds. |
+| `test.runIf(cond)(name, fn)` | The mirror. |
+
+Both conditionals exist so a case that depends on its environment stays *in the
+report*. An `if` around the registration removes it entirely, which reads as a
+suite that got smaller.
+
+`describe` carries the same four, plus `.each`.
+
+### `test.each` / `describe.each`
+
+One case per row, named by substituting the row into the name.
+
+```js
+test.each([
+  [1, 1, 2],
+  [2, 3, 5],
+])("adds %d + %d = %d", (a, b, want) => expect(a + b).toBe(want));
+
+test.each([{ input: "  x ", want: "x" }])("trims $input", ({ input, want }) =>
+  expect(trim(input)).toBe(want),
+);
+```
+
+`%s` `%d` `%i` `%f` `%j` `%o` take the next value positionally, `%#` is the
+row's index, and `$key` reads a property when the row is an object. A row that
+is an array is **spread** into the body's parameters, so they read like the
+table's header; any other row is passed whole.
+
+A name that does not vary per row gets its index appended, because six cases
+sharing one identity is a report in which a failure names none of them.
+
 ### `beforeAll` / `afterAll` / `beforeEach` / `afterEach`
 
 | Function | |

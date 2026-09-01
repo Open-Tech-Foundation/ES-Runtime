@@ -12,7 +12,48 @@
 // breaks this file rather than passing it. The lines without it are the other
 // half: legitimate usage must keep compiling.
 
-import { clock, expect, mock, test } from "runtime:test";
+import { clock, describe, expect, it, mock, suite, test } from "runtime:test";
+
+// --- the vocabulary -----------------------------------------------------------
+
+suite("aliases are the same functions", () => {
+  it("registers like test", () => {
+    expect(1).toBe(1);
+  });
+});
+
+test.todo("planned");
+test.skipIf(process_is_missing())("skipped when true", () => {});
+test.runIf(true)("run when true", () => {});
+
+declare function process_is_missing(): boolean;
+
+test.each([
+  [1, 1, 2],
+  [2, 3, 5],
+])("adds %d + %d = %d", (a: number, b: number, want: number) => {
+  expect(a + b).toBe(want);
+});
+
+test.each([{ name: "ada" }, { name: "alan" }])("$name", (row) => {
+  expect(row.name.length).toBeGreaterThan(0);
+});
+
+describe.each([["a"], ["b"]])("group %s", (letter: string) => {
+  test("has a letter", () => expect(letter).toHaveLength(1));
+});
+
+// A row written `as const` is a tuple, and the body's parameters are checked
+// against it. Without `as const` a row of one type infers as an array, so the
+// body may take as many of that type as it likes — TypeScript's rule, not a
+// looseness in these declarations, and worth pinning either way.
+test.each([[1, 2]] as const)("a tuple row", (a, b) => {
+  expect(a + b).toBe(3);
+});
+test.each([[1, 2]])("an array row", (a: number, b: number, c: number) => {
+  expect(a + b).toBe(3);
+  expect(c).toBeUndefined();
+});
 
 // --- expect -----------------------------------------------------------------
 

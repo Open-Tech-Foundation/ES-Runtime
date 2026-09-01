@@ -53,10 +53,14 @@ export const assertSorted = (xs: number[]) => assertEquals(xs, [...xs].sort());
 | | |
 | --- | --- |
 | `test(name, fn)` | `fn` may be async; cases run one at a time |
+| `it`, `suite` | The same two functions, under the ecosystem's names |
 | `test.skip(name, fn?)` | Registered and reported as skipped, never run |
 | `test.only(name, fn)` | Runs this one; the rest are counted as skipped |
+| `test.todo(name)` | Planned, not written — counted as skipped, never absent |
+| `test.each(table)(name, fn)` | One case per row ([below](#tables)) |
+| `test.skipIf(c)` / `test.runIf(c)` | A case that depends on where it runs |
 | `describe(name, body)` | A group: a composed name, and a scope for its hooks |
-| `describe.skip` / `describe.only` | The same pair, for the whole group |
+| `describe.skip` / `.only` / `.todo` / `.each` | The same set, for a whole group |
 | `assert(cond, msg?)` | |
 | `assertEquals(actual, expected, msg?)` | Structural |
 | `assertThrows(fn, expected?, msg?)` | |
@@ -79,6 +83,35 @@ key set rather than key order, and a cyclic structure terminates.
 | `"TypeError"` | the error's `name`, or a substring of its message |
 | `/too long/` | tested against the message |
 | `HttpError` | an `instanceof` check |
+
+## Tables
+
+`each` registers one case per row, and the name says which row it was.
+
+```ts
+import { test, expect } from "runtime:test";
+
+test.each([
+  [1, 1, 2],
+  [2, 3, 5],
+])("adds %d + %d = %d", (a, b, want) => {
+  expect(a + b).toBe(want);
+});
+
+test.each([
+  { input: "  x ", want: "x" },
+  { input: "y",    want: "y" },
+])("trims $input", ({ input, want }) => {
+  expect(trim(input)).toBe(want);
+});
+```
+
+`%s` `%d` `%i` `%f` `%j` `%o` take the next value positionally, `%#` is the
+row's index, and `$key` reads a property when the row is an object. An array row
+is **spread** into the parameters, so they read like the table's header.
+
+A name that does not vary per row gets an index appended. Six cases sharing one
+identity is a report where a failure names none of them.
 
 ## Group what shares a fixture
 
@@ -215,6 +248,48 @@ Freezing the clock replaces globals for the **whole process**, which is safe
 here only because a test file *is* a process. The runner drains on microtasks
 rather than timers, so a file that forgets `clock.release()` still reports.
 
+## Setup, budgets, and a machine-readable report
+
+```sh
+esdev test --setup=./test/setup.ts   # imported before every test file
+esdev test --timeout=5000            # a file that takes longer is stopped
+esdev test --reporter=json           # one JSON object per line
+```
+
+Each is also an `esdev.json` key, because a project's setup files and its
+per-file budget are properties *of the project* — a flag repeated in every
+script is one that gets repeated differently in two of them. **A flag beats the
+file.**
+
+```json
+{
+  "test": {
+    "setup": ["./test/setup.ts"],
+    "timeout": 5000,
+    "jobs": 4,
+    "reporter": "json"
+  }
+}
+```
+
+A setup module is imported **before** the file under test, so a global it stubs
+is in place before anything reads it — and it costs no line numbers: a failing
+assertion still names the line you wrote.
+
+`--timeout` is enforced by the parent, which **ends** the process. The case it
+exists for is a file that wedges, and a budget the file kept for itself is one
+it never gets round to noticing. There is no default: a suite is not a place to
+guess how long a machine takes.
+
+`--reporter=json` writes one object per line — a `case` for each failure, a
+`file` for each file, and a `summary` at the end — so a CI job reads results as
+they land rather than parsing a document once the run is over.
+
+```json
+{"type":"file","file":"/p/ok.test.ts","passed":1,"failed":0,"skipped":1}
+{"type":"summary","files":2,"failed":1}
+```
+
 ## Imports the way a bundler resolves them
 
 `esdev` finds `./util` for `util.ts`, a directory for its `index.ts`, and
@@ -233,7 +308,9 @@ resolved all of it, so ship the build rather than the source.
 | `esrun`, Node | `ERR_MODULE_NOT_FOUND` |
 
 <Callout type="note" title="Not yet">
-  Per-file timeouts, coverage, and a machine-readable reporter. Module mocking
-  (`mock.module`) — a mock installed here replaces a method on an object, not a
-  module in the graph.
+  **Coverage**, which needs V8's own instrumentation rather than anything this
+  runner can add, and **module mocking** (`mock.module`) — a mock installed here
+  replaces a method on an object, not a module in the graph, which needs a
+  loader hook and a hoisting transform. Discovery is also fixed at
+  `*.test.*`/`*.spec.*`; there is no `include` pattern yet.
 </Callout>
