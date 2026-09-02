@@ -74,6 +74,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Both CLIs are one cargo workspace and share all but a handful of
+          # dependencies, so the two jobs for a triple share one cache entry
+          # instead of storing the same half-gigabyte twice. Six entries rather
+          # than twelve, which is what keeps this inside the repository's 10 GB
+          # cache budget with ci.yml's entries alongside it.
+          shared-key: release-${{ matrix.triple }}
+          # `librusty_v8.a` is a 178 MB prebuilt that the `v8` build script
+          # fetches, and it lands in `gn_out` — beside the three directories
+          # rust-cache knows about, not inside them, so the default set misses
+          # it and every job re-downloads it. The script skips the download when
+          # the `.sum` file next to the archive still names the same URL, so
+          # restoring this directory is what makes that skip happen.
+          cache-directories: target/${{ matrix.triple }}/release/gn_out
       - name: Install otf-release
         if: runner.os != 'Windows'
         shell: bash
@@ -126,6 +141,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Both CLIs are one cargo workspace and share all but a handful of
+          # dependencies, so the two jobs for a triple share one cache entry
+          # instead of storing the same half-gigabyte twice. Six entries rather
+          # than twelve, which is what keeps this inside the repository's 10 GB
+          # cache budget with ci.yml's entries alongside it.
+          shared-key: release-${{ matrix.triple }}
+          # `librusty_v8.a` is a 178 MB prebuilt that the `v8` build script
+          # fetches, and it lands in `gn_out` — beside the three directories
+          # rust-cache knows about, not inside them, so the default set misses
+          # it and every job re-downloads it. The script skips the download when
+          # the `.sum` file next to the archive still names the same URL, so
+          # restoring this directory is what makes that skip happen.
+          cache-directories: target/${{ matrix.triple }}/release/gn_out
       - name: Install otf-release
         if: runner.os != 'Windows'
         shell: bash

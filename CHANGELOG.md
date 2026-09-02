@@ -35,6 +35,23 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- **The release workflow builds from cold every time, and no longer does.**
+  `ci.yml` has cached its Rust builds since it was written; `release.yml` never
+  did, so every push to `main` that released anything compiled the whole
+  dependency graph six times per binary — twelve jobs, each from an empty
+  registry and an empty `target/`. They cache now, with the two CLIs sharing one
+  entry per triple: they are one workspace and share all but a handful of
+  dependencies, so twelve entries would have stored the same half-gigabyte twice
+  and spent the repository's whole cache budget doing it.
+
+  Every cached job across all four workflows also keeps `gn_out` now. That is
+  where the `v8` build script puts the 178 MB `librusty_v8.a` it downloads, and
+  it sits beside the three directories `rust-cache` keeps rather than inside
+  them — so the download was being repeated on every job of every run, cache hit
+  or not. The script skips it when the checksum file beside the archive still
+  names the same URL, which is exactly what restoring the directory restores.
+### Testing / CI
+
 - **The gates that could not pass on a fresh checkout, fixed.** Each had been
   passing locally, for a different reason than it was failing in CI.
 

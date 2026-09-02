@@ -38,6 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
+          # and it lands beside the directories rust-cache caches by default
+          # rather than inside them — so without this every job downloads it
+          # again. The script skips the fetch when the `.sum` file next to the
+          # archive still names the same URL, which restoring this gives it.
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
       - uses: ./.github/actions/setup-tsr
       - run: tsr clippy
 
@@ -58,6 +67,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
+          # and it lands beside the directories rust-cache caches by default
+          # rather than inside them — so without this every job downloads it
+          # again. The script skips the fetch when the `.sum` file next to the
+          # archive still names the same URL, which restoring this gives it.
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
       - uses: ./.github/actions/setup-tsr
       - run: tsr test
       # One platform is enough for the conformance suite — it checks the driver,
@@ -71,5 +89,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
+          # and it lands beside the directories rust-cache caches by default
+          # rather than inside them — so without this every job downloads it
+          # again. The script skips the fetch when the `.sum` file next to the
+          # archive still names the same URL, which restoring this gives it.
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
       - uses: ./.github/actions/setup-tsr
       - run: tsr miri
