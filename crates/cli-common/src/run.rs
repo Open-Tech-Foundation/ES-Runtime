@@ -368,8 +368,18 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         Source::Inline(code) => {
             // A synthetic file: id in the working directory, so the snippet's
             // relative imports resolve against the cwd.
+            //
+            // Canonicalized, because `within_root` below compares this against
+            // a canonicalized root and says both sides must be in one normal
+            // form. `current_dir()` is not: it reports the working directory in
+            // whatever spelling the parent set it with, and on Windows a `TEMP`
+            // holding an 8.3 short name — `C:\\Users\\RUNNER~1\\…`, which is what
+            // a CI runner has — makes this the same directory as the root and
+            // not a prefix of it. The `Source::File` arm below has always
+            // canonicalized; only `-e` was comparing raw against normal.
             let cwd = std::env::current_dir()
                 .map_err(|e| format!("cannot read working directory: {e}"))?;
+            let cwd = path::canonicalize(&cwd).unwrap_or(cwd);
             let base = Url::from_directory_path(&cwd)
                 .map_err(|()| "working directory is not absolute".to_string())?;
             let url = base
@@ -451,7 +461,12 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // Entries are resolved against the *working directory*, because that is
     // where the user typed them; the jail's own base is the entry file's
     // directory, which is not what `./data` means on a command line.
-    let flag_dir = std::env::current_dir().unwrap_or_else(|_| base_dir.clone());
+    // Canonical for the same reason `base_dir` is: what a `--allow-read` entry
+    // resolves to is compared against the jail root, so it has to be spelled the
+    // way the root is.
+    let flag_dir = std::env::current_dir()
+        .map(|cwd| path::canonicalize(&cwd).unwrap_or(cwd))
+        .unwrap_or_else(|_| base_dir.clone());
     let allow_read = path_scope(&config.scopes, Capability::FileRead, &flag_dir)?;
     let allow_write = path_scope(&config.scopes, Capability::FileWrite, &flag_dir)?;
     // An entry outside the jail is not an error: it *adds* that subtree (D54).

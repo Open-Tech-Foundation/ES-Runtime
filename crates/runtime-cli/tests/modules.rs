@@ -286,7 +286,7 @@ fn net_validates_ports_and_reports_binds_as_socket_errors() {
         // …but `listen(0)` is the documented ephemeral-port request.
         "listen-zero:true",
         // A bind failure carries the same SocketError shape a connect does.
-        "privileged:TypeError:true",
+        "unbindable:TypeError:true",
         // `Object.isFrozen` asks [[IsExtensible]] first, which used to bypass
         // the lazy seeding and report the empty, still-extensible array.
         "args-frozen:true",
@@ -745,11 +745,17 @@ fn an_installed_program_is_still_jailed_to_the_project() {
         .expect("temp dir")
         .join(format!("esrun-hoisted-secret-{}.mjs", std::process::id()));
     std::fs::write(&outside, "export const s = 1;").expect("seed");
+    // A `file:` URL, not a bare absolute path. Both are refused, but not by the
+    // same code and not with the same message: on Windows `C:\\…` parses as a URL
+    // whose scheme is `c`, so a bare path never reaches the jail check at all
+    // and the test would be asserting about the specifier parser. The `file:`
+    // spelling is the portable one and is the escape this test is about.
+    let target = url::Url::from_file_path(&outside).expect("an absolute path");
     std::fs::write(
         proj.join("node_modules/@acme/cli/src/cli.js"),
         format!(
             "import * as s from {:?}; console.log('READ', s);",
-            outside.to_string_lossy()
+            target.as_str()
         ),
     )
     .expect("seed");
@@ -814,8 +820,12 @@ fn the_root_is_the_directory_the_run_was_started_in() {
     assert!(from_top.status.success(), "stderr: {top_err}");
     assert!(top_out.contains("APP=shared"), "{top_out}");
     assert!(!from_package.status.success(), "{pkg_out}");
+    // The path is rendered by `Display`, so it carries the platform's own
+    // separator — the assertion has to ask for the same one rather than for the
+    // `/` a specifier would use.
+    let in_the_package = ["packages", "app"].join(std::path::MAIN_SEPARATOR_STR);
     assert!(
-        pkg_err.contains("cannot find package") && pkg_err.contains("packages/app"),
+        pkg_err.contains("cannot find package") && pkg_err.contains(&in_the_package),
         "{pkg_err}"
     );
 }

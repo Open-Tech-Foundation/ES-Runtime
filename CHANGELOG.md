@@ -33,7 +33,29 @@ namespace) is unstable and may change between minor releases until the API freez
   the BSDs. It goes through `Mode::from_raw_mode` with a cast to `RawMode`, which
   names whatever width the target has.
 
+- **`esrun -e` compared two spellings of the same directory.** The entry-file
+  path is canonicalized before it is checked against the project root, and the
+  `-e` path was not — it handed `within_root` a raw `current_dir()`, against the
+  documented rule that both sides be in one normal form. Nothing showed on Unix,
+  where the two agree. On Windows they need not: a `TEMP` holding an 8.3 short
+  name — `C:\Users\RUNNER~1\…`, which is what a CI runner has — made the working
+  directory *the* root and not a prefix of it, and every `-e` run from such a
+  directory was refused as outside its own project. `--allow-read` and
+  `--allow-write` entries resolved against the same raw path and are fixed with
+  it.
+
+
 ### Testing / CI
+
+- **Three Windows tests were asserting Unix.** They had not run since the jail
+  rewrite stopped the crate compiling there, so all three had been passing on a
+  platform that never executed them. `packages/app` appears in a diagnostic as
+  `packages\app`, and the assertion asked for the `/`. An absolute path in an
+  `import` is a URL whose scheme is `c` on Windows, so the module never reached
+  the jail check the test was about — it says `file:` now, which is the one
+  spelling that means the same thing on both. And a bind failure was provoked
+  with a privileged port, which Windows does not have; it uses an address that
+  is not the machine's own, which every platform refuses.
 
 - **The release workflow builds from cold every time, and no longer does.**
   `ci.yml` has cached its Rust builds since it was written; `release.yml` never
@@ -50,7 +72,6 @@ namespace) is unstable and may change between minor releases until the API freez
   them — so the download was being repeated on every job of every run, cache hit
   or not. The script skips it when the checksum file beside the archive still
   names the same URL, which is exactly what restoring the directory restores.
-### Testing / CI
 
 - **The gates that could not pass on a fresh checkout, fixed.** Each had been
   passing locally, for a different reason than it was failing in CI.

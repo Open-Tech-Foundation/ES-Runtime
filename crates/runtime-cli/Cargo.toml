@@ -24,6 +24,9 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 # Test-only: a self-signed cert, so the telemetry e2e can stand up a TLS
 # listener and fail a handshake against it hermetically.
 rcgen.workspace = true
+# Test-only: spelling an absolute path as a `file:` URL, which is the one
+# specifier form that means the same thing on Windows as it does on Unix.
+url.workspace = true
 
 [lints]
 workspace = true

@@ -27,11 +27,16 @@ await l.close();
 
 // A bind failure carries the same SocketError shape a connect failure does;
 // it used to be a raw Error, so the two reported differently.
+//
+// The address is TEST-NET-1, which is reserved for documentation and so is
+// never one of this machine's own — every platform refuses to bind it. A
+// privileged port used to stand here and does not travel: Windows reserves no
+// low ports, so `listen(1)` simply succeeded there and the case tested nothing.
 try {
-  await listen({ hostname: "127.0.0.1", port: 1 }).addr;
-  console.log("privileged:NO-THROW");
+  await listen({ hostname: "192.0.2.1", port: 0 }).addr;
+  console.log("unbindable:NO-THROW");
 } catch (e) {
-  console.log(`privileged:${e.constructor.name}:${e.message.startsWith("SocketError: ")}`);
+  console.log(`unbindable:${e.constructor.name}:${e.message.startsWith("SocketError: ")}`);
 }
 
 // `args` is documented as frozen, and now reports as frozen: `Object.isFrozen`
