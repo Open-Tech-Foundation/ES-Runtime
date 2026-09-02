@@ -308,21 +308,30 @@ console.log("secretUnmasked=" + JSON.stringify(unmask(env.MY_API_KEY)));
 /// to a child, which used to be impossible for anything but a string.
 #[test]
 fn a_coerced_env_value_reaches_a_child_process() {
+    // The child is `esrun` itself rather than `sh -c echo`: what is under test
+    // is that a coerced value survives the crossing, which is nothing to do
+    // with shells, and Windows has no `sh` to spawn. The program path is
+    // interpolated with `{:?}`, whose `Debug` for a string escapes the
+    // backslashes a Windows path is full of — pasted with `{}` it would be a
+    // JavaScript escape sequence instead of a path.
+    let esrun_path = env!("CARGO_BIN_EXE_esrun");
     let app = write(
         "env-coercion-child.mjs",
-        r#"
-import { env } from "runtime:process";
-import { Command } from "runtime:system";
+        &format!(
+            r#"
+import {{ env }} from "runtime:process";
+import {{ Command }} from "runtime:system";
 env.PORT = 8080;
-const out = await new Command("sh", {
-  args: ["-c", "echo PORT=[$PORT]"],
-  env: { PORT: env.PORT },
-}).output();
+const out = await new Command({esrun_path:?}, {{
+  args: ["--allow-env", "-e=import {{ env }} from 'runtime:process'; console.log(`PORT=[${{env.PORT}}]`);"],
+  env: {{ PORT: env.PORT }},
+}}).output();
 console.log(new TextDecoder().decode(out.stdout).trim());
-"#,
+"#
+        ),
     );
     let out = esrun()
-        .arg("--allow-run=sh")
+        .arg(format!("--allow-run={esrun_path}"))
         .arg(&app)
         .output()
         .expect("spawn esrun");

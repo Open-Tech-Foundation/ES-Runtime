@@ -43,7 +43,14 @@ fn run(prefix: &str, worker: &str, main: &str, flags: &[&str]) -> Output {
     write(&format!("{prefix}-worker.mjs"), worker);
     let app = write(
         &format!("{prefix}-main.mjs"),
-        &main.replace("WORKER_URL", &format!("./{prefix}-worker.mjs")),
+        &main
+            .replace("WORKER_URL", &format!("./{prefix}-worker.mjs"))
+            // A test that needs a child process spawns *this* binary: it is the
+            // one program every platform running these tests is guaranteed to
+            // have. Quoted through `Debug`, which escapes the backslashes a
+            // Windows path is full of — pasted raw they would be JavaScript
+            // escape sequences rather than a path.
+            .replace("ESRUN_BIN", &format!("{:?}", env!("CARGO_BIN_EXE_esrun"))),
     );
     let mut command = esrun();
     // `--max-heap`/`--timeout` shape a run without saying anything about its
@@ -1578,7 +1585,13 @@ fn a_worker_cannot_kill_a_child_process_it_did_not_spawn() {
         "#,
         r#"
         import { Command } from "runtime:system";
-        const child = await new Command("sleep", { args: ["10"] }).spawn();
+        // `esrun` idling, not `sleep`, which Windows does not have. All this
+        // needs is a child that outlives the worker's attempt on it, and the
+        // property under test — a worker cannot name a handle it did not mint —
+        // is not a Unix one.
+        const child = await new Command(ESRUN_BIN, {
+          args: ["-e=await new Promise((r) => setTimeout(r, 10000));"],
+        }).spawn();
         const w = new Worker(new URL("WORKER_URL", import.meta.url), { permissions: [] });
         w.onmessage = async (e) => {
           console.log(e.data);

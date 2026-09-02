@@ -47,6 +47,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- **`tsr test` no longer stops at the first test binary that fails.** Cargo's
+  default abandons the run at the first failing *target*, so a platform with
+  problems spread across several of them reports one batch per run: fix, push,
+  wait, discover the next. `--no-fail-fast` reports all of them at once, which
+  is the rule the OS matrix already applies one level up.
+
+  It was found the slow way. Restoring the Windows leg surfaced failures in
+  `modules`, then `permissions`, then — swept for rather than waited on — `env`
+  and `workers`, which spawn `sh` and `sleep`. Neither exists on Windows, and
+  both tests were about something else entirely: that a coerced value reaches a
+  child, and that a worker cannot kill a process it did not spawn. They spawn
+  `esrun` itself now, which is the one program every platform running these
+  tests is guaranteed to have.
+
 - **Three Windows tests were asserting Unix.** They had not run since the jail
   rewrite stopped the crate compiling there, so all three had been passing on a
   platform that never executed them. `packages/app` appears in a diagnostic as

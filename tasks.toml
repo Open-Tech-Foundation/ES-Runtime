@@ -24,7 +24,12 @@ run = "cargo fmt --all --check"
 run = "cargo build --workspace --all-features && cargo clippy --workspace --all-targets --all-features -- -D warnings"
 
 [tasks.test]
-run = "cargo test --workspace --all-features"
+# `--no-fail-fast`: cargo otherwise stops at the first test *target* that
+# fails, so a platform with problems in several binaries reports them one
+# run at a time — fix, push, wait, discover the next. The matrix already
+# says `fail-fast: false` for the same reason one leg should not hide the
+# others; this is that rule one level down.
+run = "cargo test --workspace --all-features --no-fail-fast"
 
 # The curated suite, driven by the real binary: a real event loop, a real
 # filesystem, real process exit. The grants are named rather than replaced by
