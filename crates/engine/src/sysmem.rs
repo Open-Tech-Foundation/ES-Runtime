@@ -47,8 +47,22 @@ fn cgroup_limit() -> Option<u64> {
     None
 }
 
-/// Physical memory, from `MemTotal` in `/proc/meminfo` (kibibytes).
+/// Physical memory, three ways, because there is no portable answer.
+///
+/// This used to be `/proc/meminfo` and nothing else, which is Linux and only
+/// Linux — so on macOS and Windows the documented fallback did not exist and
+/// `available_bytes` returned zero, handing V8 no number and letting it size
+/// from its own default instead of the machine. That is safe (a wrong number is
+/// worse than none) and it is not what this module says it does.
+///
+/// The two foreign calls are declared here rather than depended on. `libc` has
+/// nothing for the Windows one, and `windows-sys` is already in this lockfile at
+/// four different versions — pinning a fifth to read a single integer is a worse
+/// trade than eleven lines of `extern`. Both are stable ABI and neither is going
+/// to change. This is the crate `unsafe` is permitted in (ARCHITECTURE.md §7).
+#[cfg(target_os = "linux")]
 fn physical_memory() -> Option<u64> {
+    // `MemTotal` is kibibytes.
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let total = meminfo
         .lines()
@@ -57,15 +71,107 @@ fn physical_memory() -> Option<u64> {
     Some(kib * 1024)
 }
 
+/// macOS and the rest of Apple's platforms: `hw.memsize`, an `int64_t`.
+#[cfg(target_vendor = "apple")]
+fn physical_memory() -> Option<u64> {
+    use std::ffi::{c_char, c_int, c_void};
+
+    unsafe extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            oldp: *mut c_void,
+            oldlenp: *mut usize,
+            newp: *mut c_void,
+            newlen: usize,
+        ) -> c_int;
+    }
+
+    let mut bytes: u64 = 0;
+    let mut len = size_of::<u64>();
+    // SAFETY: `name` is a NUL-terminated literal. `oldp` is a live `u64` and
+    // `oldlenp` says how many bytes may be written there, which is the width
+    // `hw.memsize` reports; the call writes no more than it is told it may.
+    // `newp`/`newlen` are the documented spelling of "reading, not setting".
+    // `bytes` is read only when the call reports success.
+    let read = unsafe {
+        sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut bytes).cast::<c_void>(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (read == 0 && bytes > 0).then_some(bytes)
+}
+
+/// Windows: `GlobalMemoryStatusEx`, which fills a struct it is told the size of.
+#[cfg(windows)]
+fn physical_memory() -> Option<u64> {
+    /// `MEMORYSTATUSEX`. Only `total_phys` is read; the rest is there because
+    /// the call fills all of it and a short buffer would be written past.
+    #[repr(C)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page_file: u64,
+        avail_page_file: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended_virtual: u64,
+    }
+
+    unsafe extern "system" {
+        fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
+    }
+
+    let mut status = MemoryStatusEx {
+        // The call refuses a struct that does not declare its own size, which
+        // is how it tells the caller's vintage from its own.
+        length: u32::try_from(size_of::<MemoryStatusEx>()).ok()?,
+        memory_load: 0,
+        total_phys: 0,
+        avail_phys: 0,
+        total_page_file: 0,
+        avail_page_file: 0,
+        total_virtual: 0,
+        avail_virtual: 0,
+        avail_extended_virtual: 0,
+    };
+    // SAFETY: the pointer is to a live, fully initialised `MemoryStatusEx`
+    // whose `length` field states its own size, which is the contract the call
+    // documents. Nothing beyond that struct is written, and `total_phys` is
+    // read only when the call reports success.
+    let read = unsafe { GlobalMemoryStatusEx(&raw mut status) };
+    (read != 0 && status.total_phys > 0).then_some(status.total_phys)
+}
+
+/// Anywhere else: no answer rather than a guess, which `available_bytes`
+/// already knows how to report.
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+fn physical_memory() -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Whatever this machine is, the answer has to be a usable number: the
     /// isolate's ceiling is derived from it.
+    ///
+    /// Asserted on the three platforms this ships to — where a zero is a bug,
+    /// as it was on two of them until the platform arms above existed. Anywhere
+    /// else there is deliberately no implementation, and the contract is that
+    /// the caller is told nothing rather than told wrong.
     #[test]
     fn this_host_reports_something_plausible() {
         let bytes = available_bytes();
+        if !cfg!(any(target_os = "linux", target_vendor = "apple", windows)) {
+            return;
+        }
         assert!(
             bytes >= 64 * 1024 * 1024,
             "implausibly little memory: {bytes}"

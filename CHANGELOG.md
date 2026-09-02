@@ -33,6 +33,20 @@ namespace) is unstable and may change between minor releases until the API freez
   the BSDs. It goes through `Mode::from_raw_mode` with a cast to `RawMode`, which
   names whatever width the target has.
 
+- **The heap was sized from the machine on Linux and nowhere else.** `sysmem`
+  reads the cgroup limit first — the number that matters for a server, and the
+  reason this module exists rather than reading physical RAM like Node and Deno
+  — and falls back to the host's physical memory. That fallback was
+  `/proc/meminfo` and nothing else, so on macOS and Windows it found nothing and
+  reported zero. V8 was handed no number and sized from its own default instead
+  of the host, which is safe (a wrong ceiling is worse than none) but is not
+  what the module says it does, and on a developer's Mac `esdev` is where that
+  lands. macOS reads `hw.memsize` and Windows `GlobalMemoryStatusEx`; anywhere
+  else still reports nothing rather than guessing. Both calls are declared in
+  the one crate `unsafe` is permitted in, with no new dependency —
+  `windows-sys` is already in the lockfile four times at four versions, and a
+  fifth pin to read one integer is a worse trade than the `extern` block.
+
 - **`esrun -e` compared two spellings of the same directory.** The entry-file
   path is canonicalized before it is checked against the project root, and the
   `-e` path was not — it handed `within_root` a raw `current_dir()`, against the
