@@ -33,6 +33,28 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// An existing path in the spelling the rest of the system uses.
+///
+/// `std::fs::canonicalize` returns Windows' verbatim `\\?\` form, which most
+/// APIs there do not accept; the runtime strips it with `dunce` for exactly this
+/// reason (D25). A test that hands one to a flag is handing over a path the
+/// runtime would never produce itself.
+fn real(path: &std::path::Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize");
+    dunce::simplified(&canonical).display().to_string()
+}
+
+/// The same path, escaped for a JavaScript string literal.
+///
+/// A backslash inside a JS literal starts an escape, so a Windows path
+/// interpolated raw is not the path any more: `…\target\tmp\…` is read as a
+/// tab, `arget`, a tab, `mp`. A test that did that was asserting a refusal of a
+/// path nobody named — it passed for the wrong reason on the case that expects a
+/// refusal, and failed outright on the two that expect a read.
+fn js_path(path: &str) -> String {
+    path.replace('\\', "\\\\")
+}
+
 /// Runs `code` as an inline module under `flags`.
 fn run(flags: &[&str], code: &str) -> Output {
     esrun()
@@ -972,12 +994,12 @@ fn a_path_outside_the_jail_is_reachable_only_when_the_command_line_names_it() {
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("mkdir");
     std::fs::write(outside.join("cert.pem"), "PEM").expect("write");
-    let outside = std::fs::canonicalize(&outside).expect("canonicalize");
-    let granted = outside.display().to_string();
+    let granted = real(&outside);
+    let in_js = js_path(&granted);
 
     let code = format!(
         "import fs from 'runtime:fs'; \
-         console.log((await fs.file('{granted}/cert.pem').text()).trim()); \
+         console.log((await fs.file('{in_js}/cert.pem').text()).trim()); \
          try {{ await fs.file('/etc/hostname').text(); console.log('NO THROW'); }} \
          catch (e) {{ console.log('refused', e.code); }}"
     );
@@ -1000,12 +1022,12 @@ fn a_granted_read_path_does_not_become_writable() {
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("mkdir");
     std::fs::write(outside.join("cert.pem"), "PEM").expect("write");
-    let granted = std::fs::canonicalize(&outside).expect("canonicalize");
-    let granted = granted.display().to_string();
+    let granted = real(&outside);
+    let in_js = js_path(&granted);
 
     let code = format!(
         "import fs from 'runtime:fs'; \
-         try {{ await fs.write('{granted}/cert.pem', new Uint8Array([1])); \
+         try {{ await fs.write('{in_js}/cert.pem', new Uint8Array([1])); \
                 console.log('NO THROW'); }} \
          catch (e) {{ console.log('refused', e.code); }}"
     );
@@ -1032,13 +1054,13 @@ fn a_granted_read_path_does_not_widen_module_resolution() {
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("mkdir");
     std::fs::write(outside.join("mod.mjs"), "export const v = 'imported';").expect("write");
-    let granted = std::fs::canonicalize(&outside).expect("canonicalize");
-    let granted = granted.display().to_string();
+    let granted = real(&outside);
+    let in_js = js_path(&granted);
 
     let code = format!(
         "import fs from 'runtime:fs'; \
-         console.log((await fs.file('{granted}/mod.mjs').text()).length > 0); \
-         try {{ await import('{granted}/mod.mjs'); console.log('IMPORTED'); }} \
+         console.log((await fs.file('{in_js}/mod.mjs').text()).length > 0); \
+         try {{ await import('{in_js}/mod.mjs'); console.log('IMPORTED'); }} \
          catch {{ console.log('import refused'); }}"
     );
     let out = run_in(
@@ -1223,14 +1245,31 @@ fn allow_imports_takes_no_value_and_points_at_the_policy() {
 fn allow_signals_narrows_what_may_be_watched_and_what_is_reported() {
     // A watch suppresses the signal's default action, so the list decides which
     // deaths the program may decline. `signals()` reports only what it may use.
+    // One signal granted and one withheld, named per platform. Windows has no
+    // SIGTERM — its console signals are SIGINT and SIGBREAK, and `onSignal`
+    // says so rather than pretending — so asking for SIGTERM there threw about
+    // the platform instead of testing the narrowing this is about.
+    let (granted, withheld) = if cfg!(windows) {
+        ("SIGINT", "SIGBREAK")
+    } else {
+        ("SIGTERM", "SIGINT")
+    };
     let out = run(
-        &["--deny-all", "--allow-signals=SIGTERM"],
-        "import { signals, onSignal, offSignal } from 'runtime:process';          console.log('available', signals().join(','));          const noop = () => {};          onSignal('SIGTERM', noop); console.log('watched SIGTERM');          try { onSignal('SIGINT', noop); console.log('NO THROW'); }          catch (e) { console.log('refused', e.code); }          offSignal('SIGTERM', noop);",
+        &["--deny-all", &format!("--allow-signals={granted}")],
+        &format!(
+            "import {{ signals, onSignal, offSignal }} from 'runtime:process'; \
+             console.log('available', signals().join(',')); \
+             const noop = () => {{}}; \
+             onSignal('{granted}', noop); console.log('watched {granted}'); \
+             try {{ onSignal('{withheld}', noop); console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.code); }} \
+             offSignal('{granted}', noop);"
+        ),
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
-    assert!(s.contains("available SIGTERM"), "{s}");
-    assert!(s.contains("watched SIGTERM"), "{s}");
+    assert!(s.contains(&format!("available {granted}")), "{s}");
+    assert!(s.contains(&format!("watched {granted}")), "{s}");
     assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
 }
 
@@ -1361,11 +1400,23 @@ fn granting_a_capability_whole_and_narrowed_at_once_is_an_error() {
 fn a_scoped_allow_needs_no_mode_flag() {
     // The line that D65 exists to make writable: a grant, narrowed, and nothing
     // else on it. Everything not named stays denied.
-    let out = run(
-        &["--allow-env=HOME"],
-        "import { permissions, env } from 'runtime:process'; \
-         console.log(permissions.has('env'), typeof env.HOME, permissions.has('net'));",
-    );
+    //
+    // The variable is set here rather than borrowed from the environment: this
+    // used to name `HOME`, which Windows does not have — `typeof` came back
+    // `undefined` and the assertion read as if the grant had failed. What is
+    // under test is that a named variable arrives and the rest of the process
+    // stays denied, and neither half needs the host to have any particular
+    // variable set.
+    let out = esrun()
+        .env("ESRUN_SCOPED_ALLOW", "1")
+        .arg("--allow-env=ESRUN_SCOPED_ALLOW")
+        .arg(
+            "-e=import { permissions, env } from 'runtime:process'; \
+             console.log(permissions.has('env'), typeof env.ESRUN_SCOPED_ALLOW, \
+                         permissions.has('net'));",
+        )
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "true string false");
 }

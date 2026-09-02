@@ -27,6 +27,9 @@ rcgen.workspace = true
 # Test-only: spelling an absolute path as a `file:` URL, which is the one
 # specifier form that means the same thing on Windows as it does on Unix.
 url.workspace = true
+# Test-only: `dunce::simplified`, to spell a canonical Windows path the way the
+# runtime does rather than in the verbatim `\\?\` form (D25).
+dunce.workspace = true
 
 [lints]
 workspace = true

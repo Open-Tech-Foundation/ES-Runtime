@@ -57,6 +57,26 @@ namespace) is unstable and may change between minor releases until the API freez
   with a privileged port, which Windows does not have; it uses an address that
   is not the machine's own, which every platform refuses.
 
+- **A Windows path interpolated into JavaScript stopped being a path.** Three
+  permission tests built their script with `format!` and pasted a canonical path
+  straight into a single-quoted literal. A backslash there starts an escape, so
+  `…\target\tmp\…` was read as a tab, `arget`, a tab, `mp` — the runtime was
+  asked about a path nobody had granted, and refused it correctly. Two of the
+  three failed on that; the third *passed*, because it expects a refusal and got
+  one for the wrong reason. The paths are escaped for the literal now, and kept
+  unescaped for the flag, which needs the opposite. They also came from
+  `std::fs::canonicalize`, which returns the verbatim `\\?\` form the runtime
+  strips with `dunce` (D25) — so the test was handing over a spelling the
+  runtime never produces.
+
+- **`HOME` and `SIGTERM` are not everywhere.** The scoped-grant test read
+  `env.HOME`, which Windows has no equivalent of under that name, so `typeof`
+  came back `undefined` and the assertion looked like a failed grant; it sets
+  its own variable now and depends on no ambient environment. The signal test
+  asked for `SIGTERM`, which Windows does not have — its console signals are
+  `SIGINT` and `SIGBREAK` — so it threw about the platform instead of testing
+  the narrowing. It names one granted and one withheld signal per platform.
+
 - **And one was asserting Linux.** The multicast case already allowed for a
   macOS or Windows runner having no multicast-capable interface — but only in
   the *receive*: it tolerated nothing arriving, not the send failing. On the
