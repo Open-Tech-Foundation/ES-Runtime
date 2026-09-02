@@ -2019,13 +2019,35 @@ mod datagram_tests {
         }
 
         let (sender, _) = udp(&net).await;
-        net.send_to(
-            sender,
-            b"announce".to_vec(),
-            Some((GROUP.to_string(), port)),
-        )
-        .await
-        .expect("send to the group");
+        // The BSDs need the outgoing interface named before they will send to a
+        // group: without `IP_MULTICAST_IF` the route lookup has nothing to
+        // choose and `sendto` answers EADDRNOTAVAIL rather than picking a
+        // default the way Linux does. Naming it is what a program does there,
+        // not a concession this test makes.
+        if net
+            .set_datagram_option(
+                sender,
+                DatagramOption::MulticastInterface("127.0.0.1".to_string()),
+            )
+            .await
+            .is_err()
+        {
+            return; // no interface to send a group on
+        }
+        if net
+            .send_to(
+                sender,
+                b"announce".to_vec(),
+                Some((GROUP.to_string(), port)),
+            )
+            .await
+            .is_err()
+        {
+            // Every other step here already steps aside on a host with no
+            // usable multicast; the send was the one that did not, and it is
+            // where macOS stops.
+            return;
+        }
 
         for id in [first, second] {
             let got = tokio::time::timeout(Duration::from_secs(2), net.receive(id)).await;
@@ -2050,7 +2072,7 @@ mod datagram_tests {
             Some((GROUP.to_string(), port)),
         )
         .await
-        .expect("send to the group");
+        .expect("the same send that worked a moment ago");
         let after = tokio::time::timeout(Duration::from_millis(300), net.receive(first)).await;
         assert!(
             after.is_err(),

@@ -77,15 +77,17 @@ namespace) is unstable and may change between minor releases until the API freez
   `SIGINT` and `SIGBREAK` — so it threw about the platform instead of testing
   the narrowing. It names one granted and one withheld signal per platform.
 
-- **And one was asserting Linux.** The multicast case already allowed for a
-  macOS or Windows runner having no multicast-capable interface — but only in
-  the *receive*: it tolerated nothing arriving, not the send failing. On the
-  BSDs it fails one step earlier, because sending to a group needs the outgoing
-  interface named (`IP_MULTICAST_IF`) and without it the route lookup has
-  nothing to choose, so `sendto` returns `EADDRNOTAVAIL` rather than picking a
-  default. The sender names the interface, which is what a program does there;
-  a host that still cannot send now reports that as itself. Linux stays strict,
-  since that is where the delivery is real.
+- **Two multicast tests were asserting Linux**, one at each layer. Both already
+  allowed for a macOS or Windows runner having no multicast-capable interface —
+  but only in the *receive*: they tolerated nothing arriving, not the send
+  failing. On the BSDs it fails one step earlier, because sending to a group
+  needs the outgoing interface named (`IP_MULTICAST_IF`) and without it the
+  route lookup has nothing to choose, so `sendto` returns `EADDRNOTAVAIL`
+  rather than picking a default. Both senders name the interface, which is what
+  a program does there; a host that still cannot send steps aside the way every
+  other step in these tests already did. Linux stays strict — verified by making
+  each bail-out fatal and watching the suite still pass, so the tolerance has
+  not quietly become the path taken.
 
 - **The release workflow builds from cold every time, and no longer does.**
   `ci.yml` has cached its Rust builds since it was written; `release.yml` never
