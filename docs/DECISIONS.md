@@ -793,6 +793,8 @@ It was not a narrow window, either. `jailed()` resolves **eagerly**, before the 
 
 - **Timing side-channels.** Out of scope, and not closable for filesystem I/O by anyone: durations are data-dependent through the page cache, the dentry cache and the disk. The jail stops a guest *reaching* outside it; it has never claimed to hide how long its own reads take.
 
+**Amendment (the Windows arm was written down but not written, 2026-09-02).** "Windows keeps the path-based behaviour" was a decision recorded and then not implemented: the pinned type grew a Windows field and a Windows `anchor()`, and the eleven operations that *are* the behaviour were `#[cfg(unix)]` only. Nothing on Windows called them, because nothing on Windows compiled — the crate has not built for `*-pc-windows-msvc` since this landed, taking the `windows-latest` test leg and the Windows release artifact with it. The operations now exist there, by path, as this section says they should. **The rule this establishes:** a platform named in "what this does not cover" is still a platform that has to build, and a `cfg` that removes an `impl` block removes it silently — the error surfaces at the call site, in another file, as a method that does not exist.
+
 ### D82 — Collections: a document the database cannot read, beside the columns it can · *Proposed (2026-08-19)* · *delivers a phase D80 deferred*
 
 **Context:** D80 put a worker's state in its heap and capped it at 1 MiB for a reason it stands by — a resident cache with a soft limit is an unbounded one — and then owed an answer for everything that outgrows the cap. Without one, the answer is "open a second database beside the one the runtime already gave you", which is the shape this whole feature exists to remove.

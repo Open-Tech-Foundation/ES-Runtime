@@ -63,8 +63,11 @@
 //! one needs privileges no guest of this runtime has.
 
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::ProviderError;
 
@@ -97,6 +100,7 @@ impl Anchored {
 /// is: something arranged for this path to lead somewhere the check did not
 /// agree to, and the only reason it did not is that this walk refused to follow
 /// it.
+#[cfg(unix)]
 fn swapped(path: &Path) -> ProviderError {
     ProviderError::Coded {
         code: ErrorCode::JailEscape,
@@ -349,7 +353,13 @@ impl Anchored {
             Mode::empty(),
         )
         .map_err(|e| self.io(e))?;
-        rustix::fs::fchmod(&fd, Mode::from(mode)).map_err(|e| self.io(e))
+        // `mode` is a `u32`, as `PermissionsExt::mode` gives it — but `Mode` is
+        // built from `RawMode`, which is `mode_t`: `u32` on Linux and `u16` on
+        // macOS and the BSDs. `Mode::from` therefore only compiles on the
+        // platforms where those agree. Casting to `RawMode` names the target's
+        // width, and the permission bits this carries fit in twelve either way.
+        let bits = mode as rustix::fs::RawMode;
+        rustix::fs::fchmod(&fd, Mode::from_raw_mode(bits)).map_err(|e| self.io(e))
     }
 
     /// Whether the name is a directory, without following a link at it.
@@ -445,6 +455,105 @@ impl Anchored {
             rustix::io::Errno::LOOP | rustix::io::Errno::MLINK => swapped(&self.path),
             other => failed(&self.path, other.into()),
         }
+    }
+}
+
+/// Windows: the same surface, by path.
+///
+/// D83 says Windows "keeps the old behaviour", and this is it — resolve, then
+/// act on the name. Every method here reopens `parent/name` from the root, so
+/// the window the Unix arm closes stays open: a directory swapped between the
+/// check and the call redirects the operation, exactly as it did before the
+/// jail learned to hold descriptors. That is not an oversight to fix here.
+/// Windows has no `*at` family, and the equivalent — opening each component
+/// with `FILE_FLAG_OPEN_REPARSE_POINT` and reopening children by handle — is a
+/// different piece of work against a different API. It is written down in one
+/// place so the weaker guarantee is a decision on the record rather than
+/// something inferred from a missing function.
+#[cfg(not(unix))]
+impl Anchored {
+    /// The name to act on. `parent` and `name` rejoin to the path `anchor`
+    /// split, and nothing here resolves further than that.
+    fn target(&self) -> PathBuf {
+        self.parent.join(&self.name)
+    }
+
+    /// Opens the final name for writing, creating it if it is not there.
+    pub fn create(&self, append: bool) -> Result<std::fs::File, ProviderError> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true);
+        if append {
+            options.append(true);
+        } else {
+            options.truncate(true);
+        }
+        options.open(self.target()).map_err(|e| self.io(e))
+    }
+
+    /// Opens the final name for reading.
+    pub fn open(&self) -> Result<std::fs::File, ProviderError> {
+        std::fs::File::open(self.target()).map_err(|e| self.io(e))
+    }
+
+    /// Opens it for writing **without** creating or truncating — what
+    /// `truncate()` needs a handle for.
+    fn open_write(&self) -> Result<std::fs::File, ProviderError> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(self.target())
+            .map_err(|e| self.io(e))
+    }
+
+    pub fn mkdir(&self) -> Result<(), ProviderError> {
+        std::fs::create_dir(self.target()).map_err(|e| self.io(e))
+    }
+
+    /// Removes the name. `directory` picks between the two calls, which is a
+    /// distinction the caller has already had to make.
+    pub fn unlink(&self, directory: bool) -> Result<(), ProviderError> {
+        let target = self.target();
+        if directory {
+            std::fs::remove_dir(target)
+        } else {
+            std::fs::remove_file(target)
+        }
+        .map_err(|e| self.io(e))
+    }
+
+    /// Reads the link stored at the name.
+    pub fn read_link(&self) -> Result<PathBuf, ProviderError> {
+        std::fs::read_link(self.target()).map_err(|e| self.io(e))
+    }
+
+    /// Renames into `destination`.
+    pub fn rename_to(&self, destination: &Anchored) -> Result<(), ProviderError> {
+        std::fs::rename(self.target(), destination.target()).map_err(|e| self.io(e))
+    }
+
+    /// Sets the length of the file at the name.
+    pub fn truncate(&self, len: u64) -> Result<(), ProviderError> {
+        let file = self.open_write()?;
+        file.set_len(len).map_err(|e| self.io(e))
+    }
+
+    /// Whether the name is a directory, without following a link at it.
+    pub fn is_dir(&self) -> Result<bool, ProviderError> {
+        let meta = std::fs::symlink_metadata(self.target()).map_err(|e| self.io(e))?;
+        Ok(meta.is_dir())
+    }
+
+    /// Removes the name and everything under it.
+    ///
+    /// By path, where the Unix arm descends by descriptor: `remove_dir_all`
+    /// resolves afresh at every level. It does refuse to recurse through a
+    /// symlink — it unlinks the link — so the tree it walks stays the tree it
+    /// opened, but a directory *replaced* mid-walk is followed.
+    pub fn remove_tree(&self) -> Result<(), ProviderError> {
+        std::fs::remove_dir_all(self.target()).map_err(|e| self.io(e))
+    }
+
+    fn io(&self, err: std::io::Error) -> ProviderError {
+        failed(&self.path, err)
     }
 }
 

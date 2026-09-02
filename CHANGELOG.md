@@ -16,6 +16,23 @@ namespace) is unstable and may change between minor releases until the API freez
   `runtime:http`'s server and `esrun upgrade`'s client both carried it. Yanked
   `chacha20` 0.10.1 goes with it, which had failed `cargo deny` on its own.
 
+### Fixed
+
+- **The filesystem jail builds on Windows and macOS again.** The descriptor-based
+  jail (D83) landed with a Windows arm that was documented rather than written:
+  the pinned type had a `PathBuf` parent and a Windows `anchor()`, but the eleven
+  operations that *are* "Windows keeps the path-based behaviour" sat behind
+  `#[cfg(unix)]`. Nothing on Windows called them because nothing on Windows
+  compiled — twelve `no method named ...` errors in `system_fs.rs`, one per call
+  site, which took the `windows-latest` test leg and the
+  `aarch64-pc-windows-msvc` release artifact with it. They exist now, by path,
+  with the race D83 says stays open there and says why.
+
+  macOS failed for a smaller reason in the same file: `chmod` built a `Mode` from
+  a `u32`, and `Mode` is built from `mode_t` — `u32` on Linux, `u16` on macOS and
+  the BSDs. It goes through `Mode::from_raw_mode` with a cast to `RawMode`, which
+  names whatever width the target has.
+
 ### Testing / CI
 
 - **The gates that could not pass on a fresh checkout, fixed.** Each had been
