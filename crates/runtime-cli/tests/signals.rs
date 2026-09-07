@@ -148,9 +148,12 @@ fn sigterm_drains_an_in_flight_request_before_exiting() {
     let mut lines = BufReader::new(stdout).lines();
     let port: u16 = wait_for_line(&mut lines, "PORT ").parse().expect("port");
 
-    // Fire the slow request, then interrupt while it is still in the handler.
+    // Fire the slow request, then interrupt once it is inside the handler —
+    // waited on, not slept for, so a loaded machine cannot be beaten here by
+    // its own dispatch of the request.
     let request = std::thread::spawn(move || http_get(port, "/slow"));
-    std::thread::sleep(Duration::from_millis(300));
+    let entered = wait_for_line(&mut lines, "SLOW ");
+    assert_eq!(entered, "ENTERED", "the slow handler never started");
     send(child.id(), "TERM");
 
     let response = request.join().expect("request thread");

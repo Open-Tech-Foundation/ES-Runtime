@@ -61,6 +61,28 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- **The never-ending-burst watch test no longer depends on a timer firing on
+  time.** Its flood sent an event every `SETTLE / 3` (10 ms) and asserted
+  `coalesce` holds the full 500 ms cap — but on a loaded runner a missed wake
+  leaves a gap wider than the 30 ms lull, so the burst settled early (288 ms on
+  macOS CI) and the test failed. The flood now sends back-to-back with only a
+  scheduler yield between events, which stays denser than any lull the
+  scheduler itself could observe. Zero-sized payload, so the burst vector never
+  allocates.
+
+- **Two more fixed sleeps that raced a loaded machine, made conditional.**
+  `sigterm_drains_an_in_flight_request` slept 300 ms for the slow request to
+  reach its handler before sending `SIGTERM` — on a loaded runner dispatch can
+  take longer, the interrupt lands with nothing in flight, and the test fails.
+  The fixture prints `SLOW ENTERED` on handler entry and the test waits for
+  that line, the same prints-and-waits shape the `PORT` line already used.
+  `stderr_after_a_failed_handshake` (telemetry) slept 500 ms for the
+  connection's logging task before killing the server; stderr is now drained on
+  a thread and the filtered case waits for the `tls handshake failed` event
+  itself (10 s deadline, so a real regression still fails loudly). The unfiltered
+  case keeps a quiescence window — absence has no event to wait for — widened
+  to 2 s and documented as inherent rather than a race.
+
 - **`tsr test` no longer stops at the first test binary that fails.** Cargo's
   default abandons the run at the first failing *target*, so a platform with
   problems spread across several of them reports one batch per run: fix, push,

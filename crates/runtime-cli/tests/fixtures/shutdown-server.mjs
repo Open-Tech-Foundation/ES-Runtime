@@ -5,6 +5,9 @@ import { serve } from "runtime:http";
 
 const server = serve({ port: 0 }, async (request) => {
   if (new URL(request.url).pathname === "/slow") {
+    // Observed by the parent, which interrupts only once this is in flight: a
+    // fixed sleep there would race a loaded machine's dispatch of the request.
+    console.log("SLOW ENTERED");
     await new Promise((resolve) => setTimeout(resolve, 1200));
     return new Response("slow finished");
   }

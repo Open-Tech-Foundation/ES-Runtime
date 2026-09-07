@@ -61,13 +61,66 @@ fn stderr_after_a_failed_handshake(name: &str, rust_log: Option<&str>) -> String
     let mut tcp = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     let _ = tcp.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     drop(tcp);
+
     // The server logs from the connection's own task, which this test does not
-    // join; the wait is for that task to run, not for a fixed duration.
-    std::thread::sleep(Duration::from_millis(500));
+    // join — so stderr is drained on a thread and the wait below is for the
+    // log to arrive, not for a fixed duration. A fixed sleep here races a
+    // loaded machine's scheduling of that task.
+    let stderr = child.stderr.take().expect("piped stderr");
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut stderr = stderr;
+        let mut buf = [0_u8; 4096];
+        loop {
+            match stderr.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut collected = Vec::<u8>::new();
+    if rust_log.is_some() {
+        // A positive assertion: wait for the event itself, up to a deadline. A
+        // regression that stops emitting still fails — by timeout, with
+        // whatever stderr did arrive in the message.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(chunk) => {
+                    collected.extend_from_slice(&chunk);
+                    if String::from_utf8_lossy(&collected).contains("tls handshake failed") {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    } else {
+        // A negative assertion: absence is only meaningful after a quiescence
+        // window, since there is no event to wait for. Generous on purpose —
+        // this is the one place a duration is inherent rather than a race.
+        std::thread::sleep(Duration::from_secs(2));
+        while let Ok(chunk) = rx.try_recv() {
+            collected.extend_from_slice(&chunk);
+        }
+    }
 
     let _ = child.kill();
-    let out = child.wait_with_output().expect("wait");
-    String::from_utf8_lossy(&out.stderr).into_owned()
+    child.wait().expect("wait");
+    // The kill closes the pipe, so the drain thread ends and the channel
+    // disconnects; everything it sent is the server's whole stderr.
+    while let Ok(chunk) = rx.recv() {
+        collected.extend_from_slice(&chunk);
+    }
+    String::from_utf8_lossy(&collected).into_owned()
 }
 
 /// Reads the `PORT <n>` line the app prints once it is listening.

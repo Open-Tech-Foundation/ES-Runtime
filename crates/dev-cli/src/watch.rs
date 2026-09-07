@@ -379,13 +379,18 @@ mod tests {
     #[tokio::test]
     async fn a_burst_that_never_ends_is_still_built() {
         let (tx, mut rx) = mpsc::unbounded_channel::<()>();
-        // Faster than the lull, so it can never be reached.
+        // No timer: a `sleep(SETTLE / 3)` flood assumes the scheduler wakes the
+        // sender every 10 ms, and on a loaded runner (macOS CI) a missed wake
+        // leaves a gap wider than the SETTLE lull, so `coalesce` settles early
+        // and the test fails with "it gave up before the cap". Yielding keeps
+        // the stream denser than any lull the scheduler itself could observe.
+        // `()` is zero-sized, so the burst `Vec` this fills never allocates.
         let flood = tokio::spawn(async move {
             loop {
                 if tx.send(()).is_err() {
                     return;
                 }
-                tokio::time::sleep(SETTLE / 3).await;
+                tokio::task::yield_now().await;
             }
         });
 
