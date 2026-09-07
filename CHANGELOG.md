@@ -83,6 +83,15 @@ namespace) is unstable and may change between minor releases until the API freez
   case keeps a quiescence window — absence has no event to wait for — widened
   to 2 s and documented as inherent rather than a race.
 
+- **The module-loader unit tests assumed Unix paths.** Their helper rooted the
+  `FsModuleLoader` at `"/app"`, which is absolute on Unix and a drive-less
+  relative path on Windows — so every test using it failed on Windows in the
+  helper, in `with_base_dir`'s absolutness check, rather than in anything they
+  meant to pin. The helper roots at the test process's working directory now
+  (absolute everywhere) and builds its expectations by joining that base URL;
+  the missing-file case names a real temp path instead of a Unix-only
+  `file://` literal, which Windows cannot even convert to a path.
+
 - **The Redis TLS fixture server could not read its own certificate on Linux.**
   `tls-server.sh` bind-mounts a `mktemp -d` directory (0700, owned by whoever
   ran the script) at `/certs`, and `chmod 644` on the files does not open the

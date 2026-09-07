@@ -161,47 +161,55 @@ impl ModuleLoader for DenyModuleLoader {
 mod tests {
     use super::*;
 
-    fn loader() -> FsModuleLoader {
-        FsModuleLoader::with_base_dir("/app").expect("base dir")
+    /// A loader rooted at the test process's working directory — absolute on
+    /// every platform — with the matching base URL to build expectations from.
+    /// A literal `"/app"` used to stand here, which is absolute on Unix and a
+    /// drive-less relative path on Windows, so every test using the helper
+    /// failed there in the helper rather than in anything it meant to check.
+    fn loader() -> (FsModuleLoader, Url) {
+        let dir = std::env::current_dir().expect("working directory");
+        let base = Url::from_directory_path(&dir).expect("base dir");
+        let loader = FsModuleLoader::with_base_dir(&dir).expect("base dir");
+        (loader, base)
     }
 
     #[tokio::test]
     async fn resolves_relative_against_referrer() {
-        let l = loader();
+        let (l, base) = loader();
+        let referrer = base.join("main.mjs").unwrap().to_string();
         assert_eq!(
-            l.resolve("./util.mjs", "file:///app/main.mjs")
-                .await
-                .unwrap(),
-            "file:///app/util.mjs"
+            l.resolve("./util.mjs", &referrer).await.unwrap(),
+            base.join("util.mjs").unwrap().to_string()
         );
+        let referrer = base.join("sub/main.mjs").unwrap().to_string();
         assert_eq!(
-            l.resolve("../lib/x.mjs", "file:///app/sub/main.mjs")
-                .await
-                .unwrap(),
-            "file:///app/lib/x.mjs"
+            l.resolve("../lib/x.mjs", &referrer).await.unwrap(),
+            base.join("lib/x.mjs").unwrap().to_string()
         );
     }
 
     #[tokio::test]
     async fn resolves_entry_relative_to_base() {
         // Empty referrer → resolve against the loader's base directory.
+        let (l, base) = loader();
         assert_eq!(
-            loader().resolve("./main.mjs", "").await.unwrap(),
-            "file:///app/main.mjs"
+            l.resolve("./main.mjs", "").await.unwrap(),
+            base.join("main.mjs").unwrap().to_string()
         );
     }
 
     #[tokio::test]
     async fn resolves_absolute_path_and_file_url() {
-        let l = loader();
+        let (l, base) = loader();
+        let referrer = base.join("main.mjs").unwrap().to_string();
+        // An absolute-path reference replaces the base's whole path, on every
+        // platform — so this is one fixed URL, not one per drive letter.
         assert_eq!(
-            l.resolve("/abs/x.mjs", "file:///app/main.mjs")
-                .await
-                .unwrap(),
+            l.resolve("/abs/x.mjs", &referrer).await.unwrap(),
             "file:///abs/x.mjs"
         );
         assert_eq!(
-            l.resolve("file:///elsewhere/y.mjs", "file:///app/main.mjs")
+            l.resolve("file:///elsewhere/y.mjs", &referrer)
                 .await
                 .unwrap(),
             "file:///elsewhere/y.mjs"
@@ -210,17 +218,18 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_bare_specifier() {
-        let err = loader()
-            .resolve("lodash", "file:///app/main.mjs")
-            .await
-            .unwrap_err();
+        let (l, base) = loader();
+        let referrer = base.join("main.mjs").unwrap().to_string();
+        let err = l.resolve("lodash", &referrer).await.unwrap_err();
         assert!(format!("{err}").contains("bare module specifier"), "{err}");
     }
 
     #[tokio::test]
     async fn rejects_non_file_scheme() {
-        let err = loader()
-            .resolve("https://example.com/x.mjs", "file:///app/main.mjs")
+        let (l, base) = loader();
+        let referrer = base.join("main.mjs").unwrap().to_string();
+        let err = l
+            .resolve("https://example.com/x.mjs", &referrer)
             .await
             .unwrap_err();
         assert!(format!("{err}").contains("only file:"), "{err}");
@@ -234,7 +243,7 @@ mod tests {
         std::fs::write(&path, "export const v = 1;").unwrap();
         let id = Url::from_file_path(&path).unwrap().to_string();
 
-        let source = loader().load(&id).await.unwrap();
+        let source = loader().0.load(&id).await.unwrap();
         assert_eq!(source, ModuleSource::Text("export const v = 1;".into()));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -251,7 +260,7 @@ mod tests {
         let id = Url::from_file_path(&path).unwrap().to_string();
 
         // Read as bytes, not decoded as UTF-8 (which these are not).
-        let source = loader().load(&id).await.unwrap();
+        let source = loader().0.load(&id).await.unwrap();
         assert_eq!(source, ModuleSource::Wasm(bytes.to_vec()));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -259,10 +268,16 @@ mod tests {
 
     #[tokio::test]
     async fn load_reports_a_missing_file() {
-        let err = loader()
-            .load("file:///no/such/module.mjs")
-            .await
-            .unwrap_err();
+        // A well-formed file URL that names nothing: `to_file_path` must
+        // succeed so the failure is the read, on every platform. A Unix-only
+        // literal like `file:///no/such/module.mjs` is not convertible on
+        // Windows, which would fail the test in URL parsing instead of in
+        // the read it is about.
+        let missing = std::env::temp_dir().join(format!("esrt-mod-missing-{}", std::process::id()));
+        let id = Url::from_file_path(missing.join("module.mjs"))
+            .unwrap()
+            .to_string();
+        let err = loader().0.load(&id).await.unwrap_err();
         assert!(format!("{err}").contains("cannot read"), "{err}");
     }
 
