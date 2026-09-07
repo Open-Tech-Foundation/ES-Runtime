@@ -83,6 +83,15 @@ namespace) is unstable and may change between minor releases until the API freez
   case keeps a quiescence window — absence has no event to wait for — widened
   to 2 s and documented as inherent rather than a race.
 
+- **The Redis TLS fixture server could not read its own certificate on Linux.**
+  `tls-server.sh` bind-mounts a `mktemp -d` directory (0700, owned by whoever
+  ran the script) at `/certs`, and `chmod 644` on the files does not open the
+  directory above them — so the container's `redis` user got `Permission
+  denied` on `server.crt` and exited on "Failed to configure TLS". Docker
+  Desktop's file sharing masks host modes, which is why this only bit native
+  Linux runners. The directory is `chmod 755` now; the postgres script never
+  had this, since it `docker cp`s the key in and fixes ownership inside.
+
 - **`tsr test` no longer stops at the first test binary that fails.** Cargo's
   default abandons the run at the first failing *target*, so a platform with
   problems spread across several of them reports one batch per run: fix, push,

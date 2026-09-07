@@ -24,6 +24,14 @@ openssl req -newkey rsa:2048 -nodes -keyout "$dir/server.key" -out "$dir/server.
 openssl x509 -req -in "$dir/server.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" \
   -CAcreateserial -out "$dir/server.crt" -days 2 \
   -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1") 2>/dev/null
+# The container's `redis` user must be able to reach these: `mktemp -d` makes
+# the directory 0700 owned by whoever ran this script, and native Linux docker
+# honours that — so without the execute bit the bind mount below is a
+# `Permission denied` on `server.crt` and the server exits on "Failed to
+# configure TLS". (Docker Desktop's file sharing masks it, which is why this
+# only bites on Linux.) The key stays unreadable by nobody who matters: the
+# directory is torn down with the run, and the certs live two days.
+chmod 755 "$dir"
 chmod 644 "$dir"/*.key "$dir"/*.crt
 
 docker rm -f "$name" >/dev/null 2>&1 || true
