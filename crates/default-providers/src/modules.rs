@@ -202,11 +202,39 @@ mod tests {
     async fn resolves_absolute_path_and_file_url() {
         let (l, base) = loader();
         let referrer = base.join("main.mjs").unwrap().to_string();
-        // An absolute-path reference replaces the base's whole path, on every
-        // platform — so this is one fixed URL, not one per drive letter.
+        // An absolute-path reference replaces the base's path but keeps its
+        // drive: `file:///D:/base/` + `/abs/x.mjs` is `file:///D:/abs/x.mjs`,
+        // not `file:///abs/x.mjs` — file URLs carry the Windows drive with
+        // them through resolution. (`set_path` would drop it, so the drive is
+        // read off the base instead: the `url` crate parses OS-independently,
+        // so this expectation holds on Windows exactly as written.)
+        let drive = base
+            .path()
+            .split('/')
+            .nth(1)
+            .filter(|seg| {
+                seg.len() == 2
+                    && seg.as_bytes()[0].is_ascii_alphabetic()
+                    && seg.as_bytes()[1] == b':'
+            })
+            .unwrap_or("");
+        let expected = if drive.is_empty() {
+            "file:///abs/x.mjs".to_string()
+        } else {
+            format!("file:///{drive}/abs/x.mjs")
+        };
+        assert_eq!(l.resolve("/abs/x.mjs", &referrer).await.unwrap(), expected);
+        // And the drive half, against a synthetic Windows base: `url` parsing
+        // is OS-independent, so this runs everywhere yet pins the exact string
+        // Windows CI compares against — it is what catches a wrong expectation
+        // here before a Windows run has to.
         assert_eq!(
-            l.resolve("/abs/x.mjs", &referrer).await.unwrap(),
-            "file:///abs/x.mjs"
+            Url::parse("file:///D:/base/")
+                .unwrap()
+                .join("/abs/x.mjs")
+                .unwrap()
+                .to_string(),
+            "file:///D:/abs/x.mjs"
         );
         assert_eq!(
             l.resolve("file:///elsewhere/y.mjs", &referrer)

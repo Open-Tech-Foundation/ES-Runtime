@@ -90,7 +90,17 @@ namespace) is unstable and may change between minor releases until the API freez
   meant to pin. The helper roots at the test process's working directory now
   (absolute everywhere) and builds its expectations by joining that base URL;
   the missing-file case names a real temp path instead of a Unix-only
-  `file://` literal, which Windows cannot even convert to a path.
+  `file://` literal, which Windows cannot even convert to a path. The
+  absolute-path case keeps its drive (`file:///D:/abs/x.mjs`, which `set_path`
+  would have dropped — the expectation reads the drive off the base), with a
+  synthetic `file:///D:/` assertion pinning the Windows string on every host,
+  since `url` parsing is OS-independent.
+- **The signal-allowlist test watched a signal Windows cannot deliver.** Scoped
+  to `SIGTERM`, `available()` came back `[]` there because the platform list
+  never contained it. The test scopes `SIGINT` — the one signal every platform
+  delivers — and names its withheld signal per platform (`SIGTERM`/`SIGBREAK`),
+  so the scoped-denial path is exercised on both rather than passing on one
+  and erroring on the other.
 
 - **The Redis TLS fixture server could not read its own certificate on Linux.**
   `tls-server.sh` bind-mounts a `mktemp -d` directory (0700, owned by whoever

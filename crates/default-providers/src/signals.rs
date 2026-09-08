@@ -381,19 +381,32 @@ impl Signals for ManualSignals {
 mod tests {
     use super::*;
 
+    // Nowhere to watch from on a platform with no signals at all: the
+    // narrowing below is over what the platform delivers, and there is none.
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn the_signal_allowlist_narrows_watch_and_available() {
-        let signals = SystemSignals::new().with_allowlist([Signal::Term]);
+        // `SIGINT` is the one signal every platform delivers, so the allowlist
+        // under test is portable: `SIGTERM` is not watchable on Windows and a
+        // test scoped to it fails there in the platform check rather than in
+        // the narrowing it means to pin.
+        let signals = SystemSignals::new().with_allowlist([Signal::Int]);
         // A guest should enumerate what it may use, not what the platform
         // happens to deliver.
-        assert_eq!(signals.available(), vec![Signal::Term]);
-        assert!(signals.watch(Signal::Term).is_ok());
+        assert_eq!(signals.available(), vec![Signal::Int]);
+        assert!(signals.watch(Signal::Int).is_ok());
+        // Listed nowhere: refused as a scoped denial on every platform, which
+        // means naming a signal the platform delivers but the list withholds.
+        #[cfg(unix)]
+        let unlisted = Signal::Term;
+        #[cfg(windows)]
+        let unlisted = Signal::Break;
         let err = signals
-            .watch(Signal::Int)
+            .watch(unlisted)
             .expect_err("an unlisted signal must be refused");
         assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
-        assert!(err.to_string().contains("SIGINT"), "{err}");
-        signals.unwatch(Signal::Term);
+        assert!(err.to_string().contains(unlisted.name()), "{err}");
+        signals.unwatch(Signal::Int);
     }
 
     #[test]
