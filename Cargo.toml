@@ -243,6 +243,7 @@ subtle = "2.6.1"
 # globset gives `**`/`{a,b}` semantics, walkdir the traversal we confine to the
 # root jail. Both permissive (MIT / Unlicense). Used only by default-providers.
 globset = "0.4.16"
+ignore = "0.4.23"
 walkdir = "2.5.0"
 # Self-update for `esrun upgrade`: finds the latest GitHub release for the
 # target, downloads + extracts it, and replaces the running binary in place

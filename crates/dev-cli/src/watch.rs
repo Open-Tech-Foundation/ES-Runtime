@@ -29,7 +29,6 @@
 //! detects) and the entry's own directory otherwise, minus the directories
 //! nobody edits by hand.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -37,12 +36,6 @@ use notify::event::{EventKind, ModifyKind};
 use notify::{Event, RecursiveMode, Watcher};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
-
-/// Directories never worth watching: machine-written, and large enough that
-/// watching them costs real descriptors. `dist` and `target` matter for
-/// correctness rather than cost — `esdev build` writes into `dist`, and a
-/// watcher that restarted on its own output would never settle.
-const IGNORED_DIRS: &[&str] = &["node_modules", ".git", "dist", "target", ".cache"];
 
 /// Extensions a restart is worth. A README or a PNG changing is not a reason to
 /// bounce a server.
@@ -330,8 +323,9 @@ pub fn is_asset(path: &Path, root: &Path) -> bool {
     is_watchable(path, root, ASSET_EXTENSIONS)
 }
 
-/// Whether a change is inside the project, outside the machine-written
-/// directories, and in a file of a kind worth acting on.
+/// Whether a change is inside the project, outside esdev's staging directory,
+/// and in a file of a kind worth acting on. Project-specific exclusions belong
+/// in `.gitignore`.
 ///
 /// **The ignored names are matched below the watch root, not anywhere in the
 /// path.** Matching the whole path looks equivalent and is not: a project that
@@ -340,14 +334,13 @@ pub fn is_asset(path: &Path, root: &Path) -> bool {
 /// symptom is a watcher that runs and reports and never reacts to anything.
 /// Found exactly that way.
 fn is_watchable(path: &Path, root: &Path, extensions: &[&str]) -> bool {
-    let ignored: HashSet<&str> = IGNORED_DIRS.iter().copied().collect();
     let relative = path.strip_prefix(root).unwrap_or(path);
     if relative.components().any(|c| {
         let name = c.as_os_str().to_string_lossy();
         // The staging directory a build writes into carries a pid, so it is
         // matched by its prefix. Without this the dev loop watches its own
         // half-finished output and rebuilds for ever.
-        ignored.contains(name.as_ref()) || name.starts_with(crate::staging::PREFIX)
+        name.starts_with(crate::staging::PREFIX)
     }) {
         return false;
     }
@@ -475,21 +468,20 @@ mod tests {
         assert!(!is_asset(Path::new("/p/src/app.ts"), root));
     }
 
-    /// `dist` is the one that would otherwise loop: `esdev build` writes there,
-    /// and a watcher that restarted on its own output would never settle.
+    /// Directory names do not decide what is watched. Projects can exclude
+    /// generated trees in `.gitignore`; the watcher itself only filters by
+    /// extension and esdev's staging prefix.
     #[test]
-    fn machine_written_directories_are_ignored() {
+    fn directory_names_are_not_hardcoded_exclusions() {
         let root = Path::new("/p");
-        assert!(!is_interesting(
-            Path::new("/p/node_modules/x/index.js"),
-            root
-        ));
-        assert!(!is_interesting(Path::new("/p/dist/server.js"), root));
-        assert!(!is_interesting(Path::new("/p/target/debug/build.js"), root));
-        assert!(!is_interesting(
-            Path::new("/p/.git/hooks/pre-commit.js"),
-            root
-        ));
+        for path in [
+            "/p/node_modules/x/index.js",
+            "/p/dist/server.js",
+            "/p/target/debug/build.js",
+            "/p/.git/hooks/pre-commit.js",
+        ] {
+            assert!(is_interesting(Path::new(path), root), "{path}");
+        }
     }
 
     /// The names are ignored *below the root*, not anywhere in the path — a
@@ -506,8 +498,7 @@ mod tests {
             Path::new("/home/me/work/target/app/index.html"),
             root
         ));
-        // …and its own build output is still ignored.
-        assert!(!is_interesting(
+        assert!(is_interesting(
             Path::new("/home/me/work/target/app/dist/x.js"),
             root
         ));

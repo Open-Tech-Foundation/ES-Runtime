@@ -1,5 +1,7 @@
 import { define, html, mount, update } from "@opentf/micro-ui";
 
+import "@opentf/micro-ui/styles.css";
+
 const root = document.getElementById("app");
 if (!root) {
   throw new Error("index.html has no #app for this module to render into");

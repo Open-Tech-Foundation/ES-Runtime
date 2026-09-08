@@ -64,6 +64,9 @@ regex.workspace = true
 anyhow.workspace = true
 # `--watch`. The events only; the restart policy is ours.
 notify.workspace = true
+# `.gitignore` is the project's watch policy; esdev does not duplicate it with
+# another hardcoded directory list.
+ignore.workspace = true
 # `esdev create`'s questions. See the workspace manifest for why a TUI is worth
 # a dependency here and why it draws inline. Nothing else in esdev takes the
 # terminal over: every other command prints lines.

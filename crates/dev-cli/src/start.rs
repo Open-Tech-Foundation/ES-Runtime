@@ -59,6 +59,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ignore::Match;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, RecursiveMode, Watcher};
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc};
@@ -301,7 +303,9 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     let root = project.dir.clone();
     let ignored = output_dirs(&project);
-    let scope = root.clone();
+    let gitignore = load_gitignore(&root)?;
+    let watch_roots = watch_roots(&project);
+    let scopes = watch_roots.clone();
     // The *paths*, not just the fact of a change: a stylesheet can be swapped
     // into a running page and everything else has to reload it, and only the
     // path says which this was.
@@ -311,19 +315,26 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         if let Ok(event) = res
             && crate::watch::is_change(&event.kind)
         {
-            for path in event
-                .paths
-                .iter()
-                .filter(|path| is_source(path, &scope, &ignored))
-            {
+            for path in event.paths.iter().filter(|path| {
+                scopes
+                    .iter()
+                    .any(|scope| is_source(path, scope, &ignored, gitignore.as_ref()))
+            }) {
                 let _ = tx.send(path.clone());
             }
         }
     })
     .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-    watcher
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
+    for path in &watch_roots {
+        let mode = if path.is_dir() {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        watcher
+            .watch(path, mode)
+            .map_err(|e| format!("cannot watch {}: {e}", path.display()))?;
+    }
 
     let paint = crate::style::Palette::stderr();
     let tag = paint.dim("esdev:");
@@ -810,11 +821,66 @@ fn output_dirs(project: &Project) -> Vec<PathBuf> {
 /// does: an `index.html`, a stylesheet and an image in `public` are all things
 /// a target names, and a save that appears to do nothing is worse than a
 /// rebuild that costs milliseconds.
-fn is_source(path: &Path, root: &Path, outputs: &[PathBuf]) -> bool {
+fn is_source(path: &Path, root: &Path, outputs: &[PathBuf], gitignore: Option<&Gitignore>) -> bool {
     if outputs.iter().any(|output| path.starts_with(output)) {
         return false;
     }
+    if gitignore.is_some_and(|rules| {
+        matches!(
+            rules.matched_path_or_any_parents(path, path.is_dir()),
+            Match::Ignore(_)
+        )
+    }) {
+        return false;
+    }
     crate::watch::is_interesting(path, root) || crate::watch::is_asset(path, root)
+}
+
+fn load_gitignore(root: &Path) -> Result<Option<Gitignore>, String> {
+    let path = root.join(".gitignore");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let mut builder = GitignoreBuilder::new(root);
+    if let Some(err) = builder.add(&path) {
+        return Err(format!("cannot read {}: {err}", path.display()));
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|err| format!("cannot parse {}: {err}", path.display()))
+}
+
+/// The project tree plus every path explicitly granted to the child for reads.
+///
+/// A permission grant is already the project's declaration that a file may
+/// affect the running program. Watching those paths keeps an external config,
+/// certificate or data file in the same development loop as source under the
+/// project root. Only scoped `--allow-read=...` entries add roots; an unscoped
+/// grant has no finite path to register.
+fn watch_roots(project: &Project) -> Vec<PathBuf> {
+    let mut roots = vec![project.dir.clone()];
+    for permission in &project.permissions {
+        let Some(paths) = permission.strip_prefix("--allow-read=") else {
+            continue;
+        };
+        for path in paths
+            .split(',')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let path = Path::new(path);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                project.dir.join(path)
+            };
+            if !roots.contains(&path) {
+                roots.push(path);
+            }
+        }
+    }
+    roots
 }
 
 #[cfg(test)]
@@ -1014,17 +1080,38 @@ mod tests {
     fn the_build_s_own_output_is_not_a_change() {
         let root = Path::new("/p");
         let outputs = vec![PathBuf::from("/p/dist"), PathBuf::from("/p/.dev")];
-        assert!(!is_source(Path::new("/p/dist/server.js"), root, &outputs));
+        assert!(!is_source(
+            Path::new("/p/dist/server.js"),
+            root,
+            &outputs,
+            None
+        ));
         assert!(!is_source(
             Path::new("/p/dist/assets/main.js"),
             root,
-            &outputs
+            &outputs,
+            None
         ));
-        assert!(!is_source(Path::new("/p/.dev/index.html"), root, &outputs));
+        assert!(!is_source(
+            Path::new("/p/.dev/index.html"),
+            root,
+            &outputs,
+            None
+        ));
 
-        assert!(is_source(Path::new("/p/src/server.ts"), root, &outputs));
-        assert!(is_source(Path::new("/p/index.html"), root, &outputs));
-        assert!(is_source(Path::new("/p/public/styles.css"), root, &outputs));
+        assert!(is_source(
+            Path::new("/p/src/server.ts"),
+            root,
+            &outputs,
+            None
+        ));
+        assert!(is_source(Path::new("/p/index.html"), root, &outputs, None));
+        assert!(is_source(
+            Path::new("/p/public/styles.css"),
+            root,
+            &outputs,
+            None
+        ));
     }
 
     /// A build target's output directory is whatever the config called it, so
@@ -1045,5 +1132,25 @@ mod tests {
         let dirs = output_dirs(&project);
         assert!(dirs.contains(&PathBuf::from("/p/build")), "{dirs:?}");
         assert!(dirs.contains(&PathBuf::from("/p/public_html")), "{dirs:?}");
+    }
+
+    #[test]
+    fn scoped_read_permissions_are_additional_watch_roots() {
+        let project = crate::config::parse(
+            r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } },
+                "permissions": { "allow": { "read": ["./config", "/etc/example"] } } }"#,
+            PathBuf::from("/p"),
+            "esdev.json",
+        )
+        .expect("config")
+        .expect("project");
+        assert_eq!(
+            watch_roots(&project),
+            vec![
+                PathBuf::from("/p"),
+                PathBuf::from("/p/config"),
+                PathBuf::from("/etc/example")
+            ]
+        );
     }
 }

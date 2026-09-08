@@ -13,6 +13,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - **`esdev create --template=micro-ui`** scaffolds a framework-free browser
   micro app using Open Tech Foundation's
   [`@opentf/micro-ui`](https://github.com/Open-Tech-Foundation/Micro-UI) library.
+- **`esdev start` watches scoped `--allow-read` paths**, including grants from
+  `esdev.json` and additional paths supplied with `--allow-read=...` on the
+  command line. The generic watcher no longer hardcodes directory exclusions;
+  templates declare generated directories in `.gitignore` instead.
 
 ### Security
 

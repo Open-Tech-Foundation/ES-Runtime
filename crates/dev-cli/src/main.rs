@@ -290,6 +290,7 @@ OPTIONS:
     --no-hot                    Reload the page on a change instead of patching
                                 the changed module into it
     --config=<path>             Read this instead of ./esdev.json
+    --allow-read=<paths>        Also watch explicitly granted read paths
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
 
@@ -1065,6 +1066,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     let mut port: Option<u16> = None;
     let mut hot = true;
     let mut options = RunOptions::default();
+    let mut permission_args = Vec::new();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         // One shared flag applies here, and it is the one a restart uses. The
@@ -1094,6 +1096,13 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                         format!("--port={given} is not a port number (1 to 65535).")
                     })?);
             }
+            "--allow-read" => {
+                let permission = match value {
+                    Some(value) => format!("--allow-read={value}"),
+                    None => "--allow-read".to_string(),
+                };
+                permission_args.push(permission);
+            }
             flag if RunOptions::is_shared_flag(flag) => {
                 return Err(format!(
                     "{flag} shapes a run, and `esdev start` does not run your program — it \
@@ -1121,6 +1130,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     if let Some(port) = port {
         project.start.port = Some(port);
     }
+    project.permissions.extend(permission_args);
     Ok(StartConfig {
         project,
         hot,
