@@ -17,9 +17,10 @@ that trait moves.
 <Callout type="info" title="Plugins are a `runtime:build` thing">
   They are written in JavaScript and passed to [`build()`](/api/build), so they
   exist for a program that bundles — a framework's dev server, a site
-  generator. There is no plugin field in `esdev.json` and no `--plugin` flag on
-  [`esdev build`](/docs/esdev/build): a plugin is a function, and a config file
-  that is read to decide permissions cannot execute one. And because
+  generator. Project plugins can also be declared in `esdev.json` for
+  [`esdev build`](/esdev/build) and `esdev start`; there is no `--plugin` flag for
+  a standalone entry build. A config file is still read as data to decide
+  permissions, while esdev loads the declared plugin after parsing it. And because
   `runtime:build` is esdev-only, none of this is in the binary that serves
   production.
 </Callout>
@@ -113,7 +114,7 @@ syntax tree the compiler already has. **The per-module half is yours**, in a
 under this module's id" while this module is evaluating.
 
 It is honoured **only in a hot dev build of a target that named a
-[`refresh`](/docs/esdev/start#another-frameworks-scheme) scheme** — the calls it
+[`refresh`](/esdev/start#component-refresh-is-a-plugin) scheme** — the calls it
 inserts reach globals that only a hot loop installs, so emitting them into a
 release build would ship calls to something undefined.
 
@@ -213,7 +214,7 @@ The last argument of every handler, never `this`.
 | `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
 | `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
 | `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |
-| `ctx.refresh` | The hot-reload scheme the target named ([`refresh`](/docs/esdev/start#another-frameworks-scheme)), **only** while the dev loop is running it hot. Absent in a release build. |
+| `ctx.refresh` | The hot-reload scheme the target named ([`refresh`](/esdev/start#component-refresh-is-a-plugin)), **only** while the dev loop is running it hot. Absent in a release build. |
 | `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
 
 It is an argument so that an arrow-function handler keeps it. Rollup's

@@ -20,22 +20,6 @@ const NAV = [
     ],
   },
   {
-    // The development binary. Its own group rather than a Guides entry: what it
-    // offers is a second command line, not another API to use from JS.
-    title: "Development",
-    items: [
-      { title: "esdev", path: "/docs/esdev" },
-      { title: "Starting a project", path: "/docs/esdev/create" },
-      { title: "TypeScript setup", path: "/docs/esdev/typescript" },
-      { title: "Bundling", path: "/docs/esdev/build" },
-      { title: "Writing a plugin", path: "/docs/esdev/plugins" },
-      { title: "The dev loop", path: "/docs/esdev/start" },
-      { title: "Testing", path: "/docs/esdev/test" },
-      { title: "Debugging", path: "/docs/esdev/debugging" },
-      { title: "Tracing permissions", path: "/docs/esdev/permissions" },
-    ],
-  },
-  {
     title: "Guides",
     items: [
       { title: "File handling", path: "/docs/guides/file-handling" },

@@ -22,6 +22,7 @@ export default defineDocsConfig({
       { label: "Home", href: "/" },
       { label: "Docs", href: "/docs" },
       { label: "API", href: "/api" },
+      { label: "Development", href: "/esdev" },
     ],
     // Footer chrome is rendered by components/SiteFooter.jsx.
     footer: {},

@@ -370,12 +370,12 @@ that depends on one needs a different shape rather than a workaround.
 
 | What | Why, and what to do instead |
 | --- | --- |
-| `require()`, `module.exports` | No CommonJS at run time. [`esdev build`](/docs/esdev/build) converts a CJS dependency at build time, and esrun receives ordinary ESM. |
+| `require()`, `module.exports` | No CommonJS at run time. [`esdev build`](/esdev/build) converts a CJS dependency at build time, and esrun receives ordinary ESM. |
 | `import "https://…"` | Remote imports are rejected. Fetch data with `fetch` or `runtime:net`; code stays local and reviewable. |
 | Native addons (N-API), FFI | No addon ABI and no foreign-function interface. The host extends the runtime through providers, in Rust. |
 | `SharedWorker`, `data:`/`blob:` worker URLs | A worker's URL names a file. The dedicated [`Worker`](/docs/guides/workers) ships. |
 | `npm install` from the runtime | esrun resolves an existing `node_modules` tree and installs nothing — that stays your package manager's job. |
-| TypeScript, a bundler, a test runner, a watcher, a debugger | All of it is [esdev](/docs/esdev), the development binary, and none of it is in the one that serves production. |
+| TypeScript, a bundler, a test runner, a watcher, a debugger | All of it is [esdev](/esdev), the development binary, and none of it is in the one that serves production. |
 
 ## Checklist
 
@@ -386,6 +386,6 @@ that depends on one needs a different shape rather than a workaround.
   4. `fs.readFileSync`, `Bun.file`, `Deno.readTextFile` → `import { file, write } from "runtime:fs"`.
   5. `child_process.spawn`, `Bun.spawn`, `Deno.Command` → `import { Command } from "runtime:system"`.
   6. `Buffer` → `Uint8Array`, `TextEncoder`, `TextDecoder`.
-  7. Run it once under [`esdev --trace-permissions`](/docs/esdev/permissions) and
+  7. Run it once under [`esdev --trace-permissions`](/esdev/permissions) and
      deploy with the `esrun` line it prints.
 </Callout>

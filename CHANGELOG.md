@@ -17,6 +17,9 @@ namespace) is unstable and may change between minor releases until the API freez
   `esdev.json` and additional paths supplied with `--allow-read=...` on the
   command line. The generic watcher no longer hardcodes directory exclusions;
   templates declare generated directories in `.gitignore` instead.
+- **The esdev documentation has its own `/esdev` section and Development menu**,
+  with workflow navigation, legacy URL redirects, and corrected plugin,
+  watcher, permission, and HMR guidance.
 
 ### Security
 

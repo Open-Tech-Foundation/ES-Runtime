@@ -207,7 +207,7 @@ export default function HomePage() {
               </p>
               <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2">
                 <a
-                  href="/docs/esdev"
+                  href="/esdev"
                   className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
                 >
                   <code className="font-mono font-semibold">esdev</code> docs →

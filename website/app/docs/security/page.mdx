@@ -11,7 +11,7 @@ import { Callout } from "@opentf/web-docs";
 environment, filesystem, or network until the command line that started it says
 so. Widen a run with [grant flags](#granting-capabilities-in-esrun).
 
-[`esdev`](/docs/esdev), the development binary, is the exception: it grants
+[`esdev`](/esdev), the development binary, is the exception: it grants
 everything so an inner loop needs no flags, and never reaches production.
 
 <Callout type="tip" title="Looking for the how-to?">
@@ -87,7 +87,7 @@ A run with nothing granted still executes the entry file — it is read before t
 runtime exists, and you named it. `imports` is denied with everything else, so
 add `--allow-imports` for an app with dependencies.
 
-[esdev](/docs/esdev), the development binary, is the one place this differs: it
+[esdev](/esdev), the development binary, is the one place this differs: it
 grants everything, so an inner loop needs no flags.
 `esdev --trace-permissions app.js` prints the `esrun` line a run actually
 needs.

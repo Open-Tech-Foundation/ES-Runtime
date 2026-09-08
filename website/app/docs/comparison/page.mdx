@@ -57,7 +57,7 @@ makes the trade-offs explicit.
 **On the TypeScript, JSX, CommonJS and toolchain rows.** esrun does none of them,
 deliberately: it is the binary that runs in production, and a transform, a
 watcher or a test discoverer in there is surface that cannot pay for itself.
-[`esdev`](/docs/esdev) — a second binary, for your machine only — runs `.ts` and
+[`esdev`](/esdev) — a second binary, for your machine only — runs `.ts` and
 `.tsx` directly, bundles (which is how a CommonJS dependency becomes runnable),
 runs tests, watches, and debugs over the Chrome DevTools Protocol. It shares
 every line that decides how a run behaves, so a program cannot behave one way

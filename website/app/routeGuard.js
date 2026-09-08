@@ -9,12 +9,15 @@
 const MOVED = {
   // TypeScript setup joined the esdev section, where the tool that writes the
   // tsconfig lives (2026-08-12).
-  "/docs/typescript": "/docs/esdev/typescript",
+  "/docs/typescript": "/esdev/typescript",
 };
 
 export default async function routeGuard(to, { next, redirect }) {
   const path = (to?.path ?? to?.pathname ?? String(to ?? "")).replace(/\/+$/, "");
   if (MOVED[path]) return redirect(MOVED[path]);
+  if (path === "/docs/esdev" || path.startsWith("/docs/esdev/")) {
+    return redirect(`/esdev${path.slice("/docs/esdev".length)}`);
+  }
 
   next();
 }

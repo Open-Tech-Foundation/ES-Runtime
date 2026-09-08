@@ -4,7 +4,7 @@ import SiteFooter from "../components/SiteFooter.jsx";
 import config from "../otfw.config.js";
 
 // Site-wide shell: the web-docs Navbar + Footer wrap every route (landing, docs,
-// api). Docs/api sections render `DocsLayout` with `frame={false}` so they slot
+// api/esdev). Docs/api/esdev sections render `DocsLayout` with `frame={false}` so they slot
 // their sidebar · content · TOC grid inside this shared chrome.
 export default function RootLayout(props) {
   return (

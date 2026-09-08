@@ -11,7 +11,7 @@ import { Callout } from "@opentf/web-docs";
 esdev start
 ```
 
-It is [`esdev build`](/docs/esdev/build) on a loop. A dev build differs from a
+It is [`esdev build`](/esdev/build) on a loop. A dev build differs from a
 release build in three ways and no more: `process.env.NODE_ENV` is
 `"development"`, nothing is content-hashed, and the browser bundle is built so a
 module can be replaced in place. Dev and prod disagreeing about how a module
@@ -62,14 +62,21 @@ never written to.
 
 An update is sent **after** a restart finishes, so a page never fetches from a
 server still coming back up. The client reconnects on its own, backing off to a
-5 s ceiling, because a restarted dev server is the ordinary case.
+5 s ceiling, because a restarted dev server is the ordinary case. The port is
+written into the document when it is built, so this reconnect works while the
+endpoint keeps the same port. If you stop and start esdev again and its
+unpinned endpoint chooses a different port, reload the page; the old document
+cannot discover that new endpoint. For a frontend project, use `--port=<n>` to
+pin the endpoint.
 
 ## Options
 
 | | |
 | --- | --- |
 | `--port=<n>` | The port you open |
+| `--no-hot` | Reload the page instead of patching changed modules |
 | `--config=<path>` | Read this instead of `./esdev.json` |
+| `--allow-read=<paths>` | Also watch explicitly granted read paths |
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
 
 ```json
@@ -194,7 +201,7 @@ provides is the generic half, and it is the same for everyone:
   present *only* while the loop is running that target hot;
 - the compiler's component registrations, when a plugin asks for them.
 
-A scheme is a [plugin](/docs/esdev/plugins) on top of that:
+A scheme is a [plugin](/esdev/plugins) on top of that:
 
 ```json
 {
@@ -258,10 +265,15 @@ sitting unread in a config file.
 
 ## What is watched
 
-The project root, minus `node_modules`, `.git`, `dist`, `target`, `.cache` and
-**every directory your targets write into** — a build that triggered itself
-would never settle. Ignored names are matched below the root, so a project
-living in a directory called `target` is still watched.
+`esdev start` watches the project root, every explicitly scoped `--allow-read`
+path from `esdev.json` or the command line, and the build inputs those paths may
+contain. Target output directories are always excluded so a build cannot trigger
+itself. Rules in the project's root `.gitignore` also exclude matching paths;
+other directory names are not hardcoded exclusions.
 
 Modules, and the things a *build* consumes that a run does not: `index.html`,
 stylesheets, images, fonts.
+
+`--allow-read=./config,/etc/example` adds those scoped paths to both the child
+permission grant and the watch list. An unscoped `--allow-read` grants access but
+does not identify a finite directory to watch.

@@ -13,7 +13,7 @@ do is as important as knowing what it does.
 
 Some of that narrowness is a **division of labour, not an absence**: TypeScript,
 bundling, testing, watching and debugging live in a second binary,
-[`esdev`](/docs/esdev), which never reaches production. The rest below are
+[`esdev`](/esdev), which never reaches production. The rest below are
 durable boundaries for the whole project.
 
 <Callout type="info" title="In scope">
@@ -35,7 +35,7 @@ implementation.
 - **No CommonJS at runtime.** Modules are real ES Modules only. There is no
   `require()`, no `module.exports`, and no CJS↔ESM interop; a CommonJS-only
   package is rejected with a clear error. It is converted **at build time**
-  instead — [`esdev build`](/docs/esdev/build) absorbs CJS→ESM and esrun receives
+  instead — [`esdev build`](/esdev/build) absorbs CJS→ESM and esrun receives
   ordinary ESM, so a deployed artifact stays the text that was reviewed.
 - **No remote module imports.** `import "https://..."` is explicitly rejected.
   Load data through a `runtime:net` API instead, keeping code locally verified
@@ -61,12 +61,12 @@ the capability model: attach and you own the isolate, whatever the flags said.
 
 | | |
 | --- | --- |
-| **TypeScript & JSX** | [`esdev app.ts`](/docs/esdev) strips types as files load — erased, never checked |
-| **A bundler** | [`esdev build`](/docs/esdev/build) — one deployable ES module, and how CommonJS becomes runnable |
-| **A test runner** | [`esdev test`](/docs/esdev/test) — one process per file |
+| **TypeScript & JSX** | [`esdev app.ts`](/esdev) strips types as files load — erased, never checked |
+| **A bundler** | [`esdev build`](/esdev/build) — one deployable ES module, and how CommonJS becomes runnable |
+| **A test runner** | [`esdev test`](/esdev/test) — one process per file |
 | **Watch mode** | `esdev --watch` — a restart is a SIGTERM, so it drains |
-| **A debugger** | [`esdev --inspect`](/docs/esdev/debugging) — and even there, only in a build that asked for it |
-| **Permission discovery** | [`esdev --trace-permissions`](/docs/esdev/permissions) — prints the esrun line to deploy with |
+| **A debugger** | [`esdev --inspect`](/esdev/debugging) — and even there, only in a build that asked for it |
+| **Permission discovery** | [`esdev --trace-permissions`](/esdev/permissions) — prints the esrun line to deploy with |
 
 `esdev` shares every line that decides how a run behaves, so a program cannot
 behave one way there and another in production. It is **not a deployment
