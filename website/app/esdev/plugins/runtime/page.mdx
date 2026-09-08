@@ -1,0 +1,37 @@
+---
+title: Plugin runtime and troubleshooting
+description: Understand where esdev plugins run and diagnose common plugin mistakes.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Plugin runtime and troubleshooting
+
+In **your** isolate, under the same capability model as the rest of your
+program: a plugin that reads a file needs `FileRead`, like anything else. No
+other bundler's plugin API can state what a plugin is allowed to do, because
+none of them has a capability model to state it in.
+
+The bundler works on threads of its own and posts each hook call over; several
+can be in flight at once, so a slow plugin holds up its own module rather than
+the whole build. A hook that blocks the isolate *synchronously* blocks
+everything, your server included — so keep handlers `async` and do the waiting
+with `await`.
+
+<Callout type="note" title="Your plugins are not the only passes">
+  esdev's own CSS Modules scoping and React Fast Refresh are written against
+  this same contract and travel in the same ordered list as yours. That is what
+  keeps it honest: a contract with one implementation always fits, and before
+  these shared it, `runtime:build` shipped without the CSS pass the `build`
+  subcommand installed — one project, two different builds depending which door
+  it came in.
+</Callout>
+
+## See also
+
+- [`runtime:build`](/api/build) — the options, the `Bundle`, and every field of
+  a hook's answer
+- [Internals: the bundler bridge](/docs/internals/bundler) — how a hook call
+  gets from a parallel Rust bundler into a single-threaded isolate and back,
+  and what it costs
+- [`runtime:watch`](/api/watch) — the other half of an incremental dev server

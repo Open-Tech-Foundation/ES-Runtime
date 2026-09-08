@@ -1,0 +1,143 @@
+---
+title: Database driver shape and implementation
+description: Implement an ES-Runtime database driver, handle messages, and run the conformance suite.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Driver shape and implementation
+
+`runtime:db` is one module with two tiers. The **application tier** —
+`connect`, `sql`, `Connection`, `Rows`, transactions — is what your users call.
+The **driver tier** is what you build on: `defineDriver`, the row decoder, the
+parameter encoder, `Dialect`, `Pool` and `PooledConnection`, the portable error
+codes, `BaseConnection`, and the conformance suite.
+
+**A driver is a value.** Your package exports one; a caller imports it and hands
+it to `connect(url, { driver })`. There is no registry to claim a scheme in,
+nothing is installed by the side effect of an import, and two drivers for the
+same scheme can coexist — which is what makes a fork, a fake for tests, or a
+second implementation of `postgres:` an ordinary thing rather than a conflict.
+
+A backend for a networked database needs **no runtime code at all**. The
+transport is [`runtime:net`](/docs/guides/networking) — a TLS socket, a
+mid-connection `startTls()` upgrade, and reads that arrive in 64 KiB batches.
+The PostgreSQL driver added not one line of Rust, which is the property the
+whole design exists to preserve.
+
+## Writing a backend
+
+Subclass `BaseConnection` and implement five things:
+
+```js
+import { defineDriver, BaseConnection, Dialect } from "runtime:db";
+
+const dialect = new Dialect({ name: "mydb", placeholder: (i) => `$${i}` });
+
+class MyConnection extends BaseConnection {
+  constructor(socket) {
+    super({ dialect, backend: "mydb" });
+    this.socket = socket;
+  }
+  async _query({ text, positional, named }) { /* → Rows */ }
+  async _execute({ text, positional, named }) { /* → { changes, lastInsertRowid } */ }
+  async _close() {}
+
+  // Optional, and the defaults are real behaviour rather than stubs.
+  async _executeMany(query, sets) { /* one round trip instead of N */ }
+  async _cancel() { /* stop what is running */ }
+}
+
+// The package's export *is* the driver, and every driver package spells it the
+// same way: a named `driver`, no default.
+export const driver = defineDriver({
+  name: "mydb",
+  schemes: ["mydb"],
+  dialect,
+  open: async (url, options) => new MyConnection(await open(url, options)),
+});
+```
+
+Your users then write:
+
+```js
+import { connect } from "runtime:db";
+import { driver } from "@you/esrun-mydb";
+
+const db = await connect("mydb://host/app", { driver });
+```
+
+Transactions, savepoints, the closed-connection check, the `sql` tag, the
+abandoned-result discipline and `AbortSignal` handling all come from the base
+class. You do not reimplement them, and — more to the point — you do not get to
+implement them *differently*, which is what makes an ORM able to rely on them.
+
+### If your backend pushes messages
+
+`LISTEN`/`NOTIFY`, pub/sub, a change stream: one concept, and the kit gives it
+one surface. Declare `supports.subscriptions` and implement two methods:
+
+```js
+protected async _subscribe(channels, handler) { /* confirmed before it resolves */ }
+protected async _unsubscribe(channels) { /* undefined means all of them */ }
+```
+
+`subscribe`/`unsubscribe`/`subscribed`/`subscriptions`/`onMessage`/
+`onSubscribeError` come with it, along with the closed-connection check, the
+capability refusal, and the normalization of one name or several. Deliver with
+`(payload, context)` — `context.channel` always, plus whatever only your backend
+knows. A handler that throws goes to `onSubscribeError` and the loop continues:
+it is the only thing reading the socket, and one bad handler must not stop every
+other subscription.
+
+Resolve **after** the backend confirms, not after the write. A subscribe that
+resolves early makes `subscribe(); publish()` a race that fails once a week.
+
+### If your backend does not speak SQL
+
+Say so, and the rest still works. `supports.queryText: false` makes SQL text and
+`` sql`` `` templates refused with `ERR_DB_QUERY_FORM`; `supports.queryAst: true`
+makes `queryAst(…)` arrive as `q.ast`. That form has been in the contract since
+the first release for exactly this, and `redis:` is the backend that uses it —
+a command is `queryAst(["GET", key])`, and positional parameters are appended,
+which is what keeps `executeMany` meaningful.
+
+Two things follow. `transaction()` writes SQL by default, so a backend with
+transactions of its own overrides `_beginTransaction`, `_commitTransaction` and
+`_rollbackTransaction` — and one with none declares
+`supports.transactions: false`, which makes `transaction()` refuse by name
+rather than send a `BEGIN` nothing would understand. And `executeMany` then runs
+**without** a transaction, so its batch is not atomic; that is a real difference
+and it belongs in your README.
+
+<Callout type="info" title="What the conformance suite does about it">
+  Most of the suite is written in SQL DDL, and a backend with no SQL can express
+  none of it. Those checks are **skipped with a reason** rather than failed — a
+  check you cannot express is not a finding — and what runs is the part that
+  holds whatever form you take. Read the reasons: a count with no explanation is
+  how you conclude you passed something you never ran.
+</Callout>
+
+<Callout type="info" title="Optional means optional, not absent">
+  `_executeMany` defaults to a loop over `_execute` inside the same transaction:
+  correct, and no faster than the loop it replaces. `_cancel` defaults to doing
+  nothing, so a signal still rejects your caller while the work runs on.
+  Overriding either buys speed or reach — never the feature itself. That way an
+  ORM can call them on day one of a backend's existence.
+</Callout>
+
+### Run the conformance suite
+
+```js
+import { runBackendConformance } from "runtime:db";
+
+const report = await runBackendConformance(() => connect(url, { driver }));
+if (!report.ok) console.error(report.failures);
+```
+
+Fifteen checks: column order, parameter binding and the injection it prevents,
+null against no-row, empty results, streaming with an early exit, transactions
+and savepoints, batched execution and its atomicity, the portable error codes,
+signals, and the forms a backend refuses. The built-in `sqlite:` backend runs
+it too — a conformance suite the reference backend does not pass is a
+description of nothing.

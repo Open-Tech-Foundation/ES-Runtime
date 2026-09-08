@@ -1,0 +1,114 @@
+---
+title: Mocks, setup, and imports
+description: Use mocks, clocks, setup budgets, reports, and bundler-style imports in esdev tests.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Mocks, setup, and imports
+
+`mock` and `clock` are the two subsystems that stand in for something real: a
+function you want to assert about, and code that waits.
+
+```ts
+import { test, expect, mock, clock } from "runtime:test";
+
+test("gives up after a minute", async () => {
+  const send = mock.fn().mockRejectedValueOnce(new Error("nope"));
+  clock.freeze();
+
+  const gone = deliver(send);
+  await clock.advanceAsync(60_000);
+
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(gone).resolves.toBe(false);
+  clock.release();
+});
+```
+
+| | |
+| --- | --- |
+| `mock.fn(impl?)` | Records `mock.calls`, `mock.results`; `mockReturnValue`, `mockResolvedValue`, `mockImplementation`, each with a `…Once` |
+| `mock.spyOn(o, k)` | Replaces a method and **still calls the original**; `mockRestore()` puts it back |
+| `mock.global(name, v)` | Replaces a global for the file |
+| `mock.restoreAll()` | Every spy's method and every replaced global, back |
+| `clock.freeze(at?)` | Stops time — and `setTimeout`, `setInterval`, `Date` |
+| `clock.advance(ms)` | Moves it, running what comes due |
+| `clock.advanceAsync(ms)` | …pausing after each callback, so an `await` resumes |
+| `clock.runAll()` / `runPending()` | Drain, or fire what is waiting once |
+| `clock.release()` | Real time again |
+
+`clock.advanceAsync` is the one to reach for when the code under test `await`s.
+The synchronous form resolves the promise and returns before anything waiting on
+it has run, so the assertion after it sees the state from before.
+
+Freezing the clock replaces globals for the **whole process**, which is safe
+here only because a test file *is* a process. The runner drains on microtasks
+rather than timers, so a file that forgets `clock.release()` still reports.
+
+## Setup, budgets, and a machine-readable report
+
+```sh
+esdev test --setup=./test/setup.ts   # imported before every test file
+esdev test --timeout=5000            # a file that takes longer is stopped
+esdev test --reporter=json           # one JSON object per line
+```
+
+Each is also an `esdev.json` key, because a project's setup files and its
+per-file budget are properties *of the project* — a flag repeated in every
+script is one that gets repeated differently in two of them. **A flag beats the
+file.**
+
+```json
+{
+  "test": {
+    "setup": ["./test/setup.ts"],
+    "timeout": 5000,
+    "jobs": 4,
+    "reporter": "json"
+  }
+}
+```
+
+A setup module is imported **before** the file under test, so a global it stubs
+is in place before anything reads it — and it costs no line numbers: a failing
+assertion still names the line you wrote.
+
+`--timeout` is enforced by the parent, which **ends** the process. The case it
+exists for is a file that wedges, and a budget the file kept for itself is one
+it never gets round to noticing. There is no default: a suite is not a place to
+guess how long a machine takes.
+
+`--reporter=json` writes one object per line — a `case` for each failure, a
+`file` for each file, and a `summary` at the end — so a CI job reads results as
+they land rather than parsing a document once the run is over.
+
+```json
+{"type":"file","file":"/p/ok.test.ts","passed":1,"failed":0,"skipped":1}
+{"type":"summary","files":2,"failed":1}
+```
+
+## Imports the way a bundler resolves them
+
+`esdev` finds `./util` for `util.ts`, a directory for its `index.ts`, and
+`./util.js` for the `util.ts` that TypeScript tells you to spell that way. That
+is what `esdev build` already does, so a source tree written for a build step
+runs under the runner without being rewritten first.
+
+`esrun` resolves only what the module spec says — which is **Node's** answer
+too, since an extensionless specifier was never valid ESM and extension guessing
+is a bundler convention. The artifact you deploy has been through a build, which
+resolved all of it, so ship the build rather than the source.
+
+| `import { two } from "./util"` | |
+| --- | --- |
+| `esdev`, Bun, a bundler | resolves `util.ts` |
+| `esrun`, Node | `ERR_MODULE_NOT_FOUND` |
+
+<Callout type="note" title="Not yet">
+  **Coverage**, which needs V8's own instrumentation rather than anything this
+  runner can add, and **module mocking** (`mock.module`) — a mock installed here
+  replaces a method on an object, not a module in the graph, which needs a
+  loader hook and a hoisting transform. Discovery is also fixed at
+  `*.test.*`/`*.spec.*`; there is no `include` pattern yet.
+</Callout>

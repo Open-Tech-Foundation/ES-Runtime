@@ -1,0 +1,126 @@
+---
+title: HTTPS, HTTP/2, and trailers
+description: Use HTTPS, HTTP/2, and HTTP trailers with the ES-Runtime HTTP server.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# HTTPS, HTTP/2, and trailers
+
+`secureTransport: "on"` terminates TLS on accept. Cert and key are passed
+**inline**, not as paths — reading a file is the filesystem's privilege, so you
+read it yourself and serving needs nothing beyond `NetListen`.
+
+```js
+import { serve } from "runtime:http";
+import { file } from "runtime:fs";
+
+serve(
+  {
+    port: 443,
+    secureTransport: "on",
+    cert: await file("/etc/certs/fullchain.pem").text(),
+    key: await file("/etc/certs/privkey.pem").text(),
+  },
+  (request) => new Response(request.url), // https://…
+);
+```
+
+| | |
+| --- | --- |
+| `request.url` scheme | `https:` — from the listener, not a `Host` header |
+| `request.url` host | the client's `Host` / `:authority`, if it is a host and optional port — anything else is `400` |
+| `alpn` | defaults to `["h2", "http/1.1"]` — narrow it to pin a version |
+| Bad cert or key | fails `serve()`, not each handshake |
+| `"on"` without cert/key | `TypeError` |
+| Failed handshake | ends that connection only |
+
+`wss:` WebSocket servers are still a follow-up — see
+[WebSockets](/docs/guides/websocket).
+
+## HTTP/2
+
+Nothing to turn on: the client picks the version, and the handler is the same
+function either way — one `Request` in, one `Response` out.
+
+Over TLS the choice is ALPN, where `serve()` offers `["h2", "http/1.1"]` and the
+client takes the first it speaks. On a cleartext port, a client that opens with
+the HTTP/2 connection preface is served **h2c** by prior knowledge — which is
+what a reverse proxy or a gRPC client that terminates TLS in front of the
+runtime sends. Everything else is served HTTP/1.1, exactly as before.
+
+```js
+// Same server, both versions. Pin to HTTP/1.1 only if a client needs it:
+serve({ port: 443, secureTransport: "on", cert, key, alpn: ["http/1.1"] }, handler);
+```
+
+Multiplexing, one handshake per session, HPACK-compressed headers, and a
+`request.url` rebuilt from `:authority` all come with it, with the handler
+untouched — see [Internals: the HTTP server](/docs/internals/http/connections#protocol-version)
+for what changes on the wire and what it costs.
+
+### Is it faster?
+
+Only in the shape it is designed for — and it is worth measuring rather than
+assuming. Same server, same request count, only the version changed
+(`bench/http2.sh`, best of 3 interleaved repetitions):
+
+| client shape | HTTP/1.1 | HTTP/2 | |
+| --- | --- | --- | --- |
+| 50 connections × 1 stream | 66,939 req/s | 53,080 req/s | **0.79×** |
+| 1 connection × 50 streams | 20,157 req/s | 73,541 req/s | **3.65×** |
+
+With 50 sockets already open there is nothing to multiplex, so HTTP/2 is pure
+framing overhead and *loses*. On a single connection — where HTTP/1.1 can only
+send the next request after reading the previous response — it wins by 3.65×.
+The second row is the shape a reverse proxy, an API gateway, or a gRPC client is
+in, which is why it is the interesting one.
+
+<Callout type="info" title="Against other runtimes">
+  On that single-connection shape esrun serves **73,541 req/s over HTTP/2, the
+  fastest of the four measured** — ahead of Bun (49,142), Node (39,700) and Deno
+  (39,209) — while being the *slowest* of them over HTTP/1.1 on the same shape.
+  Node and Bun serve cleartext h2 through `node:http2` rather than their default
+  server (`node:http` and `Bun.serve` are HTTP/1.1-only), so their own
+  h2-vs-h1 ratios mix in an implementation change; compare the absolute numbers
+  instead. Full table and method:
+  [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md).
+</Callout>
+
+## Trailers
+
+Some things are not known until the body has been produced — the status of a
+gRPC call, a checksum, a row count. Those travel *after* the body, as trailers.
+
+```js
+import { serve, withTrailers } from "runtime:http";
+
+serve({ port: 8080 }, () =>
+  withTrailers(new Response(body), { "grpc-status": "0" }));
+```
+
+The value may be a promise, which is the shape that matters for a streaming
+response: the head goes out, the body streams, and the trailers follow whenever
+they are known. Reading them from the other side takes `trailersOf`, after the
+body has been consumed:
+
+```js
+import { trailersOf } from "runtime:http";
+
+const response = await fetch(url);
+await response.text();
+const status = (await trailersOf(response)).get("grpc-status");
+```
+
+<Callout type="info" title="Why these are imports, not Response options">
+  Trailers are not part of the Fetch API, and no runtime exposes them there —
+  `Deno.serve` and `Bun.serve` cannot send them at all, and no runtime's `fetch`
+  can read them. A `trailers` option on `Response` would look standard and
+  silently do nothing everywhere else; an import shows the dependency. It also
+  makes esrun the only Fetch-API server that can serve native gRPC.
+</Callout>
+
+They go out on both versions. On HTTP/1.1 only the fields named in a `Trailer`
+header travel, and that header is added for you whenever the names are known
+before the head is sent — so the one case to remember is a promise on a
+*streaming* body, where you should declare `Trailer` yourself.

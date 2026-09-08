@@ -1,0 +1,106 @@
+---
+title: Database production pitfalls and errors
+description: Avoid connection, cancellation, caching, and error-handling pitfalls when authoring a database driver.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Production pitfalls and errors
+
+### A connection is one conversation
+
+Querying while another result is still streaming deadlocked the first version —
+two readers taking turns on one socket, each waiting for the other's message.
+
+Queueing is the obvious fix and the wrong one. An `execute` in flight finishes
+on its own, so waiting for it is finite; an open result set finishes only when
+the caller drains it, and a caller stuck on the queue never will. So
+`for await (row of a) { await query(b) }` goes from a hang to a slower hang.
+Refuse it instead, immediately, with `ERR_DB_CONNECTION_BUSY` and the fix in the
+message. A pool is what makes the pattern work.
+
+### `release(clean)` defaults to false
+
+`Pool` is protocol-blind: it cannot know whether a returned connection is fit to
+reuse, because that needs the protocol. You assert it. Anything not explicitly
+clean is destroyed, and the default is `false` — when nobody checked, the safe
+answer is to throw the resource away. For PostgreSQL the assertion is
+`status === "I"`: idle, outside any transaction. `T` or `E` would leak an open
+or failed transaction into the next borrower.
+
+### A crossing costs about 20 µs — so batch, or lose
+
+Measured, and in line with Node's own async I/O. It follows that any API doing
+one crossing per row spends its time on the boundary rather than in the
+database. Rows come back 64 KiB at a time; a result that fits one batch comes
+back *with* its query and opens no cursor; `executeMany` crosses once for a
+whole batch and took 50 000 inserts from 1832 ms to 312 ms.
+
+### Do not generalise one measurement to a different shape
+
+The statement cache bought **6%**, because a point query is one round trip and
+parsing was never its dominant term. I concluded the round trip dominates and
+predicted binary result formats would not pay. Then I measured: on a 10 000-row
+scan, **decoding was 54% of the query**, and binary took it to 8% — the scan
+from 72 ms to 51.6 ms, past every other driver.
+
+Both measurements were right. A round trip is a *fixed* cost per query, so it is
+the whole cost of a point query and negligible against ten thousand rows, where
+decoding is what scales. Applying one where the other belonged was the mistake.
+
+<Callout type="info" title="How to measure decoding without guessing">
+  Lazy rows make this exact. Run the same query touching a different number of
+  columns: the network and the protocol are held constant, and only the decoding
+  varies. `bench/db/pg/decode-share.mjs` does it in twenty lines.
+</Callout>
+
+### Cancellation is a request, not an instruction
+
+Aborting should ask the backend to cancel and then **wait** for it to answer.
+Rejecting the caller the instant the signal fires leaves a statement running and
+a connection mid-exchange; waiting a moment leaves both in a known state and the
+connection usable — which is the whole difference between cancelling and hanging
+up.
+
+Report the caller's own `reason`, not the backend's word for a cancelled
+statement. And note that the failure from an **abandoned stream** arrives out of
+the iterator, not out of the call that started it: translate it in both places,
+or `execute` and `query` will report the same act differently.
+
+### Latch a lost connection
+
+Once a message has been half-read off a socket, nothing later on it can be
+trusted to start on a boundary. Keep the first transport failure and answer
+every later call with it, rather than letting each caller meet a different
+symptom of one dead connection — a hang, a length that makes no sense, a message
+tag nobody sent.
+
+### A statement cache needs a bound and an invalidation story
+
+Each entry is a plan the *server* holds. An ORM inlining a literal per query
+would accumulate them until the backend ran out of memory, so bound it and evict
+least-recently-used. And handle the plan going stale underneath you —
+`0A000` after a migration, `26000` after a pooler reset or `DISCARD ALL` —
+by dropping the cache and preparing again, once. Neither is the caller's mistake
+and neither should surface as one.
+
+### Test the default path, not the one you configured
+
+Reading the server's answer to `SSLRequest` takes a stream reader, and a reader
+**locks the stream**. Building a second one after the server declined threw — so
+`postgres://host/db` with no `sslmode` failed against every server without TLS,
+which is most development setups. Every test had specified `sslmode`, so nothing
+caught it until a test finally did not.
+
+## Errors
+
+Map your backend's vocabulary onto the portable codes so an application can
+branch on what happened without knowing who said it. PostgreSQL's SQLSTATE is a
+far better source than a message — stable across versions and locales, where a
+message is neither.
+
+Layer the classification: your own table first, then any stable host code, then
+`ERR_DB_BACKEND`. A denied capability must stay `ERR_CAPABILITY_DENIED` — an
+application testing for it should not have to know the call went through a
+database. The first version swallowed both into `ERR_DB_BACKEND`, and only the
+end-to-end capability test noticed.

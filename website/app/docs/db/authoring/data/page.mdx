@@ -1,0 +1,122 @@
+---
+title: Database rows and value types
+description: Map database rows and values onto the portable ES-Runtime database API.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Rows and value types
+
+There are two ways to hand rows over, and which one you use is your backend's
+nature rather than a preference.
+
+**If your values arrive as bytes** — every wire protocol, and the embedded
+engine — rows cross as **one byte buffer per batch**, in the layout PostgreSQL
+already uses for `DataRow`: per column an `int32` length (`-1` for NULL) then
+the bytes. A `DataRow` frame is copied into a batch as it arrives and **never
+transcoded**. Transcode into that layout and you inherit the decoder.
+
+**If your values are already JavaScript** — a document store answering JSON, a
+graph or vector service over HTTP, an engine holding objects — hand over
+**records** and skip the encoding entirely:
+
+```js
+async _query(q) {
+  const docs = await this.find(q.ast);   // already objects
+  return Rows.fromObjects(docs);         // columns default to their keys
+}
+```
+
+`Rows.fromObjects` is the whole of it for most such backends. For control of
+batching, answer `{ records, done }` from your `RowSource` — each record an
+array of values in column order — and pair it with `defineRecordShape(columns)`.
+Batch either way: a caller who breaks out of the loop after three rows must not
+have paid for three thousand, and that is as true of building objects as it is
+of decoding bytes.
+
+**The columns are fixed for the whole result set**, which is a real constraint
+if your documents do not agree on a shape. `Rows.fromObjects` unions the keys of
+the records you hand it, so it is correct when the answer is in hand and wrong
+when the second page introduces a field the first never had — that field would
+simply not be there. A backend streaming heterogeneous documents should say so
+in its shape rather than guess: one `doc` column holding the document is an
+honest result set, and a document is what the caller wanted anyway.
+
+<Callout type="warning" title="Do not encode objects into the byte layout">
+  The first version of the Redis driver did, because the byte layout was the
+  only one there was: it packed a reply it already held in memory into
+  `DataRow` frames so that `decodeBatch` could immediately take them apart
+  again, and it duplicated the kit's value tags to do it. If you find yourself
+  writing a serializer to satisfy `Rows`, you want records.
+</Callout>
+
+Either way the `Row` contract is the same — prototype getters per column,
+`values()`, `toObject()`, `toJSON()` — so nothing downstream can tell which kind
+it holds.
+
+`defineRowShape(columns, { decoders })` generates the accessor class;
+`decodeBatch(bytes, shape, count)` walks a batch. Rows are **lazy** — one pass
+records each column's span and nothing is decoded until it is read, so a query
+selecting more columns than it uses pays only for the ones it touches.
+
+<Callout type="warning" title="The cost of lazy rows">
+  The getters live on the prototype, so `{ ...row }` yields an **empty object**.
+  `row.toObject()` is how a row is materialized. If you build an ORM, this is
+  the sharp edge your users will meet first — `JSON.stringify(row)` works,
+  spreading does not.
+</Callout>
+
+The row's own state is in private fields, not properties. A row holds a
+reference to its whole batch, and anything reachable from the instance is
+reachable by a caller who spreads it — including symbol keys. Private fields are
+copied by nothing.
+
+## Types, and where the ecosystem disagrees
+
+Every cell below was produced by running one query through each driver
+(`bench/db/pg/types-*.mjs`), so it can be regenerated rather than trusted.
+
+| PostgreSQL | esrun | node + postgres.js | bun:sql | deno + postgres.js |
+| --- | --- | --- | --- | --- |
+| `bool` `int2` `int4` `float4` `float8` | `boolean` / `number` | same | same | same |
+| `text` `uuid` `numeric` | `string` | same | same | same |
+| `json` `jsonb` | parsed object | same | same | same |
+| `bytea` | `Uint8Array` | same | same | same |
+| arrays | JS array | same | same | same |
+| `NULL` | `null` | same | same | same |
+| **`int8` (small)** | `number 42` | `"42"` | `"42"` | `"42"` |
+| **`int8` (> 2⁵³)** | `bigint` | `"9007…"` | `"9007…"` | `"9007…"` |
+| **`date`** | `Temporal.PlainDate` | `Date` midnight UTC | `Date` | `Date` |
+| **`time`** | `Temporal.PlainTime` | `string` | `string` | `string` |
+| **`timestamp`** | `Temporal.PlainDateTime` | `Date` in **client zone** | `Date` UTC | `Date` in **client zone** |
+| **`timestamptz`** | `Temporal.Instant` | `Date` | `Date` | `Date` |
+| **`interval`** | `Temporal.Duration` | `string` | `string` | `string` |
+
+Three lessons in that table, and they generalise past PostgreSQL.
+
+**Pick a type that can say what the column is.** A `Date` is an instant with
+millisecond resolution. That makes it wrong for three columns at once: it cannot
+hold the microseconds a `timestamp` has (every driver above except this one
+answers `.123` for a column containing `.123456`), it can only express
+`timestamp without time zone` by inventing a zone — and the drivers disagree
+about which, so `postgres.js` returns a different value depending on the
+machine's offset — and a `date` is a calendar day rather than an instant at all.
+`Temporal` has a type for each of those and loses nothing.
+
+**Exactness that costs usability is not a gift.** The other drivers return
+`int8` as a string: exact, and unusable until you convert it — with `Number()`,
+which is the precision loss the string was avoiding. Returning a `number` when
+the value fits one and a `bigint` when it does not is exact *and* arithmetic
+works.
+
+**Know which conversions are lossy and refuse those.** `numeric` stays a string
+in every driver here, and should: it is arbitrary precision by definition, and a
+double is the one representation guaranteed to lose it.
+
+<Callout type="info" title="Verify both wire formats agree">
+  A driver that requests binary for some columns and text for others has two
+  decoders per type and one contract. Read the same row through both paths and
+  require every column to match. That test caught a `date` decoding as a string
+  through text and a `Date` through binary — a column whose *type* changed
+  depending on whether the statement cache happened to be warm.
+</Callout>

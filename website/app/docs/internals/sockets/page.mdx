@@ -151,7 +151,7 @@ The accept loop is the same design as the HTTP server's, for the same reason:
 `EINTR` are ordinary on a busy public port and say nothing about the listening
 socket, so every error is retried behind a delay that doubles from 5ms to 1s and
 resets on the next accepted connection. See
-[the HTTP page](/docs/internals/http#accept) for the full reasoning.
+[the HTTP page](/docs/internals/http/connections#accept) for the full reasoning.
 
 One task owns the sole channel sender, which is what makes `listener.close()`
 work: aborting the task drops the sender, so an `accept` already parked on

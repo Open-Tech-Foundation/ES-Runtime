@@ -1,0 +1,79 @@
+---
+title: Hardening and pre-deploy checklist
+description: Refuse dangerous grants, protect secrets, and review an esrun deployment command.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Hardening and pre-deploy checklist
+
+<Callout type="danger" title="Do not grant Run">
+  A child process runs **outside** every confinement described here — no
+  capability check, no root jail, and no execution deadline reaches it.
+  `--allow-run=git` bounds *which* program starts, not what that program may then
+  do, so granting `Run` to code you do not fully trust grants everything the host
+  user can do. If a service genuinely needs it, name the exact program, and treat
+  that grant as the sandbox boundary it is.
+</Callout>
+
+<Callout type="danger" title="Do not grant env wholesale">
+  Bare `--allow-env` hands over every variable in the process — including your CI
+  runner's, your cloud metadata, and anything else exported on that box.
+  `--allow-env=PORT,DATABASE_URL` makes every other variable **absent** from the
+  snapshot, so guest code can neither read one nor enumerate its name.
+</Callout>
+
+## Secrets
+
+A `.env` file is never discovered on its own. It loads only when `--env-file`
+names it, and loaded values fill unset keys rather than overriding the real
+environment, so a checked-in file cannot clobber production configuration.
+
+```sh
+esrun --env-file=.env.production --allow-env=PORT,DATABASE_URL app.js
+```
+
+Keys ending in `_KEY` / `_TOKEN` / `_SECRET` / `_PASS(WORD)`, or containing
+`CREDENTIAL` / `AUTH`, become [`Secret`](/api/process) values that print as
+`[redacted]` in logs and JSON.
+
+<Callout type="danger" title="Masking is for accidents, not attackers">
+  Guest code can call `unmask()` itself. Masking keeps a token out of a log line,
+  a stack trace, and a serialized error payload; it is not a confinement. The
+  confinement is `--allow-env=<names>` — a variable that never entered the
+  snapshot cannot be unmasked.
+</Callout>
+
+## A pre-deploy checklist
+
+- The command names grants, and does not carry `--allow-all`.
+- Every `--allow-` flag that can carry a list carries one.
+- `--allow-run` is absent, or names exactly one program you can defend.
+- `--allow-env` names variables; it is not bare.
+- `--allow-write` names the narrowest directory that works — a log and a temp
+  directory, not the project root.
+- `--allow-net` names hosts, and has been checked against what the service calls
+  on its *error* paths too: retries, telemetry, crash reporters.
+- `--allow-read` and `--allow-write` entries are all inside the project root, so
+  none of them is inert.
+- An `--import-policy` exists, even if it only denies.
+- The permission flags precede the script path.
+- The deployment command is committed and code-reviewed like source, and widening
+  it takes the same review as changing the code.
+
+## What this does not cover
+
+Worth knowing before you rely on it:
+
+- **Integrity.** Nothing here verifies that a package is the code you audited —
+  only which packages and paths may load at all. Lockfiles remain your
+  install-time control, and content pinning is future work.
+- **Resource limits.** Capabilities bound reach, not consumption; a fully denied
+  script still computes. Use `--timeout=<ms>` for a wall-clock bound, and your
+  supervisor — container limits, cgroups — for CPU and memory.
+- **Runtime revocation.** The policy is fixed at launch. There is no `.drop()`: a
+  program cannot narrow its own grants partway through, and equally cannot widen
+  them. `permissions` is introspection only.
+- **The host user.** Everything here confines the JavaScript. Run the process as
+  an unprivileged user, in a container, regardless. This is one layer, not a
+  replacement for the ones beneath it.

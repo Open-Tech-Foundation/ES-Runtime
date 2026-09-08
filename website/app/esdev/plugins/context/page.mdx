@@ -1,0 +1,101 @@
+---
+title: Plugin context and ordering
+description: Use plugin hook context, ordering, build results, and diagnostics in esdev.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Plugin context and ordering
+
+The last argument of every handler, never `this`.
+
+| Member | Description |
+| --- | --- |
+| `ctx.resolve(source, importer?, options?)` | Asks the build's own resolver, mid-hook. `null` when nothing resolves. |
+| `ctx.emit({ type, … })` | Adds a chunk or an asset to a build already running; returns a reference id. |
+| `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
+| `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
+| `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |
+| `ctx.refresh` | The hot-reload scheme the target named ([`refresh`](/esdev/start/hmr#component-refresh-is-a-plugin)), **only** while the dev loop is running it hot. Absent in a release build. |
+| `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
+
+It is an argument so that an arrow-function handler keeps it. Rollup's
+context-as-`this` is silently lost by an arrow, and a hook whose `this.resolve`
+is undefined fails a long way from the arrow that caused it.
+
+It is also live only while its hook runs. Stash `ctx` and call it later and it
+throws — by then it may name a build that no longer exists.
+
+<Callout type="warning" title="Calling ctx.resolve from your own resolve hook">
+  Pass `{ skipSelf: true }`, or your hook resolves through itself and the build
+  never finishes:
+
+  ```js
+  const found = await ctx.resolve(source, importer, { skipSelf: true });
+  ```
+</Callout>
+
+`emit` puts a file beside the output, or adds an entry to a build in flight:
+
+```js
+ctx.emit({ type: "asset", fileName: "meta.json", source: '{"built":true}' });
+ctx.emit({ type: "chunk", id: "/app/admin.js" });
+```
+
+## order
+
+```js
+transform: { order: "pre", filter: { id: /\.mdx$/ }, handler }
+```
+
+`"pre"` runs before the unordered plugins and `"post"` after, for when one pass
+has to see a module before another does. Within a group, plugins run in the
+order you listed them.
+
+```text
+order: pre-one -> normal -> post-one
+```
+
+**It orders you against esdev's own passes too, not only against the other
+plugins.** That is the point of it for a CSS compiler: `esdev:css-modules` is
+unordered, so a plugin that says `pre` gets the stylesheet first, and the
+built-in pass then sees `ctx.type` is no longer `"css"` and steps aside rather
+than re-reading the file off disk and undoing the work.
+
+```js
+transform: {
+  order: "pre",
+  filter: { id: /\.css$/ },
+  handler: (code, id) => ({ code: compileTailwind(code, id), type: "js" }),
+}
+```
+
+## What the build hands back
+
+```js
+const { output, watchFiles, warnings } = await bundle.generate({ format: "esm" });
+```
+
+`watchFiles` is every file the build read **plus** every file a plugin declared,
+which is what makes an incremental dev server possible: pair it with
+[`runtime:watch`](/api/watch) and drop the three cached chunks whose
+dependencies changed rather than all forty. `warnings` carries the bundler's and
+yours.
+
+## When you get it wrong
+
+The declaration is checked when `build()` is called, not at the `generate()`
+three lines later, so the rejection lands on the line that wrote it.
+
+| Written | What it says |
+| --- | --- |
+| `transform(code, id) {}` | `p.transform: a hook is an object, not a function — write { handler(...) {} }, optionally with filter and order` |
+| `transfrom: { … }` | `p: unknown hook "transfrom". Did you mean "transform"?` |
+| `start: { filter: … }` | `p.start: this hook runs once, for the whole build, so it cannot be filtered` |
+| `load: { filter: { code: … } }` | `p.load: only transform can filter on code — it is the only hook given any` |
+| `order: "first"` | `p.transform: order must be "pre" or "post", got "first"` |
+| `handler: () => "export {}"` | `transform must return an object or null — return { code } instead` |
+
+A handler that throws fails the build with what it threw, stack and all — a
+plugin error arriving as a bare "build failed" would be the worst outcome of
+running hooks on a different thread from the bundler.

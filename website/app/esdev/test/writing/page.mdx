@@ -1,0 +1,122 @@
+---
+title: Writing tests
+description: Write esdev tests with runtime:test assertions, helpers, and table-driven cases.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Writing tests
+
+The API comes from [`runtime:test`](/api/test), like everything else on this
+runtime.
+
+```ts
+import { test, expect } from "runtime:test";
+
+test("adds", () => {
+  expect(1 + 1).toBe(2);
+});
+
+test("rejects", async () => {
+  await expect(fetch("http://127.0.0.1:1/")).rejects.toThrow();
+});
+```
+
+`expect` and the `assert*` family are two spellings of the same assertions —
+`assertEquals(a, b)` and `expect(a).toEqual(b)` share one comparison — so a
+suite written for another runner needs an import line rather than a rewrite.
+
+Because it is an import, a **helper module** beside your test file can use the
+assertions too:
+
+```ts
+// helpers.ts
+import { assertEquals } from "runtime:test";
+export const assertSorted = (xs: number[]) => assertEquals(xs, [...xs].sort());
+```
+
+| | |
+| --- | --- |
+| `test(name, fn)` | `fn` may be async; cases run one at a time |
+| `it`, `suite` | The same two functions, under the ecosystem's names |
+| `test.skip(name, fn?)` | Registered and reported as skipped, never run |
+| `test.only(name, fn)` | Runs this one; the rest are counted as skipped |
+| `test.todo(name)` | Planned, not written — counted as skipped, never absent |
+| `test.each(table)(name, fn)` | One case per row ([below](#tables)) |
+| `test.skipIf(c)` / `test.runIf(c)` | A case that depends on where it runs |
+| `describe(name, body)` | A group: a composed name, and a scope for its hooks |
+| `describe.skip` / `.only` / `.todo` / `.each` | The same set, for a whole group |
+| `assert(cond, msg?)` | |
+| `assertEquals(actual, expected, msg?)` | Structural |
+| `assertThrows(fn, expected?, msg?)` | |
+| `assertRejects(fn, expected?, msg?)` | |
+| `expect(value)` | The matcher vocabulary — see [`runtime:test`](/api/test) |
+| `mock.fn()` / `mock.spyOn(o, k)` | A function that records what it was asked |
+| `clock.freeze()` / `clock.advance(ms)` | Time, stopped |
+
+The same vocabulary the runtime's own conformance suite uses: reading its tests
+and writing your own should not mean learning two.
+
+`assertEquals` walks the values: `BigInt` and `NaN` compare, typed arrays and
+`ArrayBuffer` compare as bytes, `Map` and `Set` by contents, objects by their
+key set rather than key order, and a cyclic structure terminates.
+
+`expected` is what the error must be — omit it to accept any throw.
+
+| | |
+| --- | --- |
+| `"TypeError"` | the error's `name`, or a substring of its message |
+| `/too long/` | tested against the message |
+| `HttpError` | an `instanceof` check |
+
+## Tables
+
+`each` registers one case per row, and the name says which row it was.
+
+```ts
+import { test, expect } from "runtime:test";
+
+test.each([
+  [1, 1, 2],
+  [2, 3, 5],
+])("adds %d + %d = %d", (a, b, want) => {
+  expect(a + b).toBe(want);
+});
+
+test.each([
+  { input: "  x ", want: "x" },
+  { input: "y",    want: "y" },
+])("trims $input", ({ input, want }) => {
+  expect(trim(input)).toBe(want);
+});
+```
+
+`%s` `%d` `%i` `%f` `%j` `%o` take the next value positionally, `%#` is the
+row's index, and `$key` reads a property when the row is an object. An array row
+is **spread** into the parameters, so they read like the table's header.
+
+A name that does not vary per row gets an index appended. Six cases sharing one
+identity is a report where a failure names none of them.
+
+## Group what shares a fixture
+
+`describe` composes the name — `"db > constraints > rejects a null"` — and, the
+half that earns it, **scopes the hooks**: a `beforeEach` written inside one runs
+for the tests inside it and no others.
+
+```ts
+import { test, describe, beforeAll, afterAll, beforeEach } from "runtime:test";
+
+describe("db", () => {
+  beforeAll(() => open());
+  afterAll(() => close());       // runs when this group's last test has run
+  beforeEach(() => reset());
+
+  test("inserts", async () => {});
+});
+
+test("needs no database", () => {});   // and does not pay for one
+```
+
+The body registers and returns — an `async` one is refused, because only the
+part before its first `await` would register in time.

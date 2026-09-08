@@ -16,7 +16,15 @@ const NAV = [
       { title: "Overview", path: "/docs" },
       { title: "Installation", path: "/docs/install" },
       { title: "Scope & non-goals", path: "/docs/scope" },
-      { title: "Migration guide", path: "/docs/migration" },
+      {
+        title: "Migration guide",
+        items: [
+          { title: "Overview", path: "/docs/migration" },
+          { title: "From Node.js", path: "/docs/migration/node" },
+          { title: "From Bun", path: "/docs/migration/bun" },
+          { title: "From Deno", path: "/docs/migration/deno" },
+        ],
+      },
     ],
   },
   {
@@ -27,18 +35,53 @@ const NAV = [
       { title: "Process & Env", path: "/docs/process" },
       { title: "Path handling", path: "/docs/path" },
       { title: "Databases", path: "/docs/db" },
-      { title: "Redis", path: "/docs/db/redis" },
-      { title: "Drivers & ORMs", path: "/docs/db/authoring" },
+      {
+        title: "Redis",
+        items: [
+          { title: "Overview", path: "/docs/db/redis" },
+          { title: "Concepts & connections", path: "/docs/db/redis/core" },
+          { title: "Transactions & blocking", path: "/docs/db/redis/transactions" },
+          { title: "Operations & reliability", path: "/docs/db/redis/operations" },
+          { title: "Compatibility & limits", path: "/docs/db/redis/compatibility" },
+        ],
+      },
+      {
+        title: "Drivers & ORMs",
+        items: [
+          { title: "Overview", path: "/docs/db/authoring" },
+          { title: "Driver implementation", path: "/docs/db/authoring/backend" },
+          { title: "Rows & value types", path: "/docs/db/authoring/data" },
+          { title: "Production pitfalls", path: "/docs/db/authoring/production" },
+          { title: "ORM checklist", path: "/docs/db/authoring/checklist" },
+        ],
+      },
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "Workers", path: "/docs/guides/workers" },
-      { title: "HTTP server", path: "/docs/http" },
+      {
+        title: "HTTP server",
+        items: [
+          { title: "Overview", path: "/docs/http" },
+          { title: "Basics", path: "/docs/http/basics" },
+          { title: "Lifecycle & shutdown", path: "/docs/http/lifecycle" },
+          { title: "HTTPS, HTTP/2 & trailers", path: "/docs/http/protocols" },
+          { title: "Identity & deployment", path: "/docs/http/production" },
+        ],
+      },
       { title: "WebSockets", path: "/docs/guides/websocket" },
       { title: "URLPattern", path: "/docs/urlpattern" },
       { title: "WebAssembly & WASI", path: "/docs/wasm" },
       { title: "Hashing", path: "/docs/guides/hashing" },
-      { title: "Securing the runtime", path: "/docs/guides/securing-runtime" },
+      {
+        title: "Securing the runtime",
+        items: [
+          { title: "Overview", path: "/docs/guides/securing-runtime" },
+          { title: "Granting capabilities", path: "/docs/guides/securing-runtime/capabilities" },
+          { title: "Import policy & deployment", path: "/docs/guides/securing-runtime/policy" },
+          { title: "Hardening checklist", path: "/docs/guides/securing-runtime/hardening" },
+        ],
+      },
       {
         title: "Text serialization",
         items: [
@@ -74,7 +117,16 @@ const NAV = [
     // (Guides).
     title: "Internals",
     items: [
-      { title: "HTTP server", path: "/docs/internals/http" },
+      {
+        title: "HTTP server",
+        items: [
+          { title: "Overview", path: "/docs/internals/http" },
+          { title: "Connections & limits", path: "/docs/internals/http/connections" },
+          { title: "Handoff & draining", path: "/docs/internals/http/handoff" },
+          { title: "Identity & observability", path: "/docs/internals/http/identity" },
+          { title: "Compared", path: "/docs/internals/http/comparison" },
+        ],
+      },
       { title: "Sockets", path: "/docs/internals/sockets" },
       { title: "The fetch client", path: "/docs/internals/fetch" },
       { title: "WebSockets", path: "/docs/internals/websockets" },

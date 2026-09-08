@@ -13,7 +13,15 @@ const NAV = [
       { title: "runtime:process", path: "/api/process" },
       { title: "runtime:path", path: "/api/path" },
       { title: "runtime:fs", path: "/api/fs" },
-      { title: "runtime:db", path: "/api/db" },
+      {
+        title: "runtime:db",
+        items: [
+          { title: "Overview", path: "/api/db" },
+          { title: "Connections & pooling", path: "/api/db/connection" },
+          { title: "Queries, rows & errors", path: "/api/db/queries" },
+          { title: "Drivers", path: "/api/db/drivers" },
+        ],
+      },
       { title: "runtime:net", path: "/api/net" },
       { title: "runtime:http", path: "/api/http" },
       { title: "runtime:websocket", path: "/api/websocket" },

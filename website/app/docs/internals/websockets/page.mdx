@@ -43,7 +43,7 @@ guest cannot observe a ping and cannot fail to answer one.
 The runtime does **not** send pings of its own. There is no keepalive on a
 WebSocket connection and no idle timeout — a connection to a peer that vanished
 without a FIN stays open until the OS TCP keepalive notices it. That is the
-inverse of the [HTTP/2 keepalive](/docs/internals/http#request-head-and-the-idle-connection)
+inverse of the [HTTP/2 keepalive](/docs/internals/http/connections#request-head-and-the-idle-connection)
 on the server side, and worth knowing if you hold long-lived client sockets.
 
 ## Sends are coalesced into one write
@@ -110,7 +110,7 @@ never blocks the next accept. A failed handshake ends that connection and
 nothing else.
 
 The accept loop retries every `accept` error behind a doubling delay rather than
-ending — the same policy as [the HTTP server](/docs/internals/http#accept) and
+ending — the same policy as [the HTTP server](/docs/internals/http/connections#accept) and
 [`runtime:net`](/docs/internals/sockets#listening). Accepted connections queue in
 a channel holding **64**.
 
@@ -126,7 +126,7 @@ closed.
 ### What bounds a connection
 
 Two, and they are the HTTP server's mechanisms unchanged — see
-[Internals: the HTTP server](/docs/internals/http#the-life-of-a-connection) for
+[Internals: the HTTP server](/docs/internals/http/connections) for
 the reasoning behind each.
 
 | Limit | Default | Bounds |

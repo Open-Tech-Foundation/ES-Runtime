@@ -1,0 +1,119 @@
+---
+title: HTTP basics: servers and requests
+description: Start an ES-Runtime HTTP server, route requests, and handle request and response bodies.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Basic servers and requests
+
+`serve(options, handler)` starts the accept loop in the background and returns a
+`Server` handle immediately. Await `server.addr` to learn the bound address once
+listening has started.
+
+```js
+import { serve } from "runtime:http";
+
+const server = serve({ port: 8080 }, (request) => {
+  return new Response("Hello from esrun!");
+});
+
+const { hostname, port } = await server.addr;
+console.log(`listening on http://${hostname}:${port}`);
+```
+
+`serve(handler)` with no options picks an **ephemeral port** — useful in tests.
+Read the port from `await server.addr` after starting.
+
+## Routing
+
+There is no built-in router. Match on `request.method` and `new URL(request.url)`
+inside your handler, or hand requests to a framework (see Hono below).
+
+```js
+import { serve } from "runtime:http";
+
+const server = serve({ port: 8080 }, async (request) => {
+  const url = new URL(request.url);
+
+  if (request.method === "GET" && url.pathname === "/health") {
+    return Response.json({ ok: true });
+  }
+
+  if (request.method === "POST" && url.pathname === "/echo") {
+    const body = await request.text();
+    return new Response(body, {
+      headers: { "content-type": request.headers.get("content-type") ?? "text/plain" },
+    });
+  }
+
+  return new Response("Not found", { status: 404 });
+});
+
+await server.addr;
+```
+
+For pathname patterns, pair this with the global [`URLPattern`](/docs/urlpattern)
+or a small routing helper.
+
+## Request and response bodies
+
+Request and response bodies **stream in both directions** with backpressure.
+`request.body` is a `ReadableStream`; nothing is held in memory until you call
+`request.text()`, `request.json()`, or read the stream incrementally. On the
+response side, `string` and byte bodies use the buffered fast path (`Content-Length`);
+a `ReadableStream` is sent with chunked transfer-encoding as you produce it:
+
+```js
+serve({ port: 8080 }, () => {
+  const enc = new TextEncoder();
+  let n = 0;
+  const body = new ReadableStream({
+    async pull(c) {
+      if (n >= 10) return c.close();
+      c.enqueue(enc.encode(`tick ${n++}\n`));
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/plain" } });
+});
+```
+
+`new Response(request.body)` pipes an upload straight back out without buffering
+either side.
+
+## Client disconnects
+
+`request.signal` aborts when the client hangs up before your handler produced a
+response — drop expensive work nobody will read.
+
+```js
+serve(async (request) => {
+  const upstream = await fetch(slowUrl, { signal: request.signal });
+  return new Response(upstream.body);
+});
+```
+
+Reading `request.signal` starts the watch, so a handler that never asks costs
+nothing. It covers the window before the response is handed over; a client that
+vanishes mid-stream ends the response body stream instead.
+
+## Errors
+
+If your handler **throws** or returns a value that is not a `Response`, the
+runtime answers with **500 Internal Server Error**. Wrap risky logic in
+`try/catch` when you want a specific status or JSON error body.
+
+```js
+serve({ port: 8080 }, async (request) => {
+  try {
+    const data = await request.json();
+    return Response.json({ received: data });
+  } catch {
+    return Response.json({ error: "invalid JSON" }, { status: 400 });
+  }
+});
+```
+
+Invalid `Request` / `Response` construction (bad status codes, malformed
+headers) throws `TypeError` at construction time — the same Fetch API rules as in
+browsers.

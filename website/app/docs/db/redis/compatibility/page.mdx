@@ -1,0 +1,85 @@
+---
+title: Redis compatibility and limits
+description: Compare the Redis driver with other databases and understand unsupported features.
+---
+
+import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
+# Redis compatibility and limits
+
+## How it compares
+
+Every cell was produced by **running** the client, not by reading its
+documentation. Node and Deno have no built-in Redis, so both npm clients are
+shown: `redis` (node-redis, the official one) and `ioredis` (about twice the
+downloads, same organisation). They differ enough that showing only one would
+misreport Node.
+
+| | esrun<br/>`esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
+| --- | :---: | :---: | :---: | :---: |
+| Ships with the runtime | <No /> | <No /> | <No /> | <Yes /> |
+| RESP3 negotiated by default | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Exact 64-bit integers | <Yes /> | <No /> | <No /> | <No /> |
+| Binary-safe values | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Pub/sub | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Pipeline builder | <Yes /> | <Partial /> | <Yes /> | <Partial /> |
+| `MULTI`/`EXEC` API | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| `WATCH` | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Cluster | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Sentinel | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Streams & consumer groups | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
+| TLS with a private CA | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Auto-reconnect | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
+| Unbounded-block guard | <Yes /> | <No /> | <No /> | <No /> |
+| Portable error codes | <Yes /> | <No /> | <No /> | <No /> |
+| Scoped by a capability flag | <Yes /> | Deno only | Deno only | <No /> |
+
+**Exact 64-bit integers** is the only row that changes an *answer*.
+`INCRBY k 9007199254740993` returns `9007199254740993n` here and
+`9007199254740992` — a `number`, off by one — on all three others.
+
+**The partial cells.** node-redis and Bun have no pipeline builder; both
+pipeline commands issued together, so `Promise.all` is the idiom rather than a
+missing feature. Bun's streams are reachable through `send()` rather than typed
+methods, and its client has no `multi`, `watch`, cluster or Sentinel at all.
+esrun's reconnect is partial because it is **off by default** — a deliberate
+disagreement rather than a gap: turning it on changes what a thrown error means,
+and a pool already replaces dead connections.
+
+### Speed
+
+Wall ms, min of 5, from [Benchmarks](/docs/benchmarks#redis-clients):
+
+| Workload | esrun | node-redis | ioredis | Bun |
+| --- | ---: | ---: | ---: | ---: |
+| 5 000 `SET`, one at a time | 858 | 1029 | 910 | **666** |
+| 20 000 `SET` in one batch | 225 | 374 | 203 | **72** |
+| `LRANGE` over 50 000 elements | 158 | 203 | 119 | **28** |
+| 200 × `HGETALL` of 1 000 fields | 957 | 479 | 496 | **205** |
+
+Bun's client is native C++ and leads everything. Among the **JavaScript**
+clients, esrun is fastest where the round trip dominates — and does it in about a
+third of the memory (38 MB against 79–124) — and ahead of the official
+node-redis on batches and list scans.
+
+<Callout type="warning" title="Where it is behind">
+  Repeated `HGETALL` is twice as slow as both npm clients. That is not decoding
+  in general — the list scan is mid-pack — but the **map** path specifically: a
+  RESP3 map becomes a pair array of wrapper objects, each holding a copied
+  `Uint8Array`, before anything becomes a key or a value. ioredis negotiates
+  RESP3 too and builds the same object twice as fast, so it is an implementation
+  cost rather than a protocol one, and it is fixable.
+</Callout>
+
+## Not supported
+
+Named rather than left to be discovered: reading from replicas in a cluster,
+cluster-aware pub/sub, RESP3 client-side caching (server attributes are read and
+discarded), `MONITOR`, and cancelling a command in flight — Redis has no such
+thing, which is why `{ signal }` rejects the caller when the reply arrives rather
+than stopping the work.

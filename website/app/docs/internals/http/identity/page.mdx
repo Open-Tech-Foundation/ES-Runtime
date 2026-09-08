@@ -1,0 +1,106 @@
+---
+title: HTTP identity and observability
+description: Understand client identity and the information the ES-Runtime HTTP server reports.
+---
+
+# Identity and observability
+
+The handler's second argument carries `remoteAddr` — the other end of the
+socket, and only ever that. Behind a reverse proxy it is the proxy.
+
+`X-Forwarded-For` is never consulted. Resolving it requires knowing which hop to
+trust, and a header anyone can send is not an identity until something says
+whose to believe; a misconfigured trust list is a spoofable identity, which is
+worse than no answer. The header is delivered untouched, so a deployment that
+knows its own topology resolves it in one line:
+
+```js
+const client = request.headers.get("x-forwarded-for")?.split(",")[0].trim()
+  ?? info.remoteAddr.hostname;
+```
+
+On HTTP/2 every request multiplexed onto one connection reports the same peer,
+because they are one connection.
+
+The peer address is also what `maxConnectionsPerIp` counts on. `maxConnections`
+alone bounds what the deployment spends and nothing else — one peer opening every
+slot fills the server exactly as a thousand peers opening one each do — so the
+per-peer cap is the half that says whose connections they are. It is taken
+*after* accept, because that is when the peer is known, and an excess is
+**refused** rather than held: the whole-server cap can afford to queue, since its
+excess is legitimate traffic waiting for a slot, while an excess here is one
+client past its share, already accepted and holding a descriptor it decides when
+to release. The counter is per address and drops the address entirely at zero, so
+a flood of one-shot connections cannot grow the table it is counted in.
+
+Both are off by default, and the per-peer one for a sharper reason: behind a load
+balancer or a NAT gateway every connection carries the same source address, so a
+cap there caps the whole service. Only the deployment knows what sits in front of
+it.
+
+## What the server reports
+
+Everything the server says about itself goes to `tracing` on the
+`runtime::http` target. Nothing is printed; the embedder's subscriber is the
+sink, and `esrun` installs one filtered by `RUST_LOG`.
+
+| Event | Level | When |
+| --- | --- | --- |
+| `accept failed; retrying` | `warn` | The listener could not accept, and is backing off |
+| `tls handshake failed` | `debug` | A peer's TLS handshake did not complete |
+| `<what> timed out; closing the connection` | `debug` | A connection hit `handshake` or the first-byte deadline |
+| `connection ended with an error` | `debug` | hyper ended the connection on a protocol error, an early EOF, or a failed write |
+
+Each served connection is a `debug` span carrying `peer` and `tls`, so every
+event above is attributable to one client and correlated across a connection's
+life — which matters on HTTP/2, where one connection carries hundreds of
+requests and the peer is the only thing they share. The span is per connection
+rather than per request for that reason.
+
+The split between `warn` and `debug` is not about severity, it is about **who
+can cause it**. An accept failure is the listening socket's problem and an
+operator's to act on. A failed handshake is something any peer can produce on
+demand, so logging one at a level people run with would hand every client a
+lever on your log volume; a scanner sweeping a public port would write the disk
+full. To see them:
+
+```sh
+RUST_LOG=runtime::http=debug esrun server.js
+```
+
+A connection that is served and closed cleanly logs **nothing**, and neither
+does one reaped by the idle keep-alive deadline — that is a healthy connection's
+designed end, not a fault, and reporting it would put a line in the log for
+every well-behaved client. `connection ended with an error` therefore means
+something actually went wrong on the wire.
+
+This is what distinguishes a misconfigured listener from an idle one. A TLS
+server whose chain no client will accept serves zero requests, exactly like a
+server nobody is calling; the handshake event is the only difference between
+them.
+
+### What the others let you find out
+
+Measured by sending one plaintext packet at each runtime's TLS port — a
+handshake none of them can start — and looking at what reaches the operator.
+Reproduce with `bash bench/probe-observability.sh`.
+
+{/* BEGIN probe:observability — written by bench/probe-observability.sh; do not hand-edit */}
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Reported by default | no | no | no | no |
+| Reported under the runtime's debug switch | yes | yes | no | no |
+| A callback receives it, with the peer | no | yes | no | no |
+
+<sub>esrun 0.15.0 · Node 24.14.0 · Bun 1.4.0 (canary) · Deno 2.8.3 · Linux · 2026-08-03</sub>
+{/* END probe:observability */}
+
+No runtime reports this by default, and that is the right default in all four.
+The difference is what you can do about it when you suspect it. Node has the
+most direct answer of the others: `tlsClientError` hands you the error object
+and the socket, so a deployment can route it wherever its logs go — and
+`NODE_DEBUG=tls` prints the OpenSSL reason, though as an unfiltered trace of all
+TLS activity rather than a record of failures. For Bun and Deno's `serve`, no
+callback fired and their debug switches printed nothing about the connection;
+`Deno.listenTls` is the lower-level escape hatch, where the handshake error
+surfaces to your own code on first read.

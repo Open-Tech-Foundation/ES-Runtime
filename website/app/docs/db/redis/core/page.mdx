@@ -1,0 +1,135 @@
+---
+title: Redis concepts and connections
+description: Connect to Redis and understand its protocol, types, and portable database vocabulary.
+---
+
+import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
+# Redis concepts and connections
+
+`connect(url, { driver })` opens a connection. What comes back speaks
+Redis, which is what most code wants:
+
+```js
+import { connect } from "runtime:db";
+import { driver } from "@opentf/esrun-redis";
+
+const r = await connect("redis://localhost", { driver });
+
+await r.set("session:42", "ada", { ex: 3600 });
+await r.get("session:42");                     // "ada"
+await r.hset("user:42", { name: "ada", age: "36" });
+await r.hgetall("user:42");                    // { name: "ada", age: "36" }
+await r.zadd("scores", { ada: 9.5, grace: 8 });
+await r.zrange("scores", 0, -1, { withScores: true });
+
+await r.close();
+```
+
+It is also a `runtime:db` backend, and **the same object**: code written against
+the portable surface rather than against Redis uses `query` and `execute` on the
+connection it already has.
+
+```js
+import { queryAst } from "runtime:db";
+
+await r.execute(queryAst(["SET", "k", "v"]));
+
+for await (const row of await r.query(queryAst(["LRANGE", "log", 0, -1]))) {
+  console.log(row.value);
+}
+```
+
+There is no second object and no second way to open one: a connection is not
+either a client or a backend, it is both, and which vocabulary you use is a
+property of the call you make rather than of the thing you opened.
+
+A command is an array, not a string. Nothing is parsed and nothing is quoted, so
+there is no injection to prevent — the arguments were never text that could
+become syntax.
+
+<Callout type="warning" title="Redis is not a SQL database, and the driver says so">
+  `supports.queryText` is `false`, so SQL is refused with `ERR_DB_QUERY_FORM`, and
+  `supports.transactions` is `false`, so `transaction(fn)` throws
+  `ERR_DB_UNSUPPORTED`. Redis's `MULTI`/`EXEC` applies commands together but does
+  **not** roll back one that fails at exec time, so a `transaction(fn)` built on
+  it would commit half a body that threw. Use [`multi()`](/docs/db/redis/transactions#multi-exec) instead —
+  named after the command it sends. See
+  [Drivers &amp; ORMs](/docs/db/authoring) for what that means for portable code.
+</Callout>
+
+## Connecting
+
+```text
+redis://[[username][:password]@]host[:port][/db][?option=value]
+rediss://…                                   TLS from the first byte
+```
+
+The path is a database **index**, not a name — `redis://host/3` is database 3.
+An empty username with a password (`redis://:secret@host`) is the pre-ACL
+spelling and means the `default` user.
+
+| Option | |
+| --- | --- |
+| `?db=` | the database index, when the path is not used |
+| `?connect_timeout=` | **seconds**, as every connection string spells it |
+| `?command_timeout=` | **milliseconds** — see [Timeouts](/docs/db/redis/operations#timeouts) |
+| `?protocol=2` \| `3` | force RESP2, or ask for RESP3 (the default) |
+| `?client_name=` | `CLIENT SETNAME`, so the connection is identifiable |
+| `?binary=1` | hand values back as `Uint8Array` rather than decoding them |
+
+A password in a query parameter is **refused**: one place for a credential means
+a URL-redacting logger only has to know about one.
+
+<Callout type="warning" title="Unmask a URL read from the environment">
+  `env` redacts anything that looks like a secret, so a connection string with a
+  password in it arrives as the literal `"[redacted]"` — which then fails as a
+  *URL*, several layers from the cause. Pass it through `unmask` from
+  [`runtime:process`](/docs/process) first.
+</Callout>
+
+TLS from a private authority needs that authority, because the public roots have
+never heard of it:
+
+```js
+const r = await connect("rediss://redis.internal", { driver, tlsCa: await readFile("ca.crt") });
+```
+
+## RESP3, and what it buys
+
+`HELLO 3` is sent on connect, negotiating the protocol **and** authenticating in
+one round trip. RESP3 types the reply: `HGETALL` comes back as a map rather than
+a flat array the client has to re-pair, and a double is a double rather than a
+string.
+
+A server older than Redis 6 has no `HELLO`, and one built without RESP3 answers
+`NOPROTO`; both fall back to RESP2 and authenticate separately. A wrong password
+is **not** a fallback — it fails, rather than quietly becoming an
+unauthenticated session. `r.protocol` reports which is in force, and the client
+absorbs the difference either way.
+
+## Types
+
+| Redis | JavaScript |
+| --- | --- |
+| bulk string | `string` (UTF-8), or `Uint8Array` with `{ binary: true }` |
+| integer | `number`, or `bigint` past 2⁵³ |
+| double, big number, boolean (RESP3) | `number`, `bigint`, `boolean` |
+| null / `$-1` / `*-1` | `null` |
+| array, set | `Array` |
+| map (RESP3) | plain object |
+
+Redis integers are signed 64-bit, so a counter can pass 2⁵³ — a `number` where
+the value is exact and a `bigint` where it is not, which is the rule
+`runtime:db` applies to every backend. **This is the one place the four runtimes
+disagree on an answer** rather than on ergonomics; see
+[the comparison](/docs/db/redis/compatibility#how-it-compares).
+
+Bitmaps are **bytes**: pass a `Uint8Array`, not a string. `"\xff"` is U+00FF,
+which is two bytes in UTF-8, and a bitmap that went through a text encoding is
+not the bitmap you meant.

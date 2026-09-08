@@ -386,7 +386,7 @@ connection that is served and closed cleanly logs nothing at all.
 Turn `debug` on when a server is accepting connections and serving nothing: that
 is what a certificate no client will accept looks like from this side, and
 without the log it is indistinguishable from a port nobody is calling. See
-[Internals: the HTTP server](/docs/internals/http#what-the-server-reports) for
+[Internals: the HTTP server](/docs/internals/http/identity#what-the-server-reports) for
 the full event list.
 
 `RUST_LOG` is the name `tracing-subscriber` reads, so embedding the runtime as a

@@ -1,0 +1,112 @@
+---
+title: Redis transactions and blocking commands
+description: Use Redis pipelining, transactions, pub/sub, and blocking commands through the database driver.
+---
+
+import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
+# Redis transactions and blocking commands
+
+```js
+const p = r.pipeline();
+for (const id of ids) p.hgetall(`user:${id}`);
+const users = await p.exec();
+```
+
+The reason is arithmetic rather than taste: a Redis command's whole cost is a
+round trip, so a loop of `await`s spends its time on the network. Measured on
+loopback, where a round trip is nearly free, **500 `INCR`s took 102 ms one at a
+time and 6 ms pipelined**.
+
+A pipeline is **not** a transaction — another client's commands may land among
+yours, and one failing does not stop the rest. Failed commands come back as
+`DbError` in place.
+
+## MULTI/EXEC
+
+```js
+const tx = r.multi();
+tx.set("a", "1");
+const counter = tx.incr("visits");
+const results = await tx.exec();     // ["OK", 1]
+```
+
+Commands are **buffered**, so a transaction is one round trip — and a **pool**
+can run one, since there is nothing to hold a connection for until `exec()`.
+
+What `MULTI` gives you is that nothing interleaves. What it does not give you is
+rollback: a command that fails at exec time leaves the ones beside it applied.
+So `exec()` hands errors back **in place** rather than throwing, and the
+per-command promises resolve with them for the same reason.
+
+One case *is* all-or-nothing: a command the server refuses as it is **queued**
+makes `EXEC` fail with `EXECABORT` and nothing runs. That one throws.
+
+### WATCH
+
+```js
+await r.watch("balance");
+const current = Number(await r.get("balance"));
+
+const tx = r.multi();
+tx.set("balance", current - 10);
+if (await tx.exec() === null) retry();   // someone else changed it first
+```
+
+`exec()` answers `null` when a watched key moved — the optimistic-locking
+outcome, not an error. Queued commands settle with `ERR_DB_SERIALIZATION_FAILURE`,
+which is what an optimistic-concurrency failure is called everywhere else in
+`runtime:db`. `WATCH` is tied by the server to one connection, so on a pool it
+needs `withConnection()`.
+
+## Pub/sub
+
+```js
+const sub = await connect("redis://localhost", { driver });
+await sub.subscribe("news", (payload, { channel }) => console.log(channel, payload));
+await sub.psubscribe("room.*", (payload, { channel, pattern }) => …);
+
+const pub = await connect("redis://localhost", { driver });
+await pub.publish("news", "hello");
+```
+
+`subscribe`, `unsubscribe`, `onMessage` and `subscribed` are the portable names
+every backend with subscriptions answers to — PostgreSQL's `LISTEN` is the same
+call. `psubscribe` and `ssubscribe` are Redis's own, because patterns and shard
+channels are.
+
+**Two connections, and that is not a workaround.** The first `subscribe` gives
+its connection over to a read loop, and it then runs no ordinary commands —
+`get`, `set`, even `publish` refuse with `ERR_DB_CONNECTION_BUSY`. Over RESP2
+that is the protocol's own rule; over RESP3 it is because the loop owns the
+reader. It is also how you would deploy it anyway.
+
+Subscribing is **confirmed** before it resolves, so publishing immediately after
+cannot race it. A handler that throws is reported to `onSubscribeError` and the
+loop continues — it is the only thing reading the socket, and one bad handler
+must not silently stop every other subscription.
+
+## Blocking commands
+
+```js
+await r.blpop("queue", 5);        // → { key, value } | null
+await r.bzpopmin("scores", 5);    // → { key, member, score } | null
+
+for await (const job of r.consume("jobs", { timeout: 5, signal })) {
+  await handle(job.value);
+}
+```
+
+The timeout is **required**, in the units Redis takes it. A blocking command
+holds its connection for as long as it blocks — that is inherent — so a bounded
+wait is a stall you chose. `0` means forever, which is a stuck connection, and
+through a pool one that is gone for the life of the process. It is refused
+unless the connection was opened with `{ blocking: true }`.
+
+`consume` polls with a *bounded* pop even though it loops forever, which is what
+makes an abandoned loop or an aborted signal stop it.

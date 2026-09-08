@@ -1,0 +1,60 @@
+---
+title: Migrating from Bun
+description: Move a Bun application to esrun: files, subprocesses, hashing, and passwords.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Migrating from Bun
+
+Bun's Web-standard surface carries over unchanged. What moves is the `Bun.*`
+namespace: each ambient global becomes an explicit `runtime:` import.
+
+### 1. File handling (`Bun.file`, `Bun.write`)
+
+```js
+// ❌ Bun
+const text = await Bun.file("./data.txt").text();
+const json = await Bun.file("./data.json").json();
+await Bun.write("./out.txt", "data");
+
+// ✅ esrun
+import { file, write } from "runtime:fs";
+
+const text = await file("./data.txt").text();
+const json = await file("./data.json").json();
+await write("./out.txt", "data");
+```
+
+### 2. Subprocesses (`Bun.spawn`, `Bun.$`)
+
+```js
+// ❌ Bun
+const proc = Bun.spawn(["git", "rev-parse", "HEAD"]);
+const text = await new Response(proc.stdout).text();
+
+// ✅ esrun
+import { Command } from "runtime:system";
+
+const { stdout } = await new Command("git", {
+  args: ["rev-parse", "HEAD"],
+}).output();
+
+const text = new TextDecoder().decode(stdout).trim();
+```
+
+### 3. Hashing and passwords (`Bun.hash`, `Bun.CryptoHasher`, `Bun.password`)
+
+```js
+// ❌ Bun
+const key = Bun.hash(data);
+const digest = new Bun.CryptoHasher("sha256").update("data").digest("hex");
+const stored = await Bun.password.hash(input);
+
+// ✅ esrun
+import { hash, Hasher, password } from "runtime:hashing";
+
+const key = hash("xxhash64", data);
+const digest = new Hasher("sha256").update("data").digest("hex");
+const stored = await password.hash(input);
+```

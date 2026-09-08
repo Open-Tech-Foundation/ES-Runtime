@@ -1,0 +1,156 @@
+---
+title: Granting capabilities step by step
+description: Start an esrun service from no capabilities, add only what its real workload needs, and understand every denial.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Granting capabilities step by step
+
+<Callout type="tip" title="Grant back, never take away">
+  Do not start from `--allow-all` and remove flags. You will stop the moment the
+  service runs, which is *before* you have found what it doesn't need. Start from
+  the default, where nothing works, and add until it does. What you end up with
+  is the honest minimum, and you will have read a denial for every grant in it.
+</Callout>
+
+### 1. Start from nothing
+
+```sh
+esrun server.js
+```
+
+With nothing granted a run can compute and nothing else. It still executes the
+entry file — that file is read by the CLI before a runtime exists, and you named
+it — but it cannot read a second file, import a package, reach the network, or
+see the environment.
+
+The first thing that breaks tells you what to grant. A capability denial names
+the flag word in parentheses:
+
+```text
+NotAllowedError: capability denied: FileSystem (permission "imports")
+```
+
+`permission "imports"` → add `--allow-imports`. Re-run. Repeat.
+
+<Callout type="note" title="Do this against a real exercise of the service">
+  A denial only surfaces when the code path runs. A run that reaches only the
+  health check will not reveal the host your payment client calls or the
+  directory your crash reporter writes to. Drive the service through its actual
+  workload — including its failure paths — or you will discover the missing
+  grant in production instead.
+</Callout>
+
+### 2. Grant capabilities back
+
+Repeat until the service starts and serves. For a typical HTTP service:
+
+```sh
+esrun --allow-imports --allow-listen --allow-net --allow-env \
+      --allow-read server.js
+```
+
+This already excludes a great deal — there is no `--allow-write`, no
+`--allow-run`, no `--allow-signals` — but every grant it *does* carry is still
+whole. At this stage `--allow-net` means "any host, anywhere".
+
+### 3. Narrow each grant to a list
+
+Seven of the nine names take a comma-separated list — `imports` and `workers`
+are all-or-nothing. Go back through the
+command and replace each whole grant with what the service actually touches:
+
+```sh
+esrun --allow-imports \
+      --allow-listen=8080 \
+      --allow-net=db.internal:5432,api.stripe.com \
+      --allow-env=PORT,DATABASE_URL,STRIPE_KEY \
+      --allow-read=./public,./config \
+      --allow-write=./var/log \
+      --allow-signals=SIGTERM \
+      server.js
+```
+
+That command is now a readable, enforced statement of everything the service may
+touch. Commit it next to the code: a diff that widens it is a diff worth
+reviewing.
+
+<Callout type="note" title="--allow-net is the one that stops an exfiltration">
+  A compromised dependency does not need a new capability to steal your data. It
+  already has the network access your application legitimately needs. Narrowing
+  `net` to the hosts you actually call is what turns that into a refusal — and
+  the check runs on **every redirect hop**, so a `302` from an allowed host
+  toward a denied one fails rather than being followed transparently.
+</Callout>
+
+Matching is exact throughout, and never widens. `--allow-net=example.com` does
+not admit `api.example.com`; `--allow-read=./app` does not admit `./app-secrets`;
+there are no wildcards. Hosts are judged **as written, before resolution**, so an
+IP entry never silently admits a name that resolves to it, and DNS is not part of
+your policy.
+
+<Callout type="warning" title="A name entry bounds the name, not the machine">
+  `--allow-net=api.vendor.example` permits a connection to wherever that name
+  resolves — at the moment of the connection, on every connection. Whoever
+  controls the zone chooses the address, including `127.0.0.1` or a cloud
+  metadata endpoint, and each reconnect resolves again. So a name entry is a
+  statement about who you trust to answer for that name.
+
+  Where that matters — a host outside your control, or one an attacker could
+  make you look up — **write the address**: `--allow-net=203.0.113.7:443` is
+  checked against what the program actually dials, and a name never satisfies
+  it. Your own service names (`db.internal:5432`) are the ordinary case and need
+  nothing special; the zone is yours.
+</Callout>
+
+## Reading a denial
+
+Four different refusals mean four different fixes. The error code tells you
+which, and they are worth distinguishing in your alerting:
+
+| Code | Means | Fix |
+| --- | --- | --- |
+| `ERR_CAPABILITY_DENIED` | The capability was never granted | Add `--allow-<name>` |
+| `ERR_PERMISSION_DENIED` | Granted, but not for *this* value | Add the value to that flag's list |
+| `ERR_JAIL_ESCAPE` | Outside the project root, and not granted | Name it in `--allow-read`/`--allow-write` |
+| `ERR_FOREIGN_HANDLE` | Another agent's socket, process or request | Not a flag — pass data, not handles |
+
+What each looks like in practice:
+
+```text
+NotAllowedError | ERR_CAPABILITY_DENIED | capability denied: Net (permission "net")
+Error           | ERR_PERMISSION_DENIED | example.com:443 is not an allowed address (fetch)
+Error           | ERR_PERMISSION_DENIED | /srv/app/secret.txt is not an allowed path (read)
+Error           | ERR_JAIL_ESCAPE       | path /etc/passwd escapes the filesystem root jail /srv/app
+NotAllowedError | ERR_FOREIGN_HANDLE    | socket 3 does not belong to this agent
+```
+
+A denial is thrown **before** the effect, never partway through one: no packet
+leaves, no file is created, no process is spawned. An uncaught one ends the run
+with a non-zero exit status, like any other uncaught exception.
+
+<Callout type="note" title="A scoped grant is still a grant">
+  `--allow-net=api.stripe.com` reports `permissions.has("net") === true`. The
+  capability opens the door; the list is what the provider then declines to hand
+  over. That is why the two codes are distinct — "you never had `net`" and "you
+  have `net`, but not for that host" are different mistakes in a deployment
+  command, and only the second is a one-word fix.
+</Callout>
+
+<Callout type="note" title="A path list narrows the root jail, and one path outside it adds that subtree">
+  Inside the project root, a path list **narrows** what is reachable. An entry
+  *outside* it **adds** that subtree — how a server reads a TLS certificate from
+  `/etc/letsencrypt`, which no project root contains and no renewal would write
+  inside one:
+
+  ```sh
+  esrun --allow-listen=443 \
+        --allow-read=/etc/letsencrypt/live/example.com \
+        server.js
+  ```
+
+  Only a path typed on the command line widens it — guest code never can, which
+  is what the jail is for. A path neither inside the project nor named is still
+  `ERR_JAIL_ESCAPE`, and `--allow-read` does not make its subtree writable.
+</Callout>

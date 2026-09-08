@@ -1,0 +1,44 @@
+---
+title: HTTP internals compared
+description: Compare ES-Runtime HTTP server behavior with other runtimes.
+---
+
+# HTTP internals compared
+
+Measured on one machine on one day, by standing each server up and probing it —
+not read from documentation. Reproduce with `bash bench/probe-runtimes.sh`.
+
+{/* BEGIN probe:table — written by bench/probe-runtimes.sh; do not hand-edit */}
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Silent connection closed after | 10.0s | 88.1s | 13.0s | never (>150s) |
+| Idle keep-alive closed after | 30.0s | 6.0s | 12.0s | never (>150s) |
+| HTTP/2 concurrent streams | 256 | unlimited | unlimited | 200 |
+| HTTP/2 header list | 16KB | unlimited | 64KB | 16KB |
+| HTTP/2 initial window | 1MB | 64KB | 64KB | 1MB |
+
+<sub>esrun 0.15.0 · Node 24.14.0 · Bun 1.4.0 (canary) · Deno 2.8.3 · Linux · 2026-08-03</sub>
+{/* END probe:table */}
+
+A silent connection — one that completes the TCP handshake and then says nothing
+— is the cheapest hold on a server there is: one syscall to the peer, no state to
+keep. Node bounds it at 88s, which is a 60s `headersTimeout` polled on a 30s
+interval. Deno does not bound it at all, despite being built on the same HTTP
+implementation we are; nor does it bound an idle keep-alive connection.
+
+The HTTP/2 rows are read off the wire from each server's `SETTINGS` frame, which
+is what it tells every client its limits are. Node and Bun advertise unlimited
+concurrent streams; the runtimes that cap are the two on hyper.
+
+None of this makes one runtime better than another — Node's 5s keep-alive is
+more aggressive than ours, and its 88s header bound is looser. It is here so
+that a number in this documentation can be checked rather than believed.
+
+## See also
+
+- [`runtime:http` API reference](/api/http) — signatures, options, errors
+- [HTTP server guide](/docs/http) — how to build one
+- [Internals: sockets](/docs/internals/sockets) — `runtime:net`, which this does not share code with
+- [Internals: the fetch client](/docs/internals/fetch) — the outbound direction
+- [Benchmarks](/docs/benchmarks) — throughput, including HTTP/1.1 vs HTTP/2
+- [vs Node · Bun · Deno](/docs/comparison) — capability-level comparison

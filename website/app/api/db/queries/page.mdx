@@ -1,0 +1,114 @@
+---
+title: runtime:db queries, rows, and errors
+description: Use runtime:db SQL, queries, subscriptions, transactions, rows, and portable error codes.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Queries, rows, and errors
+
+Every interpolation becomes a parameter, never text. A nested fragment splices
+with its own values, so queries compose without either half knowing the other's
+placeholder numbering.
+
+```js
+const active = sql`AND status = ${"active"}`;
+await db.query(sql`SELECT * FROM users WHERE id > ${10} ${active}`);
+```
+
+Fragments and values stay apart until the backend renders them, so one template
+targets `$1`, `?` and `:name` backends unchanged — and there is no arrangement
+of it that puts a value into the text.
+
+## `Rows`
+
+Async-iterable, pulled one batch at a time — never the whole result, so a table
+larger than memory streams through at the cost of a batch.
+
+| Member | Meaning |
+| --- | --- |
+| `[Symbol.asyncIterator]` | Streams rows. |
+| `toArray()` | The whole result as an array. |
+| `first()` | The first row, or `null`. Closes the cursor. |
+| `columns` | `[{ name, declType }]`. |
+| `exhausted` | `true` when the rows came back with the query and no cursor was opened. |
+| `close()` | Closes the cursor early. |
+
+Stopping early — `break`, `return`, a `throw` — closes the cursor on the way
+out and leaves the connection usable.
+
+A result small enough to fit one batch comes back **with the query itself**, so
+no cursor is opened and the whole query costs one crossing instead of three.
+
+<Callout type="warning" title="One open result set per connection">
+  A networked backend's connection is a single conversation. Querying while
+  another result is still streaming is refused with `ERR_DB_CONNECTION_BUSY`
+  rather than queued — queueing would deadlock, since the open result only
+  finishes when the caller drains it and the caller is waiting on the queue.
+  Finish the result, or use a second connection. (`sqlite:` has no such limit:
+  each query gets its own cursor.)
+</Callout>
+
+## `Row`
+
+A **lazy view** over its batch, with one getter per column, so a query that
+selects more columns than it reads pays only for the ones it touches. A 64-bit
+integer arrives as a `bigint` only where a `number` would have lost it; a blob
+arrives as a `Uint8Array`.
+
+**What a column produces is the backend's decision.** `DbOutput` — the union
+above — is what `sqlite` produces, and `Row<V>` is generic so a driver can say
+what it produces instead: `@opentf/esrun-postgres` decodes `timestamptz` into a
+`Temporal.Instant` and `jsonb` into the document, and types its rows
+accordingly. Held through the portable `Connection` type, a row's values are
+`unknown`, because an unknown backend decodes what it likes.
+
+<Callout type="warning" title="Spreading a row does not copy its columns">
+  The getters live on the prototype, so `{ ...row }` yields an **empty object**
+  (and leaks nothing internal either). `row.toObject()` is how a row is
+  materialized. `JSON.stringify(row)` works, and `row.values()` gives the
+  columns in query order.
+</Callout>
+
+## Errors
+
+A failure is a `DbError` whose `code` is layered: the driver's own
+classification first, then a stable host code, then `ERR_DB_BACKEND`. A denied
+capability stays `ERR_CAPABILITY_DENIED` and a jail escape stays
+`ERR_JAIL_ESCAPE` — an application testing for those should not have to know the
+call went through a database. The backend's own code, where it had one, stays on
+`e.backendCode`.
+
+```js
+import { DbErrorCode } from "runtime:db";
+
+try {
+  await db.execute("INSERT INTO users (email) VALUES (?)", [email]);
+} catch (e) {
+  if (e.code === DbErrorCode.UniqueViolation) return { taken: true };
+  throw e;
+}
+```
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_DB_UNIQUE_VIOLATION` | A unique constraint or primary key collided. |
+| `ERR_DB_FOREIGN_KEY_VIOLATION` | A foreign key constraint failed. |
+| `ERR_DB_NOT_NULL_VIOLATION` | A `NOT NULL` column was given null. |
+| `ERR_DB_CHECK_VIOLATION` | A `CHECK` constraint failed. |
+| `ERR_DB_DEADLOCK` | The transaction was chosen as a deadlock victim. |
+| `ERR_DB_SERIALIZATION_FAILURE` | The transaction could not be serialized; retry it. |
+| `ERR_DB_THROTTLED` | The service is shedding load — a quota, a rate limit, a connection cap. Distinct from `ERR_DB_BUSY`, which is one resource held by someone else. |
+| `ERR_DB_NOT_FOUND` | The thing addressed does not exist. Distinct from an empty result: a query that matched nothing succeeded. |
+| `ERR_DB_BUSY` | The database is locked by another writer. |
+| `ERR_DB_CONNECTION_LOST` | The connection went away mid-operation. |
+| `ERR_DB_AUTH_FAILED` | The server refused the credentials. |
+| `ERR_DB_TIMEOUT` | The database gave up on the statement. |
+| `ERR_DB_SYNTAX` | The backend could not parse the statement. |
+| `ERR_DB_UNDEFINED_TABLE` / `ERR_DB_UNDEFINED_COLUMN` | No such table / column. |
+| `ERR_DB_READ_ONLY` | A write against a read-only database. |
+| `ERR_DB_QUERY_FORM` | The query was handed in a form this backend does not take. |
+| `ERR_DB_UNSUPPORTED` | The backend, scheme, option or parameter type is not supported. |
+| `ERR_DB_CLOSED` | The connection is closed. |
+| `ERR_DB_CONNECTION_BUSY` | The connection is already streaming a result set — only the caller draining it can free it. Distinct from `ERR_DB_BUSY`, which is the database refusing. |
+| `ERR_DB_BACKEND` | The backend failed in a way with no portable name — check `e.backendCode`. |

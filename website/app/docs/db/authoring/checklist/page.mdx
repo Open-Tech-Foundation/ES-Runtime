@@ -1,0 +1,67 @@
+---
+title: ORM integration and database checklist
+description: Understand what ORMs may rely on and verify a database driver before release.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# ORM integration and checklist
+
+Across every backend that passes the conformance suite, and regardless of who
+wrote it:
+
+- `sql\`\`` binds every interpolation as a parameter, rendering placeholders
+  through the backend's own `Dialect` — one template targets `$1`, `?` and
+  `:name` backends unchanged.
+- `Dialect.placeholder(i)` and `quoteIdent(name)` are how you build SQL for a
+  backend you were not written for. Quote identifiers with `quoteIdent`; never
+  interpolate a name.
+- `transaction(fn)` commits on return and rolls back on throw, and **nests via
+  savepoints** where the backend has them, so a helper that opens a transaction
+  composes with a caller that already did.
+- `executeMany` exists everywhere and is atomic.
+- The portable `DbErrorCode` values mean the same thing everywhere, and
+  `e.backendCode` still carries the original.
+- `{ signal }` rejects with your reason and leaves the connection usable.
+- `Rows` streams; `rows.exhausted` tells you whether a connection is still tied
+  up by it, which is what a pool needs to know.
+- `withConnection(fn)` holds **one** connection for the whole of `fn`, on a
+  single connection and on a pool alike — so an ORM never has to ask which it
+  was handed. `usable` and `reusable` answer on both too.
+- `driver.dialect.supports` answers **before** a connection exists, so an ORM
+  can pick a strategy at configuration time rather than at first query.
+- `executeMany` reports `results` per parameter set wherever the backend can,
+  which is where a batch of inserts against a key-generating backend finds its
+  keys — the aggregate carries only the last.
+- `subscribe`/`unsubscribe` mean the same thing on every backend that has them,
+  and are refused by name on every backend that does not.
+
+What is **not** portable, and should be behind a capability check rather than an
+assumption: named parameters (`dialect.supports.namedParameters` —
+PostgreSQL binds by position and refuses them), `RETURNING`
+(`supports.returning`), savepoints (`supports.savepoints`), multi-statement
+scripts, and `lastInsertRowid`, which PostgreSQL has no equivalent of and
+always reports as `null`.
+
+Three more, which an ORM that assumed "every backend is a SQL backend" will meet
+the moment one is not. `supports.queryText` — `redis:` refuses SQL, so a query
+builder that emits text has to check before it emits any. `supports.queryAst`,
+which is how you reach such a backend at all. And `supports.transactions`: where
+it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
+**not** atomic, so an ORM relying on either has to say what it does instead.
+
+## A checklist
+
+- [ ] `defineDriver`, exported as your package's default — that *is* the API
+- [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
+- [ ] `supports` states what you take and what you have — `queryText`, `queryAst`, `transactions`, plus any capability of your own an ORM should be able to branch on
+- [ ] Rows as bytes if that is what you were handed, as records if they are already JavaScript — never encode objects to satisfy the byte layout
+- [ ] Both wire formats, if you have two, decode to identical values
+- [ ] SQLSTATE or equivalent mapped onto the portable codes, host codes preserved
+- [ ] One open result set per connection, enforced rather than hoped
+- [ ] `withConnection` left alone unless you genuinely have no single session to lend, in which case refuse it by name
+- [ ] `reusable` answered from the protocol's own idea of idle, so pooling is correct
+- [ ] Timeouts on connect; let the server bound the statement if it can
+- [ ] Transport failures latched
+- [ ] `_subscribe`/`_unsubscribe` if you push messages, confirmed before resolving
+- [ ] `runBackendConformance()` passing, in CI, against a real server

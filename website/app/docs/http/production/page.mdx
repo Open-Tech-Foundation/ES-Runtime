@@ -1,0 +1,97 @@
+---
+title: HTTP identity, limits, and deployment
+description: Understand HTTP caller identity, timeouts, connection limits, and Hono integration.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Identity, limits, and deployment
+
+The handler's second argument carries the connection's peer — the same shape
+`Deno.serve` passes, so a handler ports either way. Taking it is optional.
+
+```js
+serve({ port: 8080 }, (request, info) => {
+  const ip = info.remoteAddr.hostname; // "203.0.113.7"
+  return new Response(`hello ${ip}`);
+});
+```
+
+<Callout type="warning" title="Behind a proxy, this is the proxy">
+  `remoteAddr` is the other end of the socket and nothing else. esrun never
+  reads `X-Forwarded-For` for you: resolving it takes knowing which hop to
+  trust, and a header anyone can send is not an identity. The header arrives
+  untouched, so a deployment that knows its own topology can do it explicitly —
+  `request.headers.get("x-forwarded-for")?.split(",")[0].trim()`.
+</Callout>
+
+It is `null` when there is no peer to report, rather than a blank address.
+
+## Timeouts and connection limits
+
+A connection that is not making progress is closed, and you can cap how many are
+served at once. Nothing here has to be turned on:
+
+| Option | Default | What it bounds |
+| --- | --- | --- |
+| `timeouts.handshake` | `10000`ms | Accept → ready to carry requests |
+| `timeouts.headerRead` | `30000`ms | A request head arriving in full; on HTTP/1.1, the idle keep-alive limit too |
+| `timeouts.h2KeepAlive` | `20000`ms | PING probes on an idle HTTP/2 connection |
+| `timeouts.bodyRead` | `30000`ms | A request body arriving, before what `bodyMinRate` earns it |
+| `timeouts.bodyMinRate` | `1024` B/s | Bytes per second that extend `bodyRead` |
+| `maxConnections` | unlimited | How many connections are served at once |
+| `maxConnectionsPerIp` | unlimited | How many one peer address may hold — over it, refused rather than held |
+
+```js
+// Timeouts are milliseconds; `null` disables one; omit it to keep the default.
+serve({ port: 8080, timeouts: { headerRead: 5000 }, maxConnections: 10_000 }, handler);
+```
+
+They bound only connections that are **idle or stalled**. A request in flight and
+a response still streaming are never interrupted, however long they take — a live
+feed is unaffected by `headerRead` no matter how far past it runs. A connection
+over `maxConnections` is held rather than refused: it waits, and is served as
+soon as a slot frees. `maxConnectionsPerIp` is the half that says *whose*
+connections fill that budget — without it one peer can take every slot — and a
+connection over it is refused rather than held. Leave it off behind a proxy,
+where every connection carries the same source address.
+
+A request **body** is bounded differently, because elapsed time cannot tell a
+large upload on a slow link from a peer dribbling a byte a minute. The deadline
+is **earned** — `bodyRead + received / bodyMinRate` — so an upload extends its
+own by uploading, and a dribbler does not send enough to extend it. At the
+defaults a 100 MiB upload has over a day; a byte-a-minute peer is closed at ~30s.
+The handler sees the body stream error with `ERR_TIMED_OUT`.
+
+<Callout type="info" title="How this behaves, and why">
+  Why the HTTP/1.1 idle limit and the request-head limit are the same timer, why
+  the connection cap ships off when the timeouts ship on, what a single
+  connection costs in memory, and how all of it compares to Node, Bun and Deno
+  on measured numbers: [Internals: the HTTP server](/docs/internals/http).
+</Callout>
+
+## Usage with Hono
+
+Because esrun uses standard Web APIs, frameworks like
+[Hono](https://hono.dev) work when their package is on disk (install with npm,
+bun, or pnpm — esrun resolves `node_modules` but does not install packages for
+you).
+
+```js
+import { serve } from "runtime:http";
+import { Hono } from "hono";
+
+const app = new Hono();
+app.get("/", (c) => c.text("Hello from Hono on esrun!"));
+
+const server = serve({ port: 8080 }, app.fetch);
+const { port } = await server.addr;
+console.log(`Hono listening on http://127.0.0.1:${port}`);
+```
+
+## See also
+
+- [`runtime:http` API reference](/api/http) — full signatures, errors, and types
+- [Sockets](/docs/guides/networking) — raw TCP/TLS when you need lower-level control
+- [WebSockets](/docs/guides/websocket) — upgrade-friendly real-time connections
+- [Benchmarks](/docs/benchmarks) — HTTP throughput measurements

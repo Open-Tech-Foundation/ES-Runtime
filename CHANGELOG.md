@@ -25,6 +25,10 @@ namespace) is unstable and may change between minor releases until the API freez
   entry, focused pages for permissions, import policy, processes, networking,
   filesystem, and cryptography, plus private reporting through
   `security@opentechf.org` in the site, README, and `SECURITY.md`.
+- **The largest site documentation pages are now split into focused routes**,
+  covering migration, runtime security, esdev plugins and testing, Redis,
+  database authoring, the HTTP guide and internals, and the `runtime:db` API.
+  Their overview pages now provide clear navigation into the detailed guides.
 
 ### Security
 

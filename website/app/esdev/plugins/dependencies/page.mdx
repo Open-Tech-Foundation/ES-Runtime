@@ -1,0 +1,29 @@
+---
+title: Plugin dependencies and module context
+description: Declare files a plugin depends on and work with virtual modules in esdev.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Dependencies and module context
+
+`docs/_meta.js` above is imported by nothing. The graph cannot discover it, so
+without a word from the plugin a change to it rebuilds nothing — and the failure
+shows up as a page that is quietly out of date, which is the worst kind to
+debug.
+
+Rollup's answer is `this.addWatchFile()`, a call you can forget to make. Here
+the dependency is **a field of the value you return**, which is not forgettable
+in the same way. Relative paths resolve like every other path in a run, and come
+back absolute:
+
+```text
+--- watchFiles --- ["/app/docs/_meta.js", "/app/main.js", "/app/hello.txt"]
+```
+
+`start` is where a whole-build dependency goes — a config file, a manifest —
+since it has no module to hang an answer on:
+
+```js
+start: { handler: () => ({ dependsOn: ["esdev.json"] }) }
+```

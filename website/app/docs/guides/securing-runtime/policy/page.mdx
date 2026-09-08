@@ -1,0 +1,89 @@
+---
+title: Import policy and deployment commands
+description: Control which modules may load and make esrun deployment commands fail closed.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Import policy and deployment commands
+
+Capabilities bound what running code may *reach*. Which modules may **become**
+running code is a separate question, and has a separate mechanism — a JSON file,
+named explicitly and never auto-discovered:
+
+```sh
+esrun --allow-imports --import-policy=./import-policy.json server.js
+```
+
+```json
+{
+  "allow": ["./src", "express", "@acme/ui"],
+  "deny": ["aws-sdk"]
+}
+```
+
+A refused import fails to load, by name:
+
+```text
+module loading failed: package aws-sdk is denied by the import policy
+```
+
+Entries beginning with `.` or `/` are paths covering their subtree; anything
+else is a package name. **Deny wins over allow.** Omitting `"allow"` permits
+everything not denied — the shape to reach for first, because a deny-only policy
+can be adopted on an existing project today without enumerating a dependency
+graph. An empty `"allow": []` and any unknown key are errors, rather than a
+policy that quietly permits or forbids everything. See the
+[full rules](/api/cli#import-policy).
+
+<Callout type="note" title="The policy is not a way around --deny-imports">
+  Two layers, not two alternatives. The `imports` **capability** decides whether
+  the module loader runs at all; the **policy** decides what it may then
+  resolve. Without `--allow-imports`, an `"allow"` entry still loads nothing.
+</Callout>
+
+<Callout type="warning" title="A policy names packages, not content">
+  `"express"` says the loader may resolve that package. It says nothing about
+  which version, or whether the bytes are the ones you audited. Keep your
+  lockfile — it is the install-time half of this, and the policy does not
+  replace it.
+</Callout>
+
+## The command is part of the deployment
+
+A permission flag that is ignored would leave a run wider than the command line
+claims, so the parser never guesses. Each of these **fails the run** rather than
+starting one:
+
+```text
+$ esrun app.js --allow-net
+error: --allow-net appears after app.js, where it is the script's own argument
+and does nothing to the run.
+
+$ esrun --allow-ne app.js
+error: unknown option: --allow-ne
+
+$ esrun --deny-net app.js
+error: --deny-net requires --allow-all: every capability is denied by default,
+so there is nothing for --deny-net to take away.
+
+$ esrun --allow-env --allow-env=HOME app.js
+error: --allow-env=HOME and --allow-env disagree: one narrows the grant to a
+list, the other grants it whole.
+```
+
+The consequences for a deployment are worth stating plainly:
+
+- **Order matters.** esrun's flags come before the script; anything after it is
+  the script's own argument. A restriction appended to the end of a command is
+  the classic way to ship an unrestricted service, so this is an error rather
+  than a silent pass-through.
+- **A typo cannot degrade you quietly.** An unknown flag stops the run and lists
+  the valid names.
+- **No flag overrides another.** There is no precedence to reason about. The two
+  modes — `--allow-<name>` adding, `--allow-all --deny-<name>` subtracting —
+  cannot be combined, and granting one capability both whole and narrowed is an
+  error rather than a rule someone has to remember.
+
+Because a malformed command fails loudly, a smoke test that the service *starts*
+is also a test that its permission flags parsed.

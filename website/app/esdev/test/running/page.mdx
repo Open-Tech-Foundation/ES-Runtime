@@ -1,0 +1,77 @@
+---
+title: Running and isolating tests
+description: Run, filter, isolate, and diagnose esdev test files.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Running and isolating tests
+
+`test.only` runs that case and skips the rest; `describe.only` does it for a
+group. What did not run is counted and said out loud:
+
+```text
+  only: 27 other tests did not run
+  1 passed, 0 failed, 27 skipped
+```
+
+That line is the point. A `.only` left in a commit otherwise looks exactly like
+a suite that got faster, and a skipped case missing from the report is the same
+failure as a case that quietly never ran.
+
+## One process per file
+
+A test suite is where isolation matters most. A file that wedges, exhausts its
+heap or calls `exit()` must not decide the fate of the others, and a global left
+behind by one must not be visible to the next. Each file gets its own process —
+the prelude snapshot makes that cheap.
+
+`--file=<path>` is what a child is invoked with, and is equally a supported way
+to run one file by hand.
+
+Files run **in parallel** — the machine's parallelism, at most 8, since every job
+holds a V8 heap. Each file's output is held and printed whole when it finishes,
+so two suites never interleave line by line.
+
+```sh
+esdev test                  # all of them, in parallel
+esdev test db --watch       # the files whose path contains "db", again on every save
+esdev test --jobs=1         # one at a time, writing straight to the terminal
+```
+
+`--jobs=1` is the run to reach for when a test is hanging and you want to watch
+it happen. `--watch` re-discovers files every pass, so a test you are about to
+write is one the watcher will find.
+
+## The file is the entry, unaltered
+
+It keeps its own path, its module resolution, its relative imports and its
+TypeScript — and nothing is added to it. What runs is byte for byte the file on
+disk, so a failing assertion names the line you wrote because it *is* the line
+you wrote.
+
+That was not always true. The API used to be five globals prepended to the file
+as a single physical line, with an epilogue appended to await and report, and
+keeping your line 1 as line 1 was a constraint the harness had to be written
+around. Moving the API into a module and the tally into the host removed both.
+
+Since a test file is now an ordinary module, running one directly works and
+reports the same way:
+
+```sh
+esdev app.test.ts
+```
+
+## A test that never finishes
+
+It is reported as a **failure**, not a hang:
+
+```text
+  FAIL never finishes
+    the test never finished — it is waiting on something that never happened
+  3 passed, 1 failed
+```
+
+The runner knows a case started and never settled. It used to await every
+pending promise, so a test waiting on something that never happened hung the
+file forever.

@@ -21,7 +21,16 @@ const NAV = [
       { title: "Project builds", path: "/esdev/build/project" },
       { title: "Browser builds", path: "/esdev/build/browser" },
       { title: "Libraries", path: "/esdev/build/library" },
-      { title: "Writing a plugin", path: "/esdev/plugins" },
+      {
+        title: "Writing plugins",
+        items: [
+          { title: "Overview", path: "/esdev/plugins" },
+          { title: "Lifecycle & hooks", path: "/esdev/plugins/lifecycle" },
+          { title: "Dependencies & modules", path: "/esdev/plugins/dependencies" },
+          { title: "Context & ordering", path: "/esdev/plugins/context" },
+          { title: "Runtime & troubleshooting", path: "/esdev/plugins/runtime" },
+        ],
+      },
     ],
   },
   {
@@ -36,7 +45,15 @@ const NAV = [
   {
     title: "Testing & diagnostics",
     items: [
-      { title: "Testing", path: "/esdev/test" },
+      {
+        title: "Testing",
+        items: [
+          { title: "Overview", path: "/esdev/test" },
+          { title: "Writing tests", path: "/esdev/test/writing" },
+          { title: "Running & isolating", path: "/esdev/test/running" },
+          { title: "Mocks, setup & imports", path: "/esdev/test/mocks" },
+        ],
+      },
       { title: "Debugging", path: "/esdev/debugging" },
       { title: "Tracing permissions", path: "/esdev/permissions" },
     ],

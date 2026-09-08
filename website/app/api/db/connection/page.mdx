@@ -1,0 +1,195 @@
+---
+title: runtime:db connections and pooling
+description: Connect to a database, configure pooling, and cancel runtime:db operations.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Connections and pooling
+
+```js
+import { connect, sqlite, sql } from "runtime:db";
+```
+
+## `connect(url, options)`
+
+Opens a connection with the **driver** you pass. `sqlite` is built in; every
+other driver is a package export.
+
+```js
+const db  = await connect("sqlite:./app.db", { driver: sqlite });
+const mem = await connect("sqlite::memory:", { driver: sqlite });
+const enc = await connect("sqlite:./secret.db", { driver: sqlite, key });
+
+// Every driver package exports its driver as `driver`, and nothing as a
+// default. Two of them in one module are told apart with `as`.
+import { driver as postgres } from "@opentf/esrun-postgres";
+const pg = await connect("postgres://user@host/app", { driver: postgres });
+```
+
+| Option | Type | Meaning |
+| --- | --- | --- |
+| `driver` | `Driver` | **Required.** The backend to open with — every driver package exports one as `driver`. |
+| `pool` | `boolean \| { max, idleTimeout, acquireTimeout }` | Pool instead of opening one connection. |
+
+Everything else in the options object belongs to the driver — `key`, `cipher`
+and `readOnly` for `sqlite`, a host and TLS settings for a networked one.
+
+| `sqlite` option | Type | Meaning |
+| --- | --- | --- |
+| `key` | `string \| Uint8Array` | Encryption key, hex or bytes. |
+| `cipher` | `string` | Cipher name; defaults to the backend's. |
+| `readOnly` | `boolean` | Open without the ability to write. |
+
+What comes back is **that driver's** connection, so a driver's own surface is on
+the object `connect` returned and needs no second entry point: Redis's commands,
+PostgreSQL's `LISTEN`. The URL's scheme is checked against the driver's, so a
+driver pointed at a URL it does not take is refused at the call.
+
+<Callout type="warning" title="A key never goes in the URL">
+  A key in a connection string ends up in logs, in error messages and in stack
+  traces. `connect("sqlite:./app.db?key=…", { driver: sqlite })` is **refused**,
+  not honoured quietly. Pass it in the options object.
+</Callout>
+
+### `pool`
+
+```js
+const pool = await connect("postgres://host/app", { driver: postgres, pool: { max: 20 } });
+await pool.query("SELECT 1");            // borrows and returns a connection
+await pool.transaction(async (tx) => …); // holds one for the whole of it
+await pool.withConnection(async (c) => …);  // for anything stateful across calls
+```
+
+A pooled connection answers the same surface a single one does, plus `size`,
+`idle` and `pending`. A connection is returned to the pool only if the driver
+says it is fit for the next caller (`reusable`), and destroyed otherwise.
+
+`sqlite:` names a file format and a SQL dialect the way `postgres://` names a
+wire protocol — not a particular implementation, which may be replaced without
+the URL changing.
+
+`sqlite::memory:` opens a database that exists only in memory, and each
+connection gets its own. The named form (`:memory:name`), which in SQLite means
+*sharing* one, is refused rather than quietly not sharing.
+
+## `Connection`
+
+| Member | Returns |
+| --- | --- |
+| `query(q, params?)` | `Promise<Rows>` |
+| `execute(q, params?)` | `Promise<{ changes, lastInsertRowid }>` |
+| `executeMany(sql, rows)` | `Promise<{ changes, lastInsertRowid, results? }>` |
+| `transaction(fn)` | whatever `fn` returns |
+| `withConnection(fn)` | whatever `fn` returns, with **one** connection held for it |
+| `subscribe(channels, handler?)` / `unsubscribe(channels?)` | `Promise<void>` |
+| `subscribed`, `subscriptions` | whether it is delivering messages, and what it listens to |
+| `usable`, `reusable` | still worth using; fit for the next caller |
+| `close()` | `Promise<void>` — also `Symbol.asyncDispose` |
+| `dialect`, `backend` | the backend's dialect and name |
+
+Every one of these is on a single connection **and** on a pooled one, so code
+that holds "a connection" never has to ask which kind it has.
+
+`q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
+(bound by position) or an object (bound by name).
+
+Which forms a backend takes is its own declaration — `dialect.supports.queryText`
+and `supports.queryAst` — and the form it does not take is refused with
+`ERR_DB_QUERY_FORM`, in either direction. `sqlite:` and `postgres:` take SQL;
+`redis:` takes command arrays and refuses SQL.
+
+`supports.transactions` is the matching declaration for `transaction(fn)`: a
+backend that says `false` refuses with `ERR_DB_UNSUPPORTED` rather than emitting
+a `BEGIN` it has never heard of, and its `executeMany` is **not** atomic,
+because there is no transaction to wrap it in.
+
+### Cancelling
+
+```js
+await db.query(sql, params, { signal: AbortSignal.timeout(5_000) });
+```
+
+Aborting asks the backend to cancel and **waits** for it to answer, so the
+connection is left in a known state and stays usable — which is the difference
+between cancelling and hanging up. The rejection carries the signal's own
+`reason` rather than the backend's word for a cancelled statement, including
+when a streaming result is abandoned halfway.
+
+How much can actually be cancelled is a backend question, and the interface does
+not pretend otherwise: `sqlite:` interrupts a running statement, `postgres:`
+sends a cancel on a second connection, and a backend that implements neither
+still rejects the caller while the work runs to completion.
+
+```js
+await db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["ada", 36]);
+await db.execute("INSERT INTO users (name) VALUES (:name)", { name: "grace" });
+```
+
+### `executeMany(sql, rows)`
+
+One statement, many parameter sets, **one crossing** and one prepare.
+
+```js
+await db.executeMany("INSERT INTO users (name, email) VALUES (?, ?)", [
+  ["Ada", "ada@example.com"],
+  ["Grace", "grace@example.com"],
+]);
+```
+
+The reason to reach for it is arithmetic rather than taste: a crossing costs
+about the same whatever it carries, so a loop that crosses once per row spends
+its time on the boundary instead of in the database.
+
+<Callout type="info" title="It runs as one transaction">
+  Unless one is already open, in which case it joins that one. A batch that
+  half-applied would be a worse default than either alternative — and outside a
+  transaction each statement would be committed durably on its own, which is
+  the slow path this exists to avoid, arrived at by accident.
+</Callout>
+
+A `` sql`` `` template with values describes a single row, so it is refused
+here rather than silently running the first row's values for every row.
+
+`results` carries **one result per parameter set** where the backend reports
+them — which the default batch path always does, since it ran the sets one at a
+time. It is absent when the backend answered for the batch as a whole, so check
+before reading it. Without it, a batch of inserts against a backend that
+generates keys is a batch whose keys are unreachable: the aggregate can only
+carry the last.
+
+### `subscribe(channels, handler?)`
+
+Server-pushed messages: PostgreSQL's `LISTEN`/`NOTIFY`, Redis's pub/sub, a
+change stream elsewhere.
+
+```js
+await conn.subscribe("orders", (payload, { channel }) => console.log(channel, payload));
+conn.onMessage = (payload, context) => …;      // the catch-all
+conn.onSubscribeError = (error) => …;          // the delivery loop failed
+await conn.unsubscribe("orders");              // omit the name for all of them
+```
+
+It resolves once the backend has **confirmed** the subscription, so publishing
+immediately afterwards cannot race it. Subscribing gives the connection over to
+delivering messages, and on most backends it then refuses ordinary work with
+`ERR_DB_CONNECTION_BUSY` — which is the protocol's own rule as often as it is
+the driver's, and how you would deploy it anyway.
+
+`supports.subscriptions` is the declaration; a backend without them refuses by
+name. **A pooled connection refuses too**: a subscription needs a connection
+that does not come back, which is the opposite of a pool's premise.
+
+### `transaction(fn)`
+
+Commits when `fn` returns and rolls back when it throws. Nested calls become
+savepoints where the backend has them, so a helper that opens a transaction
+composes with a caller that already did instead of committing the outer one
+early. A rollback that itself fails never replaces the error that caused it.
+
+```js
+await db.transaction(async (tx) => {
+  await tx.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", [100, from]);
+  await tx.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", [100, to]);
+});
+```

@@ -1,0 +1,60 @@
+---
+title: Migrating from Deno
+description: Move a Deno application to esrun: filesystem, process, environment, and subprocess APIs.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Migrating from Deno
+
+Deno is the closest starting point — Web APIs, and permissions on the command
+line. Two things move: the `Deno.*` namespace becomes `runtime:` imports, and
+resolution becomes `package.json` plus `node_modules` rather than
+`deno.json`.
+
+### 1. File operations (`Deno.readTextFile`, `Deno.writeTextFile`)
+
+```js
+// ❌ Deno
+const text = await Deno.readTextFile("./data.txt");
+await Deno.writeTextFile("./out.txt", "content");
+await Deno.remove("./temp.txt");
+
+// ✅ esrun
+import { file, write, remove } from "runtime:fs";
+
+const text = await file("./data.txt").text();
+await write("./out.txt", "content");
+await remove("./temp.txt");
+```
+
+### 2. Process and environment (`Deno.env`, `Deno.args`)
+
+```js
+// ❌ Deno
+const port = Deno.env.get("PORT");
+const cliArgs = Deno.args;
+const currentDir = Deno.cwd();
+
+// ✅ esrun
+import { env, args, cwd } from "runtime:process";
+
+const port = env.PORT;
+const cliArgs = args;
+const currentDir = cwd();
+```
+
+### 3. Subprocesses (`Deno.Command`)
+
+```js
+// ❌ Deno
+const command = new Deno.Command("git", { args: ["status"] });
+const { code, stdout } = await command.output();
+
+// ✅ esrun
+import { Command } from "runtime:system";
+
+const { code, stdout } = await new Command("git", {
+  args: ["status"],
+}).output();
+```

@@ -18,6 +18,16 @@ because they are [out of scope](/docs/scope).
   and every host effect is imported from a `runtime:` module. Whatever a file
   can reach is visible in its import list.
 </Callout>
+## Choose your starting runtime
+
+The quick reference below gives the one-line replacement. Use the focused guide
+for the host you are leaving:
+
+- [Migrating from Node.js](/docs/migration/node) — globals, files, paths,
+  subprocesses, buffers, and cryptography.
+- [Migrating from Bun](/docs/migration/bun) — the `Bun.*` namespace, processes,
+  and hashing.
+- [Migrating from Deno](/docs/migration/deno) — `Deno.*` APIs and permissions.
 
 ## Architectural and language differences
 
@@ -57,280 +67,14 @@ Three rules shape the port before any individual API does.
 | **WASI guest** | `node:wasi` | `node:wasi` | `node:wasi` | `import { WASI } from "runtime:wasi"` |
 | **YAML and other formats** | `js-yaml` (npm) | `js-yaml` (npm) | `js-yaml` (npm) | `import { YAML } from "runtime:serialization"` |
 
-## Migrating from Node.js
+## Provider migration guides
 
-### 1. Environment and process globals
+The detailed provider mappings live on separate pages so you can read only the
+runtime you are moving from.
 
-In Node.js `process` is ambient. In esrun, `env`, `args`, `cwd` and `exit` are
-imported from `runtime:process`, and reading any of them needs `--allow-env`.
-
-```js
-// ❌ Node.js
-const port = process.env.PORT || 8080;
-const cliArgs = process.argv.slice(2);
-const currentDir = process.cwd();
-process.exit(0);
-
-// ✅ esrun
-import { env, args, cwd, exit } from "runtime:process";
-
-const port = env.PORT || 8080;
-const cliArgs = args; // Script arguments (excluding binary/script names)
-const currentDir = cwd();
-exit(0);
-```
-
-### 2. Filesystem operations (`node:fs`)
-
-Synchronous and callback `node:fs` calls become the promise-based, `Blob`-like
-surface in `runtime:fs`. Every path is resolved inside the project root jail,
-and reads and writes are two separate grants.
-
-```js
-// ❌ Node.js
-import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
-
-if (existsSync("./config.json")) {
-  const raw = readFileSync("./config.json", "utf8");
-  writeFileSync("./out.txt", "processed");
-  appendFileSync("./app.log", "done\n");
-}
-
-// ✅ esrun
-import { file, write } from "runtime:fs";
-
-const cfg = file("./config.json");
-if (await cfg.exists()) {
-  const text = await cfg.text();       // UTF-8 text
-  const json = await cfg.json();       // Parsed JSON
-  const bytes = await cfg.bytes();     // Uint8Array
-
-  await write("./out.txt", "processed");
-  await write("./app.log", "done\n", { append: true });
-}
-```
-
-### 3. Path resolution (`__dirname`, `__filename`, `node:path`)
-
-`__dirname` and `__filename` are CommonJS, and `import.meta` here carries `url`
-and `resolve` only. Derive them from `import.meta.url` with `runtime:path`.
-
-```js
-// ❌ Node.js (CommonJS)
-const path = require("path");
-const file = path.join(__dirname, "data", "app.db");
-
-// ✅ esrun
-import { join, dirname, fromFileURL } from "runtime:path";
-
-const __filename = fromFileURL(import.meta.url);
-const __dirname = dirname(__filename);
-const dbPath = join(__dirname, "data", "app.db");
-```
-
-### 4. Subprocesses (`node:child_process`)
-
-Replace `child_process.spawn()` or `exec()` with `Command` from `runtime:system`.
-
-```js
-// ❌ Node.js
-import { spawn } from "node:child_process";
-const child = spawn("git", ["status"]);
-
-// ✅ esrun (Collect output)
-import { Command } from "runtime:system";
-
-const { code, stdout, stderr } = await new Command("git", {
-  args: ["status"],
-}).output();
-
-const outputText = new TextDecoder().decode(stdout);
-```
-
-```js
-// ✅ esrun (Stream stdin / stdout with Web Streams)
-import { Command } from "runtime:system";
-
-const child = await new Command("ffmpeg", {
-  args: ["-i", "pipe:0", "-f", "mp3", "pipe:1"],
-  stdin: request.body, // Web ReadableStream / Response body streams directly in
-}).spawn();
-
-return new Response(child.stdout); // Web ReadableStream streams directly out
-```
-
-### 5. Binary data and buffers (`node:buffer`)
-
-`Buffer` becomes `Uint8Array`, with `TextEncoder`/`TextDecoder` for text and
-`btoa()`/`atob()` for base64.
-
-```js
-// ❌ Node.js
-const buf = Buffer.from("Hello World", "utf8");
-const b64 = buf.toString("base64");
-const back = Buffer.from(b64, "base64").toString("utf8");
-
-// ✅ esrun (Standard Web APIs)
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-const bytes = encoder.encode("Hello World"); // Uint8Array
-const b64 = btoa(decoder.decode(bytes));
-const back = decoder.decode(encoder.encode(atob(b64)));
-```
-
-### 6. Cryptography and hashing (`node:crypto`)
-
-`createHash`, `createHmac` and `timingSafeEqual` become
-[`runtime:hashing`](/api/hashing); keys, signatures and ciphers become
-`crypto.subtle`; `randomUUID` and `randomBytes` become `crypto`.
-
-```js
-// ❌ Node.js
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-const id = randomUUID();
-const digest = createHash("sha256").update("data").digest("hex");
-const mac = createHmac("sha256", secret).update(body).digest("hex");
-
-// ✅ esrun
-import { hash, Hasher, hmac, timingSafeEqual } from "runtime:hashing";
-const id = crypto.randomUUID();
-const digest = hash("sha256", "data", "hex");
-const mac = hmac("sha256", secret, body, "hex");
-
-// Chunked, for anything too large to hold at once.
-const h = new Hasher("sha256");
-for await (const chunk of stream) h.update(chunk);
-h.digest("hex");
-```
-
-| Node | esrun |
-| --- | --- |
-| `createHash(alg)` | `hash(alg, data, "hex")` or `new Hasher(alg)` |
-| `createHmac(alg, key)` | `hmac(alg, key, data, "hex")` |
-| `timingSafeEqual(a, b)` | `timingSafeEqual(a, b)` |
-| `scrypt`, `pbkdf2` | `password.hash()` / `crypto.subtle.deriveBits` |
-| `bcrypt`, `argon2` (npm) | `password.hash()` / `password.verify()` |
-| `randomUUID`, `randomBytes` | `crypto.randomUUID()`, `crypto.getRandomValues()` |
-| `createSign`, `createCipheriv`, `generateKeyPair` | `crypto.subtle` |
-
-```js
-// Passwords: no npm package, and the parameters travel with the hash.
-import { password } from "runtime:hashing";
-
-const stored = await password.hash(input);   // argon2id
-if (await password.verify(input, user.hash) && password.needsRehash(user.hash)) {
-  user.hash = await password.hash(input);
-}
-```
-
-## Migrating from Bun
-
-Bun's Web-standard surface carries over unchanged. What moves is the `Bun.*`
-namespace: each ambient global becomes an explicit `runtime:` import.
-
-### 1. File handling (`Bun.file`, `Bun.write`)
-
-```js
-// ❌ Bun
-const text = await Bun.file("./data.txt").text();
-const json = await Bun.file("./data.json").json();
-await Bun.write("./out.txt", "data");
-
-// ✅ esrun
-import { file, write } from "runtime:fs";
-
-const text = await file("./data.txt").text();
-const json = await file("./data.json").json();
-await write("./out.txt", "data");
-```
-
-### 2. Subprocesses (`Bun.spawn`, `Bun.$`)
-
-```js
-// ❌ Bun
-const proc = Bun.spawn(["git", "rev-parse", "HEAD"]);
-const text = await new Response(proc.stdout).text();
-
-// ✅ esrun
-import { Command } from "runtime:system";
-
-const { stdout } = await new Command("git", {
-  args: ["rev-parse", "HEAD"],
-}).output();
-
-const text = new TextDecoder().decode(stdout).trim();
-```
-
-### 3. Hashing and passwords (`Bun.hash`, `Bun.CryptoHasher`, `Bun.password`)
-
-```js
-// ❌ Bun
-const key = Bun.hash(data);
-const digest = new Bun.CryptoHasher("sha256").update("data").digest("hex");
-const stored = await Bun.password.hash(input);
-
-// ✅ esrun
-import { hash, Hasher, password } from "runtime:hashing";
-
-const key = hash("xxhash64", data);
-const digest = new Hasher("sha256").update("data").digest("hex");
-const stored = await password.hash(input);
-```
-
-## Migrating from Deno
-
-Deno is the closest starting point — Web APIs, and permissions on the command
-line. Two things move: the `Deno.*` namespace becomes `runtime:` imports, and
-resolution becomes `package.json` plus `node_modules` rather than
-`deno.json`.
-
-### 1. File operations (`Deno.readTextFile`, `Deno.writeTextFile`)
-
-```js
-// ❌ Deno
-const text = await Deno.readTextFile("./data.txt");
-await Deno.writeTextFile("./out.txt", "content");
-await Deno.remove("./temp.txt");
-
-// ✅ esrun
-import { file, write, remove } from "runtime:fs";
-
-const text = await file("./data.txt").text();
-await write("./out.txt", "content");
-await remove("./temp.txt");
-```
-
-### 2. Process and environment (`Deno.env`, `Deno.args`)
-
-```js
-// ❌ Deno
-const port = Deno.env.get("PORT");
-const cliArgs = Deno.args;
-const currentDir = Deno.cwd();
-
-// ✅ esrun
-import { env, args, cwd } from "runtime:process";
-
-const port = env.PORT;
-const cliArgs = args;
-const currentDir = cwd();
-```
-
-### 3. Subprocesses (`Deno.Command`)
-
-```js
-// ❌ Deno
-const command = new Deno.Command("git", { args: ["status"] });
-const { code, stdout } = await command.output();
-
-// ✅ esrun
-import { Command } from "runtime:system";
-
-const { code, stdout } = await new Command("git", {
-  args: ["status"],
-}).output();
-```
+- [Migrating from Node.js](/docs/migration/node)
+- [Migrating from Bun](/docs/migration/bun)
+- [Migrating from Deno](/docs/migration/deno)
 
 ## Serialization without a package
 
