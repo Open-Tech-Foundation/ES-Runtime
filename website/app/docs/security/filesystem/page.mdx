@@ -1,0 +1,61 @@
+---
+title: Filesystem and secrets
+description: Understand the root jail, environment files, and secret masking.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Filesystem and secrets
+
+## The filesystem root jail
+
+Filesystem access, including module resolution, is confined to the working
+directory. Paths are canonicalized to their real location before the check, so
+a symlink cannot escape the jail. This is on by default and is not optional.
+
+The root is the working directory exactly: there is no walk up to a
+`package.json`, marker file, or flag that moves it. A path grant can add a
+specific subtree outside the root, but guest code cannot widen the grant.
+
+The filesystem root and the home directory are refused as working directories,
+because either would accidentally make the jail the whole machine or a user's
+private tree. The process fails at startup and names the fix.
+
+<Callout type="danger" title="Root jail in action">
+  `file("../../etc/passwd")` reaches the trusted Rust capability and root-jail
+  checks, canonicalizes to `/etc/passwd`, and fails with a jail-escape error
+  because it is outside `/home/user/project`.
+</Callout>
+
+See [The project root](/docs/modules#the-project-root) for module-resolution
+details.
+
+## Environment files and secret masking
+
+What the guest can read from the environment is an explicit host decision, and
+secret values resist accidental disclosure.
+
+<Callout type="warning" title="No implicit disk reads">
+  A `.env` file loads only through `--env-file`. Nothing on disk reaches the
+  guest environment unless the command asks for it.
+</Callout>
+
+<Callout type="note" title="OS environment wins">
+  Loaded values fill only unset keys by default, so a checked-in file cannot
+  clobber production configuration. The real process environment is never
+  mutated.
+</Callout>
+
+<Callout type="tip" title="Secret masking">
+  Keys ending in `_KEY`, `_TOKEN`, `_SECRET`, `_PASS` or `_PASSWORD`, or
+  containing `CREDENTIAL` or `AUTH`, become a [`Secret`](/api/process) that
+  prints as `[redacted]`.
+</Callout>
+
+<Callout type="danger" title="Masking is not a sandbox">
+  Masking prevents accidental leaks into logs and JSON. Guest code can call
+  `unmask()` itself, so withhold `Env` when the code should not see a secret.
+</Callout>
+
+For the permission flags that govern file and environment access, see
+[Permissions & capabilities](/docs/security/permissions).

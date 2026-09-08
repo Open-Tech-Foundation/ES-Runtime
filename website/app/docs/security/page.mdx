@@ -1,367 +1,101 @@
 ---
-title: Security model
-description: Deny-by-default capabilities, a filesystem root jail, secret masking, and engine confinement.
+title: Security
+description: How to report vulnerabilities, what ES-Runtime protects, and where to find each part of its security model.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
-# Security model
+# 🔒 Security
 
-**`esrun` is deny-by-default.** It can compute, but cannot reach the host
-environment, filesystem, or network until the command line that started it says
-so. Widen a run with [grant flags](#granting-capabilities-in-esrun).
+ES-Runtime runs JavaScript services inside a capability-based security boundary.
+This page explains how to report a vulnerability, what belongs in scope, and
+where to read each part of the runtime's security model.
 
-[`esdev`](/esdev), the development binary, is the exception: it grants
-everything so an inner loop needs no flags, and never reaches production.
-
-<Callout type="tip" title="Looking for the how-to?">
-  This page is the model — what the pieces are and why. To take a working
-  script and lock it down step by step, read
-  [Securing the runtime](/docs/guides/securing-runtime).
+<Callout type="warning" title="Please report vulnerabilities privately">
+  Do not open a public GitHub issue for a suspected security vulnerability.
+  Email [security@opentechf.org](mailto:security@opentechf.org) and follow the
+  private reporting process in the repository's
+  [SECURITY.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/SECURITY.md)
+  so a fix can be assessed before details are published.
 </Callout>
 
-## Capabilities
+## Reporting a vulnerability
 
-Every host operation declares the capability it requires. The check lives on the
-native op, not in JavaScript, so it cannot be bypassed by reaching a different
-module path. A denied capability will instantly throw a standard `DOMException`
-with the `NotAllowedError` name.
+The fastest report answers three questions: what breaks, how to reproduce it,
+and what an attacker gains. Include:
 
-| Capability | Grants |
+Report privately to [security@opentechf.org](mailto:security@opentechf.org).
+
+| Include | Why it helps |
 | --- | --- |
-| `Env` | Read environment, arguments, cwd, platform; backs `runtime:process`. |
-| `FileRead` | Read files within the configured root jail. |
-| `FileWrite` | Write files within the configured root jail. |
-| `Net` | Open outbound network connections (`runtime:net` connect, a UDP send, fetch, WebSocket). |
-| `NetListen` | Bind a listening socket and accept connections (`runtime:net` listen and bind, `runtime:http` / `runtime:websocket` serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed. |
-| `Signals` | Watch OS signals (`runtime:process` onSignal). Separate from `Env` because a watch **suppresses the signal's default action** — the privilege to decline to die on request, not a read of process state. |
-| `Run` | Spawn a child process (`runtime:system`). Never implied by another capability — see below. |
-| `Worker` | Start a [`Worker`](/docs/internals/workers). What the worker itself may do is a separate, narrower grant made at the spawn — it starts with nothing and can never be handed what the agent spawning it lacks. |
-| `HrTime` | Access high-resolution timing. |
+| Affected version or commit | Identifies the code path and whether the issue is already fixed |
+| Minimal reproduction | A few lines of JavaScript or a small project is easier to verify than a general description |
+| Impact | Shows whether the result is a capability bypass, data disclosure, code execution, denial of service, or crash |
+| Runtime and platform | Identifies OS, architecture, binary (`esrun` or `esdev`), and relevant flags |
 
-Importing a `runtime:` module never needs a capability. The gate is the op, so a
-built-in imports under any policy and only its operations throw.
+The project is pre-1.0 and has no long-term-support branches. Keep deployments
+on the current release line and check [SECURITY.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/SECURITY.md)
+for the current status of known issues and accepted gaps.
 
-## Handles belong to one agent
+## Scope
 
-A capability authorizes *opening* a resource; the handle that comes back says
-*which* one. Sockets, listeners, child processes, file descriptors, HTTP servers
-and in-flight requests are usable only by the agent that created them — a
-[worker](/docs/internals/workers) naming its parent's handle is refused with
-`ERR_FOREIGN_HANDLE`, whether or not it holds the capability. `MessagePort` is
-the exception by design: a port is *meant* to be transferred, so its id is
-unguessable rather than owned.
+In scope is a defect that lets untrusted JavaScript do something the host policy
+should prevent, or makes the runtime unsafe under hostile input:
 
-## Granting capabilities in esrun
+- bypassing a capability check or the filesystem root jail;
+- escaping a worker's attenuated permissions or using a foreign resource handle;
+- leaking environment values, filesystem contents, credentials, or key material;
+- remote code or module execution outside the command's explicit policy;
+- denial of service caused by unbounded host work, memory, recursion, or input;
+- memory-safety, FFI, parser, cryptographic, or supply-chain vulnerabilities.
 
-**esrun grants nothing by default.** Two modes widen a run, each with a single
-direction. They cannot be combined, so no flag ever overrides another.
+Out of scope are vulnerabilities in an application that merely uses ES-Runtime,
+issues requiring an attacker to already control the host process or deployment
+command, and ordinary documentation or website bugs unless they expose
+credentials or change the security boundary.
 
-```sh
-esrun --allow-imports --allow-net app.js    # nothing, plus these
-esrun --allow-all --deny-run app.js         # everything, minus these
-```
+## Built-in hardening
 
-| Mode | Baseline | Direction |
-| --- | --- | --- |
-| `--allow-<name>` | nothing granted (**the default**) | additive only |
-| `--allow-all --deny-<name>` | everything granted | subtractive only |
+The security boundary is in the native host, not in JavaScript:
 
-`--deny-<name>` requires `--allow-all` — with nothing granted, there is nothing
-for it to take away. `--deny-all` restates the default, and is worth writing on
-a deploy line so a reader need not know which way a binary defaults.
-
-| Name | Covers |
+| Protection | What it does |
 | --- | --- |
-| `read` | `runtime:fs` / `runtime:wasi` reads |
-| `write` | `runtime:fs` / `runtime:wasi` mutations |
-| `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `net` | `fetch`, `WebSocket`, `runtime:net` connect, a UDP send |
-| `listen` | `runtime:net` listen and bind, `runtime:http` serve |
-| `env` | `runtime:process` env / cwd |
-| `run` | `runtime:system` child processes |
-| `signals` | `runtime:process` onSignal |
-| `workers` | `new Worker(...)` |
+| **Deny-by-default capabilities** | `esrun` reaches no host-facing operation until the launch command grants it. |
+| **Filesystem root jail** | File and module paths are canonicalized and confined to the working directory. |
+| **Explicit import policy** | `--import-policy` separately controls which packages and paths may become running code. |
+| **Resource limits** | Heap, execution time, stack depth, pending host work, and worker memory are bounded or terminated. |
+| **Agent isolation** | Workers have separate isolates and attenuated permissions; handles belong to their creating agent. |
+| **No remote modules** | Network URLs cannot silently become executable modules. |
+| **Supply-chain gates** | CI runs `cargo deny check` and `cargo audit`. |
 
-A run with nothing granted still executes the entry file — it is read before the
-runtime exists, and you named it. `imports` is denied with everything else, so
-add `--allow-imports` for an app with dependencies.
-
-[esdev](/esdev), the development binary, is the one place this differs: it
-grants everything, so an inner loop needs no flags.
-`esdev --trace-permissions app.js` prints the `esrun` line a run actually
-needs.
-
-**Seven of the nine** can be granted narrowed to a list. Two are
-all-or-nothing: `imports`, because what may be *loaded* is [its own
-mechanism](#import-policy), and `workers`, because a worker's grant is set at the
-spawn rather than on the command line:
-
-```sh
-esrun --allow-imports --allow-env=PORT,DATABASE_URL \
-      --allow-net=db.internal:5432 --allow-listen=8080 \
-      --allow-read=./data --allow-write=./out --allow-run=git \
-      --allow-signals=SIGTERM server.js
-```
-
-`--allow-net` is the one that stops an exfiltration — a compromised dependency
-reaching out over the app's own legitimate network access has to reach an
-address you named — and it is enforced on **every redirect hop**, not just the
-URL the program wrote. Unlisted environment variables are *absent*, so a guest
-can neither read them nor learn their names; unlisted programs fail to spawn;
-unlisted binds are refused before the port is claimed; unlisted paths are
-refused after canonicalization, so a symlink inside an allowed directory cannot
-name a file outside it; unlisted signals cannot be watched and are hidden from
-`signals()`.
-
-Matching is exact: `example.com` does not admit `api.example.com`, there are no
-wildcards, and hosts are judged as written rather than resolved. A name entry
-therefore bounds the name, not the machine — whoever controls the zone picks the
-address, on every connection — so where the machine is what matters, write the
-address. An IP entry is never satisfied by a name that resolves to it. A refusal is
-`ERR_PERMISSION_DENIED`, a scoped denial distinct from the
-`ERR_CAPABILITY_DENIED` a missing capability gives. A scoped grant still reports
-`permissions.has("net") === true`: the capability opens the door, the list is
-what the provider withholds.
-
-Inside the root jail a path list **narrows** it. An entry *outside* the jail
-**adds** that subtree — how a run reaches a TLS certificate or a CA bundle the
-project root does not contain. Only a path typed on the command line can widen
-it; guest code never can. A path neither inside the jail nor named is still a
-jail escape, and `read` and `write` are two separate grants.
-
-A value on a flag that could not enforce it would still be rejected rather than
-ignored — a run must never be narrower on the command line than it is in
-reality, and that holds for any capability added later.
-
-The [argument grammar](/api/cli#argument-grammar) is enforced for the same
-reason. Each of these is an error, not a warning:
-
-| Written | Why it fails |
-| --- | --- |
-| `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
-| `--allow-env=A,,B` | An empty entry in a scope list |
-| `--allow-net example.com` | A value never attaches as a separate word |
-| `esrun app.js --deny-net` | After the script it restricts nothing (`--` opts out) |
-| `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
-| `--allow-ffi` | Not one of the nine |
-| `--allow-workers=x` | `workers` is all-or-nothing; a worker's own grant is set at the spawn |
-
-A sandbox that silently isn't one is worse than no sandbox, so the parser never
-guesses what a malformed flag meant.
-
-Ask from JS:
-
-```js
-import { permissions } from "runtime:process";
-
-permissions.denied; // ["read", "write"]
-permissions.has("net"); // false
-```
-
-## Import policy
-
-Capabilities bound what running code may *reach*. What may **become** running
-code is a separate question, with a separate mechanism: a JSON file, named by
-`--import-policy` and never auto-discovered.
-
-```sh
-esrun --allow-imports --allow-net=db.internal:5432 \
-      --import-policy=./import-policy.json server.js
-```
-
-```json
-{ "allow": ["./src", "express", "@acme/ui"], "deny": ["aws-sdk"] }
-```
-
-An entry beginning with `.` or `/` is a path covering its subtree; anything else
-is a package name — the split the loader already makes between a relative and a
-bare specifier. A module matches if either kind names it, so
-`"deny": ["./node_modules/aws-sdk"]` works as written. **Deny wins over
-allow.** Omitting `"allow"` permits everything
-not denied; an empty `"allow": []` is an error rather than a run that can load
-nothing, and so is an unknown key — a misspelled `"allowed"` would otherwise read
-as protection that is not there.
-
-Paths resolve relative to the **policy file**, so a committed policy means the
-same thing wherever the run is invoked from. Matching runs on the resolved,
-canonicalized module, after the root jail: a symlink cannot name its way in, and
-a pnpm store path is still recognisably its package. A package entry covers that
-package's own files and **not** the packages it imports, so a dependency that
-quietly pulls in another cannot load it. The entry file is exempt — it is read
-before a loader exists.
-
-The policy also binds `import.meta.resolve`: a package it refuses cannot be
-located, not just not imported — otherwise the refusal would still hand out the
-path.
-
-<Callout type="note" title="A policy is not a way around a missing imports grant">
-  Two layers, not two alternatives: the `imports` capability decides whether the
-  loader runs at all, the policy decides what it may resolve. Without
-  `--allow-imports`, an allow entry still loads nothing.
+<Callout type="note" title="Security is policy plus code">
+  `esdev` is intentionally permissive for development and grants everything by
+  default. Deploy the built artifact with `esrun`, then state its minimum grant
+  explicitly. Use [`esdev --trace-permissions`](/esdev/permissions) to discover
+  the capabilities a development run used.
 </Callout>
 
-<Callout type="warning" title="Known gap: no integrity">
-  A policy names packages and paths, not content. `"express"` says the loader
-  may resolve that package; it says nothing about which version, or whether the
-  bytes are the ones you audited. Lockfiles remain the install-time counterpart,
-  and content pinning is future work — treat the policy as a bound on *which*
-  dependencies can run, not as proof of *what* they are.
-</Callout>
+## Security guides
 
-## Child processes
+Choose the topic you need:
 
-<Callout type="danger" title="Run ends the sandbox">
-  A child process runs **outside** every confinement here: no capability check,
-  no root jail, no execution deadline reaches it. Granting **Run** to guest code
-  grants everything the host user can do.
-</Callout>
+- [Permissions & capabilities](/docs/security/permissions) — grants, scopes,
+  denials, and resource ownership. This replaces the old
+  `#granting-capabilities-in-esrun` section.
+- [Import policy](/docs/security/imports) — control which files and packages may
+  become running code.
+- [Processes and workers](/docs/security/processes) — child-process escape,
+  worker isolation, and attenuated permissions.
+- [Network security](/docs/security/networking) — outbound/listening grants and
+  UDP's limits.
+- [Filesystem and secrets](/docs/security/filesystem) — root jail, `.env`, and
+  secret masking.
+- [Cryptography and runtime hardening](/docs/security/cryptography) — password
+  hashing, remote modules, and V8 confinement.
 
-<Callout type="note" title="No shell">
-  `runtime:system` has no `exec`, no `shell: true`, and no template form. A
-  command is a program plus an argv, so a guest-supplied argument is data and
-  can never become a second command. Windows `.bat`/`.cmd` files are refused
-  rather than run through the command interpreter.
-</Callout>
+For the practical deployment method, see [Securing the runtime](/docs/guides/securing-runtime).
 
-<Callout type="note" title="No inherited environment">
-  A child gets exactly the `env` it is passed. Inheriting is opt-in and needs
-  **Env** as well as **Run**, so `Run` alone cannot launder the host's
-  environment out through a child.
-</Callout>
+<a id="granting-capabilities-in-esrun"></a>
 
-<Callout type="tip" title="Policy below the capability">
-  An embedder that must grant `Run` can still bound it: the default provider
-  takes an allowlist of programs and a cap on concurrent children, both enforced
-  in Rust. Children still running at shutdown are killed, not orphaned.
-</Callout>
-
-## UDP
-
-A UDP socket is a client and a server at the same time, and the capability model
-says so: `bind()` needs **NetListen**, `send()` and `connect()` need **Net**, and
-a socket is checked against both rather than whichever grant created it.
-
-<Callout type="note" title="A sender is reachable too">
-  A program that only sends still needs `listen`. Its ephemeral source port is a
-  port, and anything that learns it can send datagrams back — so calling a
-  send-only socket "outbound only" would be a claim the transport does not
-  support.
-</Callout>
-
-<Callout type="tip" title="The destination list is checked per datagram">
-  `--allow-net` is consulted on **every** `send` and `connect`, not once at the
-  bind, because the destination is an argument rather than a property of the
-  socket. `--allow-listen` covers the bind, before the port is claimed.
-</Callout>
-
-<Callout type="danger" title="A source address is not an identity">
-  UDP has no handshake, so a source address is trivially forged and `address` on
-  a received datagram is a hint at best. Two consequences worth designing for:
-  never authenticate on it, and never answer an unverified request with a
-  substantially larger reply — that asymmetry is what turns a service into a
-  **reflection and amplification** tool aimed at whoever the attacker names as
-  the source. `connect()` makes the OS drop datagrams from anyone but the peer,
-  which closes the ordinary case rather than the spoofing one.
-</Callout>
-
-<Callout type="warning" title="No backpressure, and no report">
-  Nothing here queues datagrams for you: the kernel's receive buffer is the only
-  one, and it drops silently once full. A program that stops calling `receive()`
-  loses traffic without an error, and a flood is bounded by the OS rather than by
-  a limit this runtime could apply.
-</Callout>
-
-## The filesystem root jail
-
-Filesystem access — including module resolution — is confined to a single
-project root. Paths are canonicalized to their real location before the check, so
-a symlink cannot be used to escape the jail. This is on by default and is not
-currently optional.
-
-The root is **the working directory**, exactly — no walk up to a `package.json`,
-no marker file required, and no flag that moves it. The boundary is where you
-stand, so nothing on a deployment line can widen it, and an entry outside it is
-refused before the program starts.
-
-Two working directories are refused outright, because the jail they would create
-is the accident: a **filesystem root** (an image with no `WORKDIR`, a unit with
-no `WorkingDirectory=`) and the **home directory** (where cron starts). Both fail
-at startup naming the fix, rather than running with the machine open. See
-[The project root](/docs/modules#the-project-root).
-
-<Callout type="danger" title="Root jail in action">
-  Untrusted JS calls `file("../../etc/passwd")` → the **FileRead** capability
-  check and **Root Jail** check run in the trusted Rust host → the path
-  canonicalizes to `/etc/passwd` → **DENIED: path escapes the project root**
-  (`/home/user/project`).
-</Callout>
-
-## Environment files & secret masking
-
-What the guest can read from the environment is an explicit host decision, and
-secret values resist accidental disclosure.
-
-<Callout type="warning" title="No implicit disk reads">
-  A `.env` loads only via `--env-file`. Nothing on disk reaches the environment
-  unless you ask for it.
-</Callout>
-
-<Callout type="note" title="OS environment wins">
-  Loaded values fill only unset keys by default, so a checked-in file can't
-  clobber production config. The real process env is never mutated.
-</Callout>
-
-<Callout type="tip" title="Secret masking">
-  Keys ending in `_KEY/_TOKEN/_SECRET/_PASS(WORD)` or containing
-  `CREDENTIAL/AUTH` become a [`Secret`](/api/process) that prints as `[redacted]`.
-</Callout>
-
-<Callout type="danger" title="Accidents, not attackers">
-  Masking prevents leaks into logs and JSON. It is not a sandbox — guest code can
-  call `unmask()` itself.
-</Callout>
-
-## Hashing & passwords
-
-[`runtime:hashing`](/api/hashing) carries no capability — hashing reads nothing
-and reaches nothing.
-
-<Callout type="note" title="A salt is randomness">
-  `password.hash()` draws its salt from `crypto.getRandomValues`, so it needs
-  **Entropy**. `password.verify()` needs nothing: the salt is inside the stored
-  string.
-</Callout>
-
-<Callout type="tip" title="Parameters live in the hash">
-  Verification reads the algorithm, cost and salt from the stored string, so
-  raising a default never invalidates existing hashes. `needsRehash()` replaces
-  them at login.
-</Callout>
-
-<Callout type="warning" title="bcrypt refuses what it would truncate">
-  Past 71 bytes, hashing errors rather than silently making two passwords one.
-  Verification still truncates — a stored hash may have been written by an
-  implementation that did.
-</Callout>
-
-<Callout type="danger" title="Not every algorithm is a defence">
-  `md5` and `sha1` are interop only. `xxhash*` and `crc32*` are checksums, and
-  `hmac` refuses them. Password hashing blocks the calling isolate — queue a
-  public login endpoint.
-</Callout>
-
-## Remote modules disabled
-
-esrun intentionally drops support for downloading modules dynamically over the
-network (e.g., `import "https://..."`). This mitigates entire classes of
-supply-chain attacks and runtime hijacking because every piece of executed code
-must explicitly reside within the secure local filesystem root, greatly
-improving predictability and security.
-
-## Engine confinement
-
-All V8 contact is contained in a single engine crate; the rest of the runtime
-never names a V8 type. This keeps the trusted surface small and auditable, and
-lets the host drive the event loop without surrendering control of its own
-thread.
+Legacy links to the former capability section now continue through the
+[Permissions & capabilities](/docs/security/permissions) guide.

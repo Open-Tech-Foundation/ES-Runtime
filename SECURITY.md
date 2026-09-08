@@ -9,8 +9,10 @@ attack-surface enumeration, and residual-risk register is in
 
 ## Reporting
 
-Until a formal channel is published, report suspected vulnerabilities privately
-to the maintainer rather than via public issues.
+Report suspected vulnerabilities privately to
+[security@opentechf.org](mailto:security@opentechf.org) rather than via public
+issues. Please include the affected version, a minimal reproduction, the impact,
+and the runtime/platform details.
 
 ## Runtime safety status
 

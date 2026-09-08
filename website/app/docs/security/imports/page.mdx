@@ -1,0 +1,59 @@
+---
+title: Import policy
+description: Restrict which local files and packages may become running code.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Import policy
+
+Capabilities control what running code may *reach*. Import policy controls what
+may **become** running code. The two are separate mechanisms.
+
+## Configure a policy
+
+The policy is a JSON file named explicitly with `--import-policy`; it is never
+auto-discovered.
+
+```sh
+esrun --allow-imports --allow-net=db.internal:5432 \
+      --import-policy=./import-policy.json server.js
+```
+
+```json
+{ "allow": ["./src", "express", "@acme/ui"], "deny": ["aws-sdk"] }
+```
+
+An entry beginning with `.` or `/` is a path covering its subtree. Anything
+else is a package name. **Deny wins over allow.** Omitting `allow` permits
+everything not denied; an empty `"allow": []` and unknown keys are errors.
+
+Paths resolve relative to the policy file, so a committed policy means the same
+thing wherever the process is invoked from.
+
+## What it matches
+
+Matching uses the resolved, canonicalized module after the filesystem root jail.
+A symlink cannot name its way in, and a pnpm store path remains recognizably its
+package. A package entry covers that package's own files, not packages it
+imports; dependencies must be named separately. The entry file is exempt
+because it is read before a loader exists.
+
+The policy also binds `import.meta.resolve`: a package it refuses cannot be
+located merely to learn its path.
+
+<Callout type="note" title="The imports grant still applies">
+  The `imports` capability decides whether the loader runs at all. The policy
+  decides what that loader may resolve. Without `--allow-imports`, an allow entry
+  still loads nothing.
+</Callout>
+
+<Callout type="warning" title="Known gap: no integrity pinning">
+  A policy names packages and paths, not content. `"express"` says the loader
+  may resolve that package; it does not prove which version or bytes were
+  audited. Lockfiles remain the install-time counterpart, and content pinning is
+  future work.
+</Callout>
+
+For the capability that permits importing in the first place, see
+[Permissions & capabilities](/docs/security/permissions).

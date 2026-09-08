@@ -1,0 +1,69 @@
+---
+title: Processes and workers
+description: Understand the security boundary around child processes and worker agents.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Processes and workers
+
+## Child processes
+
+<Callout type="danger" title="Run ends the sandbox">
+  A child process runs outside every confinement here: no capability check, root
+  jail, or execution deadline reaches it. Granting **Run** to guest code grants
+  everything the host user can do.
+</Callout>
+
+<Callout type="note" title="No shell">
+  `runtime:system` has no `exec`, `shell: true`, or template form. A command is
+  a program plus an argv, so a guest-supplied argument remains data. Windows
+  `.bat` and `.cmd` files are refused rather than run through the command
+  interpreter.
+</Callout>
+
+<Callout type="note" title="No inherited environment">
+  A child gets exactly the `env` it is passed. Inheriting is opt-in and needs
+  **Env** as well as **Run**, so Run alone cannot launder the host environment
+  through a child.
+</Callout>
+
+<Callout type="tip" title="Policy below the capability">
+  A provider can still bound Run with an allowlist of programs and a cap on
+  concurrent children, enforced in Rust. Children still running at shutdown
+  are killed rather than orphaned.
+</Callout>
+
+The runtime does not kill a process tree: `kill()` signals the direct child only.
+A child that creates its own children can leave grandchildren running.
+
+## Workers
+
+A worker is a second agent with its own thread and V8 isolate. Starting one is
+capability-gated, and everything it receives narrows from the agent that started
+it.
+
+- A worker starts with no capabilities. `permissions: ["net"]` grants only the
+  named set, and it can never exceed the spawning agent. `permissions:
+  "inherit"` is still bounded by the parent.
+- Two grants are needed to spawn: `workers` and `imports` to read the worker's
+  entry module. `--allow-workers` alone is refused.
+- The entry module is instantiated under the parent's authority, then the
+  worker's narrower set applies before its code runs. Dynamic imports need the
+  worker's own `imports` grant.
+- Unknown permission names throw rather than silently degrading the worker.
+- `{ env: { … } }` passes precisely the values named; the environment is not
+  shared or inherited.
+- Worker memory can only be lowered from the parent's heap ceiling. Reaching it
+  ends that worker with `ERR_WORKER_OUT_OF_MEMORY`.
+- `terminate()` interrupts a spinning worker and takes its nested workers with
+  it. `onSignal` is not available inside a worker, and `exit()` ends that worker
+  without setting the process exit code.
+
+CPU time is not limited per worker: `--timeout` is per process. Message queues
+are unbounded, so producers should use `worker.queued` to pace themselves.
+`SharedArrayBuffer` is genuinely shared memory and is not isolated by the
+capability model.
+
+For the capability table and command-line grants, see
+[Permissions & capabilities](/docs/security/permissions).

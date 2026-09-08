@@ -219,7 +219,7 @@ runtime's to fix:
   one that large, so it is an IPv6 jumbogram that reaches it.
 - **Who sent it.** A source address is trivially forged. Treat `address` as a
   hint, not an identity, and never send a large answer to a small unverified
-  request — that is the shape of a [reflection attack](/docs/security#udp).
+  request — that is the shape of a [reflection attack](/docs/security/networking#udp).
 
 ## Keeping the process alive
 
@@ -312,4 +312,4 @@ for await (const [data, from] of conn) {
 - [Sockets guide](/docs/guides/networking) — TCP and TLS
 - [Internals: sockets](/docs/internals/sockets#udp-no-tasks-no-channels) — why UDP has no forwarding task, and what it costs
 - [Benchmarks](/docs/benchmarks) — `udp_echo` and `udp_send` across five runtimes
-- [Security model](/docs/security#udp) — what binding a UDP port exposes
+- [Network security](/docs/security/networking#udp) — what binding a UDP port exposes

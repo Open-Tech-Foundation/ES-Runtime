@@ -1,0 +1,53 @@
+---
+title: Cryptography and runtime hardening
+description: Password hashing, remote modules, and the boundary around V8.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Cryptography and runtime hardening
+
+## Hashing and passwords
+
+[`runtime:hashing`](/api/hashing) carries no capability because hashing reads
+nothing and reaches nothing.
+
+<Callout type="note" title="A salt is randomness">
+  `password.hash()` draws its salt from `crypto.getRandomValues`, so it needs
+  **Entropy**. `password.verify()` needs nothing because the salt is inside the
+  stored string.
+</Callout>
+
+<Callout type="tip" title="Parameters live in the hash">
+  Verification reads the algorithm, cost and salt from the stored string, so
+  raising a default never invalidates existing hashes. `needsRehash()` replaces
+  them at login.
+</Callout>
+
+<Callout type="warning" title="bcrypt refuses what it would truncate">
+  Past 71 bytes, hashing errors rather than silently making two passwords one.
+  Verification still truncates because a stored hash may have been written by
+  an implementation that did.
+</Callout>
+
+<Callout type="danger" title="Not every algorithm is a defence">
+  `md5` and `sha1` are interop only. `xxhash*` and `crc32*` are checksums, and
+  `hmac` refuses them. Password hashing blocks the calling isolate; queue a
+  public login endpoint.
+</Callout>
+
+## Remote modules disabled
+
+`esrun` does not download modules dynamically over the network, such as
+`import "https://..."`. Every executed module must be present inside the
+secure local filesystem root, reducing supply-chain and runtime-hijacking risk.
+
+## Engine confinement
+
+All V8 contact is contained in a single engine crate; the rest of the runtime
+never names a V8 type. This keeps the trusted surface small and auditable, and
+lets the host drive the event loop without surrendering control of its own
+thread.
+
+For the complete security posture and reporting process, return to the
+[Security overview](/docs/security).

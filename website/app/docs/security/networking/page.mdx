@@ -1,0 +1,45 @@
+---
+title: Network security
+description: Understand the separate outbound and listening permissions, including UDP's limits.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Network security
+
+The network capability separates reaching out from being reachable. `bind()`
+needs **NetListen**; `send()` and `connect()` need **Net**. A socket is checked
+against both rather than whichever grant created it.
+
+## UDP
+
+A UDP socket is a client and a server at the same time.
+
+<Callout type="note" title="A sender is reachable too">
+  A program that only sends still needs `listen`. Its ephemeral source port is a
+  port, and anything that learns it can send datagrams back. “Outbound only” is
+  not a property UDP can provide.
+</Callout>
+
+<Callout type="tip" title="The destination list is checked per datagram">
+  `--allow-net` is consulted on every `send` and `connect`, not only at bind,
+  because the destination is an argument rather than a socket property.
+  `--allow-listen` covers the bind before the port is claimed.
+</Callout>
+
+<Callout type="danger" title="A source address is not an identity">
+  UDP has no handshake, so a source address is trivially forged and the address
+  on a received datagram is a hint at best. Never authenticate on it, and never
+  answer an unverified request with a substantially larger reply: that asymmetry
+  creates a reflection and amplification service. `connect()` makes the OS drop
+  datagrams from anyone but the peer, which closes the ordinary case rather than
+  the spoofing one.
+</Callout>
+
+<Callout type="warning" title="No backpressure, and no report">
+  The kernel receive buffer is the only queue. It drops silently once full, so a
+  program that stops calling `receive()` loses traffic without an error.
+</Callout>
+
+For the complete host and address grant rules, see
+[Permissions & capabilities](/docs/security/permissions).

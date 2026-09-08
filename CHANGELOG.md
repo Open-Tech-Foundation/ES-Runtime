@@ -21,6 +21,10 @@ namespace) is unstable and may change between minor releases until the API freez
   with a clear, visually distinct docs-home CTA, workflow navigation, focused
   build and dev-loop guides, legacy URL redirects, and corrected plugin,
   watcher, permission, and HMR guidance.
+- **The Security documentation is now a dedicated section**, with a `🔒` menu
+  entry, focused pages for permissions, import policy, processes, networking,
+  filesystem, and cryptography, plus private reporting through
+  `security@opentechf.org` in the site, README, and `SECURITY.md`.
 
 ### Security
 

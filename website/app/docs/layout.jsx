@@ -93,7 +93,18 @@ const NAV = [
     title: "Runtime",
     items: [
       { title: "Module system", path: "/docs/modules" },
-      { title: "Security model", path: "/docs/security" },
+      {
+        title: "🔒 Security",
+        items: [
+          { title: "Overview", path: "/docs/security" },
+          { title: "Permissions & capabilities", path: "/docs/security/permissions" },
+          { title: "Import policy", path: "/docs/security/imports" },
+          { title: "Processes and workers", path: "/docs/security/processes" },
+          { title: "Network security", path: "/docs/security/networking" },
+          { title: "Filesystem and secrets", path: "/docs/security/filesystem" },
+          { title: "Cryptography and hardening", path: "/docs/security/cryptography" },
+        ],
+      },
       { title: "Error diagnostics", path: "/docs/errors" },
     ],
   },

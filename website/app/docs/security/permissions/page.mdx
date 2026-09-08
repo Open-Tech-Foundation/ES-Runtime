@@ -1,0 +1,112 @@
+---
+title: Permissions & capabilities
+description: Grant esrun only the host capabilities a service needs.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Permissions & capabilities
+
+**`esrun` grants nothing by default.** A service reaches only what the command
+line that started it named. The check lives on the native operation, not in
+JavaScript, so importing a built-in never bypasses the gate.
+
+## Capabilities
+
+Every host operation declares the capability it requires. A denied capability
+throws a standard `DOMException` with the `NotAllowedError` name.
+
+| Capability | Grants |
+| --- | --- |
+| `Env` | Read environment, arguments, cwd, platform; backs `runtime:process`. |
+| `FileRead` | Read files within the configured root jail. |
+| `FileWrite` | Write files within the configured root jail. |
+| `Net` | Open outbound network connections: `runtime:net` connect, UDP send, fetch and WebSocket. |
+| `NetListen` | Bind and accept connections: `runtime:net`, `runtime:http` and `runtime:websocket`. |
+| `Signals` | Watch OS signals through `runtime:process`. |
+| `Run` | Spawn a child process through `runtime:system`. |
+| `Worker` | Start a [`Worker`](/docs/internals/workers), whose own grant is narrower. |
+| `HrTime` | Access high-resolution timing. |
+
+Importing a `runtime:` module never needs a capability. The gate is the
+operation, so a built-in imports under any policy and only its operations throw.
+
+## Handles belong to one agent
+
+A capability authorizes opening a resource; the handle that comes back belongs
+to the agent that created it. Sockets, listeners, child processes, file
+descriptors, HTTP servers and in-flight requests reject use from another agent
+with `ERR_FOREIGN_HANDLE`, whether or not that agent holds the capability.
+`MessagePort` is the deliberate exception because it is designed to transfer.
+
+## Granting capabilities in esrun
+
+There are two modes, each with one direction. They cannot be combined:
+
+```sh
+esrun --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-all --deny-run app.js         # everything, minus these
+```
+
+| Mode | Baseline | Direction |
+| --- | --- | --- |
+| `--allow-<name>` | Nothing granted (**the default**) | Additive only |
+| `--allow-all --deny-<name>` | Everything granted | Subtractive only |
+
+`--deny-<name>` requires `--allow-all`. `--deny-all` restates the default and
+can make a deployment command's intent obvious. `esdev` is the exception: it
+grants everything for development.
+
+| Name | Covers |
+| --- | --- |
+| `read` | `runtime:fs` / `runtime:wasi` reads |
+| `write` | `runtime:fs` / `runtime:wasi` mutations |
+| `imports` | Static imports, package imports and dynamic `import()` |
+| `net` | Fetch, WebSocket, outbound sockets and UDP send |
+| `listen` | Listening sockets and HTTP/WebSocket servers |
+| `env` | `runtime:process` environment and cwd |
+| `run` | `runtime:system` child processes |
+| `signals` | `runtime:process` signal handlers |
+| `workers` | `new Worker(...)` |
+
+A run with no grants still executes its named entry file. Since `imports` is
+denied too, that is a single-file run; add `--allow-imports` for dependencies.
+
+`esdev --trace-permissions app.js` runs the program with development grants and
+prints the `esrun` line it actually needs.
+
+**Seven of the nine** can be narrowed to a list. `imports` and `workers` are
+all-or-nothing at the command line:
+
+```sh
+esrun --allow-imports --allow-env=PORT,DATABASE_URL \
+      --allow-net=db.internal:5432 --allow-listen=8080 \
+      --allow-read=./data --allow-write=./out --allow-run=git \
+      --allow-signals=SIGTERM server.js
+```
+
+Hosts and paths are matched exactly. `example.com` does not admit
+`api.example.com`, and there are no wildcards. Paths are canonicalized before
+checking, so a symlink cannot escape the jail. A scoped refusal is
+`ERR_PERMISSION_DENIED`; a missing capability is `ERR_CAPABILITY_DENIED`.
+
+Malformed or misplaced flags are errors, not warnings:
+
+| Written | Why it fails |
+| --- | --- |
+| `--deny-run=git` | Denials are all-or-nothing |
+| `--allow-env=A,,B` | The scope contains an empty entry |
+| `--allow-net example.com` | A value cannot be a separate argument |
+| `esrun app.js --deny-net` | Flags after the script restrict nothing |
+| `--deny-net` without `--allow-all` | There is no granted capability to remove |
+| `--allow-ffi` | It is not a supported capability |
+| `--allow-workers=x` | Worker grants are set at spawn time |
+
+```js
+import { permissions } from "runtime:process";
+
+permissions.denied;       // ["read", "write"]
+permissions.has("net");  // false
+```
+
+For the separate question of which modules may load, see [Import policy](/docs/security/imports).

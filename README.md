@@ -94,6 +94,22 @@ so it has a separate mechanism — `--import-policy=./import-policy.json` takes
 JSON with `"allow"` and/or `"deny"` lists of package names and paths. See
 [SECURITY.md](SECURITY.md).
 
+## Security
+
+ES-Runtime puts the security boundary in the native host: `esrun` is
+deny-by-default, filesystem and module paths are root-jailed, workers receive
+attenuated permissions, and remote modules are disabled. The development binary
+is intentionally permissive; deploy built artifacts with `esrun` and grant only
+what the service needs.
+
+- Report suspected vulnerabilities privately to
+  [security@opentechf.org](mailto:security@opentechf.org), following
+  [SECURITY.md](SECURITY.md).
+- Read the [Security documentation](https://esrun.opentechf.org/docs/security)
+  for the model, scope, hardening, and known limitations.
+- Follow the [Securing the runtime guide](https://esrun.opentechf.org/docs/guides/securing-runtime)
+  to derive a minimal deployment command.
+
 ## TypeScript
 
 `esrun` doesn't execute TypeScript, but the `runtime:*` modules have editor types
