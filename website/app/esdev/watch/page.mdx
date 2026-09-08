@@ -1,0 +1,45 @@
+---
+title: Watch mode
+description: Rerun a standalone esdev entry when its source changes.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Watch mode
+
+```sh
+esdev --watch --deny-all --allow-listen=8080 server.ts
+```
+
+The standalone watcher reruns an entry whenever its source changes. The
+program runs in a child process, so listening sockets, globals and other state
+do not leak into the next run.
+
+## Restart behavior
+
+**A restart drains.** It is a `SIGTERM`, the same graceful stop production gets:
+the server stops accepting, answers requests already in flight, and only then
+exits. `--shutdown-grace=<ms>` bounds the wait, after which the process is
+killed. A program that exits leaves the watcher running.
+
+<Callout type="note" title="Windows">
+  There is no `SIGTERM` and no console-independent way to ask another process to
+  stop cleanly, so a restart there kills rather than drains.
+</Callout>
+
+## What is watched
+
+The watcher starts at the project root (the nearest directory with a
+`package.json`) or, without one, the entry file's directory. It walks that
+directory recursively and watches source extensions.
+
+The generic watcher excludes esdev's staging directories. It does not read
+`esdev.json` or `.gitignore`, and it does not add build assets or explicit
+permission paths. Those project-aware rules belong to [`esdev start`](/esdev/start),
+which watches its configured build inputs and allowed read paths as well.
+
+## When to use `esdev start`
+
+Use [the project dev loop](/esdev/start) when `esdev.json` describes multiple
+targets, a server to restart, a directory to serve, or explicit permission
+paths that should be part of the watch set.

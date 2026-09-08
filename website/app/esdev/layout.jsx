@@ -2,19 +2,40 @@ import { DocsLayout } from "@opentf/web-docs";
 
 import config from "../../otfw.config.js";
 
-// Explicit sidebar tree for the /esdev section, matching the top-level API
-// section while keeping the development binary's command and workflow pages
-// together.
+// Explicit sidebar tree for the /esdev section. The groups follow the order in
+// which a developer normally learns the tool: start a project, build it, run
+// the loop, then test and diagnose it.
 const NAV = [
   {
-    title: "esdev",
+    title: "Getting started",
     items: [
       { title: "Overview", path: "/esdev" },
       { title: "Starting a project", path: "/esdev/create" },
       { title: "TypeScript setup", path: "/esdev/typescript" },
+    ],
+  },
+  {
+    title: "Build",
+    items: [
       { title: "Bundling", path: "/esdev/build" },
+      { title: "Project builds", path: "/esdev/build/project" },
+      { title: "Browser builds", path: "/esdev/build/browser" },
+      { title: "Libraries", path: "/esdev/build/library" },
       { title: "Writing a plugin", path: "/esdev/plugins" },
+    ],
+  },
+  {
+    title: "Development loop",
+    items: [
       { title: "The dev loop", path: "/esdev/start" },
+      { title: "Hot module replacement", path: "/esdev/start/hmr" },
+      { title: "Previewing a release", path: "/esdev/start/preview" },
+      { title: "Watch mode", path: "/esdev/watch" },
+    ],
+  },
+  {
+    title: "Testing & diagnostics",
+    items: [
       { title: "Testing", path: "/esdev/test" },
       { title: "Debugging", path: "/esdev/debugging" },
       { title: "Tracing permissions", path: "/esdev/permissions" },

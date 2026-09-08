@@ -1,0 +1,23 @@
+---
+title: Previewing a release
+description: Serve the release output locally and check the behavior that development mode does not reproduce.
+---
+
+# Previewing a release
+
+The dev loop is not what ships: `NODE_ENV` is `"development"` and nothing is
+hashed. `esdev preview` serves the **release** output, which is where failures
+the dev loop is blind to show up — a package that hands over a different module
+under `production`, or a `<link>` pointing at a name hashing changed.
+
+```sh
+esdev build
+esdev preview            # → http://127.0.0.1:4173
+esdev preview --dir=dist --port=5000
+```
+
+It serves; it does not build. Missing paths that look like routes fall back to
+`index.html`, as a client-side router needs. A project whose output is a server
+bundle has nothing to serve — run it the way production will, under `esrun`.
+
+For the rebuild-and-reload workflow, return to [The dev loop](/esdev/start).

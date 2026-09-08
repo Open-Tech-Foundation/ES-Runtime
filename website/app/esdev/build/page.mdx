@@ -1,6 +1,6 @@
 ---
 title: esdev build
-description: Bundle a server entry into one deployable ES module, or build a source tree into a publishable library with its declarations.
+description: Bundle an application entry into a deployable ES module, then choose a focused guide for project, browser or library builds.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -17,24 +17,19 @@ runtime to serve, and **CommonJS dependencies are converted on the way in**.
 
 ## The CommonJS answer
 
-`esrun` runs ES modules only, and a large share of npm — React included — still
-ships CommonJS. There were two ways out: teach the runtime `require`, or convert
-on the developer's machine.
-
-Teaching the runtime `require` would break the property that a deployed artifact
-is the text that was reviewed. So the bundler absorbs CJS→ESM at build time and
-`esrun` receives ordinary ESM. The non-goal holds completely rather than being
-narrowed:
+`esrun` runs ES modules only, while a large share of npm still ships CommonJS.
+The bundler converts CJS to ESM on the developer's machine so the deployed
+artifact remains the text that was reviewed:
 
 ```sh
 esdev build server.js         # a CJS dependency goes in
 esrun dist/server.js          # ordinary ESM comes out
 ```
 
-## It also shortens the deploy line
+## A shorter deploy line
 
 An unbundled program needs `--allow-imports`, because the loader walks
-`node_modules` at runtime. A bundle has **no imports left to resolve**:
+`node_modules` at runtime. A bundle has no imports left to resolve:
 
 ```sh
 esrun --allow-imports --allow-listen=8080 app.js  # unbundled
@@ -49,34 +44,23 @@ The build is a security step, not only a packaging one.
 | --- | --- |
 | `--out=<file>` | Where to write it (default `dist/<entry>.js`) |
 | `--minify` | Minify the output |
-| `--conditions=<list>` | Extra `exports` conditions, comma-separated. These **add** to the defaults (`import`, `default`, `worker`) |
-| `--define=<name>=<value>` | Replace `<name>` at build time. `process.env.NODE_ENV` defaults to `"production"` |
-| `--alias=<name>=<to>` | Rewrite the start of a specifier before it resolves. Repeatable |
+| `--conditions=<list>` | Extra `exports` conditions, comma-separated; these add to `import`, `default`, `worker` |
+| `--define=<name>=<value>` | Replace a name at build time; `process.env.NODE_ENV` defaults to `"production"` |
+| `--alias=<name>=<to>` | Rewrite a specifier before it resolves; repeatable |
 | `--sourcemap[=<kind>]` | A `.map` beside the output, or `=inline`, or `=hidden` |
 
-## What it gets right for you
-
-Four settings are the actual product, and each is silent when wrong — which is
-why this is a command rather than documentation telling you to run a bundler.
+## What the application build guarantees
 
 | | |
 | --- | --- |
-| **`runtime:*` stays external** | It is served by the runtime and has no file behind it. Inlining it produces a bundle that fails at its first import. |
+| **`runtime:*` stays external** | It is served by the runtime and has no file behind it. |
 | **ESM output** | The runtime has no other module system. |
-| **`process.env.NODE_ENV` is defined** | Packages branch on it before doing anything, and there is no `process` global here — undefined is a crash, not a missed optimisation. |
-| **The `worker` condition is asserted** | It is how a package hands over its Web-API build: `react-dom/server` resolves to a Web Streams implementation under it, and a `node:stream` one without it. |
+| **`process.env.NODE_ENV` is defined** | Packages branch on it before doing anything, and there is no ambient `process` global. |
+| **The `worker` condition is asserted** | Packages can select their Web-API build. |
 
 `--conditions` adds rather than replaces, so asking for one more cannot silently
-cost you `worker`. The **runtime's** condition set stays standards-only; the
-escape hatch belongs to the bundler, where you chose to run it, not to a server
-resolving imports under load.
-
-A dynamic `import()` emits a chunk beside the entry, content-hashed. That is
-what `outdir` below is for.
-
-<Callout type="note" title="Not yet">
-  Watching a build, and `?raw` / `?url` suffixes on an import.
-</Callout>
+cost the `worker` condition. A dynamic `import()` emits a content-hashed chunk
+beside the entry.
 
 ## Source maps
 
@@ -84,524 +68,27 @@ what `outdir` below is for.
 esdev build src/server.ts --out=dist/server.js --sourcemap
 ```
 
-Off unless asked, because a `.map` beside a deployment is a decision with two
-halves — bytes, and disclosing your source to whoever fetches it — and neither is
-the toolchain's to make. The dev loop maps itself regardless: nothing is deployed
-there, and an unmapped dev bundle is a stack trace into generated code on every
-save.
+Source maps are off unless asked. The available forms are:
 
-| | |
+| Option | Result |
 | --- | --- |
 | `--sourcemap` | A `.map` beside the output, pointed at by the bundle |
 | `--sourcemap=inline` | A data URL in the file itself |
-| `--sourcemap=hidden` | Written, with nothing pointing at it — for an error reporter you upload to |
-| `"sourcemap": true` | The same, per target in `esdev.json`. `"inline"`, `"hidden"` and `false` too |
+| `--sourcemap=hidden` | Written, with nothing pointing at it — useful for an error reporter |
+| `"sourcemap": true` | The same setting per target in `esdev.json`; `"inline"`, `"hidden"` and `false` are also supported |
 
-**And `esrun` reads them.** A stack trace printed by either binary is remapped
-through whatever map the file it names carries, so a deployed bundle blames the
-line you wrote:
+`esrun` remaps printed stack traces through the map, while `error.stack` inside
+the program remains the engine's original value.
 
-```text
-Error: too big
-    at boom (file:///srv/app/src/util.ts:2:14)     # not dist/server.js:3:19
-```
-
-Only what is printed changes. `error.stack` inside your program stays exactly
-what the engine built, so a program that ships its own stack to an error
-reporter still sends the truth about the file that ran.
-
-## Assets a module imports
-
-```ts
-import logo from "./logo.png";
-document.body.innerHTML = `<img src="${logo}">`;
-```
-
-The file is emitted with a content hash and the import becomes its URL —
-`/assets/logo-1a2b3c4d.png`. Images, fonts, media, PDFs and `.wasm`; a `.json`
-import stays a module, since the bundler parses one already.
-
-| | |
-| --- | --- |
-| **Hashed** | A changed file is a changed URL, so a cache cannot serve last week's |
-| **The same URL in both bundles** | Rooted, so the markup a server renders names the file the browser fetches |
-| **Counted by the build** | The file is in the output because a module imported it — nothing to remember in `esdev.json` |
-| **Not in `--lib`** | A library cannot know where the consuming build serves a file from, so it refuses and says so |
-
-`assets` is still the answer for a file nothing imports — a `favicon.ico`, a
-`robots.txt` — where the name must *not* change.
-
-
-## A project: `esdev.json`
-
-A command line describes one bundle. An app that renders on the server and
-hydrates in the browser is two, from two entries, with two shapes of output —
-and the site it prerenders is a third that has to *run*.
-
-```json
-{
-  "targets": {
-    "server":    { "entry": "src/server.ts", "out": "dist/server.js",
-                   "assets": ["index.html", "public"] },
-    "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
-                   "platform": "browser" },
-    "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
-                   "then": "run" }
-  }
-}
-```
-
-```sh
-esdev build                      # every target
-esdev build --target=browser     # one
-esdev build src/app.ts           # ignores the file entirely
-```
-
-| Key | |
-| --- | --- |
-| `entry` | The module the bundle is rooted at — or an `.html` file ([below](#an-html-entry)) |
-| `out` | One file |
-| `outdir` | A directory — what a browser target needs, since chunks land beside the entry |
-| `platform` | `server` (default) or `browser` |
-| `assets` | Copied into the output: a file by name, a directory by its **contents** |
-| `then` | `"run"` — execute the output once built |
-| `lib` | `true` — publish a library instead of deploying a bundle ([below](#a-library)) |
-| `format` | A library's module systems: `"esm"`, `"cjs"`, or both as a list |
-| `types` | `false` — skip the declarations |
-| `dts-bundle` | `true`, or the entry to link from |
-| `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
-| `alias` (top level) | Specifier rewrites for every target ([below](#aliases)) |
-| `plugins` | Plugins for this target, **added** to the project's ([below](#plugins)) |
-
-`define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
-string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
-takes a release build of a project whose day to day is unminified.
-
-### Aliases
-
-Top level, because a rewrite is a property of the source tree rather than of one
-output:
-
-```json
-{ "alias": { "@": "./src", "react": "preact/compat" } }
-```
-
-A path is resolved against the project; anything else names a package. The
-longest match wins, so `@/ui` beats `@`. `--alias=@=./src` is the same thing for
-an entry with no project around it.
-
-<Callout type="note" title="A bundling rule, and only that">
-  `@/db` resolves because the bundler was told what `@` is. A module run
-  *unbundled* — `esdev src/thing.ts`, or a file `esdev test` runs — resolves the
-  way `esrun` does and knows nothing about it. `--lib` refuses aliases outright:
-  a published module keeps the specifier its source wrote.
+<Callout type="note" title="Not yet">
+  Watching a build, and `?raw` / `?url` suffixes on an import.
 </Callout>
 
-### `import.meta.env`
-
-A browser bundle cannot read the environment at run time, so what configures it
-is compiled in — and what is compiled in is public, which is what the prefix
-says out loud:
-
-```sh
-# .env, or the environment itself
-PUBLIC_API_URL=https://api.example.com
-```
-
-```ts
-fetch(`${import.meta.env.PUBLIC_API_URL}/users`);
-if (import.meta.env.DEV) { … }        // MODE, DEV, PROD are always there
-```
-
-| | |
-| --- | --- |
-| **`PUBLIC_` only** | Everything else stays out of the artifact. A secret is read at run time through [`runtime:env`](/api/env) |
-| **`.env`, then the environment** | A variable exported in the shell beats the file — CI needs that way round |
-| **`MODE`, `DEV`, `PROD`** | `"development"`/`"production"`, and two booleans, from the build itself |
-| **The object too** | `const { PUBLIC_API_URL } = import.meta.env` works; it is replaced whole |
-| **Not in `--lib`** | Which environment the code runs in is the consuming build's to say |
-
-### Plugins
-
-A project that compiles something the toolchain does not know about — `.mdx`,
-Tailwind, another framework's components — names the plugin here, and `esdev
-build` and `esdev start` load it:
-
-```json
-{
-  "plugins": [
-    "./plugins/mdx.js",
-    { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }
-  ],
-  "targets": {
-    "server": { "entry": "src/server.ts", "out": "dist/server.js" },
-    "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
-                 "platform": "browser", "plugins": ["./plugins/only-web.js"] }
-  }
-}
-```
-
-An entry is the **module to import** — a path in this project, or a package.
-Top-level plugins apply to every target; a target's `plugins` are added to them
-rather than replacing them, so a project that compiles `.mdx` compiles it for
-the server bundle and the browser one.
-
-| Key | |
-| --- | --- |
-| `module` | What to import |
-| `export` | Which export the plugin is. Default: the default export |
-| `options` | What to call it with, when the export is a **factory** |
-
-`options` is the one thing a JSON file cannot express on its own: a plugin that
-takes options is a function you call, and `mdx({ … })` is a function
-application. So the file carries the argument and esdev makes the call. That is
-the whole of the difference from an executable config — this file is still read
-as *data*, which is what keeps `permissions` decidable without running anything.
-
-They are written against [esdev's plugin
-contract](/esdev/plugins), the same one `runtime:build` serves, and they go
-into one list with esdev's own passes — so `order: "pre"` means before
-`esdev:css-modules`, not merely before the other plugins.
-
-<Callout type="note" title="Loaded once, and kept">
-  The plugins load into an isolate of their own, started on the first build that
-  needs one and held for the run. `esdev start` rebuilds on every save, and
-  re-evaluating a plugin's module — and whatever it initialises: a compiler, a
-  template cache, a Tailwind context — per keystroke would be paying a startup
-  cost forty times a minute, and a plugin that holds state across builds could
-  not exist at all.
-
-  They run under esdev's own grant, in the project directory, with the same
-  `runtime:` namespace any other program gets. A plugin you configured is code
-  you chose to run.
-</Callout>
-
-### The three shapes
-
-| Stack | Targets |
-| --- | --- |
-| Backend | One `out` file |
-| Frontend (SSG/SPA) | A browser `outdir`, plus a prerender target with `then: "run"` |
-| Fullstack | Both |
-
-`then: "run"` is how a static site is generated without `esdev` knowing what
-one is: the bundle runs, and what it writes is the output. It runs in a child
-process, after every target is built.
-
-### A failed build changes nothing
-
-Nothing lands where it is deployed until the whole build has worked. Every
-output path is mirrored under one staging directory beside the project
-(`.esdev-build-<pid>-<n>`), and the build runs there — bundles, assets, the
-document, and any `then: "run"` step, which writes beside its own bundle and so
-writes into staging too. Only once every target and every step has succeeded
-does anything move into place.
-
-So a build that fails halfway leaves **the last build that worked**, whole, and
-leaves nothing of its own. Without this, a prerender step that exits non-zero
-left a `dist` full of bundles for a site whose pages were never rendered —
-where the working deployment used to be. In CI that is what gets uploaded.
-
-```text
-error: target "prerender": dist/prerender.js exited 1
-
-Nothing was written: a build stages its output and moves it into place only
-once every target and every step has succeeded, so what is deployed is still
-the last build that worked.
-```
-
-### A whole build replaces what it owns
-
-Output filenames are content-hashed, so `app-1a2b.js` becoming `app-9f8e.js`
-would leave the old one behind for ever — and beside it whatever `esdev start`
-wrote, which is *not* hashed and so is never overwritten either. Deploying that
-ships every build the directory has ever seen, and a stale URL still reaches a
-version of the app nobody is testing. So a whole-project `esdev build` **takes
-the place of** each `outdir`: the staged directory replaces it at the end, and
-nothing stale survives.
-
-Three things it does not replace, all for the same reason — the build has to own
-what it replaces. Each of those is *overlaid* instead: the staged files move
-into place, and whatever else is there is left alone.
-
-- **`--target=<name>` never replaces.** It writes into a directory it may share
-  with another target's output, and replacing it would delete a bundle this run
-  is not going to write again.
-- **`esdev start` never replaces**, and does not stage at all. It rebuilds into
-  a directory a page is being served from while that page runs, and writes its
-  hot updates there for the page to fetch — moving that directory at the end of
-  every build would cost a full reload per save.
-- **An `out` file's directory is never replaced.** `out` names one file in a
-  directory that may hold other builds and other people's files; such a file is
-  replaced only when it happens to sit inside another target's `outdir`, and a
-  whole build writes it again on the way past.
-
-An `outdir` that holds the project itself is refused rather than replaced.
-
-### Assets and the deployment
-
-A relative path resolves against the **entry module's** directory, so a server
-bundle in `dist/` reading `index.html` reads `dist/index.html`. Assets are
-copied there by the build, which is what makes `dist/` the whole deployment —
-a directory copied by its contents, so `public/styles.css` is served at
-`/styles.css` with nothing rewriting an href.
-
-### An HTML entry
-
-A server bundle starts at a module, because the runtime does. The browser starts
-at a **document**.
-
-```json
-{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }
-```
-
-The tags in it are the build's inputs:
-
-```html
-<link rel="stylesheet" href="./styles.css" />
-<script type="module" src="./src/entry.client.tsx"></script>
-```
-
-become, in `dist/index.html`:
-
-```html
-<link rel="stylesheet" href="/assets/styles-621d3b66.css" />
-<script type="module" src="/assets/entry.client-fccaa347.js" />
-```
-
-| | |
-| --- | --- |
-| `<script type="module">` | An entry — it and everything it imports become one browser bundle |
-| Everything else relative | Copied: stylesheets, favicons, images, classic scripts |
-| Both | Content-hashed into `<outdir>/assets`, so the whole directory caches immutably |
-| Everything else in the file | Untouched, byte for byte — title, meta, Open Graph, inline scripts |
-
-A **relative** path is an input. A rooted path (`/assets/vendor.js`), a URL and
-a `data:` URI are left exactly as written — the escape hatch for anything the
-build should keep out of.
-
-Dynamic `import()` chunks land in the same directory, hashed by the bundler, and
-the entry still points at them.
-
-A `<link rel="stylesheet">` is an entry too. It and everything it `@import`s
-become one hashed file, and a relative `url()` is followed, so fonts and images
-travel with the stylesheet instead of arriving as 404s once it moves to
-`/assets`. `--minify` drops comments and collapses whitespace.
-
-#### CSS Modules
-
-A `*.module.css` imported from JavaScript is scoped to the file that declares
-it, and the import resolves to the mapping:
-
-```js
-import styles from "./Button.module.css";  // { button: "button_a1b2c3d4" }
-```
-
-Class names, id selectors and `@keyframes` are renamed; the scoped name comes
-from the file's path, so a server build and a browser build agree without
-talking to each other. `:global(…)` opts out. Every module's CSS is collected
-into one hashed stylesheet and linked from the document — never injected from
-script, so nothing needs `style-src 'unsafe-inline'`.
-
-`composes` reuses a class without repeating its rules — from the same file,
-from another module (`composes: a from "./x.module.css"`), or from outside the
-system (`composes: a from global`). The mapping's value becomes a list of class
-names, and it is transitive.
-
-A `.css` that is **not** `.module.css` is emitted unscoped. That is what
-third-party stylesheets need: a library's own JavaScript emits its class names
-as hardcoded strings, so scoping them would break it.
-
-<Callout type="note" title="What the CSS pipeline does not do">
-  No syntax lowering and no vendor prefixing — nesting and `color-mix()` are
-  supported across the browsers this targets. No value-level minification, and
-  no per-file typed class names.
-</Callout>
-
-### Where the file is
-
-`./esdev.json`, or `--config=<path>` — paths inside it resolve against the
-file, not the working directory.
-
-<Callout type="note" title="esrun never reads it">
-  A production binary that picked up a checked-in file granting itself
-  capabilities is what the capability model exists to prevent. The grant a
-  service runs under belongs on the command that deployed it.
-</Callout>
-
-### End to end
-
-React 19 streaming SSR behind Hono, from CommonJS packages, served by `esrun`
-with no filesystem or import access at all:
-
-```sh
-esdev build server.tsx --out=dist/server.js --minify
-esrun --allow-listen=8080 dist/server.js
-```
-
-## Libraries: `--lib`
-
-```sh
-esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
-```
-
-A library is an **input to somebody else's build**, so every default above is
-theirs to make and `--lib` makes none of them.
-
-| | |
-| --- | --- |
-| **A directory, not an entry** | Every module under it is built, the way `tsc` builds a `rootDir`. Your `exports` map decides what a consumer may import, not what an entry reaches. |
-| **The output is replaced** | The build owns it. A stale file in `dist` is a file `"files": ["dist"]` publishes — and a build that fails replaces nothing. |
-| **Nothing is tree-shaken** | An export no current caller uses is not dead code — it is the API. |
-| **Dependencies stay external** | Only relative and absolute imports are emitted, so a consumer can still dedupe, override or patch. |
-| **Module structure preserved** | A subpath in `exports` is a real file, and a stack trace names a module. |
-| **Nothing defined, no condition asserted** | `NODE_ENV` and `worker` belong to the build that consumes this. |
-| **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
-
-Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
-your project is refused rather than replaced; a single-entry application build
-replaces nothing, since its `--out` is one file in a directory that may hold
-other things. (A whole-project build does replace its `outdir`s — see
-[above](#a-whole-build-replaces-what-it-owns).)
-
-### Declarations
-
-Derived from what the source **says**, never from what a checker infers — the
-same contract type-stripping has. So an exported signature has to state its
-type:
-
-```ts
-export const driver = defineDriver({ … });                    // ✗
-export const driver: Driver<Conn, Opts> = defineDriver({ … }); // ✓
-```
-
-A signature that does not fails the build with the list, rather than getting a
-guessed declaration nobody can see is wrong. TypeScript calls this rule
-[`isolatedDeclarations`](https://www.typescriptlang.org/tsconfig/#isolatedDeclarations).
-
-```text
-error: 2 declarations could not be derived:
-
-  src/index.ts:150:14  TS9010: Variable must have an explicit type annotation.
-  src/pool.ts:41:14    TS9010: Variable must have an explicit type annotation.
-```
-
-A declaration's own imports are rewritten to name the files the build wrote, the
-way the JavaScript beside them already is: `./pool` and `./pool.ts` both become
-`./pool.js`, and `./pool.cjs` in a `.d.cts`. Repeating the source's spelling is
-TS2835 for a `node16` consumer, and a `.d.cts` naming a `.js` resolves to the ES
-module's declarations (TS1479).
-
-`--no-types` skips them.
-
-### CommonJS output
-
-`esrun` loads ES modules and nothing else, and that does not move. This is an
-**output**, for the consumers of your package who are still on `require()`:
-
-```sh
-esdev build --lib src --format=esm,cjs   # dist/**.js + .d.ts, dist/**.cjs + .d.cts
-esdev build --lib src --format=cjs       # CommonJS alone
-```
-
-| | |
-| --- | --- |
-| **`.cjs`, whatever `"type"` says** | Both trees in one directory, told apart by extension. |
-| **`.d.cts` beside each `.cjs`** | Under `node16` a `.cjs` is typed by that and by nothing else. |
-| **Declarations name the output** | A specifier in a `.d.cts` points at the `.cjs` sibling — `./pool` and `./pool.js` alike. |
-| **Named exports** | `require()` returns the namespace, so a default export is `.default`. |
-| **All or nothing** | One pass per format, and none of them lands unless every one succeeds. |
-
-`types` goes **inside** each condition. Beside them it matches first, and a
-`require()` gets the ES module's declarations:
-
-```json
-{
-  "exports": {
-    ".": {
-      "import":  { "types": "./dist/index.d.ts",  "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
-    }
-  }
-}
-```
-
-Top-level `await` has no CommonJS form and stops the build, naming the pass. A
-`runtime:` import stays external in both trees and no `require()` outside
-`esrun` resolves one, so the build says when it wrote one.
-
-### One declaration file
-
-A package whose `exports` map has a single entry wants one `index.d.ts`, not a
-mirror of a source layout nobody outside it should have to know:
-
-```sh
-esdev build --lib src --dts-bundle    # → dist/index.d.ts
-```
-
-| | |
-| --- | --- |
-| **Reachable, not everything** | Everything the entry's exports name, transitively. |
-| **Inlined but not exported** | A type reachable only *through* a public one is present — the public type needs it — without widening your surface. |
-| **Collisions renamed** | Two modules with `Options` become `Options` and `Options$1`, and every site is rewritten. |
-| **Dependencies stay imports** | The same line `--lib` draws for JavaScript. |
-| **JSDoc byte for byte** | It is what an editor shows on hover. |
-
-Keep the per-module `.d.ts` if your `exports` map has subpaths — `@you/pkg/pool`
-has to find a real `pool.d.ts`.
-
-A construct that cannot be linked into one file — a namespace import, `export =`,
-a module augmentation, an inline `import("./x")` type — stops the build and names
-itself. A `.d.ts` is believed:
-nothing runs it and no test covers it, so a wrong one is worse than none.
-
-<Callout type="note" title="Written here, not borrowed">
-  Neither `tsc` nor rolldown can do this — `tsc` has no declaration-bundling
-  mode, and rolldown's Rust crates have no `.d.ts` support. The linker is
-  ours, over oxc's parser and semantic analysis.
-</Callout>
-
-### Library options
-
-Every one of these is a flag **and** a target key, because a build belongs in
-the file that describes the project. A library described only on a command line
-could describe only part of itself — `assets` is a target key, so the README and
-LICENSE a package ships had nowhere to be named.
-
-| Flag | In `esdev.json` | |
-| --- | --- | --- |
-| `--lib` | `"lib": true` | Build a library |
-| `--format=<list>` | `"format": ["esm", "cjs"]` | `esm` (default), `cjs`, or both. A single one may be a string |
-| `--no-types` | `"types": false` | Skip the `.d.ts` |
-| `--dts-bundle[=<entry>]` | `"dts-bundle": true` or `"src/main.ts"` | One `.d.ts` instead of one per module. `true` takes `<entry>/index.ts` |
-| `--out=<dir>` | `"outdir": "dist"` | Where to write it (default `dist`) |
-
-```json
-{
-  "targets": {
-    "lib": {
-      "entry": "src",
-      "lib": true,
-      "format": ["esm", "cjs"],
-      "outdir": "dist",
-      "minify": true,
-      "sourcemap": true,
-      "assets": ["README.md", "LICENSE"]
-    }
-  }
-}
-```
-
-```sh
-esdev build                      # …and the whole package is one command
-```
-
-The library keys mean nothing on an application target and are **refused**
-there rather than ignored, in the same words the flags use: an application
-build emits no declarations to skip or link, and its output is loaded by
-`esrun`, which loads ES modules and nothing else.
-
-<Callout type="note" title="Types are never checked">
-  `esdev` erases and derives; it does not typecheck. That is your editor's job
-  and `tsc --noEmit`'s.
-</Callout>
+## Choose a focused guide
+
+- [Project builds](/esdev/build/project) — `esdev.json`, multiple targets,
+  aliases, environment values, plugins and safe output replacement.
+- [Browser builds](/esdev/build/browser) — HTML entries, imported assets,
+  stylesheets and CSS Modules.
+- [Library builds](/esdev/build/library) — `--lib`, declarations and CommonJS
+  output.

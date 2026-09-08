@@ -1,0 +1,169 @@
+---
+title: Project builds
+description: Describe server, browser and prerender targets in esdev.json.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Project builds
+
+A command line describes one bundle. An app that renders on the server and
+hydrates in the browser is two, from two entries, with two shapes of output —
+and the site it prerenders is a third that has to *run*.
+
+```json
+{
+  "targets": {
+    "server":    { "entry": "src/server.ts", "out": "dist/server.js",
+                   "assets": ["index.html", "public"] },
+    "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
+                   "platform": "browser" },
+    "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
+                   "then": "run" }
+  }
+}
+```
+
+```sh
+esdev build                      # every target
+esdev build --target=browser     # one
+esdev build src/app.ts           # ignores the project file entirely
+```
+
+## Target options
+
+| Key | |
+| --- | --- |
+| `entry` | The module the bundle is rooted at — or an `.html` file ([browser builds](/esdev/build/browser)) |
+| `out` | One file |
+| `outdir` | A directory — what a browser target needs, since chunks land beside the entry |
+| `platform` | `server` (default) or `browser` |
+| `assets` | Copied into the output: a file by name, a directory by its **contents** |
+| `then` | `"run"` — execute the output once built |
+| `lib` | `true` — publish a library instead of deploying a bundle ([libraries](/esdev/build/library)) |
+| `format` | A library's module systems: `"esm"`, `"cjs"`, or both as a list |
+| `types` | `false` — skip declarations |
+| `dts-bundle` | `true`, or the entry to link from |
+| `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
+| `alias` (top level) | Specifier rewrites for every target |
+| `plugins` | Plugins for this target, **added** to the project's |
+
+`define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
+string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
+takes a release build of a project whose day to day is unminified.
+
+## Aliases
+
+Top level, because a rewrite is a property of the source tree rather than of
+one output:
+
+```json
+{ "alias": { "@": "./src", "react": "preact/compat" } }
+```
+
+A path is resolved against the project; anything else names a package. The
+longest match wins, so `@/ui` beats `@`. `--alias=@=./src` is the same thing for
+an entry with no project around it.
+
+<Callout type="note" title="A bundling rule, and only that">
+  `@/db` resolves because the bundler was told what `@` is. A module run
+  unbundled — `esdev src/thing.ts`, or a file `esdev test` runs — resolves the
+  way `esrun` does and knows nothing about it. `--lib` refuses aliases outright:
+  a published module keeps the specifier its source wrote.
+</Callout>
+
+## `import.meta.env`
+
+A browser bundle cannot read the environment at run time, so what configures it
+is compiled in — and what is compiled in is public, which is what the prefix
+says out loud:
+
+```sh
+PUBLIC_API_URL=https://api.example.com
+```
+
+```ts
+fetch(`${import.meta.env.PUBLIC_API_URL}/users`);
+if (import.meta.env.DEV) { /* development-only code */ }
+```
+
+| | |
+| --- | --- |
+| **`PUBLIC_` only** | Everything else stays out of the artifact. A secret is read at run time through [`runtime:env`](/api/env) |
+| **`.env`, then the environment** | A variable exported in the shell beats the file — CI needs that way round |
+| **`MODE`, `DEV`, `PROD`** | `"development"`/`"production"`, and two booleans, from the build itself |
+| **The object too** | `const { PUBLIC_API_URL } = import.meta.env` works; it is replaced whole |
+| **Not in `--lib`** | Which environment the code runs in is the consuming build's to say |
+
+## Plugins in a project
+
+A project can name plugins in data, so `esdev build` and `esdev start` load them
+for every target:
+
+```json
+{
+  "plugins": [
+    "./plugins/mdx.js",
+    { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }
+  ],
+  "targets": {
+    "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
+                 "platform": "browser", "plugins": ["./plugins/only-web.js"] }
+  }
+}
+```
+
+Top-level plugins apply to every target; a target's `plugins` are added rather
+than replacing them. See [Writing a plugin](/esdev/plugins) for the hook
+contract.
+
+| Key | |
+| --- | --- |
+| `module` | What to import |
+| `export` | Which export the plugin is; default: the default export |
+| `options` | What to call it with, when the export is a factory |
+
+Plugins load into an isolate of their own and are kept for the run. They run
+under esdev's grant, in the project directory, with the same `runtime:`
+namespace any other program gets. A plugin you configured is code you chose to
+run.
+
+## The three shapes
+
+| Stack | Targets |
+| --- | --- |
+| Backend | One `out` file |
+| Frontend (SSG/SPA) | A browser `outdir`, plus a prerender target with `then: "run"` |
+| Fullstack | Both |
+
+`then: "run"` is how a static site is generated without `esdev` knowing what
+one is: the bundle runs, and what it writes is the output. It runs in a child
+process, after every target is built.
+
+## Safe output replacement
+
+Nothing lands where it is deployed until the whole build has worked. Every
+output path is mirrored under one staging directory beside the project
+(`.esdev-build-<pid>-<n>`). Only once every target and every `then: "run"` step
+has succeeded does anything move into place, so a failed build leaves the last
+working deployment whole.
+
+A whole-project `esdev build` replaces each `outdir`, so stale content-hashed
+files cannot accumulate. The following are overlaid instead: a selected
+`--target`, `esdev start`, and an `out` file's containing directory. An `outdir`
+that holds the project itself is refused.
+
+## Configuration location
+
+`./esdev.json`, or `--config=<path>` — paths inside it resolve against the file,
+not the working directory. `esrun` never reads it; deployment grants belong on
+the command that deploys the artifact.
+
+## End to end
+
+```sh
+esdev build server.tsx --out=dist/server.js --minify
+esrun --allow-listen=8080 dist/server.js
+```
+
+For HTML entries, assets and CSS Modules, see [Browser builds](/esdev/build/browser).

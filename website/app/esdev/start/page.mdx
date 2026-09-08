@@ -3,8 +3,6 @@ title: esdev start
 description: The dev loop — build what esdev.json describes, run it, and patch each change into the running page.
 ---
 
-import { Callout } from "@opentf/web-docs";
-
 # esdev start
 
 ```sh
@@ -13,13 +11,12 @@ esdev start
 
 It is [`esdev build`](/esdev/build) on a loop. A dev build differs from a
 release build in three ways and no more: `process.env.NODE_ENV` is
-`"development"`, nothing is content-hashed, and the browser bundle is built so a
-module can be replaced in place. Dev and prod disagreeing about how a module
-*resolves* is the failure this toolchain exists to prevent, and none of the three
-touches that.
+`"development"`, nothing is content-hashed, and the browser bundle is built so
+a module can be replaced in place.
 
-On a change: rebuild, restart the server if its bundle moved, and patch the page
-— or reload it, if nothing accepted the change.
+On a change: rebuild, restart the server if its bundle moved, and patch the
+page — or reload it if nothing accepted the change. Read the details in
+[Hot module replacement](/esdev/start/hmr).
 
 ## The server is yours
 
@@ -32,10 +29,11 @@ process under the config's `permissions` and restarts it with a `SIGTERM` — th
 graceful stop production gets, so a request in flight when you save is answered
 rather than dropped.
 
-**It is the same file production runs.** No dev server stands in for it, nothing
-wraps it, and there is no second code path that exists only on your machine.
+**It is the same file production runs.** No dev server stands in for it,
+nothing wraps it, and there is no second code path that exists only on your
+machine.
 
-A project with no server of its own — a static site, a single-page app — has
+A project with no server of its own — a static site or single-page app — has
 nothing to run, so esdev serves the output directory itself: files, an
 `index.html` fallback for client-side routes, and nothing else.
 
@@ -45,25 +43,20 @@ nothing to run, so esdev serves the output directory itself: files, an
 esdev: src/App.tsx: Unexpected token
 ```
 
-The server you were about to fix it on is still running, still serving, and the
-browser is not told anything. A syntax error mid-edit is the most ordinary event
-in a dev loop; it should cost you a message.
-
-The rebuild happens **before** anything is stopped, so the old server also
-answers *during* it.
+The server you were about to fix is still running, still serving, and the
+browser is not told anything. The rebuild happens **before** anything is
+stopped, so the old server also answers during it.
 
 ## The update channel
 
-Every built document gets a few lines that open a WebSocket to
-`ws://127.0.0.1:<port>/@esdev/hmr` and act on what arrives — a module patch, a
-stylesheet swap, or a reload. It is esdev's endpoint rather than your
-application's, so nothing dev-only reaches your source and the file you edit is
-never written to.
+Every built document gets a WebSocket to
+`ws://127.0.0.1:<port>/@esdev/hmr`. It acts on a module patch, stylesheet swap,
+or reload. It is esdev's endpoint rather than your application's, so nothing
+dev-only reaches your source and the file you edit is never written to.
 
-An update is sent **after** a restart finishes, so a page never fetches from a
-server still coming back up. The client reconnects on its own, backing off to a
-5 s ceiling, because a restarted dev server is the ordinary case. The port is
-written into the document when it is built, so this reconnect works while the
+An update is sent **after** a restart finishes. The client reconnects on its
+own, backing off to a 5 s ceiling, because a restarted dev server is ordinary.
+The port is written into the document when it is built, so this works while the
 endpoint keeps the same port. If you stop and start esdev again and its
 unpinned endpoint chooses a different port, reload the page; the old document
 cannot discover that new endpoint. For a frontend project, use `--port=<n>` to
@@ -83,197 +76,25 @@ pin the endpoint.
 "start": { "run": "server", "watch": ["server", "web"], "serve": "dist", "port": 8080 }
 ```
 
-`watch` narrows what gets rebuilt; leaving it out rebuilds everything, which is
-what you want at 40 ms a build. `serve` overrides the directory served when
-there is no `run`.
-
-## Previewing the release build
-
-The dev loop is not what ships: `NODE_ENV` is `"development"` here and nothing is
-hashed. `esdev preview` serves the **release** output, which is where the
-failures the dev loop is blind to show up — a package that hands over a different
-module under `production`, a `<link>` pointing at a name hashing changed.
-
-```sh
-esdev build
-esdev preview            # → http://127.0.0.1:4173
-esdev preview --dir=dist --port=5000
-```
-
-It serves; it does not build. Missing paths that look like routes fall back to
-`index.html`, as a client-side router needs. A project whose output is a server
-bundle has nothing to serve — run it the way production will, under `esrun`.
-
-## The port
-
-`--port` is the port you open. With a `run` target that is your server's; without
-one esdev serves the output, so it is esdev's.
-
-A port you name is a promise and fails if it is taken. One you do not name takes
-what your `listen` grant says, or a free one, and prints where it went:
-
-```text
-esdev: 8080 was taken; use --port to pin one
-esdev: the app is on http://localhost:33407
-```
-
-Your server's port moves only when the project has said enough for the move to be
-safe, and both halves are grants you already write:
-
-```json
-"permissions": { "allow": { "listen": ["8080"], "env": ["PORT"] } }
-```
-
-One port, so there is one to move — and `PORT`, so the server can be told which
-one it got. The rewritten grant is the same capability with a different number,
-so development still runs under the deployment's grant. A project shaped any
-other way is left alone, which is what lets two of them run at once.
-
-## Hot module replacement
-
-A changed module is patched into the running page instead of reloading it, so
-scroll position, open dialogs and half-filled forms survive a save. `--no-hot`
-opts out.
-
-It is not tied to a framework. A module opts in with `import.meta.hot`:
-
-```js
-import { render } from "./view.js";
-
-render();
-
-import.meta.hot.accept();
-```
-
-If nothing on the way up accepts a change, the page reloads.
-
-### The API
-
-| | |
-| --- | --- |
-| `accept()` | Re-run this module in place |
-| `accept(cb)` | …and call `cb(newExports)` after |
-| `accept(dep, cb)` | Re-run **that dependency** and call `cb(itsNewExports)` |
-| `accept([deps], cb)` | The same, for several |
-| `signal` | `AbortSignal`, aborted just before this module is replaced |
-| `keep(key, make)` | Made once, returned on every replacement after |
-| `dispose(cb)` | Runs before replacement, with `data` |
-| `data` | An object that survives replacement |
-| `decline()` | Refuse replacement — any change reaching here reloads |
-| `invalidate()` | Hand the update up to this module's importers |
-
-`import.meta.hot` is `undefined` in a production build, so `if (import.meta.hot)`
-is how a module says "dev only" and still typechecks.
-
-### Cleanup, without cleanup code
-
-`signal` is aborted just before your module is replaced. Anything that takes one
-tears itself down:
-
-```js
-addEventListener("resize", onResize, { signal: import.meta.hot.signal });
-```
-
-That line is also correct in production, where the signal is never aborted. For
-APIs that do not take a signal:
-
-```js
-const timer = setInterval(tick, 1000);
-import.meta.hot.signal.addEventListener("abort", () => clearInterval(timer));
-```
-
-### State across replacements
-
-```js
-const cache = import.meta.hot.keep("cache", () => new Map());
-```
-
-Made once, returned every time after — one call site, where `dispose` + `data`
-is two that have to agree.
-
-### Component refresh is a plugin
-
-**esdev implements no framework's scheme and knows the name of none.** What it
-provides is the generic half, and it is the same for everyone:
-
-- `import.meta.hot` and the update channel, on in any hot loop;
-- `ctx.refresh` — the scheme your target named, handed to your plugins, and
-  present *only* while the loop is running that target hot;
-- the compiler's component registrations, when a plugin asks for them.
-
-A scheme is a [plugin](/esdev/plugins) on top of that:
-
-```json
-{
-  "targets": {
-    "web": {
-      "entry": "index.html",
-      "outdir": "dist",
-      "refresh": "otfw",
-      "plugins": ["./plugins/otfw-refresh.mjs"]
-    }
-  }
-}
-```
-
-```js
-export default {
-  name: "otfw-refresh",
-  // Only the compiler can find the components to register.
-  jsx: { refresh: true },
-  transform: {
-    filter: { id: /\.[jt]sx$/ },
-    // A wrapper makes every module a hot boundary, which is exactly wrong in
-    // anything you ship — so it goes in where the loop is hot and nowhere else.
-    handler: (code, id, ctx) =>
-      ctx.refresh === "otfw" ? { code: wrapForHot(code, id) } : null,
-  },
-};
-```
-
-The refresh itself is an ordinary `accept` callback, so a scheme is a consumer
-of the hot API rather than something esdev knows about.
-
-### React
-
-Already wired up in the react template: edit a component and it re-renders with
-its `useState` intact. It is React Fast Refresh, and it is exactly the plugin
-above — `plugins/react-refresh.mjs`, written out with the template and named by
-its `esdev.json`:
-
-```json
-"web": { "entry": "index.html", "outdir": "dist",
-         "refresh": "react", "plugins": ["./plugins/react-refresh.mjs"] }
-```
-
-It used to live in esdev, and `"react"` was the only name the config would take
-— so every other framework got a full page reload on each edit, not because the
-mechanism was missing but because the target had no way to say it had a scheme.
-React has no privileges here now: delete the plugin entry and the react template
-loses Fast Refresh like anything else would.
-
-A `refresh` naming a scheme on a target with **no plugins** is refused, since
-nothing could implement it — and a `refresh` that silently did nothing is a
-project whose components stop keeping their state one day with the reason
-sitting unread in a config file.
-
-<Callout type="note" title="What it costs">
-  Dev mode turns treeshaking off, so the react template's dev bundle goes from
-  870 KB to 1.45 MB and a rebuild costs ~20 ms more. Development only — nothing
-  you ship changes.
-</Callout>
+`watch` narrows what gets rebuilt; leaving it out rebuilds everything. `serve`
+overrides the directory served when there is no `run`.
 
 ## What is watched
 
 `esdev start` watches the project root, every explicitly scoped `--allow-read`
-path from `esdev.json` or the command line, and the build inputs those paths may
-contain. Target output directories are always excluded so a build cannot trigger
-itself. Rules in the project's root `.gitignore` also exclude matching paths;
-other directory names are not hardcoded exclusions.
+path from `esdev.json` or the command line, and the build inputs those paths
+may contain. Target output directories are always excluded so a build cannot
+trigger itself. Rules in the project's root `.gitignore` also exclude matching
+paths; other directory names are not hardcoded exclusions.
 
-Modules, and the things a *build* consumes that a run does not: `index.html`,
-stylesheets, images, fonts.
+That includes modules and the things a build consumes that a run does not:
+`index.html`, stylesheets, images and fonts. An explicit allowed path is both
+part of the child permission grant and the watch list. An unscoped
+`--allow-read` grants access but does not identify a finite directory to watch.
 
-`--allow-read=./config,/etc/example` adds those scoped paths to both the child
-permission grant and the watch list. An unscoped `--allow-read` grants access but
-does not identify a finite directory to watch.
+For the standalone command's narrower rules, see [Watch mode](/esdev/watch).
+
+## Preview the release
+
+Use [Previewing a release](/esdev/start/preview) after `esdev build` to check
+production-mode output, hashed URLs and the static server behavior.

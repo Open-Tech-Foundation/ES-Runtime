@@ -1,0 +1,130 @@
+---
+title: Hot module replacement
+description: Keep a running page alive while esdev patches accepted modules.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Hot module replacement
+
+A changed module is patched into the running page instead of reloading it, so
+scroll position, open dialogs and half-filled forms survive a save.
+`--no-hot` opts out.
+
+It is not tied to a framework. A module opts in with `import.meta.hot`:
+
+```js
+import { render } from "./view.js";
+
+render();
+
+import.meta.hot.accept();
+```
+
+If nothing on the way up accepts a change, the page reloads.
+
+## The API
+
+| | |
+| --- | --- |
+| `accept()` | Re-run this module in place |
+| `accept(cb)` | …and call `cb(newExports)` after |
+| `accept(dep, cb)` | Re-run **that dependency** and call `cb(itsNewExports)` |
+| `accept([deps], cb)` | The same, for several |
+| `signal` | `AbortSignal`, aborted just before this module is replaced |
+| `keep(key, make)` | Made once, returned on every replacement after |
+| `dispose(cb)` | Runs before replacement, with `data` |
+| `data` | An object that survives replacement |
+| `decline()` | Refuse replacement — any change reaching here reloads |
+| `invalidate()` | Hand the update up to this module's importers |
+
+`import.meta.hot` is `undefined` in a production build, so `if (import.meta.hot)`
+is how a module says “dev only” and still typechecks.
+
+## Cleanup, without cleanup code
+
+`signal` is aborted just before your module is replaced. Anything that takes one
+tears itself down:
+
+```js
+addEventListener("resize", onResize, { signal: import.meta.hot.signal });
+```
+
+That line is also correct in production, where the signal is never aborted. For
+APIs that do not take a signal:
+
+```js
+const timer = setInterval(tick, 1000);
+import.meta.hot.signal.addEventListener("abort", () => clearInterval(timer));
+```
+
+## State across replacements
+
+```js
+const cache = import.meta.hot.keep("cache", () => new Map());
+```
+
+Made once, returned every time after — one call site, where `dispose` plus
+`data` is two that have to agree.
+
+## Component refresh is a plugin
+
+**esdev implements no framework's scheme and knows the name of none.** What it
+provides is the generic half, and it is the same for everyone:
+
+- `import.meta.hot` and the update channel, on in any hot loop;
+- `ctx.refresh` — the scheme your target named, handed to your plugins, and
+  present *only* while the loop is running that target hot;
+- the compiler's component registrations, when a plugin asks for them.
+
+A scheme is a [plugin](/esdev/plugins) on top of that:
+
+```json
+{
+  "targets": {
+    "web": {
+      "entry": "index.html",
+      "outdir": "dist",
+      "refresh": "otfw",
+      "plugins": ["./plugins/otfw-refresh.mjs"]
+    }
+  }
+}
+```
+
+```js
+export default {
+  name: "otfw-refresh",
+  jsx: { refresh: true },
+  transform: {
+    filter: { id: /\.[jt]sx$/ },
+    handler: (code, id, ctx) =>
+      ctx.refresh === "otfw" ? { code: wrapForHot(code, id) } : null,
+  },
+};
+```
+
+The refresh itself is an ordinary `accept` callback, so a scheme is a consumer
+of the hot API rather than something esdev knows about.
+
+## React
+
+Already wired up in the React template: edit a component and it re-renders with
+its `useState` intact. It is React Fast Refresh, implemented by the template's
+`plugins/react-refresh.mjs` and named by its `esdev.json`:
+
+```json
+"web": { "entry": "index.html", "outdir": "dist",
+         "refresh": "react", "plugins": ["./plugins/react-refresh.mjs"] }
+```
+
+React has no privileges here: delete the plugin entry and the React template
+loses Fast Refresh like any other framework would.
+
+<Callout type="note" title="What it costs">
+  Dev mode turns treeshaking off, so the React template's dev bundle is larger
+  and rebuilds take longer. Development only — nothing you ship changes.
+</Callout>
+
+For the server restart, port selection and watch rules around HMR, see [The dev
+loop](/esdev/start).

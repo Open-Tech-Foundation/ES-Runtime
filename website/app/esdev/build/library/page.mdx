@@ -1,0 +1,122 @@
+---
+title: Library builds
+description: Build a source tree into publishable JavaScript and declarations.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Library builds
+
+```sh
+esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
+```
+
+A library is an **input to somebody else's build**, so application defaults
+such as `NODE_ENV`, `worker`, and asset URLs are the consumer's to make.
+
+| | |
+| --- | --- |
+| **A directory, not an entry** | Every module under it is built. Your `exports` map decides what a consumer may import. |
+| **The output is replaced** | The build owns it; a failed build replaces nothing. |
+| **Nothing is tree-shaken** | An export no current caller uses is still the API. |
+| **Dependencies stay external** | Consumers can dedupe, override or patch them. |
+| **Module structure preserved** | An `exports` subpath is a real file and a stack trace names a module. |
+| **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
+
+Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
+project is refused rather than replaced. A single-entry application build
+replaces nothing; whole-project application builds replace their `outdir`s.
+
+## Declarations
+
+Declarations are derived from what the source **says**, never from what a
+checker infers. An exported signature has to state its type:
+
+```ts
+export const driver = defineDriver({ … });                    // ✗
+export const driver: Driver<Conn, Opts> = defineDriver({ … }); // ✓
+```
+
+A signature that does not meet this rule fails the build with the list of
+locations. This is TypeScript's `isolatedDeclarations` contract. `--no-types`
+skips declarations.
+
+Imports in declarations are rewritten to the files the build writes: `./pool`
+and `./pool.ts` become `./pool.js`, and a `.d.cts` names its `.cjs` sibling.
+
+## CommonJS output
+
+`esrun` loads ES modules and nothing else. CommonJS is an output for consumers
+that still use `require()`:
+
+```sh
+esdev build --lib src --format=esm,cjs
+esdev build --lib src --format=cjs
+```
+
+| | |
+| --- | --- |
+| **`.cjs`, whatever `"type"` says** | Both trees in one directory are told apart by extension. |
+| **`.d.cts` beside each `.cjs`** | Under `node16`, a `.cjs` is typed by that declaration. |
+| **Named exports** | `require()` returns the namespace, so a default export is `.default`. |
+| **All or nothing** | No format lands unless every format succeeds. |
+
+`types` goes inside each `exports` condition:
+
+```json
+{
+  "exports": {
+    ".": {
+      "import":  { "types": "./dist/index.d.ts",  "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  }
+}
+```
+
+Top-level `await` has no CommonJS form and stops the build. A `runtime:` import
+stays external in both trees.
+
+## One declaration file
+
+For a package with one public entry, use a declaration bundle:
+
+```sh
+esdev build --lib src --dts-bundle    # → dist/index.d.ts
+```
+
+Everything the entry exports transitively is reachable and linked; types needed
+only through a public type are inlined without widening the API. Collisions are
+renamed consistently, dependencies stay imports, and JSDoc is preserved.
+
+Keep per-module declarations when your `exports` map has subpaths. Unsupported
+constructs such as module augmentations stop the build and name themselves.
+
+## Library options
+
+| Flag | In `esdev.json` | |
+| --- | --- | --- |
+| `--lib` | `"lib": true` | Build a library |
+| `--format=<list>` | `"format": ["esm", "cjs"]` | `esm` (default), `cjs`, or both |
+| `--no-types` | `"types": false` | Skip `.d.ts` files |
+| `--dts-bundle[=<entry>]` | `"dts-bundle": true` or an entry | One `.d.ts` instead of one per module |
+| `--out=<dir>` | `"outdir": "dist"` | Where to write it |
+
+```json
+{
+  "targets": {
+    "lib": {
+      "entry": "src",
+      "lib": true,
+      "format": ["esm", "cjs"],
+      "outdir": "dist",
+      "types": true,
+      "assets": ["README.md", "LICENSE"]
+    }
+  }
+}
+```
+
+Library keys mean nothing on an application target and are refused rather than
+ignored. Types are derived, not checked; use your editor and `tsc --noEmit` for
+type checking.

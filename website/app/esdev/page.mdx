@@ -82,54 +82,17 @@ for it, and a build without it says so instead of listening on nothing.
 
 ## TypeScript & JSX
 
-`.ts`, `.tsx`, `.mts`, `.cts` and `.jsx` are stripped to JavaScript as they
-load. A `.js` file is passed through untouched.
+`esdev` runs `.ts`, `.tsx`, `.mts`, `.cts` and `.jsx` directly by stripping
+types and compiling JSX; `.js` passes through untouched. Types are erased, not
+checked, and import specifiers stay exactly as written so development and
+production resolve the same modules.
 
-```sh
-esdev app.ts
-esdev app.tsx
-```
-
-Three rules fix the shape:
-
-| | |
-| --- | --- |
-| **Types are erased, never checked** | A type error is your editor's job, and `tsc --noEmit`'s — not something on the critical path of every run. Same call Node and Bun make. |
-| **Specifiers are left exactly as written** | `import './app.ts'`, not `./app.js`. Resolution is `esrun`'s, unchanged; extension guessing would make the two binaries disagree about which file a program is. |
-| **`.js` is not reprinted** | Round-tripping it through a parser and printer would move every line in its stack traces for no gain. |
-
-JSX compiles to the automatic runtime, `react/jsx-runtime` by default. Point it
-elsewhere per file:
-
-```ts
-/** @jsxImportSource remix/ui */
-```
-
-For editor types, see [TypeScript setup](/esdev/typescript).
+See [TypeScript setup](/esdev/typescript) for editor types and configuration.
 
 ## Watch
 
-```sh
-esdev --watch --deny-all --allow-listen=8080 server.ts
-```
-
-**A restart drains.** It is a `SIGTERM`, the same graceful stop production gets:
-the server stops accepting, answers the requests already in flight, and only
-then exits. Saving a file while a request is open does not drop that request.
-`--shutdown-grace=<ms>` bounds the wait, after which the process is killed.
-
-The program runs in a **child process**, so nothing leaks between runs — no
-listening socket, no wedged isolate, no global left behind. Watched: the project
-root (nearest `package.json`) or the entry's directory, recursively, and only
-source extensions. The generic watcher excludes esdev's staging directories;
-it does not read `esdev.json` or `.gitignore`, and it does not add the build
-assets or explicit permission paths that `esdev start` watches. A program that
-exits leaves the watcher up.
-
-<Callout type="note" title="Windows">
-  There is no `SIGTERM` and no console-independent way to ask another process to
-  stop cleanly, so a restart there kills rather than drains.
-</Callout>
+For the standalone `--watch` command, see [Watch mode](/esdev/watch). For a
+configured project that rebuilds and serves targets, see [The dev loop](/esdev/start).
 
 ## Three modules only esdev serves
 
