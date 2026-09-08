@@ -77,6 +77,11 @@ html5gum.workspace = true
 # from `esrun` with the command itself (D59): a production binary has no reason
 # to be able to rewrite a tsconfig.
 serde_json.workspace = true
+# Canonical paths without the Windows `\\?\` verbatim prefix (D25): a
+# canonicalized path becomes a bundler input, a plugin module URL and a display
+# string, and the verbatim form breaks the first two while uglifying the
+# third. Already in the graph via `default-providers`, so no new crate.
+dunce.workspace = true
 
 # Sending a child the signal that starts its graceful drain. The same crate and
 # the same reason `default-providers` uses it for `runtime:system` — a typed

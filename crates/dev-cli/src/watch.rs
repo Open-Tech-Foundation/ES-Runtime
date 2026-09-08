@@ -263,6 +263,17 @@ fn request_termination(_pid: u32) -> bool {
 /// still being awaited.
 pub fn end(pid: u32) {
     if !request_termination(pid) {
+        // Windows has no signal to ask with, so there is nothing to fall back
+        // from: insist at once, or a `--timeout` on a wedged file waits for
+        // ever. `taskkill` ships with the OS, which a new dependency would not.
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F", "/T"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
         return;
     }
     // A test that ignores SIGTERM is a test that has stopped responding, which

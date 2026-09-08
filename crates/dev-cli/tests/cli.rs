@@ -71,12 +71,15 @@ fn runs_an_inline_snippet() {
 #[test]
 fn top_level_await_and_imports_work() {
     let dep = write("dep.mjs", "export const answer = 42;\n");
+    // A `file:` URL rather than the path as written: on Windows an absolute
+    // path is a URL whose scheme is `c`, so the import never reaches the
+    // loader as a file — the same spelling the `esrun` module suite uses.
+    let dep = url::Url::from_file_path(&dep)
+        .expect("a file URL")
+        .to_string();
     let app = write(
         "tla.mjs",
-        &format!(
-            "const m = await import({:?});\nconsole.log(m.answer);\n",
-            dep.to_string_lossy()
-        ),
+        &format!("const m = await import({dep:?});\nconsole.log(m.answer);\n"),
     );
     let out = esdev().arg(&app).output().expect("spawn esdev");
     assert!(out.status.success(), "{}", stderr(&out));

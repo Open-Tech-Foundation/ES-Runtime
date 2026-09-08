@@ -101,6 +101,19 @@ namespace) is unstable and may change between minor releases until the API freez
   delivers — and names its withheld signal per platform (`SIGTERM`/`SIGBREAK`),
   so the scoped-denial path is exercised on both rather than passing on one
   and erroring on the other.
+- **The dev loop's `--timeout` never fired on Windows, and file-path plugins
+  never loaded.** `watch::end(pid)` asks with `SIGTERM` and insists with
+  `SIGKILL`, neither of which exists there — so on Windows it returned having
+  done nothing and a wedged test file hung the run past its budget. It
+  `taskkill /PID /F /T`s instead. Separately, a plugin path was canonicalized
+  into a verbatim `\\?\` path and then handed to `Url::from_file_path`, which
+  refuses exactly that form — so every file-path plugin failed with "cannot
+  name the plugin as a module". Both it and the project directory (which
+  becomes bundler inputs) go through `dunce` now, the same strip
+  `runtime:fs` applies (D25); `dunce` was already in the graph, so no new
+  crate. The top-level-await test imports its dependency by `file:` URL for
+  the same reason the `esrun` module suite does: a bare Windows path is a URL
+  whose scheme is `c`.
 
 - **The Redis TLS fixture server could not read its own certificate on Linux.**
   `tls-server.sh` bind-mounts a `mktemp -d` directory (0700, owned by whoever

@@ -354,10 +354,11 @@ pub fn load(named: Option<&str>) -> Result<Option<Project>, String> {
     // Absolute from here on. Every path in the file is resolved against this
     // directory, including the bundler's own working directory, and a relative
     // one would be resolved a second time against wherever the process happens
-    // to be — which is the same place only by coincidence.
-    let dir = dir
-        .canonicalize()
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    // to be — which is the same place only by coincidence. Stripped of the
+    // Windows verbatim prefix: this directory becomes bundler inputs and
+    // module URLs, which `\\?\` breaks.
+    let dir =
+        dunce::canonicalize(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     parse(&text, dir, &path.display().to_string())
 }
 

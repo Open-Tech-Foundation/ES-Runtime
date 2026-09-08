@@ -290,7 +290,11 @@ fn specifier(dir: &std::path::Path, module: &str) -> Result<String, String> {
         return Ok(module.to_string());
     }
     let path = dir.join(module);
-    let path = path.canonicalize().map_err(|e| {
+    // Stripped of the Windows verbatim prefix: the next call turns this into a
+    // `file:` URL, and `Url::from_file_path` refuses `\\?\`-prefixed paths —
+    // so without this every file-path plugin fails on Windows with "cannot
+    // name the plugin as a module".
+    let path = dunce::canonicalize(&path).map_err(|e| {
         format!(
             "cannot read the plugin {module}: {e}\n\n\
              Plugin paths are relative to the project, like every other path in \

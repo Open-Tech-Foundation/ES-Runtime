@@ -1535,6 +1535,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "arcstr",
+ "dunce",
  "es-runtime-cli-common",
  "es-runtime-common",
  "es-runtime-providers",
