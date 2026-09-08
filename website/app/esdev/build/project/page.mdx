@@ -89,7 +89,7 @@ if (import.meta.env.DEV) { /* development-only code */ }
 
 | | |
 | --- | --- |
-| **`PUBLIC_` only** | Everything else stays out of the artifact. A secret is read at run time through [`runtime:env`](/api/env) |
+| **`PUBLIC_` only** | Everything else stays out of the artifact. A secret is read at run time through [`runtime:env`](/api/process) |
 | **`.env`, then the environment** | A variable exported in the shell beats the file — CI needs that way round |
 | **`MODE`, `DEV`, `PROD`** | `"development"`/`"production"`, and two booleans, from the build itself |
 | **The object too** | `const { PUBLIC_API_URL } = import.meta.env` works; it is replaced whole |

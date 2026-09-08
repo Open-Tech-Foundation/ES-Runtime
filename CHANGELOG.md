@@ -36,6 +36,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Broken documentation links and anchors are now caught during every website
+  build.** The audit covers internal routes, same-page headings, legacy redirects,
+  and the static docs fallback page; stale esdev, API, README, and Redis links
+  were corrected, and preview/deploy now use the audited build path.
+
 - **The filesystem jail builds on Windows and macOS again.** The descriptor-based
   jail (D83) landed with a Windows arm that was documented rather than written:
   the pinned type had a `PathBuf` parent and a Windows `anchor()`, but the eleven

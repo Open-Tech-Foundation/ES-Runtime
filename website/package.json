@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "otfw dev",
-    "build": "otfw build --ssg",
-    "preview": "otfw build --ssg && wrangler dev",
-    "deploy": "otfw build --ssg && wrangler deploy"
+    "audit": "bun ../scripts/site-links.mjs",
+    "build": "otfw build --ssg && bun run audit",
+    "preview": "bun run build && wrangler dev",
+    "deploy": "bun run build && wrangler deploy"
   },
   "dependencies": {
     "@opentf/web": "^0.28.0",

@@ -42,7 +42,7 @@ irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/insta
 $env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
 ```
 
-Each binary is released under its own tag — `esrun@0.24.0`, `esdev@0.1.0` — and
+Each binary is released under its own tag — `esrun@0.25.0`, `esdev@0.3.0` — and
 pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. `esrun upgrade` and
 `esdev upgrade` each update their own binary in place.
 
@@ -119,7 +119,7 @@ on npm — [`@opentf/esrun-types`](https://www.npmjs.com/package/@opentf/esrun-t
 esdev --install-types   # adds the package and wires up tsconfig.json
 ```
 
-See [esrun.opentechf.org/docs/esdev/typescript](https://esrun.opentechf.org/docs/esdev/typescript).
+See [esrun.opentechf.org/esdev/typescript](https://esrun.opentechf.org/esdev/typescript).
 
 ## Development
 

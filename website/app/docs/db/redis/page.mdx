@@ -76,7 +76,7 @@ become syntax.
   `supports.transactions` is `false`, so `transaction(fn)` throws
   `ERR_DB_UNSUPPORTED`. Redis's `MULTI`/`EXEC` applies commands together but does
   **not** roll back one that fails at exec time, so a `transaction(fn)` built on
-  it would commit half a body that threw. Use [`multi()`](#multiexec) instead —
+  it would commit half a body that threw. Use [`multi()`](#multi-exec) instead —
   named after the command it sends. See
   [Drivers &amp; ORMs](/docs/db/authoring) for what that means for portable code.
 </Callout>
