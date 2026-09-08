@@ -8,6 +8,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev create --template=micro-ui`** scaffolds a framework-free browser
+  micro app using Open Tech Foundation's
+  [`@opentf/micro-ui`](https://github.com/Open-Tech-Foundation/Micro-UI) library.
+
 ### Security
 
 - **`h2` is bumped past RUSTSEC-2026-0258**, which let a peer queue empty DATA

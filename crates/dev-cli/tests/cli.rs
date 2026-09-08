@@ -5862,6 +5862,7 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
         .expect("spawn esdev create");
     assert!(listed.status.success(), "{}", stderr(&listed));
     assert!(stdout(&listed).contains("react"), "{}", stdout(&listed));
+    assert!(stdout(&listed).contains("micro-ui"), "{}", stdout(&listed));
 
     let unknown = esdev_in(&dir)
         .args(["create", "app", "--template=svelte"])

@@ -87,6 +87,10 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "vanilla",
         "TypeScript and the DOM — no framework, nothing it ships depends on",
     ),
+    (
+        "micro-ui",
+        "Micro apps with Micro-UI — framework-free UI with a tiny reactive core",
+    ),
 ];
 
 /// Where a template keeps the files that belong to one mode and not the others.
@@ -610,6 +614,14 @@ mod tests {
             assert!(
                 paths.iter().any(|path| path == expected),
                 "{expected} is not in the template: {paths:?}"
+            );
+        }
+
+        let micro_ui = resolved("micro-ui", None);
+        for expected in ["package.json", "esdev.json", "index.html", "src/main.ts"] {
+            assert!(
+                micro_ui.iter().any(|path| path == expected),
+                "{expected} is not in the micro-ui template: {micro_ui:?}"
             );
         }
     }

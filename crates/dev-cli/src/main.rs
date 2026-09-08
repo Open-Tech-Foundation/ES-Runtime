@@ -249,7 +249,7 @@ USAGE:
     esdev create -h, --help     Show this help
 
 OPTIONS:
-    --template=<name>           react (default), api, vanilla or lib
+    --template=<name>           react (default), api, vanilla, micro-ui or lib
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
     --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
