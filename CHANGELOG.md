@@ -18,9 +18,9 @@ namespace) is unstable and may change between minor releases until the API freez
   command line. The generic watcher no longer hardcodes directory exclusions;
   templates declare generated directories in `.gitignore` instead.
 - **The esdev documentation has its own `/esdev` section and Development menu**,
-  with a clear docs-home CTA, workflow navigation, focused build and dev-loop
-  guides, legacy URL redirects, and corrected plugin, watcher, permission, and
-  HMR guidance.
+  with a clear, visually distinct docs-home CTA, workflow navigation, focused
+  build and dev-loop guides, legacy URL redirects, and corrected plugin,
+  watcher, permission, and HMR guidance.
 
 ### Security
 
