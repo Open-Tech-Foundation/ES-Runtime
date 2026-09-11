@@ -48,7 +48,7 @@
 //! this one.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -109,10 +109,12 @@ struct SnapshotState {
     failed: usize,
     written: usize,
     updated: usize,
+    removed: usize,
 }
 
 struct SnapshotFile {
     snapshots: BTreeMap<String, String>,
+    used: BTreeSet<String>,
     dirty: bool,
 }
 
@@ -120,6 +122,7 @@ impl Default for SnapshotFile {
     fn default() -> Self {
         Self {
             snapshots: BTreeMap::new(),
+            used: BTreeSet::new(),
             dirty: false,
         }
     }
@@ -212,6 +215,7 @@ pub fn configure_snapshots(file: Option<PathBuf>, update: bool, ci: bool) {
             failed: 0,
             written: 0,
             updated: 0,
+            removed: 0,
         };
     });
 }
@@ -274,6 +278,7 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
             state.files.insert(file.clone(), loaded);
         }
         let snapshots = state.files.get_mut(&file).expect("inserted above");
+        snapshots.used.insert(key.clone());
         match snapshots.snapshots.get(&key) {
             Some(expected) if expected == &actual => {
                 state.matched += 1;
@@ -363,8 +368,8 @@ fn snapshot_tally() -> Option<String> {
         (used > 0).then(|| {
             if state.update {
                 format!(
-                    "snapshots: {} updated, {} written, {} unchanged",
-                    state.updated, state.written, state.matched
+                    "snapshots: {} updated, {} written, {} removed, {} unchanged",
+                    state.updated, state.written, state.removed, state.matched
                 )
             } else {
                 format!(
@@ -378,6 +383,28 @@ fn snapshot_tally() -> Option<String> {
 
 fn flush_snapshots() -> Result<(), String> {
     SNAPSHOTS.with_borrow_mut(|state| {
+        // A skipped, exclusive, failed, or unfinished case means this run did
+        // not observe the whole file. Keeping unused entries is conservative:
+        // deleting an assertion because `.only` hid its test is never safe.
+        let complete = CASES.with_borrow(|cases| {
+            !cases.is_empty()
+                && cases
+                    .iter()
+                    .all(|case| matches!(case.outcome, Some(Outcome::Passed)))
+        });
+        if state.update && complete {
+            for snapshots in state.files.values_mut() {
+                let before = snapshots.snapshots.len();
+                snapshots
+                    .snapshots
+                    .retain(|key, _| snapshots.used.contains(key));
+                let removed = before - snapshots.snapshots.len();
+                if removed > 0 {
+                    snapshots.dirty = true;
+                    state.removed += removed;
+                }
+            }
+        }
         for (file, snapshots) in &mut state.files {
             if !snapshots.dirty {
                 continue;

@@ -196,6 +196,7 @@ mismatched `Promise` — `await` them.
 | `toBe` | `Object.is` — identity, and `NaN` equals `NaN` |
 | `toEqual` / `toStrictEqual` | Structural, the `assertEquals` walk |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test; unnamed calls count from one |
+| `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory |
 | `toBeTruthy` / `toBeFalsy` / `toBeNull` / `toBeUndefined` / `toBeDefined` / `toBeNaN` | |
 | `toBeInstanceOf` / `toBeTypeOf` | |
 | `toContain` / `toContainEqual` | A member, a substring, a `Set`/`Map` key |
@@ -215,6 +216,11 @@ Snapshots represent deterministic tagged values: primitives (including
 cycles. Functions, symbols, promises, weak collections, getters, class
 instances, and host objects throw rather than creating an ambiguous snapshot.
 The matcher is not negatable and must run inside a test.
+
+Pass an object of property matchers to mask volatile fields in stored output:
+`expect(user).toMatchSnapshot({ id: expect.any(Number) })`. `assertSnapshot`
+is the assertion spelling, and `toThrowErrorMatchingSnapshot` snapshots a
+thrown error.
 
 ```js
 expect(list).toHaveLength(3);

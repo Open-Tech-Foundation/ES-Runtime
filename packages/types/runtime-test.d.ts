@@ -216,7 +216,7 @@ declare module "runtime:test" {
     /** {@link Matchers.toEqual}. This runner draws no stricter distinction. */
     toStrictEqual(expected: unknown): void;
     /** Matches the versioned snapshot recorded for this test. */
-    toMatchSnapshot(name?: string): void;
+    toMatchSnapshot(nameOrMatchers?: string | Record<string, unknown>): void;
     /** Matches exact text or bytes in this test's snapshot directory. */
     toMatchFileSnapshot(name: string): void;
     /** Calls the function and snapshots the error it throws. */

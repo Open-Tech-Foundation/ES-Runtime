@@ -3509,6 +3509,7 @@ mismatched `Promise`; `await` them.
 | `toBe(v)` | `Object.is` — identity, and `NaN` equals `NaN`. |
 | `toEqual(v)` / `toStrictEqual(v)` | Structural, the `assertEquals` walk. This runner draws no stricter distinction. |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test. `name` is optional; unnamed calls count from one. |
+| `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory. |
 | `toBeTruthy()` / `toBeFalsy()` / `toBeNull()` / `toBeUndefined()` / `toBeDefined()` / `toBeNaN()` | |
 | `toBeInstanceOf(C)` / `toBeTypeOf(t)` | |
 | `toContain(v)` / `toContainEqual(v)` | A member, a substring, or a `Set`/`Map` key — by identity, then structurally. |
@@ -3533,6 +3534,12 @@ than variants of them.
 cycles. Functions, symbols, promises, weak collections, getters, class
 instances and host objects throw instead of producing an ambiguous snapshot.
 It is not negatable and must run within a test.
+
+Pass an object of property matchers to `toMatchSnapshot` to mask volatile
+fields in the stored value: `expect(user).toMatchSnapshot({ id:
+expect.any(Number) })`. `assertSnapshot(value, name?)` is the assertion
+spelling, and `expect(fn).toThrowErrorMatchingSnapshot(name?)` snapshots a
+thrown error.
 
 The **asymmetric** matchers are values that say what they will accept, usable
 wherever a value goes — including several levels inside an expected object,

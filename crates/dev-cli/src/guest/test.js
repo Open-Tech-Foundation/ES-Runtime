@@ -594,9 +594,36 @@ function snapshotValue(value) {
   return print(value, 0);
 }
 
-function snapshot(actual, name) {
+function maskSnapshot(value, pattern) {
+  if (isMatcher(pattern)) {
+    if (!pattern.matches(value)) throw new Error(`snapshot property did not match ${pattern.label}`);
+    return `[${pattern.label}]`;
+  }
+  if (pattern === null || typeof pattern !== "object" || value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => index in pattern ? maskSnapshot(item, pattern[index]) : item);
+  }
+  const copy = { ...value };
+  for (const key of Object.keys(pattern)) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      throw new Error(`snapshot property ${JSON.stringify(key)} is missing`);
+    }
+    copy[key] = maskSnapshot(value[key], pattern[key]);
+  }
+  return copy;
+}
+
+function snapshot(actual, nameOrMatchers) {
   if (activeCase === null) throw new Error("toMatchSnapshot must run inside a test");
-  if (name !== undefined && typeof name !== "string") throw new TypeError("toMatchSnapshot(name) needs a string name");
+  let name = nameOrMatchers;
+  if (nameOrMatchers !== undefined && typeof nameOrMatchers !== "string") {
+    if (nameOrMatchers === null || typeof nameOrMatchers !== "object") throw new TypeError("toMatchSnapshot(nameOrMatchers) needs a string name or object matchers");
+    if (!matchesObject(actual, nameOrMatchers, [])) throw new Error("snapshot value did not satisfy its property matchers");
+    actual = maskSnapshot(actual, nameOrMatchers);
+    name = undefined;
+  }
   const key = name === undefined ? `snapshot ${++snapshotNumber}` : name;
   const message = ops.test_snapshot(activeCase, key, snapshotValue(actual));
   if (message !== undefined) throw new Error(message);

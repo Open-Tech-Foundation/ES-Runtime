@@ -37,6 +37,11 @@ is the point, since none of the three has any business in a deployment.
   The name is confined to that test file's snapshot directory; text has a
   unified diff and bytes compare exactly.
 
+- **Snapshot property matchers** mask volatile fields, for example
+  `expect(user).toMatchSnapshot({ id: expect.any(Number) })`. Updating a
+  complete file also removes entries whose tests no longer exist; skipped,
+  exclusive, failed, and unfinished runs never prune.
+
 - **`esdev test --isolation=none`** runs selected files serially in one runtime,
   retaining their V8 and ES-module caches. It opts out of process isolation and
   therefore refuses file-scoped jobs, timeouts, and JSON reporting.
