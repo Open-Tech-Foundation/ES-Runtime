@@ -43,6 +43,25 @@ esdev test --jobs=1         # one at a time, writing straight to the terminal
 it happen. `--watch` re-discovers files every pass, so a test you are about to
 write is one the watcher will find.
 
+## Sharing one runtime
+
+For a suite whose startup and repeated imports cost more than its tests, opt
+out of the process boundary:
+
+```sh
+esdev test --isolation=none
+```
+
+All selected files then run serially in one process. Their V8 heap, globals and
+ES-module cache stay alive, so a shared dependency evaluates once for the run.
+Likewise, a `--setup` module evaluates once rather than once per file.
+That is a performance mode, not an isolation mode: a global or mock left by one
+file reaches the next, `exit()` or a crash ends the whole run, and a hanging
+file cannot be stopped independently. `--jobs`, `--timeout`, and the per-file
+JSON reporter are unavailable with it.
+
+The default, `--isolation=process`, retains the process-per-file behavior.
+
 ## The file is the entry, unaltered
 
 It keeps its own path, its module resolution, its relative imports and its

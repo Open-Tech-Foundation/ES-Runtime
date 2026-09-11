@@ -24,6 +24,12 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev test --isolation=none`** runs selected files serially in one runtime,
+  retaining their V8 and ES-module caches. It opts out of process isolation and
+  therefore refuses file-scoped jobs, timeouts, and JSON reporting.
+
 ## [0.6.0] - 2026-09-01
 
 ### Added

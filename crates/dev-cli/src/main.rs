@@ -67,6 +67,7 @@ mod transform;
 mod types;
 mod watch;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
+use config::TestIsolation;
 use create::{CreateConfig, DEFAULT_TEMPLATE};
 use inspect::InspectConfig;
 use preview::PreviewConfig;
@@ -175,6 +176,8 @@ OPTIONS:
     --jobs=<n>                  How many files run at once. The default is the
                                 machine's parallelism, at most 8 — each file is
                                 a process holding a V8 heap
+    --isolation=<mode>          process (default), or none to run all selected
+                                files serially in one process and retain caches
     --watch                     Run them again whenever a source file changes
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
@@ -183,16 +186,18 @@ OPTIONS:
 Everything but --file and --watch is also an esdev.json key, under \"test\":
 
     { \"test\": { \"setup\": [\"./test/setup.ts\"], \"timeout\": 5000,
-                \"jobs\": 4, \"reporter\": \"json\" } }
+                \"jobs\": 4, \"isolation\": \"process\", \"reporter\": \"json\" } }
 
 A flag beats the file.
 
-Each file runs in its own process, so one that wedges, exhausts its heap or
-calls exit() cannot decide the fate of the others. Files run in parallel, and
-each one's output is held and printed whole when it finishes — --jobs=1 runs
-them one at a time and lets each write straight to the terminal. The file itself is the
-entry — it keeps its own path, its module resolution and its TypeScript — and
-imports what it uses from runtime:test:
+By default each file runs in its own process, so one that wedges, exhausts its
+heap or calls exit() cannot decide the fate of the others. Files run in parallel,
+and each one's output is held and printed whole when it finishes — --jobs=1 runs
+them one at a time and lets each write straight to the terminal. --isolation=none
+runs all selected files serially in one process, retaining module caches but
+sharing global state and failure fate. The file itself is the entry — it keeps
+its own path, its module resolution and its TypeScript — and imports what it uses
+from runtime:test:
 
     import { test, expect } from \"runtime:test\";
 
@@ -1143,6 +1148,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut file = None;
     let mut filters = Vec::new();
     let mut jobs = None;
+    let mut isolation = None;
     let mut watch = false;
     let mut setup: Vec<String> = Vec::new();
     let mut timeout = None;
@@ -1170,6 +1176,20 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                         )
                     })?;
                 jobs = Some(count);
+            }
+            "--isolation" => {
+                let mode = require_value(flag, value)?;
+                isolation = Some(match mode {
+                    "process" => TestIsolation::Process,
+                    "none" => TestIsolation::None,
+                    _ => {
+                        return Err(format!(
+                            "{flag}={mode} is not a test isolation mode.\n\n  \
+                         process  — one process per file, the default\n  \
+                         none     — all files share one process and module cache"
+                        ));
+                    }
+                });
             }
             "--watch" => {
                 reject_value(flag, value)?;
@@ -1221,6 +1241,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         file,
         filters,
         jobs,
+        isolation,
         watch,
         setup,
         timeout,
@@ -1261,6 +1282,9 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
     }
     if config.jobs.is_none() {
         config.jobs = project.test.jobs;
+    }
+    if config.isolation.is_none() {
+        config.isolation = project.test.isolation;
     }
     if config.reporter.is_none() {
         config.reporter = project.test.reporter.clone();
@@ -1331,6 +1355,10 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     };
 
     if config.watch {
+        if let Err(message) = validate_unisolated_test_config(&config) {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
         // A watched run ends when the developer ends it, so its status is the
         // watcher's rather than any pass's.
         return match test::watch(&root, &config, &exe).await {
@@ -1346,6 +1374,14 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     if files.is_empty() {
         eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
         return ExitCode::FAILURE;
+    }
+
+    if config.isolation == Some(TestIsolation::None) {
+        if let Err(message) = validate_unisolated_test_config(&config) {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+        return run_tests_unisolated(&files, &config).await;
     }
 
     let jobs = config
@@ -1365,6 +1401,71 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+fn validate_unisolated_test_config(config: &TestConfig) -> Result<(), &'static str> {
+    if config.isolation != Some(TestIsolation::None) {
+        return Ok(());
+    }
+    if config.jobs.is_some() {
+        return Err("--isolation=none runs one process, so --jobs has no meaning");
+    }
+    if config.timeout.is_some() {
+        return Err("--isolation=none has no per-file boundary, so --timeout is unavailable");
+    }
+    if config.reporter.as_deref() == Some("json") {
+        return Err("--isolation=none cannot emit a per-file JSON report");
+    }
+    Ok(())
+}
+
+/// Runs every selected test module through one entry graph, retaining its V8
+/// heap and module map. Static imports preserve discovery order, and ESM's
+/// cache makes a dependency shared by two files evaluate once for this run.
+///
+/// There is deliberately no per-file timeout or JSON report in this mode:
+/// neither has a meaningful boundary after isolation was disabled.
+pub(crate) async fn run_tests_unisolated(
+    files: &[std::path::PathBuf],
+    config: &TestConfig,
+) -> ExitCode {
+    // A watch pass gets a fresh runtime in this host process. Its tally is
+    // thread-local host bookkeeping, so start it fresh with the runtime.
+    guest::test::reset();
+    let mut source = String::new();
+    for file in files {
+        for setup in &config.setup {
+            source.push_str(&module_import(setup));
+        }
+        let url = url::Url::from_file_path(file)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|()| file.display().to_string());
+        source.push_str(&module_import(&url));
+    }
+    let run = Config {
+        source: Source::Inline(source),
+        args: Vec::new(),
+        capabilities: es_runtime_common::CapabilitySet::all(),
+        scopes: std::collections::HashMap::new(),
+        options: RunOptions::default(),
+        transform: Some(std::sync::Arc::new(TypeStripper::new())),
+        bundler_style_resolution: true,
+        extensions: guest::extensions(),
+        observer: None,
+        inspector: None,
+    };
+    match es_runtime_cli_common::run("esdev", run).await {
+        Ok(()) => guest::test::finish(),
+        Err(err) => {
+            print_error(&err);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn module_import(specifier: &str) -> String {
+    let quoted = serde_json::to_string(specifier).expect("a string always serializes as JSON");
+    format!("import {quoted};")
 }
 
 /// Starts the debugger endpoint asked for on the command line and puts it in the

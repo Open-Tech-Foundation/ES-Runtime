@@ -95,6 +95,15 @@ thread_local! {
 /// The `runtime:test` extension.
 pub struct TestExtension;
 
+/// Starts a fresh test-run tally in this host thread.
+///
+/// An ordinary `esdev test` child exits after one file, but unisolated watch
+/// mode constructs a fresh runtime for each pass in the same host process.
+/// The runtime is new; this thread-local bookkeeping must be too.
+pub fn reset() {
+    CASES.with_borrow_mut(Vec::clear);
+}
+
 const MODULES: &[HostModule] = &[HostModule {
     specifier: "runtime:test",
     source: include_str!("test.js"),

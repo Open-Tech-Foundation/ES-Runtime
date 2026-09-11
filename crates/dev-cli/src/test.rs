@@ -39,6 +39,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::config::TestIsolation;
+
 /// What `esdev test` was asked to do.
 pub struct TestConfig {
     /// Run exactly this file, harness installed. This is what the parent
@@ -49,6 +51,8 @@ pub struct TestConfig {
     pub filters: Vec<String>,
     /// How many files may run at once, from `--jobs`. `None` is [`jobs`].
     pub jobs: Option<usize>,
+    /// The process boundary between files. `None` keeps the default.
+    pub isolation: Option<TestIsolation>,
     /// Keep running, re-running the files when a source file changes.
     pub watch: bool,
     /// Modules imported before the file under test, from `--setup` or the
@@ -318,12 +322,20 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
         if files.is_empty() {
             eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
         } else {
-            let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
-            let failed = run_all(exe, root, &files, jobs, config).await;
-            if config.reporter.as_deref() == Some("json") {
-                report_as_json(files.len(), failed);
+            if config.isolation == Some(TestIsolation::None) {
+                let code = crate::run_tests_unisolated(&files, config).await;
+                report(
+                    files.len(),
+                    usize::from(code != std::process::ExitCode::SUCCESS),
+                );
             } else {
-                report(files.len(), failed);
+                let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
+                let failed = run_all(exe, root, &files, jobs, config).await;
+                if config.reporter.as_deref() == Some("json") {
+                    report_as_json(files.len(), failed);
+                } else {
+                    report(files.len(), failed);
+                }
             }
         }
         eprintln!("{}", paint.dim("watching for changes — ^C to stop"));

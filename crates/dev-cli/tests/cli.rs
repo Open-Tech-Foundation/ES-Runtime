@@ -4832,6 +4832,96 @@ fn preview_says_a_server_project_is_run_rather_than_served() {
 // `esdev test`: what runs at once, and what happens on a save
 // ---------------------------------------------------------------------------
 
+/// `--isolation=none` is intentionally the opposite of the default: test
+/// files share one module map and global object, which is useful for a large
+/// suite whose common dependency graph costs more than its tests.
+#[test]
+fn tests_can_share_one_process_and_module_cache() {
+    let dir = build_dir("b_test_no_isolation");
+    write_in(
+        &dir,
+        "shared.mjs",
+        "globalThis.shared_loads = (globalThis.shared_loads ?? 0) + 1;\n\
+         export const loads = globalThis.shared_loads;\n",
+    );
+    write_in(
+        &dir,
+        "a.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import { loads } from './shared.mjs';\n\
+         globalThis.from_first_file = loads;\n\
+         test('loads the shared module once', () => assertEquals(loads, 1));\n",
+    );
+    write_in(
+        &dir,
+        "b.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import { loads } from './shared.mjs';\n\
+         test('keeps the first file and shared module alive', () => {\n\
+           assertEquals(loads, 1);\n\
+           assertEquals(globalThis.from_first_file, 1);\n\
+         });\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("2 passed"), "{}", stdout(&out));
+}
+
+#[test]
+fn test_isolation_can_come_from_project_config() {
+    let dir = build_dir("b_test_no_isolation_config");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "app": { "entry": "app.mjs", "out": "dist/app.mjs" } },
+             "test": { "isolation": "none" } }"#,
+    );
+    write_in(&dir, "app.mjs", "export {};\n");
+    write_in(
+        &dir,
+        "a.test.mjs",
+        "import { test } from 'runtime:test';\nglobalThis.config_shared = true;\ntest('a', () => {});\n",
+    );
+    write_in(
+        &dir,
+        "b.test.mjs",
+        "import { test, assert } from 'runtime:test';\ntest('b', () => assert(globalThis.config_shared));\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("2 passed"), "{}", stdout(&out));
+}
+
+#[test]
+fn unisolated_tests_refuse_file_scoped_options() {
+    let dir = build_dir("b_test_no_isolation_options");
+    write_in(
+        &dir,
+        "one.test.mjs",
+        "import { test } from 'runtime:test';\ntest('ok', () => {});\n",
+    );
+    for flag in ["--jobs=1", "--timeout=100", "--reporter=json"] {
+        let out = esdev_in(&dir)
+            .args(["test", "--isolation=none", flag])
+            .output()
+            .expect("spawn esdev test");
+        assert!(!out.status.success(), "{flag}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("--isolation=none"),
+            "{flag}: {}",
+            stderr(&out)
+        );
+    }
+}
+
 /// A file is a process, so the machine's cores are the runner's to use — and
 /// with more than one running, output is held and printed whole rather than
 /// interleaved line by line with another file's.

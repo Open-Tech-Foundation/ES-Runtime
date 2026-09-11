@@ -3596,10 +3596,11 @@ are one question: code that waits almost always also asks what time it is, and a
 stopped `setTimeout` beside a running `Date.now()` describes a machine that does
 not exist.
 
-The swap is for the **whole process**, not one test. That is safe here because a
-test file *is* a process (`esdev test` runs one per file), so it cannot reach the
-next file; and because the runner drains on microtasks rather than timers, a
-file that forgets `clock.release()` still reports. These are standards-defined
+The swap is for the **whole process**, not one test. Under the default
+process-per-file runner it cannot reach the next file; with
+`esdev test --isolation=none`, release it before the file ends because the next
+file shares its globals. The runner drains on microtasks rather than timers, so
+a file that forgets `clock.release()` still reports. These are standards-defined
 names replaced at the test's own explicit request — the opposite of the runtime
 handing out a vocabulary.
 

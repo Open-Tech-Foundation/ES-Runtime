@@ -43,8 +43,10 @@ The synchronous form resolves the promise and returns before anything waiting on
 it has run, so the assertion after it sees the state from before.
 
 Freezing the clock replaces globals for the **whole process**, which is safe
-here only because a test file *is* a process. The runner drains on microtasks
-rather than timers, so a file that forgets `clock.release()` still reports.
+under the default process-per-file runner. With `--isolation=none`, release it
+and restore mocks before the file ends: the next file shares the same globals.
+The runner drains on microtasks rather than timers, so a file that forgets
+`clock.release()` still reports.
 
 ## Setup, budgets, and a machine-readable report
 
@@ -65,6 +67,7 @@ file.**
     "setup": ["./test/setup.ts"],
     "timeout": 5000,
     "jobs": 4,
+    "isolation": "process",
     "reporter": "json"
   }
 }

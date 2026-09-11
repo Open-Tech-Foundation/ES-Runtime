@@ -150,8 +150,19 @@ pub struct TestSettings {
     pub timeout: Option<u64>,
     /// How many files run at once. `None` is the machine's parallelism.
     pub jobs: Option<usize>,
+    /// Whether files get their usual process boundary, or share one runtime.
+    pub isolation: Option<TestIsolation>,
     /// `"human"` (the default) or `"json"`.
     pub reporter: Option<String>,
+}
+
+/// The boundary between files selected by `esdev test`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestIsolation {
+    /// One child process — and therefore one V8 isolate — per file.
+    Process,
+    /// All selected files share the runner process and its module cache.
+    None,
 }
 
 /// One thing a project builds.
@@ -318,7 +329,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 const START_KEYS: &[&str] = &["run", "watch", "serve", "port"];
 
 /// The keys `test` may carry.
-const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "reporter"];
+const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "isolation", "reporter"];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
 ///
@@ -475,6 +486,19 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
             ));
         }
     };
+    let isolation = match map.get("isolation") {
+        None => None,
+        Some(Value::String(name)) if name == "process" => Some(TestIsolation::Process),
+        Some(Value::String(name)) if name == "none" => Some(TestIsolation::None),
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `isolation` is {}, and it says whether files share a runtime.\n\n  \
+                 \"process\"  — one process per file, the default\n  \
+                 \"none\"     — all files share one process and module cache",
+                kind(other)
+            ));
+        }
+    };
     let reporter = match map.get("reporter") {
         None => None,
         Some(Value::String(name)) if matches!(name.as_str(), "human" | "json") => {
@@ -494,6 +518,7 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
         setup,
         timeout,
         jobs,
+        isolation,
         reporter,
     })
 }
