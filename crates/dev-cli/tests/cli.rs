@@ -2986,6 +2986,29 @@ fn snapshots_are_versioned_explicitly_updated_and_checked() {
     assert!(text.contains("+ "), "{text}");
 }
 
+#[test]
+fn ci_never_creates_a_missing_snapshot() {
+    let dir = build_dir("t_snapshot_ci");
+    write_in(
+        &dir,
+        "ci.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('requires a committed snapshot', () => expect({ ok: true }).toMatchSnapshot());\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .arg("--ci")
+        .output()
+        .expect("spawn esdev test --ci");
+    let text = stdout(&out);
+    assert!(!out.status.success(), "CI must reject missing snapshots");
+    assert!(text.contains("--ci does not write them"), "{text}");
+    assert!(
+        !dir.join("__snapshots__/ci.test.mjs.snap").exists(),
+        "CI wrote a snapshot:\n{text}"
+    );
+}
+
 /// A `.test.ts` file is the ordinary case: it must be stripped like any other,
 /// and its relative imports must resolve from its own directory.
 #[test]
