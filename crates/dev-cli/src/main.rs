@@ -182,6 +182,7 @@ OPTIONS:
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
+    -u, --update-snapshots       Write new and changed snapshots
 
 Everything but --file and --watch is also an esdev.json key, under \"test\":
 
@@ -1153,6 +1154,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut setup: Vec<String> = Vec::new();
     let mut timeout = None;
     let mut reporter = None;
+    let mut update_snapshots = false;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1222,6 +1224,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 }
                 reporter = Some(name.to_string());
             }
+            "-u" | "--update-snapshots" => {
+                reject_value(flag, value)?;
+                update_snapshots = true;
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{TEST_USAGE}"));
             }
@@ -1246,6 +1252,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         setup,
         timeout,
         reporter,
+        update_snapshots,
     })
 }
 
@@ -1311,6 +1318,11 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     }
 
     if let Some(file) = config.file {
+        guest::test::reset();
+        guest::test::configure_snapshots(
+            Some(std::path::PathBuf::from(&file)),
+            config.update_snapshots,
+        );
         // Nothing is added to the file, unless `--setup` named something to
         // import ahead of it. It is otherwise an ordinary run of an ordinary
         // module — the same transform any `.ts` gets — and the test API comes
@@ -1432,7 +1444,9 @@ pub(crate) async fn run_tests_unisolated(
     // A watch pass gets a fresh runtime in this host process. Its tally is
     // thread-local host bookkeeping, so start it fresh with the runtime.
     guest::test::reset();
+    guest::test::configure_snapshots(None, config.update_snapshots);
     let mut source = String::new();
+    source.push_str("import { __setTestFile } from \"runtime:test\";");
     for file in files {
         for setup in &config.setup {
             source.push_str(&module_import(setup));
@@ -1440,7 +1454,11 @@ pub(crate) async fn run_tests_unisolated(
         let url = url::Url::from_file_path(file)
             .map(|url| url.to_string())
             .unwrap_or_else(|()| file.display().to_string());
-        source.push_str(&module_import(&url));
+        source.push_str("__setTestFile(");
+        source.push_str(&serde_json::to_string(&url).expect("a URL always serializes as JSON"));
+        source.push_str(");await import(");
+        source.push_str(&serde_json::to_string(&url).expect("a URL always serializes as JSON"));
+        source.push_str(");");
     }
     let run = Config {
         source: Source::Inline(source),

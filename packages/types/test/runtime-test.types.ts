@@ -61,11 +61,15 @@ test("matchers are typed against the value", () => {
   expect(2).toBe(2);
   expect("a").toBe("a");
   expect([1, 2]).toEqual([1, 2]);
+  expect({ answer: 42 }).toMatchSnapshot();
+  expect({ answer: 42 }).toMatchSnapshot("answer");
   expect({ a: 1 }).toMatchObject({ a: 1 });
   expect(1).not.toBe(2);
 
   // @ts-expect-error — `toBe` takes the type it was given.
   expect(2).toBe("two");
+  // @ts-expect-error — a snapshot name is a string when supplied.
+  expect(2).toMatchSnapshot(2);
   // @ts-expect-error — there is no such matcher.
   expect(2).toBeAlmostCertainly(2);
   // @ts-expect-error — and `.not` carries the same set, not a wider one.

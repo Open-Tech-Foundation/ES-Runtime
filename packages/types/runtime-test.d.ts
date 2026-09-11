@@ -212,6 +212,8 @@ declare module "runtime:test" {
     toEqual(expected: unknown): void;
     /** {@link Matchers.toEqual}. This runner draws no stricter distinction. */
     toStrictEqual(expected: unknown): void;
+    /** Matches the versioned snapshot recorded for this test. */
+    toMatchSnapshot(name?: string): void;
     toBeTruthy(): void;
     toBeFalsy(): void;
     toBeNull(): void;

@@ -1552,6 +1552,7 @@ dependencies = [
  "rolldown_utils",
  "rustc-hash",
  "rustix 1.1.4",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",

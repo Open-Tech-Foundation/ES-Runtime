@@ -195,6 +195,7 @@ mismatched `Promise` — `await` them.
 | --- | --- |
 | `toBe` | `Object.is` — identity, and `NaN` equals `NaN` |
 | `toEqual` / `toStrictEqual` | Structural, the `assertEquals` walk |
+| `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test; unnamed calls count from one |
 | `toBeTruthy` / `toBeFalsy` / `toBeNull` / `toBeUndefined` / `toBeDefined` / `toBeNaN` | |
 | `toBeInstanceOf` / `toBeTypeOf` | |
 | `toContain` / `toContainEqual` | A member, a substring, a `Set`/`Map` key |
@@ -207,6 +208,13 @@ mismatched `Promise` — `await` them.
 
 The shorter jest spellings — `toBeCalled`, `toBeCalledWith`, `lastCalledWith`,
 `toReturnWith` — are aliases of the same matchers, not variants of them.
+
+Snapshots represent deterministic tagged values: primitives (including
+`undefined`, `bigint`, `NaN`, and `-0`), arrays and plain objects, `Date`,
+`RegExp`, `Map`, `Set`, byte buffers/views, `Error`, shared references, and
+cycles. Functions, symbols, promises, weak collections, getters, class
+instances, and host objects throw rather than creating an ambiguous snapshot.
+The matcher is not negatable and must run inside a test.
 
 ```js
 expect(list).toHaveLength(3);

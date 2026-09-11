@@ -80,6 +80,7 @@ html5gum.workspace = true
 # from `esrun` with the command itself (D59): a production binary has no reason
 # to be able to rewrite a tsconfig.
 serde_json.workspace = true
+serde.workspace = true
 # Canonical paths without the Windows `\\?\` verbatim prefix (D25): a
 # canonicalized path becomes a bundler input, a plugin module URL and a display
 # string, and the verbatim form breaks the first two while uglifying the

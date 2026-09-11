@@ -3508,6 +3508,7 @@ mismatched `Promise`; `await` them.
 | --- | --- |
 | `toBe(v)` | `Object.is` — identity, and `NaN` equals `NaN`. |
 | `toEqual(v)` / `toStrictEqual(v)` | Structural, the `assertEquals` walk. This runner draws no stricter distinction. |
+| `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test. `name` is optional; unnamed calls count from one. |
 | `toBeTruthy()` / `toBeFalsy()` / `toBeNull()` / `toBeUndefined()` / `toBeDefined()` / `toBeNaN()` | |
 | `toBeInstanceOf(C)` / `toBeTypeOf(t)` | |
 | `toContain(v)` / `toContainEqual(v)` | A member, a substring, or a `Set`/`Map` key — by identity, then structurally. |
@@ -3525,6 +3526,13 @@ The shorter jest spellings — `toBeCalled`, `toBeCalledTimes`, `toBeCalledWith`
 `lastCalledWith`, `nthCalledWith`, `toReturn`, `toReturnTimes`, `toReturnWith`,
 `lastReturnedWith`, `nthReturnedWith` — are aliases of those matchers rather
 than variants of them.
+
+`toMatchSnapshot` records deterministic tagged values: primitives (including
+`undefined`, `bigint`, `NaN` and `-0`), arrays and plain objects, `Date`,
+`RegExp`, `Map`, `Set`, byte buffers/views, `Error`, shared references and
+cycles. Functions, symbols, promises, weak collections, getters, class
+instances and host objects throw instead of producing an ambiguous snapshot.
+It is not negatable and must run within a test.
 
 The **asymmetric** matchers are values that say what they will accept, usable
 wherever a value goes — including several levels inside an expected object,

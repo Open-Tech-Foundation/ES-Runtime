@@ -48,6 +48,8 @@
 //! this one.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use es_runtime_cli_common::{ExtensionContext, HostExtension, HostModule, OpDecl, Value};
@@ -55,6 +57,7 @@ use es_runtime_cli_common::{ExtensionContext, HostExtension, HostModule, OpDecl,
 /// One test case, from `test()` to whatever became of it.
 struct Case {
     name: String,
+    file: Option<PathBuf>,
     /// Whether the case ever got as far as running. Cases are queued and run
     /// one at a time, so a case that never started is not the same failure as
     /// one that started and hung — the first says an *earlier* test never
@@ -90,6 +93,126 @@ enum Skip {
 thread_local! {
     /// Every case this agent registered, in the order `test()` was called.
     static CASES: RefCell<Vec<Case>> = const { RefCell::new(Vec::new()) };
+    static SNAPSHOTS: RefCell<SnapshotState> = RefCell::new(SnapshotState::default());
+}
+
+const SNAPSHOT_FORMAT: &str = "esdev-snapshot";
+const SNAPSHOT_VERSION: u32 = 1;
+
+#[derive(Default)]
+struct SnapshotState {
+    update: bool,
+    current_file: Option<PathBuf>,
+    files: BTreeMap<PathBuf, SnapshotFile>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapshotFile {
+    format: String,
+    version: u32,
+    snapshots: BTreeMap<String, serde_json::Value>,
+    #[serde(skip)]
+    dirty: bool,
+}
+
+impl Default for SnapshotFile {
+    fn default() -> Self {
+        Self {
+            format: SNAPSHOT_FORMAT.into(),
+            version: SNAPSHOT_VERSION,
+            snapshots: BTreeMap::new(),
+            dirty: false,
+        }
+    }
+}
+
+fn snapshot_path(test_file: &std::path::Path) -> PathBuf {
+    PathBuf::from(format!("{}.snap", test_file.display()))
+}
+
+fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
+    let path = snapshot_path(test_file);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(SnapshotFile::default());
+    };
+    let file: SnapshotFile = serde_json::from_str(&text)
+        .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    if file.format != SNAPSHOT_FORMAT || file.version != SNAPSHOT_VERSION {
+        return Err(format!(
+            "{} is not an esdev snapshot format version {SNAPSHOT_VERSION} file",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
+/// Configures snapshot ownership for this runtime before its extensions are
+/// constructed. A normal child has one known file; unisolated mode sets it as
+/// each module is imported.
+pub fn configure_snapshots(file: Option<PathBuf>, update: bool) {
+    SNAPSHOTS.with_borrow_mut(|state| {
+        *state = SnapshotState {
+            update,
+            current_file: file,
+            files: BTreeMap::new(),
+        };
+    });
+}
+
+fn set_snapshot_file(text: &str) {
+    let file = url::Url::parse(text)
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .unwrap_or_else(|| PathBuf::from(text));
+    SNAPSHOTS.with_borrow_mut(|state| state.current_file = Some(file));
+}
+
+fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), String> {
+    let (file, key) = CASES
+        .with_borrow(|cases| {
+            cases.get(case_id).and_then(|case| {
+                case.file
+                    .clone()
+                    .map(|file| (file, format!("{}: {key}", case.name)))
+            })
+        })
+        .ok_or_else(|| "toMatchSnapshot is available when esdev runs a test file".to_string())?;
+    let actual: serde_json::Value = serde_json::from_str(&actual)
+        .map_err(|err| format!("internal snapshot value is not JSON: {err}"))?;
+    SNAPSHOTS.with_borrow_mut(|state| {
+        if !state.files.contains_key(&file) {
+            let loaded = load_snapshots(&file)?;
+            state.files.insert(file.clone(), loaded);
+        }
+        let snapshots = state.files.get_mut(&file).expect("inserted above");
+        match snapshots.snapshots.get(&key) {
+            Some(expected) if expected == &actual => Ok(()),
+            Some(expected) if !state.update => Err(format!("snapshot changed: {key}\n\nExpected:\n{}\n\nReceived:\n{}\n\nRun esdev test --update-snapshots to accept this change.", serde_json::to_string_pretty(expected).unwrap_or_default(), serde_json::to_string_pretty(&actual).unwrap_or_default())),
+            None if !state.update => Err(format!("snapshot is missing: {key}\n\nReceived:\n{}\n\nRun esdev test --update-snapshots to create it.", serde_json::to_string_pretty(&actual).unwrap_or_default())),
+            _ => {
+                snapshots.snapshots.insert(key, actual);
+                snapshots.dirty = true;
+                Ok(())
+            }
+        }
+    })
+}
+
+fn flush_snapshots() -> Result<(), String> {
+    SNAPSHOTS.with_borrow_mut(|state| {
+        for (file, snapshots) in &mut state.files {
+            if !snapshots.dirty {
+                continue;
+            }
+            let path = snapshot_path(file);
+            let text =
+                serde_json::to_string_pretty(snapshots).map_err(|err| err.to_string())? + "\n";
+            std::fs::write(&path, text)
+                .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+            snapshots.dirty = false;
+        }
+        Ok(())
+    })
 }
 
 /// The `runtime:test` extension.
@@ -102,6 +225,7 @@ pub struct TestExtension;
 /// The runtime is new; this thread-local bookkeeping must be too.
 pub fn reset() {
     CASES.with_borrow_mut(Vec::clear);
+    configure_snapshots(None, false);
 }
 
 const MODULES: &[HostModule] = &[HostModule {
@@ -132,6 +256,7 @@ impl HostExtension for TestExtension {
                 let id = CASES.with_borrow_mut(|cases| {
                     cases.push(Case {
                         name,
+                        file: SNAPSHOTS.with_borrow(|state| state.current_file.clone()),
                         started: false,
                         outcome: None,
                     });
@@ -202,6 +327,29 @@ impl HostExtension for TestExtension {
                 });
                 Ok(Value::Undefined)
             }),
+            OpDecl::sync("test_set_file", |args| {
+                if let Some(file) = args.first().and_then(Value::as_str) {
+                    set_snapshot_file(file);
+                }
+                Ok(Value::Undefined)
+            }),
+            OpDecl::sync("test_snapshot", |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(-1.0) as usize;
+                let key = args
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .unwrap_or("(unnamed)")
+                    .to_string();
+                let actual = args
+                    .get(2)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                match check_snapshot(id, key, actual) {
+                    Ok(()) => Ok(Value::Undefined),
+                    Err(message) => Ok(Value::String(message)),
+                }
+            }),
         ]
     }
 }
@@ -213,7 +361,12 @@ impl HostExtension for TestExtension {
 /// one that did not has nothing to print. That is what makes
 /// `esdev app.test.ts` work on its own, with the same output the runner gives.
 pub fn finish() -> ExitCode {
-    report(None)
+    let code = report(None);
+    if let Err(err) = flush_snapshots() {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
+    code
 }
 
 /// The same tally, as one JSON object per line.
@@ -227,7 +380,12 @@ pub fn finish() -> ExitCode {
 /// runs a process per file and their output interleaves, so a line that does
 /// not say which file it belongs to cannot be attributed to one.
 pub fn finish_as_json(file: &str) -> ExitCode {
-    report(Some(file))
+    let code = report(Some(file));
+    if let Err(err) = flush_snapshots() {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
+    code
 }
 
 fn report(as_json: Option<&str>) -> ExitCode {
@@ -352,6 +510,7 @@ mod tests {
             cases.clear();
             cases.push(Case {
                 name: "hangs".to_string(),
+                file: None,
                 started: true,
                 outcome: None,
             });

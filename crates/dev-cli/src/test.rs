@@ -62,6 +62,10 @@ pub struct TestConfig {
     pub timeout: Option<u64>,
     /// `"json"` for one object per line, or `None` for what a person reads.
     pub reporter: Option<String>,
+    /// Rewrite snapshots whose value changed, and create snapshots that do not
+    /// exist yet. This is deliberately a command action, not project config:
+    /// committing a config that rewrites assertions would be a foot-gun.
+    pub update_snapshots: bool,
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -127,6 +131,11 @@ pub async fn run_all(
         .iter()
         .map(|module| format!("--setup={module}"))
         .chain(config.reporter.iter().map(|r| format!("--reporter={r}")))
+        .chain(
+            config
+                .update_snapshots
+                .then(|| "--update-snapshots".to_string()),
+        )
         .collect();
 
     let named = |file: &Path| {

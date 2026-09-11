@@ -68,6 +68,8 @@
 // suite that passes in a tenth of the time.
 
 const ops = globalThis.__ops;
+let activeCase = null;
+let snapshotNumber = 0;
 
 // Cases waiting to run, in the order they were written.
 const queue = [];
@@ -313,6 +315,10 @@ describe.only.each = each(describe.only);
 const it = test;
 const suite = describe;
 
+// Used only by esdev's generated unisolated entry so registrations retain the
+// test file they came from. Test authors never need to call it.
+const __setTestFile = (file) => ops.test_set_file(String(file));
+
 function schedule() {
   if (draining) return;
   draining = true;
@@ -398,6 +404,8 @@ async function runCase({ id, fn, scope }) {
   }
   let failure = null;
   try {
+    activeCase = id;
+    snapshotNumber = 0;
     for (const before of around(scope, "beforeEach")) await before();
     await fn();
   } catch (err) {
@@ -412,6 +420,7 @@ async function runCase({ id, fn, scope }) {
       failure ??= err;
     }
   }
+  activeCase = null;
   ops.test_finished(id, failure === null, failure === null ? "" : detail(failure));
   await settled(scope);
 }
@@ -541,6 +550,61 @@ function show(v) {
   } catch {
     return String(v);
   }
+}
+
+// Snapshots are a deliberately small, tagged tree rather than JavaScript text.
+// The tags keep `undefined`, bigint and non-finite numbers distinct, while
+// sorting own string keys makes equivalent plain data produce the same bytes.
+// A reference gets an id before its contents so shared objects and cycles stay
+// visible instead of being silently duplicated or rejected.
+function snapshotValue(value) {
+  const seen = new Map();
+  const encode = (v) => {
+    if (v === null) return ["null"];
+    switch (typeof v) {
+      case "undefined": return ["undefined"];
+      case "boolean": return ["boolean", v];
+      case "string": return ["string", v];
+      case "bigint": return ["bigint", v.toString()];
+      case "number":
+        return ["number", Number.isNaN(v) ? "NaN" : v === Infinity ? "+Infinity" : v === -Infinity ? "-Infinity" : Object.is(v, -0) ? "-0" : v];
+      case "function": throw new TypeError("snapshots do not support functions");
+      case "symbol": throw new TypeError("snapshots do not support symbols");
+    }
+    if (seen.has(v)) return ["ref", seen.get(v)];
+    const id = seen.size;
+    seen.set(v, id);
+    if (Array.isArray(v)) return ["array", id, v.map(encode)];
+    if (v instanceof Date) return ["date", id, v.toISOString()];
+    if (v instanceof RegExp) return ["regexp", id, v.source, v.flags];
+    if (v instanceof Map) return ["map", id, Array.from(v, ([k, x]) => [encode(k), encode(x)])];
+    if (v instanceof Set) return ["set", id, Array.from(v, encode)];
+    if (v instanceof ArrayBuffer) return ["bytes", id, "ArrayBuffer", Array.from(new Uint8Array(v))];
+    if (ArrayBuffer.isView(v)) return ["bytes", id, v.constructor.name, Array.from(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))];
+    if (v instanceof Error) return ["error", id, v.name, v.message, encodeOwn(v)];
+    if (v instanceof Promise || v instanceof WeakMap || v instanceof WeakSet) throw new TypeError("snapshots do not support asynchronous or weak collections");
+    const prototype = Object.getPrototypeOf(v);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError("snapshots support plain objects, not class or host instances");
+    return ["object", id, encodeOwn(v)];
+  };
+  const encodeOwn = (object) => {
+    const symbols = Object.getOwnPropertySymbols(object);
+    if (symbols.length) throw new TypeError("snapshots do not support symbol properties");
+    return Object.keys(object).sort().map((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      if (!descriptor || !("value" in descriptor)) throw new TypeError("snapshots do not invoke getters");
+      return [key, encode(descriptor.value)];
+    });
+  };
+  return JSON.stringify(["esdev-value", 1, encode(value)]);
+}
+
+function snapshot(actual, name) {
+  if (activeCase === null) throw new Error("toMatchSnapshot must run inside a test");
+  if (name !== undefined && typeof name !== "string") throw new TypeError("toMatchSnapshot(name) needs a string name");
+  const key = name === undefined ? `snapshot ${++snapshotNumber}` : name;
+  const message = ops.test_snapshot(activeCase, key, snapshotValue(actual));
+  if (message !== undefined) throw new Error(message);
 }
 
 const showError = (e) =>
@@ -761,6 +825,10 @@ function expectation(actual, negated) {
     // implying a strictness this does not have.
     toStrictEqual(expected) {
       it.toEqual(expected);
+    },
+    toMatchSnapshot(name) {
+      if (negated) throw new TypeError("expect(...).not.toMatchSnapshot is not meaningful");
+      snapshot(actual, name);
     },
     toBeTruthy() {
       check(Boolean(actual), negated, () =>
@@ -1477,6 +1545,7 @@ export {
   expect,
   mock,
   clock,
+  __setTestFile,
 };
 export default {
   test,

@@ -2909,6 +2909,63 @@ fn a_passing_suite_exits_zero() {
     assert!(stdout(&out).contains("4 passed"), "{}", stdout(&out));
 }
 
+#[test]
+fn snapshots_are_versioned_explicitly_updated_and_checked() {
+    let dir = build_dir("t_snapshots");
+    write_in(
+        &dir,
+        "value.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('records supported values', () => {\n\
+           const shared = { answer: 42 };\n\
+           expect({ b: undefined, a: [BigInt(2), shared, shared], when: new Date('2020-01-01T00:00:00.000Z') }).toMatchSnapshot();\n\
+         });\n",
+    );
+
+    let missing = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        !missing.status.success(),
+        "a missing snapshot must not be written implicitly"
+    );
+    assert!(
+        stdout(&missing).contains("snapshot is missing"),
+        "{}",
+        stdout(&missing)
+    );
+
+    let updated = esdev_in(&dir)
+        .args(["test", "--update-snapshots"])
+        .output()
+        .expect("spawn esdev test --update-snapshots");
+    assert!(
+        updated.status.success(),
+        "{}{}",
+        stdout(&updated),
+        stderr(&updated)
+    );
+    let snapshot = std::fs::read_to_string(dir.join("value.test.mjs.snap")).expect("read snapshot");
+    assert!(
+        snapshot.contains("\"format\": \"esdev-snapshot\""),
+        "{snapshot}"
+    );
+    assert!(snapshot.contains("\"version\": 1"), "{snapshot}");
+    assert!(snapshot.contains("\"ref\""), "{snapshot}");
+
+    let checked = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        checked.status.success(),
+        "{}{}",
+        stdout(&checked),
+        stderr(&checked)
+    );
+}
+
 /// A `.test.ts` file is the ordinary case: it must be stripped like any other,
 /// and its relative imports must resolve from its own directory.
 #[test]

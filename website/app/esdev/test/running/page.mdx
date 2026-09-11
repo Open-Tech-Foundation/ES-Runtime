@@ -62,6 +62,30 @@ JSON reporter are unavailable with it.
 
 The default, `--isolation=process`, retains the process-per-file behavior.
 
+## Snapshots
+
+Use `toMatchSnapshot` for a reviewed, versioned record of a value. The snapshot
+file lives beside the test file with a `.snap` suffix, so each test module owns
+its expectations whether files run in separate processes or share one cache.
+
+```js
+import { test, expect } from "runtime:test";
+
+test("response", () => {
+  expect({ ok: true, ids: [1, 2] }).toMatchSnapshot();
+});
+```
+
+The first run fails rather than writing an assertion implicitly. Review and
+create or update snapshots explicitly:
+
+```sh
+esdev test --update-snapshots
+```
+
+The file has a format version and sorted object keys. Rename a snapshot with
+`toMatchSnapshot("response body")`; unnamed calls use their order in the test.
+
 ## The file is the entry, unaltered
 
 It keeps its own path, its module resolution, its relative imports and its
