@@ -103,6 +103,7 @@ struct SnapshotState {
     update: bool,
     ci: bool,
     full_diff: bool,
+    prune: bool,
     current_file: Option<PathBuf>,
     files: BTreeMap<PathBuf, SnapshotFile>,
     file_writes: BTreeMap<PathBuf, Vec<u8>>,
@@ -204,12 +205,19 @@ fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
 /// Configures snapshot ownership for this runtime before its extensions are
 /// constructed. A normal child has one known file; unisolated mode sets it as
 /// each module is imported.
-pub fn configure_snapshots(file: Option<PathBuf>, update: bool, ci: bool, full_diff: bool) {
+pub fn configure_snapshots(
+    file: Option<PathBuf>,
+    update: bool,
+    ci: bool,
+    full_diff: bool,
+    prune: bool,
+) {
     SNAPSHOTS.with_borrow_mut(|state| {
         *state = SnapshotState {
             update,
             ci,
             full_diff,
+            prune,
             current_file: file,
             files: BTreeMap::new(),
             file_writes: BTreeMap::new(),
@@ -478,7 +486,7 @@ fn flush_snapshots() -> Result<(), String> {
                     .iter()
                     .all(|case| matches!(case.outcome, Some(Outcome::Passed)))
         });
-        if state.update && complete {
+        if state.update && state.prune && complete {
             for snapshots in state.files.values_mut() {
                 let before = snapshots.snapshots.len();
                 snapshots
@@ -539,7 +547,7 @@ pub struct TestExtension;
 /// The runtime is new; this thread-local bookkeeping must be too.
 pub fn reset() {
     CASES.with_borrow_mut(Vec::clear);
-    configure_snapshots(None, false, false, false);
+    configure_snapshots(None, false, false, false, false);
 }
 
 const MODULES: &[HostModule] = &[HostModule {

@@ -1159,6 +1159,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut update_snapshots = false;
     let mut ci = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
     let mut full_diff = false;
+    let mut snapshot_prune = None;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1240,6 +1241,13 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 reject_value(flag, value)?;
                 full_diff = true;
             }
+            "--_snapshot-prune" => {
+                snapshot_prune = Some(match require_value(flag, value)? {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err("internal snapshot prune flag must be 0 or 1".to_string()),
+                });
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{TEST_USAGE}"));
             }
@@ -1255,6 +1263,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
              which ones: `esdev test --watch db`."
             .to_string());
     }
+    let snapshot_prune = snapshot_prune.unwrap_or(file.is_some());
     Ok(TestConfig {
         file,
         filters,
@@ -1267,6 +1276,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         update_snapshots,
         ci,
         full_diff,
+        snapshot_prune,
     })
 }
 
@@ -1338,6 +1348,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             config.update_snapshots,
             config.ci,
             config.full_diff,
+            config.snapshot_prune,
         );
         // Nothing is added to the file, unless `--setup` named something to
         // import ahead of it. It is otherwise an ordinary run of an ordinary
@@ -1399,6 +1410,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     }
 
     let files = test::discover(&root, &config.filters);
+    config.snapshot_prune = config.filters.is_empty();
     if files.is_empty() {
         eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
         return ExitCode::FAILURE;
@@ -1460,7 +1472,13 @@ pub(crate) async fn run_tests_unisolated(
     // A watch pass gets a fresh runtime in this host process. Its tally is
     // thread-local host bookkeeping, so start it fresh with the runtime.
     guest::test::reset();
-    guest::test::configure_snapshots(None, config.update_snapshots, config.ci, config.full_diff);
+    guest::test::configure_snapshots(
+        None,
+        config.update_snapshots,
+        config.ci,
+        config.full_diff,
+        config.snapshot_prune,
+    );
     let mut source = String::new();
     source.push_str("import { __setTestFile } from \"runtime:test\";");
     for file in files {

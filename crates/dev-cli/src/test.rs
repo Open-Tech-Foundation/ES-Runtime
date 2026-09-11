@@ -71,6 +71,9 @@ pub struct TestConfig {
     pub ci: bool,
     /// Print every changed snapshot line instead of the review-sized default.
     pub full_diff: bool,
+    /// Internal parent-to-child signal: only a complete, unfiltered discovery
+    /// pass may prune obsolete entries.
+    pub snapshot_prune: bool,
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -143,6 +146,10 @@ pub async fn run_all(
         )
         .chain(config.ci.then(|| "--ci".to_string()))
         .chain(config.full_diff.then(|| "--full-diff".to_string()))
+        .chain(std::iter::once(format!(
+            "--_snapshot-prune={}",
+            u8::from(config.snapshot_prune)
+        )))
         .collect();
 
     let named = |file: &Path| {
