@@ -27,8 +27,9 @@ is the point, since none of the three has any business in a deployment.
 ### Added
 
 - **Versioned snapshots for `runtime:test`.**
-  `expect(value).toMatchSnapshot(name?)` compares a deterministic tagged value
-  with the test file's adjacent `.snap` file. `esdev test -u` /
+  `expect(value).toMatchSnapshot(name?)` compares deterministic printed values
+  with the test file's `__snapshots__/name.snap` file. Missing snapshots are
+  created on a local run; `--ci` (or `CI`) requires them to be committed. `esdev test -u` /
   `--update-snapshots` explicitly creates and rewrites them; a mismatch reports
   a line-by-line unified diff.
 

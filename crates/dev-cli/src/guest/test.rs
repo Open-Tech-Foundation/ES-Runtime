@@ -96,30 +96,28 @@ thread_local! {
     static SNAPSHOTS: RefCell<SnapshotState> = RefCell::new(SnapshotState::default());
 }
 
-const SNAPSHOT_FORMAT: &str = "esdev-snapshot";
 const SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Default)]
 struct SnapshotState {
     update: bool,
+    ci: bool,
     current_file: Option<PathBuf>,
     files: BTreeMap<PathBuf, SnapshotFile>,
+    matched: usize,
+    failed: usize,
+    written: usize,
+    updated: usize,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
 struct SnapshotFile {
-    format: String,
-    version: u32,
-    snapshots: BTreeMap<String, serde_json::Value>,
-    #[serde(skip)]
+    snapshots: BTreeMap<String, String>,
     dirty: bool,
 }
 
 impl Default for SnapshotFile {
     fn default() -> Self {
         Self {
-            format: SNAPSHOT_FORMAT.into(),
-            version: SNAPSHOT_VERSION,
             snapshots: BTreeMap::new(),
             dirty: false,
         }
@@ -127,7 +125,12 @@ impl Default for SnapshotFile {
 }
 
 fn snapshot_path(test_file: &std::path::Path) -> PathBuf {
-    PathBuf::from(format!("{}.snap", test_file.display()))
+    let name = test_file.file_name().unwrap_or_default();
+    test_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("__snapshots__")
+        .join(format!("{}.snap", name.to_string_lossy()))
 }
 
 fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
@@ -135,13 +138,40 @@ fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(SnapshotFile::default());
     };
-    let file: SnapshotFile = serde_json::from_str(&text)
-        .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
-    if file.format != SNAPSHOT_FORMAT || file.version != SNAPSHOT_VERSION {
+    let mut lines = text.lines();
+    if lines.next() != Some("// esdev snapshot v1") {
         return Err(format!(
             "{} is not an esdev snapshot format version {SNAPSHOT_VERSION} file",
             path.display()
         ));
+    }
+    let mut file = SnapshotFile::default();
+    let mut key = None;
+    let mut body = Vec::new();
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("=== ") {
+            if let Some(previous) = key.replace(
+                rest.strip_suffix(" [value]")
+                    .ok_or_else(|| {
+                        format!("cannot read {}: malformed snapshot heading", path.display())
+                    })?
+                    .to_string(),
+            ) {
+                if body.last().is_some_and(String::is_empty) {
+                    body.pop();
+                }
+                file.snapshots.insert(previous, body.join("\n"));
+                body.clear();
+            }
+        } else if key.is_some() {
+            body.push(line.strip_prefix("\\===").unwrap_or(line).to_string());
+        }
+    }
+    if let Some(previous) = key {
+        if body.last().is_some_and(String::is_empty) {
+            body.pop();
+        }
+        file.snapshots.insert(previous, body.join("\n"));
     }
     Ok(file)
 }
@@ -149,12 +179,17 @@ fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
 /// Configures snapshot ownership for this runtime before its extensions are
 /// constructed. A normal child has one known file; unisolated mode sets it as
 /// each module is imported.
-pub fn configure_snapshots(file: Option<PathBuf>, update: bool) {
+pub fn configure_snapshots(file: Option<PathBuf>, update: bool, ci: bool) {
     SNAPSHOTS.with_borrow_mut(|state| {
         *state = SnapshotState {
             update,
+            ci,
             current_file: file,
             files: BTreeMap::new(),
+            matched: 0,
+            failed: 0,
+            written: 0,
+            updated: 0,
         };
     });
 }
@@ -171,9 +206,7 @@ fn set_snapshot_file(text: &str) {
 /// deliberately bounded by reviewability, so a quadratic LCS is clearer than a
 /// dependency and ample for this error path. Unchanged lines remain too: a
 /// reader needs the surrounding JSON keys to identify what changed.
-fn snapshot_diff(expected: &serde_json::Value, actual: &serde_json::Value) -> String {
-    let expected = serde_json::to_string_pretty(expected).unwrap_or_default();
-    let actual = serde_json::to_string_pretty(actual).unwrap_or_default();
+fn snapshot_diff(expected: &str, actual: &str) -> String {
     let before: Vec<&str> = expected.lines().collect();
     let after: Vec<&str> = actual.lines().collect();
     let mut lcs = vec![vec![0usize; after.len() + 1]; before.len() + 1];
@@ -213,8 +246,6 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
             })
         })
         .ok_or_else(|| "toMatchSnapshot is available when esdev runs a test file".to_string())?;
-    let actual: serde_json::Value = serde_json::from_str(&actual)
-        .map_err(|err| format!("internal snapshot value is not JSON: {err}"))?;
     SNAPSHOTS.with_borrow_mut(|state| {
         if !state.files.contains_key(&file) {
             let loaded = load_snapshots(&file)?;
@@ -222,15 +253,50 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
         }
         let snapshots = state.files.get_mut(&file).expect("inserted above");
         match snapshots.snapshots.get(&key) {
-            Some(expected) if expected == &actual => Ok(()),
-            Some(expected) if !state.update => Err(format!("snapshot changed: {key}\n\n{}\nRun esdev test --update-snapshots to accept this change.", snapshot_diff(expected, &actual))),
-            None if !state.update => Err(format!("snapshot is missing: {key}\n\nReceived:\n{}\n\nRun esdev test --update-snapshots to create it.", serde_json::to_string_pretty(&actual).unwrap_or_default())),
-            _ => {
+            Some(expected) if expected == &actual => {
+                state.matched += 1;
+                Ok(())
+            }
+            Some(expected) if !state.update => {
+                state.failed += 1;
+                Err(format!("snapshot changed: {key}\n\n{}\nRun esdev test --update-snapshots to accept this change.", snapshot_diff(expected, &actual)))
+            }
+            None if state.ci => {
+                state.failed += 1;
+                Err(format!("no stored snapshot: {key}; --ci does not write them"))
+            }
+            Some(_) => {
                 snapshots.snapshots.insert(key, actual);
                 snapshots.dirty = true;
+                state.updated += 1;
+                Ok(())
+            }
+            None => {
+                snapshots.snapshots.insert(key, actual);
+                snapshots.dirty = true;
+                state.written += 1;
                 Ok(())
             }
         }
+    })
+}
+
+fn snapshot_tally() -> Option<String> {
+    SNAPSHOTS.with_borrow(|state| {
+        let used = state.matched + state.failed + state.written + state.updated;
+        (used > 0).then(|| {
+            if state.update {
+                format!(
+                    "snapshots: {} updated, {} written, {} unchanged",
+                    state.updated, state.written, state.matched
+                )
+            } else {
+                format!(
+                    "snapshots: {} matched, {} failed, {} written",
+                    state.matched, state.failed, state.written
+                )
+            }
+        })
     })
 }
 
@@ -241,10 +307,23 @@ fn flush_snapshots() -> Result<(), String> {
                 continue;
             }
             let path = snapshot_path(file);
-            let text =
-                serde_json::to_string_pretty(snapshots).map_err(|err| err.to_string())? + "\n";
-            std::fs::write(&path, text)
-                .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+            let mut text = String::from("// esdev snapshot v1\n");
+            for (key, body) in &snapshots.snapshots {
+                text.push_str(&format!("\n=== {key} [value]\n"));
+                for line in body.lines() {
+                    text.push_str(if line.starts_with("===") { "\\" } else { "" });
+                    text.push_str(line);
+                    text.push('\n');
+                }
+            }
+            let dir = path.parent().expect("snapshot has a parent");
+            std::fs::create_dir_all(dir)
+                .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+            let temp = path.with_extension("snap.tmp");
+            std::fs::write(&temp, text)
+                .map_err(|err| format!("cannot write {}: {err}", temp.display()))?;
+            std::fs::rename(&temp, &path)
+                .map_err(|err| format!("cannot replace {}: {err}", path.display()))?;
             snapshots.dirty = false;
         }
         Ok(())
@@ -261,7 +340,7 @@ pub struct TestExtension;
 /// The runtime is new; this thread-local bookkeeping must be too.
 pub fn reset() {
     CASES.with_borrow_mut(Vec::clear);
-    configure_snapshots(None, false);
+    configure_snapshots(None, false, false);
 }
 
 const MODULES: &[HostModule] = &[HostModule {
@@ -398,6 +477,9 @@ impl HostExtension for TestExtension {
 /// `esdev app.test.ts` work on its own, with the same output the runner gives.
 pub fn finish() -> ExitCode {
     let code = report(None);
+    if let Some(tally) = snapshot_tally() {
+        println!("{tally}");
+    }
     if let Err(err) = flush_snapshots() {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;

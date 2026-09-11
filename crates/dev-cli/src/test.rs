@@ -66,6 +66,9 @@ pub struct TestConfig {
     /// exist yet. This is deliberately a command action, not project config:
     /// committing a config that rewrites assertions would be a foot-gun.
     pub update_snapshots: bool,
+    /// Refuse every implicit snapshot write. CI is an assertion of committed
+    /// state, never a place that can create it.
+    pub ci: bool,
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -136,6 +139,7 @@ pub async fn run_all(
                 .update_snapshots
                 .then(|| "--update-snapshots".to_string()),
         )
+        .chain(config.ci.then(|| "--ci".to_string()))
         .collect();
 
     let named = |file: &Path| {

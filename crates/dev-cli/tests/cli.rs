@@ -2922,18 +2922,20 @@ fn snapshots_are_versioned_explicitly_updated_and_checked() {
          });\n",
     );
 
-    let missing = esdev_in(&dir)
+    let written = esdev_in(&dir)
         .arg("test")
         .output()
         .expect("spawn esdev test");
     assert!(
-        !missing.status.success(),
-        "a missing snapshot must not be written implicitly"
+        written.status.success(),
+        "{}{}",
+        stdout(&written),
+        stderr(&written)
     );
     assert!(
-        stdout(&missing).contains("snapshot is missing"),
+        stdout(&written).contains("snapshots: 0 matched, 0 failed, 1 written"),
         "{}",
-        stdout(&missing)
+        stdout(&written)
     );
 
     let updated = esdev_in(&dir)
@@ -2946,13 +2948,14 @@ fn snapshots_are_versioned_explicitly_updated_and_checked() {
         stdout(&updated),
         stderr(&updated)
     );
-    let snapshot = std::fs::read_to_string(dir.join("value.test.mjs.snap")).expect("read snapshot");
+    let snapshot = std::fs::read_to_string(dir.join("__snapshots__/value.test.mjs.snap"))
+        .expect("read snapshot");
+    assert!(snapshot.contains("// esdev snapshot v1"), "{snapshot}");
     assert!(
-        snapshot.contains("\"format\": \"esdev-snapshot\""),
+        snapshot.contains("=== records supported values: snapshot 1 [value]"),
         "{snapshot}"
     );
-    assert!(snapshot.contains("\"version\": 1"), "{snapshot}");
-    assert!(snapshot.contains("\"ref\""), "{snapshot}");
+    assert!(snapshot.contains("[Circular]"), "{snapshot}");
 
     let checked = esdev_in(&dir)
         .arg("test")

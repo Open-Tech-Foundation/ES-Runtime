@@ -198,6 +198,9 @@ declare module "runtime:test" {
     message?: string,
   ): Promise<void>;
 
+  /** Matches a versioned snapshot recorded for this test. */
+  export function assertSnapshot(value: unknown, name?: string): void;
+
   /**
    * The matchers `expect(value)` answers with.
    *
@@ -214,6 +217,8 @@ declare module "runtime:test" {
     toStrictEqual(expected: unknown): void;
     /** Matches the versioned snapshot recorded for this test. */
     toMatchSnapshot(name?: string): void;
+    /** Calls the function and snapshots the error it throws. */
+    toThrowErrorMatchingSnapshot(name?: string): void;
     toBeTruthy(): void;
     toBeFalsy(): void;
     toBeNull(): void;

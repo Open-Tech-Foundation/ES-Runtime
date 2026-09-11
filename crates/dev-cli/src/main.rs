@@ -183,6 +183,7 @@ OPTIONS:
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
     -u, --update-snapshots       Write new and changed snapshots
+    --ci                         Require every snapshot to be pre-existing
 
 Everything but --file and --watch is also an esdev.json key, under \"test\":
 
@@ -1155,6 +1156,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut timeout = None;
     let mut reporter = None;
     let mut update_snapshots = false;
+    let mut ci = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1228,6 +1230,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 reject_value(flag, value)?;
                 update_snapshots = true;
             }
+            "--ci" => {
+                reject_value(flag, value)?;
+                ci = true;
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{TEST_USAGE}"));
             }
@@ -1253,6 +1259,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         timeout,
         reporter,
         update_snapshots,
+        ci,
     })
 }
 
@@ -1322,6 +1329,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         guest::test::configure_snapshots(
             Some(std::path::PathBuf::from(&file)),
             config.update_snapshots,
+            config.ci,
         );
         // Nothing is added to the file, unless `--setup` named something to
         // import ahead of it. It is otherwise an ordinary run of an ordinary
@@ -1444,7 +1452,7 @@ pub(crate) async fn run_tests_unisolated(
     // A watch pass gets a fresh runtime in this host process. Its tally is
     // thread-local host bookkeeping, so start it fresh with the runtime.
     guest::test::reset();
-    guest::test::configure_snapshots(None, config.update_snapshots);
+    guest::test::configure_snapshots(None, config.update_snapshots, config.ci);
     let mut source = String::new();
     source.push_str("import { __setTestFile } from \"runtime:test\";");
     for file in files {

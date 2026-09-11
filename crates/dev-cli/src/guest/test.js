@@ -558,45 +558,40 @@ function show(v) {
 // A reference gets an id before its contents so shared objects and cycles stay
 // visible instead of being silently duplicated or rejected.
 function snapshotValue(value) {
-  const seen = new Map();
-  const encode = (v) => {
-    if (v === null) return ["null"];
-    switch (typeof v) {
-      case "undefined": return ["undefined"];
-      case "boolean": return ["boolean", v];
-      case "string": return ["string", v];
-      case "bigint": return ["bigint", v.toString()];
-      case "number":
-        return ["number", Number.isNaN(v) ? "NaN" : v === Infinity ? "+Infinity" : v === -Infinity ? "-Infinity" : Object.is(v, -0) ? "-0" : v];
-      case "function": throw new TypeError("snapshots do not support functions");
-      case "symbol": throw new TypeError("snapshots do not support symbols");
+  const seen = new Set();
+  const pad = (depth) => "  ".repeat(depth);
+  const own = (object, depth) => Object.keys(object).sort().map((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (!descriptor || !("value" in descriptor)) throw new TypeError("snapshots do not invoke getters");
+    return `${pad(depth)}${JSON.stringify(key)}: ${print(descriptor.value, depth)},`;
+  });
+  const block = (open, lines, close, depth) => lines.length === 0 ? `${open}${close}` : `${open}\n${lines.join("\n")}\n${pad(depth - 1)}${close}`;
+  const print = (v, depth) => {
+    if (v === null) return "null";
+    if (v === undefined) return "undefined";
+    if (typeof v === "string") return JSON.stringify(v);
+    if (typeof v === "boolean") return String(v);
+    if (typeof v === "bigint") return `${v}n`;
+    if (typeof v === "number") return Number.isNaN(v) ? "NaN" : v === Infinity ? "Infinity" : v === -Infinity ? "-Infinity" : Object.is(v, -0) ? "-0" : String(v);
+    if (typeof v === "function" || typeof v === "symbol") throw new TypeError("snapshots do not support functions or symbols");
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
+    if (Array.isArray(v)) return block("[", v.map((item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "]", depth + 1);
+    if (v instanceof Date) return `Date(${JSON.stringify(v.toISOString())})`;
+    if (v instanceof RegExp) return v.toString();
+    if (v instanceof Map) return block("Map {", Array.from(v, ([k, item]) => `${pad(depth + 1)}${print(k, depth + 1)} => ${print(item, depth + 1)},`), "}", depth + 1);
+    if (v instanceof Set) return block("Set {", Array.from(v, (item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "}", depth + 1);
+    if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
+      const bytes = v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      return `${v instanceof ArrayBuffer ? "ArrayBuffer" : v.constructor.name} [${Array.from(bytes).join(", ")}]`;
     }
-    if (seen.has(v)) return ["ref", seen.get(v)];
-    const id = seen.size;
-    seen.set(v, id);
-    if (Array.isArray(v)) return ["array", id, v.map(encode)];
-    if (v instanceof Date) return ["date", id, v.toISOString()];
-    if (v instanceof RegExp) return ["regexp", id, v.source, v.flags];
-    if (v instanceof Map) return ["map", id, Array.from(v, ([k, x]) => [encode(k), encode(x)])];
-    if (v instanceof Set) return ["set", id, Array.from(v, encode)];
-    if (v instanceof ArrayBuffer) return ["bytes", id, "ArrayBuffer", Array.from(new Uint8Array(v))];
-    if (ArrayBuffer.isView(v)) return ["bytes", id, v.constructor.name, Array.from(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))];
-    if (v instanceof Error) return ["error", id, v.name, v.message, encodeOwn(v)];
+    if (v instanceof Error) return `${v.name}(${JSON.stringify(v.message)})`;
     if (v instanceof Promise || v instanceof WeakMap || v instanceof WeakSet) throw new TypeError("snapshots do not support asynchronous or weak collections");
     const prototype = Object.getPrototypeOf(v);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError("snapshots support plain objects, not class or host instances");
-    return ["object", id, encodeOwn(v)];
+    return block("{", own(v, depth + 1), "}", depth + 1);
   };
-  const encodeOwn = (object) => {
-    const symbols = Object.getOwnPropertySymbols(object);
-    if (symbols.length) throw new TypeError("snapshots do not support symbol properties");
-    return Object.keys(object).sort().map((key) => {
-      const descriptor = Object.getOwnPropertyDescriptor(object, key);
-      if (!descriptor || !("value" in descriptor)) throw new TypeError("snapshots do not invoke getters");
-      return [key, encode(descriptor.value)];
-    });
-  };
-  return JSON.stringify(["esdev-value", 1, encode(value)]);
+  return print(value, 0);
 }
 
 function snapshot(actual, name) {
@@ -605,6 +600,12 @@ function snapshot(actual, name) {
   const key = name === undefined ? `snapshot ${++snapshotNumber}` : name;
   const message = ops.test_snapshot(activeCase, key, snapshotValue(actual));
   if (message !== undefined) throw new Error(message);
+}
+
+// The assert spelling is useful to helpers that deliberately avoid constructing
+// an expectation chain. It shares the same active-case key and host store.
+function assertSnapshot(actual, name) {
+  snapshot(actual, name);
 }
 
 const showError = (e) =>
@@ -829,6 +830,13 @@ function expectation(actual, negated) {
     toMatchSnapshot(name) {
       if (negated) throw new TypeError("expect(...).not.toMatchSnapshot is not meaningful");
       snapshot(actual, name);
+    },
+    toThrowErrorMatchingSnapshot(name) {
+      if (negated) throw new TypeError("expect(...).not.toThrowErrorMatchingSnapshot is not meaningful");
+      if (typeof actual !== "function") throw new TypeError("expect(...).toThrowErrorMatchingSnapshot needs a function");
+      const result = throwsSync(actual);
+      if (!result.caught) throw new Error("expected function to throw");
+      snapshot(result.err, name);
     },
     toBeTruthy() {
       check(Boolean(actual), negated, () =>
@@ -1542,6 +1550,7 @@ export {
   assertEquals,
   assertThrows,
   assertRejects,
+  assertSnapshot,
   expect,
   mock,
   clock,
@@ -1560,6 +1569,7 @@ export default {
   assertEquals,
   assertThrows,
   assertRejects,
+  assertSnapshot,
   expect,
   mock,
   clock,

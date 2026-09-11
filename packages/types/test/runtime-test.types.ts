@@ -12,7 +12,7 @@
 // breaks this file rather than passing it. The lines without it are the other
 // half: legitimate usage must keep compiling.
 
-import { clock, describe, expect, it, mock, suite, test } from "runtime:test";
+import { assertSnapshot, clock, describe, expect, it, mock, suite, test } from "runtime:test";
 
 // --- the vocabulary -----------------------------------------------------------
 
@@ -63,6 +63,8 @@ test("matchers are typed against the value", () => {
   expect([1, 2]).toEqual([1, 2]);
   expect({ answer: 42 }).toMatchSnapshot();
   expect({ answer: 42 }).toMatchSnapshot("answer");
+  assertSnapshot({ answer: 42 }, "answer assertion");
+  expect(() => { throw new Error("broken"); }).toThrowErrorMatchingSnapshot();
   expect({ a: 1 }).toMatchObject({ a: 1 });
   expect(1).not.toBe(2);
 
