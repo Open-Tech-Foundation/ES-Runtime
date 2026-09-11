@@ -262,19 +262,45 @@ fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
             };
         }
     }
-    let mut out = String::from("--- snapshot\n+++ received\n@@\n");
+    let mut rows: Vec<(char, String)> = Vec::new();
     let (mut i, mut j) = (0, 0);
     while i < before.len() || j < after.len() {
         if i < before.len() && j < after.len() && before[i] == after[j] {
-            out.push_str(&format!("  {}\n", visible_line(before[i])));
+            rows.push((' ', visible_line(before[i])));
             i += 1;
         } else if j < after.len() && (i == before.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
-            out.push_str(&format!("+ {}\n", visible_line(after[j])));
+            rows.push(('+', visible_line(after[j])));
             j += 1;
         } else {
-            out.push_str(&format!("- {}\n", visible_line(before[i])));
+            rows.push(('-', visible_line(before[i])));
             i += 1;
         }
+    }
+    let mut out = String::from("--- snapshot\n+++ received\n@@\n");
+    let mut show = vec![full; rows.len()];
+    if !full {
+        for (index, (kind, _)) in rows.iter().enumerate() {
+            if *kind != ' ' {
+                let first = index.saturating_sub(3);
+                let last = (index + 4).min(rows.len());
+                show[first..last].fill(true);
+            }
+        }
+    }
+    let mut hidden = false;
+    for ((kind, line), visible) in rows.iter().zip(show) {
+        if !visible {
+            hidden = true;
+            continue;
+        }
+        if hidden {
+            out.push_str("@@\n");
+            hidden = false;
+        }
+        out.push(*kind);
+        out.push(' ');
+        out.push_str(line);
+        out.push('\n');
     }
     if expected.ends_with('\n') != actual.ends_with('\n') {
         out.push_str("\\ No newline at end of file\n");

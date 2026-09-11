@@ -43,7 +43,8 @@ is the point, since none of the three has any business in a deployment.
   exclusive, failed, and unfinished runs never prune.
 
 - **Snapshot diagnostics** truncate large text diffs by default; `--full-diff`
-  prints every line. Binary failures name sizes, the first different byte, and
+  prints every line; ordinary diffs keep three unchanged context lines around
+  a change. Binary failures name sizes, the first different byte, and
   a short hexadecimal window. Text diffs make trailing whitespace, CRLF, and
   missing final newlines visible.
 
