@@ -2964,6 +2964,23 @@ fn snapshots_are_versioned_explicitly_updated_and_checked() {
         stdout(&checked),
         stderr(&checked)
     );
+
+    write_in(
+        &dir,
+        "value.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('records supported values', () => expect({ answer: false }).toMatchSnapshot());\n",
+    );
+    let changed = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&changed);
+    assert!(!changed.status.success(), "a changed snapshot must fail");
+    assert!(text.contains("--- snapshot"), "{text}");
+    assert!(text.contains("+++ received"), "{text}");
+    assert!(text.contains("- "), "{text}");
+    assert!(text.contains("+ "), "{text}");
 }
 
 /// A `.test.ts` file is the ordinary case: it must be stripped like any other,

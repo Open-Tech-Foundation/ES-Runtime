@@ -85,6 +85,8 @@ esdev test --update-snapshots
 
 The file has a format version and sorted object keys. Rename a snapshot with
 `toMatchSnapshot("response body")`; unnamed calls use their order in the test.
+When a value changes, the failing test prints a line-by-line unified diff:
+removed snapshot lines begin with `-` and received lines begin with `+`.
 
 ## The file is the entry, unaltered
 

@@ -29,7 +29,8 @@ is the point, since none of the three has any business in a deployment.
 - **Versioned snapshots for `runtime:test`.**
   `expect(value).toMatchSnapshot(name?)` compares a deterministic tagged value
   with the test file's adjacent `.snap` file. `esdev test -u` /
-  `--update-snapshots` explicitly creates and rewrites them.
+  `--update-snapshots` explicitly creates and rewrites them; a mismatch reports
+  a line-by-line unified diff.
 
 - **`esdev test --isolation=none`** runs selected files serially in one runtime,
   retaining their V8 and ES-module caches. It opts out of process isolation and

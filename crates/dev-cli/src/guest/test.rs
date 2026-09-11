@@ -167,6 +167,42 @@ fn set_snapshot_file(text: &str) {
     SNAPSHOTS.with_borrow_mut(|state| state.current_file = Some(file));
 }
 
+/// A small unified diff for the JSON a snapshot stores. Snapshot payloads are
+/// deliberately bounded by reviewability, so a quadratic LCS is clearer than a
+/// dependency and ample for this error path. Unchanged lines remain too: a
+/// reader needs the surrounding JSON keys to identify what changed.
+fn snapshot_diff(expected: &serde_json::Value, actual: &serde_json::Value) -> String {
+    let expected = serde_json::to_string_pretty(expected).unwrap_or_default();
+    let actual = serde_json::to_string_pretty(actual).unwrap_or_default();
+    let before: Vec<&str> = expected.lines().collect();
+    let after: Vec<&str> = actual.lines().collect();
+    let mut lcs = vec![vec![0usize; after.len() + 1]; before.len() + 1];
+    for i in (0..before.len()).rev() {
+        for j in (0..after.len()).rev() {
+            lcs[i][j] = if before[i] == after[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let mut out = String::from("--- snapshot\n+++ received\n@@\n");
+    let (mut i, mut j) = (0, 0);
+    while i < before.len() || j < after.len() {
+        if i < before.len() && j < after.len() && before[i] == after[j] {
+            out.push_str(&format!("  {}\n", before[i]));
+            i += 1;
+        } else if j < after.len() && (i == before.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
+            out.push_str(&format!("+ {}\n", after[j]));
+            j += 1;
+        } else {
+            out.push_str(&format!("- {}\n", before[i]));
+            i += 1;
+        }
+    }
+    out
+}
+
 fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), String> {
     let (file, key) = CASES
         .with_borrow(|cases| {
@@ -187,7 +223,7 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
         let snapshots = state.files.get_mut(&file).expect("inserted above");
         match snapshots.snapshots.get(&key) {
             Some(expected) if expected == &actual => Ok(()),
-            Some(expected) if !state.update => Err(format!("snapshot changed: {key}\n\nExpected:\n{}\n\nReceived:\n{}\n\nRun esdev test --update-snapshots to accept this change.", serde_json::to_string_pretty(expected).unwrap_or_default(), serde_json::to_string_pretty(&actual).unwrap_or_default())),
+            Some(expected) if !state.update => Err(format!("snapshot changed: {key}\n\n{}\nRun esdev test --update-snapshots to accept this change.", snapshot_diff(expected, &actual))),
             None if !state.update => Err(format!("snapshot is missing: {key}\n\nReceived:\n{}\n\nRun esdev test --update-snapshots to create it.", serde_json::to_string_pretty(&actual).unwrap_or_default())),
             _ => {
                 snapshots.snapshots.insert(key, actual);
