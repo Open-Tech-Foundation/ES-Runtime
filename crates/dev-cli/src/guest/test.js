@@ -831,6 +831,13 @@ function expectation(actual, negated) {
       if (negated) throw new TypeError("expect(...).not.toMatchSnapshot is not meaningful");
       snapshot(actual, name);
     },
+    toMatchFileSnapshot(name) {
+      if (negated) throw new TypeError("expect(...).not.toMatchFileSnapshot is not meaningful");
+      if (activeCase === null) throw new Error("toMatchFileSnapshot must run inside a test");
+      if (typeof name !== "string") throw new TypeError("toMatchFileSnapshot(name) needs a filename");
+      const message = ops.test_file_snapshot(activeCase, name, actual);
+      if (message !== undefined) throw new Error(message);
+    },
     toThrowErrorMatchingSnapshot(name) {
       if (negated) throw new TypeError("expect(...).not.toThrowErrorMatchingSnapshot is not meaningful");
       if (typeof actual !== "function") throw new TypeError("expect(...).toThrowErrorMatchingSnapshot needs a function");

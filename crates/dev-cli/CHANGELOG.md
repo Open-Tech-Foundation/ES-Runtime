@@ -33,6 +33,10 @@ is the point, since none of the three has any business in a deployment.
   `--update-snapshots` explicitly creates and rewrites them; a mismatch reports
   a line-by-line unified diff.
 
+- **File snapshots** use `expect(textOrBytes).toMatchFileSnapshot("name.ext")`.
+  The name is confined to that test file's snapshot directory; text has a
+  unified diff and bytes compare exactly.
+
 - **`esdev test --isolation=none`** runs selected files serially in one runtime,
   retaining their V8 and ES-module caches. It opts out of process isolation and
   therefore refuses file-scoped jobs, timeouts, and JSON reporting.

@@ -104,6 +104,7 @@ struct SnapshotState {
     ci: bool,
     current_file: Option<PathBuf>,
     files: BTreeMap<PathBuf, SnapshotFile>,
+    file_writes: BTreeMap<PathBuf, Vec<u8>>,
     matched: usize,
     failed: usize,
     written: usize,
@@ -131,6 +132,26 @@ fn snapshot_path(test_file: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("__snapshots__")
         .join(format!("{}.snap", name.to_string_lossy()))
+}
+
+fn file_snapshot_path(test_file: &std::path::Path, name: &str) -> Result<PathBuf, String> {
+    let path = std::path::Path::new(name);
+    if name.is_empty()
+        || path.components().count() != 1
+        || !matches!(
+            path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err("toMatchFileSnapshot(name) needs a filename, not a path".to_string());
+    }
+    let test_name = test_file.file_name().unwrap_or_default();
+    Ok(test_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("__snapshots__")
+        .join(test_name)
+        .join(path))
 }
 
 fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
@@ -186,6 +207,7 @@ pub fn configure_snapshots(file: Option<PathBuf>, update: bool, ci: bool) {
             ci,
             current_file: file,
             files: BTreeMap::new(),
+            file_writes: BTreeMap::new(),
             matched: 0,
             failed: 0,
             written: 0,
@@ -281,6 +303,60 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
     })
 }
 
+fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<(), String> {
+    let file = CASES
+        .with_borrow(|cases| cases.get(case_id).and_then(|case| case.file.clone()))
+        .ok_or_else(|| {
+            "toMatchFileSnapshot is available when esdev runs a test file".to_string()
+        })?;
+    let path = file_snapshot_path(&file, name)?;
+    SNAPSHOTS.with_borrow_mut(|state| {
+        let expected = state
+            .file_writes
+            .get(&path)
+            .cloned()
+            .or_else(|| std::fs::read(&path).ok());
+        match expected {
+            Some(expected) if expected == actual => {
+                state.matched += 1;
+                Ok(())
+            }
+            Some(expected) if !state.update => {
+                state.failed += 1;
+                let detail = match (std::str::from_utf8(&expected), std::str::from_utf8(&actual)) {
+                    (Ok(before), Ok(after)) => snapshot_diff(before, after),
+                    _ => format!(
+                        "binary snapshot differs: stored {} bytes, received {} bytes",
+                        expected.len(),
+                        actual.len()
+                    ),
+                };
+                Err(format!(
+                    "file snapshot differs: {}\n\n{detail}",
+                    path.display()
+                ))
+            }
+            None if state.ci => {
+                state.failed += 1;
+                Err(format!(
+                    "no stored file snapshot: {}; --ci does not write them",
+                    path.display()
+                ))
+            }
+            Some(_) => {
+                state.file_writes.insert(path, actual);
+                state.updated += 1;
+                Ok(())
+            }
+            None => {
+                state.file_writes.insert(path, actual);
+                state.written += 1;
+                Ok(())
+            }
+        }
+    })
+}
+
 fn snapshot_tally() -> Option<String> {
     SNAPSHOTS.with_borrow(|state| {
         let used = state.matched + state.failed + state.written + state.updated;
@@ -325,6 +401,16 @@ fn flush_snapshots() -> Result<(), String> {
             std::fs::rename(&temp, &path)
                 .map_err(|err| format!("cannot replace {}: {err}", path.display()))?;
             snapshots.dirty = false;
+        }
+        for (path, bytes) in &state.file_writes {
+            let dir = path.parent().expect("file snapshot has a parent");
+            std::fs::create_dir_all(dir)
+                .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+            let temp = path.with_extension("tmp");
+            std::fs::write(&temp, bytes)
+                .map_err(|err| format!("cannot write {}: {err}", temp.display()))?;
+            std::fs::rename(&temp, path)
+                .map_err(|err| format!("cannot replace {}: {err}", path.display()))?;
         }
         Ok(())
     })
@@ -461,6 +547,23 @@ impl HostExtension for TestExtension {
                     .unwrap_or_default()
                     .to_string();
                 match check_snapshot(id, key, actual) {
+                    Ok(()) => Ok(Value::Undefined),
+                    Err(message) => Ok(Value::String(message)),
+                }
+            }),
+            OpDecl::sync("test_file_snapshot", |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(-1.0) as usize;
+                let name = args.get(1).and_then(Value::as_str).unwrap_or_default();
+                let actual = match args.get(2) {
+                    Some(Value::String(text)) => text.as_bytes().to_vec(),
+                    Some(Value::Bytes(bytes)) => bytes.clone(),
+                    _ => {
+                        return Ok(Value::String(
+                            "toMatchFileSnapshot accepts a string or byte buffer".to_string(),
+                        ));
+                    }
+                };
+                match check_file_snapshot(id, name, actual) {
                     Ok(()) => Ok(Value::Undefined),
                     Err(message) => Ok(Value::String(message)),
                 }

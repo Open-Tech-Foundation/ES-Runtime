@@ -217,6 +217,8 @@ declare module "runtime:test" {
     toStrictEqual(expected: unknown): void;
     /** Matches the versioned snapshot recorded for this test. */
     toMatchSnapshot(name?: string): void;
+    /** Matches exact text or bytes in this test's snapshot directory. */
+    toMatchFileSnapshot(name: string): void;
     /** Calls the function and snapshots the error it throws. */
     toThrowErrorMatchingSnapshot(name?: string): void;
     toBeTruthy(): void;
