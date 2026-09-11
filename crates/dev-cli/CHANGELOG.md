@@ -44,7 +44,8 @@ is the point, since none of the three has any business in a deployment.
 
 - **Snapshot diagnostics** truncate large text diffs by default; `--full-diff`
   prints every line. Binary failures name sizes, the first different byte, and
-  a short hexadecimal window.
+  a short hexadecimal window. Text diffs make trailing whitespace, CRLF, and
+  missing final newlines visible.
 
 - **`esdev test --isolation=none`** runs selected files serially in one runtime,
   retaining their V8 and ES-module caches. It opts out of process isolation and

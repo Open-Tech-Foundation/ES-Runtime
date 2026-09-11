@@ -235,16 +235,16 @@ fn set_snapshot_file(text: &str) {
 /// dependency and ample for this error path. Unchanged lines remain too: a
 /// reader needs the surrounding JSON keys to identify what changed.
 fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
-    let before: Vec<&str> = expected.lines().collect();
-    let after: Vec<&str> = actual.lines().collect();
+    let before: Vec<&str> = expected.split('\n').collect();
+    let after: Vec<&str> = actual.split('\n').collect();
     if !full && before.len() + after.len() > 200 {
         let mut out =
             String::from("--- snapshot\n+++ received\n@@ large diff (use --full-diff) @@\n");
         for line in before.iter().take(50) {
-            out.push_str(&format!("- {line}\n"));
+            out.push_str(&format!("- {}\n", visible_line(line)));
         }
         for line in after.iter().take(50) {
-            out.push_str(&format!("+ {line}\n"));
+            out.push_str(&format!("+ {}\n", visible_line(line)));
         }
         out.push_str(&format!(
             "… {} more changed lines\n",
@@ -266,15 +266,35 @@ fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
     let (mut i, mut j) = (0, 0);
     while i < before.len() || j < after.len() {
         if i < before.len() && j < after.len() && before[i] == after[j] {
-            out.push_str(&format!("  {}\n", before[i]));
+            out.push_str(&format!("  {}\n", visible_line(before[i])));
             i += 1;
         } else if j < after.len() && (i == before.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
-            out.push_str(&format!("+ {}\n", after[j]));
+            out.push_str(&format!("+ {}\n", visible_line(after[j])));
             j += 1;
         } else {
-            out.push_str(&format!("- {}\n", before[i]));
+            out.push_str(&format!("- {}\n", visible_line(before[i])));
             i += 1;
         }
+    }
+    if expected.ends_with('\n') != actual.ends_with('\n') {
+        out.push_str("\\ No newline at end of file\n");
+    }
+    out
+}
+
+fn visible_line(line: &str) -> String {
+    let (line, cr) = match line.strip_suffix('\r') {
+        Some(line) => (line, true),
+        None => (line, false),
+    };
+    let trimmed = line.trim_end_matches([' ', '\t']);
+    let suffix = &line[trimmed.len()..];
+    let mut out = trimmed.replace('\t', "⇥");
+    for ch in suffix.chars() {
+        out.push(if ch == ' ' { '·' } else { '⇥' });
+    }
+    if cr {
+        out.push('␍');
     }
     out
 }
