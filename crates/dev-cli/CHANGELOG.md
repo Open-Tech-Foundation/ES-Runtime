@@ -29,6 +29,9 @@ is the point, since none of the three has any business in a deployment.
 - The snapshot guide documents file snapshots, property matchers, CI, pruning
   safeguards, and diff controls.
 
+- Snapshot matcher placeholders are unquoted tokens, hinted keys carry their
+  per-test counter, and Set/Map output is canonicalized by value.
+
 ### Added
 
 - **Versioned snapshots for `runtime:test`.**

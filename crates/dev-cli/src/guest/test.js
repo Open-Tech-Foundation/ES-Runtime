@@ -574,18 +574,19 @@ function snapshotValue(value) {
     if (typeof v === "bigint") return `${v}n`;
     if (typeof v === "number") return Number.isNaN(v) ? "NaN" : v === Infinity ? "Infinity" : v === -Infinity ? "-Infinity" : Object.is(v, -0) ? "-0" : String(v);
     if (typeof v === "function" || typeof v === "symbol") throw new TypeError("snapshots do not support functions or symbols");
+    if (v && v[SNAPSHOT_MATCHER]) return v.label;
     if (seen.has(v)) return "[Circular]";
     seen.add(v);
     if (Array.isArray(v)) return block("[", v.map((item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "]", depth + 1);
     if (v instanceof Date) return `Date(${JSON.stringify(v.toISOString())})`;
     if (v instanceof RegExp) return v.toString();
-    if (v instanceof Map) return block("Map {", Array.from(v, ([k, item]) => `${pad(depth + 1)}${print(k, depth + 1)} => ${print(item, depth + 1)},`), "}", depth + 1);
-    if (v instanceof Set) return block("Set {", Array.from(v, (item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "}", depth + 1);
+    if (v instanceof Map) return block("Map {", Array.from(v).sort(([a], [b]) => String(a).localeCompare(String(b))).map(([k, item]) => `${pad(depth + 1)}${print(k, depth + 1)} => ${print(item, depth + 1)},`), "}", depth + 1);
+    if (v instanceof Set) return block("Set {", Array.from(v).sort((a, b) => String(a).localeCompare(String(b))).map((item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "}", depth + 1);
     if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
       const bytes = v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
       return `${v instanceof ArrayBuffer ? "ArrayBuffer" : v.constructor.name} [${Array.from(bytes).join(", ")}]`;
     }
-    if (v instanceof Error) return `${v.name}(${JSON.stringify(v.message)})`;
+    if (v instanceof Error) return `${v.name}(${JSON.stringify(v.message)})${Object.keys(v).length ? ` ${block("{", own(v, depth + 1), "}", depth + 1)}` : ""}`;
     if (v instanceof Promise || v instanceof WeakMap || v instanceof WeakSet) throw new TypeError("snapshots do not support asynchronous or weak collections");
     const prototype = Object.getPrototypeOf(v);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError("snapshots support plain objects, not class or host instances");
@@ -597,7 +598,7 @@ function snapshotValue(value) {
 function maskSnapshot(value, pattern) {
   if (isMatcher(pattern)) {
     if (!pattern.matches(value)) throw new Error(`snapshot property did not match ${pattern.label}`);
-    return `[${pattern.label}]`;
+    return Object.freeze({ [SNAPSHOT_MATCHER]: true, label: pattern.label });
   }
   if (pattern === null || typeof pattern !== "object" || value === null || typeof value !== "object") {
     return value;
@@ -624,9 +625,9 @@ function snapshot(actual, nameOrMatchers) {
     actual = maskSnapshot(actual, nameOrMatchers);
     name = undefined;
   }
-  const key = name === undefined ? `snapshot ${++snapshotNumber}` : name;
+  const key = name === undefined ? `snapshot ${++snapshotNumber}` : `${name} ${++snapshotNumber}`;
   const message = ops.test_snapshot(activeCase, key, snapshotValue(actual));
-  if (message !== undefined) throw new Error(message);
+  if (message !== undefined) throw message;
 }
 
 // The assert spelling is useful to helpers that deliberately avoid constructing
@@ -718,6 +719,7 @@ async function assertRejects(fn, want, message) {
 // ---------------------------------------------------------------------------
 
 const MATCHER = Symbol.for("runtime:test.asymmetric");
+const SNAPSHOT_MATCHER = Symbol("runtime:test.snapshotMatcher");
 
 const isMatcher = (v) => v !== null && typeof v === "object" && v[MATCHER] === true;
 
@@ -863,7 +865,7 @@ function expectation(actual, negated) {
       if (activeCase === null) throw new Error("toMatchFileSnapshot must run inside a test");
       if (typeof name !== "string") throw new TypeError("toMatchFileSnapshot(name) needs a filename");
       const message = ops.test_file_snapshot(activeCase, name, actual);
-      if (message !== undefined) throw new Error(message);
+      if (message !== undefined) throw message;
     },
     toThrowErrorMatchingSnapshot(name) {
       if (negated) throw new TypeError("expect(...).not.toThrowErrorMatchingSnapshot is not meaningful");

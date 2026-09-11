@@ -284,7 +284,7 @@ fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
             i += 1;
         }
     }
-    let mut out = String::from("--- snapshot\n+++ received\n@@\n");
+    let mut out = String::from("--- snapshot\n+++ received\n");
     let mut show = vec![full; rows.len()];
     if !full {
         for (index, (kind, _)) in rows.iter().enumerate() {
@@ -302,7 +302,7 @@ fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
             continue;
         }
         if hidden {
-            out.push_str("@@\n");
+            out.push_str("… unchanged lines omitted …\n");
             hidden = false;
         }
         out.push(*kind);
@@ -357,7 +357,7 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
             }
             Some(expected) if !state.update => {
                 state.failed += 1;
-                Err(format!("snapshot changed: {key}\n\n{}\nRun esdev test --update-snapshots to accept this change.", snapshot_diff(expected, &actual, state.full_diff)))
+                Err(format!("snapshot changed — {key}\n{}\n\n{}\naccept with: esdev test --update-snapshots --file={}", snapshot_path(&file).display(), snapshot_diff(expected, &actual, state.full_diff), file.display()))
             }
             None if state.ci => {
                 state.failed += 1;
