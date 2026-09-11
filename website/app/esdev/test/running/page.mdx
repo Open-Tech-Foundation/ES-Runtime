@@ -88,6 +88,9 @@ The file has a format version and sorted object keys. Rename a snapshot with
 `toMatchSnapshot("response body")`; unnamed calls use their order in the test.
 When a value changes, the failing test prints a line-by-line unified diff:
 removed snapshot lines begin with `-` and received lines begin with `+`.
+Large diffs are review-sized by default; pass `--full-diff` for every changed
+line. Byte snapshots instead identify sizes, the first differing byte, and a
+small hexadecimal window.
 
 ## The file is the entry, unaltered
 

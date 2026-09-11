@@ -102,6 +102,7 @@ const SNAPSHOT_VERSION: u32 = 1;
 struct SnapshotState {
     update: bool,
     ci: bool,
+    full_diff: bool,
     current_file: Option<PathBuf>,
     files: BTreeMap<PathBuf, SnapshotFile>,
     file_writes: BTreeMap<PathBuf, Vec<u8>>,
@@ -203,11 +204,12 @@ fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
 /// Configures snapshot ownership for this runtime before its extensions are
 /// constructed. A normal child has one known file; unisolated mode sets it as
 /// each module is imported.
-pub fn configure_snapshots(file: Option<PathBuf>, update: bool, ci: bool) {
+pub fn configure_snapshots(file: Option<PathBuf>, update: bool, ci: bool, full_diff: bool) {
     SNAPSHOTS.with_borrow_mut(|state| {
         *state = SnapshotState {
             update,
             ci,
+            full_diff,
             current_file: file,
             files: BTreeMap::new(),
             file_writes: BTreeMap::new(),
@@ -232,9 +234,24 @@ fn set_snapshot_file(text: &str) {
 /// deliberately bounded by reviewability, so a quadratic LCS is clearer than a
 /// dependency and ample for this error path. Unchanged lines remain too: a
 /// reader needs the surrounding JSON keys to identify what changed.
-fn snapshot_diff(expected: &str, actual: &str) -> String {
+fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
     let before: Vec<&str> = expected.lines().collect();
     let after: Vec<&str> = actual.lines().collect();
+    if !full && before.len() + after.len() > 200 {
+        let mut out =
+            String::from("--- snapshot\n+++ received\n@@ large diff (use --full-diff) @@\n");
+        for line in before.iter().take(50) {
+            out.push_str(&format!("- {line}\n"));
+        }
+        for line in after.iter().take(50) {
+            out.push_str(&format!("+ {line}\n"));
+        }
+        out.push_str(&format!(
+            "… {} more changed lines\n",
+            before.len() + after.len() - 100
+        ));
+        return out;
+    }
     let mut lcs = vec![vec![0usize; after.len() + 1]; before.len() + 1];
     for i in (0..before.len()).rev() {
         for j in (0..after.len()).rev() {
@@ -286,7 +303,7 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
             }
             Some(expected) if !state.update => {
                 state.failed += 1;
-                Err(format!("snapshot changed: {key}\n\n{}\nRun esdev test --update-snapshots to accept this change.", snapshot_diff(expected, &actual)))
+                Err(format!("snapshot changed: {key}\n\n{}\nRun esdev test --update-snapshots to accept this change.", snapshot_diff(expected, &actual, state.full_diff)))
             }
             None if state.ci => {
                 state.failed += 1;
@@ -329,12 +346,8 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
             Some(expected) if !state.update => {
                 state.failed += 1;
                 let detail = match (std::str::from_utf8(&expected), std::str::from_utf8(&actual)) {
-                    (Ok(before), Ok(after)) => snapshot_diff(before, after),
-                    _ => format!(
-                        "binary snapshot differs: stored {} bytes, received {} bytes",
-                        expected.len(),
-                        actual.len()
-                    ),
+                    (Ok(before), Ok(after)) => snapshot_diff(before, after, state.full_diff),
+                    _ => binary_diff(&expected, &actual),
                 };
                 Err(format!(
                     "file snapshot differs: {}\n\n{detail}",
@@ -360,6 +373,33 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
             }
         }
     })
+}
+
+fn binary_diff(expected: &[u8], actual: &[u8]) -> String {
+    let offset = expected
+        .iter()
+        .zip(actual)
+        .position(|(a, b)| a != b)
+        .unwrap_or(expected.len().min(actual.len()));
+    let start = offset.saturating_sub(8);
+    let end = (offset + 8).min(expected.len().max(actual.len()));
+    let window = |bytes: &[u8]| {
+        (start..end)
+            .map(|index| {
+                bytes
+                    .get(index)
+                    .map_or("--".to_string(), |byte| format!("{byte:02x}"))
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    format!(
+        "binary snapshot differs: stored {} bytes, received {} bytes; first differing byte {offset}\n  stored: {}\n  received: {}",
+        expected.len(),
+        actual.len(),
+        window(expected),
+        window(actual)
+    )
 }
 
 fn snapshot_tally() -> Option<String> {
@@ -453,7 +493,7 @@ pub struct TestExtension;
 /// The runtime is new; this thread-local bookkeeping must be too.
 pub fn reset() {
     CASES.with_borrow_mut(Vec::clear);
-    configure_snapshots(None, false, false);
+    configure_snapshots(None, false, false, false);
 }
 
 const MODULES: &[HostModule] = &[HostModule {

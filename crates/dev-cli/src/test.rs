@@ -69,6 +69,8 @@ pub struct TestConfig {
     /// Refuse every implicit snapshot write. CI is an assertion of committed
     /// state, never a place that can create it.
     pub ci: bool,
+    /// Print every changed snapshot line instead of the review-sized default.
+    pub full_diff: bool,
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -140,6 +142,7 @@ pub async fn run_all(
                 .then(|| "--update-snapshots".to_string()),
         )
         .chain(config.ci.then(|| "--ci".to_string()))
+        .chain(config.full_diff.then(|| "--full-diff".to_string()))
         .collect();
 
     let named = |file: &Path| {

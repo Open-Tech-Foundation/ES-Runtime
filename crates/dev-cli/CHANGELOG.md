@@ -42,6 +42,10 @@ is the point, since none of the three has any business in a deployment.
   complete file also removes entries whose tests no longer exist; skipped,
   exclusive, failed, and unfinished runs never prune.
 
+- **Snapshot diagnostics** truncate large text diffs by default; `--full-diff`
+  prints every line. Binary failures name sizes, the first different byte, and
+  a short hexadecimal window.
+
 - **`esdev test --isolation=none`** runs selected files serially in one runtime,
   retaining their V8 and ES-module caches. It opts out of process isolation and
   therefore refuses file-scoped jobs, timeouts, and JSON reporting.
