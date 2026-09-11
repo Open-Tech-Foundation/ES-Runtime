@@ -3528,7 +3528,7 @@ The shorter jest spellings — `toBeCalled`, `toBeCalledTimes`, `toBeCalledWith`
 `lastReturnedWith`, `nthReturnedWith` — are aliases of those matchers rather
 than variants of them.
 
-`toMatchSnapshot` records deterministic tagged values: primitives (including
+`toMatchSnapshot` records deterministic printed values: primitives (including
 `undefined`, `bigint`, `NaN` and `-0`), arrays and plain objects, `Date`,
 `RegExp`, `Map`, `Set`, byte buffers/views, `Error`, shared references and
 cycles. Functions, symbols, promises, weak collections, getters, class

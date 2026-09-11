@@ -24,6 +24,11 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- The snapshot guide documents file snapshots, property matchers, CI, pruning
+  safeguards, and diff controls.
+
 ### Added
 
 - **Versioned snapshots for `runtime:test`.**

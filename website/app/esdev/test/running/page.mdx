@@ -73,6 +73,7 @@ import { test, expect } from "runtime:test";
 
 test("response", () => {
   expect({ ok: true, ids: [1, 2] }).toMatchSnapshot();
+  expect("<main>ok</main>\n").toMatchFileSnapshot("home.html");
 });
 ```
 
@@ -86,6 +87,21 @@ esdev test --update-snapshots
 
 The file has a format version and sorted object keys. Rename a snapshot with
 `toMatchSnapshot("response body")`; unnamed calls use their order in the test.
+Value snapshots live at `__snapshots__/response.test.mjs.snap`; a file snapshot
+lives at `__snapshots__/response.test.mjs/home.html`. A file snapshot name is a
+single filename, never a path, so it cannot write outside that directory.
+
+Mask a volatile field without hiding the rest of the value:
+
+```js
+expect(user).toMatchSnapshot({ id: expect.any(String) });
+```
+
+`assertSnapshot(value, name?)` is the assertion spelling, and
+`expect(fn).toThrowErrorMatchingSnapshot()` stores a thrown error. A missing
+snapshot is created only outside CI; `--ci` (and `CI`) requires it to exist.
+`--update-snapshots` updates changed entries and prunes obsolete entries only
+after a complete, unfiltered, all-passing file run.
 When a value changes, the failing test prints a line-by-line unified diff:
 removed snapshot lines begin with `-` and received lines begin with `+`.
 Large diffs are review-sized by default; pass `--full-diff` for every changed
@@ -93,6 +109,8 @@ line. Ordinary diffs retain three unchanged context lines around each change.
 Byte snapshots instead identify sizes, the first differing byte, and a
 small hexadecimal window. Text diffs render trailing spaces as `·`, tabs as
 `⇥`, CRLF's carriage return as `␍`, and report a missing final newline.
+Each passing run that used snapshots prints a summary such as
+`snapshots: 3 matched, 0 failed, 1 written`.
 
 ## The file is the entry, unaltered
 
