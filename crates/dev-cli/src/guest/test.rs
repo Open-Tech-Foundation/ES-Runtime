@@ -115,9 +115,14 @@ struct SnapshotState {
 }
 
 struct SnapshotFile {
-    snapshots: BTreeMap<String, String>,
+    snapshots: BTreeMap<String, SnapshotEntry>,
     used: BTreeSet<String>,
     dirty: bool,
+}
+
+struct SnapshotEntry {
+    kind: String,
+    body: String,
 }
 
 impl Default for SnapshotFile {
@@ -172,32 +177,52 @@ fn load_snapshots(test_file: &std::path::Path) -> Result<SnapshotFile, String> {
         ));
     }
     let mut file = SnapshotFile::default();
-    let mut key = None;
+    let mut key: Option<(String, String)> = None;
     let mut body = Vec::new();
     for line in lines {
         if let Some(rest) = line.strip_prefix("=== ") {
-            if let Some(previous) = key.replace(
-                rest.strip_suffix(" [value]")
-                    .ok_or_else(|| {
-                        format!("cannot read {}: malformed snapshot heading", path.display())
-                    })?
-                    .to_string(),
-            ) {
+            let (name, tagged_kind) = rest.rsplit_once(" [").ok_or_else(|| {
+                format!("cannot read {}: malformed snapshot heading", path.display())
+            })?;
+            let kind = tagged_kind.strip_suffix(']').ok_or_else(|| {
+                format!("cannot read {}: malformed snapshot heading", path.display())
+            })?;
+            if !matches!(kind, "value" | "error") {
+                return Err(format!(
+                    "cannot read {}: unknown snapshot kind {kind}",
+                    path.display()
+                ));
+            }
+            if let Some((previous, previous_kind)) =
+                key.replace((name.to_string(), kind.to_string()))
+            {
                 if body.last().is_some_and(String::is_empty) {
                     body.pop();
                 }
-                file.snapshots.insert(previous, body.join("\n"));
+                file.snapshots.insert(
+                    previous,
+                    SnapshotEntry {
+                        kind: previous_kind,
+                        body: body.join("\n"),
+                    },
+                );
                 body.clear();
             }
         } else if key.is_some() {
             body.push(line.strip_prefix("\\===").unwrap_or(line).to_string());
         }
     }
-    if let Some(previous) = key {
+    if let Some((previous, kind)) = key {
         if body.last().is_some_and(String::is_empty) {
             body.pop();
         }
-        file.snapshots.insert(previous, body.join("\n"));
+        file.snapshots.insert(
+            previous,
+            SnapshotEntry {
+                kind,
+                body: body.join("\n"),
+            },
+        );
     }
     Ok(file)
 }
@@ -333,7 +358,7 @@ fn visible_line(line: &str) -> String {
     out
 }
 
-fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), String> {
+fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> Result<(), String> {
     let (file, key) = CASES
         .with_borrow(|cases| {
             cases.get(case_id).and_then(|case| {
@@ -351,26 +376,26 @@ fn check_snapshot(case_id: usize, key: String, actual: String) -> Result<(), Str
         let snapshots = state.files.get_mut(&file).expect("inserted above");
         snapshots.used.insert(key.clone());
         match snapshots.snapshots.get(&key) {
-            Some(expected) if expected == &actual => {
+            Some(expected) if expected.kind == kind && expected.body == actual => {
                 state.matched += 1;
                 Ok(())
             }
             Some(expected) if !state.update => {
                 state.failed += 1;
-                Err(format!("snapshot changed — {key}\n{}\n\n{}\naccept with: esdev test --update-snapshots --file={}", snapshot_path(&file).display(), snapshot_diff(expected, &actual, state.full_diff), file.display()))
+                Err(format!("snapshot changed — {key}\n{}\n\n{}\naccept with: esdev test --update-snapshots --file={}", snapshot_path(&file).display(), snapshot_diff(&expected.body, &actual, state.full_diff), file.display()))
             }
             None if state.ci => {
                 state.failed += 1;
                 Err(format!("no stored snapshot: {key}; --ci does not write them"))
             }
             Some(_) => {
-                snapshots.snapshots.insert(key, actual);
+                snapshots.snapshots.insert(key, SnapshotEntry { kind, body: actual });
                 snapshots.dirty = true;
                 state.updated += 1;
                 Ok(())
             }
             None => {
-                snapshots.snapshots.insert(key, actual);
+                snapshots.snapshots.insert(key, SnapshotEntry { kind, body: actual });
                 snapshots.dirty = true;
                 state.written += 1;
                 Ok(())
@@ -505,9 +530,9 @@ fn flush_snapshots() -> Result<(), String> {
             }
             let path = snapshot_path(file);
             let mut text = String::from("// esdev snapshot v1\n");
-            for (key, body) in &snapshots.snapshots {
-                text.push_str(&format!("\n=== {key} [value]\n"));
-                for line in body.lines() {
+            for (key, entry) in &snapshots.snapshots {
+                text.push_str(&format!("\n=== {key} [{}]\n", entry.kind));
+                for line in entry.body.lines() {
                     text.push_str(if line.starts_with("===") { "\\" } else { "" });
                     text.push_str(line);
                     text.push('\n');
@@ -667,7 +692,12 @@ impl HostExtension for TestExtension {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                match check_snapshot(id, key, actual) {
+                let kind = args
+                    .get(3)
+                    .and_then(Value::as_str)
+                    .unwrap_or("value")
+                    .to_string();
+                match check_snapshot(id, key, kind, actual) {
                     Ok(()) => Ok(Value::Undefined),
                     Err(message) => Ok(Value::String(message)),
                 }

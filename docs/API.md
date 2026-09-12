@@ -3539,7 +3539,9 @@ Pass an object of property matchers to `toMatchSnapshot` to mask volatile
 fields in the stored value: `expect(user).toMatchSnapshot({ id:
 expect.any(Number) })`. `assertSnapshot(value, name?)` is the assertion
 spelling, and `expect(fn).toThrowErrorMatchingSnapshot(name?)` snapshots a
-thrown error.
+thrown error as an `[error]` entry. Built-in error messages are V8 text, so an
+engine upgrade can legitimately change that snapshot; enumerable own properties
+such as `code` and `cause` are printed too.
 
 The **asymmetric** matchers are values that say what they will accept, usable
 wherever a value goes — including several levels inside an expected object,

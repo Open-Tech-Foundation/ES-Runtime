@@ -32,6 +32,9 @@ is the point, since none of the three has any business in a deployment.
 - Snapshot matcher placeholders are unquoted tokens, hinted keys carry their
   per-test counter, and Set/Map output is canonicalized by value.
 
+- Error snapshots carry an `[error]` kind tag and include enumerable own error
+  properties.
+
 ### Added
 
 - **Versioned snapshots for `runtime:test`.**

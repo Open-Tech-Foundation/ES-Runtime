@@ -616,7 +616,7 @@ function maskSnapshot(value, pattern) {
   return copy;
 }
 
-function snapshot(actual, nameOrMatchers) {
+function snapshot(actual, nameOrMatchers, kind = "value") {
   if (activeCase === null) throw new Error("toMatchSnapshot must run inside a test");
   let name = nameOrMatchers;
   if (nameOrMatchers !== undefined && typeof nameOrMatchers !== "string") {
@@ -626,7 +626,7 @@ function snapshot(actual, nameOrMatchers) {
     name = undefined;
   }
   const key = name === undefined ? `snapshot ${++snapshotNumber}` : `${name} ${++snapshotNumber}`;
-  const message = ops.test_snapshot(activeCase, key, snapshotValue(actual));
+  const message = ops.test_snapshot(activeCase, key, snapshotValue(actual), kind);
   if (message !== undefined) throw message;
 }
 
@@ -872,7 +872,7 @@ function expectation(actual, negated) {
       if (typeof actual !== "function") throw new TypeError("expect(...).toThrowErrorMatchingSnapshot needs a function");
       const result = throwsSync(actual);
       if (!result.caught) throw new Error("expected function to throw");
-      snapshot(result.err, name);
+      snapshot(result.err, name, "error");
     },
     toBeTruthy() {
       check(Boolean(actual), negated, () =>

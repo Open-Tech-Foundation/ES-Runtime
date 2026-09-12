@@ -220,7 +220,9 @@ The matcher is not negatable and must run inside a test.
 Pass an object of property matchers to mask volatile fields in stored output:
 `expect(user).toMatchSnapshot({ id: expect.any(Number) })`. `assertSnapshot`
 is the assertion spelling, and `toThrowErrorMatchingSnapshot` snapshots a
-thrown error.
+thrown error as an `[error]` entry. Built-in error messages are V8 text, so an
+engine upgrade can legitimately change that snapshot; enumerable `code` and
+`cause` properties are printed too.
 
 ```js
 expect(list).toHaveLength(3);
