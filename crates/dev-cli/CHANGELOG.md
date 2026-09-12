@@ -42,6 +42,9 @@ is the point, since none of the three has any business in a deployment.
 - Obsolete value and file snapshots are named when retained and are counted
   correctly before an unfiltered update removes them.
 
+- Map and Set snapshots sort by their deterministic printed form, including
+  object members, matching `assertEquals`' order-insensitive comparison.
+
 - Snapshot format coverage now verifies typed values, cycles, error metadata,
   and text and binary file snapshots.
 

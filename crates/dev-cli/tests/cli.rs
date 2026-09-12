@@ -3034,7 +3034,7 @@ fn snapshots_print_stable_values_errors_and_files() {
         "import { test, expect } from 'runtime:test';\n\
          test('prints values', () => {\n\
            const cycle = {}; cycle.self = cycle;\n\
-           expect({ text: 'one\\ntwo', big: 9n, bytes: new Uint8Array([3, 1]), map: new Map([['z', 1], ['a', 2]]), set: new Set(['z', 'a']), cycle }).toMatchSnapshot();\n\
+           expect({ text: 'one\\ntwo', big: 9n, bytes: new Uint8Array([3, 1]), map: new Map([['z', 1], ['a', 2]]), set: new Set(['z', 'a']), objectMap: new Map([[{ z: 1 }, 'z'], [{ a: 1 }, 'a']]), cycle }).toMatchSnapshot();\n\
            expect('<main>ada</main>\\n').toMatchFileSnapshot('home.html');\n\
            expect(new Uint8Array([0, 255, 3])).toMatchFileSnapshot('chart.bin');\n\
          });\n\
@@ -3055,6 +3055,10 @@ fn snapshots_print_stable_values_errors_and_files() {
     assert!(snapshot.contains("9n"), "{snapshot}");
     assert!(snapshot.contains("Uint8Array [3, 1]"), "{snapshot}");
     assert!(snapshot.contains("Map {\n    \"a\" => 2,"), "{snapshot}");
+    assert!(
+        snapshot.contains("\"objectMap\": Map {\n    {\n      \"a\": 1,"),
+        "{snapshot}"
+    );
     assert!(snapshot.contains("Set {\n    \"a\","), "{snapshot}");
     assert!(snapshot.contains("[Circular]"), "{snapshot}");
     assert!(snapshot.contains("[error]"), "{snapshot}");

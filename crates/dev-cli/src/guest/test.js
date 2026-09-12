@@ -580,8 +580,14 @@ function snapshotValue(value) {
     if (Array.isArray(v)) return block("[", v.map((item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "]", depth + 1);
     if (v instanceof Date) return `Date(${JSON.stringify(v.toISOString())})`;
     if (v instanceof RegExp) return v.toString();
-    if (v instanceof Map) return block("Map {", Array.from(v).sort(([a], [b]) => String(a).localeCompare(String(b))).map(([k, item]) => `${pad(depth + 1)}${print(k, depth + 1)} => ${print(item, depth + 1)},`), "}", depth + 1);
-    if (v instanceof Set) return block("Set {", Array.from(v).sort((a, b) => String(a).localeCompare(String(b))).map((item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "}", depth + 1);
+    // Sorting on the printed form, rather than String(value), preserves the
+    // assertion library's order-insensitive Map/Set semantics for objects too.
+    if (v instanceof Map) return block("Map {", Array.from(v).sort(([a, av], [b, bv]) => {
+      const left = `${snapshotValue(a)} => ${snapshotValue(av)}`;
+      const right = `${snapshotValue(b)} => ${snapshotValue(bv)}`;
+      return left.localeCompare(right);
+    }).map(([k, item]) => `${pad(depth + 1)}${print(k, depth + 1)} => ${print(item, depth + 1)},`), "}", depth + 1);
+    if (v instanceof Set) return block("Set {", Array.from(v).sort((a, b) => snapshotValue(a).localeCompare(snapshotValue(b))).map((item) => `${pad(depth + 1)}${print(item, depth + 1)},`), "}", depth + 1);
     if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
       const bytes = v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
       return `${v instanceof ArrayBuffer ? "ArrayBuffer" : v.constructor.name} [${Array.from(bytes).join(", ")}]`;
