@@ -30,7 +30,7 @@
 #                                               burst number to see degradation)
 #         REPS=5 bench/rps.sh                  (more samples per runtime; best wins)
 #         SERVER=scripts/hono.js bench/rps.sh  (serve through the Hono framework;
-#                                               run `bun install` in bench/ first)
+#                                               run `pnpm install` in bench/ first)
 #         PIN=0 bench/rps.sh                   (no CPU pinning)
 #         SERVER_CPUS=0-3 LOAD_CPUS=4-11 bench/rps.sh   (choose the split)
 set -uo pipefail

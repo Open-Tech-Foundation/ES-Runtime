@@ -38,6 +38,13 @@ namespace) is unstable and may change between minor releases until the API freez
   `runtime:http`'s server and `esrun upgrade`'s client both carried it. Yanked
   `chacha20` 0.10.1 goes with it, which had failed `cargo deny` on its own.
 
+### Changed
+
+- **The repository's JavaScript projects now share one pnpm workspace.** The
+  drivers, serialization source, website, and benchmarks use the root
+  `pnpm-lock.yaml`; `tsr` remains the only task entry point for install, build,
+  test, and CI commands.
+
 ### Fixed
 
 - **Recursive `runtime:fs` `mkdir` now accepts absolute paths inside an allowed

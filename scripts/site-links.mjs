@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /* Check site links against the routes and anchors produced by the SSG build.
- * Run from website/ after `bun run build`; keeping this outside the website
+ * Run from website/ after `pnpm run build`; keeping this outside the website
  * package makes it usable from CI without adding another dependency. */
 
 import { readFile, readdir } from "node:fs/promises";

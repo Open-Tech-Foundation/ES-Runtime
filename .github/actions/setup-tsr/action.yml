@@ -1,7 +1,7 @@
 name: Set up tsr
 description: >
   Installs the tsr task runner and puts it on PATH. Every workflow here runs
-  repo tasks through `tsr <task>` rather than spelling out cargo or bun, so what
+  repo tasks through `tsr <task>` rather than spelling out cargo or pnpm, so what
   CI does and what a contributor does cannot drift.
 inputs:
   version:

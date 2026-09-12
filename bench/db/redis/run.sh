@@ -66,7 +66,7 @@ available() {
 }
 
 [ -f "$root/packages/redis/dist/index.js" ] || {
-  echo "the driver is not built — (cd packages/redis && bun run build)" >&2; exit 1; }
+  echo "the driver is not built — run tsr build" >&2; exit 1; }
 
 # Staged rather than imported in place, for the same reason the Postgres bench
 # stages its driver: esrun jails the module loader to the project root it

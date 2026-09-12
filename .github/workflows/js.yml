@@ -50,7 +50,7 @@ jobs:
           fi
           base="${{ github.event.pull_request.base.sha }}"
           changed="$(git diff --name-only "$base"...HEAD)"
-          if printf '%s\n' "$changed" | grep -qE '^(packages/|crates/runtime/js/|crates/runtime/src/runtime_modules/|biome\.json|package\.json|bun\.lock|tasks\.toml|\.github/workflows/js\.yml)'; then
+          if printf '%s\n' "$changed" | grep -qE '^(packages/|crates/runtime/js/|crates/runtime/src/runtime_modules/|website/|bench/|biome\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tasks\.toml|\.github/workflows/js\.yml)'; then
             echo "js=true" >> "$GITHUB_OUTPUT"
           else
             echo "js=false" >> "$GITHUB_OUTPUT"
@@ -63,7 +63,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
       - uses: ./.github/actions/setup-tsr
       - run: tsr install
       - run: tsr lint:ci
@@ -80,13 +86,19 @@ jobs:
   # module. Its own test suite is not reachable from `cargo test`, so without
   # this job the largest hand-written JS subsystem in the repo gates on nothing.
   js:
-    name: js (bun test + bundle)
+    name: js (test + bundle)
     needs: changes
     if: needs.changes.outputs.js == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
       - run: tsr install
@@ -119,7 +131,13 @@ jobs:
           --health-retries 20
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
       - uses: Swatinem/rust-cache@v2
         with:
           # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
@@ -174,7 +192,13 @@ jobs:
         working-directory: packages/redis
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
       - uses: Swatinem/rust-cache@v2
         with:
           # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,

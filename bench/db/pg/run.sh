@@ -37,7 +37,7 @@ available() {
 }
 
 [ -f "$root/packages/postgres/dist/index.js" ] || {
-  echo "the driver is not built — (cd packages/postgres && bun run build)" >&2; exit 1; }
+  echo "the driver is not built — run tsr build" >&2; exit 1; }
 
 # Staged rather than imported in place: esrun jails the module loader to the
 # project root it detects from the entry file, which here is `bench/`, so a

@@ -1,5 +1,5 @@
 // runtime:serialization — entry bundled into
-// crates/runtime/src/runtime_modules/serialization.js (via `bun run build`).
+// crates/runtime/src/runtime_modules/serialization.js (via `pnpm run build`).
 //
 // XML/YAML/TOML/JSONL/MessagePack are thin wrappers over the Rust host ops;
 // Protobuf is a pure-JS reflective implementation (./protobuf).

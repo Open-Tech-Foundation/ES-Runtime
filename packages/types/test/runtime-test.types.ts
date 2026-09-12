@@ -66,7 +66,9 @@ test("matchers are typed against the value", () => {
   expect({ id: 42 }).toMatchSnapshot({ id: expect.any(Number) });
   expect("<main />").toMatchFileSnapshot("home.html");
   assertSnapshot({ answer: 42 }, "answer assertion");
-  expect(() => { throw new Error("broken"); }).toThrowErrorMatchingSnapshot();
+  expect(() => {
+    throw new Error("broken");
+  }).toThrowErrorMatchingSnapshot();
   expect({ a: 1 }).toMatchObject({ a: 1 });
   expect(1).not.toBe(2);
 

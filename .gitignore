@@ -37,7 +37,7 @@ wpt/upstream
 #.idea/
 bench/db/.scratch/
 
-# Built npm packages — produced by `bun run build`, published from CI.
+# Built npm packages — produced by `pnpm run build`, published from CI.
 packages/*/dist/
 packages/*/node_modules/
 

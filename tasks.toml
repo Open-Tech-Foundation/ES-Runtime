@@ -2,7 +2,7 @@
 #
 # Every command CI runs is a task here, so what runs on a machine and what runs
 # in a workflow cannot drift. CI installs tsr and calls `tsr <task>`; it does not
-# spell out cargo or bun invocations of its own.
+# spell out cargo or pnpm invocations of its own.
 #
 #   tsr --list          what there is
 #   tsr ci              what a pull request must pass
@@ -11,7 +11,7 @@
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
-members = ["packages/postgres", "packages/redis", "packages/types", "crates/runtime/js"]
+members = ["packages/postgres", "packages/redis", "packages/types", "crates/runtime/js", "website", "bench"]
 
 # --- the runtime (Rust) ------------------------------------------------------
 
@@ -66,24 +66,25 @@ run = "cargo audit"
 # --- the JavaScript ----------------------------------------------------------
 
 [tasks.install]
-run = "bun install --frozen-lockfile"
+run = "pnpm install --frozen-lockfile"
 
-# `packages` auto-detects each member's native runner, so this is the one script
-# left in their package.json — `npm publish` needs it, and nothing else does.
+# Keep the package manager explicit here. tsr's `packages` shorthand discovers
+# a package runner independently of this workspace and can select npm; these
+# filters make every task run through the repository's pnpm workspace instead.
+# The build scripts remain in package.json because `npm publish` needs them.
 #
 # Named rather than "*": `@opentf/esrun-types` is a workspace member (it is
 # typechecked) and has nothing to build — it ships the `.d.ts` files as they are
-# written. Under "*" tsr would run `npm run build` there and npm would fail on
-# the missing script, so the alternative is a no-op script that exists to be
-# skipped, which is a worse thing to leave in a published manifest.
+# written. A broad pnpm filter would run `build` there and fail on the missing
+# script, so the alternative is a no-op script that exists to be skipped, which
+# is a worse thing to leave in a published manifest.
 [tasks.build]
-packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis", "esrun-serialization"]
-parallel = true
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-redis --filter esrun-serialization --parallel run build"
 
 # Not "*": `crates/runtime/js` has 25 standing type errors and has never been
 # typechecked standalone (its tsconfig sets `types: []` and drives the editor).
-# Wiring it up would ship a task red on arrival. Matched by manifest name, which
-# is the other thing `packages` accepts.
+# Wiring it up would ship a task red on arrival. The pnpm filters match the
+# packages by manifest name.
 #
 # `@opentf/esrun-types` is here for a different reason from the other two. It
 # describes a surface it does not implement, so nothing else can catch it being
@@ -93,9 +94,7 @@ parallel = true
 # thing being checked, and `test/` holds the `@ts-expect-error` cases that fail
 # when a declaration quietly widens to `any`.
 [tasks.typecheck]
-run = "tsc --noEmit"
-packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis", "@opentf/esrun-types"]
-parallel = true
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-redis --filter @opentf/esrun-types --parallel exec tsc --noEmit"
 
 [tasks.lint]
 run = "biome check"
@@ -112,15 +111,13 @@ run = "biome ci"
 # The protocol halves, which need nothing running.
 #
 # Named rather than "*": the two drivers are the only members that own a
-# `test/unit/run.sh`. Under "*" tsr reaches for one in `@opentf/esrun-types` and
-# `esrun-serialization` too, and a member with no such file fails the task
-# rather than being passed over.
+# `test/unit/run.sh`. A broad pnpm filter would reach for one in
+# `@opentf/esrun-types` and `esrun-serialization` too, and a member with no
+# such file fails the task rather than being passed over.
 [tasks."test:protocol"]
-run = "./test/unit/run.sh"
-packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
-parallel = true
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-redis --parallel exec bash ./test/unit/run.sh"
 
-# Run with our own `esdev`, not bun — the same reasoning as `build` above. This
+# Run with our own `esdev`, not another JavaScript runtime — the same reasoning as `build` above. This
 # is the runtime's largest hand-written JS subsystem, and running it on the
 # binary we ship means the suite exercises the module loader, the TypeScript
 # stripping and the event loop a deployment actually gets, rather than another
@@ -160,18 +157,17 @@ run = "cargo build -p es-runtime-cli"
 
 # --- the website -------------------------------------------------------------
 
-# website/ is deliberately not a workspace member (package.json's `_workspaces`
-# says why), so it keeps its own node_modules and this runs in its directory
-# rather than through `packages`. Long-lived: it serves until interrupted.
+# The site is a workspace member, while this task remains deliberately focused:
+# it is long-lived and serves until interrupted.
 [tasks."dev:website"]
-run = "bun run dev"
+run = "pnpm run dev"
 dir = "website"
 
 # Re-reads the two binaries' versions out of Cargo.toml into the module the site
 # imports. Run it after a version bump: nothing else notices that the navbar
 # badge and the install page have fallen behind the tags.
 [tasks.versions]
-run = "bun scripts/site-versions.mjs"
+run = "node scripts/site-versions.mjs"
 
 # --- aggregates --------------------------------------------------------------
 

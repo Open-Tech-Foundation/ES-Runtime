@@ -45,7 +45,7 @@ mechanism `run.sh` falls back to when GNU `time` is absent.
 the Postgres path.
 
 ```sh
-(cd packages/postgres && bun run build)
+tsr build
 PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test bench/db/pg/run.sh
 ```
 
@@ -82,7 +82,7 @@ runtime gives you — rather than how one npm package performs on four engines.
 like-for-like version instead.
 
 ```sh
-(cd packages/redis && bun run build)
+tsr build
 docker run -d --name esrun-redis-plain -p 6379:6379 redis:8
 bench/db/redis/run.sh
 ```
@@ -713,7 +713,7 @@ Hono is Web-standard (`app.fetch(request) -> Response`), so it plugs straight in
 adapter.
 
 ```sh
-cd bench && bun install               # hono + @hono/node-server
+cd bench && pnpm install              # hono + @hono/node-server
 SERVER=scripts/hono.js bench/rps.sh
 ```
 
