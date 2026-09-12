@@ -1130,6 +1130,10 @@ fn a_source_map_puts_a_stack_trace_back_in_the_source() {
     assert!(trace.contains("src/util.ts:2:"), "unmapped:\n{trace}");
     assert!(trace.contains("src/app.ts:2:"), "unmapped:\n{trace}");
     assert!(
+        trace.contains("file:///"),
+        "mapped frames must retain canonical file URLs:\n{trace}"
+    );
+    assert!(
         !trace.contains("dist/app.js:"),
         "still the bundle:\n{trace}"
     );

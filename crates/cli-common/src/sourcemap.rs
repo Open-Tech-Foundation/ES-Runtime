@@ -79,10 +79,12 @@ fn remap_line(line: &str) -> String {
     let Some((source, mapped_line, mapped_column)) = map.lookup(source_line, column) else {
         return line.to_string();
     };
+    let source_url = url::Url::from_file_path(source)
+        .map(|url| url.to_string())
+        .unwrap_or_else(|()| format!("file://{source}"));
     format!(
-        "{}file://{}:{}:{}{}",
+        "{}{source_url}:{}:{}{}",
         &line[..start],
-        source,
         mapped_line,
         mapped_column,
         &line[start + end..]
@@ -374,6 +376,15 @@ mod tests {
         // Not a position, so not a frame.
         assert_eq!(split_position("file:///a/b.js"), None);
         assert_eq!(split_position("https://x/a.js:1:1"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_drive_url_stays_on_its_drive() {
+        assert_eq!(
+            split_position("file:///D:/work/app.js:12:34"),
+            Some((PathBuf::from(r"D:\\work\\app.js"), 12, 34))
+        );
     }
 
     /// The half a reader sees: everything around the location is untouched, and
