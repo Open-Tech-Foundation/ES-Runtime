@@ -53,6 +53,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Windows `esdev` test setup and source-map remapping work again.** File URLs
+  now preserve drive letters, so setup modules run before each test and stack
+  frames locate their mapped source files.
+
 - **Recursive `runtime:fs` `mkdir` now accepts absolute paths inside an allowed
   root.** Its descriptor-safe walk begins at the resolved permitted root rather
   than at the filesystem root, so it no longer rejects an absolute path before

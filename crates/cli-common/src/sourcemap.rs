@@ -96,10 +96,15 @@ fn split_position(url: &str) -> Option<(PathBuf, u32, u32)> {
     let (path, line) = rest.rsplit_once(':')?;
     let line = line.parse::<u32>().ok()?;
     let column = column.parse::<u32>().ok()?;
-    // Percent-decoding is deliberately not done: the paths this runtime loads
-    // are the ones it was given, and a name with an escape in it is rare enough
-    // that guessing wrongly about it is worse than leaving the frame alone.
-    (!path.is_empty()).then(|| (PathBuf::from(path), line, column))
+    // A stack URL has a leading slash before a Windows drive (`/D:/…`). Feeding
+    // that text directly to `PathBuf` makes it a rooted path on the current
+    // drive, not `D:\\…`, so the map beside the output is never found. Let the
+    // URL parser perform the platform-specific file-URL conversion.
+    let path = url::Url::parse(&format!("file://{path}"))
+        .ok()?
+        .to_file_path()
+        .ok()?;
+    Some((path, line, column))
 }
 
 /// The map for one output file, read once per process.

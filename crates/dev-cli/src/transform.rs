@@ -62,7 +62,16 @@ impl TypeStripper {
     /// columns on that one line move.
     pub fn before(entry: &Path, modules: Vec<String>) -> Self {
         Self {
-            prelude: Some((format!("file://{}", entry.display()), modules)),
+            // `file://{path.display()}` is not a file URL on Windows: its
+            // drive letter becomes the host or scheme rather than the path.
+            // The loader names modules with `Url::from_file_path`, so use that
+            // exact spelling for the entry the prelude belongs to.
+            prelude: Some((
+                url::Url::from_file_path(entry)
+                    .map(|url| url.to_string())
+                    .unwrap_or_else(|()| format!("file://{}", entry.display())),
+                modules,
+            )),
         }
     }
 
@@ -215,6 +224,18 @@ mod tests {
         assert!(!out.contains("interface"), "{out}");
         assert!(!out.contains("type Id"), "{out}");
         assert!(out.contains("x: 1"), "{out}");
+    }
+
+    #[test]
+    fn a_setup_prelude_matches_the_loader_file_url() {
+        let entry = std::env::temp_dir().join("esdev_setup_prelude.ts");
+        let specifier = url::Url::from_file_path(&entry)
+            .expect("an absolute temporary path has a file URL")
+            .to_string();
+        let out = TypeStripper::before(&entry, vec!["./setup.ts".into()])
+            .transform(&specifier, "export const value: number = 1;".into())
+            .expect("transform");
+        assert!(out.starts_with("import \"./setup.ts\";"), "{out}");
     }
 
     #[test]

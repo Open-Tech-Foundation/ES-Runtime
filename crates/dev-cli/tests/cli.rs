@@ -50,6 +50,12 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// Diagnostic paths are native filesystem paths; compare their separators as
+/// paths rather than accidentally making a Unix spelling part of the contract.
+fn slash_paths(text: &str) -> String {
+    text.replace('\\', "/")
+}
+
 #[test]
 fn runs_a_module_file() {
     let app = write("run.mjs", "console.log('ran', 6 * 7);\n");
@@ -1322,7 +1328,7 @@ fn a_library_refuses_an_asset_import_and_says_why() {
         .output()
         .expect("spawn esdev build --lib");
     assert!(!out.status.success(), "{}", stdout(&out));
-    let message = stderr(&out);
+    let message = slash_paths(&stderr(&out));
     // The frame points at the import, and the explanation says what to do.
     assert!(message.contains("src/index.ts"), "{message}");
     assert!(message.contains("--lib cannot know one"), "{message}");
@@ -1950,7 +1956,7 @@ fn lib_refuses_a_top_level_await_in_the_commonjs_output() {
         .output()
         .expect("spawn esdev build --lib");
     assert!(!out.status.success(), "{}", stdout(&out));
-    let message = stderr(&out);
+    let message = slash_paths(&stderr(&out));
     assert!(message.contains("Top-level await"), "{message}");
     assert!(message.contains("src/index.ts"), "{message}");
     assert!(message.contains("cjs output"), "{message}");
@@ -2015,7 +2021,7 @@ fn lib_refuses_to_guess_a_declaration_it_cannot_derive() {
         .output()
         .expect("spawn esdev build --lib");
     assert!(!out.status.success(), "{}", stdout(&out));
-    let message = stderr(&out);
+    let message = slash_paths(&stderr(&out));
     assert!(message.contains("src/index.ts:1:"), "{message}");
     assert!(message.contains("src/index.ts:2:"), "{message}");
     assert!(message.contains("--no-types"), "{message}");
@@ -2451,7 +2457,7 @@ fn dts_bundle_refuses_an_import_type_it_cannot_link() {
         .output()
         .expect("spawn esdev build --lib");
     assert!(!out.status.success(), "{}", stdout(&out));
-    let message = stderr(&out);
+    let message = slash_paths(&stderr(&out));
     assert!(message.contains("import(\"./clock.js\")"), "{message}");
     // The module is named as it is spelled, not as a specifier joined onto a
     // directory: `src/./index.ts` is what that produces.
@@ -7464,7 +7470,7 @@ const bundle = await build({
 });
 const { watchFiles } = await bundle.generate({});
 const dep = watchFiles.filter((f) => f.endsWith("dep.js"));
-console.log("absolute", dep.length === 1 && dep[0].startsWith("/"));
+console.log("absolute", dep.length === 1 && /^(?:[A-Za-z]:[\\/]|\/)/.test(dep[0]));
 "#,
     );
 
@@ -7831,7 +7837,7 @@ for (const [what, plugin] of [["reported", reported], ["crashed", crashed]]) {
   } catch (err) {
     for (const e of err.errors) {
       const first = e.message.split(String.fromCharCode(10))[0];
-      console.log(what, "|", e.plugin, "|", (e.id ?? "").split("/").pop(), "|", e.frame, "|", first);
+      console.log(what, "|", e.plugin, "|", (e.id ?? "").split(/[\\\\/]/).pop(), "|", e.frame, "|", first);
     }
   }
   await bundle.close();
