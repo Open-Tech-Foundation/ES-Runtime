@@ -3064,6 +3064,31 @@ fn snapshots_print_stable_values_errors_and_files() {
     );
 }
 
+#[test]
+fn a_snapshot_property_matcher_fails_before_snapshot_comparison() {
+    let dir = build_dir("t_snapshot_matcher_failure");
+    write_in(
+        &dir,
+        "matcher.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('checks volatile fields', () => expect({ id: 1 }).toMatchSnapshot({ id: expect.any(String) }));\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(!out.status.success(), "a bad matcher must fail");
+    assert!(
+        text.contains("snapshot value did not satisfy its property matchers"),
+        "{text}"
+    );
+    assert!(
+        !dir.join("__snapshots__/matcher.test.mjs.snap").exists(),
+        "{text}"
+    );
+}
+
 /// A `.test.ts` file is the ordinary case: it must be stripped like any other,
 /// and its relative imports must resolve from its own directory.
 #[test]
