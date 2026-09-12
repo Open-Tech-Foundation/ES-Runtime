@@ -93,6 +93,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- **The dev CLI passes the workspace's strict Clippy gate again.** Snapshot
+  bookkeeping now uses a derivable default, clear CI branching, and a named
+  tally type.
+
 - **Snapshot E2E setup is independent of the CI runner's environment.** Test
   fixtures clear ambient `CI` while writing their own baselines; the cases that
   verify CI snapshot rules set it explicitly.

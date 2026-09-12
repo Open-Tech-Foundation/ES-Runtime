@@ -119,6 +119,7 @@ struct SnapshotState {
     removed: usize,
 }
 
+#[derive(Default)]
 struct SnapshotFile {
     snapshots: BTreeMap<String, SnapshotEntry>,
     used: BTreeSet<String>,
@@ -130,16 +131,6 @@ struct SnapshotEntry {
     body: String,
 }
 
-impl Default for SnapshotFile {
-    fn default() -> Self {
-        Self {
-            snapshots: BTreeMap::new(),
-            used: BTreeSet::new(),
-            dirty: false,
-        }
-    }
-}
-
 fn snapshot_path(test_file: &std::path::Path) -> PathBuf {
     let name = test_file.file_name().unwrap_or_default();
     test_file
@@ -147,6 +138,21 @@ fn snapshot_path(test_file: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("__snapshots__")
         .join(format!("{}.snap", name.to_string_lossy()))
+}
+
+/// The manual update command belongs in an interactive failure only. CI has no
+/// person to act on it, and its snapshots must remain committed state.
+fn snapshot_accept_hint(ci: bool, file: &std::path::Path) -> String {
+    if ci {
+        String::new()
+    } else {
+        format!(
+            "\naccept with: esdev test --update-snapshots --file={}",
+            file.file_name()
+                .unwrap_or(file.as_os_str())
+                .to_string_lossy()
+        )
+    }
 }
 
 fn file_snapshot_path(test_file: &std::path::Path, name: &str) -> Result<PathBuf, String> {
@@ -392,16 +398,7 @@ fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> 
             }
             Some(expected) if !state.update => {
                 state.failed += 1;
-                let accept = (!state.ci)
-                    .then(|| {
-                        format!(
-                            "\naccept with: esdev test --update-snapshots --file={}",
-                            file.file_name()
-                                .unwrap_or(file.as_os_str())
-                                .to_string_lossy()
-                        )
-                    })
-                    .unwrap_or_default();
+                let accept = snapshot_accept_hint(state.ci, &file);
                 Err(format!(
                     "snapshot changed — {key}\n{}\n\n{}{}",
                     snapshot_path(&file).display(),
@@ -465,14 +462,7 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
                 Err(format!(
                     "file snapshot differs: {}\n\n{detail}{}",
                     path.display(),
-                    (!state.ci)
-                        .then(|| format!(
-                            "\naccept with: esdev test --update-snapshots --file={}",
-                            file.file_name()
-                                .unwrap_or(file.as_os_str())
-                                .to_string_lossy()
-                        ))
-                        .unwrap_or_default()
+                    snapshot_accept_hint(state.ci, &file)
                 ))
             }
             None if state.ci => {
@@ -618,7 +608,10 @@ fn reconcile_snapshots() -> Result<(), String> {
     })
 }
 
-fn snapshot_tally() -> Option<(String, Vec<String>, Vec<String>, Option<&'static str>)> {
+/// The summary text plus the entries that the reporter expands below it.
+type SnapshotTally = (String, Vec<String>, Vec<String>, Option<&'static str>);
+
+fn snapshot_tally() -> Option<SnapshotTally> {
     SNAPSHOTS.with_borrow(|state| {
         let used = state.matched + state.failed + state.written + state.updated;
         (used > 0 || state.removed > 0 || !state.obsolete_entries.is_empty()).then(|| {
