@@ -40,6 +40,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Recursive `runtime:fs` `mkdir` now accepts absolute paths inside an allowed
+  root.** Its descriptor-safe walk begins at the resolved permitted root rather
+  than at the filesystem root, so it no longer rejects an absolute path before
+  reaching the directory it may create.
+
 - **Broken documentation links and anchors are now caught during every website
   build.** The audit covers internal routes, same-page headings, legacy redirects,
   and the static docs fallback page; stale esdev, API, README, and Redis links

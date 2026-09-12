@@ -262,16 +262,6 @@ pub(crate) fn roots_with(root: &Path, allow: &PathAllowlist) -> Vec<PathBuf> {
     roots
 }
 
-/// Every prefix of a path, shortest first — `a`, `a/b`, `a/b/c`.
-///
-/// What a recursive `mkdir` walks. `create_dir_all` resolves the whole path and
-/// then creates along it, which is a fresh lookup per level with a window at
-/// each; jailing and pinning one prefix at a time means every directory is
-/// created inside a parent that was checked a moment earlier and is still open.
-///
-/// The separator the caller wrote is preserved rather than normalised, because
-/// each prefix goes back through the same jail the whole path would have.
-/// The whole of a pinned file, by descriptor.
 fn read_all(anchored: &crate::anchor::Anchored, path: &str) -> Result<Vec<u8>, ProviderError> {
     use std::io::Read;
     let mut file = anchored.open()?;
@@ -280,15 +270,20 @@ fn read_all(anchored: &crate::anchor::Anchored, path: &str) -> Result<Vec<u8>, P
     Ok(bytes)
 }
 
-/// Only a **named** component is a directory to create. `.`, `/` and `..`
-/// carry the accumulating path along and produce nothing of their own — a
-/// leading `./` would otherwise ask for `mkdir(".")`, which resolves to the
-/// jail root and is refused as the sandbox-destroying request it would be if
-/// anyone meant it.
-fn prefixes(path: &str) -> Vec<String> {
+/// Every missing-directory candidate below `root`, shortest first.
+///
+/// `path` is already resolved under `root`. Starting at that root, rather than
+/// at the filesystem root, matters for absolute input: `/tmp/project/a/b` must
+/// not try to create or authorize `/tmp` on its way to the permitted project.
+/// Only a **named** component below `root` is a directory to create.
+fn prefixes(path: &Path, root: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    let mut at = PathBuf::new();
-    for component in Path::new(path).components() {
+    let mut at = root.to_path_buf();
+    for component in path
+        .strip_prefix(root)
+        .expect("a confined path is below one of its permitted roots")
+        .components()
+    {
         at.push(component.as_os_str());
         if matches!(component, std::path::Component::Normal(_)) {
             out.push(at.to_string_lossy().into_owned());
@@ -659,11 +654,24 @@ impl FileSystem for SystemFileSystem {
         // step above it exists, so these are not gathered up front.
         let result = (|| -> Result<(), ProviderError> {
             let steps = match recursive {
-                // No named component at all — `.`, `/`, `data/..`. Nothing to
-                // create; resolving the path itself produces the refusal it has
-                // always produced, rather than an empty loop reporting success.
-                true if prefixes(&path).is_empty() => vec![path.clone()],
-                true => prefixes(&path),
+                true => {
+                    let target = self.jailed(&path, Access::Write)?;
+                    let root = self
+                        .roots(Access::Write)
+                        .iter()
+                        .filter(|root| target.starts_with(root))
+                        .max_by_key(|root| root.components().count())
+                        .expect("a jailed path is below one of its permitted roots");
+                    let steps = prefixes(&target, root);
+                    // No named component at all — `.`, `/`, `data/..`. Nothing
+                    // to create; resolve the path itself so the root-mutation
+                    // refusal remains an error rather than reporting success.
+                    if steps.is_empty() {
+                        vec![path.clone()]
+                    } else {
+                        steps
+                    }
+                }
                 false => vec![path.clone()],
             };
             for step in &steps {
@@ -1185,6 +1193,39 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let fs = SystemFileSystem::new(&root, &root);
         (root, fs)
+    }
+
+    #[tokio::test]
+    async fn recursive_mkdir_creates_nested_relative_and_absolute_paths() {
+        let (root, fs) = jail("recursive-mkdir");
+
+        // Relative paths, including a leading current-directory component,
+        // create every missing level and may be requested again.
+        fs.mkdir("./relative/one/two".into(), true).await.unwrap();
+        fs.mkdir("relative/one/two".into(), true).await.unwrap();
+        assert!(root.join("relative/one/two").is_dir());
+
+        // An absolute path below the jail used to begin its walk at `/`, then
+        // fail before reaching the permitted root. It must begin at the jail.
+        let absolute = root.join("absolute/one/two");
+        fs.mkdir(absolute.to_string_lossy().into_owned(), true)
+            .await
+            .unwrap();
+        assert!(absolute.is_dir());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn recursive_mkdir_fails_when_a_file_blocks_the_path() {
+        let (root, fs) = jail("recursive-mkdir-file");
+        std::fs::write(root.join("file"), b"not a directory").unwrap();
+
+        let err = fs.mkdir("file/child".into(), true).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::AlreadyExists), "{err}");
+        assert!(!root.join("file/child").exists());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]
