@@ -1283,9 +1283,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
 /// Fills in what `esdev.json`'s `test` section says and the flags did not.
 ///
 /// **A flag beats the file**, the same rule the build uses. Setup modules are
-/// resolved against the project directory and made absolute, because a child
+/// resolved against the project directory and made file URLs, because a child
 /// process is started from wherever the parent was and a relative path would
-/// otherwise mean two different files.
+/// otherwise mean two different files. A raw absolute Windows path would be
+/// parsed as a `d:` module specifier rather than a local file.
 fn test_settings(config: &mut TestConfig) -> Result<(), String> {
     let Some(project) = crate::config::load(None)? else {
         return Ok(());
@@ -1295,18 +1296,20 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
             .test
             .setup
             .iter()
-            .map(|module| {
+            .map(|module| -> Result<_, String> {
                 let path = project.dir.join(module);
                 // A bare specifier stays one: `"setup": "my-preset/register"`
                 // names a package, and where that lives is the resolver's
                 // question rather than this file's.
                 if path.exists() {
-                    path.to_string_lossy().into_owned()
+                    url::Url::from_file_path(&path)
+                        .map(|url| url.to_string())
+                        .map_err(|()| format!("cannot name setup module {module} as a file URL"))
                 } else {
-                    module.clone()
+                    Ok(module.clone())
                 }
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
     }
     if config.timeout.is_none() {
         config.timeout = project.test.timeout;
