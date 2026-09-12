@@ -93,6 +93,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- **Snapshot E2E setup is independent of the CI runner's environment.** Test
+  fixtures clear ambient `CI` while writing their own baselines; the cases that
+  verify CI snapshot rules set it explicitly.
+
 - **The permission-trace E2E test runs on Windows.** Its fixtures now use
   `file:` URLs for module specifiers and invoke the traced entry relative to
   the fixture directory, so a drive letter cannot be misread as a URL scheme.

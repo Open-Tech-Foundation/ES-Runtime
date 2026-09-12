@@ -711,6 +711,11 @@ fn write_in(dir: &Path, name: &str, contents: &str) -> PathBuf {
 fn esdev_in(dir: &Path) -> Command {
     let mut cmd = esdev();
     cmd.current_dir(dir);
+    // Snapshot setup runs model a developer's local invocation. GitHub sets
+    // CI for the test harness too, which would make those runs refuse to write
+    // the baselines they are about to verify. CI-specific cases set `CI`
+    // explicitly below, overriding this removal.
+    cmd.env_remove("CI");
     cmd
 }
 
