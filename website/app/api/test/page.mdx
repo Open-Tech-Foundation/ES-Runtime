@@ -221,8 +221,8 @@ Pass an object of property matchers to mask volatile fields in stored output:
 `expect(user).toMatchSnapshot({ id: expect.any(Number) })`. `assertSnapshot`
 is the assertion spelling, and `toThrowErrorMatchingSnapshot` snapshots a
 thrown error as an `[error]` entry. Built-in error messages are V8 text, so an
-engine upgrade can legitimately change that snapshot; enumerable `code` and
-`cause` properties are printed too.
+engine upgrade can legitimately change that snapshot; own `code` and `cause`
+properties are printed too, including Error's normally non-enumerable `cause`.
 
 ```js
 expect(list).toHaveLength(3);

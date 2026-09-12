@@ -32,8 +32,15 @@ is the point, since none of the three has any business in a deployment.
 - Snapshot matcher placeholders are unquoted tokens, hinted keys carry their
   per-test counter, and Set/Map output is canonicalized by value.
 
-- Error snapshots carry an `[error]` kind tag and include enumerable own error
-  properties.
+- Error snapshots carry an `[error]` kind tag and include own error properties,
+  including a non-enumerable `cause`.
+
+- Snapshot creation now lists each written entry. Acceptance hints name the
+  affected test file and are omitted in CI; UTF-8 control-byte files use the
+  binary diagnostic rather than an unreadable text diff.
+
+- Obsolete value and file snapshots are named when retained and are counted
+  correctly before an unfiltered update removes them.
 
 - Snapshot format coverage now verifies typed values, cycles, error metadata,
   and text and binary file snapshots.

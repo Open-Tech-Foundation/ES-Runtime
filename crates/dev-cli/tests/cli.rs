@@ -2984,6 +2984,22 @@ fn snapshots_are_versioned_explicitly_updated_and_checked() {
     assert!(text.contains("+++ received"), "{text}");
     assert!(text.contains("- "), "{text}");
     assert!(text.contains("+ "), "{text}");
+
+    let ci_changed = esdev_in(&dir)
+        .arg("test")
+        .env("CI", "1")
+        .output()
+        .expect("run changed snapshot in CI");
+    let ci_text = stdout(&ci_changed);
+    assert!(
+        !ci_changed.status.success(),
+        "changed CI snapshot must fail"
+    );
+    assert!(ci_text.contains("snapshot changed"), "{ci_text}");
+    assert!(
+        !ci_text.contains("accept with:"),
+        "CI must not suggest accepting a snapshot:\n{ci_text}"
+    );
 }
 
 #[test]
@@ -3043,6 +3059,7 @@ fn snapshots_print_stable_values_errors_and_files() {
     assert!(snapshot.contains("[Circular]"), "{snapshot}");
     assert!(snapshot.contains("[error]"), "{snapshot}");
     assert!(snapshot.contains("E_BROKEN"), "{snapshot}");
+    assert!(snapshot.contains("\"cause\": \"network\""), "{snapshot}");
     assert_eq!(
         std::fs::read(dir.join("__snapshots__/printer.test.mjs/chart.bin")).expect("read bytes"),
         vec![0, 255, 3]
@@ -3087,6 +3104,155 @@ fn a_snapshot_property_matcher_fails_before_snapshot_comparison() {
         !dir.join("__snapshots__/matcher.test.mjs.snap").exists(),
         "{text}"
     );
+}
+
+#[test]
+fn snapshots_number_hints_and_honor_the_ci_environment() {
+    let dir = build_dir("t_snapshot_keys");
+    write_in(
+        &dir,
+        "keys.test.mjs",
+        "import { describe, test, assertSnapshot } from 'runtime:test';\n\
+         describe('outer', () => describe('inner', () => test('keys', () => {\n\
+           assertSnapshot({ first: true }, 'after lowering');\n\
+           assertSnapshot({ second: true }, 'after lowering');\n\
+         })));\n",
+    );
+    let first = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("write snapshots");
+    assert!(
+        first.status.success(),
+        "{}{}",
+        stdout(&first),
+        stderr(&first)
+    );
+    let snapshot = std::fs::read_to_string(dir.join("__snapshots__/keys.test.mjs.snap"))
+        .expect("read snapshot");
+    assert!(
+        snapshot.contains("outer > inner > keys: after lowering 1"),
+        "{snapshot}"
+    );
+    assert!(
+        snapshot.contains("outer > inner > keys: after lowering 2"),
+        "{snapshot}"
+    );
+    assert!(
+        stdout(&first).contains("written:\n  "),
+        "{}",
+        stdout(&first)
+    );
+
+    write_in(
+        &dir,
+        "missing.test.mjs",
+        "import { test, expect } from 'runtime:test'; test('CI', () => expect(1).toMatchSnapshot());\n",
+    );
+    let ci = esdev_in(&dir)
+        .arg("test")
+        .env("CI", "1")
+        .output()
+        .expect("run CI test");
+    assert!(!ci.status.success(), "CI must reject a missing snapshot");
+    assert!(
+        stdout(&ci).contains("--ci does not write them"),
+        "{}",
+        stdout(&ci)
+    );
+    assert!(!dir.join("__snapshots__/missing.test.mjs.snap").exists());
+}
+
+#[test]
+fn file_snapshot_diffs_and_filtered_updates_keep_other_entries() {
+    let dir = build_dir("t_snapshot_file_diff");
+    write_in(
+        &dir,
+        "files.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('text', () => expect('before\\n').toMatchFileSnapshot('page.html'));\n\
+         test('binary', () => expect(new Uint8Array([1, 2, 3])).toMatchFileSnapshot('bytes.bin'));\n\
+         test('kept', () => expect({ kept: true }).toMatchSnapshot());\n",
+    );
+    let initial = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("write snapshots");
+    assert!(
+        initial.status.success(),
+        "{}{}",
+        stdout(&initial),
+        stderr(&initial)
+    );
+    write_in(
+        &dir,
+        "files.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('text', () => expect('after\\n').toMatchFileSnapshot('page.html'));\n\
+         test('binary', () => expect(new Uint8Array([1, 9, 3])).toMatchFileSnapshot('bytes.bin'));\n",
+    );
+    let changed = esdev_in(&dir).arg("test").output().expect("diff snapshots");
+    let text = stdout(&changed);
+    assert!(!changed.status.success(), "file changes must fail");
+    assert!(text.contains("file snapshot differs:"), "{text}");
+    assert!(text.contains("--- snapshot"), "{text}");
+    assert!(text.contains("first differing byte 1"), "{text}");
+    assert!(text.contains("--file=files.test.mjs"), "{text}");
+
+    let filtered = esdev_in(&dir)
+        .args(["test", "--update-snapshots", "files.test.mjs"])
+        .output()
+        .expect("update filtered test");
+    assert!(
+        filtered.status.success(),
+        "{}{}",
+        stdout(&filtered),
+        stderr(&filtered)
+    );
+    let values = std::fs::read_to_string(dir.join("__snapshots__/files.test.mjs.snap"))
+        .expect("read retained snapshot");
+    assert!(
+        values.contains("kept: snapshot 1"),
+        "filtered update pruned an entry:\n{values}"
+    );
+
+    let pruned = esdev_in(&dir)
+        .args(["test", "--update-snapshots"])
+        .output()
+        .expect("prune complete test file");
+    assert!(
+        pruned.status.success(),
+        "{}{}",
+        stdout(&pruned),
+        stderr(&pruned)
+    );
+    assert!(stdout(&pruned).contains("1 removed"), "{}", stdout(&pruned));
+    let values = std::fs::read_to_string(dir.join("__snapshots__/files.test.mjs.snap"))
+        .expect("read pruned snapshot");
+    assert!(!values.contains("kept: snapshot 1"), "{values}");
+
+    write_in(
+        &dir,
+        "files.test.mjs",
+        "import { test } from 'runtime:test'; test('no snapshots remain', () => {});\n",
+    );
+    let remove_files = esdev_in(&dir)
+        .args(["test", "--update-snapshots"])
+        .output()
+        .expect("remove orphaned file snapshots");
+    assert!(
+        remove_files.status.success(),
+        "{}{}",
+        stdout(&remove_files),
+        stderr(&remove_files)
+    );
+    assert!(
+        stdout(&remove_files).contains("2 removed"),
+        "{}",
+        stdout(&remove_files)
+    );
+    assert!(!dir.join("__snapshots__/files.test.mjs/page.html").exists());
+    assert!(!dir.join("__snapshots__/files.test.mjs/bytes.bin").exists());
 }
 
 /// A `.test.ts` file is the ordinary case: it must be stripped like any other,

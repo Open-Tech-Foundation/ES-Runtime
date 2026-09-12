@@ -586,7 +586,14 @@ function snapshotValue(value) {
       const bytes = v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
       return `${v instanceof ArrayBuffer ? "ArrayBuffer" : v.constructor.name} [${Array.from(bytes).join(", ")}]`;
     }
-    if (v instanceof Error) return `${v.name}(${JSON.stringify(v.message)})${Object.keys(v).length ? ` ${block("{", own(v, depth + 1), "}", depth + 1)}` : ""}`;
+    if (v instanceof Error) {
+      // Error#cause is normally non-enumerable, but it is diagnostic state
+      // rather than an implementation detail. Preserve it alongside ordinary
+      // own fields such as `code` without invoking a getter.
+      const properties = Object.fromEntries(Object.keys(v).map((key) => [key, v[key]]));
+      if (Object.hasOwn(v, "cause")) properties.cause = v.cause;
+      return `${v.name}(${JSON.stringify(v.message)})${Object.keys(properties).length ? ` ${block("{", own(properties, depth + 1), "}", depth + 1)}` : ""}`;
+    }
     if (v instanceof Promise || v instanceof WeakMap || v instanceof WeakSet) throw new TypeError("snapshots do not support asynchronous or weak collections");
     const prototype = Object.getPrototypeOf(v);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError("snapshots support plain objects, not class or host instances");

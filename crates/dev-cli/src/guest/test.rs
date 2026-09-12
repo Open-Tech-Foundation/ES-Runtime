@@ -107,9 +107,14 @@ struct SnapshotState {
     current_file: Option<PathBuf>,
     files: BTreeMap<PathBuf, SnapshotFile>,
     file_writes: BTreeMap<PathBuf, Vec<u8>>,
+    file_used: BTreeSet<PathBuf>,
+    file_removals: Vec<PathBuf>,
     matched: usize,
     failed: usize,
     written: usize,
+    written_entries: Vec<String>,
+    obsolete_entries: Vec<String>,
+    obsolete_reason: Option<&'static str>,
     updated: usize,
     removed: usize,
 }
@@ -246,9 +251,14 @@ pub fn configure_snapshots(
             current_file: file,
             files: BTreeMap::new(),
             file_writes: BTreeMap::new(),
+            file_used: BTreeSet::new(),
+            file_removals: Vec::new(),
             matched: 0,
             failed: 0,
             written: 0,
+            written_entries: Vec::new(),
+            obsolete_entries: Vec::new(),
+            obsolete_reason: None,
             updated: 0,
             removed: 0,
         };
@@ -382,22 +392,45 @@ fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> 
             }
             Some(expected) if !state.update => {
                 state.failed += 1;
-                Err(format!("snapshot changed — {key}\n{}\n\n{}\naccept with: esdev test --update-snapshots --file={}", snapshot_path(&file).display(), snapshot_diff(&expected.body, &actual, state.full_diff), file.display()))
+                let accept = (!state.ci)
+                    .then(|| {
+                        format!(
+                            "\naccept with: esdev test --update-snapshots --file={}",
+                            file.file_name()
+                                .unwrap_or(file.as_os_str())
+                                .to_string_lossy()
+                        )
+                    })
+                    .unwrap_or_default();
+                Err(format!(
+                    "snapshot changed — {key}\n{}\n\n{}{}",
+                    snapshot_path(&file).display(),
+                    snapshot_diff(&expected.body, &actual, state.full_diff),
+                    accept
+                ))
             }
             None if state.ci => {
                 state.failed += 1;
-                Err(format!("no stored snapshot: {key}; --ci does not write them"))
+                Err(format!(
+                    "no stored snapshot: {key}; --ci does not write them"
+                ))
             }
             Some(_) => {
-                snapshots.snapshots.insert(key, SnapshotEntry { kind, body: actual });
+                snapshots
+                    .snapshots
+                    .insert(key, SnapshotEntry { kind, body: actual });
                 snapshots.dirty = true;
                 state.updated += 1;
                 Ok(())
             }
             None => {
-                snapshots.snapshots.insert(key, SnapshotEntry { kind, body: actual });
+                let written_entry = format!("{} › {key}", snapshot_path(&file).display());
+                snapshots
+                    .snapshots
+                    .insert(key, SnapshotEntry { kind, body: actual });
                 snapshots.dirty = true;
                 state.written += 1;
+                state.written_entries.push(written_entry);
                 Ok(())
             }
         }
@@ -412,6 +445,7 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
         })?;
     let path = file_snapshot_path(&file, name)?;
     SNAPSHOTS.with_borrow_mut(|state| {
+        state.file_used.insert(path.clone());
         let expected = state
             .file_writes
             .get(&path)
@@ -424,13 +458,21 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
             }
             Some(expected) if !state.update => {
                 state.failed += 1;
-                let detail = match (std::str::from_utf8(&expected), std::str::from_utf8(&actual)) {
-                    (Ok(before), Ok(after)) => snapshot_diff(before, after, state.full_diff),
+                let detail = match (text_snapshot(&expected), text_snapshot(&actual)) {
+                    (Some(before), Some(after)) => snapshot_diff(before, after, state.full_diff),
                     _ => binary_diff(&expected, &actual),
                 };
                 Err(format!(
-                    "file snapshot differs: {}\n\n{detail}",
-                    path.display()
+                    "file snapshot differs: {}\n\n{detail}{}",
+                    path.display(),
+                    (!state.ci)
+                        .then(|| format!(
+                            "\naccept with: esdev test --update-snapshots --file={}",
+                            file.file_name()
+                                .unwrap_or(file.as_os_str())
+                                .to_string_lossy()
+                        ))
+                        .unwrap_or_default()
                 ))
             }
             None if state.ci => {
@@ -446,12 +488,25 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
                 Ok(())
             }
             None => {
+                let written_entry = path.display().to_string();
                 state.file_writes.insert(path, actual);
                 state.written += 1;
+                state.written_entries.push(written_entry);
                 Ok(())
             }
         }
     })
+}
+
+fn text_snapshot(bytes: &[u8]) -> Option<&str> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    // UTF-8 control bytes other than whitespace make a file snapshot binary.
+    // A valid UTF-8 decoding alone would render arbitrary byte buffers as
+    // invisible glyphs and hide the byte-level diagnostic the caller needs.
+    (!text
+        .chars()
+        .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')))
+    .then_some(text)
 }
 
 fn binary_diff(expected: &[u8], actual: &[u8]) -> String {
@@ -481,11 +536,93 @@ fn binary_diff(expected: &[u8], actual: &[u8]) -> String {
     )
 }
 
-fn snapshot_tally() -> Option<String> {
+fn reconcile_snapshots() -> Result<(), String> {
+    let (complete, test_files) = CASES.with_borrow(|cases| {
+        (
+            !cases.is_empty()
+                && cases
+                    .iter()
+                    .all(|case| matches!(case.outcome, Some(Outcome::Passed))),
+            cases
+                .iter()
+                .filter_map(|case| case.file.clone())
+                .collect::<BTreeSet<_>>(),
+        )
+    });
+    SNAPSHOTS.with_borrow_mut(|state| {
+        // Preload every file's value store even when the current source no
+        // longer calls a value matcher. Otherwise a deleted last matcher can
+        // never make its old entry observable for reporting or pruning.
+        for file in &test_files {
+            if !state.files.contains_key(file) {
+                state.files.insert(file.clone(), load_snapshots(file)?);
+            }
+        }
+        let prune = state.update && state.prune && complete;
+        state.obsolete_entries.clear();
+        state.file_removals.clear();
+        state.obsolete_reason = (!prune).then_some(if state.prune {
+            "incomplete test run"
+        } else {
+            "filter active"
+        });
+
+        for (file, snapshots) in &mut state.files {
+            let unused = snapshots
+                .snapshots
+                .keys()
+                .filter(|key| !snapshots.used.contains(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+            if prune {
+                for key in unused {
+                    snapshots.snapshots.remove(&key);
+                    state.removed += 1;
+                    snapshots.dirty = true;
+                }
+            } else {
+                state.obsolete_entries.extend(
+                    unused
+                        .into_iter()
+                        .map(|key| format!("{} › {key}", snapshot_path(file).display())),
+                );
+            }
+        }
+
+        for file in test_files {
+            let Ok(dir) = file_snapshot_path(&file, ".probe")
+                .map(|path| path.parent().unwrap().to_path_buf())
+            else {
+                continue;
+            };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file()
+                    || state.file_used.contains(&path)
+                    || state.file_writes.contains_key(&path)
+                {
+                    continue;
+                }
+                if prune {
+                    state.file_removals.push(path);
+                    state.removed += 1;
+                } else {
+                    state.obsolete_entries.push(path.display().to_string());
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+fn snapshot_tally() -> Option<(String, Vec<String>, Vec<String>, Option<&'static str>)> {
     SNAPSHOTS.with_borrow(|state| {
         let used = state.matched + state.failed + state.written + state.updated;
-        (used > 0).then(|| {
-            if state.update {
+        (used > 0 || state.removed > 0 || !state.obsolete_entries.is_empty()).then(|| {
+            let mut tally = if state.update {
                 format!(
                     "snapshots: {} updated, {} written, {} removed, {} unchanged",
                     state.updated, state.written, state.removed, state.matched
@@ -495,35 +632,22 @@ fn snapshot_tally() -> Option<String> {
                     "snapshots: {} matched, {} failed, {} written",
                     state.matched, state.failed, state.written
                 )
+            };
+            if !state.obsolete_entries.is_empty() {
+                tally.push_str(&format!(", {} obsolete", state.obsolete_entries.len()));
             }
+            (
+                tally,
+                state.written_entries.clone(),
+                state.obsolete_entries.clone(),
+                state.obsolete_reason,
+            )
         })
     })
 }
 
 fn flush_snapshots() -> Result<(), String> {
     SNAPSHOTS.with_borrow_mut(|state| {
-        // A skipped, exclusive, failed, or unfinished case means this run did
-        // not observe the whole file. Keeping unused entries is conservative:
-        // deleting an assertion because `.only` hid its test is never safe.
-        let complete = CASES.with_borrow(|cases| {
-            !cases.is_empty()
-                && cases
-                    .iter()
-                    .all(|case| matches!(case.outcome, Some(Outcome::Passed)))
-        });
-        if state.update && state.prune && complete {
-            for snapshots in state.files.values_mut() {
-                let before = snapshots.snapshots.len();
-                snapshots
-                    .snapshots
-                    .retain(|key, _| snapshots.used.contains(key));
-                let removed = before - snapshots.snapshots.len();
-                if removed > 0 {
-                    snapshots.dirty = true;
-                    state.removed += removed;
-                }
-            }
-        }
         for (file, snapshots) in &mut state.files {
             if !snapshots.dirty {
                 continue;
@@ -557,6 +681,10 @@ fn flush_snapshots() -> Result<(), String> {
                 .map_err(|err| format!("cannot write {}: {err}", temp.display()))?;
             std::fs::rename(&temp, path)
                 .map_err(|err| format!("cannot replace {}: {err}", path.display()))?;
+        }
+        for path in &state.file_removals {
+            std::fs::remove_file(path)
+                .map_err(|err| format!("cannot remove obsolete {}: {err}", path.display()))?;
         }
         Ok(())
     })
@@ -731,8 +859,24 @@ impl HostExtension for TestExtension {
 /// `esdev app.test.ts` work on its own, with the same output the runner gives.
 pub fn finish() -> ExitCode {
     let code = report(None);
-    if let Some(tally) = snapshot_tally() {
+    if let Err(err) = reconcile_snapshots() {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Some((tally, written, obsolete, reason)) = snapshot_tally() {
         println!("{tally}");
+        if !written.is_empty() {
+            println!("written:");
+            for entry in written {
+                println!("  {entry}");
+            }
+        }
+        if !obsolete.is_empty() {
+            println!("obsolete — kept ({}):", reason.unwrap_or("not updating"));
+            for entry in obsolete {
+                println!("  {entry}");
+            }
+        }
     }
     if let Err(err) = flush_snapshots() {
         eprintln!("error: {err}");
