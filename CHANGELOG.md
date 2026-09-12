@@ -40,6 +40,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **Website benchmark data was refreshed.** The generated workload matrices now
+  include the latest five-runtime measurements, including Bun 1.4.2 and esrun
+  built with V8 152.
+
 - **V8 was updated to 152.2.0.**
 
 - **The repository's JavaScript projects now share one pnpm workspace.** The

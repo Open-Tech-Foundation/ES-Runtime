@@ -185,11 +185,11 @@ export default {
     }
   },
   "runtimes": {
-    "node": "v24.14.0",
-    "bun": "1.4.0-canary.1+095eb31ae",
-    "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
+    "node": "v24.21.0",
+    "bun": "1.4.2+744846f84",
+    "deno": "deno 2.9.5 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.23.0"
+    "esrun": "esrun 0.28.0"
   },
   "method": {
     "aggregate": "min",
@@ -832,930 +832,944 @@ export default {
   ],
   "results_ms": {
     "startup": {
-      "node": 17.9,
-      "bun": 11.2,
-      "deno": 24.5,
-      "llrt": 3.4,
-      "esrun": 8.1
+      "node": 22.3,
+      "bun": 4.5,
+      "deno": 14.3,
+      "llrt": 3.8,
+      "esrun": 8.6
     },
     "bigscript": {
-      "node": 29.5,
-      "bun": 24.2,
-      "deno": 33.9,
-      "llrt": 11.7,
-      "esrun": 20.3
+      "node": 34.1,
+      "bun": 15.5,
+      "deno": 22.4,
+      "llrt": 10.9,
+      "esrun": 3.3
     },
     "modules": {
-      "node": 82.3,
-      "bun": 28.2,
-      "deno": 41.9,
+      "node": 83.4,
+      "bun": 12.6,
+      "deno": 32.4,
       "llrt": 14.2,
-      "esrun": 25.2
+      "esrun": 3.3
     },
     "rss_load": {
-      "node": 143.6,
-      "bun": 233.4,
-      "deno": 148.9,
-      "llrt": 1806.1,
-      "esrun": 141.7
+      "node": 129.9,
+      "bun": 224.6,
+      "deno": 126.7,
+      "llrt": 1670.3,
+      "esrun": 142.8
     },
     "compute": {
-      "node": 199.1,
-      "bun": 112.9,
-      "deno": 218.1,
-      "llrt": 2283.1,
-      "esrun": 244.6
+      "node": 193.4,
+      "bun": 108.2,
+      "deno": 233.7,
+      "llrt": 2002.2,
+      "esrun": 192.1
     },
     "json": {
-      "node": 286.6,
-      "bun": 195.7,
-      "deno": 210.3,
-      "llrt": 682.8,
-      "esrun": 191.3
+      "node": 260.8,
+      "bun": 145.4,
+      "deno": 192.3,
+      "llrt": 636.2,
+      "esrun": 184.7
     },
     "jsonbig": {
-      "node": 710.7,
-      "bun": 514.3,
-      "deno": 542.2,
-      "llrt": 1799.9,
-      "esrun": 542.7
+      "node": 667,
+      "bun": 415.4,
+      "deno": 514.7,
+      "llrt": 1622.2,
+      "esrun": 462.6
     },
     "regex": {
-      "node": 67.3,
-      "bun": 22,
-      "deno": 64.2,
-      "llrt": 1296.2,
-      "esrun": 63.2
+      "node": 64.9,
+      "bun": 16.5,
+      "deno": 62.6,
+      "llrt": 1168.3,
+      "esrun": 58.1
     },
     "strings": {
-      "node": 60.7,
-      "bun": 79.2,
-      "deno": 61.2,
-      "llrt": 156.1,
-      "esrun": 59
+      "node": 60.2,
+      "bun": 58.7,
+      "deno": 57.5,
+      "llrt": 147.3,
+      "esrun": 56.4
     },
     "structured": {
-      "node": 224.2,
-      "bun": 283.3,
-      "deno": 265,
-      "llrt": 335.3,
-      "esrun": 279.1
+      "node": 213.1,
+      "bun": 229.6,
+      "deno": 249.8,
+      "llrt": 310,
+      "esrun": 267.2
     },
     "errors": {
-      "node": 1472.5,
-      "bun": 359.5,
-      "deno": 4373.1,
-      "llrt": 323.9,
-      "esrun": 385.1
+      "node": 1410.4,
+      "bun": 308.1,
+      "deno": 4120.3,
+      "llrt": 304.6,
+      "esrun": 383.4
     },
     "async": {
-      "node": 58.3,
-      "bun": 51.6,
-      "deno": 32.8,
-      "llrt": 687.9,
-      "esrun": 30
+      "node": 55.4,
+      "bun": 38.3,
+      "deno": 30.3,
+      "llrt": 666.5,
+      "esrun": 30.1
     },
     "timers": {
-      "node": 40.1,
-      "bun": 30.4,
-      "deno": 205.5,
-      "llrt": 47.1,
-      "esrun": 54.4
+      "node": 49.5,
+      "bun": 29.5,
+      "deno": 236.4,
+      "llrt": 36.7,
+      "esrun": 50.3
     },
     "url": {
-      "node": 48.7,
-      "bun": 72.5,
-      "deno": 103.7,
-      "llrt": 112.3,
-      "esrun": 87.3
+      "node": 33.7,
+      "bun": 30.5,
+      "deno": 96.3,
+      "llrt": 109.8,
+      "esrun": 84.6
     },
     "url_setter": {
-      "node": 130.2,
-      "bun": 258.6,
-      "deno": 196.4,
-      "llrt": 112.8,
-      "esrun": 182.8
+      "node": 136,
+      "bun": 84.4,
+      "deno": 181.2,
+      "llrt": 109.3,
+      "esrun": 169.8
     },
     "urlpattern": {
-      "node": 374.1,
-      "bun": 683.5,
-      "deno": 4729.2,
+      "node": 388.6,
+      "bun": 475.4,
+      "deno": 5196.3,
       "llrt": null,
-      "esrun": 842.3
+      "esrun": 805.7
     },
     "encoding": {
-      "node": 65,
-      "bun": 21.5,
-      "deno": 65.5,
-      "llrt": 69.3,
-      "esrun": 76.9
+      "node": 65.8,
+      "bun": 16.1,
+      "deno": 67,
+      "llrt": 70.4,
+      "esrun": 77.8
     },
     "encoding_large": {
-      "node": 296,
-      "bun": 65.1,
-      "deno": 226.3,
-      "llrt": 207.9,
-      "esrun": 277.8
+      "node": 309.6,
+      "bun": 72.8,
+      "deno": 136.9,
+      "llrt": 213.1,
+      "esrun": 83.6
     },
     "base64": {
-      "node": 6.7,
-      "bun": 13.3,
-      "deno": 7.4,
-      "llrt": 32.5,
-      "esrun": 22.3
+      "node": 6.9,
+      "bun": 11.1,
+      "deno": 7.7,
+      "llrt": 32.8,
+      "esrun": 21.7
     },
     "buffers": {
-      "node": 13.7,
-      "bun": 19.7,
-      "deno": 12.5,
-      "llrt": 70.1,
-      "esrun": 12.2
+      "node": 13.2,
+      "bun": 16.1,
+      "deno": 12.7,
+      "llrt": 72.1,
+      "esrun": 12.6
     },
     "headers": {
-      "node": 425.3,
-      "bun": 261.1,
-      "deno": 1504.5,
-      "llrt": 713,
-      "esrun": 409.8
+      "node": 429.6,
+      "bun": 224.4,
+      "deno": 1546.3,
+      "llrt": 726.4,
+      "esrun": 410.8
     },
     "formdata": {
-      "node": 291.2,
-      "bun": 18.8,
-      "deno": 366.9,
-      "llrt": 1331.2,
-      "esrun": 83.9
+      "node": 262.6,
+      "bun": 20,
+      "deno": 366.5,
+      "llrt": 1361.6,
+      "esrun": 91.9
     },
     "date_intl": {
-      "node": 122.7,
-      "bun": 74.7,
-      "deno": 132.2,
+      "node": 123.5,
+      "bun": 75.5,
+      "deno": 131.9,
       "llrt": null,
-      "esrun": 131.1
+      "esrun": 134
     },
     "streams": {
-      "node": 21.9,
-      "bun": 8.1,
-      "deno": 13.7,
+      "node": 11.1,
+      "bun": 5.7,
+      "deno": 10.7,
       "llrt": null,
-      "esrun": 10
+      "esrun": 10.2
     },
     "compression": {
-      "node": 606.2,
-      "bun": 228.5,
-      "deno": 209.4,
+      "node": 296.6,
+      "bun": 27.9,
+      "deno": 200.6,
       "llrt": null,
-      "esrun": 68.8
+      "esrun": 66.7
     },
     "sha256": {
-      "node": 503.5,
-      "bun": 422.4,
-      "deno": 487.5,
-      "llrt": 324.4,
-      "esrun": 327.2
+      "node": 533.1,
+      "bun": 423,
+      "deno": 417.4,
+      "llrt": 329.1,
+      "esrun": 331.5
     },
     "crypto": {
-      "node": 147.6,
-      "bun": 77.4,
-      "deno": 129,
-      "llrt": 24.5,
-      "esrun": 33.6
+      "node": 213.2,
+      "bun": 82.7,
+      "deno": 92.1,
+      "llrt": 24.7,
+      "esrun": 33.5
     },
     "crypto_asym": {
-      "node": 306.1,
-      "bun": 188.8,
-      "deno": 2170.6,
-      "llrt": 1012.8,
-      "esrun": 1092.2
+      "node": 410.6,
+      "bun": 190.1,
+      "deno": 2209.9,
+      "llrt": 1034.3,
+      "esrun": 1120.4
     },
     "crypto_kdf": {
-      "node": 71.1,
-      "bun": 64.2,
-      "deno": 70.4,
-      "llrt": 97.7,
-      "esrun": 96.8
+      "node": 69.9,
+      "bun": 63.1,
+      "deno": 72,
+      "llrt": 98.3,
+      "esrun": 101.1
     },
     "hash_hex": {
-      "node": 158.2,
-      "bun": 173.2,
+      "node": 160.2,
+      "bun": 175.5,
       "deno": 180.5,
-      "llrt": 311.8,
-      "esrun": 308.2
+      "llrt": 315.9,
+      "esrun": 312.9
     },
     "hash_chunks": {
-      "node": 1446.3,
-      "bun": 1626.6,
-      "deno": 1625.3,
-      "llrt": 2998.3,
-      "esrun": 3027.2
+      "node": 1465.7,
+      "bun": 1652.1,
+      "deno": 1649.9,
+      "llrt": 3044.7,
+      "esrun": 3063.2
     },
     "hash_fast": {
       "node": null,
-      "bun": 44.9,
+      "bun": 46.4,
       "deno": null,
       "llrt": null,
-      "esrun": 63.7
+      "esrun": 63.1
     },
     "fetch": {
-      "node": 82.8,
-      "bun": 17.5,
-      "deno": 32.9,
-      "llrt": 17.1,
-      "esrun": 39.1
+      "node": 95,
+      "bun": 17.9,
+      "deno": 34.5,
+      "llrt": 17.7,
+      "esrun": 40.5
     },
     "fetch_upload": {
-      "node": 106,
-      "bun": 38.7,
-      "deno": 34.8,
+      "node": 104.5,
+      "bun": 39.9,
+      "deno": 36.4,
       "llrt": null,
-      "esrun": 37.9
+      "esrun": 38.9
     },
     "http": {
-      "node": 374,
-      "bun": 50,
-      "deno": 97.3,
+      "node": 368.2,
+      "bun": 48,
+      "deno": 97.8,
       "llrt": null,
-      "esrun": 112
+      "esrun": 110.6
     },
     "websocket": {
-      "node": 581.5,
-      "bun": 388.3,
-      "deno": 526,
+      "node": 593.3,
+      "bun": 405.6,
+      "deno": 536.2,
       "llrt": null,
-      "esrun": 707.6
+      "esrun": 743.4
+    },
+    "udp_echo": {
+      "node": 270.9,
+      "bun": 180.9,
+      "deno": 401.1,
+      "llrt": 374.5,
+      "esrun": 313.9
+    },
+    "udp_send": {
+      "node": 233.2,
+      "bun": 174.9,
+      "deno": 244.4,
+      "llrt": 681.9,
+      "esrun": 192.4
     },
     "fsread_small": {
-      "node": 111.2,
-      "bun": 35.5,
-      "deno": 38.1,
-      "llrt": 26,
-      "esrun": 38.8
+      "node": 111.9,
+      "bun": 36.7,
+      "deno": 40,
+      "llrt": 26.7,
+      "esrun": 50.6
     },
     "fsread_large": {
-      "node": 56.5,
-      "bun": 23.5,
-      "deno": 61.2,
-      "llrt": 12.5,
-      "esrun": 42.4
+      "node": 58.7,
+      "bun": 16.4,
+      "deno": 66.7,
+      "llrt": 7.1,
+      "esrun": 36.7
     },
     "fswrite_small": {
-      "node": 154.9,
-      "bun": 12.2,
-      "deno": 84.5,
-      "llrt": 96.2,
-      "esrun": 72.4
+      "node": 157.7,
+      "bun": 12.3,
+      "deno": 87.9,
+      "llrt": 98.8,
+      "esrun": 86.3
     },
     "fswrite_large": {
-      "node": 57.2,
-      "bun": 18.9,
-      "deno": 40.2,
-      "llrt": 50.4,
-      "esrun": 57.8
+      "node": 59.4,
+      "bun": 20.7,
+      "deno": 40.4,
+      "llrt": 44,
+      "esrun": 36.5
     },
     "fsappend_small": {
-      "node": 100.2,
-      "bun": 29.8,
-      "deno": 38.7,
+      "node": 95.8,
+      "bun": 32.2,
+      "deno": 42.7,
       "llrt": null,
-      "esrun": 30
+      "esrun": 40.2
     },
     "fsappend_large": {
-      "node": 22.7,
-      "bun": 6.7,
-      "deno": 15.7,
+      "node": 25.9,
+      "bun": 7.3,
+      "deno": 15.8,
       "llrt": null,
-      "esrun": 18.2
+      "esrun": 9.3
     },
     "fsstat_small": {
-      "node": 68.9,
-      "bun": 49.7,
-      "deno": 85.8,
-      "llrt": 41.5,
-      "esrun": 65.3
+      "node": 70.5,
+      "bun": 47.2,
+      "deno": 92.7,
+      "llrt": 41.7,
+      "esrun": 66.8
     },
     "fsstat_many": {
-      "node": 268.4,
-      "bun": 195.7,
-      "deno": 361,
-      "llrt": 173.8,
-      "esrun": 283.6
+      "node": 273.8,
+      "bun": 200,
+      "deno": 372.3,
+      "llrt": 168.7,
+      "esrun": 285.9
     },
     "fsexists_small": {
-      "node": 64.8,
-      "bun": 7.1,
-      "deno": 87.9,
-      "llrt": 48,
-      "esrun": 51.1
+      "node": 61.2,
+      "bun": 7.5,
+      "deno": 90.2,
+      "llrt": 50.2,
+      "esrun": 52
     },
     "fsexists_many": {
-      "node": 253.1,
-      "bun": 30.5,
-      "deno": 356.1,
+      "node": 243.5,
+      "bun": 30.9,
+      "deno": 372,
       "llrt": 195.5,
-      "esrun": 224.7
+      "esrun": 229.2
     },
     "glob": {
-      "node": 182,
-      "bun": 28.8,
+      "node": 190.5,
+      "bun": 28.1,
       "deno": null,
       "llrt": null,
-      "esrun": 49
+      "esrun": 50.5
     },
     "spawn": {
-      "node": 197.1,
-      "bun": 95.3,
-      "deno": 103.2,
-      "llrt": 89.4,
-      "esrun": 75.6
+      "node": 255.5,
+      "bun": 135.4,
+      "deno": 153.9,
+      "llrt": 129.9,
+      "esrun": 88.8
     },
     "jsonl_stream": {
-      "node": 603.4,
-      "bun": 812,
-      "deno": 663.7,
+      "node": 619.7,
+      "bun": 849.5,
+      "deno": 665.6,
       "llrt": null,
-      "esrun": 558.8
+      "esrun": 567.2
     },
     "xml_small": {
-      "node": 473.1,
-      "bun": 447.5,
-      "deno": 472.2,
+      "node": 478.8,
+      "bun": 484.1,
+      "deno": 418.1,
       "llrt": 60,
-      "esrun": 153.9
+      "esrun": 154.2
     },
     "xml_large": {
-      "node": 952.8,
-      "bun": 848.1,
-      "deno": 933,
-      "llrt": 120.6,
-      "esrun": 308.2
+      "node": 938.6,
+      "bun": 910.9,
+      "deno": 875.7,
+      "llrt": 124.6,
+      "esrun": 309.4
     },
     "yaml_small": {
-      "node": 184.7,
-      "bun": 95.6,
-      "deno": 174.7,
-      "llrt": 4222.7,
-      "esrun": 217.5
+      "node": 191.1,
+      "bun": 93.8,
+      "deno": 177.8,
+      "llrt": 4190.4,
+      "esrun": 219
     },
     "yaml_large": {
-      "node": 375.5,
-      "bun": 186.6,
-      "deno": 354.4,
-      "llrt": 8348.1,
-      "esrun": 430.2
+      "node": 384.3,
+      "bun": 189.2,
+      "deno": 364.1,
+      "llrt": 8368,
+      "esrun": 434.1
     },
     "toml_small": {
-      "node": 198.6,
-      "bun": 52.6,
-      "deno": 208.6,
-      "llrt": 4038.7,
-      "esrun": 156.2
+      "node": 198.5,
+      "bun": 52.9,
+      "deno": 223.4,
+      "llrt": 4066.7,
+      "esrun": 156
     },
     "toml_large": {
-      "node": 407.8,
-      "bun": 99.4,
-      "deno": 434.4,
-      "llrt": 8150.6,
-      "esrun": 315.9
+      "node": 390.7,
+      "bun": 105,
+      "deno": 475.5,
+      "llrt": 8127.4,
+      "esrun": 320.9
     },
     "msgpack_small": {
-      "node": 42.4,
-      "bun": 63,
-      "deno": 40.5,
-      "llrt": 1124.7,
-      "esrun": 57.2
+      "node": 40.8,
+      "bun": 49.6,
+      "deno": 38.6,
+      "llrt": 1098.7,
+      "esrun": 50
     },
     "msgpack_large": {
-      "node": 43.1,
-      "bun": 58.6,
-      "deno": 40.6,
-      "llrt": 1168.8,
-      "esrun": 63
+      "node": 41.5,
+      "bun": 50.8,
+      "deno": 41.1,
+      "llrt": 1093.5,
+      "esrun": 55.4
     },
     "protobuf_small": {
-      "node": 115,
-      "bun": 113.2,
-      "deno": 184.5,
-      "llrt": 1780.3,
-      "esrun": 75.4
+      "node": 57.8,
+      "bun": 74.5,
+      "deno": 71,
+      "llrt": 1059.6,
+      "esrun": 74
     },
     "protobuf_large": {
-      "node": 588.5,
-      "bun": 538.1,
-      "deno": 976.6,
-      "llrt": 9014.9,
-      "esrun": 417.4
+      "node": 328.7,
+      "bun": 345.8,
+      "deno": 406.7,
+      "llrt": 5371.4,
+      "esrun": 390.6
     },
     "wasm_compile": {
-      "node": 47.9,
-      "bun": 67.3,
-      "deno": 36.2,
+      "node": 45.1,
+      "bun": 63.1,
+      "deno": 36.9,
       "llrt": null,
-      "esrun": 38.3
+      "esrun": 39.3
     },
     "wasm_call": {
-      "node": 90.7,
-      "bun": 149.9,
-      "deno": 81.3,
+      "node": 102.4,
+      "bun": 142.8,
+      "deno": 78.7,
       "llrt": null,
-      "esrun": 80.1
+      "esrun": 79.5
     },
     "wasm_mem": {
-      "node": 211.1,
-      "bun": 380.2,
-      "deno": 244.2,
+      "node": 204.1,
+      "bun": 365.5,
+      "deno": 239.7,
       "llrt": null,
-      "esrun": 248.5
+      "esrun": 250.9
     },
     "wasi_start": {
-      "node": 284.6,
-      "bun": 634.9,
-      "deno": 46.6,
+      "node": 276.5,
+      "bun": 515.8,
+      "deno": 50.8,
       "llrt": null,
-      "esrun": 44.1
+      "esrun": 44.3
     },
     "wasi_syscall": {
-      "node": 45.5,
-      "bun": 4844.4,
-      "deno": 17.2,
+      "node": 44.8,
+      "bun": 13.4,
+      "deno": 18,
       "llrt": null,
-      "esrun": 55.8
+      "esrun": 53.5
     },
     "rss": {
-      "node": 41,
-      "bun": 22,
-      "deno": 54,
+      "node": 45,
+      "bun": 12,
+      "deno": 29,
       "llrt": 11,
       "esrun": 24
     },
     "rss_loaded": {
-      "node": 131,
-      "bun": 160,
-      "deno": 147,
-      "llrt": 156,
-      "esrun": 120
-    },
-    "udp_echo": {
-      "node": 288.4,
-      "bun": 156.8,
-      "deno": 415.9,
-      "llrt": 371,
-      "esrun": 308.7
-    },
-    "udp_send": {
-      "node": 237.2,
-      "bun": 176.7,
-      "deno": 245.3,
-      "llrt": 696.9,
-      "esrun": 199.9
+      "node": 136,
+      "bun": 145,
+      "deno": 123,
+      "llrt": 162,
+      "esrun": 106
     }
   },
   "results_rss": {
     "startup": {
-      "node": 41,
-      "bun": 22,
-      "deno": 54,
+      "node": 45,
+      "bun": 12,
+      "deno": 29,
       "llrt": 11,
       "esrun": 24
     },
     "bigscript": {
-      "node": 40,
-      "bun": 26,
-      "deno": 55,
-      "llrt": 11,
-      "esrun": 24
+      "node": 46,
+      "bun": 16,
+      "deno": 28,
+      "llrt": 14,
+      "esrun": 11
     },
     "modules": {
-      "node": 58,
-      "bun": 32,
-      "deno": 57,
-      "llrt": 11,
-      "esrun": 25
+      "node": 61,
+      "bun": 25,
+      "deno": 32,
+      "llrt": 12,
+      "esrun": 11
     },
     "rss_load": {
-      "node": 131,
-      "bun": 160,
-      "deno": 147,
-      "llrt": 156,
-      "esrun": 120
+      "node": 136,
+      "bun": 145,
+      "deno": 123,
+      "llrt": 162,
+      "esrun": 106
     },
     "compute": {
-      "node": 50,
-      "bun": 34,
-      "deno": 62,
+      "node": 54,
+      "bun": 24,
+      "deno": 39,
       "llrt": 11,
-      "esrun": 34
+      "esrun": 36
     },
     "json": {
-      "node": 76,
-      "bun": 90,
-      "deno": 78,
+      "node": 80,
+      "bun": 39,
+      "deno": 56,
       "llrt": 11,
-      "esrun": 49
+      "esrun": 53
     },
     "jsonbig": {
-      "node": 155,
-      "bun": 138,
-      "deno": 160,
-      "llrt": 128,
-      "esrun": 133
+      "node": 159,
+      "bun": 116,
+      "deno": 138,
+      "llrt": 143,
+      "esrun": 135
     },
     "regex": {
-      "node": 52,
-      "bun": 47,
-      "deno": 64,
+      "node": 56,
+      "bun": 35,
+      "deno": 40,
       "llrt": 11,
-      "esrun": 35
+      "esrun": 39
     },
     "strings": {
-      "node": 60,
-      "bun": 111,
-      "deno": 72,
-      "llrt": 11,
-      "esrun": 43
-    },
-    "structured": {
-      "node": 51,
-      "bun": 82,
-      "deno": 67,
-      "llrt": 11,
-      "esrun": 45
-    },
-    "errors": {
-      "node": 60,
-      "bun": 123,
-      "deno": 95,
-      "llrt": 11,
-      "esrun": 43
-    },
-    "async": {
-      "node": 51,
-      "bun": 67,
-      "deno": 64,
-      "llrt": 11,
-      "esrun": 36
-    },
-    "timers": {
-      "node": 84,
-      "bun": 59,
-      "deno": 187,
-      "llrt": 42,
-      "esrun": 57
-    },
-    "url": {
-      "node": 60,
-      "bun": 86,
-      "deno": 71,
-      "llrt": 11,
-      "esrun": 42
-    },
-    "url_setter": {
-      "node": 61,
-      "bun": 62,
-      "deno": 70,
-      "llrt": 11,
-      "esrun": 43
-    },
-    "urlpattern": {
-      "node": 68,
-      "bun": 212,
-      "deno": 86,
-      "llrt": null,
-      "esrun": 40
-    },
-    "encoding": {
-      "node": 62,
-      "bun": 59,
-      "deno": 74,
-      "llrt": 11,
-      "esrun": 44
-    },
-    "encoding_large": {
-      "node": 51,
-      "bun": 63,
-      "deno": 63,
-      "llrt": 11,
-      "esrun": 35
-    },
-    "base64": {
-      "node": 51,
-      "bun": 57,
-      "deno": 65,
-      "llrt": 11,
-      "esrun": 34
-    },
-    "buffers": {
-      "node": 52,
-      "bun": 51,
-      "deno": 64,
-      "llrt": 11,
-      "esrun": 36
-    },
-    "headers": {
-      "node": 71,
-      "bun": 87,
-      "deno": 148,
+      "node": 64,
+      "bun": 45,
+      "deno": 48,
       "llrt": 11,
       "esrun": 46
     },
-    "formdata": {
-      "node": 116,
-      "bun": 57,
-      "deno": 101,
-      "llrt": 11,
-      "esrun": 41
-    },
-    "date_intl": {
-      "node": 59,
-      "bun": 52,
-      "deno": 69,
-      "llrt": null,
-      "esrun": 40
-    },
-    "streams": {
-      "node": 57,
-      "bun": 38,
-      "deno": 67,
-      "llrt": null,
-      "esrun": 40
-    },
-    "compression": {
-      "node": 112,
-      "bun": 70,
-      "deno": 71,
-      "llrt": null,
-      "esrun": 47
-    },
-    "sha256": {
+    "structured": {
       "node": 55,
-      "bun": 41,
-      "deno": 67,
-      "llrt": 11,
-      "esrun": 32
+      "bun": 32,
+      "deno": 43,
+      "llrt": 12,
+      "esrun": 51
     },
-    "crypto": {
-      "node": 54,
-      "bun": 37,
-      "deno": 66,
+    "errors": {
+      "node": 64,
+      "bun": 48,
+      "deno": 63,
       "llrt": 11,
-      "esrun": 33
+      "esrun": 46
     },
-    "crypto_asym": {
+    "async": {
       "node": 55,
       "bun": 33,
-      "deno": 67,
+      "deno": 40,
       "llrt": 11,
-      "esrun": 32
+      "esrun": 38
     },
-    "crypto_kdf": {
-      "node": 45,
+    "timers": {
+      "node": 85,
+      "bun": 50,
+      "deno": 167,
+      "llrt": 50,
+      "esrun": 60
+    },
+    "url": {
+      "node": 63,
+      "bun": 50,
+      "deno": 47,
+      "llrt": 11,
+      "esrun": 46
+    },
+    "url_setter": {
+      "node": 64,
+      "bun": 49,
+      "deno": 47,
+      "llrt": 11,
+      "esrun": 46
+    },
+    "urlpattern": {
+      "node": 72,
+      "bun": 116,
+      "deno": 66,
+      "llrt": null,
+      "esrun": 43
+    },
+    "encoding": {
+      "node": 66,
+      "bun": 39,
+      "deno": 50,
+      "llrt": 11,
+      "esrun": 47
+    },
+    "encoding_large": {
+      "node": 55,
+      "bun": 41,
+      "deno": 40,
+      "llrt": 14,
+      "esrun": 39
+    },
+    "base64": {
+      "node": 55,
+      "bun": 38,
+      "deno": 42,
+      "llrt": 11,
+      "esrun": 37
+    },
+    "buffers": {
+      "node": 56,
+      "bun": 35,
+      "deno": 41,
+      "llrt": 12,
+      "esrun": 39
+    },
+    "headers": {
+      "node": 76,
+      "bun": 41,
+      "deno": 127,
+      "llrt": 12,
+      "esrun": 50
+    },
+    "formdata": {
+      "node": 121,
+      "bun": 47,
+      "deno": 111,
+      "llrt": 13,
+      "esrun": 43
+    },
+    "date_intl": {
+      "node": 63,
+      "bun": 42,
+      "deno": 48,
+      "llrt": null,
+      "esrun": 44
+    },
+    "streams": {
+      "node": 61,
       "bun": 27,
-      "deno": 55,
-      "llrt": 11,
-      "esrun": 25
+      "deno": 43,
+      "llrt": null,
+      "esrun": 43
     },
-    "hash_hex": {
-      "node": 57,
-      "bun": 45,
-      "deno": 70,
+    "compression": {
+      "node": 73,
+      "bun": 42,
+      "deno": 46,
+      "llrt": null,
+      "esrun": 51
+    },
+    "sha256": {
+      "node": 58,
+      "bun": 37,
+      "deno": 42,
+      "llrt": 11,
+      "esrun": 35
+    },
+    "crypto": {
+      "node": 63,
+      "bun": 33,
+      "deno": 42,
       "llrt": 11,
       "esrun": 36
     },
-    "hash_chunks": {
-      "node": 53,
-      "bun": 31,
-      "deno": 58,
+    "crypto_asym": {
+      "node": 58,
+      "bun": 25,
+      "deno": 41,
       "llrt": 11,
-      "esrun": 29
+      "esrun": 35
+    },
+    "crypto_kdf": {
+      "node": 50,
+      "bun": 18,
+      "deno": 34,
+      "llrt": 11,
+      "esrun": 28
+    },
+    "hash_hex": {
+      "node": 60,
+      "bun": 37,
+      "deno": 56,
+      "llrt": 13,
+      "esrun": 39
+    },
+    "hash_chunks": {
+      "node": 54,
+      "bun": 24,
+      "deno": 44,
+      "llrt": 13,
+      "esrun": 31
     },
     "hash_fast": {
       "node": null,
-      "bun": 32,
+      "bun": 25,
       "deno": null,
       "llrt": null,
-      "esrun": 37
+      "esrun": 40
     },
     "fetch": {
-      "node": 87,
-      "bun": 32,
-      "deno": 63,
-      "llrt": 11,
-      "esrun": 36
+      "node": 90,
+      "bun": 22,
+      "deno": 43,
+      "llrt": 13,
+      "esrun": 39
     },
     "fetch_upload": {
       "node": 88,
-      "bun": 34,
-      "deno": 63,
+      "bun": 25,
+      "deno": 44,
       "llrt": null,
-      "esrun": 38
-    },
-    "http": {
-      "node": 150,
-      "bun": 37,
-      "deno": 85,
-      "llrt": null,
-      "esrun": 61
-    },
-    "websocket": {
-      "node": 70,
-      "bun": 36,
-      "deno": 69,
-      "llrt": null,
-      "esrun": 38
-    },
-    "fsread_small": {
-      "node": 53,
-      "bun": 39,
-      "deno": 63,
-      "llrt": 11,
       "esrun": 39
     },
-    "fsread_large": {
-      "node": 111,
-      "bun": 89,
-      "deno": 187,
-      "llrt": 13,
-      "esrun": 95
-    },
-    "fswrite_small": {
-      "node": 53,
-      "bun": 34,
-      "deno": 62,
-      "llrt": 11,
-      "esrun": 31
-    },
-    "fswrite_large": {
-      "node": 90,
-      "bun": 34,
-      "deno": 101,
-      "llrt": 15,
-      "esrun": 31
-    },
-    "fsappend_small": {
-      "node": 54,
-      "bun": 35,
-      "deno": 63,
-      "llrt": null,
-      "esrun": 30
-    },
-    "fsappend_large": {
-      "node": 57,
-      "bun": 31,
-      "deno": 71,
-      "llrt": null,
-      "esrun": 26
-    },
-    "fsstat_small": {
-      "node": 47,
-      "bun": 35,
-      "deno": 60,
-      "llrt": 11,
-      "esrun": 32
-    },
-    "fsstat_many": {
-      "node": 58,
-      "bun": 40,
-      "deno": 67,
-      "llrt": 11,
-      "esrun": 37
-    },
-    "fsexists_small": {
-      "node": 47,
-      "bun": 36,
-      "deno": 61,
-      "llrt": 11,
-      "esrun": 31
-    },
-    "fsexists_many": {
-      "node": 58,
-      "bun": 47,
-      "deno": 68,
-      "llrt": 11,
-      "esrun": 32
-    },
-    "glob": {
-      "node": 64,
-      "bun": 47,
-      "deno": null,
-      "llrt": null,
-      "esrun": 33
-    },
-    "spawn": {
-      "node": 50,
-      "bun": 47,
-      "deno": 71,
-      "llrt": 11,
-      "esrun": 32
-    },
-    "jsonl_stream": {
-      "node": 214,
-      "bun": 164,
-      "deno": 204,
-      "llrt": null,
-      "esrun": 67
-    },
-    "xml_small": {
-      "node": 75,
-      "bun": 116,
-      "deno": 88,
-      "llrt": 11,
-      "esrun": 30
-    },
-    "xml_large": {
-      "node": 279,
-      "bun": 212,
-      "deno": 226,
-      "llrt": 17,
-      "esrun": 80
-    },
-    "yaml_small": {
-      "node": 61,
-      "bun": 52,
+    "http": {
+      "node": 156,
+      "bun": 33,
       "deno": 70,
-      "llrt": 11,
-      "esrun": 31
+      "llrt": null,
+      "esrun": 62
     },
-    "yaml_large": {
-      "node": 135,
-      "bun": 104,
-      "deno": 145,
-      "llrt": 17,
-      "esrun": 60
+    "websocket": {
+      "node": 74,
+      "bun": 36,
+      "deno": 47,
+      "llrt": null,
+      "esrun": 41
     },
-    "toml_small": {
-      "node": 64,
-      "bun": 41,
-      "deno": 76,
-      "llrt": 11,
-      "esrun": 31
+    "udp_echo": {
+      "node": 61,
+      "bun": 36,
+      "deno": 68,
+      "llrt": 13,
+      "esrun": 40
     },
-    "toml_large": {
-      "node": 208,
-      "bun": 79,
-      "deno": 217,
-      "llrt": 16,
-      "esrun": 61
+    "udp_send": {
+      "node": 61,
+      "bun": 28,
+      "deno": 42,
+      "llrt": 13,
+      "esrun": 39
     },
-    "msgpack_small": {
-      "node": 58,
-      "bun": 88,
-      "deno": 72,
-      "llrt": 11,
-      "esrun": 32
-    },
-    "msgpack_large": {
-      "node": 78,
-      "bun": 95,
-      "deno": 92,
-      "llrt": 15,
-      "esrun": 61
-    },
-    "protobuf_small": {
-      "node": 65,
-      "bun": 122,
-      "deno": 74,
+    "fsread_small": {
+      "node": 57,
+      "bun": 36,
+      "deno": 42,
       "llrt": 12,
       "esrun": 41
     },
+    "fsread_large": {
+      "node": 114,
+      "bun": 37,
+      "deno": 167,
+      "llrt": 21,
+      "esrun": 95
+    },
+    "fswrite_small": {
+      "node": 57,
+      "bun": 25,
+      "deno": 42,
+      "llrt": 12,
+      "esrun": 33
+    },
+    "fswrite_large": {
+      "node": 93,
+      "bun": 24,
+      "deno": 81,
+      "llrt": 20,
+      "esrun": 33
+    },
+    "fsappend_small": {
+      "node": 57,
+      "bun": 26,
+      "deno": 42,
+      "llrt": null,
+      "esrun": 33
+    },
+    "fsappend_large": {
+      "node": 61,
+      "bun": 21,
+      "deno": 51,
+      "llrt": null,
+      "esrun": 27
+    },
+    "fsstat_small": {
+      "node": 51,
+      "bun": 27,
+      "deno": 41,
+      "llrt": 13,
+      "esrun": 34
+    },
+    "fsstat_many": {
+      "node": 60,
+      "bun": 36,
+      "deno": 45,
+      "llrt": 12,
+      "esrun": 40
+    },
+    "fsexists_small": {
+      "node": 51,
+      "bun": 28,
+      "deno": 41,
+      "llrt": 13,
+      "esrun": 33
+    },
+    "fsexists_many": {
+      "node": 61,
+      "bun": 40,
+      "deno": 46,
+      "llrt": 12,
+      "esrun": 34
+    },
+    "glob": {
+      "node": 67,
+      "bun": 34,
+      "deno": null,
+      "llrt": null,
+      "esrun": 35
+    },
+    "spawn": {
+      "node": 55,
+      "bun": 27,
+      "deno": 52,
+      "llrt": 12,
+      "esrun": 35
+    },
+    "jsonl_stream": {
+      "node": 150,
+      "bun": 86,
+      "deno": 146,
+      "llrt": null,
+      "esrun": 71
+    },
+    "xml_small": {
+      "node": 80,
+      "bun": 87,
+      "deno": 72,
+      "llrt": 12,
+      "esrun": 33
+    },
+    "xml_large": {
+      "node": 278,
+      "bun": 90,
+      "deno": 206,
+      "llrt": 22,
+      "esrun": 82
+    },
+    "yaml_small": {
+      "node": 63,
+      "bun": 48,
+      "deno": 49,
+      "llrt": 14,
+      "esrun": 35
+    },
+    "yaml_large": {
+      "node": 140,
+      "bun": 59,
+      "deno": 124,
+      "llrt": 23,
+      "esrun": 66
+    },
+    "toml_small": {
+      "node": 67,
+      "bun": 52,
+      "deno": 61,
+      "llrt": 15,
+      "esrun": 34
+    },
+    "toml_large": {
+      "node": 212,
+      "bun": 62,
+      "deno": 200,
+      "llrt": 21,
+      "esrun": 65
+    },
+    "msgpack_small": {
+      "node": 62,
+      "bun": 55,
+      "deno": 59,
+      "llrt": 12,
+      "esrun": 34
+    },
+    "msgpack_large": {
+      "node": 82,
+      "bun": 65,
+      "deno": 76,
+      "llrt": 20,
+      "esrun": 64
+    },
+    "protobuf_small": {
+      "node": 68,
+      "bun": 60,
+      "deno": 52,
+      "llrt": 19,
+      "esrun": 44
+    },
     "protobuf_large": {
-      "node": 374,
-      "bun": 207,
-      "deno": 305,
-      "llrt": 106,
-      "esrun": 234
+      "node": 297,
+      "bun": 167,
+      "deno": 248,
+      "llrt": 88,
+      "esrun": 220
     },
     "wasm_compile": {
-      "node": 312,
-      "bun": 172,
-      "deno": 267,
+      "node": 319,
+      "bun": 167,
+      "deno": 221,
       "llrt": null,
-      "esrun": 215
+      "esrun": 222
     },
     "wasm_call": {
-      "node": 53,
-      "bun": 38,
-      "deno": 63,
-      "llrt": null,
-      "esrun": 37
-    },
-    "wasm_mem": {
-      "node": 53,
-      "bun": 38,
-      "deno": 64,
-      "llrt": null,
-      "esrun": 37
-    },
-    "wasi_start": {
-      "node": 72,
-      "bun": 44,
-      "deno": 79,
-      "llrt": null,
-      "esrun": 37
-    },
-    "wasi_syscall": {
-      "node": 53,
-      "bun": 44,
-      "deno": 66,
+      "node": 56,
+      "bun": 31,
+      "deno": 42,
       "llrt": null,
       "esrun": 39
+    },
+    "wasm_mem": {
+      "node": 56,
+      "bun": 31,
+      "deno": 44,
+      "llrt": null,
+      "esrun": 39
+    },
+    "wasi_start": {
+      "node": 77,
+      "bun": 44,
+      "deno": 65,
+      "llrt": null,
+      "esrun": 39
+    },
+    "wasi_syscall": {
+      "node": 55,
+      "bun": 43,
+      "deno": 54,
+      "llrt": null,
+      "esrun": 43
     },
     "rss": {
       "node": null,
@@ -1770,470 +1784,470 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
-    },
-    "udp_echo": {
-      "node": 57,
-      "bun": 39,
-      "deno": 90,
-      "llrt": 11,
-      "esrun": 37
-    },
-    "udp_send": {
-      "node": 57,
-      "bun": 37,
-      "deno": 65,
-      "llrt": 11,
-      "esrun": 36
     }
   },
   "results_cov": {
     "startup": {
-      "node": 4,
-      "bun": 7,
-      "deno": 92.2,
-      "llrt": 13.6,
-      "esrun": 9.6
+      "node": 6.6,
+      "bun": 1.8,
+      "deno": 8.5,
+      "llrt": 4,
+      "esrun": 1.7
     },
     "bigscript": {
-      "node": 7,
-      "bun": 9.3,
-      "deno": 36.4,
-      "llrt": 13.3,
-      "esrun": 6.7
-    },
-    "modules": {
-      "node": 3.9,
-      "bun": 5.6,
-      "deno": 2.6,
-      "llrt": 3.5,
-      "esrun": 4.9
-    },
-    "rss_load": {
-      "node": 4.1,
-      "bun": 2,
-      "deno": 3.4,
-      "llrt": 1.6,
-      "esrun": 3.8
-    },
-    "compute": {
-      "node": 3.1,
-      "bun": 3.6,
-      "deno": 0.5,
-      "llrt": 1.5,
-      "esrun": 2.1
-    },
-    "json": {
-      "node": 7.2,
-      "bun": 17.6,
-      "deno": 8.6,
-      "llrt": 3.2,
-      "esrun": 18
-    },
-    "jsonbig": {
-      "node": 2.3,
-      "bun": 2,
-      "deno": 2.6,
-      "llrt": 2,
+      "node": 4.9,
+      "bun": 2.9,
+      "deno": 5.8,
+      "llrt": 2.9,
       "esrun": 3.3
     },
-    "regex": {
-      "node": 0.3,
-      "bun": 3.7,
-      "deno": 2.5,
-      "llrt": 2.1,
-      "esrun": 4.1
-    },
-    "strings": {
-      "node": 7,
-      "bun": 5.8,
-      "deno": 6.1,
-      "llrt": 5.3,
-      "esrun": 6.9
-    },
-    "structured": {
-      "node": 1.5,
-      "bun": 3.3,
-      "deno": 3.3,
-      "llrt": 3.2,
-      "esrun": 2.7
-    },
-    "errors": {
-      "node": 3.5,
-      "bun": 4.8,
-      "deno": 4.6,
-      "llrt": 2.1,
-      "esrun": 3.5
-    },
-    "async": {
-      "node": 10.5,
-      "bun": 8.4,
-      "deno": 8.7,
-      "llrt": 3.3,
-      "esrun": 7.9
-    },
-    "timers": {
-      "node": 9.7,
-      "bun": 4.5,
-      "deno": 2,
-      "llrt": 6.4,
-      "esrun": 5.3
-    },
-    "url": {
-      "node": 7,
-      "bun": 4,
-      "deno": 8.7,
-      "llrt": 8,
-      "esrun": 6.7
-    },
-    "url_setter": {
-      "node": 7.4,
-      "bun": 3.2,
-      "deno": 2.9,
-      "llrt": 5.7,
-      "esrun": 2.7
-    },
-    "urlpattern": {
-      "node": 5.8,
-      "bun": 4,
-      "deno": 7.6,
-      "llrt": null,
-      "esrun": 12.9
-    },
-    "encoding": {
-      "node": 4.9,
-      "bun": 0.3,
-      "deno": 1,
-      "llrt": 1.2,
-      "esrun": 3
-    },
-    "encoding_large": {
-      "node": 0.3,
-      "bun": 1.8,
-      "deno": 0.4,
-      "llrt": 1,
-      "esrun": 0.4
-    },
-    "base64": {
-      "node": 4.5,
-      "bun": 2,
-      "deno": 3.2,
-      "llrt": 0.7,
-      "esrun": 0.6
-    },
-    "buffers": {
-      "node": 1,
-      "bun": 4.1,
-      "deno": 1.5,
-      "llrt": 4.2,
-      "esrun": 5.4
-    },
-    "headers": {
-      "node": 1.7,
-      "bun": 0.5,
-      "deno": 0.9,
-      "llrt": 1.9,
+    "modules": {
+      "node": 4.4,
+      "bun": 2.3,
+      "deno": 11.1,
+      "llrt": 3,
       "esrun": 2
     },
-    "formdata": {
-      "node": 1.4,
-      "bun": 4.6,
-      "deno": 2.4,
-      "llrt": 0.5,
-      "esrun": 2.1
+    "rss_load": {
+      "node": 3.4,
+      "bun": 2.9,
+      "deno": 1.8,
+      "llrt": 0.4,
+      "esrun": 5.6
     },
-    "date_intl": {
-      "node": 2.8,
-      "bun": 6.7,
-      "deno": 2.8,
-      "llrt": null,
-      "esrun": 4.1
-    },
-    "streams": {
-      "node": 4.6,
-      "bun": 2.3,
-      "deno": 2.3,
-      "llrt": null,
-      "esrun": 6
-    },
-    "compression": {
-      "node": 1.4,
-      "bun": 5,
-      "deno": 0.8,
-      "llrt": null,
-      "esrun": 4.6
-    },
-    "sha256": {
-      "node": 4.2,
-      "bun": 1,
-      "deno": 1.1,
-      "llrt": 0.7,
-      "esrun": 0.2
-    },
-    "crypto": {
-      "node": 8.7,
-      "bun": 4.7,
-      "deno": 9.5,
+    "compute": {
+      "node": 1.1,
+      "bun": 4.5,
+      "deno": 2.2,
       "llrt": 1.1,
-      "esrun": 3.8
+      "esrun": 0.3
     },
-    "crypto_asym": {
-      "node": 7.2,
-      "bun": 5.8,
-      "deno": 0.8,
-      "llrt": 0.2,
-      "esrun": 0.5
-    },
-    "crypto_kdf": {
-      "node": 0.1,
-      "bun": 1.1,
-      "deno": 0.5,
-      "llrt": 0.2,
-      "esrun": 0
-    },
-    "hash_hex": {
-      "node": 0.7,
-      "bun": 1.3,
-      "deno": 0.2,
-      "llrt": 1,
+    "json": {
+      "node": 0.2,
+      "bun": 4.6,
+      "deno": 1.3,
+      "llrt": 0.7,
       "esrun": 0.4
     },
-    "hash_chunks": {
-      "node": 0.1,
-      "bun": 0.1,
-      "deno": 0.3,
+    "jsonbig": {
+      "node": 0.7,
+      "bun": 2,
+      "deno": 0.4,
       "llrt": 0.1,
-      "esrun": 0.1
+      "esrun": 1.5
     },
-    "hash_fast": {
-      "node": null,
-      "bun": 0.3,
-      "deno": null,
+    "regex": {
+      "node": 1,
+      "bun": 2.8,
+      "deno": 0.9,
+      "llrt": 0.4,
+      "esrun": 0.4
+    },
+    "strings": {
+      "node": 6.2,
+      "bun": 7.4,
+      "deno": 3,
+      "llrt": 1.6,
+      "esrun": 4.9
+    },
+    "structured": {
+      "node": 2.6,
+      "bun": 2.2,
+      "deno": 3.2,
+      "llrt": 1.4,
+      "esrun": 3.4
+    },
+    "errors": {
+      "node": 1.3,
+      "bun": 1.4,
+      "deno": 0.5,
+      "llrt": 0.7,
+      "esrun": 0.7
+    },
+    "async": {
+      "node": 3.8,
+      "bun": 8.8,
+      "deno": 3.1,
+      "llrt": 0.9,
+      "esrun": 6.1
+    },
+    "timers": {
+      "node": 2.9,
+      "bun": 4,
+      "deno": 2.9,
+      "llrt": 7.4,
+      "esrun": 1.8
+    },
+    "url": {
+      "node": 1.8,
+      "bun": 3.9,
+      "deno": 1.6,
+      "llrt": 2.1,
+      "esrun": 2.6
+    },
+    "url_setter": {
+      "node": 1.1,
+      "bun": 2.1,
+      "deno": 1.2,
+      "llrt": 2.1,
+      "esrun": 0.9
+    },
+    "urlpattern": {
+      "node": 0.2,
+      "bun": 1.1,
+      "deno": 0.6,
       "llrt": null,
-      "esrun": 1
+      "esrun": 4.4
     },
-    "fetch": {
-      "node": 3,
-      "bun": 7.9,
-      "deno": 9.1,
-      "llrt": 9.6,
-      "esrun": 8
+    "encoding": {
+      "node": 2,
+      "bun": 9.7,
+      "deno": 3.3,
+      "llrt": 4.3,
+      "esrun": 1.3
     },
-    "fetch_upload": {
+    "encoding_large": {
+      "node": 0.6,
+      "bun": 1.1,
+      "deno": 0.7,
+      "llrt": 0.5,
+      "esrun": 3.3
+    },
+    "base64": {
       "node": 1.4,
-      "bun": 2.3,
-      "deno": 4.6,
-      "llrt": null,
-      "esrun": 5
+      "bun": 6.6,
+      "deno": 3.7,
+      "llrt": 2,
+      "esrun": 1.2
     },
-    "http": {
-      "node": 2.1,
+    "buffers": {
+      "node": 8.3,
+      "bun": 1,
+      "deno": 2.1,
+      "llrt": 1.9,
+      "esrun": 2.5
+    },
+    "headers": {
+      "node": 1.2,
+      "bun": 0.8,
+      "deno": 1,
+      "llrt": 1.4,
+      "esrun": 1.4
+    },
+    "formdata": {
+      "node": 3,
+      "bun": 3.4,
+      "deno": 3,
+      "llrt": 0.8,
+      "esrun": 3
+    },
+    "date_intl": {
+      "node": 1.5,
       "bun": 0.3,
       "deno": 1.6,
       "llrt": null,
-      "esrun": 0.7
-    },
-    "websocket": {
-      "node": 1.1,
-      "bun": 3.9,
-      "deno": 1.2,
-      "llrt": null,
-      "esrun": 0.9
-    },
-    "fsread_small": {
-      "node": 6.3,
-      "bun": 5.7,
-      "deno": 6.3,
-      "llrt": 1.2,
-      "esrun": 1
-    },
-    "fsread_large": {
-      "node": 3.9,
-      "bun": 2,
-      "deno": 1.3,
-      "llrt": 2.8,
-      "esrun": 11.3
-    },
-    "fswrite_small": {
-      "node": 4.9,
-      "bun": 2.3,
-      "deno": 7.3,
-      "llrt": 3.2,
-      "esrun": 4.6
-    },
-    "fswrite_large": {
-      "node": 3.3,
-      "bun": 2.3,
-      "deno": 4.7,
-      "llrt": 4.8,
-      "esrun": 2.3
-    },
-    "fsappend_small": {
-      "node": 8.5,
-      "bun": 9.2,
-      "deno": 6.9,
-      "llrt": null,
-      "esrun": 4.6
-    },
-    "fsappend_large": {
-      "node": 2.2,
-      "bun": 4.6,
-      "deno": 1.5,
-      "llrt": null,
-      "esrun": 3.3
-    },
-    "fsstat_small": {
-      "node": 8.3,
-      "bun": 5,
-      "deno": 9.2,
-      "llrt": 2.7,
-      "esrun": 0.8
-    },
-    "fsstat_many": {
-      "node": 2.1,
-      "bun": 2.3,
-      "deno": 1.4,
-      "llrt": 4.2,
-      "esrun": 0.4
-    },
-    "fsexists_small": {
-      "node": 8.2,
-      "bun": 4.8,
-      "deno": 12.5,
-      "llrt": 6,
-      "esrun": 0.5
-    },
-    "fsexists_many": {
-      "node": 5.5,
-      "bun": 0.8,
-      "deno": 5.9,
-      "llrt": 17.3,
-      "esrun": 1.3
-    },
-    "glob": {
-      "node": 6.3,
-      "bun": 5.6,
-      "deno": null,
-      "llrt": null,
-      "esrun": 2.8
-    },
-    "spawn": {
-      "node": 2.2,
-      "bun": 1.1,
-      "deno": 1,
-      "llrt": 2.2,
-      "esrun": 3.4
-    },
-    "jsonl_stream": {
-      "node": 1.7,
-      "bun": 1.3,
-      "deno": 0.9,
-      "llrt": null,
-      "esrun": 4.8
-    },
-    "xml_small": {
-      "node": 0.6,
-      "bun": 3.3,
-      "deno": 0.9,
-      "llrt": 2.2,
-      "esrun": 1.1
-    },
-    "xml_large": {
-      "node": 2.9,
-      "bun": 7.1,
-      "deno": 2.2,
-      "llrt": 3.6,
-      "esrun": 1.3
-    },
-    "yaml_small": {
-      "node": 0.6,
-      "bun": 0.4,
-      "deno": 0.4,
-      "llrt": 0.6,
-      "esrun": 0.2
-    },
-    "yaml_large": {
-      "node": 0.6,
-      "bun": 3.9,
-      "deno": 0.9,
-      "llrt": 1.2,
-      "esrun": 0.5
-    },
-    "toml_small": {
-      "node": 1.3,
-      "bun": 0.7,
-      "deno": 2,
-      "llrt": 0.4,
       "esrun": 1.6
     },
-    "toml_large": {
-      "node": 0.6,
-      "bun": 0.4,
-      "deno": 2.1,
-      "llrt": 2.4,
-      "esrun": 0.1
+    "streams": {
+      "node": 1.4,
+      "bun": 3,
+      "deno": 3.5,
+      "llrt": null,
+      "esrun": 2.7
     },
-    "msgpack_small": {
-      "node": 3,
-      "bun": 6,
+    "compression": {
+      "node": 1.7,
+      "bun": 0.7,
+      "deno": 3.1,
+      "llrt": null,
+      "esrun": 1.6
+    },
+    "sha256": {
+      "node": 4.8,
+      "bun": 3.2,
       "deno": 2.6,
-      "llrt": 3.6,
-      "esrun": 4.1
+      "llrt": 2.1,
+      "esrun": 0.6
     },
-    "msgpack_large": {
-      "node": 2.2,
-      "bun": 1.9,
-      "deno": 2,
-      "llrt": 2,
-      "esrun": 4.8
+    "crypto": {
+      "node": 4.8,
+      "bun": 5.3,
+      "deno": 11.9,
+      "llrt": 0.9,
+      "esrun": 2.1
     },
-    "protobuf_small": {
-      "node": 2.4,
-      "bun": 4.4,
-      "deno": 3.7,
-      "llrt": 1.1,
-      "esrun": 4.8
+    "crypto_asym": {
+      "node": 1.7,
+      "bun": 1.6,
+      "deno": 1,
+      "llrt": 0.3,
+      "esrun": 0.4
     },
-    "protobuf_large": {
-      "node": 4.9,
-      "bun": 2.3,
-      "deno": 2.1,
-      "llrt": 3.1,
-      "esrun": 2
+    "crypto_kdf": {
+      "node": 0.1,
+      "bun": 1,
+      "deno": 0.2,
+      "llrt": 0.7,
+      "esrun": 1.1
     },
-    "wasm_compile": {
-      "node": 3.8,
-      "bun": 4.8,
-      "deno": 6.4,
-      "llrt": null,
-      "esrun": 3.9
+    "hash_hex": {
+      "node": 0.8,
+      "bun": 0.7,
+      "deno": 1.3,
+      "llrt": 0.7,
+      "esrun": 0.6
     },
-    "wasm_call": {
-      "node": 19.9,
-      "bun": 12.7,
-      "deno": 9.4,
-      "llrt": null,
-      "esrun": 21.3
+    "hash_chunks": {
+      "node": 0.3,
+      "bun": 0.5,
+      "deno": 0.3,
+      "llrt": 0.2,
+      "esrun": 0
     },
-    "wasm_mem": {
-      "node": 1.3,
-      "bun": 0.6,
-      "deno": 3.7,
+    "hash_fast": {
+      "node": null,
+      "bun": 0.2,
+      "deno": null,
       "llrt": null,
       "esrun": 2.5
     },
-    "wasi_start": {
-      "node": 1.6,
-      "bun": 1,
-      "deno": 3.7,
+    "fetch": {
+      "node": 2,
+      "bun": 9.4,
+      "deno": 2.7,
+      "llrt": 13.2,
+      "esrun": 8.7
+    },
+    "fetch_upload": {
+      "node": 2,
+      "bun": 4.4,
+      "deno": 3.5,
       "llrt": null,
-      "esrun": 5.9
+      "esrun": 3.6
+    },
+    "http": {
+      "node": 4.1,
+      "bun": 0.4,
+      "deno": 1.7,
+      "llrt": null,
+      "esrun": 1.5
+    },
+    "websocket": {
+      "node": 1,
+      "bun": 3.6,
+      "deno": 1.2,
+      "llrt": null,
+      "esrun": 2.9
+    },
+    "udp_echo": {
+      "node": 3.3,
+      "bun": 1.7,
+      "deno": 2,
+      "llrt": 0.8,
+      "esrun": 2.6
+    },
+    "udp_send": {
+      "node": 1.8,
+      "bun": 1.1,
+      "deno": 3.6,
+      "llrt": 2.6,
+      "esrun": 2.3
+    },
+    "fsread_small": {
+      "node": 3.3,
+      "bun": 1.2,
+      "deno": 7.2,
+      "llrt": 3.6,
+      "esrun": 2
+    },
+    "fsread_large": {
+      "node": 5.5,
+      "bun": 2.7,
+      "deno": 1.8,
+      "llrt": 8.4,
+      "esrun": 9.6
+    },
+    "fswrite_small": {
+      "node": 6.7,
+      "bun": 1.2,
+      "deno": 6.5,
+      "llrt": 3.9,
+      "esrun": 5.5
+    },
+    "fswrite_large": {
+      "node": 4.8,
+      "bun": 2,
+      "deno": 4.6,
+      "llrt": 13.3,
+      "esrun": 3.6
+    },
+    "fsappend_small": {
+      "node": 4.5,
+      "bun": 5.9,
+      "deno": 4.8,
+      "llrt": null,
+      "esrun": 0.8
+    },
+    "fsappend_large": {
+      "node": 1.4,
+      "bun": 5.3,
+      "deno": 4.9,
+      "llrt": null,
+      "esrun": 11.9
+    },
+    "fsstat_small": {
+      "node": 5.3,
+      "bun": 10.2,
+      "deno": 7.6,
+      "llrt": 8,
+      "esrun": 1.6
+    },
+    "fsstat_many": {
+      "node": 2.3,
+      "bun": 4.6,
+      "deno": 6,
+      "llrt": 11.1,
+      "esrun": 0.9
+    },
+    "fsexists_small": {
+      "node": 4.1,
+      "bun": 1.5,
+      "deno": 9.8,
+      "llrt": 17.5,
+      "esrun": 0.9
+    },
+    "fsexists_many": {
+      "node": 5.2,
+      "bun": 0.3,
+      "deno": 3.8,
+      "llrt": 16.1,
+      "esrun": 1.1
+    },
+    "glob": {
+      "node": 4.3,
+      "bun": 1.4,
+      "deno": null,
+      "llrt": null,
+      "esrun": 0.5
+    },
+    "spawn": {
+      "node": 0.2,
+      "bun": 1,
+      "deno": 0.6,
+      "llrt": 0.9,
+      "esrun": 2.6
+    },
+    "jsonl_stream": {
+      "node": 3.5,
+      "bun": 3,
+      "deno": 2.8,
+      "llrt": null,
+      "esrun": 0.7
+    },
+    "xml_small": {
+      "node": 0.7,
+      "bun": 2.5,
+      "deno": 2,
+      "llrt": 2,
+      "esrun": 1.8
+    },
+    "xml_large": {
+      "node": 3.8,
+      "bun": 3.4,
+      "deno": 1.6,
+      "llrt": 1.5,
+      "esrun": 1.4
+    },
+    "yaml_small": {
+      "node": 2.7,
+      "bun": 0.9,
+      "deno": 1.9,
+      "llrt": 0.3,
+      "esrun": 2.3
+    },
+    "yaml_large": {
+      "node": 2,
+      "bun": 1.8,
+      "deno": 3.1,
+      "llrt": 0.4,
+      "esrun": 0.6
+    },
+    "toml_small": {
+      "node": 3.4,
+      "bun": 2.9,
+      "deno": 2.6,
+      "llrt": 0.2,
+      "esrun": 0.9
+    },
+    "toml_large": {
+      "node": 3.2,
+      "bun": 1.8,
+      "deno": 1.7,
+      "llrt": 0.5,
+      "esrun": 6.8
+    },
+    "msgpack_small": {
+      "node": 0.7,
+      "bun": 0.5,
+      "deno": 2.5,
+      "llrt": 0.4,
+      "esrun": 2.1
+    },
+    "msgpack_large": {
+      "node": 4.2,
+      "bun": 4.7,
+      "deno": 1.1,
+      "llrt": 0.8,
+      "esrun": 4
+    },
+    "protobuf_small": {
+      "node": 2.5,
+      "bun": 1,
+      "deno": 1.5,
+      "llrt": 0.4,
+      "esrun": 1.4
+    },
+    "protobuf_large": {
+      "node": 1.4,
+      "bun": 7.9,
+      "deno": 1.5,
+      "llrt": 0.9,
+      "esrun": 0.8
+    },
+    "wasm_compile": {
+      "node": 1.1,
+      "bun": 1.3,
+      "deno": 1.7,
+      "llrt": null,
+      "esrun": 2.5
+    },
+    "wasm_call": {
+      "node": 4.2,
+      "bun": 2.3,
+      "deno": 1.5,
+      "llrt": null,
+      "esrun": 3.8
+    },
+    "wasm_mem": {
+      "node": 0.5,
+      "bun": 0.6,
+      "deno": 0.2,
+      "llrt": null,
+      "esrun": 0.8
+    },
+    "wasi_start": {
+      "node": 0.9,
+      "bun": 1.8,
+      "deno": 2.6,
+      "llrt": null,
+      "esrun": 1.6
     },
     "wasi_syscall": {
-      "node": 1.6,
-      "bun": 1,
-      "deno": 2.4,
+      "node": 1.7,
+      "bun": 2.9,
+      "deno": 3,
       "llrt": null,
-      "esrun": 4.7
+      "esrun": 1.5
     },
     "rss": {
       "node": null,
@@ -2248,20 +2262,6 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
-    },
-    "udp_echo": {
-      "node": 2.2,
-      "bun": 1.2,
-      "deno": 5.3,
-      "llrt": 6.1,
-      "esrun": 2.2
-    },
-    "udp_send": {
-      "node": 1.3,
-      "bun": 1.9,
-      "deno": 1.2,
-      "llrt": 1.1,
-      "esrun": 1
     }
   },
   "results_n": {
@@ -2287,11 +2287,11 @@ export default {
       "esrun": 15
     },
     "rss_load": {
-      "node": 4,
-      "bun": 4,
-      "deno": 4,
-      "llrt": 4,
-      "esrun": 4
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "compute": {
       "node": 3,
@@ -2301,11 +2301,11 @@ export default {
       "esrun": 3
     },
     "json": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "jsonbig": {
       "node": 3,
@@ -2322,11 +2322,11 @@ export default {
       "esrun": 3
     },
     "strings": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "structured": {
       "node": 3,
@@ -2336,53 +2336,53 @@ export default {
       "esrun": 3
     },
     "errors": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
+    },
+    "async": {
       "node": 5,
       "bun": 5,
       "deno": 5,
       "llrt": 5,
       "esrun": 5
     },
-    "async": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
-    },
     "timers": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "url": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
-    },
-    "url_setter": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
-    },
-    "urlpattern": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": null,
-      "esrun": 12
-    },
-    "encoding": {
       "node": 3,
       "bun": 3,
       "deno": 3,
       "llrt": 3,
       "esrun": 3
+    },
+    "url_setter": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
+    },
+    "urlpattern": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": null,
+      "esrun": 3
+    },
+    "encoding": {
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "encoding_large": {
       "node": 3,
@@ -2392,18 +2392,18 @@ export default {
       "esrun": 3
     },
     "base64": {
-      "node": 4,
-      "bun": 4,
-      "deno": 4,
-      "llrt": 4,
-      "esrun": 4
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "buffers": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "headers": {
       "node": 3,
@@ -2413,25 +2413,25 @@ export default {
       "esrun": 3
     },
     "formdata": {
-      "node": 7,
-      "bun": 7,
-      "deno": 7,
-      "llrt": 7,
-      "esrun": 7
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "date_intl": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 12
+      "esrun": 3
     },
     "streams": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 12
+      "esrun": 3
     },
     "compression": {
       "node": 3,
@@ -2448,18 +2448,18 @@ export default {
       "esrun": 3
     },
     "crypto": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "crypto_asym": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "crypto_kdf": {
       "node": 3,
@@ -2490,18 +2490,18 @@ export default {
       "esrun": 3
     },
     "fetch": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fetch_upload": {
-      "node": 4,
-      "bun": 4,
-      "deno": 4,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 4
+      "esrun": 3
     },
     "http": {
       "node": 3,
@@ -2517,82 +2517,96 @@ export default {
       "llrt": null,
       "esrun": 3
     },
+    "udp_echo": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
+    },
+    "udp_send": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
+    },
     "fsread_small": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fsread_large": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fswrite_small": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fswrite_large": {
-      "node": 9,
-      "bun": 9,
-      "deno": 9,
-      "llrt": 9,
-      "esrun": 9
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fsappend_small": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
       "llrt": null,
-      "esrun": 12
+      "esrun": 5
     },
     "fsappend_large": {
-      "node": 4,
-      "bun": 4,
-      "deno": 4,
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
       "llrt": null,
-      "esrun": 4
+      "esrun": 5
     },
     "fsstat_small": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fsstat_many": {
-      "node": 4,
-      "bun": 4,
-      "deno": 4,
-      "llrt": 4,
-      "esrun": 4
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fsexists_small": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "fsexists_many": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "glob": {
-      "node": 12,
-      "bun": 12,
+      "node": 3,
+      "bun": 3,
       "deno": null,
       "llrt": null,
-      "esrun": 12
+      "esrun": 3
     },
     "spawn": {
       "node": 3,
@@ -2602,11 +2616,11 @@ export default {
       "esrun": 3
     },
     "jsonl_stream": {
-      "node": 4,
-      "bun": 4,
-      "deno": 4,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 4
+      "esrun": 3
     },
     "xml_small": {
       "node": 3,
@@ -2616,11 +2630,11 @@ export default {
       "esrun": 3
     },
     "xml_large": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "yaml_small": {
       "node": 3,
@@ -2644,32 +2658,32 @@ export default {
       "esrun": 3
     },
     "toml_large": {
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
+    },
+    "msgpack_small": {
       "node": 3,
       "bun": 3,
       "deno": 3,
       "llrt": 3,
       "esrun": 3
     },
-    "msgpack_small": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
-      "llrt": 12,
-      "esrun": 12
-    },
     "msgpack_large": {
-      "node": 6,
-      "bun": 6,
-      "deno": 6,
-      "llrt": 6,
-      "esrun": 6
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "protobuf_small": {
-      "node": 8,
-      "bun": 8,
-      "deno": 8,
-      "llrt": 8,
-      "esrun": 8
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "protobuf_large": {
       "node": 5,
@@ -2679,18 +2693,18 @@ export default {
       "esrun": 5
     },
     "wasm_compile": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 12
+      "esrun": 3
     },
     "wasm_call": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 12
+      "esrun": 3
     },
     "wasm_mem": {
       "node": 3,
@@ -2700,11 +2714,11 @@ export default {
       "esrun": 3
     },
     "wasi_start": {
-      "node": 12,
-      "bun": 12,
-      "deno": 12,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 12
+      "esrun": 3
     },
     "wasi_syscall": {
       "node": 3,
@@ -2726,470 +2740,470 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
-    },
-    "udp_echo": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
-      "llrt": 5,
-      "esrun": 5
-    },
-    "udp_send": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
-      "llrt": 3,
-      "esrun": 3
     }
   },
   "results_floor_gap": {
     "startup": {
-      "node": 0.6,
-      "bun": 1.8,
-      "deno": 1.2,
-      "llrt": 2.9,
-      "esrun": 1.2
+      "node": 0,
+      "bun": 0,
+      "deno": 0.7,
+      "llrt": 0,
+      "esrun": 0
     },
     "bigscript": {
-      "node": 0,
-      "bun": 3.3,
-      "deno": 0.3,
-      "llrt": 0.9,
-      "esrun": 0.5
+      "node": 1.8,
+      "bun": 1.3,
+      "deno": 0.9,
+      "llrt": 2.8,
+      "esrun": 3
     },
     "modules": {
-      "node": 0.1,
-      "bun": 0.4,
-      "deno": 1.9,
-      "llrt": 2.8,
-      "esrun": 0.8
+      "node": 4.2,
+      "bun": 0.8,
+      "deno": 0,
+      "llrt": 0.7,
+      "esrun": 0
     },
     "rss_load": {
-      "node": 5.8,
-      "bun": 2.9,
-      "deno": 0.2,
-      "llrt": 0.8,
-      "esrun": 6.6
+      "node": 0.9,
+      "bun": 3.1,
+      "deno": 2.1,
+      "llrt": 0.4,
+      "esrun": 1.5
     },
     "compute": {
-      "node": 3.7,
-      "bun": 1.5,
-      "deno": 0.9,
-      "llrt": 1.2,
-      "esrun": 3.2
-    },
-    "json": {
-      "node": 0.2,
-      "bun": 0.1,
-      "deno": 4.2,
-      "llrt": 0.1,
-      "esrun": 0.4
-    },
-    "jsonbig": {
-      "node": 4.1,
-      "bun": 1.1,
-      "deno": 2.9,
-      "llrt": 0.2,
-      "esrun": 4
-    },
-    "regex": {
-      "node": 0.6,
-      "bun": 6.4,
-      "deno": 2.5,
-      "llrt": 1.9,
-      "esrun": 5.5
-    },
-    "strings": {
-      "node": 0.7,
-      "bun": 0.4,
-      "deno": 1.5,
-      "llrt": 0.1,
-      "esrun": 0
-    },
-    "structured": {
-      "node": 1,
-      "bun": 1.7,
-      "deno": 1.1,
-      "llrt": 1.3,
-      "esrun": 4
-    },
-    "errors": {
-      "node": 0.7,
-      "bun": 3.4,
-      "deno": 1.5,
-      "llrt": 2.4,
-      "esrun": 4.1
-    },
-    "async": {
-      "node": 1,
-      "bun": 1,
-      "deno": 0.6,
-      "llrt": 3.4,
-      "esrun": 1.3
-    },
-    "timers": {
-      "node": 5.5,
-      "bun": 1,
-      "deno": 1.3,
-      "llrt": 0.8,
+      "node": 0.9,
+      "bun": 0,
+      "deno": 1.8,
+      "llrt": 0,
       "esrun": 0.6
     },
-    "url": {
-      "node": 2.3,
-      "bun": 1,
-      "deno": 0.1,
-      "llrt": 1,
-      "esrun": 1
+    "json": {
+      "node": 0.1,
+      "bun": 6.3,
+      "deno": 1.5,
+      "llrt": 1.1,
+      "esrun": 0.8
     },
-    "url_setter": {
-      "node": 0.6,
-      "bun": 1.2,
+    "jsonbig": {
+      "node": 0.2,
+      "bun": 3.3,
       "deno": 0.2,
-      "llrt": 0.9,
-      "esrun": 2
+      "llrt": 0,
+      "esrun": 0.5
     },
-    "urlpattern": {
-      "node": 3,
-      "bun": 0.3,
-      "deno": 2.6,
-      "llrt": null,
+    "regex": {
+      "node": 0,
+      "bun": 1.2,
+      "deno": 0.8,
+      "llrt": 0.6,
       "esrun": 0
     },
+    "strings": {
+      "node": 6.8,
+      "bun": 1,
+      "deno": 3,
+      "llrt": 0.1,
+      "esrun": 2.3
+    },
+    "structured": {
+      "node": 0.1,
+      "bun": 0.1,
+      "deno": 0.4,
+      "llrt": 2,
+      "esrun": 2.4
+    },
+    "errors": {
+      "node": 0,
+      "bun": 1.4,
+      "deno": 0,
+      "llrt": 0.3,
+      "esrun": 1.1
+    },
+    "async": {
+      "node": 0.4,
+      "bun": 0.8,
+      "deno": 1.3,
+      "llrt": 0.2,
+      "esrun": 0.7
+    },
+    "timers": {
+      "node": 2.6,
+      "bun": 0.7,
+      "deno": 0,
+      "llrt": 0.3,
+      "esrun": 1.8
+    },
+    "url": {
+      "node": 3.3,
+      "bun": 0.7,
+      "deno": 2,
+      "llrt": 0.6,
+      "esrun": 1.2
+    },
+    "url_setter": {
+      "node": 0.1,
+      "bun": 0,
+      "deno": 1.8,
+      "llrt": 0.5,
+      "esrun": 1.4
+    },
+    "urlpattern": {
+      "node": 0.3,
+      "bun": 0.3,
+      "deno": 0.1,
+      "llrt": null,
+      "esrun": 0.2
+    },
     "encoding": {
-      "node": 1.8,
-      "bun": 0.5,
-      "deno": 0.9,
-      "llrt": 1,
-      "esrun": 3.4
+      "node": 0.3,
+      "bun": 1.9,
+      "deno": 1.2,
+      "llrt": 1.7,
+      "esrun": 1.4
     },
     "encoding_large": {
-      "node": 0.4,
-      "bun": 1.5,
-      "deno": 0.6,
-      "llrt": 1.6,
-      "esrun": 0.1
+      "node": 0,
+      "bun": 1.9,
+      "deno": 0.9,
+      "llrt": 0.7,
+      "esrun": 1.7
     },
     "base64": {
-      "node": 1.5,
-      "bun": 0.8,
-      "deno": 4.1,
-      "llrt": 0.3,
-      "esrun": 0.4
-    },
-    "buffers": {
       "node": 0,
-      "bun": 0,
-      "deno": 2.4,
-      "llrt": 1.9,
-      "esrun": 3.3
-    },
-    "headers": {
-      "node": 1,
-      "bun": 0.2,
-      "deno": 0.4,
-      "llrt": 0.4,
-      "esrun": 2.1
-    },
-    "formdata": {
-      "node": 0.2,
-      "bun": 0.5,
-      "deno": 0.5,
+      "bun": 0.9,
+      "deno": 0,
       "llrt": 0.3,
       "esrun": 0.5
     },
-    "date_intl": {
-      "node": 0.2,
-      "bun": 1.1,
-      "deno": 0.5,
-      "llrt": null,
-      "esrun": 1.8
-    },
-    "streams": {
-      "node": 0,
+    "buffers": {
+      "node": 18.9,
       "bun": 0,
-      "deno": 1.5,
-      "llrt": null,
+      "deno": 0.8,
+      "llrt": 0.4,
       "esrun": 0
     },
-    "compression": {
-      "node": 1.6,
-      "bun": 2.3,
-      "deno": 0.1,
+    "headers": {
+      "node": 0.5,
+      "bun": 0.3,
+      "deno": 1.3,
+      "llrt": 1.9,
+      "esrun": 2
+    },
+    "formdata": {
+      "node": 3.5,
+      "bun": 2.5,
+      "deno": 4.9,
+      "llrt": 0.1,
+      "esrun": 1.4
+    },
+    "date_intl": {
+      "node": 1.3,
+      "bun": 0.3,
+      "deno": 1,
+      "llrt": null,
+      "esrun": 2.6
+    },
+    "streams": {
+      "node": 1.8,
+      "bun": 0,
+      "deno": 0.9,
       "llrt": null,
       "esrun": 4.9
     },
+    "compression": {
+      "node": 1.6,
+      "bun": 1.1,
+      "deno": 2.5,
+      "llrt": null,
+      "esrun": 1.8
+    },
     "sha256": {
-      "node": 5.4,
-      "bun": 0.1,
+      "node": 5.1,
+      "bun": 1.8,
       "deno": 1.6,
-      "llrt": 0.4,
-      "esrun": 0
+      "llrt": 0.8,
+      "esrun": 0.5
     },
     "crypto": {
-      "node": 14.6,
-      "bun": 2.3,
-      "deno": 0.5,
-      "llrt": 0.8,
-      "esrun": 0
+      "node": 4,
+      "bun": 3.4,
+      "deno": 2.9,
+      "llrt": 1.2,
+      "esrun": 0.3
     },
     "crypto_asym": {
-      "node": 10.9,
+      "node": 1.8,
       "bun": 1.4,
-      "deno": 0.2,
-      "llrt": 0,
-      "esrun": 0.1
+      "deno": 1,
+      "llrt": 0.4,
+      "esrun": 0.2
     },
     "crypto_kdf": {
-      "node": 0,
-      "bun": 1.1,
-      "deno": 0.1,
-      "llrt": 0,
-      "esrun": 0
+      "node": 0.1,
+      "bun": 0.6,
+      "deno": 0,
+      "llrt": 0.2,
+      "esrun": 0.9
     },
     "hash_hex": {
-      "node": 0.1,
-      "bun": 0.2,
-      "deno": 0.1,
-      "llrt": 0.4,
+      "node": 1.3,
+      "bun": 0.6,
+      "deno": 0.8,
+      "llrt": 0.9,
       "esrun": 0.5
     },
     "hash_chunks": {
-      "node": 0,
-      "bun": 0.1,
-      "deno": 0,
-      "llrt": 0.2,
-      "esrun": 0.1
+      "node": 0.5,
+      "bun": 0,
+      "deno": 0.5,
+      "llrt": 0.3,
+      "esrun": 0
     },
     "hash_fast": {
       "node": null,
-      "bun": 0.4,
+      "bun": 0.2,
       "deno": null,
-      "llrt": null,
-      "esrun": 0.9
-    },
-    "fetch": {
-      "node": 1.9,
-      "bun": 4.6,
-      "deno": 2.4,
-      "llrt": 0.6,
-      "esrun": 1.8
-    },
-    "fetch_upload": {
-      "node": 1.2,
-      "bun": 2.6,
-      "deno": 2.9,
       "llrt": null,
       "esrun": 1.6
     },
-    "http": {
+    "fetch": {
+      "node": 0.2,
+      "bun": 1.7,
+      "deno": 2.6,
+      "llrt": 1.7,
+      "esrun": 0.5
+    },
+    "fetch_upload": {
       "node": 0.9,
-      "bun": 0.4,
-      "deno": 1.6,
+      "bun": 0.5,
+      "deno": 2.7,
       "llrt": null,
-      "esrun": 0.3
+      "esrun": 4.9
+    },
+    "http": {
+      "node": 2.9,
+      "bun": 0.2,
+      "deno": 1.4,
+      "llrt": null,
+      "esrun": 2
     },
     "websocket": {
-      "node": 0.4,
-      "bun": 2.2,
-      "deno": 0.8,
-      "llrt": null,
-      "esrun": 0.2
-    },
-    "fsread_small": {
-      "node": 0.5,
-      "bun": 0.8,
-      "deno": 1.6,
-      "llrt": 0.8,
-      "esrun": 0
-    },
-    "fsread_large": {
       "node": 0.9,
-      "bun": 0.9,
-      "deno": 2.5,
-      "llrt": 0.8,
-      "esrun": 0.2
-    },
-    "fswrite_small": {
-      "node": 3.1,
-      "bun": 0,
-      "deno": 6.9,
-      "llrt": 0.4,
-      "esrun": 0.4
-    },
-    "fswrite_large": {
-      "node": 1,
-      "bun": 2.1,
-      "deno": 3.2,
-      "llrt": 0.8,
-      "esrun": 0.5
-    },
-    "fsappend_small": {
-      "node": 3.6,
-      "bun": 1.3,
-      "deno": 0.8,
+      "bun": 0.6,
+      "deno": 1.5,
       "llrt": null,
+      "esrun": 1.4
+    },
+    "udp_echo": {
+      "node": 5.5,
+      "bun": 0.4,
+      "deno": 2.8,
+      "llrt": 0.4,
       "esrun": 0.7
     },
-    "fsappend_large": {
-      "node": 0.4,
-      "bun": 6,
+    "udp_send": {
+      "node": 2.3,
+      "bun": 0.9,
       "deno": 0,
+      "llrt": 1,
+      "esrun": 2.8
+    },
+    "fsread_small": {
+      "node": 0.4,
+      "bun": 1.6,
+      "deno": 1,
+      "llrt": 4.5,
+      "esrun": 1.2
+    },
+    "fsread_large": {
+      "node": 6.1,
+      "bun": 1.2,
+      "deno": 0.1,
+      "llrt": 5.6,
+      "esrun": 23.2
+    },
+    "fswrite_small": {
+      "node": 2.7,
+      "bun": 0.8,
+      "deno": 2.7,
+      "llrt": 1.2,
+      "esrun": 3.5
+    },
+    "fswrite_large": {
+      "node": 1.7,
+      "bun": 1,
+      "deno": 2.2,
+      "llrt": 3.6,
+      "esrun": 3
+    },
+    "fsappend_small": {
+      "node": 0.5,
+      "bun": 1.9,
+      "deno": 0.2,
       "llrt": null,
-      "esrun": 3.8
+      "esrun": 1
+    },
+    "fsappend_large": {
+      "node": 1.5,
+      "bun": 4.1,
+      "deno": 2.5,
+      "llrt": null,
+      "esrun": 1.1
     },
     "fsstat_small": {
-      "node": 0,
-      "bun": 0.2,
-      "deno": 3.8,
-      "llrt": 0.2,
-      "esrun": 0
+      "node": 1.7,
+      "bun": 4.9,
+      "deno": 6.6,
+      "llrt": 1.4,
+      "esrun": 1
     },
     "fsstat_many": {
-      "node": 0.2,
-      "bun": 1.8,
-      "deno": 0.2,
-      "llrt": 1.8,
-      "esrun": 0.4
+      "node": 2.8,
+      "bun": 7,
+      "deno": 0.3,
+      "llrt": 0.2,
+      "esrun": 1.2
     },
     "fsexists_small": {
-      "node": 3.9,
-      "bun": 0,
-      "deno": 4,
-      "llrt": 0.8,
-      "esrun": 0.2
-    },
-    "fsexists_many": {
-      "node": 6.2,
-      "bun": 0.7,
-      "deno": 0.5,
-      "llrt": 0.3,
-      "esrun": 0
-    },
-    "glob": {
-      "node": 0.1,
-      "bun": 2.8,
-      "deno": null,
-      "llrt": null,
-      "esrun": 0.2
-    },
-    "spawn": {
-      "node": 1,
-      "bun": 1.7,
-      "deno": 1.6,
-      "llrt": 3.6,
-      "esrun": 3.8
-    },
-    "jsonl_stream": {
-      "node": 1,
-      "bun": 2.5,
-      "deno": 0.8,
-      "llrt": null,
-      "esrun": 1.8
-    },
-    "xml_small": {
-      "node": 0.1,
-      "bun": 5.9,
-      "deno": 1.5,
-      "llrt": 0.2,
-      "esrun": 0.5
-    },
-    "xml_large": {
-      "node": 0.6,
-      "bun": 0.4,
-      "deno": 1.6,
-      "llrt": 0.2,
-      "esrun": 0.2
-    },
-    "yaml_small": {
-      "node": 0.4,
-      "bun": 0.1,
-      "deno": 0.1,
-      "llrt": 0.2,
-      "esrun": 0.1
-    },
-    "yaml_large": {
-      "node": 0.7,
-      "bun": 1,
-      "deno": 0.9,
-      "llrt": 1,
-      "esrun": 0.1
-    },
-    "toml_small": {
-      "node": 0.6,
-      "bun": 0,
-      "deno": 1.5,
+      "node": 0.5,
+      "bun": 1.3,
+      "deno": 5.7,
       "llrt": 0.2,
       "esrun": 0.8
     },
-    "toml_large": {
-      "node": 0,
-      "bun": 0.6,
-      "deno": 0,
-      "llrt": 0.8,
-      "esrun": 0.1
-    },
-    "msgpack_small": {
+    "fsexists_many": {
       "node": 0.2,
-      "bun": 0.6,
-      "deno": 0.2,
-      "llrt": 1,
-      "esrun": 0.7
+      "bun": 0.3,
+      "deno": 4.7,
+      "llrt": 3.1,
+      "esrun": 0.5
     },
-    "msgpack_large": {
-      "node": 4.6,
-      "bun": 0.5,
-      "deno": 1,
-      "llrt": 0,
-      "esrun": 1.4
-    },
-    "protobuf_small": {
-      "node": 1.9,
-      "bun": 0.5,
-      "deno": 1.2,
-      "llrt": 0.3,
+    "glob": {
+      "node": 7.5,
+      "bun": 2.5,
+      "deno": null,
+      "llrt": null,
       "esrun": 0
     },
-    "protobuf_large": {
-      "node": 1.9,
-      "bun": 1.1,
-      "deno": 0.2,
-      "llrt": 3.5,
-      "esrun": 0.2
+    "spawn": {
+      "node": 0.2,
+      "bun": 1.6,
+      "deno": 1,
+      "llrt": 1.2,
+      "esrun": 4.6
     },
-    "wasm_compile": {
-      "node": 0,
-      "bun": 2.8,
-      "deno": 1.1,
+    "jsonl_stream": {
+      "node": 4.6,
+      "bun": 4.4,
+      "deno": 4.8,
       "llrt": null,
+      "esrun": 1.1
+    },
+    "xml_small": {
+      "node": 0,
+      "bun": 2.4,
+      "deno": 2,
+      "llrt": 2.3,
+      "esrun": 0.6
+    },
+    "xml_large": {
+      "node": 0.5,
+      "bun": 5.9,
+      "deno": 2.6,
+      "llrt": 2.6,
+      "esrun": 0.3
+    },
+    "yaml_small": {
+      "node": 0.8,
+      "bun": 0.1,
+      "deno": 1.6,
+      "llrt": 0.4,
+      "esrun": 2.6
+    },
+    "yaml_large": {
+      "node": 1.5,
+      "bun": 1.6,
+      "deno": 3,
+      "llrt": 0.7,
+      "esrun": 0.5
+    },
+    "toml_small": {
+      "node": 2.9,
+      "bun": 3.4,
+      "deno": 0.2,
+      "llrt": 0.2,
+      "esrun": 0.3
+    },
+    "toml_large": {
+      "node": 6.3,
+      "bun": 2.2,
+      "deno": 0.6,
+      "llrt": 0.3,
+      "esrun": 0.6
+    },
+    "msgpack_small": {
+      "node": 1,
+      "bun": 0.4,
+      "deno": 0.5,
+      "llrt": 0,
       "esrun": 3.4
     },
-    "wasm_call": {
-      "node": 0.9,
-      "bun": 0.5,
+    "msgpack_large": {
+      "node": 7.5,
+      "bun": 3.5,
+      "deno": 0.7,
+      "llrt": 1,
+      "esrun": 2
+    },
+    "protobuf_small": {
+      "node": 1.7,
+      "bun": 0.1,
+      "deno": 0.6,
+      "llrt": 0.3,
+      "esrun": 1.9
+    },
+    "protobuf_large": {
+      "node": 0.8,
+      "bun": 2.3,
       "deno": 0.5,
+      "llrt": 0.1,
+      "esrun": 0.1
+    },
+    "wasm_compile": {
+      "node": 1.8,
+      "bun": 0.8,
+      "deno": 1.4,
       "llrt": null,
-      "esrun": 0.4
+      "esrun": 3.3
+    },
+    "wasm_call": {
+      "node": 0.1,
+      "bun": 3.6,
+      "deno": 2.4,
+      "llrt": null,
+      "esrun": 0.8
     },
     "wasm_mem": {
-      "node": 0.4,
-      "bun": 0,
-      "deno": 2.6,
+      "node": 0,
+      "bun": 0.4,
+      "deno": 0.1,
       "llrt": null,
-      "esrun": 2.4
+      "esrun": 0.1
     },
     "wasi_start": {
-      "node": 0,
-      "bun": 0.3,
-      "deno": 0.4,
+      "node": 1.2,
+      "bun": 0.9,
+      "deno": 4.1,
       "llrt": null,
-      "esrun": 0.9
+      "esrun": 2.5
     },
     "wasi_syscall": {
-      "node": 2.2,
-      "bun": 0.4,
-      "deno": 3.5,
+      "node": 0.2,
+      "bun": 3,
+      "deno": 2.2,
       "llrt": null,
-      "esrun": 0.2
+      "esrun": 0.6
     },
     "rss": {
       "node": null,
@@ -3204,20 +3218,6 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
-    },
-    "udp_echo": {
-      "node": 1.5,
-      "bun": 0.1,
-      "deno": 6.7,
-      "llrt": 3.2,
-      "esrun": 2.1
-    },
-    "udp_send": {
-      "node": 2,
-      "bun": 0.8,
-      "deno": 1.1,
-      "llrt": 0,
-      "esrun": 0.2
     }
   },
   "status": {
@@ -3473,6 +3473,20 @@ export default {
       "llrt": "unsupported",
       "esrun": "ok"
     },
+    "udp_echo": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
+    "udp_send": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
     "fsread_small": {
       "node": "ok",
       "bun": "ok",
@@ -3677,20 +3691,6 @@ export default {
       "esrun": "ok"
     },
     "rss_loaded": {
-      "node": "ok",
-      "bun": "ok",
-      "deno": "ok",
-      "llrt": "ok",
-      "esrun": "ok"
-    },
-    "udp_echo": {
-      "node": "ok",
-      "bun": "ok",
-      "deno": "ok",
-      "llrt": "ok",
-      "esrun": "ok"
-    },
-    "udp_send": {
       "node": "ok",
       "bun": "ok",
       "deno": "ok",
