@@ -48,7 +48,7 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # V8 bindings (DECISIONS.md D2). Confined to the `engine` crate.
-v8 = "150.0.0"
+v8 = "152.2.0"
 # Async runtime + OS CSPRNG, used only by `default-providers` (DECISIONS.md D5).
 tokio = "1.52.3"
 getrandom = "0.4.2"

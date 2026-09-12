@@ -40,6 +40,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **V8 was updated to 152.2.0.**
+
 - **The repository's JavaScript projects now share one pnpm workspace.** The
   drivers, serialization source, website, and benchmarks use the root
   `pnpm-lock.yaml`; `tsr` remains the only task entry point for install, build,
