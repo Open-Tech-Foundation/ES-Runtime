@@ -56,7 +56,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - **Windows `esdev` test setup and source-map remapping work again.** File URLs
   now preserve drive letters for command-line and `esdev.json` setup modules,
   and mapped frames retain canonical URLs, so setup modules run before each
-  test and stack frames locate their mapped sources.
+  test and stack frames locate their mapped sources. The regression coverage
+  asserts the canonical single-separator Windows path.
 
 - **Recursive `runtime:fs` `mkdir` now accepts absolute paths inside an allowed
   root.** Its descriptor-safe walk begins at the resolved permitted root rather

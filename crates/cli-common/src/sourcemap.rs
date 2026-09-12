@@ -383,7 +383,7 @@ mod tests {
     fn a_windows_drive_url_stays_on_its_drive() {
         assert_eq!(
             split_position("file:///D:/work/app.js:12:34"),
-            Some((PathBuf::from(r"D:\\work\\app.js"), 12, 34))
+            Some((PathBuf::from(r"D:\work\app.js"), 12, 34))
         );
     }
 
