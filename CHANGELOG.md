@@ -93,6 +93,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- **The permission-trace E2E test runs on Windows.** Its fixtures now use
+  `file:` URLs for module specifiers and invoke the traced entry relative to
+  the fixture directory, so a drive letter cannot be misread as a URL scheme.
+
 - **The never-ending-burst watch test no longer depends on a timer firing on
   time.** Its flood sent an event every `SETTLE / 3` (10 ms) and asserted
   `coalesce` holds the full 500 ms cap — but on a loaded runner a missed wake

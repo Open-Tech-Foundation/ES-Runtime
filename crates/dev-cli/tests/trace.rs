@@ -29,6 +29,12 @@ fn stderr(out: &Output) -> String {
 
 /// Runs `esdev --trace-permissions <entry>` and returns everything it said.
 fn trace(entry: &Path, extra: &[&str]) -> String {
+    // The fixture directory is this process's working directory. Keep the
+    // entry relative to it: a Windows absolute path begins with `D:`, which a
+    // module resolver correctly reads as a URL scheme rather than a file path.
+    let entry = entry
+        .strip_prefix(env!("CARGO_TARGET_TMPDIR"))
+        .unwrap_or(entry);
     let out = Command::new(env!("CARGO_BIN_EXE_esdev"))
         // The sandbox is the working directory (D79): run from where the
         // fixtures live.
@@ -74,8 +80,8 @@ fn the_line_it_prints_is_the_line_that_runs_and_the_smallest_one() {
              import {{ answer }} from {:?};\n\
              const text = await file({:?}).text();\n\
              console.log(answer, text.length > 0, typeof env.PATH);\n",
-            dep.to_string_lossy(),
-            dep.to_string_lossy(),
+            url_of(&dep),
+            url_of(&dep),
         ),
     );
 
@@ -99,8 +105,7 @@ fn the_line_it_prints_is_the_line_that_runs_and_the_smallest_one() {
     // Sufficient: the line runs the program.
     let out = Command::new(&esrun)
         .current_dir(env!("CARGO_TARGET_TMPDIR"))
-        .args(&args[..args.len() - 1])
-        .arg(&app)
+        .args(&args)
         .output()
         .expect("spawn esrun");
     assert!(
@@ -114,14 +119,10 @@ fn the_line_it_prints_is_the_line_that_runs_and_the_smallest_one() {
     let grants: Vec<&String> = args.iter().filter(|a| a.starts_with("--allow-")).collect();
     assert!(!grants.is_empty(), "{report}");
     for dropped in &grants {
-        let kept: Vec<&String> = args[..args.len() - 1]
-            .iter()
-            .filter(|a| a != dropped)
-            .collect();
+        let kept: Vec<&String> = args.iter().filter(|a| a != dropped).collect();
         let out = Command::new(&esrun)
             .current_dir(env!("CARGO_TARGET_TMPDIR"))
             .args(&kept)
-            .arg(&app)
             .output()
             .expect("spawn esrun");
         assert!(
@@ -136,7 +137,7 @@ fn a_program_that_reaches_for_nothing_is_told_so() {
     let app = write("trace-pure.mjs", "console.log(6 * 7);\n");
     let report = trace(&app, &[]);
     assert!(report.contains("nothing at all"), "{report}");
-    assert_eq!(grant_line(&report), vec![app.to_str().unwrap()]);
+    assert_eq!(grant_line(&report), vec!["trace-pure.mjs"]);
 }
 
 #[test]
@@ -146,10 +147,7 @@ fn what_was_refused_is_reported_and_left_out_of_the_line() {
     let dep = write("trace-refused-dep.mjs", "export const x = 1;\n");
     let app = write(
         "trace-refused.mjs",
-        &format!(
-            "import {{ x }} from {:?};\nconsole.log(x);\n",
-            dep.to_string_lossy()
-        ),
+        &format!("import {{ x }} from {:?};\nconsole.log(x);\n", url_of(&dep)),
     );
     let report = trace(&app, &["--deny-all"]);
     assert!(report.contains("imports"), "{report}");
