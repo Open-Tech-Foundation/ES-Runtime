@@ -35,6 +35,9 @@ is the point, since none of the three has any business in a deployment.
 - Error snapshots carry an `[error]` kind tag and include enumerable own error
   properties.
 
+- Snapshot format coverage now verifies typed values, cycles, error metadata,
+  and text and binary file snapshots.
+
 ### Added
 
 - **Versioned snapshots for `runtime:test`.**

@@ -3009,6 +3009,61 @@ fn ci_never_creates_a_missing_snapshot() {
     );
 }
 
+#[test]
+fn snapshots_print_stable_values_errors_and_files() {
+    let dir = build_dir("t_snapshot_printer");
+    write_in(
+        &dir,
+        "printer.test.mjs",
+        "import { test, expect } from 'runtime:test';\n\
+         test('prints values', () => {\n\
+           const cycle = {}; cycle.self = cycle;\n\
+           expect({ text: 'one\\ntwo', big: 9n, bytes: new Uint8Array([3, 1]), map: new Map([['z', 1], ['a', 2]]), set: new Set(['z', 'a']), cycle }).toMatchSnapshot();\n\
+           expect('<main>ada</main>\\n').toMatchFileSnapshot('home.html');\n\
+           expect(new Uint8Array([0, 255, 3])).toMatchFileSnapshot('chart.bin');\n\
+         });\n\
+         test('prints errors', () => expect(() => { const error = new Error('broken', { cause: 'network' }); error.code = 'E_BROKEN'; throw error; }).toThrowErrorMatchingSnapshot());\n",
+    );
+    let first = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        first.status.success(),
+        "{}{}",
+        stdout(&first),
+        stderr(&first)
+    );
+    let snapshot = std::fs::read_to_string(dir.join("__snapshots__/printer.test.mjs.snap"))
+        .expect("read snapshot");
+    assert!(snapshot.contains("9n"), "{snapshot}");
+    assert!(snapshot.contains("Uint8Array [3, 1]"), "{snapshot}");
+    assert!(snapshot.contains("Map {\n    \"a\" => 2,"), "{snapshot}");
+    assert!(snapshot.contains("Set {\n    \"a\","), "{snapshot}");
+    assert!(snapshot.contains("[Circular]"), "{snapshot}");
+    assert!(snapshot.contains("[error]"), "{snapshot}");
+    assert!(snapshot.contains("E_BROKEN"), "{snapshot}");
+    assert_eq!(
+        std::fs::read(dir.join("__snapshots__/printer.test.mjs/chart.bin")).expect("read bytes"),
+        vec![0, 255, 3]
+    );
+    let second = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("rerun esdev test");
+    assert!(
+        second.status.success(),
+        "{}{}",
+        stdout(&second),
+        stderr(&second)
+    );
+    assert!(
+        stdout(&second).contains("snapshots: 4 matched"),
+        "{}",
+        stdout(&second)
+    );
+}
+
 /// A `.test.ts` file is the ordinary case: it must be stripped like any other,
 /// and its relative imports must resolve from its own directory.
 #[test]
