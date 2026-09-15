@@ -81,10 +81,10 @@ profile, not from first principles.
 {/* BEGIN probe:context — written by bench/probe-tracing.sh; do not hand-edit */}
 | | esrun | Node.js | Bun | Deno |
 | --- | --- | --- | --- | --- |
-| `await`, module never imported | 119ns | — | — | — |
-| Bare `await` | 2176ns | 142ns | 126ns | 102ns |
-| `await` inside a context scope | 2560ns | 576ns | 153ns | 382ns |
-| **Cost of propagation** | 384ns | 434ns | 27ns | 280ns |
+| `await`, module never imported | 114ns | — | — | — |
+| Bare `await` | 2165ns | 135ns | 112ns | 99ns |
+| `await` inside a context scope | 2548ns | 552ns | 138ns | 418ns |
+| **Cost of propagation** | 383ns | 417ns | 26ns | 319ns |
 
 <sub>esrun 0.28.0 · Node 24.14.0 · Bun 1.4.2+744846f84 · Deno 2.9.5 · Linux · 2026-09-15 · 200000 iterations</sub>
 {/* END probe:context */}

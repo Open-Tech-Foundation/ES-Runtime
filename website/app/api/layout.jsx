@@ -10,8 +10,6 @@ const NAV = [
     items: [
       { title: "Overview", path: "/api" },
       { title: "CLI", path: "/api/cli" },
-      { title: "runtime:context", path: "/api/context" },
-      { title: "runtime:diagnostics", path: "/api/diagnostics" },
       { title: "runtime:process", path: "/api/process" },
       { title: "runtime:path", path: "/api/path" },
       { title: "runtime:fs", path: "/api/fs" },
@@ -31,6 +29,8 @@ const NAV = [
       { title: "runtime:hashing", path: "/api/hashing" },
       { title: "runtime:system", path: "/api/system" },
       { title: "runtime:workers", path: "/api/workers" },
+      { title: "runtime:context", path: "/api/context" },
+      { title: "runtime:diagnostics", path: "/api/diagnostics" },
       { title: "runtime:wasi", path: "/api/wasi" },
       { title: "runtime:build", path: "/api/build" },
       { title: "runtime:test", path: "/api/test" },

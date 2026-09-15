@@ -30,8 +30,6 @@ const NAV = [
   {
     title: "Guides",
     items: [
-      { title: "Request context", path: "/docs/guides/context" },
-      { title: "Observing the runtime", path: "/docs/guides/diagnostics" },
       { title: "File handling", path: "/docs/guides/file-handling" },
       { title: "Glob matching", path: "/docs/glob" },
       { title: "Process & Env", path: "/docs/process" },
@@ -75,6 +73,8 @@ const NAV = [
       { title: "URLPattern", path: "/docs/urlpattern" },
       { title: "WebAssembly & WASI", path: "/docs/wasm" },
       { title: "Hashing", path: "/docs/guides/hashing" },
+      { title: "Request context", path: "/docs/guides/context" },
+      { title: "Observing the runtime", path: "/docs/guides/diagnostics" },
       {
         title: "Securing the runtime",
         items: [
@@ -129,13 +129,13 @@ const NAV = [
           { title: "Compared", path: "/docs/internals/http/comparison" },
         ],
       },
-      { title: "Async context", path: "/docs/internals/context" },
-      { title: "Diagnostics", path: "/docs/internals/diagnostics" },
       { title: "Sockets", path: "/docs/internals/sockets" },
       { title: "The fetch client", path: "/docs/internals/fetch" },
       { title: "WebSockets", path: "/docs/internals/websockets" },
       { title: "Workers", path: "/docs/internals/workers" },
       { title: "Durable workers", path: "/docs/internals/durable-workers" },
+      { title: "Async context", path: "/docs/internals/context" },
+      { title: "Diagnostics", path: "/docs/internals/diagnostics" },
       { title: "The filesystem", path: "/docs/internals/filesystem" },
       { title: "Databases", path: "/docs/internals/database" },
       { title: "Paths", path: "/docs/internals/path" },
