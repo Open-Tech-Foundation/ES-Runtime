@@ -62,6 +62,70 @@ either; a span has a deterministic end or it is not recorded.
 `inventory()` is the one place handles are named, and it names **ids**, from the
 registries the per-agent ownership check already maintains.
 
+## How a record knows its parent
+
+`parentId` names the span a record ran **inside**, in the same id space as `id`.
+It used to name a *task*, from `runtime:context`'s separate counter — so a record
+could claim a parent that did not exist, and a set of records was a flat list no
+backend could nest.
+
+The enclosing span rides in the async capture, beside the mapping and the trace.
+That is the whole mechanism, and it needed no new propagation: a capture already
+follows work across every `await`, timer and op callback, so an op issued six
+continuations deep inside a request still nests under it.
+
+```text
+  request span opened ──▶ capture.span = 12
+      handler yields   ──▶ promise stamped with capture (span 12)
+      continuation     ──▶ capture restored, span 12 current
+        fs_write       ──▶ parentId = 12
+```
+
+Two consequences worth stating:
+
+- **Nesting is not filtering.** A span id is allocated whenever *anything* is
+  recording, not when its own kind is wanted — otherwise `{ kinds: ["op"] }`
+  produced a flat list, because the request span it should have nested under was
+  never given an id.
+- **A handle is not active.** Only a scoped `span(name, options, fn)` makes
+  itself current. The first implementation made the handle active and a test
+  caught it nesting the *caller's* next op under a callee's span: calling an
+  async function runs its body on the caller's stack up to the first `await`, so
+  a span made active there is still active when control returns. That is the
+  `enterWith` failure in a different costume.
+
+## Exporting, and who is allowed to
+
+`--otel` makes the **runtime** export. The alternative — a package in userland
+calling `subscribe()` and POSTing — would have required granting application code
+`net` to reach the collector and `diagnostics` to read the program's own traces:
+exactly the two powers the capability model exists to withhold, granted in order
+to observe it.
+
+```text
+  recorder ─▶ host subscription ─▶ OTLP encoder ─▶ TelemetrySink ─▶ collector
+             (never reaches JS)     (in runtime)    (a provider)
+```
+
+The sink is transport only. What a span *means* is runtime knowledge; where the
+bytes go is deployment knowledge, which is why that seam is one method and not a
+telemetry SDK.
+
+| | |
+| --- | --- |
+| Protocol | OTLP/JSON. Protobuf means a schema, a generator and a build step for a payload this crate writes directly. |
+| Failure | Logged once, then dropped. Telemetry that cannot be delivered must never fail the program that produced it. |
+| Latency | Export hands the payload over and returns; delivery is the sink's. A slow collector never delays the request whose span it is. |
+| Shutdown | Flushed once, because delivery is otherwise in flight at exit — and a run that finishes quickly is often the one worth a trace of. |
+| Trace ids | `--otel` enables propagation and mints a root trace itself: a deployment's choice to export cannot depend on the program having imported `runtime:context`. |
+
+Three things only measurement found: `fetch`'s span carried `url.full: "GET"`
+(the generic "first string argument" rule picks the method there, so ops can now
+name the right one); the root trace was erased by the per-turn context reset, so
+every record outside a request was unexportable; and Unix nanoseconds computed in
+`f64` rounded every timestamp to ~128ns, because 1.7e18 is well past the 2^53 an
+`f64` holds exactly.
+
 ## What replaced `worker`
 
 The module was designed around a field this runtime cannot fill. The premise was
@@ -169,6 +233,15 @@ attributes a continuation to its turn.
 
 **`worker`, pool saturation, and `link.traceparent`** — all waiting on a
 scheduler that may never exist.
+
+**OTLP metrics and logs.** Only traces are exported; `metrics()` is readable
+in-process but is not shipped. **Protobuf**, for the same reason as above.
+
+**Memory, CPU and GC.** The runtime reports nothing about its own heap, its CPU
+time or its collections — see the gap named on the
+[loop metrics](#what-it-costs-measured) above, which covers the loop and nothing
+else. Notably, this runtime *enforces* a heap ceiling and gives no way to observe
+approaching it.
 
 See [D89](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md)
 for the decision record.
