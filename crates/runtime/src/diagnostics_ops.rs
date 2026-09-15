@@ -58,7 +58,7 @@ pub(crate) fn install(
     unsubscribe(engine, &recorder)?;
     user_span(engine, &recorder)?;
     inventory_op(engine, &recorder, inventory)?;
-    metrics(engine, &recorder)?;
+    metrics(engine, &recorder, clock.clone())?;
     Ok(())
 }
 
@@ -247,7 +247,11 @@ fn inventory_op(
 }
 
 /// `diagnostics_metrics()` → the pull-only counters.
-fn metrics(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Result<()> {
+fn metrics(
+    engine: &mut dyn Engine,
+    recorder: &Rc<RefCell<Recorder>>,
+    clock: Arc<dyn Clock>,
+) -> Result<()> {
     let recorder = recorder.clone();
     engine.register_op(
         OpDecl::sync("diagnostics_metrics", move |_args| {
@@ -264,6 +268,30 @@ fn metrics(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Result<
                     histogram(&loop_metrics.duration),
                 ),
                 ("loopLagMs".to_string(), histogram(&loop_metrics.lag)),
+                // The process, not this agent: resident memory is one address
+                // space shared by every agent, and the CPU total covers every
+                // thread. Both describe the agents *around* the caller, which is
+                // why they are here behind `diagnostics` and not on
+                // `runtime:process` beside the caller's own figures.
+                (
+                    "process".to_string(),
+                    Value::Object(vec![
+                        (
+                            "rss".to_string(),
+                            Value::Number(es_runtime_engine::sysinfo::resident_bytes() as f64),
+                        ),
+                        (
+                            "cpu".to_string(),
+                            Value::Number(es_runtime_engine::sysinfo::process_cpu_ms()),
+                        ),
+                        // Every agent shares the clock the process's runtime was
+                        // built with, so this reads the same from all of them.
+                        (
+                            "uptime".to_string(),
+                            Value::Number(clock.monotonic_micros() as f64 / 1_000.0),
+                        ),
+                    ]),
+                ),
             ]))
         })
         .requires(Capability::DiagnosticsObserve),

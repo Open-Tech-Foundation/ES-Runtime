@@ -153,6 +153,36 @@ declare module "runtime:diagnostics" {
      * gap with long turns is a loop that cannot keep up.
      */
     loopLagMs: Histogram;
+    /**
+     * The **whole process**, every agent together — not just the caller.
+     *
+     * This is the half `runtime:process` cannot report: `memoryUsage()` and
+     * `cpuTime()` there describe the calling agent alone and need no capability
+     * for that reason, while these describe the agents around it and so sit
+     * behind `diagnostics`.
+     */
+    process: ProcessMetrics;
+  }
+
+  /** The process-wide figures in {@link Metrics}. */
+  export interface ProcessMetrics {
+    /**
+     * Resident set size in bytes — the memory the OS has actually given this
+     * process. Larger than any isolate's `heapUsed`: it holds every agent's
+     * heap, V8 itself, and the runtime.
+     *
+     * This is the number a container's memory limit is compared against, so it
+     * is the one that decides whether the process is killed.
+     */
+    rss: number;
+    /**
+     * CPU milliseconds used by **every thread together**, since the process
+     * started. At least any single agent's `cpuTime()`, and on a busy multi-core
+     * process it can exceed the wall clock.
+     */
+    cpu: number;
+    /** Milliseconds since the **process** started. */
+    uptime: number;
   }
 
   /** The loop's own numbers. Needs `diagnostics`. */
