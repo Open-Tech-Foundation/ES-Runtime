@@ -83,6 +83,15 @@ const lag: number = m.loopLagMs.mean;
 // @ts-expect-error — no pool saturation: there is no pool to saturate.
 const saturation: number = m.poolSaturation;
 
+// The process-wide half, which `runtime:process` deliberately does not report.
+const rss: number = m.process.rss;
+const processCpu: number = m.process.cpu;
+const processUptime: number = m.process.uptime;
+
+// @ts-expect-error — per-agent figures stay in `runtime:process`; this object is
+// the process, so it has no heap of its own.
+const heap: number = m.process.heapUsed;
+
 // --- span ---------------------------------------------------------------------
 
 const s: Span = span("checkout");
@@ -101,7 +110,7 @@ span("x", { attributes: { nested: { a: 1 } } });
 // frame per span, which this module refuses to capture.
 const origin: number = record.origin;
 
-export { attr, handles, hist, ids, kind, lag, m, nested, origin, p99, resource, s, saturation, sub };
+export { attr, handles, heap, hist, ids, kind, lag, m, nested, origin, p99, processCpu, processUptime, resource, rss, s, saturation, sub };
 
 // --- the two span forms -------------------------------------------------------
 

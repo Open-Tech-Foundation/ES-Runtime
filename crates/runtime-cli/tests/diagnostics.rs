@@ -696,7 +696,7 @@ fn metrics_reports_the_loops_shape() {
         "#,
         &["--allow-diagnostics"],
     );
-    assert_eq!(out[0], "keys: loopLagMs,tick,tickDurationMs,ticks");
+    assert_eq!(out[0], "keys: loopLagMs,process,tick,tickDurationMs,ticks");
     assert_eq!(out[1], "hist keys: count,max,mean,min,p50,p99");
     assert_eq!(out[2], "ticks advance: true");
     assert_eq!(out[3], "durations recorded: true");
@@ -1076,4 +1076,34 @@ fn a_failure_reason_is_payload_and_follows_detail() {
     assert_eq!(detail[0], "status: error");
     assert_eq!(detail[1], "message: present");
     assert_eq!(detail[2], "names the file: true");
+}
+
+/// `metrics().process` reports the whole process — resident memory, total CPU
+/// across every thread, and how long the process has run.
+///
+/// Gated on `diagnostics` rather than sitting beside the caller's own figures in
+/// `runtime:process`, because these describe the agents *around* the caller.
+#[test]
+fn metrics_reports_the_whole_process() {
+    let out = lines(
+        "process-metrics",
+        r#"
+        import { metrics } from "runtime:diagnostics";
+        import { cpuTime, memoryUsage } from "runtime:process";
+        const until = Date.now() + 40;
+        while (Date.now() < until) { /* burn */ }
+        const p = metrics().process;
+        console.log("keys:", Object.keys(p).sort().join(","));
+        // Resident memory holds the whole isolate, so it exceeds the JS heap.
+        console.log("rss > heap:", p.rss > memoryUsage().heapUsed);
+        // Every thread together is at least this one.
+        console.log("cpu >= mine:", p.cpu + 1 >= cpuTime());
+        console.log("uptime advancing:", p.uptime > 0);
+        "#,
+        &["--allow-diagnostics"],
+    );
+    assert_eq!(out[0], "keys: cpu,rss,uptime");
+    assert_eq!(out[1], "rss > heap: true");
+    assert_eq!(out[2], "cpu >= mine: true");
+    assert_eq!(out[3], "uptime advancing: true");
 }

@@ -157,3 +157,81 @@ fn each_agent_answers_for_itself() {
     );
     assert_eq!(out[4], "perf says process: true");
 }
+
+/// `cpuTime()` measures **this agent's thread**, which is what makes "is it *me*
+/// burning the CPU?" answerable — a process-wide number cannot say.
+#[test]
+fn cpu_time_measures_this_agent() {
+    let out = lines(
+        "cpu",
+        r#"
+        import { cpuTime } from "runtime:process";
+        const before = cpuTime();
+        const until = Date.now() + 80;
+        while (Date.now() < until) { /* burn */ }
+        const after = cpuTime();
+        console.log("advanced:", after > before);
+        // A burn is almost all CPU, so the two should be close. Generous either
+        // way: this runs beside a whole test suite.
+        console.log("plausible:", after - before > 20 && after - before < 400);
+        "#,
+        &[],
+    );
+    assert_eq!(out[0], "advanced: true");
+    assert_eq!(out[1], "plausible: true");
+}
+
+/// A worker burning CPU is charged to the worker, not to the agent that started
+/// it — the property the per-thread reading exists for.
+#[test]
+fn a_busy_worker_is_charged_to_itself() {
+    std::fs::write(
+        temp("pm-cpu-child.mjs"),
+        r#"
+        import { cpuTime } from "runtime:process";
+        const until = Date.now() + 150;
+        while (Date.now() < until) { /* burn */ }
+        self.postMessage({ cpu: cpuTime() });
+        "#,
+    )
+    .expect("write worker");
+
+    let out = lines(
+        "cpu-worker",
+        r#"
+        import { cpuTime } from "runtime:process";
+        const w = new Worker(new URL("./pm-cpu-child.mjs", import.meta.url));
+        const d = await new Promise((r) => w.addEventListener("message", (e) => r(e.data)));
+        console.log("worker burned:", d.cpu > 100);
+        // The parent was idle while the worker burned, so its own CPU must not
+        // have followed.
+        console.log("parent idle:", cpuTime() < 100);
+        w.terminate();
+        "#,
+        &["--allow-all"],
+    );
+    assert_eq!(out[0], "worker burned: true");
+    assert_eq!(
+        out[1], "parent idle: true",
+        "a worker's CPU landed on its parent"
+    );
+}
+
+/// The process-wide figures are **not** on `runtime:process`: they describe the
+/// agents around you, so they sit behind `diagnostics`.
+#[test]
+fn process_wide_figures_need_the_diagnostics_capability() {
+    let out = lines(
+        "process-gated",
+        r#"
+        import * as process from "runtime:process";
+        import { metrics } from "runtime:diagnostics";
+        console.log("not on process:", ["rss", "processCpu", "cpuUsage"].every((k) => !(k in process)));
+        try { metrics(); console.log("metrics: allowed"); }
+        catch (e) { console.log(`metrics: ${e.name}`); }
+        "#,
+        &[],
+    );
+    assert_eq!(out[0], "not on process: true");
+    assert_eq!(out[1], "metrics: NotAllowedError");
+}
