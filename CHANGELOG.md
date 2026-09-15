@@ -125,6 +125,15 @@ namespace) is unstable and may change between minor releases until the API freez
   `runtime:http`'s server and `esrun upgrade`'s client both carried it. Yanked
   `chacha20` 0.10.1 goes with it, which had failed `cargo deny` on its own.
 
+### Removed
+
+- **`origin` and `resolveOrigin`** are gone from `runtime:diagnostics` before
+  they ever did anything. A record says what ran and on what; it does not say
+  which line of your code issued it. The only way to know a line is a JS stack
+  frame, measured at ~1.5µs per span even for one unformatted frame — an order of
+  magnitude more than the rest of a span costs — and no other runtime provides it
+  either. `diagnostics-detail` is unchanged and still gates `attributes`.
+
 ### Fixed
 
 - **A diagnostics record's `parentId` now names a span**, in the same id space as

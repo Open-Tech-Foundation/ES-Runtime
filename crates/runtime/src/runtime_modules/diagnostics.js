@@ -11,8 +11,7 @@
 //
 //   diagnostics          subscribe, inventory, metrics, span — timings, kinds,
 //                        counts, scheduler state. `attributes` come back empty.
-//   diagnostics-detail   populates `attributes` and enables resolveOrigin.
-//                        Implies `diagnostics`.
+//   diagnostics-detail   populates `attributes`. Implies `diagnostics`.
 //
 // `detail` adds no exports of its own; it widens what the first one returns. A
 // profiler runs on `diagnostics` alone and sees full timings with empty payloads,
@@ -274,12 +273,5 @@ globalThis.__internal.diagnostics.openSpan = (name, attributes) => {
   }
 };
 
-function resolveOrigin(origin) {
-  if (!Number.isInteger(origin) || origin < 0) {
-    throw new TypeError("resolveOrigin: origin must be a non-negative integer");
-  }
-  return ops.diagnostics_resolve_origin(origin);
-}
-
-export { subscribe, inventory, metrics, span, resolveOrigin };
-export default { subscribe, inventory, metrics, span, resolveOrigin };
+export { subscribe, inventory, metrics, span };
+export default { subscribe, inventory, metrics, span };

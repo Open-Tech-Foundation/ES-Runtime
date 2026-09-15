@@ -63,11 +63,6 @@ declare module "runtime:diagnostics" {
     /** Populated only with `diagnostics-detail`; otherwise an empty object. */
     attributes: Readonly<{ [key: string]: AttributeValue }>;
     /**
-     * Opaque token for {@link resolveOrigin}. Currently always `0` — nothing
-     * captures an origin yet.
-     */
-    origin: number;
-    /**
      * Which turn of the loop this landed in. Read beside a `tick` record it
      * separates "this was slow" from "this waited behind something else".
      */
@@ -195,21 +190,11 @@ declare module "runtime:diagnostics" {
     fn: () => R,
   ): R;
 
-  /**
-   * Resolves a record's `origin` to a source position.
-   *
-   * Needs `diagnostics-detail`. **Nothing captures an origin yet**, so every
-   * record's `origin` is `0` and this always throws; the export exists so the
-   * capability is real from the first release.
-   */
-  export function resolveOrigin(origin: number): { file: string; line: number; column: number };
-
   const _default: {
     subscribe: typeof subscribe;
     inventory: typeof inventory;
     metrics: typeof metrics;
     span: typeof span;
-    resolveOrigin: typeof resolveOrigin;
   };
   export default _default;
 }

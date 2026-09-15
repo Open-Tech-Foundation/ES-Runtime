@@ -41,7 +41,6 @@ const sub = subscribe({ kinds: ["op"], minDuration: 10 }, ({ records, dropped })
 | `metrics()` | `() => Metrics` | Pull-only loop numbers. | `metrics().loopLagMs.p99` |
 | `span(name, options?)` | `(string, { attributes? }) => Span` | A measurement. Records its parent; nests nothing. | `span("checkout").end()` |
 | `span(name, options, fn)` | `(string, options, () => R) => R` | **Active** for `fn`, so the work inside nests under it. Ends when `fn` returns or its promise settles. | `span("load", {}, () => work())` |
-| `resolveOrigin(origin)` | `(number) => object` | `diagnostics-detail`. Nothing captures an origin yet. | — |
 | `default` | `object` | An aggregate of all named exports. | |
 
 `Subscription.close()` delivers whatever is buffered, then stops. It is
@@ -90,7 +89,6 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | `endedAt` | `number` | When it finished. |
 | `status` | `string` | `"ok"`, `"error"`, `"cancelled"`. A failure is recorded, not dropped. |
 | `attributes` | `object` | Empty without `diagnostics-detail`. |
-| `origin` | `number` | Opaque token. Currently always `0`. |
 | `tick` | `number` | Which turn of the loop it landed in. |
 
 `startedAt - scheduledAt` is always queue delay. For a **timer** that is lag past
@@ -181,7 +179,6 @@ kinds over-report.
 
 | Error | When |
 | --- | --- |
-| `NotAllowedError` | Any export without `diagnostics`; `resolveOrigin` without `diagnostics-detail`. |
+| `NotAllowedError` | Any export without `diagnostics`. |
 | `TypeError` | An unknown `kinds` entry, a non-function `onBatch`, a non-string span name, non-object `attributes`. |
 | `RangeError` | `minDuration < 0`, `sample` outside `0..1`, `bufferSize < 1`. |
-| `Error` | `resolveOrigin` — nothing captures an origin yet. |

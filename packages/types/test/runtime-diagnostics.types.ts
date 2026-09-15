@@ -5,7 +5,7 @@
 // fails the build when the error it names stops happening, so a declaration that
 // quietly widened to `any` breaks this file rather than passing it.
 
-import { inventory, metrics, resolveOrigin, span, subscribe } from "runtime:diagnostics";
+import { inventory, metrics, span, subscribe } from "runtime:diagnostics";
 import type {
   AttributeValue,
   Batch,
@@ -97,12 +97,9 @@ span(42);
 // @ts-expect-error — attributes are label-shaped, not arbitrary objects.
 span("x", { attributes: { nested: { a: 1 } } });
 
-// --- resolveOrigin ------------------------------------------------------------
-
-const origin: { file: string; line: number; column: number } = resolveOrigin(record.origin);
-
-// @ts-expect-error — a token is a number.
-resolveOrigin("1");
+// @ts-expect-error — `origin` was dropped: a source position needs a stack
+// frame per span, which this module refuses to capture.
+const origin: number = record.origin;
 
 export { attr, handles, hist, ids, kind, lag, m, nested, origin, p99, resource, s, saturation, sub };
 

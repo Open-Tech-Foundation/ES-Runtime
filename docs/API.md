@@ -918,7 +918,7 @@ capability — only its operations do.
 | `Run`       | Spawn a child process — `runtime:system`. Never implied by another capability: a child runs **outside** every confinement here (no capability check, no root jail, no execution deadline), so granting it to guest code grants everything the host user can do. |
 | `HrTime`    | Access high-resolution timing.                                      |
 | `DiagnosticsObserve` | Observe the runtime's own execution — `runtime:diagnostics` span timings, kinds, counts, the handle inventory, loop metrics. Gated although it never leaves the isolate: it is authority over the *rest of the program*, since a library that could subscribe would learn every filesystem call, query and request the process makes. `attributes` come back empty. |
-| `DiagnosticsDetail`  | Populate an observed span's `attributes` (paths, URLs, SQL text) and resolve its origin. Strictly wider than `DiagnosticsObserve`, which it **implies**: the difference between "a query took 40ms" and "*this* query took 40ms". |
+| `DiagnosticsDetail`  | Populate an observed span's `attributes` (paths, URLs, SQL text). Strictly wider than `DiagnosticsObserve`, which it **implies**: the difference between "a query took 40ms" and "*this* query took 40ms". |
 
 Filesystem access (including module resolution) is confined to a project **root
 jail**, on by default and not currently optional (DECISIONS D25). Paths are
@@ -961,7 +961,7 @@ scopes and the rules are otherwise identical.
 | `--allow-signals` | `Signals` | `runtime:process` `onSignal` |
 | `--allow-workers` | `Worker` | `new Worker(url)` |
 | `--allow-diagnostics` | `DiagnosticsObserve` | `runtime:diagnostics` — timings, kinds, counts, inventory, metrics |
-| `--allow-diagnostics-detail` | `DiagnosticsDetail` | the above **plus** span `attributes` and `resolveOrigin` |
+| `--allow-diagnostics-detail` | `DiagnosticsDetail` | the above **plus** span `attributes` |
 
 #### Exporting OpenTelemetry
 
@@ -1316,7 +1316,7 @@ filtered in the host and delivered in batches.
 
 **Capability:** `DiagnosticsObserve` (`--allow-diagnostics`) for everything here;
 `DiagnosticsDetail` (`--allow-diagnostics-detail`) additionally populates
-`attributes` and would resolve an origin. `detail` **implies** `observe` and adds
+`attributes`. `detail` **implies** `observe` and adds
 no exports of its own — it widens what `observe` returns, so a profiler runs on
 `observe` alone and sees full timings with empty payloads.
 
@@ -1381,7 +1381,6 @@ subscribe({}, ({ records }) => {
 | `inventory()` | `() => { handles }` | The host handles this agent **owns** (see below). |
 | `metrics()` | `() => Metrics` | Pull-only: turn count, turn durations, loop lag. |
 | `span(name, options?)` | `(string, { attributes? }) => Span` | Opens a span the program ends itself — `end()`, `fail()`, `cancel()`. |
-| `resolveOrigin(origin)` | `(number) => { file, line, column }` | `DiagnosticsDetail`. **Nothing captures an origin yet**, so every record's `origin` is `0` and this throws. |
 | `default` | `object` | An aggregate of all named exports. |
 
 ### `Filter`
@@ -1412,7 +1411,6 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | `scheduledAt` / `startedAt` / `endedAt` | `number` | Monotonic ms, fractional — the same clock as `performance.now()`. |
 | `status` | `"ok" \| "error" \| "cancelled"` | How it finished. A failed op is recorded, not dropped. |
 | `attributes` | `object` | Empty without `DiagnosticsDetail`. |
-| `origin` | `number` | Opaque token. Currently always `0`. |
 | `tick` | `number` | Which turn of the loop it landed in. |
 
 ### `inventory()`

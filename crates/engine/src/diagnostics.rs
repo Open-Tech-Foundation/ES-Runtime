@@ -171,12 +171,6 @@ pub struct SpanRecord {
     pub status: SpanStatus,
     /// Empty unless a subscription holds `diagnostics:detail`.
     pub attributes: Vec<(Rc<str>, AttrValue)>,
-    /// Opaque token resolved on demand, or `0` for "not captured".
-    ///
-    /// Captured **only while a subscription holds detail**, so the default cost
-    /// of a span is no walk at all and the cost of asking is attributable to the
-    /// subscription that asked.
-    pub origin: u32,
     /// Which turn of the driven loop this landed in.
     pub tick: u64,
 }
@@ -322,7 +316,7 @@ pub struct Recorder {
     /// touching a subscription.
     wanted: u8,
     /// Whether *any* subscription holds detail. Decides whether attributes are
-    /// collected and origins captured at all.
+    /// collected at all.
     detail: bool,
     subs: Vec<Subscription>,
     next_sub: u64,
@@ -386,7 +380,7 @@ impl Recorder {
         self.wanted & kind.bit() != 0
     }
 
-    /// Whether attributes and origins should be collected — that is, whether any
+    /// Whether attributes should be collected — that is, whether any
     /// subscription paid for them with `diagnostics:detail`.
     pub fn wants_detail(&self) -> bool {
         self.detail
@@ -467,7 +461,6 @@ impl Recorder {
                 ended_at,
                 status: SpanStatus::Ok,
                 attributes: Vec::new(),
-                origin: 0,
                 tick,
             });
         }
@@ -570,7 +563,6 @@ impl Recorder {
             if !sub.detail {
                 // Timings and kinds for an `observe`-only subscriber; no payload.
                 record.attributes.clear();
-                record.origin = 0;
             }
             sub.buffer.push_back(record);
         }
@@ -718,7 +710,6 @@ impl OpenSpan {
             ended_at,
             status,
             attributes,
-            origin: 0,
             tick: self.tick,
         });
     }
@@ -780,10 +771,6 @@ pub fn record_to_value(record: &SpanRecord) -> crate::Value {
             Value::String(record.status.name().to_string()),
         ),
         ("attributes".to_string(), attributes),
-        (
-            "origin".to_string(),
-            Value::Number(f64::from(record.origin)),
-        ),
         ("tick".to_string(), Value::Number(record.tick as f64)),
     ])
 }
@@ -930,7 +917,6 @@ fn span_close_inner(
         ended_at,
         status,
         attributes,
-        origin: 0,
         tick,
     });
 }
@@ -976,7 +962,6 @@ mod tests {
             ended_at: ended,
             status: SpanStatus::Ok,
             attributes: vec![(Rc::from("path"), AttrValue::Str(Rc::from("/etc/passwd")))],
-            origin: 7,
             tick: 1,
         }
     }
@@ -1038,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn attributes_and_origin_need_detail() {
+    fn attributes_need_detail() {
         let mut recorder = Recorder::new();
         recorder.subscribe(Filter::default(), false);
         recorder.record(record(SpanKind::Op, None, 0.0, 1.0));
@@ -1047,14 +1032,12 @@ mod tests {
             batch[0].1[0].attributes.is_empty(),
             "observe leaked payload"
         );
-        assert_eq!(batch[0].1[0].origin, 0, "observe leaked an origin");
 
         let mut recorder = Recorder::new();
         recorder.subscribe(Filter::default(), true);
         recorder.record(record(SpanKind::Op, None, 0.0, 1.0));
         let batch = recorder.drain();
         assert_eq!(batch[0].1[0].attributes.len(), 1);
-        assert_eq!(batch[0].1[0].origin, 7);
     }
 
     #[test]

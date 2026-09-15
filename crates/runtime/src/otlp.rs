@@ -270,7 +270,6 @@ mod tests {
             ended_at: 12.5,
             status: SpanStatus::Ok,
             attributes: Vec::new(),
-            origin: 0,
             tick: 4,
         }
     }

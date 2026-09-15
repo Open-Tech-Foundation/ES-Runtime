@@ -240,21 +240,18 @@ fn a_record_carries_the_documented_shape() {
         console.log("ordered:", r.endedAt >= r.startedAt);
         console.log("trace:", r.traceId === currentTask().traceId);
         console.log("tick:", Number.isInteger(r.tick) && r.tick > 0);
-        console.log("origin:", r.origin);
         "#,
         &["--allow-read", "--allow-write", "--allow-diagnostics"],
     );
     assert_eq!(
         out[0],
-        "attributes,endedAt,id,kind,name,origin,parentId,scheduledAt,source,startedAt,status,tick,traceId"
+        "attributes,endedAt,id,kind,name,parentId,scheduledAt,source,startedAt,status,tick,traceId"
     );
     assert_eq!(out[1], "op runtime ok");
     assert_eq!(out[2], "delay0: true");
     assert_eq!(out[3], "ordered: true");
     assert_eq!(out[4], "trace: true");
     assert_eq!(out[5], "tick: true");
-    // Origins are not captured; the field is honest about it rather than absent.
-    assert_eq!(out[6], "origin: 0");
 }
 
 /// A failing op is recorded with `status: "error"` rather than dropped — a span
@@ -706,36 +703,6 @@ fn metrics_reports_the_loops_shape() {
     assert_eq!(out[4], "a long turn: true");
     assert_eq!(out[5], "lag recorded: true");
     assert_eq!(out[6], "quantiles ordered: true");
-}
-
-/// `resolveOrigin` is gated on `detail` and says plainly that nothing captures
-/// an origin yet, rather than returning a fabricated position.
-#[test]
-fn resolve_origin_is_gated_and_honest() {
-    let denied = lines(
-        "origin-denied",
-        r#"
-        import { resolveOrigin } from "runtime:diagnostics";
-        try { resolveOrigin(1); } catch (e) { console.log(e.name); }
-        "#,
-        &["--allow-diagnostics"],
-    );
-    assert_eq!(denied, ["NotAllowedError"]);
-
-    let granted = lines(
-        "origin-granted",
-        r#"
-        import { resolveOrigin } from "runtime:diagnostics";
-        try { resolveOrigin(1); } catch (e) { console.log(e.name, e.message); }
-        try { resolveOrigin(-1); } catch (e) { console.log(e.name); }
-        "#,
-        &["--allow-diagnostics-detail"],
-    );
-    assert_eq!(
-        granted[0],
-        "Error span origins are not captured: every record's `origin` is 0"
-    );
-    assert_eq!(granted[1], "TypeError");
 }
 
 // ---------------------------------------------------------------------------

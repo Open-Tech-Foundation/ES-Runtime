@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, ExceptionClass};
+use es_runtime_common::Capability;
 use es_runtime_engine::diagnostics::{
     AttrValue, Filter, Recorder, SpanKind, SpanRecord, SpanStatus,
 };
@@ -59,7 +59,6 @@ pub(crate) fn install(
     user_span(engine, &recorder)?;
     inventory_op(engine, &recorder, inventory)?;
     metrics(engine, &recorder)?;
-    resolve_origin(engine)?;
     Ok(())
 }
 
@@ -216,7 +215,6 @@ fn user_span(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Resul
                 ended_at,
                 status,
                 attributes,
-                origin: 0,
                 tick,
             });
             Ok(Value::Undefined)
@@ -266,27 +264,6 @@ fn metrics(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Result<
             ]))
         })
         .requires(Capability::DiagnosticsObserve),
-    )?;
-    Ok(())
-}
-
-/// `diagnostics_resolve_origin(token)` → `{ file, line, column }`.
-///
-/// The one op gated on `detail` rather than `observe`: a source position is the
-/// program's own text, which is the same disclosure `attributes` are.
-fn resolve_origin(engine: &mut dyn Engine) -> Result<()> {
-    engine.register_op(
-        OpDecl::sync("diagnostics_resolve_origin", move |_args| {
-            // Nothing captures an origin yet, so every record carries `0` and
-            // there is nothing to resolve. Kept — behind its gate — so the
-            // capability is real from the first release and a later capture does
-            // not have to introduce a permission at the same time.
-            Err(OpError::new(
-                ExceptionClass::Error,
-                "span origins are not captured: every record's `origin` is 0",
-            ))
-        })
-        .requires(Capability::DiagnosticsDetail),
     )?;
     Ok(())
 }

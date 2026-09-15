@@ -222,11 +222,17 @@ truth rather than a host copy that drifts.
 
 ## Not done
 
-**Origins.** Nothing captures one, every record's `origin` is `0`, and
-`resolveOrigin` says so behind its gate rather than fabricating a position. A
-source position for a user span has no source but a stack frame, and capturing a
-stack per span is precisely what this module refuses — so it needs a decision
-rather than a default.
+**Source positions.** There is no `origin` field and no `resolveOrigin`, by
+decision. A record says *what* ran and on what (`name`, plus `file.path` /
+`db.query.text` / `url.full` under `detail`); it does not say which line of your
+code issued it.
+
+The only way to know a line is a JS stack frame, and measurement put that at
+~1.5µs per span even for a single unformatted frame — an order of magnitude more
+than the rest of a span costs. No other runtime provides it either: Deno's
+auto-instrumented spans carry no `code.filepath`, and OpenTelemetry's own
+convention for auto-instrumentation is a good `name` plus attributes. If it comes
+back it will be a per-subscription flag, so the cost lands on whoever asked.
 
 **Microtask spans.** The highest-volume and lowest-value kind; `tick` already
 attributes a continuation to its turn.
