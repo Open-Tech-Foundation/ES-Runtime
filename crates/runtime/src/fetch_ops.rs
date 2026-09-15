@@ -198,7 +198,10 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                     ))
                 })
             })
-            .requires(Capability::Net),
+            .requires(Capability::Net)
+            // The URL, not the method: `fetch`'s first string argument is the
+            // verb, so the default heuristic would label the span `GET`.
+            .target_arg(1),
         )?;
     }
 

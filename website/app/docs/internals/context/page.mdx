@@ -76,6 +76,41 @@ contexts. A persistent structure would trade that for an allocation per node and
 only pays at a context count no real program has. Worth revisiting from a
 profile, not from first principles.
 
+## What propagation costs
+
+{/* BEGIN probe:context — written by bench/probe-tracing.sh; do not hand-edit */}
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| `await`, module never imported | 119ns | — | — | — |
+| Bare `await` | 2176ns | 142ns | 126ns | 102ns |
+| `await` inside a context scope | 2560ns | 576ns | 153ns | 382ns |
+| **Cost of propagation** | 384ns | 434ns | 27ns | 280ns |
+
+<sub>esrun 0.28.0 · Node 24.14.0 · Bun 1.4.2+744846f84 · Deno 2.9.5 · Linux · 2026-09-15 · 200000 iterations</sub>
+{/* END probe:context */}
+
+The same workload everywhere: a value made current once, then read from inside a
+continuation. Read the rows carefully, because the interesting number is not the
+last one.
+
+**The propagation itself is competitive** — the last row is what `run()` and
+`get()` add over the same loop, and ours is in the same range as Node's.
+
+**The promise hook is not.** Our second row is an order of magnitude above the
+others because importing the module installs an isolate-wide promise hook, and
+V8 then takes a slower path for *every* promise in the program — including the
+ones that have nothing to do with any context. Node reaches the same goal without
+that penalty. This is a real gap and it is the reason the first row exists: a
+program that never imports `runtime:context` has no hook and pays none of it,
+which is why the hook is installed lazily rather than always.
+
+Measurement puts roughly 60% of the hook's cost in a single pair of
+`SetPrivate`/`GetPrivate` calls — the per-promise slot the capture is stamped
+into. Splitting that slot into cheaper pieces was tried and measured *worse*: it
+is the number of private accesses that costs, not the allocation. Closing the gap
+needs a cheaper per-promise slot than the public V8 API offers, which is the same
+thing Node solved by not using promise hooks at all.
+
 ## EventTarget
 
 A listener runs in the mapping of whoever called `dispatchEvent`. Nothing

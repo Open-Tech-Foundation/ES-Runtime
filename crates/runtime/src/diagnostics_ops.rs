@@ -130,44 +130,85 @@ fn unsubscribe(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Res
     Ok(())
 }
 
-/// `diagnostics_span(name, startedAt, status, attributes)` — records a span the
-/// guest opened and has now ended.
+/// `diagnostics_span_open()` → `[spanId, startedAt]`, or `[0, 0]` when nothing
+/// is being recorded.
 ///
-/// The guest keeps the start time rather than the host keeping an open-span
-/// table: an unended span would otherwise be a host-side leak that guest code
-/// controls, and there is nothing useful the host could do about one.
+/// Split from the close so a span can be **current** for its own duration: the
+/// module makes the returned id the enclosing span, and everything recorded
+/// until it ends nests under it. Handing back the start time in the same call
+/// saves a `performance.now()` — which is itself an op, and would otherwise
+/// record a span inside every span.
+///
+/// The guest keeps the id and the start time; the host keeps no open-span table.
+/// An unended span is then simply never recorded, rather than a host-side leak
+/// that guest code controls.
 fn user_span(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Result<()> {
+    let rec = recorder.clone();
+    engine.register_op(
+        OpDecl::sync("diagnostics_span_open", move |_args| {
+            let mut rec = rec.borrow_mut();
+            // `is_recording`, not `wants(User)`: an id is needed so the span can
+            // be made current and nest what happens inside it, even for a
+            // subscriber that filtered this kind away.
+            if !rec.is_recording() {
+                return Ok(Value::Array(vec![
+                    Value::Number(0.0),
+                    Value::Number(0.0),
+                    Value::Number(-1.0),
+                ]));
+            }
+            let now = rec.now();
+            Ok(Value::Array(vec![
+                Value::Number(rec.next_span_id() as f64),
+                Value::Number(now),
+            ]))
+        })
+        .requires(Capability::DiagnosticsObserve),
+    )?;
+
     let recorder = recorder.clone();
     engine.register_op(
-        OpDecl::sync("diagnostics_span", move |args| {
-            let name: Rc<str> = Rc::from(args.first().and_then(Value::as_str).unwrap_or("span"));
-            let started_at = args.get(1).and_then(Value::as_number).unwrap_or(0.0);
-            let status = match args.get(2).and_then(Value::as_str) {
+        OpDecl::sync("diagnostics_span_close", move |args| {
+            let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+            if id == 0 {
+                return Ok(Value::Undefined);
+            }
+            let parent = args.get(1).and_then(Value::as_number).unwrap_or(-1.0);
+            let name: Rc<str> = Rc::from(args.get(2).and_then(Value::as_str).unwrap_or("span"));
+            let started_at = args.get(3).and_then(Value::as_number).unwrap_or(0.0);
+            let status = match args.get(4).and_then(Value::as_str) {
                 Some("error") => SpanStatus::Error,
                 Some("cancelled") => SpanStatus::Cancelled,
                 _ => SpanStatus::Ok,
             };
+            // The guest says which it is; `user` is the only one a program can
+            // open for itself, and `runtime:http` opens `request`.
+            let kind = match args.get(7).and_then(Value::as_str) {
+                Some("request") => SpanKind::Request,
+                _ => SpanKind::User,
+            };
             let mut rec = recorder.borrow_mut();
-            if !rec.wants(SpanKind::User) {
+            if !rec.wants(kind) {
                 return Ok(Value::Undefined);
             }
             // Attributes are marshaled only when something paid for them. A
-            // `detail` subscriber is rare; a `span()` call in a hot loop is not.
+            // `detail` subscriber is rare; a `span()` in a hot loop is not.
             let attributes = if rec.wants_detail() {
-                parse_attributes(args.get(3))
+                parse_attributes(args.get(5))
             } else {
                 Vec::new()
             };
             let ended_at = rec.now();
-            let id = rec.next_span_id();
             let tick = rec.tick();
             rec.record(SpanRecord {
                 id,
-                parent_id: None,
-                trace_id: None,
+                parent_id: (parent >= 0.0).then_some(parent as u64),
+                trace_id: args.get(6).and_then(Value::as_str).map(Rc::from),
                 name,
-                kind: SpanKind::User,
-                user: true,
+                kind,
+                // `source: "user"` means the *program* opened it. A request span
+                // is the runtime's, even though it comes through the same op.
+                user: kind == SpanKind::User,
                 // A user span is running from the moment it is opened; there is
                 // no queue in front of it.
                 scheduled_at: started_at,

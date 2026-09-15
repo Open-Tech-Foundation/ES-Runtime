@@ -48,6 +48,7 @@ mod system_net;
 mod system_sync_fs;
 mod system_websocket;
 mod task;
+mod telemetry;
 mod timers;
 mod tls;
 #[cfg(test)]
@@ -79,5 +80,6 @@ pub use system_net::SystemNet;
 pub use system_sync_fs::SystemSyncFileSystem;
 pub use system_websocket::SystemWebSocket;
 pub use task::TokioTaskSpawner;
+pub use telemetry::OtlpHttpSink;
 pub use timers::TokioTimers;
 pub use worker::{ThreadWorkerHost, WorkerProcess, WorkerRuntimeFactory};

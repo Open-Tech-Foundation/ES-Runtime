@@ -40,6 +40,12 @@
 import { currentTask } from "runtime:context";
 
 const ops = globalThis.__ops;
+// The enclosing-span accessor, installed by the engine. A span made current here
+// is carried across every `await` by `runtime:context`'s propagation, which is
+// what lets an op six continuations deep still nest under the request that
+// caused it.
+const swapSpan = globalThis.__ctx_swap_span;
+const currentSpan = globalThis.__ctx_span;
 
 // Forcing the root trace to exist, once, at load: every record the host writes
 // is attributed to a trace, and a program that never reads `currentTask()`
@@ -161,9 +167,79 @@ function metrics() {
   return ops.diagnostics_metrics();
 }
 
-// A span the program opens and closes itself, sharing the id space and the
-// timeline with the runtime's own. `source: "user"` is what tells them apart.
-function span(name, options) {
+// Opens a span. It records its **parent** — the span enclosing it right now —
+// but does **not** become the enclosing span itself.
+//
+// That split is OpenTelemetry's (`startSpan` vs `startActiveSpan`) and it is the
+// same reason `runtime:context` has no `enterWith`. Calling an async function
+// runs its body synchronously up to the first `await`, so a span that made
+// itself active there would still be active when control returned to its
+// *caller* — and every later op in the caller would nest under a span that had
+// nothing to do with it. Only `run()` below makes one active, for exactly the
+// call it wraps.
+function openSpan(name, attributes, kind) {
+  const [id, startedAt] = ops.diagnostics_span_open();
+  if (id === 0) return null;
+  const parent = currentSpan();
+  const traceId = currentTask().traceId;
+  let ended = false;
+  const finish = (status) => {
+    // Ending twice would record the same work twice; the second call is the bug,
+    // and ignoring it is kinder than a throw out of a `finally`.
+    if (ended) return;
+    ended = true;
+    ops.diagnostics_span_close(
+      id, parent, name, startedAt, status, attributes ?? {}, traceId, kind ?? "user",
+    );
+  };
+  return {
+    id,
+    end: () => finish("ok"),
+    fail: () => finish("error"),
+    cancel: () => finish("cancelled"),
+    // Runs `fn` with this span active, so everything `fn` does — and everything
+    // it schedules, through `runtime:context`'s propagation — nests under it.
+    // The active span is restored **synchronously**, before `fn`'s promise
+    // settles: what carries it into the continuations is the capture each
+    // promise took, not a value left lying around for the caller to trip over.
+    run(fn) {
+      const previous = swapSpan(id);
+      try {
+        const result = fn();
+        if (result !== null && typeof result?.then === "function") {
+          return result.then(
+            (value) => {
+              finish("ok");
+              return value;
+            },
+            (error) => {
+              finish("error");
+              throw error;
+            },
+          );
+        }
+        finish("ok");
+        return result;
+      } catch (e) {
+        finish("error");
+        throw e;
+      } finally {
+        swapSpan(previous);
+      }
+    },
+  };
+}
+
+// A span the program opens, sharing the id space and the timeline with the
+// runtime's own. `source: "user"` is what tells them apart.
+//
+//   span("checkout").end()                  // times a region; nests nothing
+//   span("checkout", {}, () => work())      // …and everything `work` does
+//
+// With a callback the span is **active** for that call, so the ops inside it
+// become its children. Without one it is a plain measurement: it records its own
+// parent, and nothing nests under it.
+function span(name, options, fn) {
   if (typeof name !== "string") {
     throw new TypeError(`span: name must be a string, got ${typeof name}`);
   }
@@ -171,21 +247,32 @@ function span(name, options) {
   if (attributes !== undefined && (typeof attributes !== "object" || attributes === null)) {
     throw new TypeError(`span: attributes must be an object, got ${typeof attributes}`);
   }
-  const startedAt = performance.now();
-  let ended = false;
-  const finish = (status) => {
-    // Ending twice would record the same work twice; the second call is the bug
-    // and silently ignoring it is kinder than a throw from a `finally`.
-    if (ended) return;
-    ended = true;
-    ops.diagnostics_span(name, startedAt, status, attributes ?? {});
-  };
-  return Object.freeze({
-    end: () => finish("ok"),
-    fail: () => finish("error"),
-    cancel: () => finish("cancelled"),
-  });
+  if (fn !== undefined && typeof fn !== "function") {
+    throw new TypeError(`span: fn must be a function, got ${typeof fn}`);
+  }
+  const open = openSpan(name, attributes, "user");
+  if (fn !== undefined) return open === null ? fn() : open.run(fn);
+  const noop = () => {};
+  return Object.freeze(
+    open === null
+      ? { end: noop, fail: noop, cancel: noop }
+      : { end: open.end, fail: open.fail, cancel: open.cancel },
+  );
 }
+
+// `runtime:http` opens a span per request through this rather than importing the
+// module, for the reason `runtime:context` gives: an import would enable
+// recording for every server in the runtime. Filled in only once this module has
+// actually been loaded, and it answers `null` when nothing is watching.
+globalThis.__internal.diagnostics.openSpan = (name, attributes) => {
+  try {
+    return openSpan(name, attributes, "request");
+  } catch {
+    // The capability is not held. A server must not fail to serve because it
+    // could not be observed.
+    return null;
+  }
+};
 
 function resolveOrigin(origin) {
   if (!Number.isInteger(origin) || origin < 0) {

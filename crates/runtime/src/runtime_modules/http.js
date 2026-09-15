@@ -309,10 +309,109 @@ function describeReturn(v) {
 // entropy drawn for nobody. `runtime:http` deliberately does not *import*
 // `runtime:context` — that would switch the hook on for every server in the
 // runtime (DECISIONS.md D88).
-function inRequestScope(headers, trustTraceHeaders, run) {
+function inRequestScope(headers, trustTraceHeaders, method, url, run) {
+  if (!globalThis.__ctx_enabled()) return run();
+  const inner = () => inRequestSpan(method, url, run);
+  const trace = inboundTrace(headers, trustTraceHeaders);
   const scope = __internal.context.scope;
-  if (scope === undefined || !globalThis.__ctx_enabled()) return run();
-  return scope(inboundTrace(headers, trustTraceHeaders), "http-request", run);
+  // The program imported `runtime:context`, so it owns the mapping's shape —
+  // `currentTask().kind` and the per-context values both come from there.
+  if (scope !== undefined) return scope(trace, "http-request", inner);
+  // It did not, which is the shape a deployment gets when it turned telemetry on
+  // without changing any code. There is then nothing that can *read* a mapping,
+  // so a fresh trace and a cleared frame is the whole of what a request scope
+  // has to be, and the engine's own accessors are enough to install it.
+  return rootScope(trace ?? mintTrace(), inner);
+}
+
+// A request root built from the engine's accessors alone, for when
+// `runtime:context` was never loaded.
+function rootScope(traceId, run) {
+  const savedTrace = globalThis.__ctx_swap_trace(traceId);
+  const savedFrame = globalThis.__ctx_swap(undefined);
+  try {
+    return run();
+  } finally {
+    globalThis.__ctx_swap(savedFrame);
+    globalThis.__ctx_swap_trace(savedTrace);
+  }
+}
+
+// A W3C trace id. The same 16 random bytes `runtime:context` mints, drawn the
+// same ungated way, because a trace id is a correlation key and not a secret.
+function mintTrace() {
+  const bytes = ops.random_bytes(16);
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
+  return hex;
+}
+
+// The path of an absolute URL, by slicing rather than by `new URL()`.
+//
+// Parsing is an **op**, so it would be recorded — and recorded *before* the
+// request span exists, landing in the request's trace as a sibling of the
+// request rather than a child of it. A span's first act should not be to make a
+// record it cannot contain. The host only ever hands this an absolute URL, which
+// is why slicing is safe here and would not be in general.
+function pathOf(url) {
+  const scheme = url.indexOf("://");
+  if (scheme === -1) return url;
+  const slash = url.indexOf("/", scheme + 3);
+  if (slash === -1) return "/";
+  const query = url.indexOf("?", slash);
+  return query === -1 ? url.slice(slash) : url.slice(slash, query);
+}
+
+// The root span of an inbound request's trace, covering the whole handler
+// including a streamed response — so every op the handler issues nests under it
+// rather than arriving as a flat list an exporter cannot shape.
+//
+// The name is the method alone. OpenTelemetry's convention is `{method} {route}`
+// and falls back to `{method}` when no route is known, which is always here:
+// this runtime has no router, and putting the raw path in the name would make
+// every distinct URL its own span name — the high-cardinality mistake that makes
+// a trace backend unusable. The path travels as an attribute instead.
+function inRequestSpan(method, url, run) {
+  const [id, startedAt] = globalThis.__span_open();
+  // Nothing is recording — no subscriber, no exporter.
+  if (id === 0) return run();
+
+  const parent = globalThis.__ctx_span();
+  const traceId = globalThis.__ctx_trace() ?? null;
+  const attributes = ["http.request.method", method, "url.path", pathOf(url)];
+  let ended = false;
+  const finish = (status) => {
+    if (ended) return;
+    ended = true;
+    globalThis.__span_close(id, parent, method, startedAt, status, traceId, attributes);
+  };
+
+  // Active for the *synchronous* call only. What carries it into the handler's
+  // continuations is the capture each promise takes, so restoring here — before
+  // the response is finished — is what keeps this request's span out of the
+  // accept loop and out of the next request.
+  const previous = globalThis.__ctx_swap_span(id);
+  let result;
+  try {
+    result = run();
+  } catch (e) {
+    finish("error");
+    throw e;
+  } finally {
+    globalThis.__ctx_swap_span(previous);
+  }
+  // `run()` hands back the handler's promise, so the span ends when the response
+  // is complete rather than when the handler first yields.
+  return Promise.resolve(result).then(
+    (value) => {
+      finish("ok");
+      return value;
+    },
+    (error) => {
+      finish("error");
+      throw error;
+    },
+  );
 }
 
 async function handleRequest(entry, handler) {
@@ -528,7 +627,9 @@ class Server {
           // contexts put there — belongs to this request and not to the accept
           // loop that dispatched it.
           const entry = [requestId, method, url, hasBody, headers, peerHost, peerPort];
-          inRequestScope(headers, trustTraceHeaders, () => handleRequest(entry, handler));
+          inRequestScope(headers, trustTraceHeaders, method, url, () =>
+            handleRequest(entry, handler),
+          );
         }
       }
       resolveFinished();

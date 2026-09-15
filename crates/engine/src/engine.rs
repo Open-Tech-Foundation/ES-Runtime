@@ -357,6 +357,16 @@ pub trait Engine {
         (0, None, None)
     }
 
+    /// Installs the trace id every task under the root runs in, if none has been
+    /// minted yet.
+    ///
+    /// For a deployment that turned on telemetry without the program asking: a
+    /// span must name a trace, and a program that never imported
+    /// `runtime:context` has not minted one.
+    fn set_root_trace(&mut self, trace: &str) {
+        let _ = trace;
+    }
+
     /// Returns async-context propagation to the root mapping.
     ///
     /// Called once per tick by the driver, when no JS is on the stack, so that a
@@ -788,6 +798,10 @@ impl V8Engine {
             // value whose object identity is load-bearing, and the op boundary
             // flattens values (see `async_context`).
             crate::async_context::install_builtins(scope, context)?;
+            // `__span_open`/`__span_close`: how `runtime:http` opens a span per
+            // request when the *deployment* asked for telemetry (see
+            // `diagnostics::install_span_builtins`).
+            crate::diagnostics::install_span_builtins(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is
@@ -912,6 +926,7 @@ impl Engine for V8Engine {
             op.required_capabilities,
             op.handler,
             op.keeps_loop_alive,
+            op.target_arg,
         );
         // When the op shells are baked into a restored snapshot, the JS function
         // already exists — binding the handler (above) is all that is needed, and
@@ -989,6 +1004,12 @@ impl Engine for V8Engine {
 
     fn enable_async_context(&mut self) {
         crate::async_context::enable(&mut self.isolate, &self.context, &self.context_state);
+    }
+
+    fn set_root_trace(&mut self, trace: &str) {
+        self.context_state
+            .borrow_mut()
+            .set_root_trace(std::rc::Rc::from(trace));
     }
 
     fn reset_async_context(&mut self) {

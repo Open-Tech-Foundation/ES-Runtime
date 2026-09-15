@@ -31,6 +31,26 @@ Delivery is **once per subscription per turn**, never once per record. The test
 for that is a counter on the delivery binding rather than a timing measurement,
 because the claim is categorical rather than statistical.
 
+### What it costs, measured
+
+{/* BEGIN probe:diagnostics — written by bench/probe-tracing.sh; do not hand-edit */}
+| One op, under | Cost |
+| --- | --- |
+| nothing subscribed | 88ns |
+| a subscription (`diagnostics`) | 177ns |
+| a subscription (`diagnostics-detail`) | 184ns |
+| `--otel` exporting | 179ns |
+
+<sub>esrun 0.28.0 · Node 24.14.0 · Bun 1.4.2+744846f84 · Deno 2.9.5 · Linux · 2026-09-15 · 200000 iterations</sub>
+{/* END probe:diagnostics */}
+
+One op in a loop — `performance.now()`, which does no I/O, so what is measured is
+the recording path rather than a syscall. The first row is the claim above: with
+nothing subscribed there is a mask test and then nothing at all.
+
+`--otel` sits alongside a subscription rather than above it, because the encode
+and the hand-off are on the loop and the delivery is not.
+
 ## No resource, ever
 
 A record carries an id, a name, a kind and four numbers. It never carries the

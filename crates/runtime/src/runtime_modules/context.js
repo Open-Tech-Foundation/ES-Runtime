@@ -122,9 +122,11 @@ function currentTrace() {
   if (scoped !== undefined) return scoped;
   if (ambientTrace === null) {
     ambientTrace = mintTraceId();
-    // Installed as the root scope's trace, so every task under the root — and
-    // every record the host writes for one — reports the same id.
-    swapTrace(ambientTrace);
+    // Installed as the *root* trace rather than swapped in: a swapped one is
+    // scoped and is cleared when the loop returns to the root each turn, and
+    // this is the agent's own — every task under the root, and every record the
+    // host writes for one, reports it.
+    globalThis.__ctx_root_trace(ambientTrace);
   }
   return ambientTrace;
 }

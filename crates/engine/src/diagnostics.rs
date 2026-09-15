@@ -55,16 +55,20 @@ pub enum SpanKind {
     Timer,
     /// A span the guest opened with `span()`.
     User,
+    /// One inbound HTTP request, opened by `runtime:http` — the root of that
+    /// request's trace, covering the handler and its streamed response.
+    Request,
     /// One turn of the driven loop.
     Tick,
 }
 
 impl SpanKind {
     /// Every kind, for building a mask from a filter's names.
-    pub const ALL: [SpanKind; 4] = [
+    pub const ALL: [SpanKind; 5] = [
         SpanKind::Op,
         SpanKind::Timer,
         SpanKind::User,
+        SpanKind::Request,
         SpanKind::Tick,
     ];
 
@@ -74,7 +78,8 @@ impl SpanKind {
             SpanKind::Op => 1 << 0,
             SpanKind::Timer => 1 << 1,
             SpanKind::User => 1 << 2,
-            SpanKind::Tick => 1 << 3,
+            SpanKind::Request => 1 << 3,
+            SpanKind::Tick => 1 << 4,
         }
     }
 
@@ -85,6 +90,7 @@ impl SpanKind {
             SpanKind::Op => "op",
             SpanKind::Timer => "timer",
             SpanKind::User => "user",
+            SpanKind::Request => "request",
             SpanKind::Tick => "tick",
         }
     }
@@ -138,8 +144,13 @@ pub enum AttrValue {
 pub struct SpanRecord {
     /// This span's id, unique within the agent and shared with user spans.
     pub id: u64,
-    /// The task that scheduled this one — `runtime:context`'s task lineage, so
-    /// the two modules agree on what "parent" means.
+    /// The span this one ran **inside**, or `None` for a root span.
+    ///
+    /// A span id, in the same space as `id`, so a set of records forms a tree an
+    /// exporter can walk. Deliberately *not* the parent task: task lineage is
+    /// `runtime:context`'s answer (`currentTask().parentId`) and is a different
+    /// question — two sibling ops inside one request share a parent span while
+    /// having different parent tasks.
     pub parent_id: Option<u64>,
     /// The trace this span belongs to, as `runtime:context` reports it.
     pub trace_id: Option<Rc<str>>,
@@ -196,9 +207,22 @@ impl Default for Filter {
     }
 }
 
+/// Where a subscription's batches go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sink {
+    /// A `subscribe()` call in the guest; delivered by a call into JS.
+    Js,
+    /// The runtime itself — the OTLP exporter. Drained host-side and never
+    /// dispatched, so exporting telemetry needs no capability in the *program*:
+    /// a deployment that exports traces does not thereby let its own code read
+    /// them, or reach the collector.
+    Host,
+}
+
 /// One subscriber's ring and its loss counter.
 struct Subscription {
     id: u64,
+    sink: Sink,
     filter: Filter,
     /// Bounded by `filter.buffer_size`; **drop newest** on overflow.
     ///
@@ -368,6 +392,17 @@ impl Recorder {
         self.detail
     }
 
+    /// Whether *anything* is being recorded, whatever the kind.
+    ///
+    /// Distinct from [`wants`](Self::wants) because **nesting is not filtering**.
+    /// A subscriber watching only ops still wants those ops nested under the
+    /// request that caused them, so the enclosing span has to be opened and made
+    /// current even though its own record will be filtered away. Gating the id
+    /// on `wants(Request)` instead made `{ kinds: ["op"] }` produce a flat list.
+    pub fn is_recording(&self) -> bool {
+        self.wanted != 0
+    }
+
     /// The id for a span about to be recorded.
     pub fn next_span_id(&mut self) -> u64 {
         let id = self.next_id;
@@ -441,10 +476,16 @@ impl Recorder {
 
     /// Adds a subscription and returns its id.
     pub fn subscribe(&mut self, filter: Filter, detail: bool) -> u64 {
+        self.subscribe_to(filter, detail, Sink::Js)
+    }
+
+    /// Adds a subscription delivered to `sink`.
+    pub fn subscribe_to(&mut self, filter: Filter, detail: bool, sink: Sink) -> u64 {
         let id = self.next_sub;
         self.next_sub += 1;
         self.subs.push(Subscription {
             id,
+            sink,
             filter,
             buffer: VecDeque::new(),
             dropped: 0,
@@ -541,9 +582,16 @@ impl Recorder {
     /// Only subscriptions with something to say are returned, so a quiet tick
     /// hands back an empty `Vec` and the caller does nothing.
     pub(crate) fn drain(&mut self) -> Vec<(u64, Vec<SpanRecord>, u64)> {
+        self.drain_from(Sink::Js)
+    }
+
+    /// The same, for one sink. A guest subscription and the exporter each hold
+    /// their own copy of a record, so one closing or falling behind cannot
+    /// affect the other.
+    pub fn drain_from(&mut self, sink: Sink) -> Vec<(u64, Vec<SpanRecord>, u64)> {
         let mut batches = Vec::new();
         for sub in &mut self.subs {
-            if sub.buffer.is_empty() && sub.dropped == 0 {
+            if sub.sink != sink || (sub.buffer.is_empty() && sub.dropped == 0) {
                 continue;
             }
             let records: Vec<SpanRecord> = sub.buffer.drain(..).collect();
@@ -619,7 +667,7 @@ impl OpenSpan {
         recorder: &std::rc::Rc<std::cell::RefCell<Recorder>>,
         kind: SpanKind,
         name: impl FnOnce() -> Rc<str>,
-        identity: impl FnOnce() -> (u64, Option<u64>, Option<Rc<str>>),
+        scope: impl FnOnce() -> (Option<u64>, Option<Rc<str>>),
         scheduled_at: Option<f64>,
     ) -> Option<OpenSpan> {
         let mut rec = recorder.borrow_mut();
@@ -627,7 +675,10 @@ impl OpenSpan {
             return None;
         }
         let started_at = rec.now();
-        let (_, parent_id, trace_id) = identity();
+        // The enclosing span and the trace, both read from the async capture, so
+        // a record nests where the work actually happened rather than where the
+        // call stack happens to be.
+        let (parent_id, trace_id) = scope();
         Some(OpenSpan {
             id: rec.next_span_id(),
             parent_id,
@@ -735,6 +786,177 @@ pub fn record_to_value(record: &SpanRecord) -> crate::Value {
         ),
         ("tick".to_string(), Value::Number(record.tick as f64)),
     ])
+}
+
+/// Installs `__span_open` and `__span_close`: the runtime's own instrumentation
+/// seam, used by `runtime:http` to open a span per inbound request.
+///
+/// # Why these are not capability-gated
+///
+/// The guest-facing `span()` in `runtime:diagnostics` is an *op* and is gated on
+/// `diagnostics` like everything else in that module. These are different: they
+/// exist so the **runtime** can instrument itself when the *deployment* turned on
+/// telemetry with `--otel`, which the program did not ask for and holds no
+/// capability for. Gating them would mean a deployment could only trace programs
+/// that had granted themselves the right to be traced, which is backwards.
+///
+/// They are write-only and reveal nothing. A guest that calls them directly adds
+/// a span to a recording it may well not be able to read — noise, not disclosure,
+/// and the same noise it can already produce by making the runtime do work. They
+/// are inert unless something is recording.
+pub(crate) fn install_span_builtins(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+) -> crate::error::Result<()> {
+    let global = context.global(scope);
+    crate::op::install_global_fn(scope, global, "__span_open", span_open, None)?;
+    crate::op::install_global_fn(scope, global, "__span_close", span_close, None)
+}
+
+/// The native callbacks this pair contributes to the snapshot's external
+/// reference table.
+pub(crate) fn span_external_references() -> Vec<v8::ExternalReference> {
+    use v8::MapFnTo;
+    vec![
+        v8::ExternalReference {
+            function: span_open.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: span_close.map_fn_to(),
+        },
+    ]
+}
+
+fn span_open(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        span_open_inner(&mut *scope, args, rv);
+    }));
+}
+
+/// `__span_open()` → `[spanId, startedAt]`, or `[0, 0]` when nothing is
+/// recording.
+fn span_open_inner(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let (id, started_at) = match recorder(scope) {
+        Some(rec) => {
+            let mut rec = rec.borrow_mut();
+            // `is_recording`, not `wants`: the span has to exist so that what
+            // happens inside it nests, even for a subscriber that filtered this
+            // kind away.
+            if rec.is_recording() {
+                let now = rec.now();
+                (rec.next_span_id(), now)
+            } else {
+                (0, 0.0)
+            }
+        }
+        None => (0, 0.0),
+    };
+    let pair = [
+        v8::Number::new(scope, id as f64).into(),
+        v8::Number::new(scope, started_at).into(),
+    ];
+    rv.set(v8::Array::new_with_elements(scope, &pair).into());
+}
+
+fn span_close(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        span_close_inner(&mut *scope, args, rv);
+    }));
+}
+
+/// `__span_close(id, parentId, name, startedAt, status, traceId, attrs)` —
+/// records the span `__span_open` allocated.
+///
+/// `attrs` is a flat array of alternating key/value strings, which is all the
+/// one caller needs and avoids marshaling an arbitrary object outside the op
+/// boundary.
+fn span_close_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let id = args.get(0).number_value(scope).unwrap_or(0.0);
+    if id <= 0.0 {
+        return;
+    }
+    let Some(rec) = recorder(scope) else {
+        return;
+    };
+    let parent = args.get(1).number_value(scope).unwrap_or(-1.0);
+    let name: Rc<str> = Rc::from(args.get(2).to_rust_string_lossy(scope));
+    let started_at = args.get(3).number_value(scope).unwrap_or(0.0);
+    let status = match args.get(4).to_rust_string_lossy(scope).as_str() {
+        "error" => SpanStatus::Error,
+        "cancelled" => SpanStatus::Cancelled,
+        _ => SpanStatus::Ok,
+    };
+    let trace = args.get(5);
+    let trace_id: Option<Rc<str>> = (!trace.is_undefined() && !trace.is_null())
+        .then(|| Rc::from(trace.to_rust_string_lossy(scope)));
+
+    let mut rec = rec.borrow_mut();
+    if !rec.wants(SpanKind::Request) {
+        return;
+    }
+    let attributes = if rec.wants_detail() {
+        read_pairs(scope, args.get(6))
+    } else {
+        Vec::new()
+    };
+    let ended_at = rec.now();
+    let tick = rec.tick();
+    rec.record(SpanRecord {
+        id: id as u64,
+        parent_id: (parent >= 0.0).then_some(parent as u64),
+        trace_id,
+        name,
+        kind: SpanKind::Request,
+        // The runtime opened it, so it is not the program's.
+        user: false,
+        scheduled_at: started_at,
+        started_at,
+        ended_at,
+        status,
+        attributes,
+        origin: 0,
+        tick,
+    });
+}
+
+/// Reads a flat `[k, v, k, v, …]` array of strings into attribute pairs.
+fn read_pairs(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Vec<(Rc<str>, AttrValue)> {
+    let Ok(array) = v8::Local::<v8::Array>::try_from(value) else {
+        return Vec::new();
+    };
+    let mut pairs = Vec::new();
+    let mut i = 0;
+    while i + 1 < array.length() {
+        let (Some(key), Some(value)) = (array.get_index(scope, i), array.get_index(scope, i + 1))
+        else {
+            break;
+        };
+        pairs.push((
+            Rc::from(key.to_rust_string_lossy(scope)),
+            AttrValue::Str(Rc::from(value.to_rust_string_lossy(scope))),
+        ));
+        i += 2;
+    }
+    pairs
 }
 
 #[cfg(test)]

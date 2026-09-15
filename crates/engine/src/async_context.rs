@@ -85,6 +85,17 @@ pub(crate) struct Capture {
     /// An `Rc<str>` so that propagating it across a continuation is a refcount
     /// bump; it is 32 characters and it is copied on every promise `Init`.
     trace: Option<Rc<str>>,
+    /// The diagnostics span this scope is running *inside*, if any.
+    ///
+    /// Carried here for the same reason as the trace, and it is what turns a
+    /// flat list of records into a tree: a span's parent is the span that was
+    /// open when it started, and "open when it started" is a property of the
+    /// async scope, not of the call stack. An op issued six `await`s deep inside
+    /// a request handler still nests under that request, because the capture
+    /// followed it.
+    ///
+    /// `None` at the root — a record with no enclosing span is a root span.
+    span: Option<u64>,
 }
 
 /// The current mapping, the task counter, and the reaction-job stack.
@@ -101,7 +112,7 @@ pub(crate) struct ContextState {
     /// V8 does not guarantee one is entered when the hook fires.
     context: Option<v8::Global<v8::Context>>,
     /// The private slot each promise carries its [`Capture`] in, as
-    /// `[frame, taskId, parentId, traceId]`.
+    /// `[frame, taskId, parentId, traceId, spanId]`.
     ///
     /// A private symbol rather than a side table keyed by the promise: a side
     /// table would have to be told when a promise dies, and there is no such
@@ -121,6 +132,13 @@ pub(crate) struct ContextState {
     /// Source of task ids. Starts past [`ROOT_TASK`] so `0` always means "the
     /// task the agent started in".
     next_task: TaskId,
+    /// The trace the **root** runs in, minted once per agent.
+    ///
+    /// Held apart from `current` because [`reset`](Self::reset) returns `current`
+    /// to its default once per turn, which would otherwise erase it — and then
+    /// every record written outside a request would carry no trace and be
+    /// unexportable. The root trace is a property of the agent, not of a scope.
+    root_trace: Option<Rc<str>>,
 }
 
 impl ContextState {
@@ -132,6 +150,7 @@ impl ContextState {
             current: Capture::default(),
             stack: Vec::new(),
             next_task: ROOT_TASK + 1,
+            root_trace: None,
         }
     }
 
@@ -153,6 +172,18 @@ impl ContextState {
             self.current.parent,
             self.current.trace.clone(),
         )
+    }
+
+    /// The span this scope is running inside — a new span's parent.
+    pub(crate) fn current_span(&self) -> Option<u64> {
+        self.current.span
+    }
+
+    /// Makes `next` the enclosing span, returning what was. The caller restores
+    /// it; an unrestored one is bounded by the async branch it was set in, since
+    /// it lives in the capture rather than in a global.
+    pub(crate) fn swap_span(&mut self, next: Option<u64>) -> Option<u64> {
+        std::mem::replace(&mut self.current.span, next)
     }
 
     /// The capture to reinstall later — what a timer stores at schedule time.
@@ -185,7 +216,24 @@ impl ContextState {
             // a request belongs to that request's trace, and a new task id is
             // exactly what distinguishes the two.
             trace: parent.trace,
+            span: parent.span,
         })
+    }
+
+    /// Installs the trace every task under the root runs in.
+    ///
+    /// Used when the *deployment* turned on telemetry rather than the program:
+    /// a record has to name a trace, and a program that never imported
+    /// `runtime:context` has not minted one. Ignored once a trace exists, so it
+    /// cannot overwrite what the program chose.
+    pub(crate) fn set_root_trace(&mut self, trace: Rc<str>) {
+        if self.root_trace.is_some() {
+            return;
+        }
+        self.root_trace = Some(trace.clone());
+        if self.current.trace.is_none() {
+            self.current.trace = Some(trace);
+        }
     }
 
     /// Returns to the root mapping and drops any half-finished reaction-job
@@ -199,8 +247,27 @@ impl ContextState {
     /// It is also what keeps a `FinalizationRegistry` cleanup callback on the
     /// empty mapping: cleanup runs as its own microtask, never nested inside a
     /// reaction job, so "whatever the tick started with" is the root.
+    /// The capture a continuation with no stamp enters: the agent's root,
+    /// trace included.
+    ///
+    /// Not `Capture::default()` — that has no trace, so a promise created before
+    /// the hook was installed would produce records belonging to no trace and
+    /// therefore exportable to nothing.
+    fn root(&self) -> Capture {
+        Capture {
+            trace: self.root_trace.clone(),
+            ..Capture::default()
+        }
+    }
+
     pub(crate) fn reset(&mut self) {
-        self.current = Capture::default();
+        self.current = Capture {
+            // The agent's own trace survives the reset: it is a property of the
+            // agent and not of the scope being torn down, and without it every
+            // record written outside a request would carry no trace at all.
+            trace: self.root_trace.clone(),
+            ..Capture::default()
+        };
         self.stack.clear();
     }
 }
@@ -235,6 +302,18 @@ pub(crate) fn enter(scope: &v8::PinScope<'_, '_>, next: Capture) -> Option<Captu
 /// [`ContextState::enter_child`].
 pub(crate) fn enter_child(scope: &v8::PinScope<'_, '_>, parent: Capture) -> Option<Capture> {
     state(scope).map(|st| st.borrow_mut().enter_child(parent))
+}
+
+/// Makes `next` the enclosing span for what follows, returning what was.
+pub(crate) fn swap_span(scope: &v8::PinScope<'_, '_>, next: Option<u64>) -> Option<u64> {
+    state(scope).and_then(|st| st.borrow_mut().swap_span(next))
+}
+
+/// Puts back what [`swap_span`] handed over.
+pub(crate) fn restore_span(scope: &v8::PinScope<'_, '_>, previous: Option<u64>) {
+    if let Some(st) = state(scope) {
+        st.borrow_mut().swap_span(previous);
+    }
 }
 
 /// Puts back what [`enter`] handed over.
@@ -317,7 +396,7 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
 
     match kind {
         v8::PromiseHookType::Init => {
-            let (frame, parent_task, id, trace) = {
+            let (frame, parent_task, id, trace, span) = {
                 let mut st = state_rc.borrow_mut();
                 let id = st.next_task;
                 st.next_task += 1;
@@ -326,6 +405,7 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
                     st.current.task,
                     id,
                     st.current.trace.clone(),
+                    st.current.span,
                 )
             };
             let frame: v8::Local<v8::Value> = match &frame {
@@ -339,8 +419,13 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
                     Some(trace) => trace.into(),
                     None => v8::undefined(scope).into(),
                 };
-            let record =
-                v8::Array::new_with_elements(scope, &[frame, id.into(), parent.into(), trace]);
+            // `-1` for "no enclosing span": a span id is a positive counter, so
+            // the sentinel cannot collide with one.
+            let span = v8::Number::new(scope, span.map_or(-1.0, |id| id as f64));
+            let record = v8::Array::new_with_elements(
+                scope,
+                &[frame, id.into(), parent.into(), trace, span.into()],
+            );
             let _ = object.set_private(scope, key, record.into());
         }
         v8::PromiseHookType::Before => {
@@ -348,7 +433,7 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
             // enters the *root*, not the caller's mapping: inheriting whatever
             // happened to be current would attach a request's values to a
             // continuation that was scheduled outside it.
-            let next = read_record(scope, object, key).unwrap_or_default();
+            let next = read_record(scope, object, key).unwrap_or_else(|| state_rc.borrow().root());
             let mut st = state_rc.borrow_mut();
             let previous = st.enter(next);
             st.stack.push(previous);
@@ -358,7 +443,7 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
             // Balanced by V8 in normal operation; an empty stack means a `Before`
             // was missed (a hook installed mid-flight), and the root is the only
             // safe answer.
-            let previous = st.stack.pop().unwrap_or_default();
+            let previous = st.stack.pop().unwrap_or_else(|| st.root());
             st.current = previous;
         }
         v8::PromiseHookType::Resolve => {}
@@ -377,6 +462,7 @@ fn read_record(
     let task = record.get_index(scope, 1)?.number_value(scope)?;
     let parent = record.get_index(scope, 2)?.number_value(scope)?;
     let trace = record.get_index(scope, 3)?;
+    let span = record.get_index(scope, 4)?.number_value(scope)?;
     Some(Capture {
         frame: (!frame.is_undefined()).then(|| v8::Global::new(scope, frame)),
         task: task as TaskId,
@@ -385,6 +471,7 @@ fn read_record(
         // task itself, which nothing created — see [`Capture::default`].
         parent: Some(parent as TaskId),
         trace: (!trace.is_undefined()).then(|| Rc::from(trace.to_rust_string_lossy(scope))),
+        span: (span >= 0.0).then_some(span as u64),
     })
 }
 
@@ -405,7 +492,10 @@ pub(crate) fn install_builtins(
     crate::op::install_global_fn(scope, global, "__ctx_task", ctx_task, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_parent", ctx_parent, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_trace", ctx_trace, None)?;
-    crate::op::install_global_fn(scope, global, "__ctx_swap_trace", ctx_swap_trace, None)
+    crate::op::install_global_fn(scope, global, "__ctx_swap_trace", ctx_swap_trace, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_root_trace", ctx_root_trace, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_span", ctx_span, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_swap_span", ctx_swap_span, None)
 }
 
 /// The native callbacks this module contributes to the snapshot's external
@@ -433,6 +523,15 @@ pub(crate) fn external_references() -> Vec<v8::ExternalReference> {
         },
         v8::ExternalReference {
             function: ctx_swap_trace.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_root_trace.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_span.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_swap_span.map_fn_to(),
         },
     ]
 }
@@ -462,6 +561,9 @@ contained!(ctx_task, ctx_task_inner);
 contained!(ctx_parent, ctx_parent_inner);
 contained!(ctx_trace, ctx_trace_inner);
 contained!(ctx_swap_trace, ctx_swap_trace_inner);
+contained!(ctx_root_trace, ctx_root_trace_inner);
+contained!(ctx_span, ctx_span_inner);
+contained!(ctx_swap_span, ctx_swap_span_inner);
 
 /// `__ctx_enabled()` → whether `runtime:context` has been loaded.
 fn ctx_enabled_inner(
@@ -581,4 +683,59 @@ fn ctx_swap_trace_inner(
     if let Some(previous) = previous.as_deref().and_then(|t| v8::String::new(scope, t)) {
         rv.set(previous.into());
     }
+}
+
+/// `__ctx_swap_span(id)` → makes `id` the enclosing span (`-1` for none) and
+/// returns the previous one as a number, `-1` for none.
+///
+/// What `runtime:diagnostics` opens a user span with, and what `runtime:http`
+/// opens a request span with. The host owns the value so an op recorded in Rust
+/// can read it without calling into JS.
+fn ctx_swap_span_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(state_rc) = state(scope) else {
+        return;
+    };
+    let next = args.get(0).number_value(scope).unwrap_or(-1.0);
+    let next = (next >= 0.0).then_some(next as u64);
+    let previous = state_rc.borrow_mut().swap_span(next);
+    rv.set(v8::Number::new(scope, previous.map_or(-1.0, |id| id as f64)).into());
+}
+
+/// `__ctx_span()` → the enclosing span id, or `-1` for none.
+///
+/// A plain read, because a span handle records its parent **without** becoming
+/// active — the active one changes only inside a scoped run.
+fn ctx_span_inner(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let current = state(scope).and_then(|st| st.borrow().current_span());
+    rv.set(v8::Number::new(scope, current.map_or(-1.0, |id| id as f64)).into());
+}
+
+/// `__ctx_root_trace(id)` → installs the agent's root trace, if it has none.
+///
+/// `runtime:context` mints the id (it has the entropy op; the engine has no
+/// provider) and pushes it down here rather than through `__ctx_swap_trace`,
+/// because the root trace has to survive the per-turn reset and a swapped one
+/// deliberately does not.
+fn ctx_root_trace_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(state_rc) = state(scope) else {
+        return;
+    };
+    let trace = args.get(0);
+    if trace.is_undefined() || trace.is_null() {
+        return;
+    }
+    let trace: Rc<str> = Rc::from(trace.to_rust_string_lossy(scope));
+    state_rc.borrow_mut().set_root_trace(trace);
 }

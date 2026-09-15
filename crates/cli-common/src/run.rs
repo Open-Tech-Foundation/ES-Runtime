@@ -14,7 +14,7 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
-    ImportPolicy, NodeModuleLoader, OsEntropy, ProcessBroadcastHub, ProcessPortHub,
+    ImportPolicy, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub,
     ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
     SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
     SystemWebSocket, ThreadWorkerHost, TokioTimers, WorkerProcess, path,
@@ -37,6 +37,23 @@ pub enum Source {
     File(String),
     /// An inline module snippet, from `-e`.
     Inline(String),
+}
+
+/// `service.name` when the command line did not give one: the entry's file
+/// stem.
+///
+/// Better than a constant, because two services both exporting as `esrun` are
+/// indistinguishable in a collector, which is the one thing `service.name`
+/// exists to prevent.
+fn default_service_name(source: &Source) -> String {
+    match source {
+        Source::File(path) => std::path::Path::new(path)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| "esrun".to_string()),
+        Source::Inline(_) => "esrun".to_string(),
+    }
 }
 
 /// Everything a run needs, once a binary's own command line has been parsed.
@@ -343,6 +360,9 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
 /// The run itself. Everything that can end it early lives in here, so its one
 /// caller above can be the single place that reports afterwards.
 async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
+    // Read before `config.source` is consumed below: telemetry's default
+    // `service.name` is the entry's own name.
+    let service_name = default_service_name(&config.source);
     // Returns the module's canonical specifier (a file: URL — also
     // import.meta.url and the referrer its imports resolve against), its source,
     // a short diagnostic label, and the **base directory** (the entry's own
@@ -547,6 +567,32 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     .with_broadcast(Arc::new(ProcessBroadcastHub::new()))
     // MessagePort queues, so a port transferred into a worker keeps working.
     .with_ports(Arc::new(ProcessPortHub::new()));
+    // OpenTelemetry export, when the command line asked for it. Installed as a
+    // *provider*, so the spans leave the process without the program holding
+    // `net` to reach the collector or `diagnostics` to read its own traces
+    // (D89).
+    let mut providers = providers;
+    if let Some(endpoint) = &options.otel_endpoint {
+        let filter = es_runtime::diagnostics::Filter {
+            min_duration: options.otel_min_duration_ms.unwrap_or(0.0),
+            sample: match options.otel_sample {
+                Some(fraction) => (fraction * u64::MAX as f64) as u64,
+                None => u64::MAX,
+            },
+            ..es_runtime::diagnostics::Filter::default()
+        };
+        providers = providers.with_telemetry(
+            Arc::new(OtlpHttpSink::new(endpoint.clone())),
+            es_runtime::TelemetryConfig {
+                sink: None,
+                // The entry's file name is a better default than a constant:
+                // two services exporting as "esrun" are indistinguishable in a
+                // collector, which is the one thing service.name exists to fix.
+                service_name: options.otel_service.clone().unwrap_or(service_name),
+                filter,
+            },
+        );
+    }
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory and rooted at the same project root the filesystem is
@@ -801,6 +847,12 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         },
         None => drive.await,
     };
+
+    // Ship whatever telemetry the last turn recorded, and wait for it. Export
+    // hands the payload over and returns so the loop is never blocked on a
+    // collector, which means there is normally something still in flight here —
+    // and a run that finishes quickly is often the one worth having a trace of.
+    runtime.flush_telemetry().await;
 
     // A guest `process.exit(code)` from async code halts the drive via the
     // interrupt; exit with that code rather than reporting the termination.

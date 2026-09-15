@@ -66,7 +66,7 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | `number` | Unique in the agent. User spans share this id space. |
-| `parentId` | `number \| null` | The task that scheduled it — `runtime:context`'s lineage. |
+| `parentId` | `number \| null` | The span this ran **inside**, or `null` at a root. Same id space as `id`, so records form a tree. |
 | `traceId` | `string \| null` | The trace it belongs to. |
 | `name` | `string` | Op name, timer function, or user span name. |
 | `kind` | `string` | `"op"`, `"timer"`, `"user"`, `"tick"`. |

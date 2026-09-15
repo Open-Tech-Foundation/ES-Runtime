@@ -781,3 +781,288 @@ fn no_context_value_reaches_a_diagnostics_record() {
     assert_eq!(out[1], "context name absent: true");
     assert_eq!(out[2], "trace shared: true");
 }
+
+// ---------------------------------------------------------------------------
+// The span tree
+// ---------------------------------------------------------------------------
+
+/// **`parentId` names a span, in the same id space as `id`.**
+///
+/// It used to name a *task*, from `runtime:context`'s separate counter, so a
+/// record could claim a parent that did not exist (`parent=28` in a run with 16
+/// records) and an exporter could not build a tree at all. This is the
+/// regression test for that.
+#[test]
+fn parent_ids_resolve_to_real_spans() {
+    let out = lines(
+        "tree-ids",
+        r#"
+        import { subscribe, span } from "runtime:diagnostics";
+        import { serve } from "runtime:http";
+        import { write, remove } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({}, (b) => seen.push(...b.records));
+        const server = serve({ hostname: "127.0.0.1", port: 0 }, async () => {
+          await span("work", {}, async () => { await write("./tree.txt", "hi"); });
+          await remove("./tree.txt");
+          return new Response("ok");
+        });
+        const { port } = await server.addr;
+        await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text());
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        await server.stop();
+        sub.close();
+
+        const ids = new Set(seen.map((r) => r.id));
+        const parented = seen.filter((r) => r.parentId !== null);
+        console.log("has parents:", parented.length > 0);
+        console.log("all resolve:", parented.every((r) => ids.has(r.parentId)));
+        console.log("no self parent:", parented.every((r) => r.parentId !== r.id));
+        // A parent always starts no later and ends no earlier than its child.
+        const byId = new Map(seen.map((r) => [r.id, r]));
+        console.log("contained:", parented.every((r) => {
+          const p = byId.get(r.parentId);
+          return p.startedAt <= r.startedAt + 0.01 && p.endedAt >= r.endedAt - 0.01;
+        }));
+        // And a child shares its parent's trace.
+        console.log("same trace:", parented.every((r) => byId.get(r.parentId).traceId === r.traceId));
+        "#,
+        &[
+            "--allow-read",
+            "--allow-write",
+            "--allow-listen",
+            "--allow-net",
+            "--allow-diagnostics",
+        ],
+    );
+    assert_eq!(out[0], "has parents: true");
+    assert_eq!(out[1], "all resolve: true", "parentId does not name a span");
+    assert_eq!(out[2], "no self parent: true");
+    assert_eq!(out[3], "contained: true", "a child outlives its parent");
+    assert_eq!(out[4], "same trace: true");
+}
+
+/// An inbound request is the root of its trace, and every op the handler issues
+/// — however many `await`s deep — nests under it.
+#[test]
+fn an_http_request_is_the_root_of_its_trace() {
+    let out = lines(
+        "tree-request",
+        r#"
+        import { subscribe } from "runtime:diagnostics";
+        import { serve } from "runtime:http";
+        import { write, remove } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({}, (b) => seen.push(...b.records));
+        const deep = async () => { await null; await null; await write("./req.txt", "hi"); };
+        const server = serve({ hostname: "127.0.0.1", port: 0 }, async () => {
+          await deep();
+          await remove("./req.txt");
+          return new Response("ok");
+        });
+        const { port } = await server.addr;
+        await fetch(`http://127.0.0.1:${port}/x/y?q=1`).then((r) => r.text());
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        await server.stop();
+        sub.close();
+
+        const req = seen.find((r) => r.kind === "request");
+        console.log("exists:", req !== undefined);
+        console.log("name:", req.name);
+        console.log("root:", req.parentId === null);
+        console.log("source:", req.source);
+        const inside = seen.filter((r) => r.traceId === req.traceId && r.id !== req.id);
+        const under = (r) => { let p = r.parentId, seen2 = 0; while (p !== null && seen2++ < 20) { if (p === req.id) return true; p = seen.find((x) => x.id === p)?.parentId ?? null; } return false; };
+        const ops = inside.filter((r) => r.kind === "op");
+        console.log("ops under the request:", ops.length > 0 && ops.every(under));
+        "#,
+        &[
+            "--allow-read",
+            "--allow-write",
+            "--allow-listen",
+            "--allow-net",
+            "--allow-diagnostics",
+        ],
+    );
+    assert_eq!(out[0], "exists: true");
+    // The method alone — OpenTelemetry's fallback when no route is known. Putting
+    // the path here would make every URL its own span name.
+    assert_eq!(out[1], "name: GET");
+    assert_eq!(out[2], "root: true");
+    // The runtime opened it, not the program.
+    assert_eq!(out[3], "source: runtime");
+    assert_eq!(out[4], "ops under the request: true");
+}
+
+/// The two `span()` forms differ in exactly one way: the callback form is
+/// **active** for its call, so work inside it nests; the handle form is a plain
+/// measurement and nests nothing.
+#[test]
+fn only_the_callback_form_of_span_is_active() {
+    let out = lines(
+        "tree-span-forms",
+        r#"
+        import { subscribe, span } from "runtime:diagnostics";
+        import { write, remove } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({}, (b) => seen.push(...b.records));
+
+        await span("scoped", {}, async () => { await write("./a.txt", "1"); });
+        const handle = span("handle");
+        await write("./b.txt", "2");
+        handle.end();
+        await remove("./a.txt");
+        await remove("./b.txt");
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        sub.close();
+
+        const scoped = seen.find((r) => r.name === "scoped");
+        const plain = seen.find((r) => r.name === "handle");
+        const a = seen.find((r) => r.name === "fs_write" && r.startedAt >= scoped.startedAt && r.endedAt <= scoped.endedAt);
+        const b = seen.filter((r) => r.name === "fs_write").find((r) => r.startedAt >= plain.startedAt);
+        console.log("scoped contains its write:", a !== undefined && a.parentId === scoped.id);
+        console.log("handle contains nothing:", seen.every((r) => r.parentId !== plain.id));
+        console.log("write beside the handle:", b !== undefined && b.parentId !== plain.id);
+        "#,
+        &["--allow-read", "--allow-write", "--allow-diagnostics"],
+    );
+    assert_eq!(out[0], "scoped contains its write: true");
+    assert_eq!(out[1], "handle contains nothing: true");
+    assert_eq!(out[2], "write beside the handle: true");
+}
+
+/// A span must not stay active in its **caller's** branch.
+///
+/// Calling an async function runs its body up to the first `await` on the
+/// caller's stack, so a span made active in there was still active when control
+/// returned — and the caller's next op nested under a span it had nothing to do
+/// with. This is the `enterWith` failure in a different costume, and it is why
+/// the handle form is inactive and `run()` restores synchronously.
+#[test]
+fn an_active_span_does_not_leak_into_the_caller() {
+    let out = lines(
+        "tree-no-leak",
+        r#"
+        import { subscribe, span } from "runtime:diagnostics";
+        import { write, remove } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({}, (b) => seen.push(...b.records));
+
+        // An async callee that yields inside an active span…
+        const callee = () => span("inner", {}, async () => { await null; await write("./leak.txt", "1"); });
+        const promise = callee();
+        // …and the caller's own work, issued while the callee is suspended.
+        await write("./caller.txt", "2");
+        await promise;
+        await remove("./leak.txt");
+        await remove("./caller.txt");
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        sub.close();
+
+        const inner = seen.find((r) => r.name === "inner");
+        const writes = seen.filter((r) => r.name === "fs_write");
+        const under = writes.filter((r) => r.parentId === inner.id).length;
+        console.log("inner contains exactly its own write:", under === 1);
+        console.log("caller work is not inside it:", writes.length === 2 && under === 1);
+        // Nothing is left active once everything has settled.
+        const removes = seen.filter((r) => r.name === "fs_remove");
+        console.log("later work is unparented:", removes.every((r) => r.parentId === null));
+        "#,
+        &["--allow-read", "--allow-write", "--allow-diagnostics"],
+    );
+    assert_eq!(out[0], "inner contains exactly its own write: true");
+    assert_eq!(out[1], "caller work is not inside it: true");
+    assert_eq!(out[2], "later work is unparented: true");
+}
+
+/// **Nesting is not filtering.** A subscriber watching only ops still gets them
+/// nested under the request that caused them, even though the request span
+/// itself is filtered away.
+#[test]
+fn nesting_survives_a_filter_that_excludes_the_parent() {
+    let out = lines(
+        "tree-filtered",
+        r#"
+        import { subscribe } from "runtime:diagnostics";
+        import { serve } from "runtime:http";
+        import { write, remove } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({ kinds: ["op"] }, (b) => seen.push(...b.records));
+        const server = serve({ hostname: "127.0.0.1", port: 0 }, async () => {
+          await write("./f.txt", "hi");
+          await remove("./f.txt");
+          return new Response("ok");
+        });
+        const { port } = await server.addr;
+        await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text());
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        await server.stop();
+        sub.close();
+        console.log("only ops:", seen.every((r) => r.kind === "op"));
+        // The request span is not delivered, but the ops still name it.
+        const w = seen.find((r) => r.name === "fs_write");
+        console.log("write has a parent:", w.parentId !== null);
+        console.log("parent was filtered away:", !seen.some((r) => r.id === w.parentId));
+        "#,
+        &[
+            "--allow-read",
+            "--allow-write",
+            "--allow-listen",
+            "--allow-net",
+            "--allow-diagnostics",
+        ],
+    );
+    assert_eq!(out[0], "only ops: true");
+    assert_eq!(
+        out[1], "write has a parent: true",
+        "nesting followed the filter"
+    );
+    assert_eq!(out[2], "parent was filtered away: true");
+}
+
+/// A timer's callback runs inside the timer's span, so the ops it issues nest
+/// under the firing rather than beside it.
+#[test]
+fn ops_in_a_timer_callback_nest_under_the_timer() {
+    let out = lines(
+        "tree-timer",
+        r#"
+        import { subscribe } from "runtime:diagnostics";
+        import { write, remove } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({}, (b) => seen.push(...b.records));
+        await new Promise((done) => setTimeout(async () => { await write("./tm.txt", "hi"); done(); }, 2));
+        await remove("./tm.txt");
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        sub.close();
+        const w = seen.find((r) => r.name === "fs_write");
+        const parent = seen.find((r) => r.id === w.parentId);
+        console.log("parent is the timer:", parent !== undefined && parent.kind === "timer");
+        "#,
+        &["--allow-read", "--allow-write", "--allow-diagnostics"],
+    );
+    assert_eq!(out, ["parent is the timer: true"]);
+}
+
+/// The module's own ops are not recorded. They exist only because something is
+/// watching, so recording them would put the cost of observing inside the thing
+/// being observed — every `span()` would contain the op that opened it.
+#[test]
+fn the_diagnostics_modules_own_ops_are_not_recorded() {
+    let out = lines(
+        "tree-self",
+        r#"
+        import { subscribe, span, metrics, inventory } from "runtime:diagnostics";
+        const seen = [];
+        const sub = subscribe({}, (b) => seen.push(...b.records));
+        for (let i = 0; i < 5; i++) { span("x").end(); metrics(); inventory(); }
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        sub.close();
+        console.log("self ops:", seen.filter((r) => r.name.startsWith("diagnostics_")).length);
+        console.log("user spans still recorded:", seen.filter((r) => r.kind === "user").length);
+        "#,
+        &["--allow-diagnostics"],
+    );
+    assert_eq!(out[0], "self ops: 0");
+    assert_eq!(out[1], "user spans still recorded: 5");
+}

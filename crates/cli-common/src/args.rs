@@ -35,6 +35,25 @@ pub struct RunOptions {
     /// The heap ceiling in bytes, via `--max-heap=<mb>`; `None` sizes it from
     /// the host.
     pub max_heap_bytes: Option<usize>,
+    /// OTLP collector base URL, via `--otel[=<url>]` (DECISIONS.md D89).
+    ///
+    /// `None` exports nothing, which is the default. Set, the runtime exports
+    /// spans itself — the program neither opts in nor needs a capability, which
+    /// is the point: a deployment that wants traces should not have to grant its
+    /// own code the power to read them or to reach the collector.
+    pub otel_endpoint: Option<String>,
+    /// `service.name` on exported telemetry, via `--otel-service=<name>`.
+    pub otel_service: Option<String>,
+    /// Drop spans shorter than this many milliseconds before export, via
+    /// `--otel-min-duration=<ms>`.
+    ///
+    /// A trivial HTTP request produces around twenty spans, most of them
+    /// microsecond-long pure computation, so a production exporter usually wants
+    /// this or `--otel-sample` rather than all of it.
+    pub otel_min_duration_ms: Option<f64>,
+    /// Fraction of **traces** to export, via `--otel-sample=<0..1>`. Per trace,
+    /// so a trace is kept whole or dropped whole.
+    pub otel_sample: Option<f64>,
 }
 
 impl Default for RunOptions {
@@ -46,6 +65,10 @@ impl Default for RunOptions {
             env_override: false,
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
             max_heap_bytes: None,
+            otel_endpoint: None,
+            otel_service: None,
+            otel_min_duration_ms: None,
+            otel_sample: None,
         }
     }
 }
@@ -58,6 +81,38 @@ impl RunOptions {
     /// without re-implementing (or drifting from) the common ones.
     pub fn try_flag(&mut self, flag: &str, value: Option<&str>) -> Result<bool, String> {
         match flag {
+            // The collector's base URL; the OTLP signal path is appended. The
+            // default matches the OpenTelemetry convention, so `--otel` alone
+            // works against a locally running collector.
+            "--otel" => {
+                self.otel_endpoint = Some(
+                    value
+                        .unwrap_or("http://localhost:4318")
+                        .trim_end_matches('/')
+                        .to_string(),
+                );
+            }
+            "--otel-service" => {
+                self.otel_service = Some(require_value(flag, value)?.to_string());
+            }
+            "--otel-min-duration" => {
+                let ms: f64 = require_value(flag, value)?
+                    .parse()
+                    .map_err(|_| format!("{flag} takes milliseconds, e.g. {flag}=5"))?;
+                if !ms.is_finite() || ms < 0.0 {
+                    return Err(format!("{flag} must be zero or more milliseconds"));
+                }
+                self.otel_min_duration_ms = Some(ms);
+            }
+            "--otel-sample" => {
+                let fraction: f64 = require_value(flag, value)?
+                    .parse()
+                    .map_err(|_| format!("{flag} takes a fraction, e.g. {flag}=0.1"))?;
+                if !(0.0..=1.0).contains(&fraction) {
+                    return Err(format!("{flag} must be between 0 and 1"));
+                }
+                self.otel_sample = Some(fraction);
+            }
             "-t" | "--timeout" => {
                 let ms = require_value(flag, value)?;
                 let ms: u64 = ms

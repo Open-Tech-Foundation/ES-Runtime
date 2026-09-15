@@ -1,6 +1,6 @@
 declare module "runtime:diagnostics" {
   /** What produced a span. */
-  export type SpanKind = "op" | "timer" | "user" | "tick";
+  export type SpanKind = "op" | "timer" | "user" | "request" | "tick";
 
   /** How a span finished. */
   export type SpanStatus = "ok" | "error" | "cancelled";
@@ -40,7 +40,14 @@ declare module "runtime:diagnostics" {
   export interface SpanRecord {
     /** Unique within the agent. User spans share this id space. */
     id: number;
-    /** The task that scheduled this one, or `null` — `runtime:context`'s lineage. */
+    /**
+     * The span this one ran **inside**, or `null` for a root span — a span id, in
+     * the same space as `id`, so a set of records forms a tree.
+     *
+     * Not the parent *task*: two sibling ops inside one request share a parent
+     * span while having different parent tasks. Task lineage is
+     * `currentTask().parentId` in `runtime:context`.
+     */
     parentId: number | null;
     /** The trace this belongs to, or `null`. */
     traceId: string | null;
@@ -162,6 +169,10 @@ declare module "runtime:diagnostics" {
    * Opens a span the program ends itself. It shares the id space and the
    * timeline with the runtime's own spans; `source: "user"` tells them apart.
    *
+   * The handle form records its parent and **nests nothing**. For the work
+   * inside a span to become its children, use the callback form below — the
+   * same split OpenTelemetry makes between `startSpan` and `startActiveSpan`.
+   *
    * `attributes` are recorded only under `diagnostics-detail`.
    *
    * Needs `diagnostics`.
@@ -170,6 +181,19 @@ declare module "runtime:diagnostics" {
     name: string,
     options?: { attributes?: Readonly<{ [key: string]: AttributeValue }> },
   ): Span;
+
+  /**
+   * Runs `fn` with the span **active**, so everything `fn` does — and everything
+   * it schedules — nests under it. Ends when `fn` returns, or when its promise
+   * settles; `status` follows whether it threw.
+   *
+   * Returns exactly what `fn` returned.
+   */
+  export function span<R>(
+    name: string,
+    options: { attributes?: Readonly<{ [key: string]: AttributeValue }> } | undefined,
+    fn: () => R,
+  ): R;
 
   /**
    * Resolves a record's `origin` to a source position.

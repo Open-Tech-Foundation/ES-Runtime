@@ -34,6 +34,7 @@ mod http_ops;
 mod module_ops;
 mod msgpack;
 mod net_ops;
+pub mod otlp;
 mod prelude;
 mod process_ops;
 mod rsa_ops;
@@ -57,6 +58,7 @@ use crate::timer::TimerQueue;
 // One-stop public surface for embedders: the engine abstraction + impl, the op
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet, UncaughtError};
+pub use es_runtime_engine::diagnostics;
 pub use es_runtime_engine::{
     AsyncOp, CapabilityObserver, Engine, InspectorOptions, InspectorTransport, InterruptHandle,
     ModuleEvalState, ModuleId, OpDecl, OpError, OpResult, SharedObserver, V8Engine, Value,
@@ -64,9 +66,34 @@ pub use es_runtime_engine::{
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
     ConsoleLevel, EmbeddedDb, Entropy, FileSystem, HttpServerProvider, ModuleLoader, ModuleSource,
-    NetProvider, NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, WebSocketProvider,
-    WorkerHost, WorkerScope,
+    NetProvider, NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, TelemetrySink,
+    WebSocketProvider, WorkerHost, WorkerScope,
 };
+
+/// The exporter's live state: its subscription, the clock offset it converts
+/// timestamps with, and where the payloads go.
+struct Telemetry {
+    config: TelemetryConfig,
+    origin: otlp::TimeOrigin,
+    subscription: u64,
+    recorder: Rc<RefCell<diagnostics::Recorder>>,
+}
+
+/// How a runtime exports OpenTelemetry (DECISIONS.md D89).
+#[derive(Clone, Default)]
+pub struct TelemetryConfig {
+    /// Where payloads go. `None` disables export.
+    pub sink: Option<Arc<dyn TelemetrySink>>,
+    /// `service.name` on every exported resource.
+    pub service_name: String,
+    /// What to export. Defaults to every kind that has a trace.
+    ///
+    /// The filter is the *deployment's* to set and not the program's, and it is
+    /// the only bound on volume: a trivial request produces about twenty spans,
+    /// most of them microsecond-long pure computation, so a production exporter
+    /// usually wants a `min_duration` or a `sample` rather than all of it.
+    pub filter: diagnostics::Filter,
+}
 
 /// Runtime-layer error (DECISIONS.md D12).
 #[derive(Debug, thiserror::Error)]
@@ -198,6 +225,7 @@ pub struct HostProviders {
     worker_scope: Option<Arc<dyn WorkerScope>>,
     broadcast: Option<Arc<dyn BroadcastHub>>,
     ports: Option<Arc<dyn PortHub>>,
+    telemetry: Option<TelemetryConfig>,
 }
 
 impl HostProviders {
@@ -229,6 +257,7 @@ impl HostProviders {
             worker_scope: None,
             broadcast: None,
             ports: None,
+            telemetry: None,
         }
     }
 
@@ -421,6 +450,21 @@ impl HostProviders {
         self.ports.clone()
     }
 
+    /// Exports spans to `sink` as OpenTelemetry, for every program this runtime
+    /// runs (DECISIONS.md D89).
+    ///
+    /// Host-side and unconditional: the guest neither opts in nor needs a
+    /// capability, which is the point — a deployment that wants traces should not
+    /// have to grant its own code the power to read them or to reach the
+    /// collector.
+    pub fn with_telemetry(mut self, sink: Arc<dyn TelemetrySink>, config: TelemetryConfig) -> Self {
+        self.telemetry = Some(TelemetryConfig {
+            sink: Some(sink),
+            ..config
+        });
+        self
+    }
+
     fn broadcast(&self) -> Option<Arc<dyn BroadcastHub>> {
         self.broadcast.clone()
     }
@@ -512,6 +556,8 @@ pub struct Runtime {
     /// `runtime:build` and `runtime:watch` here, which is how a development
     /// module exists without existing in production.
     host_modules: HashMap<String, Rc<str>>,
+    /// The OTLP exporter, when the embedder installed a sink (DECISIONS.md D89).
+    telemetry: Option<Telemetry>,
 }
 
 impl Runtime {
@@ -539,6 +585,7 @@ impl Runtime {
             is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
             host_modules: HashMap::new(),
+            telemetry: None,
         };
         // Register the world-touching ops, then evaluate the prelude that builds
         // the pure-JS APIs on top of them (DECISIONS.md D8).
@@ -556,7 +603,89 @@ impl Runtime {
         )?;
         runtime.engine.eval(&prelude::source())?;
         runtime.engine.eval(&prelude::post_snapshot_source())?;
+        runtime.wire_telemetry(&providers);
         Ok(runtime)
+    }
+
+    /// Opens the host-side diagnostics subscription the OTLP exporter drains.
+    ///
+    /// `detail` is `true`: the deployment asked for telemetry, so it gets the
+    /// paths, URLs and statements that make a span worth reading. This does not
+    /// widen what *guest* code can see — the subscription is drained in Rust and
+    /// its records never reach JS (DECISIONS.md D89).
+    fn wire_telemetry(&mut self, providers: &HostProviders) {
+        let Some(config) = providers.telemetry.clone() else {
+            return;
+        };
+        if config.sink.is_none() {
+            return;
+        }
+        let Some(recorder) = self.engine.diagnostics() else {
+            return;
+        };
+        // Telemetry is the *deployment's* choice, so it cannot depend on the
+        // program having imported `runtime:context`: without propagation a span
+        // would not know which request it belongs to, and without a trace id
+        // there is nothing to export at all. Both are arranged here.
+        self.engine.enable_async_context();
+        let mut bytes = [0u8; 16];
+        if providers.entropy.fill(&mut bytes).is_ok() {
+            let mut trace = String::with_capacity(32);
+            for byte in bytes {
+                use std::fmt::Write;
+                let _ = write!(trace, "{byte:02x}");
+            }
+            self.engine.set_root_trace(&trace);
+        }
+        // Both clocks read together: the offset between them is what every
+        // exported timestamp is built on.
+        let clock = providers.clock.clone();
+        let origin =
+            otlp::TimeOrigin::new(clock.wall_ms(), clock.monotonic_micros() as f64 / 1_000.0);
+        let id = recorder.borrow_mut().subscribe_to(
+            config.filter.clone(),
+            true,
+            diagnostics::Sink::Host,
+        );
+        self.telemetry = Some(Telemetry {
+            config,
+            origin,
+            subscription: id,
+            recorder,
+        });
+    }
+
+    /// Ships whatever the exporter's subscription collected this turn.
+    ///
+    /// One request per turn that produced anything, and none at all on a quiet
+    /// one. A failure to export is the sink's to absorb: telemetry that cannot
+    /// be delivered must never fail the program that produced it.
+    fn export_telemetry(&mut self) {
+        let Some(telemetry) = &self.telemetry else {
+            return;
+        };
+        let batches = telemetry
+            .recorder
+            .borrow_mut()
+            .drain_from(diagnostics::Sink::Host);
+        for (id, records, _dropped) in batches {
+            if id != telemetry.subscription {
+                continue;
+            }
+            let Some(payload) =
+                otlp::encode_traces(&records, &telemetry.config.service_name, telemetry.origin)
+            else {
+                continue;
+            };
+            if let Some(sink) = &telemetry.config.sink {
+                // Fire and forget. The returned future is the sink's
+                // acknowledgement that it has taken the payload, not that the
+                // collector has it — driving delivery is the sink's own job, so
+                // a slow collector cannot add latency to the request whose span
+                // is being exported.
+                drop(sink.export("traces", payload));
+            }
+        }
     }
 
     /// Builds a startup-snapshot blob with the host ops' JS shells and the whole
@@ -643,6 +772,7 @@ impl Runtime {
             is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
             host_modules: HashMap::new(),
+            telemetry: None,
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
@@ -665,6 +795,7 @@ impl Runtime {
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
         runtime.engine.eval(&prelude::post_snapshot_source())?;
+        runtime.wire_telemetry(&providers);
         Ok(runtime)
     }
 
@@ -1254,6 +1385,7 @@ impl Runtime {
         //    Both are no-ops unless something subscribed.
         self.engine.end_tick();
         self.engine.deliver_diagnostics();
+        self.export_telemetry();
 
         TickStatus {
             timers_fired,
@@ -1266,6 +1398,27 @@ impl Runtime {
             // Read after the JS above rather than before: a sync op can request
             // it mid-tick, and `process.exit()` is exactly that.
             terminated: self.engine.interrupt_handle().is_terminating(),
+        }
+    }
+
+    /// Exports whatever telemetry is still buffered and waits for it to be
+    /// delivered (DECISIONS.md D89).
+    ///
+    /// Called once as a run winds down. Without it a short program loses its
+    /// traces: export hands the payload to the sink and returns so the loop is
+    /// never blocked on a collector, so at exit there is normally something
+    /// still in flight — and a run that finishes quickly is often exactly the one
+    /// worth having a trace of. A no-op when nothing is exporting.
+    pub async fn flush_telemetry(&mut self) {
+        // The last turn's records were never drained, because the drain happens
+        // at the *end* of a turn and the loop has stopped.
+        self.export_telemetry();
+        let sink = self
+            .telemetry
+            .as_ref()
+            .and_then(|telemetry| telemetry.config.sink.clone());
+        if let Some(sink) = sink {
+            sink.flush().await;
         }
     }
 

@@ -128,6 +128,11 @@
       // never read a context. An object for the same reason as `hostCodec`: the
       // freeze below is shallow, so a slot present now can still be populated.
       context: {},
+      // runtime:diagnostics fills in `openSpan(name, attributes)`, and only once
+      // that module has been loaded. runtime:http uses it to open one span per
+      // request — the root of that request's trace — without importing the
+      // module, for the same reason it does not import runtime:context.
+      diagnostics: {},
     }),
     writable: false,
     enumerable: false,

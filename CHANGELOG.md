@@ -10,6 +10,23 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Native OpenTelemetry export (`--otel`)** — the **runtime** ships spans over
+  OTLP/HTTP, so an unmodified program produces a usable trace (D90). An inbound
+  request becomes a `SERVER` span with the ops it caused nested under it; an
+  outbound `fetch` becomes a `CLIENT` span in its own trace; attributes follow
+  the semantic conventions (`file.path`, `db.query.text`, `url.full`).
+  - The program neither opts in nor needs a capability: it does not hold `net` to
+    reach the collector, and cannot read its own traces without
+    `--allow-diagnostics`. A userland exporter would have required granting
+    application code exactly the two powers the capability model withholds.
+  - `--otel-service`, `--otel-min-duration` and `--otel-sample` bound what is
+    sent. Payloads are OTLP/JSON; protobuf is not implemented. An unreachable
+    collector is logged once and never fails or delays the program, and the sink
+    flushes at shutdown so a short run does not lose its trace.
+- **`span(name, options, fn)`** in `runtime:diagnostics` — the scoped form, which
+  is **active** for that call so the work inside nests under it. The handle form
+  `span(name)` records its parent and nests nothing, mirroring OpenTelemetry's
+  `startSpan` / `startActiveSpan` split.
 - **`runtime:diagnostics`** — spans with deterministic ends, filtered in the
   host and delivered in batches, so an event nothing is subscribed to costs an
   integer compare in Rust and never reaches JavaScript (D89). There is no
@@ -107,6 +124,20 @@ namespace) is unstable and may change between minor releases until the API freez
   — on a stream nothing was draining. It reaches the binary through `hyper`, so
   `runtime:http`'s server and `esrun upgrade`'s client both carried it. Yanked
   `chacha20` 0.10.1 goes with it, which had failed `cargo deny` on its own.
+
+### Fixed
+
+- **A diagnostics record's `parentId` now names a span**, in the same id space as
+  `id`, so a set of records forms a tree an exporter can walk (D90). It was
+  filled from `runtime:context`'s separate *task* counter, so a record could name
+  a parent that did not exist and the records were a flat list. Task lineage is
+  unchanged and still answered by `currentTask().parentId`.
+- **Span timestamps no longer lose precision.** Unix nanoseconds were computed in
+  `f64`, which holds integers exactly only to 2^53 — every timestamp rounded to
+  the nearest ~128ns, and a duration taken from two rounded ends was not the one
+  measured.
+- **The agent's trace id survives the per-turn context reset**, so records
+  written outside a request belong to a trace rather than to none.
 
 ### Changed
 

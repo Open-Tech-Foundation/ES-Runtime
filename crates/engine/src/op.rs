@@ -149,6 +149,10 @@ pub struct OpDecl {
     /// Whether a call to this op that is still in flight should keep the
     /// embedder's loop running. See [`unref`](Self::unref).
     pub keeps_loop_alive: bool,
+    /// Which argument names the thing this op acts on, for the `target`
+    /// attribute a `diagnostics:detail` subscriber sees. See
+    /// [`target_arg`](Self::target_arg).
+    pub target_arg: Option<usize>,
 }
 
 impl OpDecl {
@@ -162,6 +166,7 @@ impl OpDecl {
             required_capabilities: Vec::new(),
             handler: OpHandler::Sync(Box::new(handler)),
             keeps_loop_alive: true,
+            target_arg: None,
         }
     }
 
@@ -175,6 +180,7 @@ impl OpDecl {
             required_capabilities: Vec::new(),
             handler: OpHandler::Async(Box::new(handler)),
             keeps_loop_alive: true,
+            target_arg: None,
         }
     }
 
@@ -188,6 +194,21 @@ impl OpDecl {
         if !self.required_capabilities.contains(&capability) {
             self.required_capabilities.push(capability);
         }
+        self
+    }
+
+    /// Names the argument that identifies what this op acts on — the path, the
+    /// URL, the statement — for the `target` attribute a `diagnostics:detail`
+    /// subscriber sees (DECISIONS.md D89).
+    ///
+    /// The default is "the first string argument", which is right for almost
+    /// every op because that is how they are written. `fetch` is the exception
+    /// that proves the rule: its first string is the *method*, so without this
+    /// its span would carry `url.full: "GET"` — a field that is not merely
+    /// unhelpful but wrong, which is worse than absent.
+    #[must_use]
+    pub fn target_arg(mut self, index: usize) -> Self {
+        self.target_arg = Some(index);
         self
     }
 
@@ -214,6 +235,8 @@ impl OpDecl {
 }
 
 struct OpEntry {
+    /// See [`OpDecl::target_arg`].
+    target_arg: Option<usize>,
     /// The name the op is registered under. Kept rather than dropped after the
     /// JS shell is installed, because a capability trace has to be able to say
     /// *what* asked for a grant, and this is the only place that knows.
@@ -357,6 +380,7 @@ impl OpState {
         required_capabilities: Vec<Capability>,
         handler: OpHandler,
         keeps_loop_alive: bool,
+        target_arg: Option<usize>,
     ) -> i32 {
         let id = self.ops.len() as i32;
         self.ops.push(OpEntry {
@@ -364,6 +388,7 @@ impl OpState {
             required_capabilities,
             handler,
             keeps_loop_alive,
+            target_arg,
         });
         id
     }
@@ -501,14 +526,24 @@ fn op_dispatch_inner(
     // the op's name is not even cloned unless it comes back true.
     let span = crate::diagnostics::recorder(scope).and_then(|recorder| {
         let name = state.ops[idx].name.clone();
+        // The diagnostics module's own ops are not recorded. They exist only
+        // because something is watching, so recording them would put the cost of
+        // observing into the thing being observed — `span()` would contain the
+        // op that opened it, and every subscription would show itself working.
+        if name.starts_with("diagnostics_") {
+            return None;
+        }
         crate::diagnostics::OpenSpan::open(
             &recorder,
             crate::diagnostics::SpanKind::Op,
             || std::rc::Rc::from(name),
             || {
                 crate::async_context::state(scope)
-                    .map(|ctx| ctx.borrow().identity())
-                    .unwrap_or((0, None, None))
+                    .map(|ctx| {
+                        let ctx = ctx.borrow();
+                        (ctx.current_span(), ctx.identity().2)
+                    })
+                    .unwrap_or((None, None))
             },
             // An op has no observable gap between becoming runnable and
             // starting, so its queue delay is reported as zero rather than
@@ -527,12 +562,19 @@ fn op_dispatch_inner(
     // Only under detail: this is a copy of guest data, and `observe` deliberately
     // does not carry one.
     let target = span.as_ref().and_then(|(recorder, _)| {
-        recorder.borrow().wants_detail().then(|| {
-            argv.iter().find_map(|value| match value {
-                Value::String(s) => Some(std::rc::Rc::from(s.as_str())),
-                _ => None,
-            })
-        })?
+        if !recorder.borrow().wants_detail() {
+            return None;
+        }
+        match state.ops[idx].target_arg {
+            // Named explicitly, for an op whose first string is not what it acts
+            // on (see `OpDecl::target_arg`).
+            Some(index) => argv.get(index),
+            // The default: the first string argument, which is how almost every
+            // op is written.
+            None => argv.iter().find(|value| matches!(value, Value::String(_))),
+        }
+        .and_then(Value::as_str)
+        .map(std::rc::Rc::from)
     });
 
     let outcome = match &mut state.ops[idx].handler {
@@ -716,6 +758,7 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     // Appended after those, for the same reason they were appended after the
     // originals: an index that already exists must not move.
     refs.extend(crate::async_context::external_references());
+    refs.extend(crate::diagnostics::span_external_references());
     std::borrow::Cow::Owned(refs)
 }
 
@@ -1134,8 +1177,11 @@ pub(crate) fn fire_timer(
             || std::rc::Rc::from(if repeat { "setInterval" } else { "setTimeout" }),
             || {
                 crate::async_context::state(scope)
-                    .map(|ctx| ctx.borrow().identity())
-                    .unwrap_or((0, None, None))
+                    .map(|ctx| {
+                        let ctx = ctx.borrow();
+                        (ctx.current_span(), ctx.identity().2)
+                    })
+                    .unwrap_or((None, None))
             },
             due_at,
         )
@@ -1161,6 +1207,11 @@ pub(crate) fn fire_timer(
     // a *new task* within it: the callback is not the code that armed the timer,
     // so it gets an id of its own with the scheduler as its parent.
     let previous = crate::async_context::enter_child(scope, context);
+    // The timer's own span is open while its callback runs, so an op the
+    // callback issues nests under the timer rather than beside it.
+    let previous_span = span
+        .as_ref()
+        .and_then(|(_, open)| crate::async_context::swap_span(scope, Some(open.id)));
 
     // A throw inside the callback is caught by the TryCatch (no host unwind).
     // It is *not* swallowed: there is no caller left to propagate it to, so the
@@ -1178,6 +1229,9 @@ pub(crate) fn fire_timer(
         if !terminated && let Some(error) = scope.exception() {
             report_uncaught(scope, op_state, error);
         }
+    }
+    if span.is_some() {
+        crate::async_context::restore_span(scope, previous_span);
     }
     crate::async_context::leave(scope, previous);
     close_span(

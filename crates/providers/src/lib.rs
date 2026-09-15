@@ -153,6 +153,41 @@ pub trait TaskSpawner: Send + Sync {
     fn spawn_blocking(&self, work: Box<dyn FnOnce() + Send + 'static>) -> BoxFuture<()>;
 }
 
+/// A destination for OpenTelemetry payloads (DECISIONS.md D89).
+///
+/// Transport only: the runtime encodes the OTLP itself, because what a span
+/// *means* is runtime knowledge and where the bytes go is deployment knowledge.
+/// That split is why this is one method and not a telemetry SDK.
+///
+/// Deliberately a **provider**, so exporting telemetry is something the *host*
+/// does and not something the program is permitted to do. A guest that never
+/// holds `Net` still produces exported traces, and holding `diagnostics` does
+/// not let it read them or reach the collector.
+pub trait TelemetrySink: Send + Sync {
+    /// Ships one OTLP payload. `signal` is the OTLP path segment — `"traces"`,
+    /// `"metrics"`, `"logs"` — so a sink can route without parsing the body.
+    ///
+    /// Failure is the sink's to handle: telemetry that cannot be delivered must
+    /// never fail the program that produced it, so this returns nothing and a
+    /// sink is expected to log and drop.
+    fn export(&self, signal: &'static str, payload: String) -> BoxFuture<()>;
+
+    /// Waits for everything already handed to [`export`](Self::export) to have
+    /// been delivered, or given up on.
+    ///
+    /// Called once, as the process winds down. Without it a short program loses
+    /// its telemetry: `export` hands the payload over and returns so the loop is
+    /// never blocked on a collector, which means at exit there is normally
+    /// something still in flight — and the traces most worth having are often
+    /// from exactly the runs that finish quickly.
+    ///
+    /// Implementations must bound their own wait: a collector that has stopped
+    /// answering must not stop the process from exiting.
+    fn flush(&self) -> BoxFuture<()> {
+        Box::pin(std::future::ready(()))
+    }
+}
+
 /// The severity of a `console` message, mirroring the method that produced it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

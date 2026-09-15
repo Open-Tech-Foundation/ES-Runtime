@@ -963,6 +963,29 @@ scopes and the rules are otherwise identical.
 | `--allow-diagnostics` | `DiagnosticsObserve` | `runtime:diagnostics` — timings, kinds, counts, inventory, metrics |
 | `--allow-diagnostics-detail` | `DiagnosticsDetail` | the above **plus** span `attributes` and `resolveOrigin` |
 
+#### Exporting OpenTelemetry
+
+`--otel` makes the **runtime** export spans over OTLP/HTTP. The program neither
+opts in nor needs a capability — it does not hold `net` to reach the collector,
+and it cannot read its own traces without `--allow-diagnostics`.
+
+| Flag | Default | |
+| ---- | ------- | - |
+| `--otel[=<url>]` | off; `http://localhost:4318` when given bare | The collector's base URL; the OTLP signal path is appended. |
+| `--otel-service=<name>` | the entry file's name | `service.name` on every exported resource. |
+| `--otel-min-duration=<ms>` | `0` | Drop spans shorter than this before export. |
+| `--otel-sample=<0..1>` | `1` | Fraction of **traces** to export — per trace, so a trace is kept whole or dropped whole. |
+
+```bash
+esrun --otel --otel-service=checkout --otel-min-duration=5 app.js
+```
+
+An inbound request becomes a `SERVER` span with the ops it caused nested under
+it; an outbound `fetch` becomes a `CLIENT` span in its own trace. A trivial
+request produces around twenty spans, most of them microsecond-long pure
+computation, so a production exporter usually wants `--otel-min-duration` or
+`--otel-sample`. Payloads are OTLP/JSON; protobuf is not implemented.
+
 Each name takes both prefixes: `--allow-net` and `--deny-net`.
 
 #### Scoped grants
@@ -1381,7 +1404,7 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | `number` | Unique within the agent. User spans share this id space. |
-| `parentId` | `number \| null` | The task that scheduled this one — `runtime:context`'s lineage. |
+| `parentId` | `number \| null` | The span this ran **inside**, or `null` at a root — same id space as `id`, so a set of records forms a tree. Not the parent *task*, which is `currentTask().parentId`. |
 | `traceId` | `string \| null` | The trace this belongs to. |
 | `name` | `string` | The op's name, the timer's function, or a user span's name. |
 | `kind` | `string` | `"op"`, `"timer"`, `"user"`, `"tick"`. |

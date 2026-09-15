@@ -121,6 +121,13 @@
     "__ctx_swap",
     "__ctx_task",
     "__ctx_parent",
+    "__ctx_trace",
+    "__ctx_swap_trace",
+    "__ctx_root_trace",
+    "__ctx_span",
+    "__ctx_swap_span",
+    "__span_open",
+    "__span_close",
   ]) {
     const d = Object.getOwnPropertyDescriptor(globalThis, name);
     if (d !== undefined && d.enumerable && d.configurable) {

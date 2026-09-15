@@ -105,3 +105,22 @@ const origin: { file: string; line: number; column: number } = resolveOrigin(rec
 resolveOrigin("1");
 
 export { attr, handles, hist, ids, kind, lag, m, nested, origin, p99, resource, s, saturation, sub };
+
+// --- the two span forms -------------------------------------------------------
+
+// The handle form: a measurement that nests nothing.
+const handle: Span = span("checkout");
+handle.end();
+
+// The callback form: active for that call, and transparent to what it returns.
+const scopedNumber: number = span("work", {}, () => 1);
+const scopedPromise: Promise<string> = span("work", {}, async () => "x");
+const scopedWithAttrs: void = span("work", { attributes: { table: "users" } }, () => {});
+
+// @ts-expect-error — the callback takes no arguments; bind what it needs.
+span("work", {}, (a: number) => a);
+
+// @ts-expect-error — and `request` is the runtime's kind, not something to open.
+const notAKind: SpanKind = "microtask";
+
+export { handle, scopedNumber, scopedPromise, scopedWithAttrs, notAKind };
