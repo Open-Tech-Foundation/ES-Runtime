@@ -207,6 +207,12 @@ one rolls back.
 
 ## Not done
 
+**The promise-hook overhead above.** Deferred, and the most valuable open item in
+this module: it needs a cheaper per-promise slot than `SetPrivate`/`GetPrivate`,
+and the two obvious rearrangements were tried and measured worse. Anyone picking
+this up should start by reproducing the breakdown with `bench/probe-tracing.sh`
+and confirming the slot is still the dominant term.
+
 Language-level `AsyncContext`, async task interception, and error bubbling
 through async stacks are out of scope. So is any `node:async_hooks` shim.
 
