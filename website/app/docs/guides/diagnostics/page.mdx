@@ -1,0 +1,178 @@
+---
+title: Observing the runtime
+description: Find what is slow, tell it apart from what merely waited, and hand a profiler timings without handing it your data.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Observing the runtime
+
+`runtime:diagnostics` reports what the runtime did and how long it took: every
+host op, every timer, every turn of the loop, plus spans you open yourself.
+
+```js
+import { subscribe } from "runtime:diagnostics";
+
+const sub = subscribe({ kinds: ["op"], minDuration: 10 }, ({ records }) => {
+  for (const r of records) console.log(r.name, (r.endedAt - r.startedAt).toFixed(1), "ms");
+});
+```
+
+<Callout type="info" title="Off costs nothing">
+  With nothing subscribed, a recordable event costs an integer compare in Rust
+  and never reaches JavaScript. There is no per-operation callback to install and
+  none to pay for.
+</Callout>
+
+## Two grants, two disclosures
+
+```bash
+esrun --allow-diagnostics app.js         # timings, kinds, counts
+esrun --allow-diagnostics-detail app.js  # …plus paths, URLs, SQL text
+```
+
+Observability is gated even though it never leaves the isolate, because it is
+authority over the rest of your program: anything that can subscribe learns every
+filesystem call, query and request you make.
+
+| | `diagnostics` | `diagnostics-detail` |
+| --- | --- | --- |
+| timings, kinds, counts | ✅ | ✅ |
+| `inventory()`, `metrics()`, `span()` | ✅ | ✅ |
+| `attributes` on a record | empty | populated |
+| `resolveOrigin()` | ❌ | ✅ |
+
+A profiler runs on the narrower grant and sees full timings with empty payloads.
+Which one a subscription gets is decided by the host, not claimed by the caller.
+
+## Was it slow, or did it wait?
+
+The question timings alone cannot answer. Every record names the loop turn it
+landed in, and a `tick` record gives that turn its own timings:
+
+```js
+subscribe({}, ({ records }) => {
+  const turns = new Map(records.filter((r) => r.kind === "tick").map((r) => [r.tick, r]));
+  for (const r of records) {
+    const turn = turns.get(r.tick);
+    if (!turn || r.kind === "tick") continue;
+    const self = r.endedAt - r.startedAt;
+    const whole = turn.endedAt - turn.startedAt;
+    if (self > 20 && whole - self > 50) console.warn(`${r.name} waited: ${whole - self}ms of other work`);
+    else if (self > 20) console.warn(`${r.name} was slow: ${self}ms`);
+  }
+});
+```
+
+A 40ms span in a 45ms turn was slow. The same span in a 400ms turn was sharing
+the turn with something else.
+
+## Queue delay means one thing
+
+| | `startedAt - scheduledAt` is |
+| --- | --- |
+| `timer` | lag past its **deadline** — `setTimeout(fn, 50)` firing on time reports ~0, not 50 |
+| `op` | always 0: there is no boundary the host can see, and it is not invented |
+| `tick` | how long the loop was not running before this turn |
+| `user` | 0 — your span starts when you open it |
+
+## Keeping the volume down
+
+```js
+subscribe({
+  kinds: ["op"],      // only host ops
+  minDuration: 5,     // only what took a while
+  sample: 0.01,       // 1% of traces — whole traces, never half of one
+  bufferSize: 512,    // per subscription
+}, onBatch);
+```
+
+All four are applied in the host. A record your filter rejects is never built, so
+narrowing a filter genuinely costs less rather than moving the work.
+
+Sampling is **per trace**, computed from the trace id: a trace is kept whole or
+dropped whole. Half a trace is worse than none.
+
+<Callout type="warn" title="Watch the dropped count">
+  Overflow drops the newest record and reports the loss on the next batch. If
+  `dropped` is non-zero your buffer is too small or your filter too wide —
+  the records you have are still coherent, but they are not all of them.
+
+  ```js
+  subscribe({}, ({ records, dropped }) => {
+    if (dropped) console.warn(`lost ${dropped}`);
+  });
+  ```
+</Callout>
+
+## Your own spans
+
+```js
+import { span } from "runtime:diagnostics";
+
+const s = span("checkout", { attributes: { plan: "pro", items: 3 } });
+try {
+  await charge();
+  s.end();
+} catch (e) {
+  s.fail();
+  throw e;
+}
+```
+
+User spans share the runtime's id space and timeline, so they line up with the
+ops underneath them. `source: "user"` tells them apart. `attributes` are recorded
+only under `diagnostics-detail`. Ending twice records once.
+
+## Loop health
+
+```js
+import { metrics } from "runtime:diagnostics";
+
+const m = metrics();
+if (m.tickDurationMs.p99 > 100) console.warn("turns are long — something is blocking");
+```
+
+`metrics()` is pull-only — poll it from a timer or expose it on a health endpoint.
+
+| | |
+| --- | --- |
+| `tickDurationMs` | how long each turn took; a long turn blocks everything in it |
+| `loopLagMs` | how long the loop was not running between turns |
+
+A large `loopLagMs` with a small `tickDurationMs` is an idle process, which is
+fine. A large one with a large `tickDurationMs` is a loop that cannot keep up.
+
+## What is still open
+
+```js
+import { inventory } from "runtime:diagnostics";
+inventory().handles;
+// [{ kind: "socket", count: 12, ids: [3, 4, …] }]
+```
+
+The host handles this agent **owns** — an id and a kind, never the resource.
+Useful for finding a leak: a count that only grows is one.
+
+<Callout type="note" title="Owns, not live">
+  Sockets, child processes, file descriptors, database connections and workers
+  are released when they end. Listeners, HTTP servers, WebSockets and in-flight
+  requests are deliberately kept for the agent's life, so those four over-report.
+</Callout>
+
+## Trace ids
+
+Records carry the trace from [`runtime:context`](/docs/guides/context), so a span
+joins the request that caused it:
+
+```js
+import { currentTask } from "runtime:context";
+subscribe({}, ({ records }) => {
+  for (const r of records) if (r.traceId === currentTask().traceId) console.log(r.name);
+});
+```
+
+The dependency runs one way. No context **value** ever reaches a record.
+
+See [Internals: diagnostics](/docs/internals/diagnostics) for what it costs, and
+the [API reference](/api/diagnostics) for signatures.

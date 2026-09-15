@@ -30,9 +30,10 @@ use crate::handles::Handles;
 pub(crate) fn install(
     engine: &mut dyn Engine,
     commands: Option<Arc<dyn CommandProvider>>,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     // The children this agent started.
-    let children = Handles::new("child process");
+    let children = inventory.track(Handles::new("child process"));
 
     let c = commands.clone();
     let owned = children.clone();

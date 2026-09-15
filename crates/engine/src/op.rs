@@ -228,6 +228,15 @@ struct PendingAsync {
     resolver: v8::Global<v8::PromiseResolver>,
     /// Copied from the op's declaration; see [`OpDecl::unref`].
     keeps_loop_alive: bool,
+    /// The diagnostics span opened at dispatch, closed when the future settles,
+    /// with the recorder it belongs to. `None` whenever nothing was subscribed,
+    /// which is the ordinary case and costs one `Option` write.
+    span: Option<(
+        Rc<RefCell<crate::diagnostics::Recorder>>,
+        crate::diagnostics::OpenSpan,
+    )>,
+    /// The `target` attribute for that span, when detail was on at dispatch.
+    target: Option<Rc<str>>,
 }
 
 struct TimerEntry {
@@ -236,6 +245,15 @@ struct TimerEntry {
     /// Arguments after `delay`, forwarded to the callback on every firing
     /// (`setTimeout(fn, ms, a, b)` calls `fn(a, b)`).
     args: Vec<v8::Global<v8::Value>>,
+    /// Milliseconds requested, kept so each firing can compute the next
+    /// deadline the way the driver re-anchors a repeating timer.
+    delay_ms: u64,
+    /// When this firing becomes **due**, on the diagnostics clock.
+    ///
+    /// A timer's queue delay is lag past its deadline, not the delay it asked
+    /// for — so this, rather than the arming time, is what a span records as
+    /// `scheduled_at`. `None` until a diagnostics clock exists.
+    due_at: Option<f64>,
     /// The async-context mapping current when the timer was *scheduled*,
     /// reinstalled around every firing.
     ///
@@ -478,6 +496,45 @@ fn op_dispatch_inner(
     // Read before the handler borrow, so it is available when the pending entry
     // is built below.
     let keeps_loop_alive = state.ops[idx].keeps_loop_alive;
+
+    // The gate: one mask test, false for every program nothing is watching, and
+    // the op's name is not even cloned unless it comes back true.
+    let span = crate::diagnostics::recorder(scope).and_then(|recorder| {
+        let name = state.ops[idx].name.clone();
+        crate::diagnostics::OpenSpan::open(
+            &recorder,
+            crate::diagnostics::SpanKind::Op,
+            || std::rc::Rc::from(name),
+            || {
+                crate::async_context::state(scope)
+                    .map(|ctx| ctx.borrow().identity())
+                    .unwrap_or((0, None, None))
+            },
+            // An op has no observable gap between becoming runnable and
+            // starting, so its queue delay is reported as zero rather than
+            // invented (see `diagnostics::SpanKind::Op`).
+            None,
+        )
+        .map(|span| (recorder, span))
+    });
+    // Under `diagnostics:detail`, the thing the op is acting *on* — which for
+    // every op that has one is its first string argument: a path for the
+    // filesystem, a URL for fetch and net, the statement for a query. Taken
+    // generically rather than threaded through each ops module one attribute at
+    // a time, because the convention already holds across all of them and a
+    // per-op list is a list that goes stale.
+    //
+    // Only under detail: this is a copy of guest data, and `observe` deliberately
+    // does not carry one.
+    let target = span.as_ref().and_then(|(recorder, _)| {
+        recorder.borrow().wants_detail().then(|| {
+            argv.iter().find_map(|value| match value {
+                Value::String(s) => Some(std::rc::Rc::from(s.as_str())),
+                _ => None,
+            })
+        })?
+    });
+
     let outcome = match &mut state.ops[idx].handler {
         OpHandler::Sync(handler) => match handler(argv) {
             Ok(value) => Outcome::Ok(value),
@@ -489,11 +546,13 @@ fn op_dispatch_inner(
     match outcome {
         Outcome::Ok(value) => {
             drop(state);
+            close_span(span, crate::diagnostics::SpanStatus::Ok, target);
             let js = value_to_js(scope, value);
             rv.set(js);
         }
         Outcome::Err(err) => {
             drop(state);
+            close_span(span, crate::diagnostics::SpanStatus::Error, target);
             throw(scope, &err);
         }
         Outcome::Async(mut future) => {
@@ -527,6 +586,14 @@ fn op_dispatch_inner(
             };
             if let Some(result) = eager {
                 drop(state);
+                close_span(
+                    span,
+                    match &result {
+                        Ok(_) => crate::diagnostics::SpanStatus::Ok,
+                        Err(_) => crate::diagnostics::SpanStatus::Error,
+                    },
+                    target,
+                );
                 let Some(resolver) = v8::PromiseResolver::new(scope) else {
                     throw(
                         scope,
@@ -553,6 +620,7 @@ fn op_dispatch_inner(
             // unbounded pending ops (SPEC §4).
             if state.pending_async.len() >= state.max_pending_ops {
                 drop(state);
+                close_span(span, crate::diagnostics::SpanStatus::Error, target);
                 throw(
                     scope,
                     &OpError::range_error("too many concurrent async operations"),
@@ -561,6 +629,7 @@ fn op_dispatch_inner(
             }
             let Some(resolver) = v8::PromiseResolver::new(scope) else {
                 drop(state);
+                close_span(span, crate::diagnostics::SpanStatus::Error, target);
                 throw(
                     scope,
                     &OpError::new(ExceptionClass::Error, "could not create promise"),
@@ -573,6 +642,10 @@ fn op_dispatch_inner(
                 future,
                 resolver,
                 keeps_loop_alive,
+                // Closed in `poll_async_ops` when the future settles — which is
+                // what makes an op span cover the wait and not just the call.
+                span,
+                target,
             });
             // Wake the driver so it re-ticks and polls this future now, rather
             // than parking first: the future hasn't been polled yet, so it has
@@ -584,6 +657,28 @@ fn op_dispatch_inner(
             drop(state);
             rv.set(promise.into());
         }
+    }
+}
+
+/// Closes an op span, if one was opened. A no-op — and not even a borrow — when
+/// nothing was subscribed, which is the ordinary case.
+fn close_span(
+    span: Option<(
+        Rc<RefCell<crate::diagnostics::Recorder>>,
+        crate::diagnostics::OpenSpan,
+    )>,
+    status: crate::diagnostics::SpanStatus,
+    target: Option<Rc<str>>,
+) {
+    if let Some((recorder, span)) = span {
+        let attributes = match target {
+            Some(target) => vec![(
+                Rc::from("target"),
+                crate::diagnostics::AttrValue::Str(target),
+            )],
+            None => Vec::new(),
+        };
+        span.close(&recorder, status, attributes);
     }
 }
 
@@ -679,6 +774,16 @@ pub(crate) fn poll_async_ops(
             match state.pending_async[i].future.as_mut().poll(&mut cx) {
                 Poll::Ready(result) => {
                     let done = state.pending_async.remove(i);
+                    // Closed here rather than at dispatch, so an op span covers
+                    // the wait and not merely the call that started it.
+                    close_span(
+                        done.span,
+                        match &result {
+                            Ok(_) => crate::diagnostics::SpanStatus::Ok,
+                            Err(_) => crate::diagnostics::SpanStatus::Error,
+                        },
+                        done.target,
+                    );
                     ready.push((done.resolver, result));
                 }
                 Poll::Pending => i += 1,
@@ -915,6 +1020,14 @@ fn timer_set_inner(
     // Taken here — at *schedule* time — not when the timer fires. A callback
     // belongs to the scope that armed it.
     let context = crate::async_context::capture(scope);
+    // The first deadline. Read only when something is watching timers: this is
+    // on the path of every `setTimeout` in the process.
+    let due_at = crate::diagnostics::recorder(scope).and_then(|recorder| {
+        let recorder = recorder.borrow();
+        recorder
+            .wants(crate::diagnostics::SpanKind::Timer)
+            .then(|| recorder.now() + delay_ms as f64)
+    });
     let id = {
         let mut state = state_rc.borrow_mut();
         let id = state.next_timer_id;
@@ -925,6 +1038,8 @@ fn timer_set_inner(
                 callback,
                 repeat,
                 args: extra,
+                delay_ms,
+                due_at,
                 context,
             },
         );
@@ -988,7 +1103,7 @@ pub(crate) fn fire_timer(
     let scope = &mut v8::ContextScope::new(scope, context);
     v8::tc_scope!(let scope, scope);
 
-    let (callback, repeat, args, context) = {
+    let (callback, repeat, args, context, due_at, delay_ms) = {
         let state = op_state.borrow();
         let entry = state.timers.get(&id).expect("checked above");
         let args: Vec<v8::Local<v8::Value>> = entry
@@ -1001,10 +1116,41 @@ pub(crate) fn fire_timer(
             entry.repeat,
             args,
             entry.context.clone(),
+            entry.due_at,
+            entry.delay_ms,
         )
     };
     if !repeat {
         op_state.borrow_mut().timers.remove(&id);
+    }
+
+    // The span covers the callback, and its `scheduled_at` is the deadline this
+    // firing was due at — so `started_at - scheduled_at` is timer lag, the
+    // number a loop's health is actually read from.
+    let span = crate::diagnostics::recorder(scope).and_then(|recorder| {
+        crate::diagnostics::OpenSpan::open(
+            &recorder,
+            crate::diagnostics::SpanKind::Timer,
+            || std::rc::Rc::from(if repeat { "setInterval" } else { "setTimeout" }),
+            || {
+                crate::async_context::state(scope)
+                    .map(|ctx| ctx.borrow().identity())
+                    .unwrap_or((0, None, None))
+            },
+            due_at,
+        )
+        .map(|span| (recorder, span))
+    });
+    // A repeating timer's next deadline is re-anchored on this firing, matching
+    // how the driver reschedules it — an interval that fell behind does not then
+    // owe a burst of catch-up firings.
+    if repeat && due_at.is_some() {
+        let next = span
+            .as_ref()
+            .map(|(recorder, _)| recorder.borrow().now() + delay_ms as f64);
+        if let (Some(next), Some(entry)) = (next, op_state.borrow_mut().timers.get_mut(&id)) {
+            entry.due_at = Some(next);
+        }
     }
 
     let recv: v8::Local<v8::Value> = v8::undefined(scope).into();
@@ -1034,6 +1180,15 @@ pub(crate) fn fire_timer(
         }
     }
     crate::async_context::leave(scope, previous);
+    close_span(
+        span,
+        if terminated {
+            crate::diagnostics::SpanStatus::Cancelled
+        } else {
+            crate::diagnostics::SpanStatus::Ok
+        },
+        None,
+    );
     (terminated, true)
 }
 
@@ -1105,7 +1260,7 @@ fn promise_reject_callback_inner(message: v8::PromiseRejectMessage) {
 /// Returns `Some(true)` when the hook ran and the guest **claimed** the failure
 /// (a listener called `preventDefault`), `Some(false)` when it ran and nothing
 /// claimed it, and `None` when there is no hook.
-fn call_dispatch_hook(
+pub(crate) fn call_dispatch_hook(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
     args: &[v8::Local<'_, v8::Value>],

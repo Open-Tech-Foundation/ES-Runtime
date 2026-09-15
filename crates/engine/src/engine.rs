@@ -305,6 +305,58 @@ pub trait Engine {
     /// observes either way, so the laziness is invisible.
     fn enable_async_context(&mut self) {}
 
+    /// Installs the clock `runtime:diagnostics` timestamps spans with, enabling
+    /// the module (DECISIONS.md D89).
+    ///
+    /// The engine owns no clock — D5 puts every reach outside the isolate behind
+    /// an injected provider — so the runtime hands one down rather than the
+    /// engine reading the host's. A test on a fake clock therefore sees fake
+    /// timestamps in its spans too. Called when the module is first served;
+    /// recording still costs nothing until something subscribes.
+    fn enable_diagnostics(&mut self, clock: std::rc::Rc<dyn Fn() -> f64>) {
+        let _ = clock;
+    }
+
+    /// The span recorder this engine writes into, or `None` on an engine that
+    /// has none.
+    ///
+    /// Handed out rather than wrapped in a method per operation because the
+    /// *ops* that expose diagnostics live in `runtime`, and an op handler is a
+    /// closure with no way back to the engine that registered it. The recorder
+    /// is plain Rust and names no V8 type, so passing it across the boundary
+    /// costs nothing the abstraction was protecting (D3).
+    ///
+    /// This is deliberately **not** the capability boundary. The handle can do
+    /// everything; the gate is on the ops in `runtime` that reach it, which is
+    /// where every other gate in this runtime lives (D7).
+    fn diagnostics(&self) -> Option<std::rc::Rc<std::cell::RefCell<crate::diagnostics::Recorder>>> {
+        None
+    }
+
+    /// Opens the next turn of the loop and returns its number. Every span
+    /// recorded until [`end_tick`](Self::end_tick) carries it.
+    fn begin_tick(&mut self) -> u64 {
+        0
+    }
+
+    /// Closes the turn, recording its duration and emitting its own span.
+    fn end_tick(&mut self) {}
+
+    /// Hands each subscription its pending batch, as one call into JS **per
+    /// subscription per tick** — never per record, which is the whole point of
+    /// buffering host-side.
+    ///
+    /// A no-op when nothing is subscribed or nothing was recorded, so a program
+    /// that is not being watched never reaches JS here at all.
+    fn deliver_diagnostics(&mut self) {}
+
+    /// The identity of the executing task, as `runtime:context` reports it —
+    /// `(id, parentId, traceId)`. Lets a guest span join the same lineage the
+    /// runtime's own spans use rather than inventing a second one.
+    fn current_task_identity(&self) -> (u64, Option<u64>, Option<std::rc::Rc<str>>) {
+        (0, None, None)
+    }
+
     /// Returns async-context propagation to the root mapping.
     ///
     /// Called once per tick by the driver, when no JS is on the stack, so that a
@@ -477,6 +529,10 @@ pub struct V8Engine {
     /// builtins via an isolate slot (see [`crate::async_context`]). Present from
     /// construction but inert until [`Engine::enable_async_context`].
     context_state: std::rc::Rc<std::cell::RefCell<crate::async_context::ContextState>>,
+    /// Span recorder, shared with the op-dispatch and timer callbacks via an
+    /// isolate slot (see [`crate::diagnostics`]). Present from construction but
+    /// gated shut until something subscribes.
+    recorder: std::rc::Rc<std::cell::RefCell<crate::diagnostics::Recorder>>,
     /// When the engine was restored from a snapshot whose `__ops.<name>` shells
     /// are already baked in, [`register_op`](Engine::register_op) binds only the
     /// Rust handler (the JS function is present), rather than re-creating it. The
@@ -681,6 +737,14 @@ impl V8Engine {
             crate::async_context::ContextState::new(),
         ));
         isolate.set_slot(context_state.clone());
+
+        // Span recorder. Slotted alongside, for the same reason: the op
+        // dispatcher and the timer callback are static functions with no closure
+        // to carry it. Inert — `wants()` is false for every kind — until
+        // `runtime:diagnostics` is loaded *and* something subscribes.
+        let recorder =
+            std::rc::Rc::new(std::cell::RefCell::new(crate::diagnostics::Recorder::new()));
+        isolate.set_slot(recorder.clone());
         crate::module::install_import_meta_callback(&mut isolate);
         crate::module::install_dynamic_import_callback(&mut isolate);
 
@@ -748,6 +812,7 @@ impl V8Engine {
             op_state,
             modules,
             context_state,
+            recorder,
             ops_baked,
             limits,
             interrupt,
@@ -928,6 +993,50 @@ impl Engine for V8Engine {
 
     fn reset_async_context(&mut self) {
         self.context_state.borrow_mut().reset();
+    }
+
+    fn enable_diagnostics(&mut self, clock: std::rc::Rc<dyn Fn() -> f64>) {
+        self.recorder.borrow_mut().set_clock(clock);
+    }
+
+    fn diagnostics(&self) -> Option<std::rc::Rc<std::cell::RefCell<crate::diagnostics::Recorder>>> {
+        Some(self.recorder.clone())
+    }
+
+    fn begin_tick(&mut self) -> u64 {
+        self.recorder.borrow_mut().begin_tick()
+    }
+
+    fn end_tick(&mut self) {
+        self.recorder.borrow_mut().end_tick();
+    }
+
+    fn deliver_diagnostics(&mut self) {
+        let batches = self.recorder.borrow_mut().drain();
+        if batches.is_empty() {
+            return;
+        }
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        for (id, records, dropped) in batches {
+            let records = crate::Value::Array(
+                records
+                    .iter()
+                    .map(crate::diagnostics::record_to_value)
+                    .collect(),
+            );
+            let args = [
+                crate::convert::value_to_js(scope, crate::Value::Number(id as f64)),
+                crate::convert::value_to_js(scope, records),
+                crate::convert::value_to_js(scope, crate::Value::Number(dropped as f64)),
+            ];
+            crate::op::call_dispatch_hook(scope, "__dispatch_diagnostics", &args);
+        }
+    }
+
+    fn current_task_identity(&self) -> (u64, Option<u64>, Option<std::rc::Rc<str>>) {
+        self.context_state.borrow().identity()
     }
 
     fn pump_message_loop(&mut self) -> bool {

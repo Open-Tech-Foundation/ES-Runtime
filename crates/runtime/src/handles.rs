@@ -107,6 +107,83 @@ impl Handles {
     pub(crate) fn release(&self, id: u64) {
         self.ids.borrow_mut().remove(&id);
     }
+
+    /// What these ids name.
+    pub(crate) fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    /// The ids currently recorded, ascending.
+    pub(crate) fn ids(&self) -> Vec<u64> {
+        let mut ids: Vec<u64> = self.ids.borrow().iter().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+}
+
+/// Every handle registry of one agent, for `runtime:diagnostics`'s
+/// `inventory()`.
+///
+/// Built from the same [`Handles`] the ownership check already uses rather than
+/// from a second list, so what is reported cannot drift from what is tracked.
+///
+/// # What this reports, exactly
+///
+/// **Handles this agent owns — not handles that are live.** D50 made releasing a
+/// per-kind judgment: a socket, a child, an fd, a database connection and a
+/// worker are released when they end, but a listener, an HTTP server, a
+/// WebSocket and an in-flight request are deliberately kept, because their ends
+/// of life are not exact and releasing early would answer an ordinary teardown
+/// with `ERR_FOREIGN_HANDLE`. Those four kinds therefore over-report here.
+///
+/// The alternative was a diagnostics-only release, which would trade a security
+/// invariant for a tidier field. The field is named for what it is instead.
+#[derive(Clone, Default)]
+pub(crate) struct Inventory {
+    /// Shared, so one `Inventory` can be handed to each ops module by reference
+    /// and every registry lands in the same list.
+    registries: Rc<RefCell<Vec<Handles>>>,
+}
+
+impl Inventory {
+    pub(crate) fn new() -> Inventory {
+        Inventory::default()
+    }
+
+    /// Registers a kind's registry, and hands it back so a caller can write
+    /// `let sockets = inventory.track(Handles::new("socket"));`.
+    pub(crate) fn track(&self, handles: Handles) -> Handles {
+        self.registries.borrow_mut().push(handles.clone());
+        handles
+    }
+
+    /// One entry per kind that currently owns anything, as
+    /// `{ kind, count, ids }`. A kind with nothing outstanding is omitted rather
+    /// than reported as zero — an inventory is a list of what is there.
+    pub(crate) fn snapshot(&self) -> Vec<es_runtime_engine::Value> {
+        use es_runtime_engine::Value;
+        self.registries
+            .borrow()
+            .iter()
+            .filter_map(|handles| {
+                let ids = handles.ids();
+                if ids.is_empty() {
+                    return None;
+                }
+                Some(Value::Object(vec![
+                    (
+                        "kind".to_string(),
+                        Value::String(handles.kind().to_string()),
+                    ),
+                    ("count".to_string(), Value::Number(ids.len() as f64)),
+                    (
+                        "ids".to_string(),
+                        Value::Array(ids.into_iter().map(|id| Value::Number(id as f64)).collect()),
+                    ),
+                ]))
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

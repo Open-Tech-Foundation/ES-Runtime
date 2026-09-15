@@ -10,6 +10,7 @@
 
 /// <reference path="./globals.d.ts" />
 /// <reference path="./runtime-context.d.ts" />
+/// <reference path="./runtime-diagnostics.d.ts" />
 /// <reference path="./runtime-process.d.ts" />
 /// <reference path="./runtime-path.d.ts" />
 /// <reference path="./runtime-fs.d.ts" />

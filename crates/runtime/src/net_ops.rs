@@ -31,13 +31,14 @@ pub(crate) fn install(
     engine: &mut dyn Engine,
     net: Option<Arc<dyn NetProvider>>,
     handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     // This agent's sockets and listeners. Separate registries because they are
     // separate namespaces in the provider: a socket id and a listener id may
     // collide, and `accept` on a socket is not a request worth honouring.
-    let sockets = Handles::new("socket");
-    let listeners = Handles::new("listener");
-    let datagrams = Handles::new("datagram socket");
+    let sockets = inventory.track(Handles::new("socket"));
+    let listeners = inventory.track(Handles::new("listener"));
+    let datagrams = inventory.track(Handles::new("datagram socket"));
 
     let n = net.clone();
     let owned = sockets.clone();

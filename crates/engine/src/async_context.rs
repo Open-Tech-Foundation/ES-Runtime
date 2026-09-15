@@ -3,10 +3,18 @@
 //! One **mapping** — an opaque JS value the module owns, never interpreted here
 //! — is current at any moment. This module's whole job is to make the right
 //! mapping current when a continuation runs, and to put the previous one back
-//! afterwards. Everything about *what* a mapping contains (the context objects,
-//! their values, the trace id) lives in `runtime_modules/context.js`; the host
-//! only ever moves the value around, so the two halves cannot disagree about a
+//! afterwards. Everything about *what* a mapping contains (the context objects
+//! and their values) lives in `runtime_modules/context.js`; the host only ever
+//! moves the value around, so the two halves cannot disagree about a
 //! representation neither of them parses.
+//!
+//! The **trace id** is the one exception, and it is carried beside the mapping
+//! rather than inside it. `runtime:diagnostics` attributes every record to a
+//! trace, on the recording path, in the host — reaching into an opaque JS value
+//! per span would be exactly the JS-on-the-hot-path that module exists to avoid.
+//! The module still owns the value: it mints the id and pushes it down with
+//! `__ctx_swap_trace`, so there is one source of truth and not a host copy that
+//! drifts from it.
 //!
 //! The propagation points:
 //!
@@ -64,6 +72,19 @@ pub(crate) struct Capture {
     frame: Option<v8::Global<v8::Value>>,
     task: TaskId,
     parent: Option<TaskId>,
+    /// The W3C trace id this scope runs under, or `None` for "not yet minted".
+    ///
+    /// The host holds this where it holds nothing else about the mapping,
+    /// because it is the one part `runtime:diagnostics` must read on the
+    /// recording path — a record carries the trace it belongs to, and reaching
+    /// into an opaque JS value per span is exactly the JS-on-the-hot-path this
+    /// runtime refuses (DECISIONS.md D89). The module still *owns* it: it mints
+    /// the id and pushes it down with `__ctx_swap_trace`, so there is one
+    /// source of truth rather than a host copy that can drift.
+    ///
+    /// An `Rc<str>` so that propagating it across a continuation is a refcount
+    /// bump; it is 32 characters and it is copied on every promise `Init`.
+    trace: Option<Rc<str>>,
 }
 
 /// The current mapping, the task counter, and the reaction-job stack.
@@ -80,7 +101,7 @@ pub(crate) struct ContextState {
     /// V8 does not guarantee one is entered when the hook fires.
     context: Option<v8::Global<v8::Context>>,
     /// The private slot each promise carries its [`Capture`] in, as
-    /// `[frame, taskId, parentId]`.
+    /// `[frame, taskId, parentId, traceId]`.
     ///
     /// A private symbol rather than a side table keyed by the promise: a side
     /// table would have to be told when a promise dies, and there is no such
@@ -121,6 +142,19 @@ impl ContextState {
         self.enabled
     }
 
+    /// The executing task's identity, as `(id, parentId, traceId)`.
+    ///
+    /// The seam `runtime:diagnostics` attributes a span through, so the two
+    /// modules report one lineage rather than each inventing its own — which is
+    /// the whole of the dependency between them, and it runs one way.
+    pub(crate) fn identity(&self) -> (TaskId, Option<TaskId>, Option<Rc<str>>) {
+        (
+            self.current.task,
+            self.current.parent,
+            self.current.trace.clone(),
+        )
+    }
+
     /// The capture to reinstall later — what a timer stores at schedule time.
     pub(crate) fn capture(&self) -> Capture {
         self.current.clone()
@@ -147,6 +181,10 @@ impl ContextState {
             frame: parent.frame,
             task: id,
             parent: Some(parent.task),
+            // The trace is the unit of work, not the task: a timer armed inside
+            // a request belongs to that request's trace, and a new task id is
+            // exactly what distinguishes the two.
+            trace: parent.trace,
         })
     }
 
@@ -279,11 +317,16 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
 
     match kind {
         v8::PromiseHookType::Init => {
-            let (frame, parent_task, id) = {
+            let (frame, parent_task, id, trace) = {
                 let mut st = state_rc.borrow_mut();
                 let id = st.next_task;
                 st.next_task += 1;
-                (st.current.frame.clone(), st.current.task, id)
+                (
+                    st.current.frame.clone(),
+                    st.current.task,
+                    id,
+                    st.current.trace.clone(),
+                )
             };
             let frame: v8::Local<v8::Value> = match &frame {
                 Some(frame) => v8::Local::new(scope, frame),
@@ -291,7 +334,13 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
             };
             let id = v8::Number::new(scope, id as f64);
             let parent = v8::Number::new(scope, parent_task as f64);
-            let record = v8::Array::new_with_elements(scope, &[frame, id.into(), parent.into()]);
+            let trace: v8::Local<v8::Value> =
+                match trace.as_deref().and_then(|t| v8::String::new(scope, t)) {
+                    Some(trace) => trace.into(),
+                    None => v8::undefined(scope).into(),
+                };
+            let record =
+                v8::Array::new_with_elements(scope, &[frame, id.into(), parent.into(), trace]);
             let _ = object.set_private(scope, key, record.into());
         }
         v8::PromiseHookType::Before => {
@@ -316,7 +365,7 @@ fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>
     }
 }
 
-/// Reads back the `[frame, taskId, parentId]` a previous `Init` stamped.
+/// Reads back the `[frame, taskId, parentId, traceId]` a previous `Init` stamped.
 fn read_record(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<v8::Object>,
@@ -327,6 +376,7 @@ fn read_record(
     let frame = record.get_index(scope, 0)?;
     let task = record.get_index(scope, 1)?.number_value(scope)?;
     let parent = record.get_index(scope, 2)?.number_value(scope)?;
+    let trace = record.get_index(scope, 3)?;
     Some(Capture {
         frame: (!frame.is_undefined()).then(|| v8::Global::new(scope, frame)),
         task: task as TaskId,
@@ -334,6 +384,7 @@ fn read_record(
         // task was the root (id `ROOT_TASK`). `None` is reserved for the root
         // task itself, which nothing created — see [`Capture::default`].
         parent: Some(parent as TaskId),
+        trace: (!trace.is_undefined()).then(|| Rc::from(trace.to_rust_string_lossy(scope))),
     })
 }
 
@@ -352,7 +403,9 @@ pub(crate) fn install_builtins(
     crate::op::install_global_fn(scope, global, "__ctx_frame", ctx_frame, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_swap", ctx_swap, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_task", ctx_task, None)?;
-    crate::op::install_global_fn(scope, global, "__ctx_parent", ctx_parent, None)
+    crate::op::install_global_fn(scope, global, "__ctx_parent", ctx_parent, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_trace", ctx_trace, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_swap_trace", ctx_swap_trace, None)
 }
 
 /// The native callbacks this module contributes to the snapshot's external
@@ -374,6 +427,12 @@ pub(crate) fn external_references() -> Vec<v8::ExternalReference> {
         },
         v8::ExternalReference {
             function: ctx_parent.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_trace.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_swap_trace.map_fn_to(),
         },
     ]
 }
@@ -401,6 +460,8 @@ contained!(ctx_frame, ctx_frame_inner);
 contained!(ctx_swap, ctx_swap_inner);
 contained!(ctx_task, ctx_task_inner);
 contained!(ctx_parent, ctx_parent_inner);
+contained!(ctx_trace, ctx_trace_inner);
+contained!(ctx_swap_trace, ctx_swap_trace_inner);
 
 /// `__ctx_enabled()` → whether `runtime:context` has been loaded.
 fn ctx_enabled_inner(
@@ -474,4 +535,50 @@ fn ctx_parent_inner(
     let parent = state_rc.borrow().current.parent;
     let parent = parent.map_or(NO_PARENT, |id| id as f64);
     rv.set(v8::Number::new(scope, parent).into());
+}
+
+/// `__ctx_trace()` → the trace id current in this scope, or `undefined` if none
+/// has been minted yet.
+///
+/// The module mints lazily on first read, so `undefined` is the signal to do so
+/// — which is why this is a separate accessor rather than part of the mapping.
+fn ctx_trace_inner(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(state_rc) = state(scope) else {
+        return;
+    };
+    let trace = state_rc.borrow().current.trace.clone();
+    if let Some(trace) = trace.as_deref().and_then(|t| v8::String::new(scope, t)) {
+        rv.set(trace.into());
+    }
+}
+
+/// `__ctx_swap_trace(next)` → makes `next` the current trace and returns what
+/// was, mirroring `__ctx_swap` for the mapping.
+///
+/// Separate from the mapping swap because the two change at different rates:
+/// `run()` is the hot path and never touches the trace, while `withTrace` and a
+/// new inbound request are per-unit-of-work. Folding them into one call would
+/// put a string allocation on the frequent one to serve the rare one.
+fn ctx_swap_trace_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(state_rc) = state(scope) else {
+        return;
+    };
+    let next = args.get(0);
+    let next: Option<Rc<str>> = (!next.is_undefined() && !next.is_null())
+        .then(|| Rc::from(next.to_rust_string_lossy(scope)));
+    let previous = {
+        let mut st = state_rc.borrow_mut();
+        std::mem::replace(&mut st.current.trace, next)
+    };
+    if let Some(previous) = previous.as_deref().and_then(|t| v8::String::new(scope, t)) {
+        rv.set(previous.into());
+    }
 }

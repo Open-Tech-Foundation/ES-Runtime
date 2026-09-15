@@ -73,6 +73,7 @@
     "__dispatch_error_event",
     "__dispatch_unhandled_rejection",
     "__dispatch_rejection_handled",
+    "__dispatch_diagnostics",
     "__structuredWriteHostObject",
     "__structuredReadHostObject",
   ]) {

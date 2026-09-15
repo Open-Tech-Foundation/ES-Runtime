@@ -1,0 +1,154 @@
+---
+title: "Internals: diagnostics"
+description: Why there is no per-operation JS callback, what replaced the scheduler field the design started with, and the two rules the implementation argued with.
+---
+
+# Internals: diagnostics
+
+How `runtime:diagnostics` records a span, what it costs, and the things it
+refuses to report.
+
+For signatures see the [API reference](/api/diagnostics); for the patterns, the
+[guide](/docs/guides/diagnostics).
+
+## The gate is an integer compare
+
+The recorder holds the union of every live subscription's wanted kinds as a
+bitmask. A recording site tests it **before** it reads a clock, allocates a name,
+or takes an id:
+
+```text
+  op dispatched
+    └▶ recorder.wants(Op)?  ──no──▶ nothing. no clock, no allocation, no JS.
+         └yes─▶ open span ─▶ run the op ─▶ close span ─▶ ring buffer
+```
+
+With nothing subscribed the mask is zero. This is the whole difference from
+`node:async_hooks`, which calls into JS for every async resource and cannot stop
+doing so once enabled.
+
+Delivery is **once per subscription per turn**, never once per record. The test
+for that is a counter on the delivery binding rather than a timing measurement,
+because the claim is categorical rather than statistical.
+
+## No resource, ever
+
+A record carries an id, a name, a kind and four numbers. It never carries the
+object. Exposing the raw handle is what pinned objects, perturbed GC, and froze
+an internal representation into public API — the reason `async_hooks` could not
+be fixed afterwards. There is no destroy event and no finalizer dependency
+either; a span has a deterministic end or it is not recorded.
+
+`inventory()` is the one place handles are named, and it names **ids**, from the
+registries the per-agent ownership check already maintains.
+
+## What replaced `worker`
+
+The module was designed around a field this runtime cannot fill. The premise was
+a bounded pool with a CPU offload tier, so a record could say `worker: "cpu:3"`
+and a reader could tell "slow" from "waited behind a CPU-bound task".
+
+None of that exists here. `TaskSpawner` is defined in the provider traits and
+called nowhere in the runtime; the only real offload is `spawn_blocking` inside
+two providers; and there is a standing decision *against* routing CPU work
+through `TaskSpawn`, because it is a capability and gating it would break
+deny-by-default.
+
+The conclusion survives anyway, because this is a **driven loop**: the embedder
+owns `tick()`, so there is an exact turn boundary. Every record names its turn,
+and a `tick` record gives the turn its own timings. A 40ms span in a 45ms turn
+was slow; the same span in a 400ms turn was waiting. No other runtime can report
+this, because no other runtime hands the turn boundary to the embedder.
+
+If a CPU tier ever lands, `worker` slots in beside `tick` without changing the
+record shape.
+
+## One meaning for three timestamps
+
+| | |
+| --- | --- |
+| `scheduledAt` | when the work became **runnable** |
+| `startedAt` | when it began |
+| `endedAt` | when it finished |
+
+So `startedAt - scheduledAt` is always queue delay.
+
+For a **timer**, "became runnable" is its deadline. Using the arming time would
+fold the delay you asked for into the field and make it read as lag when it is
+mostly sleep. The deadline is reconstructed from the engine's clock while the
+scheduler anchors it at the reading taken when the turn began, so a firing can
+look a fraction of a millisecond early; queue delay is a duration, so that
+artefact is clamped rather than reported as negative.
+
+For an **op** there is no boundary. The future is polled eagerly at dispatch and
+the provider's internals are behind a trait boundary, so the host cannot point at
+a moment and call it "started". The two timestamps are equal, which says "no
+queue is visible here". The alternative — instrumenting the provider traits so
+`spawn_blocking` queueing became visible — would change a public interface every
+embedder implements, to observe queueing in two providers.
+
+## Sampling without state
+
+Per **trace**, never per record: half a trace is worse than none. The decision is
+computed by hashing the trace id rather than cached, so there is no table to
+evict — and evicting one mid-trace is exactly the half-trace the rule exists to
+prevent. A record belonging to no trace is always kept.
+
+## Two rules the implementation argued with
+
+Both were specified, and both changed under a failing test.
+
+**A `tick` record is never dropped**, though everything else is drop-newest. The
+first overflow test burned a turn by busy-waiting on `performance.now()` — which
+is an *op* — and produced 18,190 records in one turn, 14,094 of them dropped. The
+casualty was the turn's own record, because it is emitted last. Drop-newest was
+chosen so a span's end is never delivered without its start; completed spans have
+no such pairs to break, and in an overloaded turn the tick record is the one that
+*explains* the overload. Reserving it makes the loss self-describing.
+
+**`close()` delivers what is buffered, then stops.** Delivery is per turn, so a
+subscriber closing inside one silently lost everything recorded in it — usually
+the work it had subscribed to watch.
+
+## Where it lives
+
+The recorder is in `engine`, because the things worth recording — op dispatch,
+timer firing, the turn boundary — happen there. The **ops** are in `runtime`,
+because that is where every capability check in this runtime lives; a builtin
+would reach the recorder with no gate at all. The engine hands out the recorder
+rather than wrapping it in a method per operation, since an op handler is a
+closure with no way back to the engine that registered it.
+
+Whether a subscription sees payloads is decided host-side: two ops do the same
+work behind different gates and the module tries the wider one first. A boolean
+argument would let JavaScript claim what it was not granted.
+
+## The dependency on `runtime:context`
+
+One-directional, and it is one field: a record carries the trace the work belongs
+to. Nothing goes the other way — no context **value** lives on a record, passes
+through the ring, or is reachable from any export here. A test greps a full
+record dump for a context value to keep it that way.
+
+The trace id moved out of the context mapping and into the capture beside it, for
+this module's sake: a record is attributed on the recording path, and reaching
+into an opaque JS value per span is the JS-on-the-hot-path the design refuses.
+`runtime:context` still mints it and pushes it down, so there is one source of
+truth rather than a host copy that drifts.
+
+## Not done
+
+**Origins.** Nothing captures one, every record's `origin` is `0`, and
+`resolveOrigin` says so behind its gate rather than fabricating a position. A
+source position for a user span has no source but a stack frame, and capturing a
+stack per span is precisely what this module refuses — so it needs a decision
+rather than a default.
+
+**Microtask spans.** The highest-volume and lowest-value kind; `tick` already
+attributes a continuation to its turn.
+
+**`worker`, pool saturation, and `link.traceparent`** — all waiting on a
+scheduler that may never exist.
+
+See [D89](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md)
+for the decision record.

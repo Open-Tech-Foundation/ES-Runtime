@@ -26,6 +26,12 @@ use es_runtime_providers::{ProviderError, WorkerHost, WorkerIncoming, WorkerScop
 
 use crate::Result;
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each is a distinct provider or piece of agent-scoped bookkeeping, \
+              and this only forwards them to the four sub-installs below; a \
+              struct would move the list rather than shorten it"
+)]
 pub(crate) fn install(
     engine: &mut dyn Engine,
     workers: Option<Arc<dyn WorkerHost>>,
@@ -34,10 +40,11 @@ pub(crate) fn install(
     loader: crate::module_ops::LoaderSlot,
     entry: crate::EntrySlot,
     handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     install_entry_reader(engine, loader)?;
     install_base(engine, entry)?;
-    install_parent(engine, workers, capabilities, handle_refs)?;
+    install_parent(engine, workers, capabilities, handle_refs, inventory)?;
     install_scope(engine, scope)
 }
 
@@ -122,6 +129,7 @@ fn install_parent(
     workers: Option<Arc<dyn WorkerHost>>,
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
     handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     // This agent's own ceilings, read once: they are fixed for the isolate's
     // life, and every worker it starts derives from them.
@@ -129,7 +137,7 @@ fn install_parent(
     // The workers this agent started. The host is shared by every agent in the
     // process and its ids are sequential, so without this a worker could post
     // to — or terminate — a sibling it was never handed (D50).
-    let children = crate::handles::Handles::new("worker");
+    let children = inventory.track(crate::handles::Handles::new("worker"));
     let host = workers.clone();
     let owned = children.clone();
     engine.register_op(
@@ -549,6 +557,7 @@ fn require_ports(
 pub(crate) fn install_broadcast(
     engine: &mut dyn Engine,
     hub: Option<Arc<dyn es_runtime_providers::BroadcastHub>>,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     // Sync, and the prelude's test for whether cross-agent delivery exists.
     let present = hub.is_some();
@@ -562,7 +571,7 @@ pub(crate) fn install_broadcast(
     // The subscriptions this agent holds. The hub is process-wide — that is what
     // makes a BroadcastChannel reach other agents — so the subscription id is
     // the only thing distinguishing "my channel" from "yours" (D50).
-    let subscriptions = crate::handles::Handles::new("BroadcastChannel");
+    let subscriptions = inventory.track(crate::handles::Handles::new("BroadcastChannel"));
 
     let h = hub.clone();
     let owned = subscriptions.clone();

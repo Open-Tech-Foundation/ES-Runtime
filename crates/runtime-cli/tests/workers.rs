@@ -879,14 +879,14 @@ fn permissions_inherit_gives_the_parents_set_and_no_more() {
     let out = stdout(&out);
     // Omitted: everything denied, unchanged.
     assert!(
-        out.contains(r#""omitted" -> [read,write,imports,net,listen,env,run,signals,workers]"#),
+        out.contains(r#""omitted" -> [read,write,imports,net,listen,env,run,signals,workers,diagnostics,diagnostics-detail]"#),
         "stdout: {out}"
     );
     // Inherit: exactly what the parent lacks, and nothing more.
     assert!(out.contains(r#""inherit" -> [net]"#), "stdout: {out}");
     // Asking for what the parent does not hold still yields nothing.
     assert!(
-        out.contains(r#"["net"] -> [read,write,imports,net,listen,env,run,signals,workers]"#),
+        out.contains(r#"["net"] -> [read,write,imports,net,listen,env,run,signals,workers,diagnostics,diagnostics-detail]"#),
         "stdout: {out}"
     );
 }

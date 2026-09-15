@@ -43,20 +43,25 @@ const frameOf = globalThis.__ctx_frame;
 const swap = globalThis.__ctx_swap;
 const taskId = globalThis.__ctx_task;
 const parentId = globalThis.__ctx_parent;
+// The trace id rides beside the mapping rather than inside it: it is the one
+// part `runtime:diagnostics` reads on its recording path, and a record is
+// attributed in the host, per span. This module still owns the value — it mints
+// it and pushes it down — so there is one source of truth (DECISIONS D89).
+const traceOfScope = globalThis.__ctx_trace;
+const swapTrace = globalThis.__ctx_swap_trace;
 
 // A *mapping* is one of these, or `undefined` for the root — every context at
-// its default, no trace of its own. It is opaque to the host, which only ever
-// moves it from one scope to another.
+// its default. It is opaque to the host, which only ever moves it from one
+// scope to another.
 //
 //   values  Map<Context, value>, or null when the scope added no values
-//   trace   the W3C trace id this scope runs under, or null to inherit
 //   kind    what established this scope: "main", "http-request", "worker", …
 //
 // Frozen because it is shared by every scope derived from it: the copy-on-write
 // below is the only way to "change" one, and a mapping that could be mutated in
 // place would let a child scope rewrite its parent's.
-function makeFrame(values, trace, kind) {
-  return Object.freeze({ values, trace, kind });
+function makeFrame(values, kind) {
+  return Object.freeze({ values, kind });
 }
 
 // Copy-on-write. `run()` shallow-copies the value map for the new scope, so a
@@ -71,7 +76,7 @@ function makeFrame(values, trace, kind) {
 // made here.
 function derive(previous, kind) {
   const values = previous?.values ? new Map(previous.values) : new Map();
-  return makeFrame(values, previous?.trace ?? null, kind ?? previous?.kind ?? ROOT_KIND);
+  return makeFrame(values, kind ?? previous?.kind ?? ROOT_KIND);
 }
 
 // Runs `fn` with `frame` current, then puts back whatever was current before —
@@ -105,11 +110,22 @@ function mintTraceId() {
 // `withTrace` — minted on first read rather than at load, so a program that
 // never asks never draws the entropy, and shared from then on so that every
 // task in this agent's root reports the same trace.
+//
+// Held here *and* pushed to the host: the host needs it to attribute a
+// diagnostics record without calling into JS, and this module needs to know
+// whether it has minted one yet. `__ctx_trace()` answers for the current scope,
+// which is `undefined` until something asks.
 let ambientTrace = null;
 
-function traceOf(frame) {
-  if (frame?.trace) return frame.trace;
-  if (ambientTrace === null) ambientTrace = mintTraceId();
+function currentTrace() {
+  const scoped = traceOfScope();
+  if (scoped !== undefined) return scoped;
+  if (ambientTrace === null) {
+    ambientTrace = mintTraceId();
+    // Installed as the root scope's trace, so every task under the root — and
+    // every record the host writes for one — reports the same id.
+    swapTrace(ambientTrace);
+  }
   return ambientTrace;
 }
 
@@ -156,7 +172,7 @@ function currentTask() {
     id: taskId(),
     // The root task is the one nothing scheduled — the only `null` here.
     parentId: parent < 0 ? null : parent,
-    traceId: traceOf(frame),
+    traceId: currentTrace(),
     kind: frame?.kind ?? ROOT_KIND,
   };
 }
@@ -235,8 +251,14 @@ function withTrace(traceId, fn) {
     throw new TypeError(`withTrace: fn must be a function, got ${typeof fn}`);
   }
   const id = checkTraceId(traceId, "withTrace");
-  const frame = derive(frameOf());
-  return within(makeFrame(frame.values, id, frame.kind), fn);
+  // Only the trace changes: the values in scope are the caller's, because
+  // adopting an upstream trace says nothing about whose request this is.
+  const saved = swapTrace(id);
+  try {
+    return fn();
+  } finally {
+    swapTrace(saved);
+  }
 }
 
 // `runtime:http` reaches this without importing the module: an import would
@@ -250,7 +272,12 @@ function withTrace(traceId, fn) {
 // carry whatever the accept loop happened to be holding into every request
 // handler, which is the leak this module exists to avoid.
 globalThis.__internal.context.scope = function requestScope(traceId, kind, fn) {
-  return within(makeFrame(null, traceId ?? mintTraceId(), kind), fn);
+  const savedTrace = swapTrace(traceId ?? mintTraceId());
+  try {
+    return within(makeFrame(null, kind), fn);
+  } finally {
+    swapTrace(savedTrace);
+  }
 };
 globalThis.__internal.context.checkTraceId = checkTraceId;
 

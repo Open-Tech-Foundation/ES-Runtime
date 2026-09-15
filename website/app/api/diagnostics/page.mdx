@@ -1,0 +1,143 @@
+---
+title: runtime:diagnostics
+description: Spans with deterministic ends, filtered in the host and delivered in batches — with no per-operation JavaScript callback.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:diagnostics
+
+What the runtime is doing, and how long it took. Spans with deterministic ends,
+filtered in the host and delivered in batches.
+
+<Callout type="info" title="Capability: diagnostics — or diagnostics-detail">
+  `--allow-diagnostics` buys timings, kinds, counts, the handle inventory and
+  loop metrics, with `attributes` empty. `--allow-diagnostics-detail` populates
+  `attributes` and implies the first. Status: **Available**.
+</Callout>
+
+There is **no per-operation JavaScript callback**. An event nothing is subscribed
+to — or one every filter rejects — costs an integer compare in Rust and never
+reaches JavaScript. Delivery is once per subscription per loop turn, never once
+per record, and no resource object is ever handed out.
+
+## Import
+
+```js
+import { subscribe } from "runtime:diagnostics";
+
+const sub = subscribe({ kinds: ["op"], minDuration: 10 }, ({ records, dropped }) => {
+  for (const r of records) console.log(r.name, (r.endedAt - r.startedAt).toFixed(1), "ms");
+  if (dropped) console.warn(`${dropped} records lost`);
+});
+```
+
+## Exports
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `subscribe(filter, onBatch)` | `(Filter, (Batch) => void) => Subscription` | Receives batches matching `filter`. | `subscribe({}, (b) => …)` |
+| `inventory()` | `() => { handles }` | Host handles this agent **owns**. | `inventory().handles` |
+| `metrics()` | `() => Metrics` | Pull-only loop numbers. | `metrics().loopLagMs.p99` |
+| `span(name, options?)` | `(string, { attributes? }) => Span` | A span the program ends itself. | `span("checkout").end()` |
+| `resolveOrigin(origin)` | `(number) => object` | `diagnostics-detail`. Nothing captures an origin yet. | — |
+| `default` | `object` | An aggregate of all named exports. | |
+
+`Subscription.close()` delivers whatever is buffered, then stops. It is
+idempotent. `Span` has `end()`, `fail()` and `cancel()`; ending twice records
+once.
+
+## Filter
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kinds` | `string[]` | `"op"`, `"timer"`, `"user"`, `"tick"`. Omitted means every kind. |
+| `minDuration` | `number` | Milliseconds. Shorter records are discarded host-side. |
+| `sample` | `number` | `0..1`, applied **per trace** so a trace is whole or absent. |
+| `bufferSize` | `number` | Default `4096`, per subscription. |
+
+Overflow drops the **newest** and reports the count on the next batch. A `tick`
+record is never dropped — in an overloaded turn it is what explains the overload.
+
+## Record
+
+Field names follow OpenTelemetry, so an exporter attaches with no translation.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `number` | Unique in the agent. User spans share this id space. |
+| `parentId` | `number \| null` | The task that scheduled it — `runtime:context`'s lineage. |
+| `traceId` | `string \| null` | The trace it belongs to. |
+| `name` | `string` | Op name, timer function, or user span name. |
+| `kind` | `string` | `"op"`, `"timer"`, `"user"`, `"tick"`. |
+| `source` | `"runtime" \| "user"` | Who opened it. |
+| `scheduledAt` | `number` | When the work became **runnable**. |
+| `startedAt` | `number` | When it started. |
+| `endedAt` | `number` | When it finished. |
+| `status` | `string` | `"ok"`, `"error"`, `"cancelled"`. A failure is recorded, not dropped. |
+| `attributes` | `object` | Empty without `diagnostics-detail`. |
+| `origin` | `number` | Opaque token. Currently always `0`. |
+| `tick` | `number` | Which turn of the loop it landed in. |
+
+`startedAt - scheduledAt` is always queue delay. For a **timer** that is lag past
+its *deadline* — `setTimeout(fn, 50)` firing on time reports ~0, not 50. For an
+**op** the two are equal: there is no boundary the host can observe, and that is
+reported rather than invented.
+
+## Loop-tick attribution
+
+```js
+subscribe({}, ({ records }) => {
+  const turns = new Map(records.filter((r) => r.kind === "tick").map((r) => [r.tick, r]));
+  for (const r of records) {
+    const turn = turns.get(r.tick);
+    if (!turn) continue;
+    // 40ms in a 45ms turn was slow. 40ms in a 400ms turn waited.
+    console.log(r.name, `${r.endedAt - r.startedAt}ms of a ${turn.endedAt - turn.startedAt}ms turn`);
+  }
+});
+```
+
+## Metrics
+
+```js
+metrics();
+// { tick, ticks,
+//   tickDurationMs: { count, min, max, mean, p50, p99 },
+//   loopLagMs:      { count, min, max, mean, p50, p99 } }
+```
+
+`loopLagMs` is how long the loop was not running between turns. An idle loop is
+parked, so read it beside `tickDurationMs`: a large gap with short turns is an
+idle process, a large gap with long turns is a loop that cannot keep up.
+
+## Inventory
+
+The handles this agent **owns** — an id and a kind, never the resource.
+
+```js
+inventory().handles;
+// [{ kind: "HTTP server", count: 1, ids: [1] }]
+```
+
+Not the same as "live": listeners, HTTP servers, WebSockets and in-flight
+requests are deliberately never released by the ownership registry, so those
+kinds over-report.
+
+## Coming from Node
+
+| Node | Here |
+| --- | --- |
+| `createHook({ init, before, after, destroy })` | `subscribe(filter, onBatch)` |
+| a manual live-resource `Map` | `inventory()` |
+| `AsyncResource` | Removed |
+| — | `scheduledAt`, `tick`, per-trace sampling |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `NotAllowedError` | Any export without `diagnostics`; `resolveOrigin` without `diagnostics-detail`. |
+| `TypeError` | An unknown `kinds` entry, a non-function `onBatch`, a non-string span name, non-object `attributes`. |
+| `RangeError` | `minDuration < 0`, `sample` outside `0..1`, `bufferSize < 1`. |
+| `Error` | `resolveOrigin` — nothing captures an origin yet. |

@@ -69,7 +69,7 @@ fn run(flags: &[&str], code: &str) -> Output {
 #[test]
 fn nothing_is_granted_by_default() {
     // esrun is deny-by-default (D65): a run reaches what the command line named
-    // and nothing else, so a line with no permission flag denies all nine.
+    // and nothing else, so a line with no permission flag denies all eleven.
     let out = run(
         &[],
         "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
@@ -77,7 +77,7 @@ fn nothing_is_granted_by_default() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out).trim(),
-        "read,write,imports,net,listen,env,run,signals,workers"
+        "read,write,imports,net,listen,env,run,signals,workers,diagnostics,diagnostics-detail"
     );
 }
 
@@ -136,7 +136,7 @@ fn deny_all_denies_every_host_facing_capability() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out).trim(),
-        "read,write,imports,net,listen,env,run,signals,workers"
+        "read,write,imports,net,listen,env,run,signals,workers,diagnostics,diagnostics-detail"
     );
 }
 
@@ -393,7 +393,7 @@ fn allow_grants_a_capability_back_under_deny_all() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out).trim(),
-        "read,write,imports,listen,run,signals,workers"
+        "read,write,imports,listen,run,signals,workers,diagnostics,diagnostics-detail"
     );
 }
 
@@ -462,6 +462,8 @@ fn allowing_everything_back_is_the_same_as_no_flags() {
         "--allow-run",
         "--allow-signals",
         "--allow-workers",
+        "--allow-diagnostics",
+        "--allow-diagnostics-detail",
     ];
     let out = run(
         &flags,

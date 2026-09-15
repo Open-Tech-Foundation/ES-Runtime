@@ -11,6 +11,7 @@ const NAV = [
       { title: "Overview", path: "/api" },
       { title: "CLI", path: "/api/cli" },
       { title: "runtime:context", path: "/api/context" },
+      { title: "runtime:diagnostics", path: "/api/diagnostics" },
       { title: "runtime:process", path: "/api/process" },
       { title: "runtime:path", path: "/api/path" },
       { title: "runtime:fs", path: "/api/fs" },

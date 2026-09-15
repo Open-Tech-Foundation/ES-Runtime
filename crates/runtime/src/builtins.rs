@@ -29,6 +29,10 @@ pub(crate) fn install(
     entry_specifier: crate::EntrySlot,
     handle_refs: Rc<Cell<u32>>,
 ) -> Result<()> {
+    // Every handle registry this agent builds, collected as they are built, so
+    // `runtime:diagnostics`'s `inventory()` reads the same set D50's ownership
+    // check does rather than a second list beside it.
+    let inventory = crate::handles::Inventory::new();
     install_console(engine, providers.console())?;
     install_performance(engine, providers.clock())?;
     // Pure-computation ops (no provider): URL parsing, UTF-8 transcoding,
@@ -65,20 +69,30 @@ pub(crate) fn install(
         providers.worker_scope().is_some(),
     )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
-    crate::db_ops::install(engine, providers.embedded_db())?;
+    crate::db_ops::install(engine, providers.embedded_db(), &inventory)?;
     crate::fs_ops::install(engine, providers.file_system())?;
     // Synchronous filesystem ops for `runtime:wasi` (WASI's syscalls cannot
     // await); same FileRead / FileWrite gates as the async ops above.
-    crate::sync_fs_ops::install(engine, providers.sync_file_system())?;
+    crate::sync_fs_ops::install(engine, providers.sync_file_system(), &inventory)?;
     // runtime:net ops: connect (Net), listen (NetListen); read/write/accept by id.
-    crate::net_ops::install(engine, providers.net_provider(), handle_refs.clone())?;
+    crate::net_ops::install(
+        engine,
+        providers.net_provider(),
+        handle_refs.clone(),
+        &inventory,
+    )?;
     // The in-flight requests this agent has been handed (D50). Built here
     // rather than inside `http_ops` because `ws_ops` needs the same registry:
     // upgrading a request to a WebSocket is a use of that request, so it is
     // checked against the agent that was given it (D55).
-    let requests = crate::handles::Handles::new("HTTP request");
+    let requests = inventory.track(crate::handles::Handles::new("HTTP request"));
     // runtime:http ops: serve (NetListen); next_request/body_read/respond by id.
-    crate::http_ops::install(engine, providers.http_server(), requests.clone())?;
+    crate::http_ops::install(
+        engine,
+        providers.http_server(),
+        requests.clone(),
+        &inventory,
+    )?;
     // WebSocket global ops: connect (Net); send/recv/close by id (DECISIONS D29).
     // Also `ws_upgrade`, which joins the two server providers (D55).
     crate::ws_ops::install(
@@ -86,9 +100,10 @@ pub(crate) fn install(
         providers.web_socket(),
         providers.http_server(),
         requests,
+        &inventory,
     )?;
     // runtime:system ops: spawn (Run); read/write/wait/kill by child id.
-    crate::system_ops::install(engine, providers.commands())?;
+    crate::system_ops::install(engine, providers.commands(), &inventory)?;
     crate::serialization_ops::install(engine)?;
     // runtime:hashing ops: digests, incremental hashers, HMAC, password
     // hashing. Pure computation, so no capability and no provider (D57).
@@ -105,12 +120,18 @@ pub(crate) fn install(
         module_loader,
         entry_specifier,
         handle_refs,
+        &inventory,
     )?;
     // BroadcastChannel's cross-agent delivery. Ungated; absent hub means the
     // prelude keeps agent-local delivery.
-    crate::worker_ops::install_broadcast(engine, providers.broadcast())?;
+    crate::worker_ops::install_broadcast(engine, providers.broadcast(), &inventory)?;
     // MessagePort queues, so a port can be transferred between agents.
     crate::worker_ops::install_ports(engine, providers.ports())?;
+    // runtime:diagnostics, last: it is handed the inventory every registry above
+    // has now registered itself in, so what `inventory()` reports is the same
+    // set D50's ownership check consults rather than a second list that could
+    // drift from it (D89).
+    crate::diagnostics_ops::install(engine, providers.clock(), inventory)?;
     Ok(())
 }
 

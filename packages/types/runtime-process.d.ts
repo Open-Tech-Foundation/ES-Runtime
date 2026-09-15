@@ -145,7 +145,9 @@ declare module "runtime:process" {
     | "env"
     | "run"
     | "signals"
-    | "workers";
+    | "workers"
+    | "diagnostics"
+    | "diagnostics-detail";
 
   /**
    * What this process is allowed to reach. The policy is fixed at launch — by

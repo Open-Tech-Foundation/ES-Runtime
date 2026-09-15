@@ -72,12 +72,32 @@ pub enum Capability {
     /// [`CapabilitySet::none`] and is granted explicitly, bounded above by the
     /// parent's set, so a spawn can never widen what the spawner holds.
     Worker,
+    /// Observe the runtime's own execution — span timings, kinds, counts, the
+    /// live handle inventory, loop metrics (`runtime:diagnostics`).
+    ///
+    /// Gated because observability is authority over *other* code in the same
+    /// isolate: a library that could subscribe would learn every filesystem
+    /// call, query and request the program makes, including which of them are
+    /// slow and how often they run. It reveals no payload on its own —
+    /// `attributes` come back empty without [`DiagnosticsDetail`](Self::DiagnosticsDetail)
+    /// — so a profiler runs on this alone and sees full timings with empty
+    /// values.
+    DiagnosticsObserve,
+    /// Populate the `attributes` of an observed span — filesystem paths, URLs,
+    /// SQL text — and resolve a span's origin to a source position.
+    ///
+    /// Strictly wider than [`DiagnosticsObserve`](Self::DiagnosticsObserve),
+    /// which it implies: the difference between "a query took 40ms" and "*this*
+    /// query, against this table, took 40ms". The second is the one that carries
+    /// the program's data out through a diagnostics subscription, so it is the
+    /// one that is separately grantable.
+    DiagnosticsDetail,
 }
 
 impl Capability {
     /// All capabilities, in a fixed order. Used to build [`CapabilitySet::all`]
     /// and to keep the bit assignment in [`bit`](Self::bit) exhaustive.
-    const ALL: [Capability; 13] = [
+    const ALL: [Capability; 15] = [
         Capability::Clock,
         Capability::Entropy,
         Capability::Timers,
@@ -91,6 +111,8 @@ impl Capability {
         Capability::Signals,
         Capability::Run,
         Capability::Worker,
+        Capability::DiagnosticsObserve,
+        Capability::DiagnosticsDetail,
     ];
 
     /// The **host-facing** capabilities: everything that reaches past the
@@ -105,7 +127,7 @@ impl Capability {
     /// [`Worker`](Self::Worker) is here despite not reaching past the isolate:
     /// a real op gates it, so `--deny-workers` denies something, and a host
     /// bounding what a script may consume wants to name it.
-    pub const HOST_FACING: [Capability; 9] = [
+    pub const HOST_FACING: [Capability; 11] = [
         Capability::FileRead,
         Capability::FileWrite,
         Capability::FileSystem,
@@ -115,6 +137,8 @@ impl Capability {
         Capability::Run,
         Capability::Signals,
         Capability::Worker,
+        Capability::DiagnosticsObserve,
+        Capability::DiagnosticsDetail,
     ];
 
     /// This capability's name in the denial vocabulary — the suffix of `esrun`'s
@@ -138,6 +162,11 @@ impl Capability {
             // Plural, unlike the rest: what it gates is starting workers, and
             // `--deny-worker` would read as naming one particular worker.
             Capability::Worker => Some("workers"),
+            // The unqualified name is the *observe* level, because that is what
+            // "may this code watch the runtime?" means to someone writing a
+            // command line. The wider grant qualifies itself.
+            Capability::DiagnosticsObserve => Some("diagnostics"),
+            Capability::DiagnosticsDetail => Some("diagnostics-detail"),
             Capability::Clock
             | Capability::Entropy
             | Capability::Timers
@@ -170,6 +199,24 @@ impl Capability {
             Capability::Signals => 1 << 10,
             Capability::Run => 1 << 11,
             Capability::Worker => 1 << 12,
+            Capability::DiagnosticsObserve => 1 << 13,
+            Capability::DiagnosticsDetail => 1 << 14,
+        }
+    }
+
+    /// Capabilities this one necessarily carries with it.
+    ///
+    /// Only one pair needs this:
+    /// [`DiagnosticsDetail`](Self::DiagnosticsDetail) is
+    /// [`DiagnosticsObserve`](Self::DiagnosticsObserve) plus the payload, so a
+    /// set holding the wider grant and not the narrower one would deny every
+    /// export while claiming to be the more permissive of the two. Applied when
+    /// a set is *built*, so `contains` stays a single bit test on the dispatch
+    /// path.
+    const fn implies(self) -> u32 {
+        match self {
+            Capability::DiagnosticsDetail => Capability::DiagnosticsObserve.bit(),
+            _ => 0,
         }
     }
 }
@@ -217,13 +264,14 @@ impl CapabilitySet {
     /// Returns `self` with `cap` added (builder style).
     #[must_use]
     pub const fn with(mut self, cap: Capability) -> Self {
-        self.bits |= cap.bit();
+        self.bits |= cap.bit() | cap.implies();
         self
     }
 
-    /// Adds `cap` to this set in place.
+    /// Adds `cap` to this set in place, along with anything it
+    /// [implies](Capability::implies).
     pub fn grant(&mut self, cap: Capability) {
-        self.bits |= cap.bit();
+        self.bits |= cap.bit() | cap.implies();
     }
 
     /// Removes `cap` from this set in place.
@@ -312,6 +360,62 @@ mod tests {
     }
 
     #[test]
+    fn detail_implies_observe() {
+        // The wider diagnostics grant must never leave the narrower one denied:
+        // `attributes` widen what `observe` returns, so a set holding only
+        // detail would deny every export it claims to widen.
+        let set = CapabilitySet::none().with(Capability::DiagnosticsDetail);
+        assert!(set.contains(Capability::DiagnosticsObserve));
+        assert!(set.contains(Capability::DiagnosticsDetail));
+
+        let mut granted = CapabilitySet::none();
+        granted.grant(Capability::DiagnosticsDetail);
+        assert!(granted.contains(Capability::DiagnosticsObserve));
+
+        // Not the other way round: observing timings does not grant payloads.
+        let observe = CapabilitySet::none().with(Capability::DiagnosticsObserve);
+        assert!(!observe.contains(Capability::DiagnosticsDetail));
+    }
+
+    #[test]
+    fn revoking_observe_leaves_detail_naming_a_set_that_grants_nothing() {
+        // `revoke` is deliberately literal — it clears one bit. Revoking the
+        // narrower grant from a set that holds both is therefore expressible,
+        // and every diagnostics op still refuses, because they all require
+        // `observe`. Pinned so that a later "revoke should cascade" change has
+        // to argue with a test rather than a comment.
+        let mut set = CapabilitySet::none().with(Capability::DiagnosticsDetail);
+        set.revoke(Capability::DiagnosticsObserve);
+        assert!(!set.contains(Capability::DiagnosticsObserve));
+        assert!(set.require(Capability::DiagnosticsObserve).is_err());
+    }
+
+    #[test]
+    fn diagnostics_capabilities_are_host_facing_and_named() {
+        assert_eq!(
+            Capability::DiagnosticsObserve.flag_name(),
+            Some("diagnostics")
+        );
+        assert_eq!(
+            Capability::DiagnosticsDetail.flag_name(),
+            Some("diagnostics-detail")
+        );
+        assert_eq!(
+            Capability::from_flag_name("diagnostics"),
+            Some(Capability::DiagnosticsObserve)
+        );
+        assert_eq!(
+            Capability::from_flag_name("diagnostics-detail"),
+            Some(Capability::DiagnosticsDetail)
+        );
+        // `--deny-all` must take them: observing the runtime is a reach over the
+        // rest of the program, even though it never leaves the isolate.
+        let denied = CapabilitySet::all().without_host_access();
+        assert!(!denied.contains(Capability::DiagnosticsObserve));
+        assert!(!denied.contains(Capability::DiagnosticsDetail));
+    }
+
+    #[test]
     fn require_denied_names_the_capability() {
         let err = CapabilitySet::none()
             .require(Capability::Entropy)
@@ -388,7 +492,17 @@ mod tests {
         assert_eq!(
             CapabilitySet::all().without_host_access().denied_names(),
             [
-                "read", "write", "imports", "net", "listen", "env", "run", "signals", "workers"
+                "read",
+                "write",
+                "imports",
+                "net",
+                "listen",
+                "env",
+                "run",
+                "signals",
+                "workers",
+                "diagnostics",
+                "diagnostics-detail"
             ]
         );
         let mut set = CapabilitySet::all();

@@ -10,6 +10,40 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:diagnostics`** — spans with deterministic ends, filtered in the
+  host and delivered in batches, so an event nothing is subscribed to costs an
+  integer compare in Rust and never reaches JavaScript (D89). There is no
+  per-operation JS callback and no resource object is ever handed out, which is
+  what makes it a different design from `node:async_hooks` rather than a
+  reimplementation of it.
+  - **Two capabilities.** `--allow-diagnostics` buys timings, kinds, counts, the
+    handle inventory and loop metrics, with `attributes` empty;
+    `--allow-diagnostics-detail` additionally populates `attributes` and implies
+    the first. A profiler runs on the narrower grant and sees full timings with
+    empty payloads. Which one a subscription gets is decided host-side, not
+    claimed by the caller.
+  - **`subscribe(filter, onBatch)`** with host-side `kinds`, `minDuration`,
+    `sample` and `bufferSize`. Sampling is **per trace**, computed from the trace
+    id, so a trace is kept whole or dropped whole. Overflow drops the newest and
+    reports a `dropped` count; a turn's own record is never dropped, because it
+    is what explains the overload. `close()` delivers what is buffered first.
+  - **Loop-tick attribution.** Every record names the loop turn it landed in, and
+    a `tick` record gives that turn its own timings — so a slow span can be told
+    apart from one that merely waited behind something else in the same turn.
+    This runtime's `tick()` boundary is owned by the embedder (D4), which is why
+    it can report this and other runtimes cannot.
+  - **One meaning for the three timestamps.** `startedAt - scheduledAt` is always
+    queue delay: for a timer that is lag past its **deadline**, not the delay it
+    asked for; for an op it is zero, because there is no boundary the host can
+    observe, and that is reported rather than invented.
+  - **`inventory()`** reports the host handles the agent owns — an id and a kind,
+    never the resource — reading the same registries the ownership check uses.
+    **`metrics()`** is pull-only: turn durations and loop lag as histograms.
+    **`span()`** opens a span the program ends itself, sharing the runtime's id
+    space and timeline.
+- **`permissions.denied`** and `--deny-all` now cover `diagnostics` and
+  `diagnostics-detail`, and `PermissionName` in `@opentf/esrun-types` names both.
+
 - **`runtime:context`** — values that follow the work rather than the call
   stack, for the request id, tenant or ambient transaction that every layer
   underneath needs and no layer wants in its signature (D88).
@@ -76,6 +110,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **`runtime:context`'s trace id now rides beside the mapping rather than inside
+  it.** No visible behaviour changes; `runtime:diagnostics` attributes a record
+  to a trace on its recording path, and reaching into an opaque JavaScript value
+  per span is the cost that module exists to avoid.
 - **Website benchmark data was refreshed.** The generated workload matrices now
   include the latest five-runtime measurements, including Bun 1.4.2 and esrun
   built with V8 152.

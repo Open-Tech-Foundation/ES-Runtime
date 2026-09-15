@@ -17,6 +17,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [The `runtime:` scheme](#the-runtime-scheme)
 - [Capabilities](#capabilities)
 - [`runtime:context`](#runtimecontext)
+- [`runtime:diagnostics`](#runtimediagnostics)
 - [`runtime:process`](#runtimeprocess)
 - [`runtime:path`](#runtimepath)
 - [`runtime:fs`](#runtimefs)
@@ -877,6 +878,7 @@ the required capability has been granted.
 | Module            | Status      | Capability | Reference                     |
 | ----------------- | ----------- | ---------- | ----------------------------- |
 | `runtime:context` | Available   | **none**   | [↓](#runtimecontext)          |
+| `runtime:diagnostics` | Available | `DiagnosticsObserve` / `DiagnosticsDetail` | [↓](#runtimediagnostics) |
 | `runtime:process` | Available   | `Env` / `Signals` | [↓](#runtimeprocess)   |
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
@@ -915,6 +917,8 @@ capability — only its operations do.
 | `Signals`   | Watch OS signals — `runtime:process` `onSignal`. Separate from `Env` because a watch **suppresses the signal's default action**: it is the privilege to decline to die on request, not a read of process state. |
 | `Run`       | Spawn a child process — `runtime:system`. Never implied by another capability: a child runs **outside** every confinement here (no capability check, no root jail, no execution deadline), so granting it to guest code grants everything the host user can do. |
 | `HrTime`    | Access high-resolution timing.                                      |
+| `DiagnosticsObserve` | Observe the runtime's own execution — `runtime:diagnostics` span timings, kinds, counts, the handle inventory, loop metrics. Gated although it never leaves the isolate: it is authority over the *rest of the program*, since a library that could subscribe would learn every filesystem call, query and request the process makes. `attributes` come back empty. |
+| `DiagnosticsDetail`  | Populate an observed span's `attributes` (paths, URLs, SQL text) and resolve its origin. Strictly wider than `DiagnosticsObserve`, which it **implies**: the difference between "a query took 40ms" and "*this* query took 40ms". |
 
 Filesystem access (including module resolution) is confined to a project **root
 jail**, on by default and not currently optional (DECISIONS D25). Paths are
@@ -956,6 +960,8 @@ scopes and the rules are otherwise identical.
 | `--allow-run` | `Run` | `runtime:system` child processes |
 | `--allow-signals` | `Signals` | `runtime:process` `onSignal` |
 | `--allow-workers` | `Worker` | `new Worker(url)` |
+| `--allow-diagnostics` | `DiagnosticsObserve` | `runtime:diagnostics` — timings, kinds, counts, inventory, metrics |
+| `--allow-diagnostics-detail` | `DiagnosticsDetail` | the above **plus** span `attributes` and `resolveOrigin` |
 
 Each name takes both prefixes: `--allow-net` and `--deny-net`.
 
@@ -1277,6 +1283,158 @@ The V8 promise hook behind propagation is installed the first time
 `runtime:context` is imported, so a program that never uses a context is
 unaffected — including a `runtime:http` server, which mints a trace per request
 only once something can observe one.
+
+---
+
+## `runtime:diagnostics`
+
+What the runtime is doing, and how long it took. Spans with deterministic ends,
+filtered in the host and delivered in batches.
+
+**Capability:** `DiagnosticsObserve` (`--allow-diagnostics`) for everything here;
+`DiagnosticsDetail` (`--allow-diagnostics-detail`) additionally populates
+`attributes` and would resolve an origin. `detail` **implies** `observe` and adds
+no exports of its own — it widens what `observe` returns, so a profiler runs on
+`observe` alone and sees full timings with empty payloads.
+
+Gated even though nothing here leaves the isolate, because it is authority over
+the rest of the program: a library that could subscribe would learn every
+filesystem call, query and request the process makes (DECISIONS D89).
+
+```js
+import { subscribe } from "runtime:diagnostics";
+
+const sub = subscribe({ kinds: ["op"], minDuration: 10 }, ({ records, dropped }) => {
+  for (const r of records) console.log(r.name, r.endedAt - r.startedAt, "ms");
+  if (dropped) console.warn(`${dropped} records lost to buffer overflow`);
+});
+```
+
+There is **no per-operation JS callback**. An event nothing is subscribed to, or
+that every filter rejects, costs an integer compare in Rust and never reaches
+JavaScript; delivery is once per subscription per loop turn, never once per
+record. No resource object is ever handed to JS — exposing the raw handle is what
+made Node's `async_hooks` unfixable.
+
+### The three timestamps
+
+| | |
+| --- | --- |
+| `scheduledAt` | when the work became **runnable** |
+| `startedAt` | when it actually started |
+| `endedAt` | when it finished |
+
+`startedAt - scheduledAt` is therefore always queue delay. For a **timer** that
+means lag past its *deadline*, not the delay it asked for — a `setTimeout(fn,
+50)` that fires on time reports ~0, not 50. For an **op** the two are equal:
+there is no boundary between them the host can observe, and that is reported
+rather than invented.
+
+### Loop-tick attribution
+
+This runtime is a driven loop — the embedder owns `tick()` — so there is an exact
+turn boundary. Every record names the turn it landed in, and a `tick` record
+gives that turn its own timings:
+
+```js
+subscribe({}, ({ records }) => {
+  const turns = new Map(records.filter((r) => r.kind === "tick").map((r) => [r.tick, r]));
+  for (const r of records) {
+    const turn = turns.get(r.tick);
+    if (!turn) continue;
+    const self = r.endedAt - r.startedAt;
+    const whole = turn.endedAt - turn.startedAt;
+    // A 40ms span in a 45ms turn was slow. The same span in a 400ms turn waited.
+    console.log(r.name, `${self}ms of a ${whole}ms turn`);
+  }
+});
+```
+
+### Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `subscribe(filter, onBatch)` | `(Filter, (Batch) => void) => Subscription` | Receives batches matching `filter`. `close()` delivers what is buffered, then stops; it is idempotent. |
+| `inventory()` | `() => { handles }` | The host handles this agent **owns** (see below). |
+| `metrics()` | `() => Metrics` | Pull-only: turn count, turn durations, loop lag. |
+| `span(name, options?)` | `(string, { attributes? }) => Span` | Opens a span the program ends itself — `end()`, `fail()`, `cancel()`. |
+| `resolveOrigin(origin)` | `(number) => { file, line, column }` | `DiagnosticsDetail`. **Nothing captures an origin yet**, so every record's `origin` is `0` and this throws. |
+| `default` | `object` | An aggregate of all named exports. |
+
+### `Filter`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kinds` | `string[]` | `"op"`, `"timer"`, `"user"`, `"tick"`. Omitted means every kind. |
+| `minDuration` | `number` | Milliseconds. Shorter records are discarded host-side. |
+| `sample` | `number` | `0..1`, applied **per trace** (not per record) so a trace is kept whole or dropped whole. A record with no trace is always kept. |
+| `bufferSize` | `number` | Records held before dropping. Default `4096`, per subscription. |
+
+Overflow **drops the newest** and reports the count on the next batch. A `tick`
+record is never dropped: it is one per turn, and in an overloaded turn it is the
+record that explains the overload.
+
+### `Record`
+
+Field names follow OpenTelemetry, so an exporter attaches with no translation.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `number` | Unique within the agent. User spans share this id space. |
+| `parentId` | `number \| null` | The task that scheduled this one — `runtime:context`'s lineage. |
+| `traceId` | `string \| null` | The trace this belongs to. |
+| `name` | `string` | The op's name, the timer's function, or a user span's name. |
+| `kind` | `string` | `"op"`, `"timer"`, `"user"`, `"tick"`. |
+| `source` | `"runtime" \| "user"` | Who opened it. |
+| `scheduledAt` / `startedAt` / `endedAt` | `number` | Monotonic ms, fractional — the same clock as `performance.now()`. |
+| `status` | `"ok" \| "error" \| "cancelled"` | How it finished. A failed op is recorded, not dropped. |
+| `attributes` | `object` | Empty without `DiagnosticsDetail`. |
+| `origin` | `number` | Opaque token. Currently always `0`. |
+| `tick` | `number` | Which turn of the loop it landed in. |
+
+### `inventory()`
+
+Reports the host handles this agent **owns** — not handles that are live. It
+reads the same registries the per-agent ownership check maintains (D50), which
+deliberately never releases listeners, HTTP servers, WebSockets or in-flight
+requests, so those four kinds over-report. An id and a kind; never the resource.
+
+```js
+inventory().handles;
+// [{ kind: "HTTP server", count: 1, ids: [1] }, { kind: "socket", count: 3, ids: [4, 5, 6] }]
+```
+
+### `metrics()`
+
+```js
+metrics();
+// { tick: 412, ticks: 412,
+//   tickDurationMs: { count, min, max, mean, p50, p99 },
+//   loopLagMs:      { count, min, max, mean, p50, p99 } }
+```
+
+`loopLagMs` is how long the loop was *not running* between turns. Not all of it
+is lag — an idle loop is parked, and parking is correct. Read it beside
+`tickDurationMs`: a large gap with short turns is an idle process; a large gap
+with long turns is a loop that cannot keep up.
+
+### Coming from Node
+
+| Node | Here |
+| --- | --- |
+| `createHook({ init, before, after, destroy })` | `subscribe(filter, onBatch)` |
+| a manual live-resource `Map` | `inventory()` |
+| `AsyncResource` | **Removed** — it conflates context capture with lifecycle emission |
+| — | `scheduledAt`, `tick`, per-trace sampling |
+
+### Not here
+
+**No `worker` field and no scheduler tiers.** This runtime has no CPU offload
+tier and no bounded pool to be saturated, so there is nothing to report; `tick`
+is the attribution it can honestly give. **No microtask spans** — the
+highest-volume, lowest-value kind, and `tick` already attributes a continuation
+to its turn. **No `resource` field, no destroy event, no finalizer dependency**,
+under any name.
 
 ---
 

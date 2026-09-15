@@ -49,12 +49,16 @@ const TAG_REAL: u8 = 2;
 const TAG_TEXT: u8 = 3;
 const TAG_BLOB: u8 = 4;
 
-pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    db: Option<Arc<dyn EmbeddedDb>>,
+    inventory: &crate::handles::Inventory,
+) -> Result<()> {
     // Connections and cursors are separate namespaces in the provider, so they
     // are separate registries here: a cursor id and a connection id may
     // collide, and fetching from a connection is not a request worth honouring.
-    let conns = Handles::new("database");
-    let cursors = Handles::new("cursor");
+    let conns = inventory.track(Handles::new("database"));
+    let cursors = inventory.track(Handles::new("cursor"));
 
     for (name, read_only) in [("db_open", false), ("db_open_read_only", true)] {
         let d = db.clone();

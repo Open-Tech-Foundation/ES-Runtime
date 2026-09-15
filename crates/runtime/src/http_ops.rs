@@ -71,6 +71,7 @@ pub(crate) fn install(
     engine: &mut dyn Engine,
     http: Option<Arc<dyn HttpServerProvider>>,
     requests: Handles,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     // Inbound request-body streams, keyed by request id: `http_next_request`
     // inserts, `http_body_read` pulls chunks, response completion drops leftovers.
@@ -97,7 +98,7 @@ pub(crate) fn install(
     // come from the shared provider's id space; these are the halves of it this
     // agent may name. A request is released when it is answered — an id past
     // that names a response already on the wire.
-    let servers = Handles::new("HTTP server");
+    let servers = inventory.track(Handles::new("HTTP server"));
 
     let h = http.clone();
     let owned = servers.clone();

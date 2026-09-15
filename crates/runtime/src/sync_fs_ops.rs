@@ -30,9 +30,13 @@ use crate::Result;
 use crate::handles::Handles;
 
 /// Registers the synchronous filesystem ops, capturing the (optional) provider.
-pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem>>) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    fs: Option<Arc<dyn SyncFileSystem>>,
+    inventory: &crate::handles::Inventory,
+) -> Result<()> {
     // The descriptors this agent opened.
-    let fds = Handles::new("file descriptor");
+    let fds = inventory.track(Handles::new("file descriptor"));
 
     // Opening is split in two so each half carries the right gate — `requires`
     // takes a single capability, and a read-only open must not demand

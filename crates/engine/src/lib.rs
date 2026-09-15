@@ -33,6 +33,7 @@
 
 mod async_context;
 mod convert;
+pub mod diagnostics;
 mod engine;
 pub mod error;
 pub mod inspector;

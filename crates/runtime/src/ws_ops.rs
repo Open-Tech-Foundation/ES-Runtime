@@ -26,10 +26,11 @@ pub(crate) fn install(
     ws: Option<Arc<dyn WebSocketProvider>>,
     http: Option<Arc<dyn HttpServerProvider>>,
     requests: Handles,
+    inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     // This agent's connections (dialled or accepted) and its bound servers.
-    let connections = Handles::new("WebSocket");
-    let servers = Handles::new("WebSocket server");
+    let connections = inventory.track(Handles::new("WebSocket"));
+    let servers = inventory.track(Handles::new("WebSocket server"));
 
     let w = ws.clone();
     let owned = connections.clone();

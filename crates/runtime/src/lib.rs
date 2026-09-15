@@ -20,6 +20,7 @@ mod compression_ops;
 mod crypto_ops;
 mod curve25519_ops;
 mod db_ops;
+mod diagnostics_ops;
 mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
@@ -1196,6 +1197,10 @@ impl Runtime {
         // *terminated* mid-scope on the last tick skipped the `finally` that
         // would have restored it (DECISIONS.md D88).
         self.engine.reset_async_context();
+        // Open this turn. Every span recorded below carries its number, which is
+        // what makes "was this slow, or did it wait behind something?" answerable
+        // (DECISIONS.md D89).
+        self.engine.begin_tick();
         // Schedule timers created since the last drain (e.g. during `eval`).
         self.drain_new_timers(now_ms);
 
@@ -1243,6 +1248,12 @@ impl Runtime {
         if self.module_eval_pending && self.engine.module_eval_state() != ModuleEvalState::Pending {
             self.module_eval_pending = false;
         }
+
+        // 5. Close the turn and hand each diagnostics subscriber its batch — one
+        //    call into JS per subscription per tick, never one per record.
+        //    Both are no-ops unless something subscribed.
+        self.engine.end_tick();
+        self.engine.deliver_diagnostics();
 
         TickStatus {
             timers_fired,
