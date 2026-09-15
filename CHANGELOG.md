@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-09-15
+
 ### Added
 
 - **Native OpenTelemetry export (`--otel`)** — the **runtime** ships spans over

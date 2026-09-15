@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-15
+
 ### Added
 
 - **`runtime:context`** — `Context<T>`, `ContextOptions<T>` and `TaskInfo`, with
