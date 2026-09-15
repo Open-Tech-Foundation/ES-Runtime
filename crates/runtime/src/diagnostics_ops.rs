@@ -257,6 +257,9 @@ fn metrics(
         OpDecl::sync("diagnostics_metrics", move |_args| {
             let rec = recorder.borrow();
             let loop_metrics = rec.loop_metrics();
+            // Per isolate and read from the thread it runs on — which is this
+            // one, since an op runs on its own agent's thread.
+            let gc_metrics = es_runtime_engine::diagnostics::gc_metrics();
             Ok(Value::Object(vec![
                 ("tick".to_string(), Value::Number(rec.tick() as f64)),
                 (
@@ -268,6 +271,18 @@ fn metrics(
                     histogram(&loop_metrics.duration),
                 ),
                 ("loopLagMs".to_string(), histogram(&loop_metrics.lag)),
+                // Beside the loop's numbers rather than under a heading of its
+                // own, because a GC pause *is* loop lag: the isolate is stopped
+                // for the whole of one, so a major collection lands in
+                // `loopLagMs` with nothing else to explain it. `gc.pause` is
+                // what says which it was.
+                (
+                    "gc".to_string(),
+                    Value::Object(vec![
+                        ("count".to_string(), Value::Number(gc_metrics.count as f64)),
+                        ("pauseMs".to_string(), histogram(&gc_metrics.pause)),
+                    ]),
+                ),
                 // The process, not this agent: resident memory is one address
                 // space shared by every agent, and the CPU total covers every
                 // thread. Both describe the agents *around* the caller, which is

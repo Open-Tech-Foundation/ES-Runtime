@@ -35,8 +35,10 @@
 //! whether a span was slow or merely waited behind something else in its turn.
 //! That is this module's reason to exist beyond parity.
 
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::time::Instant;
 
 /// What produced a span. One bit each, so "does anything want this kind?" is a
 /// mask test on the recording path.
@@ -1172,4 +1174,97 @@ mod tests {
         // way for everything, which a constant would.
         assert!((350..650).contains(&kept), "kept {kept} of 1000");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Garbage collection
+// ---------------------------------------------------------------------------
+
+/// What `metrics()` reports about garbage collection.
+///
+/// It sits beside [`LoopMetrics`] rather than in a section of its own because a
+/// GC pause **is** loop lag: the loop is stopped for the whole of one, so a
+/// major collection shows up in `lag` with no other explanation. Read together
+/// they separate "the loop was idle" from "the loop was stopped".
+#[derive(Clone, Debug, Default)]
+pub struct GcMetrics {
+    /// Collections so far — every kind, minor and major together.
+    pub count: u64,
+    /// How long each one stopped the isolate.
+    pub pause: Histogram,
+}
+
+/// Per-isolate GC accounting.
+///
+/// A thread-local rather than an isolate slot, because the two V8 callbacks are
+/// `extern "C"` and reaching a slot from one means turning the raw isolate
+/// pointer back into a reference — unsafe for a number that a thread-local can
+/// hold safely. One agent is one isolate on one thread (D48), so the two are the
+/// same scope; a snapshot builder gets its own and never installs the hooks.
+///
+/// `Cell` and not `RefCell`: the prologue runs with an allocation in flight and
+/// must not be able to panic, and a counter needs no borrow.
+struct GcState {
+    /// When the collection currently running began, or `None` between them.
+    started_at: Cell<Option<Instant>>,
+    metrics: RefCell<GcMetrics>,
+}
+
+thread_local! {
+    static GC_STATE: GcState = GcState {
+        started_at: Cell::new(None),
+        metrics: RefCell::new(GcMetrics::default()),
+    };
+}
+
+/// V8 is about to stop the isolate and collect.
+unsafe extern "C" fn gc_prologue(
+    _isolate: v8::UnsafeRawIsolatePtr,
+    _kind: v8::GCType,
+    _flags: v8::GCCallbackFlags,
+    _data: *mut std::ffi::c_void,
+) {
+    GC_STATE.with(|state| state.started_at.set(Some(Instant::now())));
+}
+
+/// V8 has finished collecting and is about to resume the isolate.
+unsafe extern "C" fn gc_epilogue(
+    _isolate: v8::UnsafeRawIsolatePtr,
+    _kind: v8::GCType,
+    _flags: v8::GCCallbackFlags,
+    _data: *mut std::ffi::c_void,
+) {
+    GC_STATE.with(|state| {
+        let Some(started_at) = state.started_at.take() else {
+            // An epilogue with no prologue: V8 nests incremental marking steps
+            // inside a collection, so this is a step ending rather than a pause.
+            return;
+        };
+        let pause = started_at.elapsed().as_secs_f64() * 1000.0;
+        // `try_borrow_mut` because this runs at an arbitrary allocation point.
+        // Nothing here should be able to end the program; a lost sample is a
+        // sample, an abort is the program.
+        if let Ok(mut metrics) = state.metrics.try_borrow_mut() {
+            metrics.count += 1;
+            metrics.pause.observe(pause);
+        }
+    });
+}
+
+/// Starts counting collections on this isolate.
+///
+/// Unconditional and not gated, like the loop histograms: two `Instant` reads
+/// per collection is a fixed cost that does not scale with the program's work,
+/// and `metrics()` is pull-only — a reader asking for the first time still wants
+/// to see what the heap has been doing since before it asked. There is nothing
+/// to subscribe to here that could turn it on in time.
+pub fn install_gc_metrics(isolate: &mut v8::Isolate) {
+    let null = std::ptr::null_mut();
+    isolate.add_gc_prologue_callback(gc_prologue, null, v8::GCType::kGCTypeAll);
+    isolate.add_gc_epilogue_callback(gc_epilogue, null, v8::GCType::kGCTypeAll);
+}
+
+/// What this isolate's heap has been doing.
+pub fn gc_metrics() -> GcMetrics {
+    GC_STATE.with(|state| state.metrics.borrow().clone())
 }

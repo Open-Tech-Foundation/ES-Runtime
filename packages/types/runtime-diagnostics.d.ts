@@ -162,6 +162,23 @@ declare module "runtime:diagnostics" {
      * behind `diagnostics`.
      */
     process: ProcessMetrics;
+    /**
+     * Garbage collection on **this agent's isolate**.
+     *
+     * Here rather than under a heading of its own because a GC pause *is* loop
+     * lag: the isolate is stopped for the whole of one, so a major collection
+     * lands in {@link loopLagMs} with nothing else to explain it. `gc.pauseMs`
+     * is what says which it was.
+     */
+    gc: GcMetrics;
+  }
+
+  /** What garbage collection cost, in {@link Metrics}. */
+  export interface GcMetrics {
+    /** Collections so far — minor and major together. */
+    count: number;
+    /** How long each one stopped the isolate. */
+    pauseMs: Histogram;
   }
 
   /** The process-wide figures in {@link Metrics}. */

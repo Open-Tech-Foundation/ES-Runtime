@@ -787,6 +787,14 @@ impl V8Engine {
             guard
         });
 
+        // Count collections and how long each stopped the isolate. Unconditional
+        // for the reason the loop histograms are: `metrics()` is pull-only, so a
+        // reader asking for the first time still wants what the heap did before
+        // it asked. Skipped for snapshot builders, which run no program.
+        if heap_limit.is_some() {
+            crate::diagnostics::install_gc_metrics(&mut isolate);
+        }
+
         let context = Self::make_context(&mut isolate);
 
         // Timer builtins (`setTimeout` &c.) are part of the driven loop, not a
