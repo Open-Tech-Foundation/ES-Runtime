@@ -1657,6 +1657,34 @@ exit(); // defaults to 0
 
 ---
 
+### Self-reporting
+
+Both need **no capability**, by the rule this module already applies to
+`platform` and `args`: they report only what the caller could discover about
+itself anyway.
+
+| Export | Type | Description |
+| ------ | ---- | ----------- |
+| `memoryUsage()` | `() => { heapUsed, heapLimit, external }` | Bytes, for **this agent's isolate**. `heapLimit` is the ceiling `--max-heap` (or a worker's `memory` option) set, so `heapLimit - heapUsed` is real headroom. |
+| `uptime()` | `() => number` | Milliseconds since **this agent** started. |
+
+```js
+import { memoryUsage, uptime } from "runtime:process";
+
+const { heapUsed, heapLimit } = memoryUsage();
+if (heapLimit - heapUsed < 32 * 1024 * 1024) shedLoad();
+```
+
+`uptime()` is not `performance.now()`: a worker is handed its parent's clock, so
+`performance.now()` counts from when the *process's* runtime was built and reads
+the same in every agent. `uptime()` counts from when this one did.
+
+The process's resident set and CPU are about the agents around you, so they are
+not here — they are `metrics().process` in
+[`runtime:diagnostics`](#runtimediagnostics), behind `DiagnosticsObserve`.
+
+---
+
 ## `runtime:path`
 
 Modern, platform-aware path utilities. Pure computation — it performs no I/O.

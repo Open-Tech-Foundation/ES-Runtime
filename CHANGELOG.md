@@ -137,6 +137,19 @@ namespace) is unstable and may change between minor releases until the API freez
   version and the sampled flag. Without them a trace arrives looking like it came
   from nowhere in particular.
 
+- **`memoryUsage()` and `uptime()` in `runtime:process`**, both needing **no
+  capability**. `memoryUsage()` reports `heapUsed`, `heapLimit` and `external`
+  for **this agent's isolate**, so `heapLimit - heapUsed` is real headroom — the
+  runtime enforces a heap ceiling and until now a program learned it was near one
+  by being killed. `uptime()` is milliseconds since **this agent** started, which
+  `performance.now()` cannot give: a worker inherits its parent's clock, so
+  `performance.now()` counts from when the process's runtime was built and reads
+  the same in every agent.
+  - Ungated by the rule this module already applies to `platform` and `args`:
+    they report only what the caller could discover about itself anyway. The
+    process's resident set and CPU are about the agents *around* you, so they are
+    not here.
+
 ### Removed
 
 - **`origin` and `resolveOrigin`** are gone from `runtime:diagnostics` before

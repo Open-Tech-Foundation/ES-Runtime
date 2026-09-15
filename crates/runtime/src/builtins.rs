@@ -67,6 +67,7 @@ pub(crate) fn install(
         interrupt,
         capabilities.clone(),
         providers.worker_scope().is_some(),
+        providers.clock(),
     )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
     crate::db_ops::install(engine, providers.embedded_db(), &inventory)?;

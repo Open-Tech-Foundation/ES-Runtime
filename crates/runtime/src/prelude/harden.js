@@ -128,6 +128,7 @@
     "__ctx_swap_span",
     "__span_open",
     "__span_close",
+    "__heap_bytes",
   ]) {
     const d = Object.getOwnPropertyDescriptor(globalThis, name);
     if (d !== undefined && d.enumerable && d.configurable) {

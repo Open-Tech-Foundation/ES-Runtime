@@ -771,6 +771,9 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     // originals: an index that already exists must not move.
     refs.extend(crate::async_context::external_references());
     refs.extend(crate::diagnostics::span_external_references());
+    refs.push(v8::ExternalReference {
+        function: heap_bytes.map_fn_to(),
+    });
     std::borrow::Cow::Owned(refs)
 }
 
@@ -884,6 +887,55 @@ pub(crate) fn install_timer_builtins(
     install_global_fn(scope, global, "clearTimeout", timer_clear, None)?;
     install_global_fn(scope, global, "clearInterval", timer_clear, None)?;
     Ok(())
+}
+
+/// Installs `__heap_bytes()` → `[used, limit, external]` for this isolate.
+///
+/// A builtin rather than an op for the same reason the timer setters are: it
+/// reads the isolate, which an op handler — a plain closure over provider state —
+/// cannot reach.
+///
+/// **Ungated**, by the rule `runtime:process` already applies to `platform` and
+/// `args`: it reports only what the guest could discover anyway. A program can
+/// already find its own ceiling by allocating until the heap guard stops it, and
+/// its own usage by watching when that happens. What it cannot discover — the
+/// process's resident set, which is about *other* agents — is not here.
+pub(crate) fn install_heap_builtin(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+) -> Result<()> {
+    let global = context.global(scope);
+    install_global_fn(scope, global, "__heap_bytes", heap_bytes, None)
+}
+
+fn heap_bytes(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        heap_bytes_inner(&mut *scope, args, rv);
+    }));
+    if caught.is_err() && !scope.is_execution_terminating() {
+        throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "internal error in __heap_bytes"),
+        );
+    }
+}
+
+fn heap_bytes_inner(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let stats = scope.get_heap_statistics();
+    let values = [
+        v8::Number::new(scope, stats.used_heap_size() as f64).into(),
+        v8::Number::new(scope, stats.heap_size_limit() as f64).into(),
+        v8::Number::new(scope, stats.external_memory() as f64).into(),
+    ];
+    rv.set(v8::Array::new_with_elements(scope, &values).into());
 }
 
 /// Installs `__wasm_pending(delta)`, through which the prelude's `WebAssembly`

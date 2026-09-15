@@ -357,6 +357,16 @@ pub trait Engine {
         (0, None, None)
     }
 
+    /// This isolate's heap, in bytes: `(used, limit, external)`.
+    ///
+    /// **Per isolate, not per process.** A worker is its own isolate with its own
+    /// ceiling, so each agent answers for itself — which is what makes "is *this*
+    /// worker near its limit?" answerable at all. Resident set is a process fact
+    /// and is not here.
+    fn heap_bytes(&mut self) -> (usize, usize, usize) {
+        (0, 0, 0)
+    }
+
     /// Installs the trace id every task under the root runs in, if none has been
     /// minted yet.
     ///
@@ -802,6 +812,8 @@ impl V8Engine {
             // request when the *deployment* asked for telemetry (see
             // `diagnostics::install_span_builtins`).
             crate::diagnostics::install_span_builtins(scope, context)?;
+            // `__heap_bytes`: this isolate's heap, which only the isolate knows.
+            crate::op::install_heap_builtin(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is
@@ -1004,6 +1016,15 @@ impl Engine for V8Engine {
 
     fn enable_async_context(&mut self) {
         crate::async_context::enable(&mut self.isolate, &self.context, &self.context_state);
+    }
+
+    fn heap_bytes(&mut self) -> (usize, usize, usize) {
+        let stats = self.isolate.get_heap_statistics();
+        (
+            stats.used_heap_size(),
+            stats.heap_size_limit(),
+            stats.external_memory(),
+        )
     }
 
     fn set_root_trace(&mut self, trace: &str) {

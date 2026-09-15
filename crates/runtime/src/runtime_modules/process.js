@@ -397,6 +397,34 @@ const permissions = Object.freeze({
   },
 });
 
+// How much memory *this agent's isolate* is using, in bytes.
+//
+//   heapUsed   what V8 has allocated and not collected
+//   heapLimit  this isolate's ceiling — `--max-heap`, or a worker's own
+//   external   ArrayBuffers and other memory V8 holds outside its heap
+//
+// Per isolate, not per process: a worker has its own heap and its own ceiling,
+// so `heapLimit - heapUsed` answers "how close is *this* agent to being killed
+// by the heap guard?" — which is the question, and one nothing else could
+// answer. The process's resident set is about the agents around you and lives
+// behind the `diagnostics` capability, in `metrics().process`.
+//
+// Ungated for the reason `platform` and `args` are: it reports only what the
+// caller could discover about itself anyway, by allocating until it stops.
+function memoryUsage() {
+  const [heapUsed, heapLimit, external] = globalThis.__heap_bytes();
+  return { heapUsed, heapLimit, external };
+}
+
+// Milliseconds since **this agent** started.
+//
+// `performance.now()` is not this: a worker is handed its parent's clock, so it
+// counts from when the process's runtime was built and reads the same in every
+// agent. This counts from when this one did.
+function uptime() {
+  return ops.process_uptime();
+}
+
 export {
   env,
   args,
@@ -412,6 +440,8 @@ export {
   offSignal,
   signals,
   permissions,
+  memoryUsage,
+  uptime,
 };
 export default {
   env,
@@ -428,4 +458,6 @@ export default {
   offSignal,
   signals,
   permissions,
+  memoryUsage,
+  uptime,
 };

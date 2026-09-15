@@ -42,6 +42,8 @@ import process from "runtime:process";
 | `stdout` | `StdStream` | The process's own standard output — `write(chunk)`, `isTTY`, `columns`, `rows`. **No capability**, like `console.log`. |
 | `stderr` | `StdStream` | The same, for standard error. |
 | `permissions` | `object` | What this run may reach (see below). **No capability.** |
+| `memoryUsage()` | `() => object` | `{ heapUsed, heapLimit, external }` in bytes, for **this agent's isolate**. **No capability.** |
+| `uptime()` | `() => number` | Milliseconds since **this agent** started. **No capability.** |
 
 ## env — reading and writing
 
@@ -196,6 +198,44 @@ unmask(env.DB_HOST);                 // plain strings pass through
 
 Load values from a file with [`esrun --env-file=.env`](/api/cli) (no
 auto-discovery; the OS environment wins unless `--env-override` is passed).
+
+## memoryUsage and uptime — reporting on yourself
+
+```js
+import { memoryUsage, uptime } from "runtime:process";
+
+const { heapUsed, heapLimit } = memoryUsage();
+if (heapLimit - heapUsed < 32 * 1024 * 1024) shedLoad();
+```
+
+| Field | |
+| --- | --- |
+| `heapUsed` | what V8 has allocated and not collected, for this isolate |
+| `heapLimit` | this isolate's ceiling — `--max-heap`, or a worker's `memory` option |
+| `external` | `ArrayBuffer`s and other memory V8 holds outside its heap |
+
+`heapLimit - heapUsed` is real headroom: exceed it and the heap guard ends this
+agent. Per isolate, so a worker answers for itself:
+
+```js
+// in a worker started with { memory: 64 }
+memoryUsage().heapLimit;   // 67108864, not the parent's
+uptime();                  // ms since *this worker* started
+```
+
+`uptime()` is not `performance.now()`. A worker is handed its parent's clock, so
+`performance.now()` counts from when the **process's** runtime was built and
+reads the same in every agent.
+
+<Callout type="note" title="No capability, and no rss">
+  Both report only what the caller could discover about itself anyway — its
+  ceiling by allocating until it is stopped, its age by counting — which is the
+  same rule `platform` and `args` follow.
+
+  The process's resident set and CPU are about the *other* agents in the process,
+  so they are not here. They are `metrics().process` in
+  [`runtime:diagnostics`](/api/diagnostics), behind `diagnostics`.
+</Callout>
 
 ## Errors
 

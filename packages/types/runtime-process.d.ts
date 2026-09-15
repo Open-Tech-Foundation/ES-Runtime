@@ -136,6 +136,44 @@ declare module "runtime:process" {
    * - `signals` — `onSignal`
    * - `workers` — starting a `Worker`
    */
+  /** What {@link memoryUsage} reports, in bytes. */
+  export interface MemoryUsage {
+    /** What V8 has allocated and not collected, for **this agent's isolate**. */
+    heapUsed: number;
+    /**
+     * This isolate's ceiling — `--max-heap`, or a worker's own `memory` option.
+     * `heapLimit - heapUsed` is real headroom: exceed it and the heap guard ends
+     * this agent.
+     */
+    heapLimit: number;
+    /** `ArrayBuffer`s and other memory V8 holds outside its heap. */
+    external: number;
+  }
+
+  /**
+   * How much memory **this agent's isolate** is using.
+   *
+   * Per isolate, not per process: a worker has its own heap and its own ceiling.
+   * The process's resident set is about the agents around you and lives behind
+   * the `diagnostics` capability, as `metrics().process` in
+   * `runtime:diagnostics`.
+   *
+   * Needs no capability — it reports only what the caller could discover about
+   * itself anyway, by allocating until it is stopped.
+   */
+  export function memoryUsage(): MemoryUsage;
+
+  /**
+   * Milliseconds since **this agent** started.
+   *
+   * Not the same as `performance.now()`, which a worker inherits from its
+   * parent's clock and which therefore counts from when the *process's* runtime
+   * was built — the same number in every agent.
+   *
+   * Needs no capability.
+   */
+  export function uptime(): number;
+
   export type PermissionName =
     | "read"
     | "write"

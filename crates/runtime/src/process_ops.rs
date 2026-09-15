@@ -40,7 +40,27 @@ pub(crate) fn install(
     interrupt: InterruptHandle,
     capabilities: Rc<Cell<CapabilitySet>>,
     is_worker: bool,
+    clock: Arc<dyn es_runtime_providers::Clock>,
 ) -> Result<()> {
+    // How long *this agent* has been running.
+    //
+    // Not derivable from `performance.now()`, despite appearances: a worker is
+    // handed its parent's `Clock`, so `performance.now()` counts from when the
+    // process's runtime was built and reads the same in every agent. This
+    // counts from when this one did.
+    //
+    // Ungated, by the rule above: it says only how long the caller itself has
+    // been running. Process uptime, which is about the agents around it, is not
+    // here — that is `metrics().process` in `runtime:diagnostics`.
+    let started_micros = clock.monotonic_micros();
+    let uptime_clock = clock.clone();
+    engine.register_op(OpDecl::sync("process_uptime", move |_args| {
+        let now = uptime_clock.monotonic_micros();
+        Ok(Value::Number(
+            now.saturating_sub(started_micros) as f64 / 1_000.0,
+        ))
+    }))?;
+
     // Ungated, unlike `process_env` beside it, and safe for one reason: it can
     // only report what a *parent handed this worker* — values that parent could
     // already read and chose to pass on. On the agent driving the process it is
