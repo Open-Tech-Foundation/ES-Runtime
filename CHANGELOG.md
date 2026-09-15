@@ -137,18 +137,29 @@ namespace) is unstable and may change between minor releases until the API freez
   version and the sampled flag. Without them a trace arrives looking like it came
   from nowhere in particular.
 
-- **`memoryUsage()` and `uptime()` in `runtime:process`**, both needing **no
-  capability**. `memoryUsage()` reports `heapUsed`, `heapLimit` and `external`
-  for **this agent's isolate**, so `heapLimit - heapUsed` is real headroom — the
-  runtime enforces a heap ceiling and until now a program learned it was near one
-  by being killed. `uptime()` is milliseconds since **this agent** started, which
+- **`memoryUsage()`, `cpuTime()` and `uptime()` in `runtime:process`**, all
+  needing **no capability**, and all scoped to the **calling agent** (D91).
+  `memoryUsage()` reports `heapUsed`, `heapLimit` and `external` for this
+  agent's isolate, so `heapLimit - heapUsed` is real headroom — the runtime
+  enforces a heap ceiling and until now a program learned it was near one by
+  being killed. `cpuTime()` is CPU milliseconds used by **this agent's thread**,
+  which answers "is it *me* burning the CPU?" — the question no process-wide
+  number can. `uptime()` is milliseconds since **this agent** started, which
   `performance.now()` cannot give: a worker inherits its parent's clock, so
   `performance.now()` counts from when the process's runtime was built and reads
   the same in every agent.
   - Ungated by the rule this module already applies to `platform` and `args`:
-    they report only what the caller could discover about itself anyway. The
-    process's resident set and CPU are about the agents *around* you, so they are
-    not here.
+    they report only what the caller could discover about itself anyway.
+  - `cpuTime()` is total CPU, not a user/system split, and uses each OS's own
+    per-thread API — `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` on Linux and
+    macOS, `GetThreadTimes` on Windows. The split needs Mach on macOS, where a
+    wrong struct layout is a memory-safety bug rather than a wrong number, so it
+    is reported nowhere rather than on two platforms out of three.
+- **`metrics().process`** in `runtime:diagnostics` — `{ rss, cpu, uptime }` for
+  the **whole process**, every agent together. `rss` is what a container's memory
+  limit is compared against, so it is what decides whether the process is killed.
+  Behind `diagnostics` rather than beside the per-agent figures in
+  `runtime:process`, because these describe the agents *around* the caller.
 
 ### Removed
 

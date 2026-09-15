@@ -220,9 +220,43 @@ if (m.tickDurationMs.p99 > 100) console.warn("turns are long — something is bl
 | --- | --- |
 | `tickDurationMs` | how long each turn took; a long turn blocks everything in it |
 | `loopLagMs` | how long the loop was not running between turns |
+| `process` | `{ rss, cpu, uptime }` — the whole process, every agent together |
 
 A large `loopLagMs` with a small `tickDurationMs` is an idle process, which is
 fine. A large one with a large `tickDurationMs` is a loop that cannot keep up.
+
+## Memory and CPU
+
+A health endpoint usually wants both halves — what this agent is doing, and what
+the process around it is doing:
+
+```js
+import { cpuTime, memoryUsage, uptime } from "runtime:process";
+import { metrics } from "runtime:diagnostics";
+
+const mine = { heap: memoryUsage().heapUsed, cpu: cpuTime(), up: uptime() };
+const all = metrics().process; // { rss, cpu, uptime }
+```
+
+| | Scope | Capability |
+| --- | --- | --- |
+| `memoryUsage()`, `cpuTime()`, `uptime()` | the calling agent | none |
+| `metrics().process` | every agent together | `diagnostics` |
+
+The per-agent half needs no grant because it reports only what the caller could
+find out about itself anyway — by allocating until it is stopped, or by
+counting. `rss` is the number a container's memory limit is compared against, so
+it is the one that decides whether the process is killed.
+
+The split matters most in a worker. A worker is its own isolate and its own OS
+thread, so `cpuTime()` there answers "is it *me* burning the CPU?" — which the
+process-wide figure cannot:
+
+```js
+// parent: idle while the worker computes
+cpuTime();            // small
+metrics().process.cpu; // large — the worker's time is in here
+```
 
 ## What handles are open
 

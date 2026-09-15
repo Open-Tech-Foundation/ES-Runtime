@@ -147,12 +147,25 @@ subscribe({}, ({ records }) => {
 metrics();
 // { tick, ticks,
 //   tickDurationMs: { count, min, max, mean, p50, p99 },
-//   loopLagMs:      { count, min, max, mean, p50, p99 } }
+//   loopLagMs:      { count, min, max, mean, p50, p99 },
+//   process:        { rss, cpu, uptime } }
 ```
 
 `loopLagMs` is how long the loop was not running between turns. An idle loop is
 parked, so read it beside `tickDurationMs`: a large gap with short turns is an
 idle process, a large gap with long turns is a loop that cannot keep up.
+
+`process` is the whole process — **every agent together**:
+
+| Field | |
+| --- | --- |
+| `rss` | resident bytes: every agent's heap, V8 itself, the runtime. What a container's memory limit is compared against |
+| `cpu` | CPU milliseconds across every thread. Exceeds the wall clock on a busy multi-core process |
+| `uptime` | ms since the **process** started |
+
+The per-agent half is [`runtime:process`](/api/process) — `memoryUsage()`,
+`cpuTime()`, `uptime()`, no capability, because they describe the caller. These
+describe the agents around it, so they sit behind `diagnostics`.
 
 ## Inventory
 

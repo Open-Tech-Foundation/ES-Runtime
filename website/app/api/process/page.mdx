@@ -43,6 +43,7 @@ import process from "runtime:process";
 | `stderr` | `StdStream` | The same, for standard error. |
 | `permissions` | `object` | What this run may reach (see below). **No capability.** |
 | `memoryUsage()` | `() => object` | `{ heapUsed, heapLimit, external }` in bytes, for **this agent's isolate**. **No capability.** |
+| `cpuTime()` | `() => number` | CPU milliseconds **this agent's thread** has used. **No capability.** |
 | `uptime()` | `() => number` | Milliseconds since **this agent** started. **No capability.** |
 
 ## env — reading and writing
@@ -199,10 +200,10 @@ unmask(env.DB_HOST);                 // plain strings pass through
 Load values from a file with [`esrun --env-file=.env`](/api/cli) (no
 auto-discovery; the OS environment wins unless `--env-override` is passed).
 
-## memoryUsage and uptime — reporting on yourself
+## Reporting on yourself
 
 ```js
-import { memoryUsage, uptime } from "runtime:process";
+import { cpuTime, memoryUsage, uptime } from "runtime:process";
 
 const { heapUsed, heapLimit } = memoryUsage();
 if (heapLimit - heapUsed < 32 * 1024 * 1024) shedLoad();
@@ -220,6 +221,7 @@ agent. Per isolate, so a worker answers for itself:
 ```js
 // in a worker started with { memory: 64 }
 memoryUsage().heapLimit;   // 67108864, not the parent's
+cpuTime();                 // CPU burned by *this worker's* thread
 uptime();                  // ms since *this worker* started
 ```
 
@@ -227,13 +229,25 @@ uptime();                  // ms since *this worker* started
 `performance.now()` counts from when the **process's** runtime was built and
 reads the same in every agent.
 
-<Callout type="note" title="No capability, and no rss">
-  Both report only what the caller could discover about itself anyway — its
-  ceiling by allocating until it is stopped, its age by counting — which is the
-  same rule `platform` and `args` follow.
+Utilisation is two reads and a division:
 
-  The process's resident set and CPU are about the *other* agents in the process,
-  so they are not here. They are `metrics().process` in
+```js
+const [cpu0, t0] = [cpuTime(), uptime()];
+await work();
+const busy = (cpuTime() - cpu0) / (uptime() - t0);
+```
+
+`cpuTime()` is total CPU, not a user/system split. The split needs Mach on
+macOS, where a wrong struct layout is a memory-safety bug rather than a wrong
+number, so it is reported nowhere rather than on two platforms out of three.
+
+<Callout type="note" title="No capability, and no rss">
+  All three report only what the caller could discover about itself anyway — its
+  ceiling by allocating until it is stopped, its CPU and age by counting — which
+  is the same rule `platform` and `args` follow.
+
+  The process's resident set, total CPU and uptime are about the *other* agents
+  in the process, so they are not here. They are `metrics().process` in
   [`runtime:diagnostics`](/api/diagnostics), behind `diagnostics`.
 </Callout>
 

@@ -1432,13 +1432,27 @@ inventory().handles;
 metrics();
 // { tick: 412, ticks: 412,
 //   tickDurationMs: { count, min, max, mean, p50, p99 },
-//   loopLagMs:      { count, min, max, mean, p50, p99 } }
+//   loopLagMs:      { count, min, max, mean, p50, p99 },
+//   process:        { rss, cpu, uptime } }
 ```
 
 `loopLagMs` is how long the loop was *not running* between turns. Not all of it
 is lag — an idle loop is parked, and parking is correct. Read it beside
 `tickDurationMs`: a large gap with short turns is an idle process; a large gap
 with long turns is a loop that cannot keep up.
+
+`process` is the **whole process, every agent together**:
+
+| Field | Meaning |
+| ----- | ------- |
+| `rss` | Resident bytes — every agent's heap, V8 itself and the runtime. This is what a container's memory limit is compared against, so it is what decides whether the process is killed. |
+| `cpu` | CPU milliseconds across **every thread**. On a busy multi-core process it exceeds the wall clock. |
+| `uptime` | Milliseconds since the **process** started. |
+
+This is the half [`runtime:process`](#runtimeprocess) will not report.
+`memoryUsage()`, `cpuTime()` and `uptime()` there describe the calling agent and
+need no capability for exactly that reason; these describe the agents around it,
+so they sit behind `diagnostics` with the rest of this module.
 
 ### Coming from Node
 
@@ -1659,28 +1673,43 @@ exit(); // defaults to 0
 
 ### Self-reporting
 
-Both need **no capability**, by the rule this module already applies to
+All three need **no capability**, by the rule this module already applies to
 `platform` and `args`: they report only what the caller could discover about
 itself anyway.
 
 | Export | Type | Description |
 | ------ | ---- | ----------- |
 | `memoryUsage()` | `() => { heapUsed, heapLimit, external }` | Bytes, for **this agent's isolate**. `heapLimit` is the ceiling `--max-heap` (or a worker's `memory` option) set, so `heapLimit - heapUsed` is real headroom. |
+| `cpuTime()` | `() => number` | CPU milliseconds **this agent's thread** has used. |
 | `uptime()` | `() => number` | Milliseconds since **this agent** started. |
 
 ```js
-import { memoryUsage, uptime } from "runtime:process";
+import { cpuTime, memoryUsage, uptime } from "runtime:process";
 
 const { heapUsed, heapLimit } = memoryUsage();
 if (heapLimit - heapUsed < 32 * 1024 * 1024) shedLoad();
+
+// Utilisation is two reads and a division.
+const [cpu0, t0] = [cpuTime(), uptime()];
+await work();
+const busy = (cpuTime() - cpu0) / (uptime() - t0);
 ```
+
+Each is scoped to the **calling agent**, which is what makes them answerable at
+all: a worker has its own isolate, its own OS thread and its own start, so
+"is it *me* burning the CPU?" has an answer here that no process-wide number
+could give.
 
 `uptime()` is not `performance.now()`: a worker is handed its parent's clock, so
 `performance.now()` counts from when the *process's* runtime was built and reads
 the same in every agent. `uptime()` counts from when this one did.
 
-The process's resident set and CPU are about the agents around you, so they are
-not here — they are `metrics().process` in
+`cpuTime()` is total CPU, not a user/system split. The split needs Mach on
+macOS, where a wrong struct layout is a memory-safety bug rather than a wrong
+number, so it is reported nowhere rather than on two platforms out of three.
+
+The process's resident set, total CPU and uptime are about the agents around
+you, so they are not here — they are `metrics().process` in
 [`runtime:diagnostics`](#runtimediagnostics), behind `DiagnosticsObserve`.
 
 ---
