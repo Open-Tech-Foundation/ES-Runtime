@@ -256,6 +256,9 @@ importers:
       '@opentf/web-docs':
         specifier: ^0.26.0
         version: 0.26.0(@opentf/web@0.28.0)
+      tailwindcss:
+        specifier: ^4.3.3
+        version: 4.3.3
     devDependencies:
       '@opentf/web-cli':
         specifier: ^1.26.0
@@ -1529,6 +1532,9 @@ packages:
   tailwindcss@4.2.2:
     resolution: {integrity: sha512-KWBIxs1Xb6NoLdMVqhbhgwZf2PGBpPEiwOqgI4pFIYbNTfBXiKYyWoTsXgBQ9WFg/OlhnvHaY+AEpW7wSmFo2Q==}
 
+  tailwindcss@4.3.3:
+    resolution: {integrity: sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==}
+
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
@@ -2550,6 +2556,8 @@ snapshots:
   supports-color@10.2.2: {}
 
   tailwindcss@4.2.2: {}
+
+  tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
 

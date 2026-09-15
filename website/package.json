@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "@opentf/web": "^0.28.0",
-    "@opentf/web-docs": "^0.26.0"
+    "@opentf/web-docs": "^0.26.0",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@opentf/web-cli": "^1.26.0",
