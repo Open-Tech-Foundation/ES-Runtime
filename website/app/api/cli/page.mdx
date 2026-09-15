@@ -68,7 +68,7 @@ script that genuinely wants a flag esrun also knows.
 | `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
 | `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
 | `--max-heap=<mb>` | Heap ceiling in megabytes for this agent, and the ceiling the workers it starts inherit. Default: the container's memory limit when there is one, else the host's memory. See [Memory](#memory). |
-| `--allow-<name>` | Grant one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`. See [Permissions](#permissions). |
+| `--allow-<name>` | Grant one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail`. See [Permissions](#permissions). |
 | `--allow-all, -A` | Grant every capability. Cannot be combined with `--allow-<name>` or `--deny-all`. |
 | `--deny-<name>` | Take one capability back; repeatable. Requires `--allow-all`. |
 | `--deny-all` | Grant nothing — the default, said outright. Cannot be combined with `--allow-all`. |
@@ -77,6 +77,10 @@ script that genuinely wants a flag esrun also knows.
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
+| `--otel[=<url>]` | Export OpenTelemetry traces to a collector. Bare, it uses `http://localhost:4318`. The **runtime** exports — your program needs no capability and no code. See [Telemetry](#telemetry). |
+| `--otel-service=<name>` | `service.name` on exported telemetry. Default: the entry file's name. |
+| `--otel-min-duration=<ms>` | Drop spans shorter than this before exporting. |
+| `--otel-sample=<0..1>` | Fraction of **traces** to export. Per trace, so a trace is kept whole or dropped whole. |
 | `upgrade` | Download the latest release for your platform, verify its checksum, and replace the running binary in place. |
 | `-h, --help` | Print usage and exit. |
 | `-v, --version` | Print the esrun version and exit. |
@@ -155,6 +159,8 @@ the other way — everything granted — and there `--allow-all` is the no-op.
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` onSignal |
 | `workers` | `new Worker(...)` — what the worker itself may do is granted at the spawn |
+| `diagnostics` | `runtime:diagnostics` — span timings, kinds, counts, the handle inventory, loop metrics. `attributes` come back empty. |
+| `diagnostics-detail` | The above **plus** span `attributes` (paths, URLs, SQL text). Implies `diagnostics`. |
 
 A denied operation throws `NotAllowedError` (`ERR_CAPABILITY_DENIED`) before the
 effect happens. Importing a `runtime:` module always works — the gate is the
@@ -356,6 +362,45 @@ esrun stops accepting, lets in-flight requests answer, and exits `130` / `143`.
 Install a handler with [`onSignal`](/api/process) when you have your own cleanup
 — closing a pool, flushing a buffer — and esrun leaves the whole shutdown to
 you.
+
+## Telemetry
+
+```bash
+esrun --otel app.js                                   # localhost:4318
+esrun --otel=http://collector:4318 --otel-service=checkout app.js
+```
+
+Your program does not change. An inbound request becomes a `SERVER` span with
+the work it caused nested under it; an outbound `fetch` becomes a `CLIENT` span
+in its own trace.
+
+```text
+GET                       (SERVER, trace 6341c455)
+├─ fs_write   ./o.txt
+├─ fs_remove  ./o.txt
+└─ http_respond
+
+fetch  http://…/api/users (CLIENT, trace 3bf2e15b)
+```
+
+| | |
+| --- | --- |
+| Protocol | OTLP/JSON over HTTP, to `<url>/v1/traces`. Protobuf is not implemented. |
+| Attributes | Semantic conventions: `file.path`, `db.query.text`, `url.full`, `process.command`, `http.request.method`, `url.path`. |
+| Capability | **None.** The runtime exports, so your code holds neither `net` to reach the collector nor `diagnostics` to read its own traces. |
+| Collector down | Logged once, then dropped. It never fails or delays your program. |
+| Shutdown | Flushed, so a short run does not lose its trace. |
+
+A trivial request produces around twenty spans, most of them microsecond-long
+pure computation. Bound it:
+
+```bash
+esrun --otel --otel-min-duration=5 --otel-sample=0.01 app.js
+```
+
+To read spans *inside* your program instead, use
+[`runtime:diagnostics`](/api/diagnostics) with `--allow-diagnostics`. The two are
+independent: exporting does not grant your code the ability to subscribe.
 
 ## Logging
 

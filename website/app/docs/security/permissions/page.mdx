@@ -68,6 +68,8 @@ grants everything for development.
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` signal handlers |
 | `workers` | `new Worker(...)` |
+| `diagnostics` | `runtime:diagnostics` — span timings, kinds, counts, the handle inventory, loop metrics. `attributes` come back empty. |
+| `diagnostics-detail` | The above **plus** span `attributes` (paths, URLs, SQL text). Implies `diagnostics`. |
 
 A run with no grants still executes its named entry file. Since `imports` is
 denied too, that is a single-file run; add `--allow-imports` for dependencies.
