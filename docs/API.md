@@ -1410,6 +1410,7 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | `source` | `"runtime" \| "user"` | Who opened it. |
 | `scheduledAt` / `startedAt` / `endedAt` | `number` | Monotonic ms, fractional — the same clock as `performance.now()`. |
 | `status` | `"ok" \| "error" \| "cancelled"` | How it finished. A failed op is recorded, not dropped. |
+| `statusMessage` | `string \| null` | Why it failed. Payload — populated only with `DiagnosticsDetail`, like `attributes`. |
 | `attributes` | `object` | Empty without `DiagnosticsDetail`. |
 | `tick` | `number` | Which turn of the loop it landed in. |
 

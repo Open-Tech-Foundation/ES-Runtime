@@ -208,6 +208,9 @@ fn user_span(engine: &mut dyn Engine, recorder: &Rc<RefCell<Recorder>>) -> Resul
                 // `source: "user"` means the *program* opened it. A request span
                 // is the runtime's, even though it comes through the same op.
                 user: kind == SpanKind::User,
+                // A guest span's failure reason is whatever the program put in
+                // its attributes; there is no separate message to record.
+                status_message: None,
                 // A user span is running from the moment it is opened; there is
                 // no queue in front of it.
                 scheduled_at: started_at,

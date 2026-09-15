@@ -60,6 +60,14 @@ declare module "runtime:diagnostics" {
     startedAt: number;
     endedAt: number;
     status: SpanStatus;
+    /**
+     * Why it failed, or `null`.
+     *
+     * Payload, not status: a failure message routinely names the thing that
+     * failed, so it is populated only with `diagnostics-detail` — exactly like
+     * `attributes`. A failed span still reports `status: "error"` without it.
+     */
+    statusMessage: string | null;
     /** Populated only with `diagnostics-detail`; otherwise an empty object. */
     attributes: Readonly<{ [key: string]: AttributeValue }>;
     /**

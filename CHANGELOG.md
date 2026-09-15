@@ -125,6 +125,18 @@ namespace) is unstable and may change between minor releases until the API freez
   `runtime:http`'s server and `esrun upgrade`'s client both carried it. Yanked
   `chacha20` 0.10.1 goes with it, which had failed `cargo deny` on its own.
 
+- **A failed span now says why.** `statusMessage` on the record, and on export a
+  `status.message` plus a timestamped OpenTelemetry `exception` event with
+  `exception.type` and `exception.message` — which is what a backend's exception
+  view is built on. A span that only said `status: "error"` counted toward an
+  error rate and was useless to open. The message is payload (it routinely names
+  the file, URL or statement that failed), so it follows `diagnostics-detail`
+  like `attributes` do.
+- **Exported spans carry resource and scope identity** — `telemetry.sdk.*`,
+  `process.runtime.*` alongside `service.name`, plus the instrumentation scope's
+  version and the sampled flag. Without them a trace arrives looking like it came
+  from nowhere in particular.
+
 ### Removed
 
 - **`origin` and `resolveOrigin`** are gone from `runtime:diagnostics` before

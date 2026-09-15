@@ -518,3 +518,71 @@ fn a_failure_is_exported_as_an_error_status() {
         "no error status exported: {spans:?}"
     );
 }
+
+/// A failure is exported as OpenTelemetry records one: a `status.message` and a
+/// timestamped `exception` **event**.
+///
+/// A span that only said `status: ERROR` is counted in an error rate and useless
+/// to open — the event is what a backend's exception view is built on.
+#[test]
+fn a_failure_is_exported_with_an_exception_event() {
+    let payloads = export(
+        "exception-event",
+        r#"
+        import { file } from "runtime:fs";
+        try { await file("./definitely-not-here.txt").text(); } catch { /* expected */ }
+        await new Promise((r) => setTimeout(r, 20));
+        "#,
+        &["--allow-read"],
+    );
+    let body = payloads.join("");
+    assert!(body.contains(r#""code":2"#), "no error status: {body}");
+    assert!(
+        body.contains(r#""name":"exception""#),
+        "no exception event: {body}"
+    );
+    assert!(body.contains(r#""key":"exception.type""#), "{body}");
+    assert!(body.contains(r#""key":"exception.message""#), "{body}");
+    // The message rides on the status too, which is where a list view reads it.
+    assert!(body.contains(r#""message":"#), "{body}");
+    // The exporter holds `detail`, so the reason is present rather than blank.
+    assert!(body.contains("definitely-not-here"), "{body}");
+}
+
+/// The resource says where the spans came from, and the scope says what produced
+/// them. Omitting either is legal and makes a trace look like it came from
+/// nowhere in particular.
+#[test]
+fn exported_spans_carry_resource_and_scope_identity() {
+    let payloads = export(
+        "resource",
+        r#"
+        import { write, remove } from "runtime:fs";
+        await write("./res.txt", "hi");
+        await remove("./res.txt");
+        await new Promise((r) => setTimeout(r, 20));
+        "#,
+        &["--allow-read", "--allow-write"],
+    );
+    let body = payloads.join("");
+    for key in [
+        "service.name",
+        "telemetry.sdk.name",
+        "telemetry.sdk.language",
+        "telemetry.sdk.version",
+        "process.runtime.name",
+        "process.runtime.version",
+    ] {
+        assert!(
+            body.contains(&format!(r#""key":"{key}""#)),
+            "missing {key}: {body}"
+        );
+    }
+    assert!(
+        body.contains(r#""name":"esrun","version":"#),
+        "no scope version: {body}"
+    );
+    // Everything exported was sampled by definition — it would not be here
+    // otherwise — so the flag says so rather than being left unset.
+    assert!(body.contains(r#""flags":1"#), "no sampled flag: {body}");
+}

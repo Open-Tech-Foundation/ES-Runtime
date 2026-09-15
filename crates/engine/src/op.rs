@@ -588,13 +588,18 @@ fn op_dispatch_inner(
     match outcome {
         Outcome::Ok(value) => {
             drop(state);
-            close_span(span, crate::diagnostics::SpanStatus::Ok, target);
+            close_span(span, crate::diagnostics::SpanStatus::Ok, target, None);
             let js = value_to_js(scope, value);
             rv.set(js);
         }
         Outcome::Err(err) => {
             drop(state);
-            close_span(span, crate::diagnostics::SpanStatus::Error, target);
+            close_span(
+                span,
+                crate::diagnostics::SpanStatus::Error,
+                target,
+                Some(&err),
+            );
             throw(scope, &err);
         }
         Outcome::Async(mut future) => {
@@ -635,6 +640,7 @@ fn op_dispatch_inner(
                         Err(_) => crate::diagnostics::SpanStatus::Error,
                     },
                     target,
+                    result.as_ref().err(),
                 );
                 let Some(resolver) = v8::PromiseResolver::new(scope) else {
                     throw(
@@ -662,7 +668,7 @@ fn op_dispatch_inner(
             // unbounded pending ops (SPEC §4).
             if state.pending_async.len() >= state.max_pending_ops {
                 drop(state);
-                close_span(span, crate::diagnostics::SpanStatus::Error, target);
+                close_span(span, crate::diagnostics::SpanStatus::Error, target, None);
                 throw(
                     scope,
                     &OpError::range_error("too many concurrent async operations"),
@@ -671,7 +677,7 @@ fn op_dispatch_inner(
             }
             let Some(resolver) = v8::PromiseResolver::new(scope) else {
                 drop(state);
-                close_span(span, crate::diagnostics::SpanStatus::Error, target);
+                close_span(span, crate::diagnostics::SpanStatus::Error, target, None);
                 throw(
                     scope,
                     &OpError::new(ExceptionClass::Error, "could not create promise"),
@@ -711,6 +717,7 @@ fn close_span(
     )>,
     status: crate::diagnostics::SpanStatus,
     target: Option<Rc<str>>,
+    reason: Option<&OpError>,
 ) {
     if let Some((recorder, span)) = span {
         let attributes = match target {
@@ -720,7 +727,12 @@ fn close_span(
             )],
             None => Vec::new(),
         };
-        span.close(&recorder, status, attributes);
+        // Collected on the same terms as `target`: a failure message routinely
+        // names what failed, so it is payload and follows `detail`.
+        let message = reason
+            .filter(|_| recorder.borrow().wants_detail())
+            .map(|error| Rc::from(error.to_string()));
+        span.close(&recorder, status, message, attributes);
     }
 }
 
@@ -826,6 +838,7 @@ pub(crate) fn poll_async_ops(
                             Err(_) => crate::diagnostics::SpanStatus::Error,
                         },
                         done.target,
+                        result.as_ref().err(),
                     );
                     ready.push((done.resolver, result));
                 }
@@ -1241,6 +1254,7 @@ pub(crate) fn fire_timer(
         } else {
             crate::diagnostics::SpanStatus::Ok
         },
+        None,
         None,
     );
     (terminated, true)

@@ -169,6 +169,13 @@ pub struct SpanRecord {
     pub ended_at: f64,
     /// How it finished.
     pub status: SpanStatus,
+    /// Why it failed, when it did and when somebody paid to know.
+    ///
+    /// Treated as payload, not as status: a failure message routinely names the
+    /// thing that failed — `cannot read ./secrets.env` — so it is collected only
+    /// under `diagnostics:detail`, exactly like `attributes`. Without it a failed
+    /// span still says *that* it failed, which is what an error rate needs.
+    pub status_message: Option<Rc<str>>,
     /// Empty unless a subscription holds `diagnostics:detail`.
     pub attributes: Vec<(Rc<str>, AttrValue)>,
     /// Which turn of the driven loop this landed in.
@@ -460,6 +467,7 @@ impl Recorder {
                 started_at,
                 ended_at,
                 status: SpanStatus::Ok,
+                status_message: None,
                 attributes: Vec::new(),
                 tick,
             });
@@ -563,6 +571,7 @@ impl Recorder {
             if !sub.detail {
                 // Timings and kinds for an `observe`-only subscriber; no payload.
                 record.attributes.clear();
+                record.status_message = None;
             }
             sub.buffer.push_back(record);
         }
@@ -694,6 +703,7 @@ impl OpenSpan {
         self,
         recorder: &std::rc::Rc<std::cell::RefCell<Recorder>>,
         status: SpanStatus,
+        status_message: Option<Rc<str>>,
         attributes: Vec<(Rc<str>, AttrValue)>,
     ) {
         let mut rec = recorder.borrow_mut();
@@ -709,6 +719,7 @@ impl OpenSpan {
             started_at: self.started_at,
             ended_at,
             status,
+            status_message,
             attributes,
             tick: self.tick,
         });
@@ -769,6 +780,13 @@ pub fn record_to_value(record: &SpanRecord) -> crate::Value {
         (
             "status".to_string(),
             Value::String(record.status.name().to_string()),
+        ),
+        (
+            "statusMessage".to_string(),
+            match &record.status_message {
+                Some(message) => Value::String(message.to_string()),
+                None => Value::Null,
+            },
         ),
         ("attributes".to_string(), attributes),
         ("tick".to_string(), Value::Number(record.tick as f64)),
@@ -908,6 +926,7 @@ fn span_close_inner(
         id: id as u64,
         parent_id: (parent >= 0.0).then_some(parent as u64),
         trace_id,
+        status_message: None,
         name,
         kind: SpanKind::Request,
         // The runtime opened it, so it is not the program's.
@@ -961,6 +980,7 @@ mod tests {
             started_at: started,
             ended_at: ended,
             status: SpanStatus::Ok,
+            status_message: None,
             attributes: vec![(Rc::from("path"), AttrValue::Str(Rc::from("/etc/passwd")))],
             tick: 1,
         }

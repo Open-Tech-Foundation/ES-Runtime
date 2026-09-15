@@ -245,7 +245,7 @@ fn a_record_carries_the_documented_shape() {
     );
     assert_eq!(
         out[0],
-        "attributes,endedAt,id,kind,name,parentId,scheduledAt,source,startedAt,status,tick,traceId"
+        "attributes,endedAt,id,kind,name,parentId,scheduledAt,source,startedAt,status,statusMessage,tick,traceId"
     );
     assert_eq!(out[1], "op runtime ok");
     assert_eq!(out[2], "delay0: true");
@@ -1032,4 +1032,48 @@ fn the_diagnostics_modules_own_ops_are_not_recorded() {
     );
     assert_eq!(out[0], "self ops: 0");
     assert_eq!(out[1], "user spans still recorded: 5");
+}
+
+/// A failure carries **why**, and only for a subscriber that paid for it.
+///
+/// The message routinely names the thing that failed — a path, a URL, a
+/// statement — so it is payload and follows `detail`, exactly like
+/// `attributes`. Without it a failed span still reports `status: "error"`,
+/// which is what an error rate needs.
+#[test]
+fn a_failure_reason_is_payload_and_follows_detail() {
+    const APP: &str = r#"
+        import { subscribe } from "runtime:diagnostics";
+        import { file } from "runtime:fs";
+        const seen = [];
+        const sub = subscribe({ kinds: ["op"] }, (b) => seen.push(...b.records));
+        try { await file("./secret-name.txt").text(); } catch { /* expected */ }
+        for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 2));
+        sub.close();
+        const bad = seen.find((r) => r.status === "error");
+        console.log("status:", bad.status);
+        console.log("message:", bad.statusMessage === null ? "null" : "present");
+        console.log("names the file:", String(bad.statusMessage).includes("secret-name"));
+    "#;
+
+    let observe = lines(
+        "reason-observe",
+        APP,
+        &["--allow-read", "--allow-diagnostics"],
+    );
+    assert_eq!(observe[0], "status: error");
+    assert_eq!(
+        observe[1], "message: null",
+        "observe leaked a failure message"
+    );
+    assert_eq!(observe[2], "names the file: false");
+
+    let detail = lines(
+        "reason-detail",
+        APP,
+        &["--allow-read", "--allow-diagnostics-detail"],
+    );
+    assert_eq!(detail[0], "status: error");
+    assert_eq!(detail[1], "message: present");
+    assert_eq!(detail[2], "names the file: true");
 }

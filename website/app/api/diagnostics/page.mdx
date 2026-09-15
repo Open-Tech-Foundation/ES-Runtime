@@ -88,6 +88,7 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | `startedAt` | `number` | When it started. |
 | `endedAt` | `number` | When it finished. |
 | `status` | `string` | `"ok"`, `"error"`, `"cancelled"`. A failure is recorded, not dropped. |
+| `statusMessage` | `string \| null` | Why it failed. Payload — needs `diagnostics-detail`, like `attributes`. |
 | `attributes` | `object` | Empty without `diagnostics-detail`. |
 | `tick` | `number` | Which turn of the loop it landed in. |
 

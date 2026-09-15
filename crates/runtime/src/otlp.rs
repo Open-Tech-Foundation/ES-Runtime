@@ -102,13 +102,47 @@ pub fn encode_traces(
     }
     Some(format!(
         concat!(
-            r#"{{"resourceSpans":[{{"resource":{{"attributes":[{{"key":"service.name","#,
-            r#""value":{{"stringValue":{service}}}}}]}},"#,
-            r#""scopeSpans":[{{"scope":{{"name":"esrun"}},"spans":[{spans}]}}]}}]}}"#
+            r#"{{"resourceSpans":[{{"resource":{{"attributes":[{resource}]}},"#,
+            r#""scopeSpans":[{{"scope":{{"name":"esrun","version":{version}}},"#,
+            r#""spans":[{spans}]}}]}}]}}"#
         ),
-        service = json_string(service_name),
+        resource = resource_attributes(service_name),
+        version = json_string(env!("CARGO_PKG_VERSION")),
         spans = spans,
     ))
+}
+
+/// The resource every exported span belongs to.
+///
+/// `service.name` is the one a deployment chooses; the rest are the
+/// `telemetry.sdk.*` and `process.runtime.*` conventions, which backends use to
+/// group and to decide how to render a trace. Omitting them is legal and makes
+/// the spans look like they came from nowhere in particular.
+fn resource_attributes(service_name: &str) -> String {
+    [
+        ("service.name", service_name.to_string()),
+        ("telemetry.sdk.name", "esrun".to_string()),
+        ("telemetry.sdk.language", "javascript".to_string()),
+        (
+            "telemetry.sdk.version",
+            env!("CARGO_PKG_VERSION").to_string(),
+        ),
+        ("process.runtime.name", "esrun".to_string()),
+        (
+            "process.runtime.version",
+            env!("CARGO_PKG_VERSION").to_string(),
+        ),
+    ]
+    .iter()
+    .map(|(key, value)| {
+        format!(
+            r#"{{"key":{},"value":{{"stringValue":{}}}}}"#,
+            json_string(key),
+            json_string(value)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 fn encode_span(out: &mut String, record: &SpanRecord, trace_id: &str, origin: TimeOrigin) {
@@ -130,14 +164,66 @@ fn encode_span(out: &mut String, record: &SpanRecord, trace_id: &str, origin: Ti
     out.push_str(&json_string(&origin.nanos(record.ended_at)));
     out.push_str(r#","attributes":["#);
     encode_attributes(out, record);
-    out.push_str(r#"],"status":{"code":"#);
+    out.push(']');
+    // Everything exported was sampled, by definition — it would not be here
+    // otherwise. Saying so lets a backend tell a sampled trace from one whose
+    // flags were never set.
+    out.push_str(r#","flags":1"#);
+    encode_events(out, record, origin);
+    out.push_str(r#","status":{"code":"#);
     out.push_str(match record.status {
         SpanStatus::Ok => "1",
         // OTel has no "cancelled": a span that did not finish its work did not
         // succeed, and collapsing it to `UNSET` would hide it from error rates.
         SpanStatus::Error | SpanStatus::Cancelled => "2",
     });
+    if let Some(message) = &record.status_message {
+        out.push_str(r#","message":"#);
+        out.push_str(&json_string(message));
+    }
     out.push_str("}}");
+}
+
+/// Writes the span's events — today, the `exception` event a failure carries.
+///
+/// OpenTelemetry records a failure as a **timestamped event** on the span rather
+/// than as a field, which is what lets a backend show "what went wrong" next to
+/// "when", and what its exception views are built on. A span that only said
+/// `status: ERROR` would be counted in an error rate and be useless to open.
+///
+/// Empty without `diagnostics:detail`, because the message is the payload: a
+/// failure routinely names the thing that failed.
+fn encode_events(out: &mut String, record: &SpanRecord, origin: TimeOrigin) {
+    let Some(message) = &record.status_message else {
+        return;
+    };
+    out.push_str(r#","events":[{"timeUnixNano":"#);
+    // The moment it ended is the moment it failed: an op's failure is what ends
+    // it, so there is no separate instant to record and inventing one would be
+    // a worse answer than the true one.
+    out.push_str(&json_string(&origin.nanos(record.ended_at)));
+    out.push_str(r#","name":"exception","attributes":["#);
+    out.push_str(&format!(
+        r#"{{"key":"exception.type","value":{{"stringValue":{}}}}},"#,
+        json_string(exception_type(record))
+    ));
+    out.push_str(&format!(
+        r#"{{"key":"exception.message","value":{{"stringValue":{}}}}}"#,
+        json_string(message)
+    ));
+    out.push_str("]}]");
+}
+
+/// What kind of failure this was, in the one word OTel's `exception.type` wants.
+///
+/// The runtime does not keep the JS class a failure surfaced as — an `OpError`
+/// carries a message and a class that is chosen at the throw — so this reports
+/// the shape of the outcome rather than inventing a type name it does not have.
+fn exception_type(record: &SpanRecord) -> &'static str {
+    match record.status {
+        SpanStatus::Cancelled => "cancelled",
+        _ => "error",
+    }
 }
 
 /// OTel `SpanKind`: `INTERNAL=1`, `SERVER=2`, `CLIENT=3`.
@@ -269,6 +355,7 @@ mod tests {
             started_at: 10.0,
             ended_at: 12.5,
             status: SpanStatus::Ok,
+            status_message: None,
             attributes: Vec::new(),
             tick: 4,
         }
@@ -413,6 +500,71 @@ mod tests {
         assert!(json.contains("c\\nd"), "{json}");
         assert!(json.contains("d\\te"), "{json}");
         assert!(json.contains("e\\u0001"), "{json}");
+    }
+
+    #[test]
+    fn a_failure_becomes_a_status_message_and_an_exception_event() {
+        let mut r = record("fs_read", SpanKind::Op);
+        r.status = SpanStatus::Error;
+        r.status_message = Some(Rc::from("no such file"));
+        let json = encode(&[r]);
+        assert!(
+            json.contains(r#""status":{"code":2,"message":"no such file"}"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""name":"exception""#), "{json}");
+        assert!(
+            json.contains(r#"{"key":"exception.type","value":{"stringValue":"error"}}"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#"{"key":"exception.message","value":{"stringValue":"no such file"}}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_span_with_no_reason_carries_no_event() {
+        // An `observe`-only subscriber sees no message, so there is nothing to
+        // put in an event and none is invented.
+        let mut r = record("fs_read", SpanKind::Op);
+        r.status = SpanStatus::Error;
+        let json = encode(&[r]);
+        assert!(json.contains(r#""status":{"code":2}"#), "{json}");
+        assert!(!json.contains("events"), "{json}");
+    }
+
+    #[test]
+    fn a_cancelled_span_says_so_in_its_exception_type() {
+        let mut r = record("setTimeout", SpanKind::Timer);
+        r.status = SpanStatus::Cancelled;
+        r.status_message = Some(Rc::from("terminated"));
+        let json = encode(&[r]);
+        assert!(json.contains(r#""stringValue":"cancelled""#), "{json}");
+    }
+
+    #[test]
+    fn the_resource_and_scope_identify_the_runtime() {
+        let json = encode(&[record("fs_write", SpanKind::Op)]);
+        for key in [
+            "service.name",
+            "telemetry.sdk.name",
+            "telemetry.sdk.language",
+            "telemetry.sdk.version",
+            "process.runtime.name",
+            "process.runtime.version",
+        ] {
+            assert!(
+                json.contains(&format!(r#""key":"{key}""#)),
+                "missing {key}: {json}"
+            );
+        }
+        assert!(
+            json.contains(r#""scope":{"name":"esrun","version":"#),
+            "{json}"
+        );
+        // Exported means sampled; saying so beats leaving the flag unset.
+        assert!(json.contains(r#""flags":1"#), "{json}");
     }
 
     #[test]
