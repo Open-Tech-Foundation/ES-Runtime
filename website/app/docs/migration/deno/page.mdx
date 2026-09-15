@@ -58,3 +58,64 @@ const { code, stdout } = await new Command("git", {
   args: ["status"],
 }).output();
 ```
+
+### 4. Async context (`node:async_hooks`)
+
+```js
+// ❌ Deno
+import { AsyncLocalStorage } from "node:async_hooks";
+const store = new AsyncLocalStorage();
+store.run({ tenant }, () => handle(req));
+store.getStore().tenant;
+
+// ✅ esrun
+import { createContext } from "runtime:context";
+const store = createContext({ name: "request" });
+store.run({ tenant }, () => handle(req));
+store.get().tenant;
+```
+
+| Deno | esrun |
+| --- | --- |
+| `new AsyncLocalStorage()` | `createContext({ name })` |
+| `.getStore()` | `.get()` |
+| `.run(store, fn)` | `.run(value, fn)` |
+| `.enterWith()` | Removed — `snapshot()` |
+
+### 5. Observability and process metrics
+
+Deno exports OpenTelemetry from the runtime rather than from the program, and so
+does esrun — the flag is `--otel` instead of an environment variable, and it
+needs no unstable gate.
+
+```js
+// ❌ Deno
+// OTEL_DENO=1 deno run --unstable-otel app.ts
+Deno.memoryUsage().rss;
+
+// ✅ esrun
+// esrun --otel=http://localhost:4318 app.js
+import { memoryUsage, cpuTime, uptime } from "runtime:process";
+import { metrics } from "runtime:diagnostics";
+```
+
+| Deno | esrun | Needs |
+| --- | --- | --- |
+| `OTEL_DENO=1 --unstable-otel` | `--otel=<url>` | — |
+| `Deno.memoryUsage().heapUsed` | `memoryUsage().heapUsed` | — |
+| `Deno.memoryUsage().rss` | `metrics().process.rss` | `diagnostics` |
+| — | `cpuTime()` | — |
+| — | `metrics().gc`, `metrics().loopLagMs` | `diagnostics` |
+| `Deno.metrics()` (removed in Deno 2) | `metrics()`, `inventory()` | `diagnostics` |
+
+**Reading your own telemetry is a capability here.** Exporting is not: `--otel`
+is a deployment's decision and grants the program nothing, while `subscribe()`
+and `metrics()` need `--allow-diagnostics` and `attributes` additionally need
+`--allow-diagnostics-detail`.
+
+Per-agent rather than per-process is the other difference: `memoryUsage()`,
+`cpuTime()` and `uptime()` describe the **calling agent**, so a worker answers
+for itself. `metrics().process` is the process-wide half.
+
+See the [Request context](/docs/guides/context) and
+[Observing the runtime](/docs/guides/diagnostics) guides.

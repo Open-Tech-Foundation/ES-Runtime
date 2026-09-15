@@ -58,3 +58,65 @@ const key = hash("xxhash64", data);
 const digest = new Hasher("sha256").update("data").digest("hex");
 const stored = await password.hash(input);
 ```
+
+### 4. Async context (`node:async_hooks`)
+
+Bun's `AsyncLocalStorage` becomes [`runtime:context`](/api/context) — a rename,
+with no `async_hooks` shim.
+
+```js
+// ❌ Bun
+import { AsyncLocalStorage } from "node:async_hooks";
+const store = new AsyncLocalStorage();
+store.run({ tenant }, () => handle(req));
+store.getStore().tenant;
+
+// ✅ esrun
+import { createContext } from "runtime:context";
+const store = createContext({ name: "request" });
+store.run({ tenant }, () => handle(req));
+store.get().tenant;
+```
+
+| Bun | esrun |
+| --- | --- |
+| `new AsyncLocalStorage()` | `createContext({ name })` |
+| `.getStore()` | `.get()` |
+| `.run(store, fn)` | `.run(value, fn)` |
+| `.enterWith()` | Removed — `snapshot()` |
+| `AsyncResource` | Removed |
+
+### 5. Observability and process metrics
+
+```js
+// ❌ Bun
+process.memoryUsage().heapUsed;
+process.cpuUsage().user;      // microseconds
+import { heapStats } from "bun:jsc";
+
+// ✅ esrun
+import { memoryUsage, cpuTime, uptime } from "runtime:process";
+import { metrics, subscribe } from "runtime:diagnostics";
+
+memoryUsage().heapUsed;
+cpuTime();                    // milliseconds, this agent's thread
+metrics().gc.pauseMs.p99;     // needs --allow-diagnostics
+```
+
+| Bun | esrun | Needs |
+| --- | --- | --- |
+| `process.memoryUsage().heapUsed` | `memoryUsage().heapUsed` | — |
+| `process.memoryUsage().rss` | `metrics().process.rss` | `diagnostics` |
+| `process.cpuUsage()` `{ user, system }` | `cpuTime()` — one total | — |
+| `bun:jsc` `heapStats()` | `metrics().gc` | `diagnostics` |
+| `Bun.gc(true)` | Removed — no forced collection | — |
+| `--console-depth`, ad-hoc tracing | `subscribe(filter, onBatch)` | `diagnostics` |
+| OpenTelemetry SDK | `esrun --otel=<url>` | — |
+
+Units and scope both change: milliseconds rather than microseconds, and the
+per-agent figures describe the **calling agent** rather than the process — which
+is what makes them answerable inside a worker. The process-wide ones are in
+`metrics()`, behind `--allow-diagnostics`.
+
+See the [Request context](/docs/guides/context) and
+[Observing the runtime](/docs/guides/diagnostics) guides.

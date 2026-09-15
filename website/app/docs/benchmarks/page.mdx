@@ -132,6 +132,17 @@ Starting a child process and collecting its output — `Deno.Command`,
 
 <BenchChart group="system" />
 
+## Tracing and async context
+
+Measured separately, by `bench/probe-tracing.sh`, and shown where the design is
+explained:
+
+- [Async context](/docs/internals/context#what-propagation-costs) — propagation
+  cost against Node, Bun and Deno, and the promise-hook overhead that is a known
+  gap.
+- [Diagnostics](/docs/internals/diagnostics#what-it-costs-measured) — one op with
+  nothing subscribed, with a subscription, and under `--otel`.
+
 ## Behaviour under memory exhaustion
 
 What happens when a script asks for more than the machine can give. The question

@@ -211,3 +211,84 @@ Node's behaviour. And a worker starts with every context at its `defaultValue`;
 nothing is auto-injected across `postMessage`.
 
 See the [Request context guide](/docs/guides/context).
+
+### 8. Observability (`node:diagnostics_channel`, `perf_hooks`)
+
+`runtime:diagnostics` replaces all three of Node's observability surfaces, and
+needs `--allow-diagnostics`.
+
+```js
+// ❌ Node.js
+import { createHook } from "node:async_hooks";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+createHook({ init(id, type) { … } }).enable();
+const h = monitorEventLoopDelay(); h.enable();
+
+// ✅ esrun
+import { subscribe, metrics } from "runtime:diagnostics";
+subscribe({ kinds: ["op"] }, (batch) => { … });
+metrics().loopLagMs.p99;
+```
+
+| Node | esrun |
+| --- | --- |
+| `createHook({ init, before, after, destroy })` | `subscribe(filter, onBatch)` |
+| `diagnostics_channel` `subscribe`/`publish` | `subscribe()` / `span()` |
+| `monitorEventLoopDelay()` | `metrics().loopLagMs` |
+| `PerformanceObserver` on `gc` | `metrics().gc` |
+| a manual live-resource `Map` | `inventory()` |
+| `@opentelemetry/sdk-node` | `esrun --otel=<url>` |
+| `AsyncResource` | Removed |
+
+Four differences worth knowing before you port.
+
+**Delivery is batched per loop turn, not per event.** A callback receives
+`{ records, dropped }`, and with nothing subscribed no event reaches JavaScript
+at all. There is no per-resource callback to make fast.
+
+**A record never carries the resource**, only an id and a kind — the thing that
+made `async_hooks` impossible to fix. `inventory()` is the supported way to ask
+what is open.
+
+**`record.parentId` is the enclosing span, not the trigger task.** For Node's
+`triggerAsyncId`, use `currentTask().parentId` from
+[`runtime:context`](/api/context).
+
+**Exporting is the runtime's job.** `--otel=<url>` ships OTLP without the
+program importing an SDK, holding `net`, or being able to read its own traces.
+
+### 9. Process metrics (`process.memoryUsage`, `cpuUsage`, `uptime`)
+
+```js
+// ❌ Node.js
+process.memoryUsage().heapUsed;
+process.cpuUsage().user;   // microseconds
+process.uptime();          // seconds
+
+// ✅ esrun
+import { memoryUsage, cpuTime, uptime } from "runtime:process";
+memoryUsage().heapUsed;
+cpuTime();                 // milliseconds
+uptime();                  // milliseconds
+```
+
+| Node | esrun | Scope |
+| --- | --- | --- |
+| `memoryUsage().heapUsed` / `.external` | `memoryUsage().heapUsed` / `.external` | this agent |
+| — | `memoryUsage().heapLimit` | this agent |
+| `memoryUsage().rss` | `metrics().process.rss` | the process |
+| `cpuUsage()` `{ user, system }` | `cpuTime()` — one total | this agent's thread |
+| — | `metrics().process.cpu` | every thread |
+| `uptime()` | `uptime()` | this agent |
+
+**Units and scope both change.** Node reports microseconds and seconds; these
+are all milliseconds. And Node's figures are process-wide, while these describe
+the **calling agent** — which is what makes them answerable in a worker. The
+process-wide ones moved to `metrics()`, behind `--allow-diagnostics`, because
+they describe the agents around you.
+
+`cpuUsage()`'s user/system split has no equivalent: getting it on macOS needs a
+Mach struct whose layout a wrong guess turns into a memory-safety bug, so it is
+reported on no platform rather than on two of three.
+
+See the [Observing the runtime guide](/docs/guides/diagnostics).

@@ -66,6 +66,10 @@ Three rules shape the port before any individual API does.
 | **UDP datagrams** | `dgram.createSocket("udp4")` | `Bun.udpSocket()` | `Deno.listenDatagram()` | `import { bind } from "runtime:net";`<br />`bind({ port })` — [mapping](/docs/guides/udp#coming-from-node-deno-or-bun) |
 | **WASI guest** | `node:wasi` | `node:wasi` | `node:wasi` | `import { WASI } from "runtime:wasi"` |
 | **YAML and other formats** | `js-yaml` (npm) | `js-yaml` (npm) | `js-yaml` (npm) | `import { YAML } from "runtime:serialization"` |
+| **Async context** | `new AsyncLocalStorage()` | `new AsyncLocalStorage()` | `new AsyncLocalStorage()` | `import { createContext } from "runtime:context";`<br />`createContext({ name })` |
+| **Tracing** | `async_hooks`, `diagnostics_channel` | ad-hoc | `OTEL_DENO=1 --unstable-otel` | `import { subscribe } from "runtime:diagnostics";`<br />or `esrun --otel=<url>` |
+| **Heap and CPU** | `process.memoryUsage()`<br />`process.cpuUsage()` | `process.memoryUsage()` | `Deno.memoryUsage()` | `import { memoryUsage, cpuTime } from "runtime:process";`<br />per agent, not per process |
+| **Loop health** | `monitorEventLoopDelay()` | — | — | `import { metrics } from "runtime:diagnostics";`<br />`metrics().loopLagMs` |
 
 ## Provider migration guides
 
