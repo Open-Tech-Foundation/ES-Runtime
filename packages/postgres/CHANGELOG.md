@@ -13,6 +13,10 @@ the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-15
+
+_Dependency updates._
+
 ## [0.1.3] - 2026-09-01
 
 _Dependency updates._

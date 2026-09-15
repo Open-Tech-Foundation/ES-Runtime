@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-15
+
 ### Changed
 
 - The snapshot guide documents file snapshots, property matchers, CI, pruning
