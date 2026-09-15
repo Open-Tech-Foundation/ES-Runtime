@@ -13,6 +13,50 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:context`** — `Context<T>`, `ContextOptions<T>` and `TaskInfo`, with
+  `createContext`, `snapshot`, `bind`, `withTrace` and `currentTask`.
+  `createContext<T>()` carries its value type through `.get()` and `.run()`, so
+  a context declared to hold a `Request` cannot be `run()` with a string.
+  `bind<F>` returns the same signature it was given rather than widening to
+  `Function`, which is what lets a bound callback stay assignable to the
+  parameter it came from.
+
+- **`runtime:diagnostics`** — `SpanRecord`, `Filter`, `Batch`, `Subscription`,
+  `SpanKind`, `SpanStatus`, `AttributeValue`, `HandleGroup`, `Histogram`,
+  `Metrics`, `ProcessMetrics`, `GcMetrics` and `Span`, with `subscribe`,
+  `inventory`, `metrics` and `span`.
+  - `span` is **two overloads**: the handle form `span(name, options?)` returns
+    a `Span`, and the scoped form `span(name, options, fn)` returns exactly what
+    `fn` returned — including its `Promise`. Declared in that order so a callback
+    argument selects the second rather than being rejected by the first.
+  - `attributes` is `Readonly<{ [key: string]: AttributeValue }>`, so a nested
+    object is a type error where it would otherwise have been silently dropped
+    host-side.
+
+- **`runtime:process` gains `memoryUsage()`, `cpuTime()` and `uptime()`**, with
+  `MemoryUsage`. All three are per **agent**, which the doc comments say at each
+  one because the same names are process-wide in Node and the difference does not
+  show up in the signature. `PermissionName` gains `diagnostics` and
+  `diagnostics-detail`, without which `permissions.has("diagnostics")` — a call
+  the runtime answers — did not compile.
+
+- **`runtime:http`'s `ServeOptions` gains `trustTraceHeaders`**.
+
+- **Type tests for both new modules** — `test/runtime-context.types.ts` and
+  `test/runtime-diagnostics.types.ts`, run by `tsr typecheck`. They pin the
+  overload resolution above and the `@ts-expect-error` cases that matter: a
+  nested attribute value, a callback taking arguments, and the fields this
+  surface deliberately does not have (`record.origin`, `Metrics.poolSaturation`,
+  a per-space GC breakdown, a resource on a `HandleGroup`).
+
+### Fixed
+
+- **`PermissionName`'s documentation had detached from it.** The comment
+  listing what each capability buys sat above `MemoryUsage` rather than above
+  the type it describes, so the editor showed nothing on hover.
+
 ## [0.4.0] - 2026-09-01
 
 ### Added
