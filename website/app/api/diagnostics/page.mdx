@@ -39,7 +39,8 @@ const sub = subscribe({ kinds: ["op"], minDuration: 10 }, ({ records, dropped })
 | `subscribe(filter, onBatch)` | `(Filter, (Batch) => void) => Subscription` | Receives batches matching `filter`. | `subscribe({}, (b) => …)` |
 | `inventory()` | `() => { handles }` | Host handles this agent **owns**. | `inventory().handles` |
 | `metrics()` | `() => Metrics` | Pull-only loop numbers. | `metrics().loopLagMs.p99` |
-| `span(name, options?)` | `(string, { attributes? }) => Span` | A span the program ends itself. | `span("checkout").end()` |
+| `span(name, options?)` | `(string, { attributes? }) => Span` | A measurement. Records its parent; nests nothing. | `span("checkout").end()` |
+| `span(name, options, fn)` | `(string, options, () => R) => R` | **Active** for `fn`, so the work inside nests under it. Ends when `fn` returns or its promise settles. | `span("load", {}, () => work())` |
 | `resolveOrigin(origin)` | `(number) => object` | `diagnostics-detail`. Nothing captures an origin yet. | — |
 | `default` | `object` | An aggregate of all named exports. | |
 
@@ -47,11 +48,24 @@ const sub = subscribe({ kinds: ["op"], minDuration: 10 }, ({ records, dropped })
 idempotent. `Span` has `end()`, `fail()` and `cancel()`; ending twice records
 once.
 
+### The two span forms
+
+```js
+span("checkout").end();                    // times a region; nests nothing
+await span("checkout", {}, () => work());  // …and everything `work` does
+```
+
+Only the callback form is **active**. A handle that made itself active would
+still be active in its caller — calling an async function runs its body on the
+caller's stack up to the first `await` — so the caller's next operation would
+nest under a span it had nothing to do with. Same split as OpenTelemetry's
+`startSpan` / `startActiveSpan`.
+
 ## Filter
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `kinds` | `string[]` | `"op"`, `"timer"`, `"user"`, `"tick"`. Omitted means every kind. |
+| `kinds` | `string[]` | `"op"`, `"timer"`, `"user"`, `"request"`, `"tick"`. Omitted means every kind. |
 | `minDuration` | `number` | Milliseconds. Shorter records are discarded host-side. |
 | `sample` | `number` | `0..1`, applied **per trace** so a trace is whole or absent. |
 | `bufferSize` | `number` | Default `4096`, per subscription. |
@@ -69,7 +83,7 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 | `parentId` | `number \| null` | The span this ran **inside**, or `null` at a root. Same id space as `id`, so records form a tree. |
 | `traceId` | `string \| null` | The trace it belongs to. |
 | `name` | `string` | Op name, timer function, or user span name. |
-| `kind` | `string` | `"op"`, `"timer"`, `"user"`, `"tick"`. |
+| `kind` | `string` | `"op"`, `"timer"`, `"user"`, `"request"`, `"tick"`. |
 | `source` | `"runtime" \| "user"` | Who opened it. |
 | `scheduledAt` | `number` | When the work became **runnable**. |
 | `startedAt` | `number` | When it started. |
@@ -83,6 +97,36 @@ Field names follow OpenTelemetry, so an exporter attaches with no translation.
 its *deadline* — `setTimeout(fn, 50)` firing on time reports ~0, not 50. For an
 **op** the two are equal: there is no boundary the host can observe, and that is
 reported rather than invented.
+
+## The span tree
+
+Records nest. `parentId` names the span a record ran **inside**, in the same id
+space as `id`, so a set of records is a tree an exporter can walk.
+
+```text
+request/GET               1.73ms      ← runtime:http opens one per request
+├─ user/load-user         0.67ms      ← span("load-user", {}, fn)
+│  ├─ op/fs_write         0.11ms
+│  └─ op/fs_read          0.06ms
+├─ op/fs_remove           0.06ms
+└─ op/http_respond        0.03ms
+```
+
+Nesting follows the **async scope**, not the call stack: an op issued six
+`await`s deep inside a request still nests under it.
+
+| | |
+| --- | --- |
+| Root of a request | `runtime:http` opens a `request` span, named for the method. |
+| Root elsewhere | Whatever ran with no enclosing span. |
+| Filtering | Independent of nesting — `{ kinds: ["op"] }` still gets ops nested under a request whose own record was filtered away. |
+| Task lineage | A different question, answered by `currentTask().parentId` in [`runtime:context`](/api/context). |
+
+## Exporting
+
+To ship these to a collector, use [`--otel`](/api/cli#telemetry) — the runtime
+exports, and your program needs no capability and no code. `runtime:diagnostics`
+is for reading spans *inside* your program.
 
 ## Loop-tick attribution
 
