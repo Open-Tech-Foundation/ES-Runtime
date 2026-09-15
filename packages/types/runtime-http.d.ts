@@ -131,6 +131,28 @@ declare module "runtime:http" {
      * @defaultValue `false`
      */
     reusePort?: boolean;
+
+    /**
+     * Whether to adopt the trace id from an inbound `traceparent` header
+     * instead of minting a fresh one for the request.
+     *
+     * **Off by default.** The header arrives from whoever opened the
+     * connection, and a trace id is a correlation key that lands in logs and in
+     * every downstream request this one makes: trusted by default, any client
+     * could stitch its requests into another tenant's trace, or replay one id
+     * across millions of requests and make a whole trace tree useless.
+     *
+     * Turn it on only behind a proxy that overwrites the header — a mesh
+     * sidecar or an ingress controller — on a port that is not reachable around
+     * it. A malformed or all-zero id is never adopted, trusted or not.
+     *
+     * Read back through `currentTask().traceId` from `runtime:context`, which
+     * is also what this does nothing without: a program that never imports that
+     * module has no way to observe a trace, and none is minted.
+     *
+     * @defaultValue `false`
+     */
+    trustTraceHeaders?: boolean;
   }
 
   /**

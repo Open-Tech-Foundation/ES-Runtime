@@ -34,7 +34,7 @@ import { serve, trailersOf, withTrailers } from "runtime:http";
 | Function | Type | Description | Example |
 | --- | --- | --- | --- |
 | `serve(handler)` | `(Handler) => Server` | Start a server on an ephemeral port (read it from `server.addr`). `handler` is `(request) => response`. | `serve((req) => new Response("hi"))` |
-| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
+| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
 
 ## Serve
 
@@ -129,6 +129,28 @@ serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler
 ```
 
 ## Connection limit
+
+## Trace ids
+
+Every request runs in its own [`runtime:context`](/api/context) root scope with a
+freshly minted W3C trace id.
+
+```js
+import { currentTask } from "runtime:context";
+serve({ port: 8080 }, () => new Response(currentTask().traceId));
+```
+
+`trustTraceHeaders: true` adopts the id from an inbound `traceparent` instead.
+Off by default — the header comes from whoever opened the connection, so
+believing it lets any client stitch its requests into another tenant's trace.
+Set it only behind a proxy that overwrites the header. A malformed or all-zero
+id is never adopted.
+
+```js
+serve({ port: 8080, trustTraceHeaders: true }, handler);
+```
+
+Nothing is minted until the program imports `runtime:context`.
 
 ## Sharing a port
 

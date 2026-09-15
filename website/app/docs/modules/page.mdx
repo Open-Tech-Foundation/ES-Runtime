@@ -188,6 +188,10 @@ security boundary is the op, not the JavaScript. Shipped modules include
 [runtime:system](/api/system), `runtime:wasi`, and
 [runtime:workers](/api/workers).
 
+[runtime:context](/api/context) is the one exception to the gate: it carries
+values across `await` and has no capability on any export, because there is no
+side effect in it to gate.
+
 ## runtime:wasi
 
 WASI preview 1 for `wasm32-wasip1` binaries — args, env, clocks, random, stdio,

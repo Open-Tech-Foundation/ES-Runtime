@@ -1,0 +1,232 @@
+---
+title: Request context
+description: Carry a request id, a tenant or an ambient transaction through every layer without threading it through every signature.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Request context
+
+Some values belong to a *unit of work* rather than to a function: which request
+this is, which tenant it is for, which transaction it runs in. Threading them
+through every signature is the honest answer and nobody does it past the second
+layer. A module-level variable is the usual alternative, and it is correct until
+two requests are in flight.
+
+`runtime:context` is the third option: a value that follows the work.
+
+```js
+import { createContext } from "runtime:context";
+
+const tenant = createContext({ name: "tenant", defaultValue: null });
+
+await tenant.run("acme", async () => {
+  await loadRows();       // six layers down, tenant.get() === "acme"
+});
+
+tenant.get();             // null — the scope has ended
+```
+
+<Callout type="info" title="No capability, ever">
+  Every export works under `--deny-all`. A context is a channel from one part of
+  a program to another part of the same program; denying it would not restrict a
+  reach out of the isolate, it would corrupt the answer.
+</Callout>
+
+## A request-scoped value
+
+The shape almost every server wants — set it once at the edge, read it anywhere:
+
+```js
+import { createContext, currentTask } from "runtime:context";
+import { serve } from "runtime:http";
+
+const request = createContext({ name: "request" });
+
+serve({ port: 8080 }, (req) =>
+  request.run({ id: currentTask().traceId, url: req.url }, () => handle(req)));
+
+function log(message) {
+  const { id } = request.get();
+  console.log(`[${id}] ${message}`);
+}
+```
+
+`log()` takes no request argument and never will. Nothing above it has to pass
+one down.
+
+## An ambient transaction
+
+The pattern an ORM uses. The repository layer takes no connection:
+
+```js
+import { createContext } from "runtime:context";
+import { connect, sqlite } from "runtime:db";
+
+const current = createContext({ name: "unit-of-work" });
+
+const db = () => {
+  const conn = current.get();
+  if (!conn) throw new Error("no ambient connection");
+  return conn;
+};
+
+// The repository: no connection argument anywhere.
+const insertUser = (name) => db().execute("INSERT INTO users (name) VALUES (?)", [name]);
+const countUsers = async () =>
+  (await (await db().query("SELECT count(*) AS n FROM users")).first()).n;
+
+// The edge: check out a connection, open a transaction, run the work.
+async function handle(job) {
+  const conn = await connect("sqlite:./app.db", { driver: sqlite });
+  try {
+    return await current.run(conn, () =>
+      conn.transaction(async () => {
+        await insertUser(job.name);
+        await insertUser(`${job.name}-audit`);   // joins the same transaction
+      }));
+  } finally {
+    await conn.close();
+  }
+}
+```
+
+Two requests running this at once each see their own connection. A rollback in
+one leaves the other untouched — `run()` copies the mapping per scope, so a
+write in one branch is invisible to a concurrent sibling and to the parent.
+
+## Trace ids
+
+Every inbound request already has one, minted by `runtime:http`:
+
+```js
+import { currentTask } from "runtime:context";
+
+serve({ port: 8080 }, async () => {
+  const { traceId } = currentTask();      // 32 hex characters, W3C trace-id
+  await downstream("/api", { headers: { traceparent: `00-${traceId}-0000000000000001-01` } });
+  return new Response("ok");
+});
+```
+
+An **inbound** `traceparent` is ignored by default. It arrives from whoever
+opened the connection, so believing it lets any client stitch its requests into
+another tenant's trace. Turn it on only behind a proxy that overwrites the
+header:
+
+```js
+serve({ port: 8080, trustTraceHeaders: true }, handler);
+```
+
+A queue consumer adopts an upstream trace explicitly:
+
+```js
+import { withTrace } from "runtime:context";
+
+for await (const message of queue) {
+  await withTrace(message.traceId, () => handle(message.body));
+}
+```
+
+## Where it stops
+
+Context follows `await`, `queueMicrotask`, timers and every `runtime:*` op
+callback. It deliberately does **not** cross two boundaries.
+
+### EventTarget listeners
+
+A listener runs in the mapping of whoever called `dispatchEvent` — not the one
+that was current when `addEventListener` ran:
+
+```js
+tenant.run("acme", () => {
+  target.addEventListener("ping", () => tenant.get());       // ✗ the dispatcher's value
+  target.addEventListener("ping", bind(() => tenant.get())); // ✓ "acme"
+});
+```
+
+<Callout type="warn" title="The one place a Node habit misleads">
+  Listeners are long-lived and usually registered at module scope, so capturing
+  at registration would pin a request's values to a listener that outlives the
+  request — a leak that grows for as long as the process runs. `bind()` is how
+  you ask for it, per listener, where you know the lifetime.
+</Callout>
+
+### Workers
+
+A worker is a separate agent: every context starts at its `defaultValue` and it
+gets its own trace. Nothing is auto-injected across `postMessage`. Send what the
+worker needs:
+
+```js
+// parent
+worker.postMessage({ traceId: currentTask().traceId, job });
+
+// worker
+self.addEventListener("message", (e) =>
+  withTrace(e.data.traceId, () => run(e.data.job)));
+```
+
+## Crossing a boundary on purpose
+
+`snapshot()` captures the current mapping for later. Useful where work is queued
+now and run somewhere else:
+
+```js
+const resume = snapshot();
+jobs.push(() => resume(doTheWork));   // doTheWork sees this request's values
+```
+
+`bind(fn)` is the same thing wrapped around one function, and forwards `this` —
+which is what makes it a drop-in for an `EventTarget` listener.
+
+## Identity, not names
+
+A context is keyed by its own object. Two libraries that both call theirs
+`"user"` are still two contexts:
+
+```js
+const mine = createContext({ name: "user", defaultValue: "a" });
+const theirs = createContext({ name: "user", defaultValue: "b" });
+
+mine.run("set", () => theirs.get());   // "b"
+```
+
+There is no string-keyed bag and nothing that enumerates the contexts in flight,
+so a library's context is reachable only by code that can name the object. Keep
+yours module-private.
+
+## Debugging
+
+`currentTask()` reports the executing task:
+
+```js
+const { id, parentId, traceId, kind } = currentTask();
+```
+
+| Field | |
+| --- | --- |
+| `id` | this task — Node's `executionAsyncId()` |
+| `parentId` | the task that scheduled it, `null` at the root |
+| `traceId` | the trace this task runs under |
+| `kind` | `"main"`, `"http-request"` or `"worker"` |
+
+An `unhandledrejection` or an uncaught error is reported in the mapping it
+**originated** in, so a reporter still sees the tenant and request that produced
+it:
+
+```js
+addEventListener("unhandledrejection", (event) => {
+  event.preventDefault();
+  report(event.reason, { tenant: tenant.get(), traceId: currentTask().traceId });
+});
+```
+
+## Cost
+
+The propagation machinery is installed the first time `runtime:context` is
+imported. A program that never uses a context pays nothing — including an HTTP
+server, which mints a trace per request only once something can read one.
+
+See [Internals: async context](/docs/internals/context) for how that works and
+what it costs, and the [API reference](/api/context) for signatures.

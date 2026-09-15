@@ -10,6 +10,42 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:context`** — values that follow the work rather than the call
+  stack, for the request id, tenant or ambient transaction that every layer
+  underneath needs and no layer wants in its signature (D88).
+  `createContext({ name, defaultValue })` returns a context keyed by its own
+  object identity, so two libraries cannot collide; `run(value, fn)` makes a
+  value current for `fn` and everything `fn` schedules, and `get()` reads it
+  back however many `await`s later. `snapshot()`, `bind(fn)`, `withTrace(id,
+  fn)` and `currentTask()` complete the surface.
+  - **The only `runtime:` module with no capability on any export.** There is no
+    ambient authority and no I/O here — a context is a channel from one part of
+    a program to another part of the same program, so denying it would not
+    restrict a reach out of the isolate, it would corrupt the answer.
+  - **Propagates** across `await`, `.then`, `queueMicrotask`, `setTimeout` /
+    `setInterval` (captured where the timer was armed), and every `runtime:*` op
+    callback. **Does not propagate** across `EventTarget` dispatch — a listener
+    runs in the dispatcher's mapping, because capturing at `addEventListener`
+    would pin a request's values to a listener that outlives the request; wrap
+    it in `bind()` to ask for the other thing — or into a spawned `Worker`,
+    which starts with every context at its default.
+  - **A scope is copy-on-write**, so a write in one branch is invisible to a
+    concurrent sibling and to the parent.
+  - **`unhandledrejection` and uncaught errors report the mapping they
+    originated in**, not the one the loop observed them from, so the tenant and
+    request id are still present where a failure is reported.
+  - **Costs nothing until imported.** The V8 promise hook behind it is installed
+    the first time the module is loaded, so a program that never uses a context
+    is unaffected.
+  - Node's `enterWith`, `exit`, `disable` and `AsyncResource` are deliberately
+    absent; `AsyncLocalStorage`'s remaining surface ports as a rename.
+- **`serve({ trustTraceHeaders })`** in `runtime:http` — off by default, and
+  the only way an inbound `traceparent` is adopted as the request's trace id.
+  Otherwise every request gets a freshly minted W3C trace id, readable through
+  `currentTask().traceId`. The header comes from whoever opened the connection,
+  so believing it by default would let any client stitch its requests into
+  another tenant's trace.
+
 - **`esdev create --template=micro-ui`** scaffolds a framework-free browser
   micro app using Open Tech Foundation's
   [`@opentf/micro-ui`](https://github.com/Open-Tech-Foundation/Micro-UI) library.

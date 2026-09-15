@@ -171,3 +171,43 @@ if (await password.verify(input, user.hash) && password.needsRehash(user.hash)) 
   user.hash = await password.hash(input);
 }
 ```
+
+### 7. Async context (`node:async_hooks`)
+
+`AsyncLocalStorage` becomes [`runtime:context`](/api/context). The port is a
+rename; there is no `async_hooks` shim.
+
+```js
+// ❌ Node.js
+import { AsyncLocalStorage } from "node:async_hooks";
+const store = new AsyncLocalStorage();
+store.run({ tenant }, () => handle(req));
+store.getStore().tenant;
+
+// ✅ esrun
+import { createContext } from "runtime:context";
+const store = createContext({ name: "request" });
+store.run({ tenant }, () => handle(req));
+store.get().tenant;
+```
+
+| Node | esrun |
+| --- | --- |
+| `new AsyncLocalStorage()` | `createContext({ name })` |
+| `.getStore()` | `.get()` |
+| `.run(store, fn)` | `.run(value, fn)` |
+| `AsyncLocalStorage.snapshot()` | `snapshot()` |
+| `AsyncLocalStorage.bind(fn)` | `bind(fn)` |
+| `executionAsyncId()` | `currentTask().id` |
+| `triggerAsyncId()` | `currentTask().parentId` |
+| `.enterWith()` | Removed — `snapshot()` |
+| `.exit(fn)` | Removed — `run(undefined, fn)` |
+| `.disable()` | Removed |
+| `AsyncResource`, `createHook` | Removed |
+
+Two behaviours differ. An `EventTarget` listener runs in the **dispatcher's**
+mapping, not the one current when it was registered — wrap it in `bind()` to get
+Node's behaviour. And a worker starts with every context at its `defaultValue`;
+nothing is auto-injected across `postMessage`.
+
+See the [Request context guide](/docs/guides/context).

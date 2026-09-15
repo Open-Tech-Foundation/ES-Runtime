@@ -1,0 +1,126 @@
+---
+title: runtime:context
+description: Values that follow the work rather than the call stack — request ids, tenants, ambient transactions — with no capability on any export.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:context
+
+Values that follow the work rather than the call stack. `run()` makes a value
+current for a callback and everything that callback schedules; `get()` reads it
+back, however deep and however many `await`s later.
+
+<Callout type="info" title="Capability: none, on any export">
+  The only `runtime:` module with no gate anywhere in it. No ambient authority,
+  no I/O, nothing observable that was not already in the caller's own scope.
+  Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import { createContext, snapshot, bind, withTrace, currentTask } from "runtime:context";
+
+const tenant = createContext({ name: "tenant", defaultValue: null });
+
+await tenant.run("acme", async () => {
+  await somethingSlow();
+  tenant.get(); // "acme"
+});
+
+tenant.get(); // null
+```
+
+## Exports
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `createContext(options?)` | `({ name?, defaultValue? }) => Context` | A context keyed by its **own object identity**. `name` is a label, never an identity key. | `createContext({ name: "user" })` |
+| `snapshot()` | `() => (fn, ...args) => R` | Captures the current mapping; the returned function runs `fn` under it. | `const run = snapshot(); run(job)` |
+| `bind(fn)` | `(fn) => fn` | Pins `fn` to the mapping current now, forwarding `this`. | `el.addEventListener("x", bind(h))` |
+| `withTrace(traceId, fn)` | `(string, fn) => R` | Runs `fn` under an explicit W3C trace id. | `withTrace(msg.traceId, handle)` |
+| `currentTask()` | `() => TaskInfo` | The executing task. | `currentTask().traceId` |
+| `default` | `object` | An aggregate of all named exports. |
+
+### `Context`
+
+| Member | Type | Description | Example |
+| --- | --- | --- | --- |
+| `name` | `string \| undefined` | The label passed to `createContext`. | `tenant.name // "tenant"` |
+| `get()` | `() => T` | The value current in this scope, or `defaultValue` outside any `run()`. | `tenant.get()` |
+| `run(value, fn, ...args)` | `(T, fn, ...args) => R` | Runs `fn` with `value` current. Returns what `fn` returned, promise included. | `tenant.run("acme", load)` |
+
+### `TaskInfo`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `number` | This task's id. Node's `executionAsyncId()`. |
+| `parentId` | `number \| null` | The task that scheduled this one; `null` at the root. Node's `triggerAsyncId()`. |
+| `traceId` | `string` | 32 lowercase hex, W3C trace-id. Read-only — `withTrace` is the only override. |
+| `kind` | `string` | `"main"`, `"http-request"` or `"worker"`. |
+
+## Propagation
+
+Captured where work is **scheduled**, restored when the continuation runs.
+
+| Boundary | Propagates |
+| --- | --- |
+| `await`, `.then()`, promise combinators | Yes |
+| `queueMicrotask` | Yes |
+| `setTimeout` / `setInterval` | Yes — captured when armed; an interval reuses that one capture |
+| `runtime:*` op callbacks | Yes — captured when the op is issued |
+| `EventTarget` dispatch | **No** — the listener runs in the dispatcher's mapping |
+| A spawned `Worker` | **No** — every context starts at its `defaultValue` |
+
+`EventTarget` is the one a Node habit gets wrong. Wrap the listener to opt in:
+
+```js
+target.addEventListener("message", bind(onMessage));
+```
+
+A scope is copy-on-write, so a write in one branch is invisible to a concurrent
+sibling and to the parent.
+
+## Trace ids
+
+`runtime:http` mints one per inbound request. Outside a request one is minted
+lazily on first read and shared by everything under the agent's root.
+
+```js
+import { serve } from "runtime:http";
+serve({ port: 8080 }, () => new Response(currentTask().traceId));
+```
+
+An inbound `traceparent` is ignored unless the server sets
+[`trustTraceHeaders: true`](/api/http). A worker gets its own trace; to continue
+one, send the id and adopt it:
+
+```js
+self.addEventListener("message", (e) =>
+  withTrace(e.data.traceId, () => run(e.data.job)));
+```
+
+## Coming from Node
+
+| Node | Here |
+| --- | --- |
+| `new AsyncLocalStorage()` | `createContext({ name })` |
+| `.getStore()` | `.get()` |
+| `.run(store, fn)` | `.run(value, fn)` |
+| `AsyncLocalStorage.snapshot()` | `snapshot()` |
+| `AsyncLocalStorage.bind(fn)` | `bind(fn)` |
+| `executionAsyncId()` | `currentTask().id` |
+| `triggerAsyncId()` | `currentTask().parentId` |
+| `.enterWith()` | Removed — `snapshot()` |
+| `.exit(fn)` | Removed — `ctx.run(undefined, fn)` |
+| `.disable()` | Removed |
+| `AsyncResource` | Removed |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | `run`, `snapshot()(…)`, `bind` or `withTrace` given a non-function. |
+| `TypeError` | `withTrace` given anything but a W3C trace-id (32 hex characters, not all zero). |
+| `TypeError` | `createContext` given a non-string `name`. |

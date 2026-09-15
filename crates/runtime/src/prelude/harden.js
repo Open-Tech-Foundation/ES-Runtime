@@ -103,12 +103,23 @@
   // still breaks its own `structuredClone`. That is self-harm, not escalation —
   // the op table and the capability set live in Rust, so no amount of tampering
   // here reaches authority (see the note at the top of this file).
+  //
+  // The five `__ctx_*` accessors are here for exactly the same reason: the
+  // engine reinstalls them on every isolate, and `runtime:context` captures them
+  // in module scope before any guest code can run, so reassigning the global
+  // reaches nothing. They move no authority either — the mapping they read and
+  // write holds only what the guest's own code put there.
   for (const name of [
     "__wasm_pending",
     "__wasm_module",
     "__structuredSerialize",
     "__structuredDeserialize",
     "__responseTrailers",
+    "__ctx_enabled",
+    "__ctx_frame",
+    "__ctx_swap",
+    "__ctx_task",
+    "__ctx_parent",
   ]) {
     const d = Object.getOwnPropertyDescriptor(globalThis, name);
     if (d !== undefined && d.enumerable && d.configurable) {

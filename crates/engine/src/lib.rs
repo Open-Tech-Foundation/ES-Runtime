@@ -31,6 +31,7 @@
 //! several isolates on several threads is precisely what that V8 type exists
 //! for; the impl is what lets us say so to Rust.
 
+mod async_context;
 mod convert;
 mod engine;
 pub mod error;

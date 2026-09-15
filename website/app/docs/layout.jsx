@@ -30,6 +30,7 @@ const NAV = [
   {
     title: "Guides",
     items: [
+      { title: "Request context", path: "/docs/guides/context" },
       { title: "File handling", path: "/docs/guides/file-handling" },
       { title: "Glob matching", path: "/docs/glob" },
       { title: "Process & Env", path: "/docs/process" },
@@ -127,6 +128,7 @@ const NAV = [
           { title: "Compared", path: "/docs/internals/http/comparison" },
         ],
       },
+      { title: "Async context", path: "/docs/internals/context" },
       { title: "Sockets", path: "/docs/internals/sockets" },
       { title: "The fetch client", path: "/docs/internals/fetch" },
       { title: "WebSockets", path: "/docs/internals/websockets" },

@@ -1029,6 +1029,16 @@ impl Runtime {
                 Error::ModuleLoad(format!("unknown built-in module {specifier:?}"))
             })?,
         };
+        // `runtime:context` is the one built-in whose *existence in the graph*
+        // changes the engine: it needs the promise hook that carries a mapping
+        // across a continuation, and that hook is off until something asks
+        // (DECISIONS.md D88). Here, at compile rather than evaluation, so the
+        // hook is already in place for every promise the module graph creates on
+        // its way to running — including one created by a module that imports
+        // this one and is evaluated first.
+        if specifier == "runtime:context" {
+            self.engine.enable_async_context();
+        }
         let id = self.engine.compile_module(specifier, &source)?;
         self.module_map.insert(specifier.to_string(), id);
         Ok((id, Some(specifier.to_string())))
@@ -1181,6 +1191,11 @@ impl Runtime {
         // breakpoint set a moment ago is in place for the code about to run. A
         // no-op unless a debugger is attached, which is every production run.
         self.engine.poll_inspector();
+        // Back to the root async-context mapping. No JS is on the stack here, so
+        // the answer is known rather than guessed — and a callback that was
+        // *terminated* mid-scope on the last tick skipped the `finally` that
+        // would have restored it (DECISIONS.md D88).
+        self.engine.reset_async_context();
         // Schedule timers created since the last drain (e.g. during `eval`).
         self.drain_new_timers(now_ms);
 

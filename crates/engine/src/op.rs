@@ -32,9 +32,20 @@ use crate::value::Value;
 /// Identifier for a scheduled timer, returned by `setTimeout`/`setInterval`.
 pub type TimerId = u64;
 
-/// A rejected promise and the reason it rejected with — the two values an
-/// `unhandledrejection` event carries.
-type Rejection = (v8::Global<v8::Promise>, v8::Global<v8::Value>);
+/// A rejected promise, the reason it rejected with — the two values an
+/// `unhandledrejection` event carries — and the async-context mapping that was
+/// current **where the rejection happened**.
+///
+/// The mapping is captured here rather than at dispatch because this callback
+/// runs synchronously inside the rejecting code, while the dispatch happens a
+/// tick later with nothing of the request left on the stack. Reporting an error
+/// against the tenant and request that produced it is the whole point; the
+/// mapping at the point of *observation* would be the loop's, which is empty.
+type Rejection = (
+    v8::Global<v8::Promise>,
+    v8::Global<v8::Value>,
+    crate::async_context::Capture,
+);
 
 /// The result a host op produces: a [`Value`] or an [`OpError`] to throw.
 pub type OpResult = std::result::Result<Value, OpError>;
@@ -225,6 +236,14 @@ struct TimerEntry {
     /// Arguments after `delay`, forwarded to the callback on every firing
     /// (`setTimeout(fn, ms, a, b)` calls `fn(a, b)`).
     args: Vec<v8::Global<v8::Value>>,
+    /// The async-context mapping current when the timer was *scheduled*,
+    /// reinstalled around every firing.
+    ///
+    /// A repeating timer reuses the one capture rather than taking a fresh one
+    /// per firing: the callback was written once, in one scope, and an interval
+    /// whose mapping drifted with whatever happened to be current when the loop
+    /// got round to it would be the least predictable thing in the module.
+    context: crate::async_context::Capture,
 }
 
 /// Op table and pending-work registries, shared with the in-isolate dispatch
@@ -599,6 +618,9 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     // structured-clone builtins are heap-reachable from a snapshot the same way
     // the timer setters are.
     refs.extend(crate::serialize::external_references());
+    // Appended after those, for the same reason they were appended after the
+    // originals: an index that already exists must not move.
+    refs.extend(crate::async_context::external_references());
     std::borrow::Cow::Owned(refs)
 }
 
@@ -808,7 +830,7 @@ fn wasm_pending_inner(
     }
 }
 
-fn install_global_fn(
+pub(crate) fn install_global_fn(
     scope: &mut v8::PinScope,
     global: v8::Local<v8::Object>,
     name: &str,
@@ -890,6 +912,9 @@ fn timer_set_inner(
         return;
     };
     let callback = v8::Global::new(scope, callback);
+    // Taken here — at *schedule* time — not when the timer fires. A callback
+    // belongs to the scope that armed it.
+    let context = crate::async_context::capture(scope);
     let id = {
         let mut state = state_rc.borrow_mut();
         let id = state.next_timer_id;
@@ -900,6 +925,7 @@ fn timer_set_inner(
                 callback,
                 repeat,
                 args: extra,
+                context,
             },
         );
         state.new_timers.push((id, delay_ms, repeat));
@@ -962,7 +988,7 @@ pub(crate) fn fire_timer(
     let scope = &mut v8::ContextScope::new(scope, context);
     v8::tc_scope!(let scope, scope);
 
-    let (callback, repeat, args) = {
+    let (callback, repeat, args, context) = {
         let state = op_state.borrow();
         let entry = state.timers.get(&id).expect("checked above");
         let args: Vec<v8::Local<v8::Value>> = entry
@@ -970,13 +996,26 @@ pub(crate) fn fire_timer(
             .iter()
             .map(|a| v8::Local::new(scope, a))
             .collect();
-        (v8::Local::new(scope, &entry.callback), entry.repeat, args)
+        (
+            v8::Local::new(scope, &entry.callback),
+            entry.repeat,
+            args,
+            entry.context.clone(),
+        )
     };
     if !repeat {
         op_state.borrow_mut().timers.remove(&id);
     }
 
     let recv: v8::Local<v8::Value> = v8::undefined(scope).into();
+
+    // The async-context mapping the timer was *armed* in, put back for the
+    // duration of the callback — including the `error` dispatch below, which is
+    // part of the callback's failure and belongs in the same mapping. Entered as
+    // a *new task* within it: the callback is not the code that armed the timer,
+    // so it gets an id of its own with the scheduler as its parent.
+    let previous = crate::async_context::enter_child(scope, context);
+
     // A throw inside the callback is caught by the TryCatch (no host unwind).
     // It is *not* swallowed: there is no caller left to propagate it to, so the
     // platform reports it — an `error` event on the global scope, then the
@@ -994,6 +1033,7 @@ pub(crate) fn fire_timer(
             report_uncaught(scope, op_state, error);
         }
     }
+    crate::async_context::leave(scope, previous);
     (terminated, true)
 }
 
@@ -1025,12 +1065,16 @@ fn promise_reject_callback_inner(message: v8::PromiseRejectMessage) {
     match message.get_event() {
         v8::PromiseRejectEvent::PromiseRejectWithNoHandler => {
             if let Some(value) = message.get_value() {
+                // Captured *here*: this callback runs synchronously inside the
+                // code that rejected, so this is the mapping the failure
+                // happened in. By dispatch time (next tick) it is long gone.
+                let context = crate::async_context::capture(scope);
                 let value = v8::Global::new(scope, value);
                 let promise = v8::Global::new(scope, promise);
                 state_rc
                     .borrow_mut()
                     .unhandled_rejections
-                    .insert(key, (promise, value));
+                    .insert(key, (promise, value, context));
             }
         }
         v8::PromiseRejectEvent::PromiseHandlerAddedAfterReject => {
@@ -1127,15 +1171,19 @@ pub(crate) fn take_unhandled_rejections(
     }
 
     let mut reported = Vec::new();
-    for (key, (promise, value)) in &rejections {
+    for (key, (promise, value, context)) in &rejections {
         let value = v8::Local::new(scope, value);
         let promise = v8::Local::new(scope, promise);
-        if call_dispatch_hook(
+        // The listener runs where the rejection was *created*, so an error
+        // reporter can still read the tenant and request that produced it.
+        let previous = crate::async_context::enter(scope, context.clone());
+        let claimed = call_dispatch_hook(
             scope,
             "__dispatch_unhandled_rejection",
             &[value, promise.into()],
-        ) == Some(true)
-        {
+        ) == Some(true);
+        crate::async_context::leave(scope, previous);
+        if claimed {
             continue;
         }
         op_state.borrow_mut().reported_rejections.insert(*key);

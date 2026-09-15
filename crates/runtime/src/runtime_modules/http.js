@@ -301,6 +301,20 @@ function describeReturn(v) {
   return `a ${t}`;
 }
 
+// Runs one request under a fresh root mapping carrying its own trace id.
+//
+// A no-op unless the program loaded `runtime:context`: until then nothing can
+// observe a trace, the engine's promise hook is not installed so a mapping would
+// not survive the first `await` anyway, and minting an id per request would be
+// entropy drawn for nobody. `runtime:http` deliberately does not *import*
+// `runtime:context` — that would switch the hook on for every server in the
+// runtime (DECISIONS.md D88).
+function inRequestScope(headers, trustTraceHeaders, run) {
+  const scope = __internal.context.scope;
+  if (scope === undefined || !globalThis.__ctx_enabled()) return run();
+  return scope(inboundTrace(headers, trustTraceHeaders), "http-request", run);
+}
+
 async function handleRequest(entry, handler) {
   const requestId = entry[0];
   // Flipped once the response has been handed over, which is also when the
@@ -430,6 +444,7 @@ class Server {
     maxConnections,
     maxConnectionsPerIp,
     reusePort,
+    trustTraceHeaders,
     handler,
   ) {
     let resolveAddr, rejectAddr, resolveFinished, rejectFinished;
@@ -508,8 +523,12 @@ class Server {
             headers.push([flat[i++], flat[i++]]);
           }
           
-          // Handle each concurrently
-          handleRequest([requestId, method, url, hasBody, headers, peerHost, peerPort], handler);
+          // Handle each concurrently, each in its own async-context scope so
+          // that `currentTask().traceId` — and anything the program's own
+          // contexts put there — belongs to this request and not to the accept
+          // loop that dispatched it.
+          const entry = [requestId, method, url, hasBody, headers, peerHost, peerPort];
+          inRequestScope(headers, trustTraceHeaders, () => handleRequest(entry, handler));
         }
       }
       resolveFinished();
@@ -539,6 +558,46 @@ function parseReusePort(options) {
   return value;
 }
 
+// W3C trace-context: `traceparent: 00-<32 hex trace-id>-<16 hex span-id>-<flags>`.
+// Only the trace id is read; this runtime does not join a remote span.
+const TRACEPARENT = /^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/;
+
+// Whether to believe an inbound `traceparent`. **Off by default**: the header
+// arrives from whoever opened the connection, and a trace id is a correlation
+// key that lands in logs and in every downstream request this one makes. Trusted
+// by default, any client could stitch its requests into another tenant's trace,
+// or replay one id across millions of requests and make a whole trace tree
+// useless. Deny-by-default on untrusted input is the rule the rest of this
+// runtime is built on, and an inbound header is untrusted input.
+//
+// Turn it on only behind a proxy that overwrites the header — which is what a
+// mesh sidecar or an ingress controller does — and where the port is not
+// reachable from outside it.
+function parseTrustTraceHeaders(options) {
+  const value = options.trustTraceHeaders;
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new TypeError(
+      `serve: trustTraceHeaders must be a boolean, got ${typeof value}`,
+    );
+  }
+  return value;
+}
+
+// The trace id to run a request under, or null to mint a fresh one.
+function inboundTrace(headers, trust) {
+  if (!trust) return null;
+  for (let i = 0; i < headers.length; i++) {
+    if (headers[i][0].toLowerCase() !== "traceparent") continue;
+    const match = TRACEPARENT.exec(headers[i][1].trim().toLowerCase());
+    // A malformed or all-zero id is refused rather than propagated: it is the
+    // usual shape of a field that was never filled in.
+    if (match === null || /^0+$/.test(match[1])) return null;
+    return match[1];
+  }
+  return null;
+}
+
 function serve(options, handler) {
   if (typeof options === "function") {
     handler = options;
@@ -558,6 +617,7 @@ function serve(options, handler) {
     parseMaxConnections(options),
     parseMaxConnectionsPerIp(options),
     parseReusePort(options),
+    parseTrustTraceHeaders(options),
     handler,
   );
 }

@@ -16,6 +16,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`WebAssembly`](#webassembly)
 - [The `runtime:` scheme](#the-runtime-scheme)
 - [Capabilities](#capabilities)
+- [`runtime:context`](#runtimecontext)
 - [`runtime:process`](#runtimeprocess)
 - [`runtime:path`](#runtimepath)
 - [`runtime:fs`](#runtimefs)
@@ -875,6 +876,7 @@ the required capability has been granted.
 
 | Module            | Status      | Capability | Reference                     |
 | ----------------- | ----------- | ---------- | ----------------------------- |
+| `runtime:context` | Available   | **none**   | [↓](#runtimecontext)          |
 | `runtime:process` | Available   | `Env` / `Signals` | [↓](#runtimeprocess)   |
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
@@ -1144,6 +1146,137 @@ the script opts a script's own argument out of rule 2.
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
 | `--allow-ffi` | Not one of the nine |
+
+---
+
+## `runtime:context`
+
+Values that follow the work rather than the call stack: the request id, the
+tenant, the transaction this unit of work is on — things every layer underneath
+needs and no layer wants in its signature. `run()` makes a value current for a
+callback and for everything that callback schedules; `get()` reads it back,
+however deep and however many `await`s later.
+
+**Capability: none, on any export.** This is the only `runtime:` module with no
+gate anywhere in it. There is no ambient authority here and no I/O — a context
+is a channel from one part of a program to another part of the same program, and
+exposes nothing that was not already in the caller's own scope. Denying it would
+not restrict a reach out of the isolate; it would corrupt the answer, because an
+ORM that cannot see its own transaction opens a second one (DECISIONS D88).
+
+```js
+import { createContext, currentTask } from "runtime:context";
+import { serve } from "runtime:http";
+
+const tenant = createContext({ name: "tenant", defaultValue: null });
+
+serve({ port: 8080 }, async (request) =>
+  tenant.run(request.headers.get("x-tenant"), async () => {
+    const rows = await loadRows();            // reads the tenant, six layers down
+    return Response.json({ rows, traceId: currentTask().traceId });
+  }));
+
+async function loadRows() {
+  await someOtherThing();
+  return db.query("SELECT * FROM items WHERE tenant = ?", [tenant.get()]);
+}
+```
+
+### What propagates
+
+A context is captured where work is **scheduled** and restored when the
+continuation runs.
+
+| Boundary | Propagates | Note |
+| --- | --- | --- |
+| `await`, `.then()`, promise combinators | Yes | |
+| `queueMicrotask` | Yes | |
+| `setTimeout` / `setInterval` | Yes | Captured when the timer is armed; every firing of an interval reuses that one capture. |
+| `runtime:*` op callbacks | Yes | Captured when the op is issued. |
+| `EventTarget` dispatch | **No** | The listener runs in the **dispatcher's** mapping. |
+| A spawned `Worker` | **No** | A separate agent: every context starts at its `defaultValue`. |
+
+`EventTarget` is the one place a Node habit will mislead. A listener runs in the
+mapping of whoever called `dispatchEvent`, *not* the one that was current when
+`addEventListener` ran — because listeners are long-lived and usually registered
+at module scope, so capturing at registration would pin a request's values to a
+listener that outlives the request, and the leak grows for as long as the process
+runs. Ask for the other behaviour explicitly:
+
+```js
+target.addEventListener("message", bind(onMessage));
+```
+
+A scope is **copy-on-write**: `run()` copies the mapping, so a write in one
+branch is invisible to a concurrent sibling and to the parent. Two requests in
+flight cannot see each other's values, whatever order the loop interleaves them
+in.
+
+`run()` returns exactly what its callback returned, promise included. For an
+`async` callback it returns as soon as the callback first yields — the mapping is
+reinstalled on entry to each continuation, not held until the promise settles.
+
+### Trace ids
+
+`currentTask().traceId` is a W3C trace-id: 32 lowercase hex characters.
+`runtime:http` mints one per inbound request; outside a request one is minted
+lazily on first read and shared by everything under the agent's root. A spawned
+worker gets its own — to continue a trace, send the id and call `withTrace`:
+
+```js
+// parent
+worker.postMessage({ traceId: currentTask().traceId, job });
+// worker
+self.addEventListener("message", (e) => withTrace(e.data.traceId, () => run(e.data.job)));
+```
+
+An **inbound `traceparent` header is ignored** unless the server was configured
+with [`serve({ trustTraceHeaders: true })`](#runtimehttp) — the header comes from
+whoever opened the connection, and a trace id lands in logs and in every
+downstream call the request makes.
+
+`unhandledrejection` and uncaught errors are reported in the mapping where they
+**originated**, not the one the loop observed them from, so an error reporter
+still sees the tenant and request that produced the failure.
+
+### Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `createContext(options?)` | `({ name?, defaultValue? }) => Context` | A context keyed by its **own object identity**. Two libraries that both name theirs `"user"` cannot collide; `name` is a label for diagnostics, never an identity key. |
+| `Context.name` | `string \| undefined` | The label passed to `createContext`. |
+| `Context.get()` | `() => T` | The value current in this scope, or `defaultValue` outside any `run()`. |
+| `Context.run(value, fn, ...args)` | `(T, fn, ...args) => R` | Runs `fn` with `value` current, for `fn` and everything it schedules. Returns what `fn` returned. |
+| `snapshot()` | `() => (fn, ...args) => R` | Captures the current mapping; the returned function runs `fn` under it. |
+| `bind(fn)` | `(fn) => fn` | Pins `fn` to the mapping current at `bind()` time, forwarding `this`. The answer wherever propagation deliberately stops. |
+| `withTrace(traceId, fn)` | `(string, fn) => R` | Runs `fn` under an explicit trace id — for a queue consumer adopting an upstream trace. Throws `TypeError` unless `traceId` is a W3C trace-id (32 hex, not all zero). |
+| `currentTask()` | `() => TaskInfo` | `{ id, parentId, traceId, kind }` for the executing task. A copy; writing to it changes nothing. |
+| `default` | `object` | An aggregate of all named exports. |
+
+### Coming from Node
+
+| Node | Here |
+| --- | --- |
+| `new AsyncLocalStorage()` | `createContext({ name })` |
+| `.getStore()` | `.get()` |
+| `.run(store, fn)` | `.run(value, fn)` |
+| `AsyncLocalStorage.snapshot()` | `snapshot()` |
+| `AsyncLocalStorage.bind(fn)` | `bind(fn)` |
+| `executionAsyncId()` | `currentTask().id` |
+| `triggerAsyncId()` | `currentTask().parentId` |
+| `.enterWith()` | **Removed** — a scope with no end is the main source of leaked request state. `snapshot()` covers the legitimate uses. |
+| `.exit(fn)` | **Removed** — `ctx.run(undefined, fn)` is exactly it. |
+| `.disable()` | **Removed** — a global kill switch breaks every consumer of every context at once, and no library can defend against another calling it. |
+| `AsyncResource` | **Removed** — it conflates context capture with lifecycle emission. |
+
+Porting an ORM's implicit-transaction pattern is a rename rather than a redesign.
+
+### Cost
+
+The V8 promise hook behind propagation is installed the first time
+`runtime:context` is imported, so a program that never uses a context is
+unaffected — including a `runtime:http` server, which mints a trace per request
+only once something can observe one.
 
 ---
 
@@ -1837,7 +1970,7 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.
@@ -2086,6 +2219,26 @@ silent exclusive bind that fails the moment you scale.
 
 The same option is on [`runtime:net`](#runtimenet) `listen()`, and the two bind
 on identical terms.
+
+#### Request trace ids
+
+Every inbound request runs in its own [`runtime:context`](#runtimecontext) root
+scope with a freshly minted W3C trace id, readable with `currentTask()`:
+
+```js
+import { currentTask } from "runtime:context";
+serve({ port: 8080 }, () => new Response(currentTask().traceId));
+```
+
+`trustTraceHeaders: true` adopts the id from an inbound `traceparent` instead.
+It is **off by default**: the header comes from whoever opened the connection,
+so believing it would let any client stitch its requests into another tenant's
+trace, or replay one id across millions of requests. Turn it on only behind a
+proxy that overwrites the header, on a port that is not reachable around it. A
+malformed or all-zero id is never adopted, trusted or not.
+
+None of this costs anything until the program imports `runtime:context`; a
+server that never reads a trace mints none.
 
 `maxConnections` caps how many connections the server holds at once. Unlimited
 by default:

@@ -120,6 +120,14 @@
       // both — a stream is transferred *as* a port pair — and they cannot reach
       // channel.js's own constructor symbol.
       ports: {},
+      // runtime:context fills in `scope(traceId, kind, fn)` and `checkTraceId`,
+      // and only once that module has been loaded. runtime:http reads them to
+      // give each inbound request its own trace, rather than importing
+      // runtime:context — an import would switch on the engine's promise hook
+      // for every server in the runtime, including the many whose programs
+      // never read a context. An object for the same reason as `hostCodec`: the
+      // freeze below is shallow, so a slot present now can still be populated.
+      context: {},
     }),
     writable: false,
     enumerable: false,

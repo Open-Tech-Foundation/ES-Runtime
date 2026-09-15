@@ -294,6 +294,26 @@ pub trait Engine {
     /// promise reactions). Microtasks are explicit, never auto-run mid-eval.
     fn run_microtasks(&mut self);
 
+    /// Turns on async-context propagation: the mapping a continuation was
+    /// *scheduled* in is made current again when it runs (DECISIONS.md D88).
+    ///
+    /// Called by `runtime` the first time it serves the `runtime:context`
+    /// module, and idempotent thereafter. Deliberately not on by default: it
+    /// installs an isolate-wide promise hook that fires for every promise, and
+    /// a program with no contexts would pay for propagating nothing. Until it is
+    /// called the mapping is empty everywhere — which is what such a program
+    /// observes either way, so the laziness is invisible.
+    fn enable_async_context(&mut self) {}
+
+    /// Returns async-context propagation to the root mapping.
+    ///
+    /// Called once per tick by the driver, when no JS is on the stack, so that a
+    /// callback *terminated* mid-scope (`process.exit()`, the watchdog, the heap
+    /// guard) — which skips the `try/finally` that would have restored it —
+    /// cannot leave its mapping current for the next turn. A no-op on an engine
+    /// that never enabled propagation.
+    fn reset_async_context(&mut self) {}
+
     /// Drains foreground tasks V8 queued for this isolate, returning whether any
     /// ran. These are how V8 reports back work finished on its own background
     /// threads — async WebAssembly compilation above all — so a driver must pump
@@ -453,6 +473,10 @@ pub struct V8Engine {
     /// Compiled-module registry, shared with the in-isolate resolve and
     /// import-meta callbacks via an isolate slot (see [`ModuleRegistry`]).
     modules: std::rc::Rc<std::cell::RefCell<ModuleRegistry>>,
+    /// Async-context state, shared with the promise hook and the context
+    /// builtins via an isolate slot (see [`crate::async_context`]). Present from
+    /// construction but inert until [`Engine::enable_async_context`].
+    context_state: std::rc::Rc<std::cell::RefCell<crate::async_context::ContextState>>,
     /// When the engine was restored from a snapshot whose `__ops.<name>` shells
     /// are already baked in, [`register_op`](Engine::register_op) binds only the
     /// Rust handler (the JS function is present), rather than re-creating it. The
@@ -648,6 +672,15 @@ impl V8Engine {
         // (not serialized), so a snapshot-restored isolate gets it here too.
         let modules = std::rc::Rc::new(std::cell::RefCell::new(ModuleRegistry::new()));
         isolate.set_slot(modules.clone());
+
+        // Async-context state. Slotted now — the builtins below read it, and so
+        // do `setTimeout` and the promise-reject callback, which must answer
+        // "which mapping?" whether or not `runtime:context` was ever loaded.
+        // The promise *hook* is not installed until it is (D88).
+        let context_state = std::rc::Rc::new(std::cell::RefCell::new(
+            crate::async_context::ContextState::new(),
+        ));
+        isolate.set_slot(context_state.clone());
         crate::module::install_import_meta_callback(&mut isolate);
         crate::module::install_dynamic_import_callback(&mut isolate);
 
@@ -686,6 +719,11 @@ impl V8Engine {
             // because it must reach the live JS value before the op boundary
             // flattens it to `Value` (see `serialize`'s module docs).
             crate::serialize::install_structured_clone(scope, context)?;
+            // `__ctx_*`: the mapping accessors `runtime:context` is written
+            // against. Builtins rather than ops because the mapping is a live JS
+            // value whose object identity is load-bearing, and the op boundary
+            // flattens values (see `async_context`).
+            crate::async_context::install_builtins(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is
@@ -709,6 +747,7 @@ impl V8Engine {
             context,
             op_state,
             modules,
+            context_state,
             ops_baked,
             limits,
             interrupt,
@@ -881,6 +920,14 @@ impl Engine for V8Engine {
 
     fn run_microtasks(&mut self) {
         self.isolate.perform_microtask_checkpoint();
+    }
+
+    fn enable_async_context(&mut self) {
+        crate::async_context::enable(&mut self.isolate, &self.context, &self.context_state);
+    }
+
+    fn reset_async_context(&mut self) {
+        self.context_state.borrow_mut().reset();
     }
 
     fn pump_message_loop(&mut self) -> bool {
