@@ -155,6 +155,15 @@ namespace) is unstable and may change between minor releases until the API freez
     macOS, `GetThreadTimes` on Windows. The split needs Mach on macOS, where a
     wrong struct layout is a memory-safety bug rather than a wrong number, so it
     is reported nowhere rather than on two platforms out of three.
+- **`metrics().gc`** in `runtime:diagnostics` — `count` collections and a
+  `pauseMs` histogram of how long each one stopped **this agent's isolate**,
+  from V8's GC prologue and epilogue callbacks. Beside the loop numbers rather
+  than under a heading of its own because a GC pause *is* loop lag: the isolate
+  is stopped for the whole of one, so a collection lands in `loopLagMs` with
+  nothing else to explain it. Counted per isolate, so a worker's are its own.
+  - No per-space or per-generation breakdown. That is a V8 internal, and
+    freezing one into public API is the `async_hooks` mistake this module exists
+    to avoid.
 - **`metrics().process`** in `runtime:diagnostics` — `{ rss, cpu, uptime }` for
   the **whole process**, every agent together. `rss` is what a container's memory
   limit is compared against, so it is what decides whether the process is killed.

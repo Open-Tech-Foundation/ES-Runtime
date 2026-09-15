@@ -1433,6 +1433,7 @@ metrics();
 // { tick: 412, ticks: 412,
 //   tickDurationMs: { count, min, max, mean, p50, p99 },
 //   loopLagMs:      { count, min, max, mean, p50, p99 },
+//   gc:             { count, pauseMs: { … } },
 //   process:        { rss, cpu, uptime } }
 ```
 
@@ -1440,6 +1441,13 @@ metrics();
 is lag — an idle loop is parked, and parking is correct. Read it beside
 `tickDurationMs`: a large gap with short turns is an idle process; a large gap
 with long turns is a loop that cannot keep up.
+
+`gc` is garbage collection on **this agent's isolate** — `count` collections,
+and `pauseMs` for how long each one stopped it. It sits beside the loop numbers
+rather than under a heading of its own because a GC pause *is* loop lag: the
+isolate is stopped for the whole of one, so a major collection lands in
+`loopLagMs` with nothing else to explain it, and `gc.pauseMs` is what says which
+it was. Counted per isolate, so a worker's collections are its own.
 
 `process` is the **whole process, every agent together**:
 

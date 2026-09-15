@@ -148,12 +148,18 @@ metrics();
 // { tick, ticks,
 //   tickDurationMs: { count, min, max, mean, p50, p99 },
 //   loopLagMs:      { count, min, max, mean, p50, p99 },
+//   gc:             { count, pauseMs: { … } },
 //   process:        { rss, cpu, uptime } }
 ```
 
 `loopLagMs` is how long the loop was not running between turns. An idle loop is
 parked, so read it beside `tickDurationMs`: a large gap with short turns is an
 idle process, a large gap with long turns is a loop that cannot keep up.
+
+`gc` is this isolate's collections and how long each stopped it. Beside the loop
+numbers because a GC pause **is** loop lag — the isolate is stopped for the whole
+of one, so a collection lands in `loopLagMs` with nothing else to explain it.
+Per isolate, so a worker's are its own.
 
 `process` is the whole process — **every agent together**:
 

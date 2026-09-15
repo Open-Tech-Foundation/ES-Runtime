@@ -220,10 +220,25 @@ if (m.tickDurationMs.p99 > 100) console.warn("turns are long — something is bl
 | --- | --- |
 | `tickDurationMs` | how long each turn took; a long turn blocks everything in it |
 | `loopLagMs` | how long the loop was not running between turns |
+| `gc` | `{ count, pauseMs }` — collections on this isolate, and what each cost |
 | `process` | `{ rss, cpu, uptime }` — the whole process, every agent together |
 
 A large `loopLagMs` with a small `tickDurationMs` is an idle process, which is
 fine. A large one with a large `tickDurationMs` is a loop that cannot keep up.
+
+`gc` is in this table and not one of its own because a GC pause **is** lag: the
+isolate is stopped for the whole of one, so a collection shows up in `loopLagMs`
+with nothing else to explain it.
+
+```js
+const m = metrics();
+// Was the loop stopped, or merely idle?
+const stopped = m.gc.pauseMs.p99;
+const lag = m.loopLagMs.p99;
+```
+
+Counted per isolate, so a worker's collections are its own and do not move its
+parent's count.
 
 ## Memory and CPU
 
