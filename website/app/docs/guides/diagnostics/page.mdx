@@ -7,8 +7,55 @@ import { Callout } from "@opentf/web-docs";
 
 # Observing the runtime
 
-`runtime:diagnostics` reports what the runtime did and how long it took: every
-host op, every timer, every turn of the loop, plus spans you open yourself.
+The runtime records what it did and how long it took: every host op, every timer,
+every turn of the loop, plus spans you open yourself.
+
+There are two ways to get at it. Pick by where you want the data to go.
+
+| You want | Use | Your code changes |
+| --- | --- | --- |
+| Traces in Jaeger, Tempo, Honeycomb… | [`--otel`](#send-it-to-a-collector) | nothing |
+| To read spans inside your program | [`runtime:diagnostics`](#read-them-in-your-program) | an import |
+
+## Send it to a collector
+
+```bash
+esrun --otel app.js
+```
+
+That is the whole change. Your program does not know it is being traced.
+
+```text
+GET                        (SERVER, trace 6341c455)
+├─ fs_write   ./o.txt
+├─ fs_remove  ./o.txt
+└─ http_respond
+
+fetch  http://…/api/users  (CLIENT, trace 3bf2e15b)
+```
+
+An inbound request becomes a `SERVER` span with the work it caused nested under
+it; an outbound `fetch` becomes a `CLIENT` span in its own trace. Attributes
+follow the semantic conventions, so a backend labels them without a mapping:
+`file.path`, `db.query.text`, `url.full`, `http.request.method`, `url.path`.
+
+```bash
+esrun --otel=http://collector:4318 \
+      --otel-service=checkout \
+      --otel-min-duration=5 \
+      --otel-sample=0.01 app.js
+```
+
+A trivial request produces around twenty spans, most of them microsecond-long
+pure computation, so a production exporter usually wants the last two.
+
+<Callout type="note" title="Your program is not granted anything">
+  The runtime exports, not your code. It holds neither `net` to reach the
+  collector nor `diagnostics` to read its own traces. A collector that is down is
+  logged once and never fails or delays your program.
+</Callout>
+
+## Read them in your program
 
 ```js
 import { subscribe } from "runtime:diagnostics";
@@ -107,22 +154,57 @@ dropped whole. Half a trace is worse than none.
 
 ## Your own spans
 
+Two forms. The one with a callback is **active**, so the work inside becomes its
+children:
+
 ```js
 import { span } from "runtime:diagnostics";
 
-const s = span("checkout", { attributes: { plan: "pro", items: 3 } });
-try {
-  await charge();
-  s.end();
-} catch (e) {
-  s.fail();
-  throw e;
-}
+// Nests: every query and file read inside `charge()` becomes a child.
+await span("checkout", { attributes: { plan: "pro" } }, () => charge());
+
+// Measures: times a region, nests nothing.
+const s = span("checkout");
+try { await charge(); s.end(); } catch (e) { s.fail(); throw e; }
 ```
+
+<Callout type="note" title="Why the handle form does not nest">
+  A handle that made itself active would still be active in its *caller* —
+  calling an async function runs its body on the caller's stack up to the first
+  `await` — so the caller's next query would land under a span it had nothing to
+  do with. The same reason `runtime:context` has no `enterWith`, and the same
+  split OpenTelemetry makes between `startSpan` and `startActiveSpan`.
+</Callout>
 
 User spans share the runtime's id space and timeline, so they line up with the
 ops underneath them. `source: "user"` tells them apart. `attributes` are recorded
 only under `diagnostics-detail`. Ending twice records once.
+
+## Following one request
+
+Records nest, so you can read a trace as a tree rather than a list:
+
+```js
+subscribe({}, ({ records }) => {
+  const byId = new Map(records.map((r) => [r.id, r]));
+  for (const r of records) {
+    const depth = (function d(x, n = 0) {
+      const p = byId.get(x.parentId);
+      return p ? d(p, n + 1) : n;
+    })(r);
+    console.log(`${"  ".repeat(depth)}${r.kind}/${r.name}`);
+  }
+});
+```
+
+`parentId` names the span a record ran **inside** — the async scope, not the call
+stack, so an op six `await`s deep inside a request still nests under it. Nesting
+is independent of filtering: `{ kinds: ["op"] }` still gets ops parented to the
+request that caused them.
+
+For the *task* that scheduled something — Node's `triggerAsyncId` — use
+`currentTask().parentId` from [`runtime:context`](/docs/guides/context). Two
+sibling ops in one request share a parent span but have different parent tasks.
 
 ## Loop health
 
@@ -143,7 +225,7 @@ if (m.tickDurationMs.p99 > 100) console.warn("turns are long — something is bl
 A large `loopLagMs` with a small `tickDurationMs` is an idle process, which is
 fine. A large one with a large `tickDurationMs` is a loop that cannot keep up.
 
-## What is still open
+## What handles are open
 
 ```js
 import { inventory } from "runtime:diagnostics";
