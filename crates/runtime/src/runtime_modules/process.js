@@ -416,6 +416,22 @@ function memoryUsage() {
   return { heapUsed, heapLimit, external };
 }
 
+// CPU milliseconds **this agent's thread** has used, since the agent started.
+//
+// A worker is its own OS thread, so this is what answers "is it *me* burning the
+// CPU?" — the question you cannot ask of a process-wide number. Read it twice
+// and divide by the wall time between to get a utilisation.
+//
+// Total, not split into user and system time: the split needs Mach on macOS,
+// where getting a struct layout wrong is a memory-safety bug rather than a wrong
+// number, so it is reported nowhere rather than on two platforms out of three.
+//
+// The process's total is `metrics().process.cpu` in runtime:diagnostics, behind
+// the `diagnostics` capability, because it is about the agents around you.
+function cpuTime() {
+  return ops.process_cpu_time();
+}
+
 // Milliseconds since **this agent** started.
 //
 // `performance.now()` is not this: a worker is handed its parent's clock, so it
@@ -441,6 +457,7 @@ export {
   signals,
   permissions,
   memoryUsage,
+  cpuTime,
   uptime,
 };
 export default {
@@ -459,5 +476,6 @@ export default {
   signals,
   permissions,
   memoryUsage,
+  cpuTime,
   uptime,
 };

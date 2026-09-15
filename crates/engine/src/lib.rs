@@ -41,6 +41,7 @@ mod module;
 pub mod op;
 mod serialize;
 pub mod snapshot;
+pub mod sysinfo;
 mod sysmem;
 pub mod trace;
 mod value;

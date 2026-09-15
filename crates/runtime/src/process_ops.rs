@@ -52,6 +52,13 @@ pub(crate) fn install(
     // Ungated, by the rule above: it says only how long the caller itself has
     // been running. Process uptime, which is about the agents around it, is not
     // here — that is `metrics().process` in `runtime:diagnostics`.
+    // CPU this agent's **thread** has used. Ungated by the same rule: a program
+    // can already time itself, and this only sharpens what it would measure. The
+    // process's total is about the agents around it and is not here.
+    engine.register_op(OpDecl::sync("process_cpu_time", move |_args| {
+        Ok(Value::Number(es_runtime_engine::sysinfo::thread_cpu_ms()))
+    }))?;
+
     let started_micros = clock.monotonic_micros();
     let uptime_clock = clock.clone();
     engine.register_op(OpDecl::sync("process_uptime", move |_args| {

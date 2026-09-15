@@ -122,20 +122,6 @@ declare module "runtime:process" {
    */
   export function offSignal(signal: SignalName, handler: (signal: SignalName) => void): void;
 
-  /**
-   * A capability this process may hold. These are exactly the suffixes of the
-   * `--allow-<name>` / `--deny-<name>` flags:
-   *
-   * - `read` / `write` — the `runtime:fs` and `runtime:wasi` surfaces
-   * - `imports` — the module loader (`import "./x.js"`, `import "pkg"`)
-   * - `net` / `listen` — outbound (`fetch`, `WebSocket`, `runtime:net`) and
-   *   inbound (`runtime:net` listen, `runtime:http` serve)
-   * - `env` — this module's `env` and `cwd()` (`args` needs no grant: it is the
-   *   command line that started this program)
-   * - `run` — `runtime:system` child processes
-   * - `signals` — `onSignal`
-   * - `workers` — starting a `Worker`
-   */
   /** What {@link memoryUsage} reports, in bytes. */
   export interface MemoryUsage {
     /** What V8 has allocated and not collected, for **this agent's isolate**. */
@@ -164,6 +150,25 @@ declare module "runtime:process" {
   export function memoryUsage(): MemoryUsage;
 
   /**
+   * CPU milliseconds **this agent's thread** has used since it started.
+   *
+   * A worker is its own OS thread, so this answers "is it *me* burning the
+   * CPU?" — the question a process-wide number cannot. Read it twice and divide
+   * by the wall time between the reads to get a utilisation.
+   *
+   * Total, not split into user and system time: the split needs Mach on macOS,
+   * where a wrong struct layout is a memory-safety bug rather than a wrong
+   * number, so it is reported nowhere rather than on two platforms out of three.
+   *
+   * The whole process's total is `metrics().process.cpu` in
+   * `runtime:diagnostics`, behind the `diagnostics` capability, because it is
+   * about the agents around you.
+   *
+   * Needs no capability.
+   */
+  export function cpuTime(): number;
+
+  /**
    * Milliseconds since **this agent** started.
    *
    * Not the same as `performance.now()`, which a worker inherits from its
@@ -174,6 +179,22 @@ declare module "runtime:process" {
    */
   export function uptime(): number;
 
+  /**
+   * A capability this process may hold. These are exactly the suffixes of the
+   * `--allow-<name>` / `--deny-<name>` flags:
+   *
+   * - `read` / `write` — the `runtime:fs` and `runtime:wasi` surfaces
+   * - `imports` — the module loader (`import "./x.js"`, `import "pkg"`)
+   * - `net` / `listen` — outbound (`fetch`, `WebSocket`, `runtime:net`) and
+   *   inbound (`runtime:net` listen, `runtime:http` serve)
+   * - `env` — this module's `env` and `cwd()` (`args` needs no grant: it is the
+   *   command line that started this program)
+   * - `run` — `runtime:system` child processes
+   * - `signals` — `onSignal`
+   * - `workers` — starting a `Worker`
+   * - `diagnostics` / `diagnostics-detail` — `runtime:diagnostics`; the
+   *   wider one adds span attributes and failure messages
+   */
   export type PermissionName =
     | "read"
     | "write"
@@ -243,6 +264,9 @@ declare module "runtime:process" {
     onSignal: typeof onSignal;
     offSignal: typeof offSignal;
     permissions: typeof permissions;
+    memoryUsage: typeof memoryUsage;
+    cpuTime: typeof cpuTime;
+    uptime: typeof uptime;
   };
   export default process;
 }
