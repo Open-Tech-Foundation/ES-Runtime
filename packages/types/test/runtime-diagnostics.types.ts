@@ -92,6 +92,14 @@ const processUptime: number = m.process.uptime;
 // the process, so it has no heap of its own.
 const heap: number = m.process.heapUsed;
 
+// GC sits beside the loop numbers, because a pause is lag.
+const collections: number = m.gc.count;
+const pauseP99: number = m.gc.pauseMs.p99;
+
+// @ts-expect-error — no per-space breakdown: that is a V8 internal, and
+// freezing one into public API is the mistake this module was built to avoid.
+const spaces: object[] = m.gc.spaces;
+
 // --- span ---------------------------------------------------------------------
 
 const s: Span = span("checkout");
@@ -110,7 +118,7 @@ span("x", { attributes: { nested: { a: 1 } } });
 // frame per span, which this module refuses to capture.
 const origin: number = record.origin;
 
-export { attr, handles, heap, hist, ids, kind, lag, m, nested, origin, p99, processCpu, processUptime, resource, rss, s, saturation, sub };
+export { attr, collections, handles, heap, hist, ids, kind, lag, m, nested, origin, p99, pauseP99, processCpu, processUptime, resource, rss, spaces, s, saturation, sub };
 
 // --- the two span forms -------------------------------------------------------
 

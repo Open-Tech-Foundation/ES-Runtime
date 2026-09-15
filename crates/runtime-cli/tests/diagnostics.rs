@@ -696,7 +696,10 @@ fn metrics_reports_the_loops_shape() {
         "#,
         &["--allow-diagnostics"],
     );
-    assert_eq!(out[0], "keys: loopLagMs,process,tick,tickDurationMs,ticks");
+    assert_eq!(
+        out[0],
+        "keys: gc,loopLagMs,process,tick,tickDurationMs,ticks"
+    );
     assert_eq!(out[1], "hist keys: count,max,mean,min,p50,p99");
     assert_eq!(out[2], "ticks advance: true");
     assert_eq!(out[3], "durations recorded: true");
@@ -1106,4 +1109,86 @@ fn metrics_reports_the_whole_process() {
     assert_eq!(out[1], "rss > heap: true");
     assert_eq!(out[2], "cpu >= mine: true");
     assert_eq!(out[3], "uptime advancing: true");
+}
+
+/// `metrics().gc` counts collections and how long each one **stopped the
+/// isolate**.
+///
+/// It sits beside the loop numbers because a GC pause *is* loop lag — the
+/// isolate is stopped for the whole of one — so this is what says whether a gap
+/// in `loopLagMs` was an idle loop or a stopped one.
+#[test]
+fn metrics_counts_gc_pauses() {
+    let out = lines(
+        "gc",
+        r#"
+        import { metrics } from "runtime:diagnostics";
+        const before = metrics().gc;
+        console.log("starts empty:", before.count === 0);
+
+        // Churn short-lived objects until the young generation is collected.
+        let sink = null;
+        for (let i = 0; i < 400_000; i++) sink = { i, pad: [i, i + 1], s: `o${i}` };
+
+        const after = metrics().gc;
+        console.log("keys:", Object.keys(after).sort().join(","));
+        console.log("collected:", after.count > 0);
+        // Every collection contributes exactly one pause sample: an unpaired
+        // prologue or epilogue would show up here as a mismatch.
+        console.log("one sample each:", after.pauseMs.count === after.count);
+        console.log("pauses positive:", after.pauseMs.min >= 0 && after.pauseMs.max > 0);
+        console.log("quantiles ordered:", after.pauseMs.p50 <= after.pauseMs.p99);
+        // A scavenge is sub-millisecond; anything near a second is a broken clock.
+        console.log("plausible:", after.pauseMs.max < 1000);
+        console.log("kept:", sink !== null);
+        "#,
+        &["--allow-diagnostics"],
+    );
+    assert_eq!(out[0], "starts empty: true");
+    assert_eq!(out[1], "keys: count,pauseMs");
+    assert_eq!(out[2], "collected: true", "no GC was observed at all");
+    assert_eq!(out[3], "one sample each: true");
+    assert_eq!(out[4], "pauses positive: true");
+    assert_eq!(out[5], "quantiles ordered: true");
+    assert_eq!(out[6], "plausible: true");
+    assert_eq!(out[7], "kept: true");
+}
+
+/// Collections are counted **per isolate**: a worker churning its own heap does
+/// not move its parent's count, because the two are different heaps collected
+/// independently.
+#[test]
+fn gc_is_counted_per_agent() {
+    std::fs::write(
+        temp("diag-gc-child.mjs"),
+        r#"
+        import { metrics } from "runtime:diagnostics";
+        let sink = null;
+        for (let i = 0; i < 400_000; i++) sink = { i, pad: [i, i + 1], s: `o${i}` };
+        self.postMessage({ gc: metrics().gc.count, kept: sink !== null });
+        "#,
+    )
+    .expect("write worker");
+
+    let out = lines(
+        "gc-worker",
+        r#"
+        import { metrics } from "runtime:diagnostics";
+        const w = new Worker(new URL("./diag-gc-child.mjs", import.meta.url), {
+          permissions: ["diagnostics"],
+        });
+        const d = await new Promise((r) => w.addEventListener("message", (e) => r(e.data)));
+        console.log("worker collected:", d.gc > 0 && d.kept);
+        // The parent allocated almost nothing, so its own heap was not collected
+        // on the worker's behalf.
+        console.log("parent quiet:", metrics().gc.count < d.gc);
+        w.terminate();
+        "#,
+        &["--allow-diagnostics", "--allow-workers", "--allow-imports"],
+    );
+    assert_eq!(out[0], "worker collected: true");
+    assert_eq!(
+        out[1], "parent quiet: true",
+        "a worker's GC landed on its parent"
+    );
 }
