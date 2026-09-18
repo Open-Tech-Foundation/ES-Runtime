@@ -186,7 +186,9 @@ OPTIONS:
     --ci                         Require every snapshot to be pre-existing
     --full-diff                  Do not truncate a large snapshot diff
 
-Everything but --file and --watch is also an esdev.json key, under \"test\":
+`setup`, `timeout`, `jobs`, `isolation` and `reporter` are also esdev.json
+keys, under \"test\" — the rest (`--update-snapshots`, `--ci`, `--full-diff`)
+are flags only: they decide a single run, not the project:
 
     { \"test\": { \"setup\": [\"./test/setup.ts\"], \"timeout\": 5000,
                 \"jobs\": 4, \"isolation\": \"process\", \"reporter\": \"json\" } }

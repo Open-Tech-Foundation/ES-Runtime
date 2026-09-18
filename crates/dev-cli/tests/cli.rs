@@ -117,6 +117,54 @@ fn reports_its_own_name_in_version_and_help() {
     }
 }
 
+/// The help used to claim every flag but `--file`/`--watch` was also an
+/// esdev.json key; `--update-snapshots`, `--ci` and `--full-diff` are flags
+/// only. Both halves are pinned: what the help says, and that the file
+/// refuses the key.
+#[test]
+fn test_help_names_which_options_live_in_the_file() {
+    let out = esdev()
+        .args(["test", "--help"])
+        .output()
+        .expect("spawn esdev test --help");
+    let text = stdout(&out);
+    assert!(
+        text.contains("are also esdev.json"),
+        "help does not name the file keys:\n{text}"
+    );
+    assert!(
+        !text.contains("Everything but --file and --watch"),
+        "help still claims every flag is a key:\n{text}"
+    );
+
+    let dir = build_dir("t_test_keys");
+    write_in(
+        &dir,
+        "one.test.ts",
+        "import { test } from \"runtime:test\";\ntest(\"x\", () => {});\n",
+    );
+    write_in(&dir, "app.mjs", "console.log(1);\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "app": { "entry": "app.mjs", "out": "dist/app.js" } },
+             "test": { "updateSnapshots": true } }"#,
+    );
+    let ran = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        !ran.status.success(),
+        "a flag-only option was accepted as a key"
+    );
+    assert!(
+        stderr(&ran).contains("unknown key `updateSnapshots`"),
+        "{}",
+        stderr(&ran)
+    );
+}
+
 /// The help for `esdev test` is where the test API is learned, and it described
 /// an ambient `test()` that D71 replaced with an import — so a file written from
 /// it failed with `ReferenceError: test is not defined`. Both halves are pinned:

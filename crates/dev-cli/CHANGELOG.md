@@ -31,6 +31,10 @@ is the point, since none of the three has any business in a deployment.
 - `upgrade --dry-run` asks whether a newer release exists and changes nothing:
   the same listing as the upgrade, stopping at the comparison, naming the
   version to `upgrade` to (or that this platform has no build yet).
+- `test --help` no longer claims every flag is also an `esdev.json` key:
+  `--update-snapshots`, `--ci` and `--full-diff` are flags only, and the file
+  refuses them as keys (only `setup`, `timeout`, `jobs`, `isolation` and
+  `reporter` live under `"test"`).
 - `tsr build:esdev` builds the release artifact with the V8 inspector compiled
   in, so `--inspect` works in it. Same switch a manual build uses
   (`ES_RUNTIME_INSPECTOR=1`), carried by the task so it can never leak into an
