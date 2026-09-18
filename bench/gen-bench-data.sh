@@ -24,8 +24,9 @@ TMP7="$(mktemp)"
 TMP8="$(mktemp)"
 TMP9="$(mktemp)"
 TMP10="$(mktemp)"
+TMP11="$(mktemp)"
 TMP_COMBINED="$(mktemp)"
-trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP9" "$TMP10" "$TMP_COMBINED"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP9" "$TMP10" "$TMP11" "$TMP_COMBINED"' EXIT
 
 # Scoped or full, one code path.
 #
@@ -40,7 +41,7 @@ trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TM
 # `workloads` is bench/run.sh and owns every charted row; the others own one
 # section each. Note the row-level workload update is the argument form above
 # (`gen-bench-data.sh regex strings`), which is cheaper still.
-ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia devserver buildtime websocket http2 memory_safety"
+ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia devserver buildtime pg_qps websocket http2 memory_safety"
 # Row names as arguments scope the `workloads` section to those rows. They used
 # to be a separate mode that could not be combined with anything, so adding a
 # row and a section in one pass was impossible: each failed validation waiting
@@ -111,6 +112,13 @@ run_rps_static() { SERVER=scripts/staticserver.js BENCH_JSON=1 bash rps.sh; }
 # for the legs and bench/README.md for what each number means.
 run_devserver() { BENCH_JSON=1 node dev-server/run.mjs 10000; }
 run_buildtime() { BENCH_JSON=1 node dev-server/build.mjs 10000; }
+# Postgres QPS in Bun's shape (100 rows x 100 in flight). Needs a server:
+# PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test (see the
+# DB-backed endpoint section in bench/README.md for the one-time setup).
+run_pg_qps() {
+  [ -n "${PG_URL:-}" ] || { echo "pg_qps needs PG_URL — see bench/README.md" >&2; exit 1; }
+  BENCH_JSON=1 bash db/pg/qps-run.sh
+}
 run_websocket() { BENCH_JSON=1 bash websocket-chat/run-chat.sh; }
 run_http2() { BENCH_JSON=1 bash http2.sh; }
 run_memory_safety() { BENCH_JSON=1 bash memory-safety.sh; }
@@ -124,6 +132,7 @@ run_section http2 "$TMP4" run_http2
 run_section rps_static "$TMP5" run_rps_static
 run_section devserver "$TMP9" run_devserver
 run_section buildtime "$TMP10" run_buildtime
+run_section pg_qps "$TMP11" run_pg_qps
 run_section memory_safety "$TMP6" run_memory_safety
 
 # Merge onto whatever the module already holds, so unselected sections survive.

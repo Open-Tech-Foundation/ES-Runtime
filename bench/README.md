@@ -789,6 +789,31 @@ Needs a Chrome/Chromium binary (`CHROME_PATH`, else `/usr/bin/chromium` or
 rest). The fixture apps (`bench/dev-server/apps/`) are generated, not
 tracked.
 
+### Postgres QPS (Bun's shape, every runtime)
+
+100 rows × 100 queries in flight against a local Postgres, measured as
+queries/sec plus peak RSS (`bench/db/pg/qps-*.mjs`, runner `qps-run.sh`,
+published as `results_pg_qps`). The work unit is Bun's: 100,000 queries of
+the same 100-row numeric scan, issued 100 in flight at a time and timed —
+every response row-counted, the first checksummed. Node and Deno use
+postgres.js with a pool of 100, Bun uses its native `bun:sql` (`new SQL(url,
+{ max: 100 })`); esrun uses `@opentf/esrun-postgres` with a pool of 100
+(staged `.driver`, rebuilt by `tsr build` like the driver benchmark). The
+table is indexed: the first version of this bench filtered an unindexed
+column and measured Postgres seq-scanning 200k rows (~650 q/s on every
+runtime) instead of the drivers — see `http-seed.mjs`.
+
+```sh
+docker run -d --name esrun-pg-bench -e POSTGRES_PASSWORD=esrun \
+  -e POSTGRES_DB=esrun_test -p 5433:5432 postgres:16 -c max_connections=200
+PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test node bench/db/pg/http-seed.mjs
+PG_URL=... bench/db/pg/qps-run.sh                        # human table
+PG_URL=... SECTIONS=pg_qps bench/gen-bench-data.sh       # publish
+```
+
+`max_connections=200` leaves headroom for the 100-connection pools; the seed
+is the shared `bench_num` table (200k rows, server-side `generate_series`).
+
 ### HTTP/1.1 vs HTTP/2
 
 `bench/http2.sh` measures the same hello-world server over HTTP/1.1 and over

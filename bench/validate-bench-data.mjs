@@ -137,6 +137,7 @@ const sections = [
   ["results_rps.elysia", () => data.results_rps?.elysia, "SECTIONS=rps_elysia"],
   ["dev_server", () => data.dev_server, "SECTIONS=devserver"],
   ["build_time", () => data.build_time, "SECTIONS=buildtime"],
+  ["results_pg_qps", () => data.results_pg_qps, "SECTIONS=pg_qps"],
   [
     "results_rps.hono_sustained",
     () => data.results_rps?.hono_sustained,

@@ -5,6 +5,7 @@
 // owns.
 import BuildChart from "./BuildChart.jsx";
 import DevServerChart from "./DevServerChart.jsx";
+import PgQpsChart from "./PgQpsChart.jsx";
 import RpsChart from "./RpsChart.jsx";
 
 function tabClass(active) {
@@ -28,6 +29,9 @@ export default function FrameworkTabs() {
           </button>
           <button type="button" onclick={() => (tab = "build")} className={tabClass(tab === "build")}>
             Build time
+          </button>
+          <button type="button" onclick={() => (tab = "pg")} className={tabClass(tab === "pg")}>
+            Postgres QPS
           </button>
         </div>
       </div>
@@ -73,7 +77,7 @@ export default function FrameworkTabs() {
             bench.
           </p>
         </div>
-      ) : (
+      ) : tab === "build" ? (
         <div>
           <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
             <BuildChart large />
@@ -84,6 +88,20 @@ export default function FrameworkTabs() {
             <code className="font-mono">NODE_ENV=production</code>, which the
             other three default to). Each output must mount in a real browser
             before its numbers publish.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <PgQpsChart large />
+          </div>
+          <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+            100,000 queries of 100 rows, 100 in flight at a time, against
+            local Postgres — every response row-counted and the first
+            checksummed. Node and Deno use postgres.js, Bun its native{" "}
+            <code className="font-mono">bun:sql</code>, esrun
+            @opentf/esrun-postgres — pools of 100 everywhere. Best of three
+            runs.
           </p>
         </div>
       )}

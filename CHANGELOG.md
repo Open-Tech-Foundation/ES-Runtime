@@ -24,6 +24,9 @@ namespace) is unstable and may change between minor releases until the API freez
   of the home-page Benchmarks section.
 - Production-build benchmark (same four tools, wall time plus output bytes),
   published as `build_time` and charted in a third tab.
+- Postgres QPS benchmark (100 rows × 100 in flight, queries/sec plus peak
+  RSS, across Node, Bun, Deno and esrun), published as `results_pg_qps` and
+  charted in a fourth tab.
 
 ### Fixed
 

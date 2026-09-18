@@ -3799,5 +3799,37 @@ export default {
       "bun": "1.4.2",
       "esdev": "esdev 0.7.0"
     }
+  },
+  "results_pg_qps": {
+    "pg_qps": {
+      "node": 8904,
+      "bun": 14152,
+      "deno": 9159,
+      "esrun": 4892
+    }
+  },
+  "results_pg_qps_rss": {
+    "pg_qps": {
+      "node": 207,
+      "bun": 69,
+      "deno": 148,
+      "esrun": 144
+    }
+  },
+  "pg_qps_method": {
+    "pg_qps": {
+      "query": "SELECT a, b, c FROM bench_num WHERE id <= 100 (100 rows x 100 in flight x 100,000)",
+      "warmup_s": 3,
+      "measure_s": 10,
+      "reps": 3,
+      "aggregate": "max",
+      "spread_pct": {
+        "node": 3.6,
+        "bun": 1.1,
+        "deno": 4,
+        "esrun": 0.7
+      },
+      "queries": 100000
+    }
   }
 }
