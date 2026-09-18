@@ -17,6 +17,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - Drop the stale `Unicode-DFS-2016` allowance from `deny.toml`: `unicode-ident`
   is now `(MIT OR Apache-2.0) AND Unicode-3.0`, which was already allowed, so
   the entry matched nothing.
+- `esrun upgrade --dry-run` asks whether a newer release exists and changes
+  nothing (the same read-half `esdev upgrade --dry-run` runs on). Stray
+  arguments are now refused by name — the replacement used to run past them —
+  and `upgrade --help` prints usage.
 
 ## [0.29.0] - 2026-09-15
 

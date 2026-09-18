@@ -55,7 +55,7 @@ USAGE:
     esrun [options] <file> [args...]
                                 Run a JavaScript module file
     esrun -e=<code>             Run an inline module snippet
-    esrun upgrade               Update esrun to the latest release
+    esrun upgrade [--dry-run]   Update esrun to the latest release
     esrun -h, --help            Show this help
     esrun -v, --version         Show the version
 
@@ -110,6 +110,20 @@ streams, encoding, timers, events.
     The modules:         https://esrun.opentechf.org/api
 ";
 
+/// `esrun upgrade` usage, printed for `-h`/`--help` and after a refused argument.
+const UPGRADE_USAGE: &str = "\
+esrun upgrade — update esrun to the latest release
+
+USAGE:
+    esrun upgrade               Replace this binary with the newest release
+    esrun upgrade --dry-run     Say whether a newer release exists, and change
+                                nothing
+    esrun upgrade -h, --help    Show this help
+
+It finds the latest release, downloads it, and replaces the running binary
+in place. There is nothing else to configure, and no other argument to give it.
+";
+
 /// Parses `esrun`'s command line.
 ///
 /// The shared flags (`--timeout`, `--env-file`, `--max-heap`, the permission
@@ -156,7 +170,40 @@ fn parse_args() -> Result<Config, String> {
             }
             "upgrade" => {
                 reject_value(flag, value)?;
-                es_runtime_cli_common::upgrade::run_and_exit("esrun", env!("CARGO_PKG_VERSION"));
+                // Anything after `upgrade` is its own: `--dry-run` checks,
+                // `-h`/`--help` prints, and anything else is refused by name.
+                // Running the replacement past a stray argument would upgrade
+                // a binary the developer never asked to move.
+                let rest: Vec<String> = args.collect();
+                match rest.as_slice() {
+                    [] => es_runtime_cli_common::upgrade::run_and_exit(
+                        "esrun",
+                        env!("CARGO_PKG_VERSION"),
+                    ),
+                    [extra] => {
+                        let (flag, value) = split_flag_value(extra);
+                        if value.is_none() {
+                            if flag == "-h" || flag == "--help" {
+                                println!("{UPGRADE_USAGE}");
+                                std::process::exit(0);
+                            }
+                            if flag == "--dry-run" {
+                                es_runtime_cli_common::upgrade::check_and_exit(
+                                    "esrun",
+                                    env!("CARGO_PKG_VERSION"),
+                                );
+                            }
+                        }
+                        return Err(format!(
+                            "esrun upgrade takes no arguments; got {extra}.\n\n{UPGRADE_USAGE}"
+                        ));
+                    }
+                    [first, ..] => {
+                        return Err(format!(
+                            "esrun upgrade takes no arguments; got {first}.\n\n{UPGRADE_USAGE}"
+                        ));
+                    }
+                }
             }
             "-v" | "-V" | "--version" => {
                 reject_value(flag, value)?;

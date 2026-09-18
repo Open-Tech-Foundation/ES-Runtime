@@ -116,7 +116,7 @@ COMMANDS:
     build [entry]               Bundle to deploy, or --lib to publish
     test [filter...]            Run the test files
     preview                     Serve the built output before deploying it
-    upgrade                     Update esdev to the latest release
+    upgrade [--dry-run]         Update esdev to the latest release
 
     Each takes --help: `esdev build --help`.
 
