@@ -3728,19 +3728,24 @@ export default {
   },
   "dev_server": {
     "vite": {
-      "cold_ms": 57667,
-      "warm_ms": 55136,
-      "peak_mb": 1185
+      "cold_ms": 49186,
+      "warm_ms": 49580,
+      "peak_mb": 1232
     },
     "oj": {
-      "cold_ms": 4047,
-      "warm_ms": 3730,
-      "peak_mb": 347
+      "cold_ms": 3700,
+      "warm_ms": 3455,
+      "peak_mb": 345
     },
     "esdev": {
-      "cold_ms": 3696,
-      "warm_ms": 2407,
-      "peak_mb": 640
+      "cold_ms": 3474,
+      "warm_ms": 2320,
+      "peak_mb": 645
+    },
+    "bun": {
+      "cold_ms": 3238,
+      "warm_ms": 3370,
+      "peak_mb": 352
     }
   },
   "dev_server_method": {
@@ -3748,13 +3753,50 @@ export default {
     "legs": {
       "vite": "vite dev (default)",
       "oj": "oj dev --bundle",
-      "esdev": "esdev start"
+      "esdev": "esdev start",
+      "bun": "bun ./index.html"
     },
     "iters": 3,
     "aggregate": "min",
     "versions": {
       "vite": "8.3.0",
       "oj": "oj 0.2.0",
+      "esdev": "esdev 0.7.0",
+      "bun": "1.4.2"
+    }
+  },
+  "build_time": {
+    "vite": {
+      "build_ms": 868,
+      "out_kb": 1855
+    },
+    "oj": {
+      "build_ms": 11068,
+      "out_kb": 1857
+    },
+    "esdev": {
+      "build_ms": 1199,
+      "out_kb": 1855
+    },
+    "bun": {
+      "build_ms": 218,
+      "out_kb": 1488
+    }
+  },
+  "build_time_method": {
+    "fixture": "fanout-10 React tree, 10000 components",
+    "legs": {
+      "vite": "vite build (minified by default)",
+      "oj": "oj build (minified by default)",
+      "esdev": "esdev build --minify",
+      "bun": "bun build --minify (NODE_ENV=production, which bun does not default)"
+    },
+    "iters": 3,
+    "aggregate": "min",
+    "versions": {
+      "vite": "8.3.0",
+      "oj": "oj 0.2.0",
+      "bun": "1.4.2",
       "esdev": "esdev 0.7.0"
     }
   }

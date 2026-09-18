@@ -93,7 +93,7 @@ export default function HomePage() {
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-zinc-600 dark:text-zinc-400">
               V8-based ECMAScript runtime for the server. WinterTC-compliant,
-              deny-by-default, and everything a service needs in one binary.
+              capability secured.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a

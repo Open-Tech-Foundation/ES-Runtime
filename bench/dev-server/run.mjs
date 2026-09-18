@@ -10,8 +10,9 @@
 // the MIN over sessions (repo convention: contention only adds time).
 //
 // Legs: `vite` (default dev), `oj dev --bundle` (the mode oj's site charts
-// for the 10k-component app), `esdev start` (the dev loop). One browser drives
-// every render; servers are killed between sessions.
+// for the 10k-component app), `esdev start` (the dev loop), `bun ./index.html`
+// (Bun's zero-config frontend serve). One browser drives every render;
+// servers are killed between sessions.
 //
 // Usage:
 //   node gen.mjs 10000 && (cd apps/app-10000 && npm install)
@@ -37,6 +38,7 @@ const ESDEV_BIN =
 const TOOLS = {
   vite: {
     port: 5210,
+    host: "127.0.0.1",
     spawn: () =>
       spawn(
         process.execPath,
@@ -47,13 +49,30 @@ const TOOLS = {
   },
   oj: {
     port: 5211,
+    host: "127.0.0.1",
     spawn: () => spawn(OJ_BIN, ["dev", app, "--port", String(5211), "--bundle"], { stdio: "ignore" }),
     clearCache: () => fs.rmSync(path.join(app, ".oj-cache"), { recursive: true, force: true }),
   },
   esdev: {
     port: 5212,
+    host: "127.0.0.1",
     spawn: () => spawn(ESDEV_BIN, ["start", `--port=${5212}`], { cwd: app, stdio: "ignore" }),
     clearCache: () => fs.rmSync(path.join(app, "dist"), { recursive: true, force: true }),
+  },
+  bun: {
+    // `bun ./index.html` serves + hot-reloads the frontend with no config.
+    // The port comes from PORT env, and it binds IPv6 loopback only, hence
+    // host localhost. Dev serving writes nothing into the app dir, so there
+    // is no cache to clear — each boot re-bundles from source.
+    port: 5213,
+    host: "localhost",
+    spawn: () =>
+      spawn("bun", ["./index.html"], {
+        cwd: app,
+        stdio: "ignore",
+        env: { ...process.env, PORT: String(5213) },
+      }),
+    clearCache: () => {},
   },
 };
 
@@ -67,24 +86,24 @@ function chromePath() {
   throw new Error("no Chrome/Chromium found — set CHROME_PATH");
 }
 
-async function waitForServer(port, timeoutMs = 120000) {
+async function waitForServer(host, port, timeoutMs = 120000) {
   const t0 = Date.now();
-  const url = `http://127.0.0.1:${port}/`;
+  const url = `http://${host}:${port}/`;
   for (;;) {
     try {
       const res = await fetch(url);
       if (res.ok) return;
       await res.arrayBuffer().catch(() => {});
     } catch {}
-    if (Date.now() - t0 > timeoutMs) throw new Error(`server on :${port} did not come up`);
+    if (Date.now() - t0 > timeoutMs) throw new Error(`server on ${host}:${port} did not come up`);
     await sleep(50);
   }
 }
 
-async function renderOnce(browser, port) {
+async function renderOnce(browser, host, port) {
   const page = await browser.newPage();
   const t0 = Date.now();
-  await page.goto(`http://127.0.0.1:${port}/`, { timeout: 180000 });
+  await page.goto(`http://${host}:${port}/`, { timeout: 180000 });
   await page.waitForSelector("[data-done]", { timeout: 180000 });
   const ms = Date.now() - t0;
   await page.close();
@@ -113,21 +132,24 @@ function toolVersions() {
     out.oj = execFileSync(OJ_BIN, ["--version"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
   } catch { out.oj = null; }
   try {
+    out.bun = execFileSync("bun", ["--version"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch { out.bun = null; }
+  try {
     out.esdev = execFileSync(ESDEV_BIN, ["--version"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split("\n")[0];
   } catch { out.esdev = null; }
   return out;
 }
 
 async function bench(tool, browser) {
-  const { port, spawn: spawnTool, clearCache } = TOOLS[tool];
+  const { host, port, spawn: spawnTool, clearCache } = TOOLS[tool];
   const result = { tool, cold: [], warm: [], peakMb: null };
   for (let i = 0; i < ITERS; i++) {
     clearCache();
     let t0 = Date.now();
     let proc = spawnTool();
-    await waitForServer(port);
+    await waitForServer(host, port);
     const ready = Date.now() - t0;
-    const render = await renderOnce(browser, port);
+    const render = await renderOnce(browser, host, port);
     result.cold.push(ready + render);
     if (i === 0) result.peakMb = peakMb(proc.pid);
     proc.kill("SIGKILL");
@@ -135,9 +157,9 @@ async function bench(tool, browser) {
 
     t0 = Date.now();
     proc = spawnTool();
-    await waitForServer(port);
+    await waitForServer(host, port);
     const wReady = Date.now() - t0;
-    const wRender = await renderOnce(browser, port);
+    const wRender = await renderOnce(browser, host, port);
     result.warm.push(wReady + wRender);
     proc.kill("SIGKILL");
     await sleep(700);
@@ -185,7 +207,7 @@ async function main() {
       dev_server,
       dev_server_method: {
         fixture: `fanout-10 React tree, ${N} components`,
-        legs: { vite: "vite dev (default)", oj: "oj dev --bundle", esdev: "esdev start" },
+        legs: { vite: "vite dev (default)", oj: "oj dev --bundle", esdev: "esdev start", bun: "bun ./index.html" },
         iters: ITERS,
         aggregate: "min",
         versions,

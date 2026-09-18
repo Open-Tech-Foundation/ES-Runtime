@@ -1,7 +1,9 @@
 // Tab switcher for the homepage Benchmarks section: request throughput
-// (Hono vs Elysia per runtime) and dev-server startup (vite vs oj vs esdev).
-// Both panels reuse the site's bar-chart language and read the generated
-// benchmark data; the tab state is the only thing this component owns.
+// (Hono vs Elysia per runtime), dev-server startup (vite vs oj vs esdev vs
+// bun) and production build time (same four tools). Every panel reads the
+// generated benchmark data; the tab state is the only thing this component
+// owns.
+import BuildChart from "./BuildChart.jsx";
 import DevServerChart from "./DevServerChart.jsx";
 import RpsChart from "./RpsChart.jsx";
 
@@ -23,6 +25,9 @@ export default function FrameworkTabs() {
           </button>
           <button type="button" onclick={() => (tab = "dev")} className={tabClass(tab === "dev")}>
             Dev-server startup
+          </button>
+          <button type="button" onclick={() => (tab = "build")} className={tabClass(tab === "build")}>
+            Build time
           </button>
         </div>
       </div>
@@ -52,7 +57,7 @@ export default function FrameworkTabs() {
             </a>
           </p>
         </div>
-      ) : (
+      ) : tab === "dev" ? (
         <div>
           <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
             <DevServerChart />
@@ -60,10 +65,25 @@ export default function FrameworkTabs() {
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Same 10,000-component React app booted under{" "}
             <code className="font-mono">vite dev</code>,{" "}
-            <code className="font-mono">oj dev --bundle</code> and{" "}
-            <code className="font-mono">esdev start</code> — spawn to first
-            paint in a real browser, min of three cold+warm sessions; memory
-            is peak RSS. The fixture shape follows oj's published bench.
+            <code className="font-mono">oj dev --bundle</code>,{" "}
+            <code className="font-mono">esdev start</code> and{" "}
+            <code className="font-mono">bun ./index.html</code> — spawn to
+            first paint in a real browser, min of three cold+warm sessions;
+            memory is peak RSS. The fixture shape follows oj's published
+            bench.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <BuildChart />
+          </div>
+          <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Same app, minified production build, min of three runs — every
+            leg minifies and builds production React (bun needs an explicit{" "}
+            <code className="font-mono">NODE_ENV=production</code>, which the
+            other three default to). Each output must mount in a real browser
+            before its numbers publish.
           </p>
         </div>
       )}

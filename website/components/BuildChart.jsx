@@ -1,9 +1,8 @@
-// Dev-server startup chart: cold start, warm start and peak memory for
-// vite dev, oj dev --bundle and esdev start on the generated 10k-component
-// React fixture. Same visual language as RpsChart (rows are tools, bar
-// columns are metrics, the winner of each column is drawn bold) — but the
-// data comes from bench/dev-server rather than the req/s pipeline, so this
-// reads bench.dev_server instead of bench.results_rps.
+// Production-build chart: wall time and output size for vite build,
+// oj build, esdev build and bun build on the generated 10k-component React
+// fixture. Same visual language as DevServerChart (rows are tools, bar
+// columns are metrics, the winner of each column is drawn bold); data comes
+// from bench/dev-server/build.mjs via bench.build_time.
 //
 // NOTE: same compiler constraint as RpsChart — non-render computations use
 // plain loops, dynamic styles are objects.
@@ -43,13 +42,13 @@ function fmtMs(v) {
   return v >= 1000 ? (v / 1000).toFixed(1) + "s" : Math.round(v) + "ms";
 }
 
-function fmtMb(v) {
+function fmtKb(v) {
   if (typeof v !== "number") return "n/a";
-  return v >= 1024 ? (v / 1024).toFixed(1) + " GB" : v + " MB";
+  return v >= 1024 ? (v / 1024).toFixed(1) + " MB" : v + " KB";
 }
 
 function getVal(tool, key) {
-  return bench.dev_server?.[tool]?.[key] ?? null;
+  return bench.build_time?.[tool]?.[key] ?? null;
 }
 
 function getMax(tools, key) {
@@ -82,28 +81,26 @@ function getPct(tools, key, tool) {
 }
 
 const COLUMNS = [
-  { key: "cold_ms", title: "Cold start (lower ↓)", fmt: fmtMs },
-  { key: "warm_ms", title: "Warm start (lower ↓)", fmt: fmtMs },
-  { key: "peak_mb", title: "Peak memory (lower ↓)", fmt: fmtMb },
+  { key: "build_ms", title: "Build time (lower ↓)", fmt: fmtMs },
+  { key: "out_kb", title: "Output size (lower ↓)", fmt: fmtKb },
 ];
 
-export default function DevServerChart() {
-  if (!bench.dev_server) return null;
-  const tools = ORDER.filter((t) => bench.dev_server[t]);
+export default function BuildChart() {
+  if (!bench.build_time) return null;
+  const tools = ORDER.filter((t) => bench.build_time[t]);
 
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-          Dev-server startup · 10,000 components
+          Production build · 10,000 components
         </span>
       </div>
 
       <div className="mb-2 grid grid-cols-12 gap-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-        <div className="col-span-3">Tool</div>
-        <div className="col-span-3 text-left">Cold start (lower ↓)</div>
-        <div className="col-span-3 text-left">Warm start (lower ↓)</div>
-        <div className="col-span-3 text-left">Peak memory (lower ↓)</div>
+        <div className="col-span-4">Tool</div>
+        <div className="col-span-4 text-left">Build time (lower ↓)</div>
+        <div className="col-span-4 text-left">Output size (lower ↓)</div>
       </div>
 
       <div className="space-y-2">
@@ -116,13 +113,13 @@ export default function DevServerChart() {
           };
           return (
             <div className="grid grid-cols-12 items-center gap-2">
-              <div className="col-span-3 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              <div className="col-span-4 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
                 {meta.label}
               </div>
               {COLUMNS.map((col) => {
                 const isWin = tool === getWinner(tools, col.key);
                 return (
-                  <div className="col-span-3 flex items-center gap-1.5 pr-1">
+                  <div className="col-span-4 flex items-center gap-1.5 pr-1">
                     <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                       <div
                         className={"h-full rounded-full " + meta.bar}

@@ -742,10 +742,10 @@ SECTIONS=rps_elysia bench/gen-bench-data.sh
 SERVER=dist/elysia.bundle.js SERVER_KEY=elysia bench/rps.sh   # by hand
 ```
 
-### Dev-server startup (vite vs oj vs esdev)
+### Dev-server startup (vite vs oj vs esdev vs bun)
 
 `bench/dev-server/` boots the same generated React app — 10,000 components in
-a fanout-10 tree, the shape of oj's bench fixture — under three dev servers
+a fanout-10 tree, the shape of oj's bench fixture — under four dev servers
 and measures spawn-to-first-paint in a real (headless Chromium) browser, min
 of three cold+warm sessions each, plus peak RSS:
 
@@ -754,11 +754,13 @@ of three cold+warm sessions each, plus peak RSS:
 | `vite` | `vite dev` | default unbundled dev |
 | `oj` | `oj dev --bundle` | the mode oj's site charts for this app |
 | `esdev` | `esdev start` | the dev loop |
+| `bun` | `bun ./index.html` | zero-config frontend serve (binds IPv6 loopback; the harness uses `localhost` for this leg) |
 
 Cold clears the tool's cache first (`node_modules/.vite`, `.oj-cache`,
-`dist`); warm restarts into the primed caches. Each session records server
-ready plus the full render to `[data-done]`, because an on-demand server
-reports ready before transforming anything and the render is the cost.
+`dist`; bun writes none); warm restarts into the primed caches. Each session
+records server ready plus the full render to `[data-done]`, because an
+on-demand server reports ready before transforming anything and the render is
+the cost.
 
 ```sh
 cargo install oj --locked          # oj 0.2.0
@@ -766,6 +768,20 @@ node bench/dev-server/gen.mjs 10000
 (cd bench/dev-server/apps/app-10000 && npm install)   # react + vite
 node bench/dev-server/run.mjs 10000                   # human table
 SECTIONS=devserver bench/gen-bench-data.sh            # publish as `dev_server`
+```
+
+### Production build (vite vs oj vs esdev vs bun)
+
+Same app, minified production build into per-tool outdirs, min of three runs
+each, plus output bytes (`bench/dev-server/build.mjs`, published as
+`build_time`). Every leg minifies — the default for vite and oj, `--minify`
+for esdev and bun — so time and size compare like for like. After its reps,
+each tool's output is served statically and must mount in a real browser
+before its numbers publish.
+
+```sh
+node bench/dev-server/build.mjs 10000                # human table
+SECTIONS=buildtime bench/gen-bench-data.sh           # publish as `build_time`
 ```
 
 Needs a Chrome/Chromium binary (`CHROME_PATH`, else `/usr/bin/chromium` or
