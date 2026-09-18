@@ -377,7 +377,7 @@ same run that feeds the site. One machine; re-run locally for your own numbers.
 ```
 workload      |     node |      bun |     deno |     llrt |    esrun
 --------------+----------+----------+----------+----------+----------
-startup       |     22.3 |      4.5 |     14.3 |      3.8 |      8.6
+startup       |     17.1 |      4.2 |     14.4 |      3.6 |      8.4
 bigscript     |     34.1 |     15.5 |     22.4 |     10.9 |      3.3
 modules       |     83.4 |     12.6 |     32.4 |     14.2 |      3.3
 compute       |    193.4 |    108.2 |    233.7 |   2002.2 |    192.1
@@ -442,13 +442,13 @@ wasm_call     |    102.4 |    142.8 |     78.7 |      n/a |     79.5
 wasm_mem      |    204.1 |    365.5 |    239.7 |      n/a |    250.9
 wasi_start    |    276.5 |    515.8 |     50.8 |      n/a |     44.3
 wasi_syscall  |     44.8 |     13.4 |     18.0 |      n/a |     53.5
-rss           |     45.0 |     12.0 |     29.0 |     11.0 |     24.0
+rss           |     41.0 |     12.0 |     28.0 |     11.0 |     24.0
 rss_loaded    |    136.0 |    145.0 |    123.0 |    162.0 |    106.0
 ```
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.21.0, bun 1.4.2, deno 2.9.5, llrt v0.8.0-beta, esrun 0.28.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.14.0, bun 1.4.2, deno 2.9.5, llrt v0.8.0-beta, esrun 0.29.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 
@@ -723,6 +723,25 @@ cost on top of their fast servers. Express, by contrast, cannot run on esrun at
 all (it is CommonJS and needs `node:http`'s `(req, res)` API; esrun is ESM-only
 and rejects `node:` builtins).
 
+### Through a second framework (Elysia)
+
+The same hello-world shape through [Elysia] (`scripts/elysia.js`), published as
+the `elysia` key next to `hono` and charted beside it on the home page. Elysia
+is WinterTC-compliant, so Bun and Deno serve its `app.fetch` natively — but one
+transitive dependency is CommonJS, which esrun rejects. So this section measures
+the **esdev bundle**: `gen-bench-data.sh` builds `dist/elysia.bundle.js` first,
+and every runtime serves that same bundle — one artifact, one comparison. On
+Node both frameworks share `@hono/node-server` as the HTTP glue, for the same
+reason: Elysia's official Node adapter is srvx-based CJS and does not survive
+the bundle (its server resolves to srvx's generic build, which the adapter
+cannot start). The delta on Node is therefore route handling, not glue.
+
+```sh
+cd bench && pnpm install              # elysia (+ hono for the shared Node glue)
+SECTIONS=rps_elysia bench/gen-bench-data.sh
+SERVER=dist/elysia.bundle.js SERVER_KEY=elysia bench/rps.sh   # by hand
+```
+
 ### HTTP/1.1 vs HTTP/2
 
 `bench/http2.sh` measures the same hello-world server over HTTP/1.1 and over
@@ -802,6 +821,7 @@ measurement.
 [oha]: https://github.com/hatoo/oha
 [bombardier]: https://github.com/codesenberg/bombardier
 [Hono]: https://hono.dev
+[Elysia]: https://elysiajs.com
 
 ### Sustained load
 
@@ -856,7 +876,8 @@ The module is fed by five independent scripts and re-running all of them takes
 most of an hour, so `SECTIONS` picks which actually run: `workloads` (run.sh,
 which owns every charted row), `rps` (Hono req/s), `rps_sustained` (the same
 server held under load for a window), `rps_static` (64 KiB static file req/s),
-`websocket` (the chat fan-out sweep), `http2`, and `memory_safety`.
+`rps_elysia` (Elysia req/s, via the esdev bundle), `websocket` (the chat fan-out
+sweep), `http2`, and `memory_safety`.
 A section left out keeps the values already in the module. `workloads` is the
 one exception to merging — it owns the row matrices outright and replaces them,
 so a row deleted from the suite does not live on in the data forever.

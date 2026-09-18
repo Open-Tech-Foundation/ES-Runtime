@@ -44,6 +44,10 @@ packages/*/node_modules/
 # Staged driver build for the postgres benchmark.
 bench/db/pg/.driver/
 
+# esdev bundle of the Elysia server for the rps_elysia benchmark section
+# (bench/gen-bench-data.sh rebuilds it on every run; the source is tracked).
+bench/dist/
+
 # The templates `esdev create` scaffolds are real, runnable projects, developed
 # and tested in place (crates/dev-cli/templates). What running them leaves
 # behind is not part of the template: a scaffolded project resolves and builds

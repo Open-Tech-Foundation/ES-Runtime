@@ -21,8 +21,9 @@ TMP4="$(mktemp)"
 TMP5="$(mktemp)"
 TMP6="$(mktemp)"
 TMP7="$(mktemp)"
+TMP8="$(mktemp)"
 TMP_COMBINED="$(mktemp)"
-trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP_COMBINED"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP_COMBINED"' EXIT
 
 # Scoped or full, one code path.
 #
@@ -37,7 +38,7 @@ trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP_COMBIN
 # `workloads` is bench/run.sh and owns every charted row; the others own one
 # section each. Note the row-level workload update is the argument form above
 # (`gen-bench-data.sh regex strings`), which is cheaper still.
-ALL_SECTIONS="workloads rps rps_sustained rps_static websocket http2 memory_safety"
+ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia websocket http2 memory_safety"
 # Row names as arguments scope the `workloads` section to those rows. They used
 # to be a separate mode that could not be combined with anything, so adding a
 # row and a section in one pass was impossible: each failed validation waiting
@@ -75,6 +76,20 @@ run_workloads() {
   else BENCH_JSON=1 bash run.sh; fi
 }
 run_rps_hono() { SERVER=scripts/hono.js BENCH_JSON=1 bash rps.sh; }
+# The same hello-world shape through Elysia instead of Hono — the framework
+# comparison the home page charts. Elysia cannot run on esrun from source (a
+# transitive dependency is CommonJS and esrun is ESM-only), so the section
+# first bundles scripts/elysia.js with esdev — the documented deployment path —
+# and every runtime serves that same bundle: one artifact, one comparison.
+run_rps_elysia() {
+  ESDEV="${ESDEV:-../target/release/esdev}"
+  if [ ! -x "$ESDEV" ]; then
+    echo "rps_elysia needs esdev at $ESDEV — build it: cargo build --release -p es-runtime-dev-cli" >&2
+    exit 1
+  fi
+  "$ESDEV" build scripts/elysia.js --out=dist/elysia.bundle.js >&2
+  SERVER=dist/elysia.bundle.js SERVER_KEY=elysia BENCH_JSON=1 bash rps.sh
+}
 # The same Hono server held under load for a fixed window instead of a fixed
 # burst. The burst above answers "how fast when fresh"; this answers whether it
 # is still that fast once the heap has filled and the collector has been running
@@ -95,6 +110,7 @@ run_memory_safety() { BENCH_JSON=1 bash memory-safety.sh; }
 
 run_section workloads "$TMP1" run_workloads
 run_section rps "$TMP2" run_rps_hono
+run_section rps_elysia "$TMP8" run_rps_elysia
 run_section rps_sustained "$TMP7" run_rps_sustained
 run_section websocket "$TMP3" run_websocket
 run_section http2 "$TMP4" run_http2

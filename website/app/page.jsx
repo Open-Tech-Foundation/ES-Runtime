@@ -159,6 +159,46 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Framework throughput: Hono and Elysia on every runtime. A full
+          viewport, like a slide — the comparison is the whole point, so it
+          gets the whole screen rather than sharing one. The numbers come from
+          the generated benchmark data, never typed by hand. */}
+      <section className="flex min-h-screen flex-col justify-center border-b border-zinc-200 dark:border-zinc-800">
+        <div className="mx-auto w-full max-w-6xl px-6 py-20">
+          <div className="mb-12 text-center">
+            <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+              Hono and Elysia, on every runtime.
+            </h2>
+            <p className="mx-auto mt-4 max-w-2xl text-lg text-zinc-600 dark:text-zinc-400">
+              The same hello-world service through two real frameworks —
+              throughput and memory, side by side.
+            </p>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <RpsChart server="hono" title="Hono hello-world · Speed & Memory" />
+            </div>
+            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <RpsChart server="elysia" title="Elysia hello-world · Speed & Memory" />
+            </div>
+          </div>
+          <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Plaintext hello-world over loopback, driven by oha at 100
+            connections — best of three runs. Elysia is measured on the esdev
+            bundle every runtime serves (esrun is ESM-only), and Node serves
+            both frameworks through the same{" "}
+            <code className="font-mono">@hono/node-server</code> glue, so the
+            delta is route handling, not the adapter.{" "}
+            <a
+              href="/docs/benchmarks"
+              className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+            >
+              How it is measured →
+            </a>
+          </p>
+        </div>
+      </section>
+
       {/* Sandbox Section. The section follows the site theme like every other;
           only the diagram itself is dark in both, because the brand orange and
           the six host colours need a dark ground to carry — and a single dark

@@ -20,6 +20,12 @@ export default {
       "bun": 83072,
       "deno": 78594,
       "esrun": 54194
+    },
+    "elysia": {
+      "node": 30782,
+      "bun": 87830,
+      "deno": 82350,
+      "esrun": 51461
     }
   },
   "rps_method": {
@@ -69,6 +75,22 @@ export default {
         "bun": 0.2,
         "deno": 1.5,
         "esrun": 1.9
+      }
+    },
+    "elysia": {
+      "server": "dist/elysia.bundle.js",
+      "tool": "oha",
+      "connections": 100,
+      "requests": 500000,
+      "duration": null,
+      "reps": 3,
+      "aggregate": "max",
+      "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
+      "spread_pct": {
+        "node": 1.8,
+        "bun": 4.4,
+        "deno": 0.9,
+        "esrun": 0.5
       }
     }
   },
@@ -182,14 +204,20 @@ export default {
       "bun": 50,
       "deno": 72,
       "esrun": 55
+    },
+    "elysia": {
+      "node": 107,
+      "bun": 47,
+      "deno": 56,
+      "esrun": 50
     }
   },
   "runtimes": {
-    "node": "v24.21.0",
+    "node": "v24.14.0",
     "bun": "1.4.2+744846f84",
     "deno": "deno 2.9.5 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.28.0"
+    "esrun": "esrun 0.29.0"
   },
   "method": {
     "aggregate": "min",
@@ -832,11 +860,11 @@ export default {
   ],
   "results_ms": {
     "startup": {
-      "node": 22.3,
-      "bun": 4.5,
-      "deno": 14.3,
-      "llrt": 3.8,
-      "esrun": 8.6
+      "node": 17.1,
+      "bun": 4.2,
+      "deno": 14.4,
+      "llrt": 3.6,
+      "esrun": 8.4
     },
     "bigscript": {
       "node": 34.1,
@@ -1294,9 +1322,9 @@ export default {
       "esrun": 53.5
     },
     "rss": {
-      "node": 45,
+      "node": 41,
       "bun": 12,
-      "deno": 29,
+      "deno": 28,
       "llrt": 11,
       "esrun": 24
     },
@@ -1310,9 +1338,9 @@ export default {
   },
   "results_rss": {
     "startup": {
-      "node": 45,
+      "node": 41,
       "bun": 12,
-      "deno": 29,
+      "deno": 28,
       "llrt": 11,
       "esrun": 24
     },
@@ -1788,11 +1816,11 @@ export default {
   },
   "results_cov": {
     "startup": {
-      "node": 6.6,
-      "bun": 1.8,
-      "deno": 8.5,
-      "llrt": 4,
-      "esrun": 1.7
+      "node": 2.8,
+      "bun": 6.6,
+      "deno": 5,
+      "llrt": 3.9,
+      "esrun": 5.3
     },
     "bigscript": {
       "node": 4.9,
@@ -2744,11 +2772,11 @@ export default {
   },
   "results_floor_gap": {
     "startup": {
-      "node": 0,
-      "bun": 0,
+      "node": 1.2,
+      "bun": 2.4,
       "deno": 0.7,
       "llrt": 0,
-      "esrun": 0
+      "esrun": 1.2
     },
     "bigscript": {
       "node": 1.8,

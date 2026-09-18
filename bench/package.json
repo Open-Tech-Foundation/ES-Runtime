@@ -1,19 +1,20 @@
 {
   "private": true,
-  "description": "Dev deps for the cross-runtime benchmark \u2014 Hono powers scripts/hono.js (rps.sh SERVER=scripts/hono.js); postgres.js and ioredis are the comparison clients for bench/db/pg and bench/db/redis. Install with: pnpm install",
+  "description": "Dev deps for the cross-runtime benchmark — Hono powers scripts/hono.js and Elysia powers scripts/elysia.js (rps.sh SERVER=scripts/<framework>.js); postgres.js and ioredis are the comparison clients for bench/db/pg and bench/db/redis. Install with: pnpm install",
   "dependencies": {
     "@bufbuild/buf": "^1.71.0",
     "@bufbuild/protobuf": "^2.12.1",
     "@bufbuild/protoc-gen-es": "^2.12.1",
     "@hono/node-server": "^2.0.4",
     "@iarna/toml": "^2.2.5",
+    "elysia": "^1.4.30",
     "fast-xml-parser": "^5.9.2",
     "hono": "^4.12.25",
+    "ioredis": "^6.0.0",
     "js-yaml": "^4.2.0",
     "msgpackr": "^1.11.2",
     "ndjson": "^2.0.0",
     "postgres": "^3.4.9",
-    "ioredis": "^6.0.0",
     "redis": "^6.2.0"
   }
 }

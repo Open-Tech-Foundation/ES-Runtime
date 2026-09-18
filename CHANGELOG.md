@@ -8,6 +8,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
+  esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
+  `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every
+  runtime serves, since a transitive dependency is CommonJS and esrun is
+  ESM-only.
+- Home page section "Hono and Elysia, on every runtime" below "Why
+  ES-Runtime?", charting both frameworks' throughput and memory per runtime
+  from the generated benchmark data.
+
 ### Fixed
 
 - Bump `rustls` 0.23.42 → 0.23.45 (with `rustls-webpki` 0.103.15 and

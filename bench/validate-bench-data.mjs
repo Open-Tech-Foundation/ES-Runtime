@@ -134,6 +134,7 @@ if (runtimes.includes("esrun") && esrunRows.length === 0) {
 // Each entry: the path the site reads, and how to tell "present and populated".
 const sections = [
   ["results_rps.hono", () => data.results_rps?.hono, "SECTIONS=rps"],
+  ["results_rps.elysia", () => data.results_rps?.elysia, "SECTIONS=rps_elysia"],
   [
     "results_rps.hono_sustained",
     () => data.results_rps?.hono_sustained,
