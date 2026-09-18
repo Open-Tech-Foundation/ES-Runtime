@@ -48,7 +48,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::contract::{self, Answer, Filter, HookSpec, Hooks, ModuleResult, Pattern};
+use crate::contract::{self, Answer, Filter, HookSpec, Hooks, ModuleResult, Order, Pattern};
 
 /// What this pass is called wherever a diagnostic names it.
 pub const PASS_NAME: &str = "esdev:assets";
@@ -89,7 +89,14 @@ const ASSET_EXTENSIONS: &[&str] = &[
     "otf", "eot", "mp4", "webm", "ogv", "mp3", "wav", "ogg", "flac", "pdf", "zip", "wasm",
 ];
 
-/// The assets one build referenced, and the names they take in its output.
+/// A `?raw`/`?url` query key on the specifier — the Vite spellings for "this
+/// file as text" and "this file's URL".
+///
+/// The resolver answers paths, not queries, so one of these reaches no file —
+/// and the failure it used to produce named a file that is really there.
+/// Matched on the specifier (the id does not exist yet), and refused late: a
+/// plugin that claims the suffix for itself keeps it.
+const SUFFIX_QUERY: &str = r"\?(?:[^#]*&)?(raw|url)(?:[=&#]|$)";
 ///
 /// Shared with the pass rather than returned from it, for the reason
 /// [`crate::cssmodules::Collected`] is: a hook has nowhere to return something
@@ -193,6 +200,17 @@ impl Assets {
         Self {
             emitted,
             hooks: Hooks {
+                resolve: Some(HookSpec {
+                    filter: Filter {
+                        id: vec![Pattern::Regex(
+                            regex::Regex::new(SUFFIX_QUERY).expect("a generated pattern"),
+                        )],
+                        code: Vec::new(),
+                    },
+                    // Last: a plugin that claims the suffix for itself keeps
+                    // it, and only what nobody claimed reaches this refusal.
+                    order: Order::Post,
+                }),
                 load: Some(HookSpec {
                     filter: Filter {
                         id: vec![Pattern::Regex(
@@ -215,6 +233,33 @@ impl contract::Pass for Assets {
 
     fn hooks(&self) -> &Hooks {
         &self.hooks
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        specifier: &'a str,
+        _importer: Option<&'a str>,
+        _is_entry: bool,
+        _ctx: &'a Arc<dyn contract::Context>,
+    ) -> Answer<'a, contract::Resolved> {
+        Box::pin(async move {
+            // Remote modules fail their own way; this hint is for files.
+            if specifier.contains("://") {
+                return Ok(contract::Resolved::Pass);
+            }
+            let suffix = if has_query_key(specifier, "raw") {
+                "raw"
+            } else {
+                "url"
+            };
+            Err(format!(
+                "{specifier} uses a ?{suffix} import suffix, which esdev does not support yet.\n\
+                 \n\
+                 Import the file without the suffix: an asset resolves to its URL and \
+                 anything else imports as the module it is — a file that is neither is \
+                 not importable at all."
+            ))
+        })
     }
 
     fn load<'a>(
@@ -248,6 +293,21 @@ impl contract::Pass for Assets {
             }))
         })
     }
+}
+
+/// Whether `specifier` carries `key` as a query key (`?raw`, `?url&v=1`).
+///
+/// Split on purpose rather than matched: the filter already admitted only
+/// candidates, and this names the one for the diagnostic.
+fn has_query_key(specifier: &str, key: &str) -> bool {
+    specifier.split('?').skip(1).any(|query| {
+        query
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .split('&')
+            .any(|pair| pair.split('=').next() == Some(key))
+    })
 }
 
 #[cfg(test)]
@@ -302,5 +362,45 @@ mod tests {
         let two = crate::html::hashed_name(Path::new("icon.svg"), b"<svg>b</svg>");
         assert_ne!(one, two);
         assert!(one.starts_with("icon-") && one.ends_with(".svg"), "{one}");
+    }
+
+    /// A suffixed specifier reaches the refusal, and only one: the filter is
+    /// what the hook is called for, so the two have to agree.
+    #[test]
+    fn a_query_suffix_is_refused_by_name() {
+        let pass = Assets::new(Emitted::new());
+        let resolve_filter = contract::Pass::hooks(&pass)
+            .resolve
+            .as_ref()
+            .expect("a resolve hook")
+            .filter
+            .id
+            .iter();
+        let admitted = |specifier: &str| {
+            resolve_filter.clone().any(|pattern| match pattern {
+                Pattern::Regex(regex) => regex.is_match(specifier),
+                Pattern::Exact(exact) => exact == specifier,
+            })
+        };
+
+        for specifier in [
+            "./data.txt?raw",
+            "./logo.png?url",
+            "./logo.png?url#v2",
+            "./shader.glsl?defines=A&raw",
+            "pkg/data.txt?raw",
+        ] {
+            assert!(admitted(specifier), "{specifier}");
+            assert!(has_query_key(specifier, "raw") || has_query_key(specifier, "url"));
+        }
+        for specifier in [
+            "./util.ts",
+            "./logo.png",
+            "./data.json",
+            "./lib?raw.ts",
+            "./x?library=raw",
+        ] {
+            assert!(!admitted(specifier), "{specifier}");
+        }
     }
 }

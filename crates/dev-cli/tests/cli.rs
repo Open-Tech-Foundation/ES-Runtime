@@ -1422,6 +1422,35 @@ fn a_library_refuses_an_asset_import_and_says_why() {
     assert!(message.contains("data:"), "{message}");
 }
 
+/// A `?raw` import used to die in the resolver naming a file that is really
+/// there. The suffix is refused by name instead — after every other plugin,
+/// so one that claims it keeps it.
+#[test]
+fn a_raw_suffix_is_refused_by_name() {
+    let dir = build_dir("b_raw_suffix");
+    write_in(&dir, "data.txt", "hello\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        "import text from './data.txt?raw';\nconsole.log(text);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"targets\": { \"app\": { \"entry\": \"app.mjs\", \"out\": \"dist/app.js\" } } }",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let message = slash_paths(&stderr(&out));
+    assert!(message.contains("?raw"), "{message}");
+    assert!(message.contains("does not support yet"), "{message}");
+    assert!(!message.contains("No such file"), "{message}");
+}
+
 // ---------------------------------------------------------------------------
 // `alias` and `import.meta.env`: the two things a project configures that a
 // bundler has to be told, and that a hand-written `--define` was the only way

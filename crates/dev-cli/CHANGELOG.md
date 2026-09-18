@@ -35,6 +35,9 @@ is the point, since none of the three has any business in a deployment.
   `--update-snapshots`, `--ci` and `--full-diff` are flags only, and the file
   refuses them as keys (only `setup`, `timeout`, `jobs`, `isolation` and
   `reporter` live under `"test"`).
+- A `?raw`/`?url` import suffix no longer dies in the resolver naming a file
+  that is really there: the `esdev:assets` pass refuses it by name, after
+  every other plugin, and says what is importable instead.
 - `tsr build:esdev` builds the release artifact with the V8 inspector compiled
   in, so `--inspect` works in it. Same switch a manual build uses
   (`ES_RUNTIME_INSPECTOR=1`), carried by the task so it can never leak into an
