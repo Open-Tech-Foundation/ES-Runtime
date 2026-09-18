@@ -35,11 +35,11 @@ export default function FrameworkTabs() {
       {tab === "req" ? (
         <div>
           <div className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <RpsChart server="hono" title="Hono hello-world · Speed & Memory" />
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <RpsChart server="hono" title="Hono hello-world · Speed & Memory" large sort="rps" />
             </div>
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <RpsChart server="elysia" title="Elysia hello-world · Speed & Memory" />
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <RpsChart server="elysia" title="Elysia hello-world · Speed & Memory" large sort="rps" />
             </div>
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
@@ -59,8 +59,8 @@ export default function FrameworkTabs() {
         </div>
       ) : tab === "dev" ? (
         <div>
-          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <DevServerChart />
+          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <DevServerChart large />
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Same 10,000-component React app booted under{" "}
@@ -75,8 +75,8 @@ export default function FrameworkTabs() {
         </div>
       ) : (
         <div>
-          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <BuildChart />
+          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <BuildChart large />
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Same app, minified production build, min of three runs — every

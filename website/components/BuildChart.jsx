@@ -85,25 +85,47 @@ const COLUMNS = [
   { key: "out_kb", title: "Output size (lower ↓)", fmt: fmtKb },
 ];
 
-export default function BuildChart() {
+export default function BuildChart({ large = false }) {
   if (!bench.build_time) return null;
-  const tools = ORDER.filter((t) => bench.build_time[t]);
+  // Fastest build first; a tool without a number sinks to the bottom.
+  const tools = ORDER.filter((t) => bench.build_time[t])
+    .slice()
+    .sort((a, b) => {
+      const va = getVal(a, "build_ms");
+      const vb = getVal(b, "build_ms");
+      if (typeof va !== "number") return 1;
+      if (typeof vb !== "number") return -1;
+      return va - vb;
+    });
+
+  // Roomier type and taller bars for the full-viewport Benchmarks section.
+  const titleCls = large
+    ? "text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400"
+    : "text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400";
+  const headCls = large
+    ? "text-xs font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500"
+    : "text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500";
+  const nameCls = large
+    ? "truncate text-sm font-medium text-zinc-700 dark:text-zinc-300"
+    : "truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300";
+  const barCls = large ? "h-4 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" : "h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800";
+  const valCls = large ? "shrink-0 text-right text-sm tabular-nums " : "shrink-0 text-right text-[11px] tabular-nums ";
 
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+        <span className={titleCls}>
           Production build · 10,000 components
         </span>
       </div>
 
-      <div className="mb-2 grid grid-cols-12 gap-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+      <div className={"mb-2 grid grid-cols-12 gap-2 " + headCls}>
         <div className="col-span-4">Tool</div>
         <div className="col-span-4 text-left">Build time (lower ↓)</div>
         <div className="col-span-4 text-left">Output size (lower ↓)</div>
       </div>
 
-      <div className="space-y-2">
+      <div className={large ? "space-y-3" : "space-y-2"}>
         {tools.map((tool) => {
           const meta = TOOL_META[tool] || {
             label: tool,
@@ -113,14 +135,14 @@ export default function BuildChart() {
           };
           return (
             <div className="grid grid-cols-12 items-center gap-2">
-              <div className="col-span-4 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              <div className={"col-span-4 " + nameCls}>
                 {meta.label}
               </div>
               {COLUMNS.map((col) => {
                 const isWin = tool === getWinner(tools, col.key);
                 return (
                   <div className="col-span-4 flex items-center gap-1.5 pr-1">
-                    <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                    <div className={barCls}>
                       <div
                         className={"h-full rounded-full " + meta.bar}
                         style={{ width: getPct(tools, col.key, tool) + "%" }}
@@ -128,7 +150,7 @@ export default function BuildChart() {
                     </div>
                     <span
                       className={
-                        "w-14 shrink-0 text-right text-[11px] tabular-nums " +
+                        (large ? "w-16 " : "w-14 ") + valCls +
                         (isWin ? meta.text : meta.dimText)
                       }
                     >

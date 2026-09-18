@@ -4,7 +4,8 @@
 // height (see .bench-roll-* in global.css), so the loop never jumps. Hover
 // pauses it; reduced-motion turns it into a normal scroll.
 //
-// The req/s HTTP story is shown separately (RpsChart) as a fixed headline; the
+// The req/s HTTP story is charted separately (RpsChart in the Benchmarks
+// section tabs) as a fixed headline; the
 // in-process `http` micro-metric is intentionally left out here — it measures the
 // server together with the client, which is not the claim this belt implies.
 //

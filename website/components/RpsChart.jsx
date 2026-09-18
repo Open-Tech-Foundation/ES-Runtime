@@ -119,21 +119,46 @@ function getFormattedRss(server, rt) {
   return typeof v === "number" ? v + " MB" : "n/a";
 }
 
-export default function RpsChart({ server = "hono", title = "Hono hello-world · Speed & Memory" }) {
+export default function RpsChart({ server = "hono", title = "Hono hello-world · Speed & Memory", large = false, sort = null }) {
   let mode = $state("burst");
 
   const httpRps = bench.results_rps ? bench.results_rps[server] : null;
   if (!httpRps) return null;
 
   const sustainedRps = bench.results_rps ? bench.results_rps[server + "_sustained"] : null;
-  const runtimes = ORDER.filter((rt) => typeof httpRps[rt] === "number");
+  let runtimes = ORDER.filter((rt) => typeof httpRps[rt] === "number");
   if (runtimes.length === 0) return null;
+  // Opt-in ranking for the Benchmarks section cards (fastest first, by the
+  // visible mode). Everywhere else keeps runtimes.js's alphabetical order.
+  if (sort === "rps") {
+    runtimes = runtimes.slice().sort((a, b) => {
+      const va = getRpsVal(server, a, mode);
+      const vb = getRpsVal(server, b, mode);
+      if (typeof va !== "number") return 1;
+      if (typeof vb !== "number") return -1;
+      return vb - va;
+    });
+  }
+
+  // The Benchmarks section is a full viewport; its cards get roomier type
+  // and taller bars than the compact hero card.
+  const titleCls = large
+    ? "text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400"
+    : "text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400";
+  const headCls = large
+    ? "text-xs font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500"
+    : "text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500";
+  const nameCls = large
+    ? "truncate text-sm font-medium text-zinc-700 dark:text-zinc-300"
+    : "truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300";
+  const barCls = large ? "h-4 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" : "h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800";
+  const valCls = large ? "shrink-0 text-right text-sm tabular-nums " : "shrink-0 text-right text-[11px] tabular-nums ";
 
   return (
     <div>
       {/* Title & Mode Switcher */}
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+        <span className={titleCls}>
           {title}
         </span>
         {sustainedRps && runtimes.some((rt) => typeof sustainedRps[rt] === "number") ? (
@@ -165,14 +190,14 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
       </div>
 
       {/* Column Headers */}
-      <div className="mb-2 grid grid-cols-12 gap-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+      <div className={"mb-2 grid grid-cols-12 gap-2 " + headCls}>
         <div className="col-span-3">Runtime</div>
         <div className="col-span-5 text-left">Throughput (higher ↑)</div>
         <div className="col-span-4 text-left">Memory (lower ↓)</div>
       </div>
 
       {/* Side-by-side Runtimes List */}
-      <div className="space-y-2">
+      <div className={large ? "space-y-3" : "space-y-2"}>
         {runtimes.map((rt) => {
           const brand = BRAND_COLORS[rt] || {
             bar: "bg-zinc-400 dark:bg-zinc-500",
@@ -186,13 +211,13 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
           return (
             <div className="grid grid-cols-12 items-center gap-2">
               {/* Runtime Name */}
-              <div className="col-span-3 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              <div className={"col-span-3 " + nameCls}>
                 {LABELS[rt]}
               </div>
 
               {/* Throughput Bar & Value */}
               <div className="col-span-5 flex items-center gap-1.5 pr-1">
-                <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                <div className={barCls}>
                   <div
                     className={"h-full rounded-full " + brand.bar}
                     style={{ width: getRpsPct(server, runtimes, rt, mode) + "%" }}
@@ -200,7 +225,7 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
                 </div>
                 <span
                   className={
-                    "w-11 shrink-0 text-right text-[11px] tabular-nums " +
+                    (large ? "w-14 " : "w-11 ") + valCls +
                     (isRpsWin ? brand.text : brand.dimText)
                   }
                 >
@@ -210,7 +235,7 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
 
               {/* Memory Bar & Value */}
               <div className="col-span-4 flex items-center gap-1.5">
-                <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                <div className={barCls}>
                   <div
                     className={"h-full rounded-full opacity-80 " + brand.bar}
                     style={{ width: getRssPct(server, runtimes, rt) + "%" }}
