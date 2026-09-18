@@ -168,7 +168,7 @@ env = { ES_RUNTIME_INSPECTOR = "1" }
 # The site is a workspace member, while this task remains deliberately focused:
 # it is long-lived and serves until interrupted.
 [tasks."dev:website"]
-run = "pnpm run dev"
+run = "otfw dev"
 dir = "website"
 
 # Re-reads the two binaries' versions out of Cargo.toml into the module the site
