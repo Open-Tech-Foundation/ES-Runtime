@@ -127,6 +127,58 @@ fn target() -> String {
     format!("{os}-{arch}")
 }
 
+/// What a check reports: `current` against the newest listed release.
+///
+/// `latest` is the newest release's version and whether it published an
+/// archive for this platform — `None` when no release of this binary is
+/// listed at all. Pure so it is unit-testable; the network stays in [`check`].
+fn describe(binary: &str, current_version: &str, latest: Option<(&str, bool)>) -> String {
+    let Some((version, has_asset)) = latest else {
+        return format!("no {binary} releases found; nothing to upgrade to.");
+    };
+    match self_update::version::bump_is_greater(current_version, version) {
+        Ok(true) => {
+            let mut message = format!(
+                "{binary} {current_version} can upgrade to {version}: run `{binary} upgrade`."
+            );
+            if !has_asset {
+                message.push_str(&format!(
+                    " (this release published no {} build yet)",
+                    target()
+                ));
+            }
+            message
+        }
+        // Equal, newer (a build ahead of the releases), or unparseable on
+        // either side: there is nothing to move to, and an unparseable
+        // version is reported rather than acted on.
+        _ => format!("{binary} is already up to date ({current_version})."),
+    }
+}
+
+/// Asks whether `binary` has a newer release, changing nothing.
+///
+/// The read half of [`run`]: the same release listing, but it stops at
+/// comparing versions instead of downloading and self-replacing. Returns the
+/// line to print.
+pub fn check(binary: &'static str, current_version: &str) -> Result<String, String> {
+    let latest = <Releases as self_update::ReleaseSource>::get_releases(&Releases { binary })
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .map(|release| {
+            let has_asset = release.has_target_asset(&target());
+            (release.version().to_string(), has_asset)
+        });
+    Ok(describe(
+        binary,
+        current_version,
+        latest
+            .as_ref()
+            .map(|(v, has_asset)| (v.as_str(), *has_asset)),
+    ))
+}
+
 /// Upgrades `binary` from `current_version` to the newest release, in place.
 ///
 /// Returns the line to print. `Err` is a `String` (not a boxed `dyn Error`) so
@@ -179,9 +231,30 @@ pub fn run_and_exit(binary: &'static str, current_version: &'static str) -> ! {
     }
 }
 
+/// Runs [`check`] on a thread of its own and prints the outcome, exiting the
+/// process either way.
+///
+/// The same thread hop [`run_and_exit`] needs: the release listing is blocking
+/// HTTP, and dropping that from inside a `#[tokio::main]` context panics.
+pub fn check_and_exit(binary: &'static str, current_version: &'static str) -> ! {
+    let result = std::thread::spawn(move || check(binary, current_version))
+        .join()
+        .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
+    match result {
+        Ok(message) => {
+            println!("{message}");
+            std::process::exit(0)
+        }
+        Err(e) => {
+            eprintln!("error: upgrade check failed: {e}");
+            std::process::exit(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Releases;
+    use super::{Releases, describe};
 
     #[test]
     fn a_tag_belongs_to_one_binary() {
@@ -211,5 +284,35 @@ mod tests {
         // and `nightly` is not tagged for anybody.
         assert_eq!(Releases { binary: "esrun" }.version_of("vnext"), None);
         assert_eq!(Releases { binary: "esrun" }.version_of("nightly"), None);
+    }
+
+    #[test]
+    fn check_names_the_newer_release() {
+        assert_eq!(
+            describe("esdev", "0.7.0", Some(("0.8.0", true))),
+            "esdev 0.7.0 can upgrade to 0.8.0: run `esdev upgrade`."
+        );
+        // A newer release without this platform's archive still names the
+        // version — so the developer knows to wait or build it — rather than
+        // claiming to be current.
+        assert!(describe("esdev", "0.7.0", Some(("0.8.0", false))).contains("0.8.0"));
+    }
+
+    #[test]
+    fn check_is_quiet_when_there_is_nothing_to_move_to() {
+        assert_eq!(
+            describe("esdev", "0.7.0", Some(("0.7.0", true))),
+            "esdev is already up to date (0.7.0)."
+        );
+        // A build ahead of the releases (or an unparseable version on either
+        // side) is reported as current, never acted on.
+        assert_eq!(
+            describe("esdev", "0.8.0", Some(("0.7.0", true))),
+            "esdev is already up to date (0.8.0)."
+        );
+        assert_eq!(
+            describe("esdev", "0.7.0", None),
+            "no esdev releases found; nothing to upgrade to."
+        );
     }
 }

@@ -348,8 +348,28 @@ fn upgrade_answers_help() {
             .output()
             .expect("spawn esdev upgrade --help");
         assert!(out.status.success(), "{flag}: {}", stderr(&out));
-        assert!(stdout(&out).contains("esdev upgrade"), "{}", stdout(&out));
+        let text = stdout(&out);
+        assert!(text.contains("esdev upgrade"), "{text}");
+        assert!(text.contains("--dry-run"), "{text}");
     }
+}
+
+/// `--dry-run` is the read half of `upgrade`: it reaches the network, so what
+/// is pinned here is the grammar — a value is refused by name without going
+/// anywhere, which a live check then honors. (The live path is exercised by
+/// hand: `esdev upgrade --dry-run` against the real release listing.)
+#[test]
+fn upgrade_dry_run_takes_no_value() {
+    let out = esdev()
+        .args(["upgrade", "--dry-run=yes"])
+        .output()
+        .expect("spawn esdev upgrade --dry-run=yes");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("takes no arguments"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// A flag that is taken and dropped is one somebody keeps passing and keeps

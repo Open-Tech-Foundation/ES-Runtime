@@ -23,6 +23,9 @@ namespace) is unstable and may change between minor releases until the API freez
   (a `void` variable annotation and `return <void>` are both lint errors).
 - `esdev upgrade --help` (and `-h`) now prints usage instead of erroring, like
   every other subcommand the top-level help promises it for.
+- `esdev upgrade --dry-run` asks whether a newer release exists and changes
+  nothing: same listing as the upgrade, stops at the comparison, and names
+  the version to `upgrade` to (or that this platform has no build yet).
 
 ## [0.29.0] - 2026-09-15
 
