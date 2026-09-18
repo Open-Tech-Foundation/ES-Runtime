@@ -155,6 +155,14 @@ deps = ["test:postgres", "test:redis"]
 [tasks."build:esrun"]
 run = "cargo build -p es-runtime-cli"
 
+# The esdev artifact with the debugger compiled in (DECISIONS D59). The V8
+# inspector is a compile-time opt-in read from the environment, and it must
+# never be set for an esrun build — hence its own task carrying the variable
+# rather than a flag, so the two cannot mix.
+[tasks."build:esdev"]
+run = "cargo build --release -p es-runtime-dev-cli"
+env = { ES_RUNTIME_INSPECTOR = "1" }
+
 # --- the website -------------------------------------------------------------
 
 # The site is a workspace member, while this task remains deliberately focused:
