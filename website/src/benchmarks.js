@@ -3725,5 +3725,37 @@ export default {
       "llrt": "ok",
       "esrun": "ok"
     }
+  },
+  "dev_server": {
+    "vite": {
+      "cold_ms": 57667,
+      "warm_ms": 55136,
+      "peak_mb": 1185
+    },
+    "oj": {
+      "cold_ms": 4047,
+      "warm_ms": 3730,
+      "peak_mb": 347
+    },
+    "esdev": {
+      "cold_ms": 3696,
+      "warm_ms": 2407,
+      "peak_mb": 640
+    }
+  },
+  "dev_server_method": {
+    "fixture": "fanout-10 React tree, 10000 components",
+    "legs": {
+      "vite": "vite dev (default)",
+      "oj": "oj dev --bundle",
+      "esdev": "esdev start"
+    },
+    "iters": 3,
+    "aggregate": "min",
+    "versions": {
+      "vite": "8.3.0",
+      "oj": "oj 0.2.0",
+      "esdev": "esdev 0.7.0"
+    }
   }
 }

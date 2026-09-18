@@ -18,6 +18,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - Home page section "Hono and Elysia, on every runtime" below "Why
   ES-Runtime?", charting both frameworks' throughput and memory per runtime
   from the generated benchmark data.
+- Dev-server startup benchmark (vite dev vs oj dev --bundle vs esdev start on
+  a generated 10,000-component React app, cold/warm/peak-RSS), published as
+  `dev_server` and charted in a second tab of the home-page framework
+  section.
 
 ### Fixed
 

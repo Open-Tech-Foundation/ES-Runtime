@@ -48,6 +48,10 @@ bench/db/pg/.driver/
 # (bench/gen-bench-data.sh rebuilds it on every run; the source is tracked).
 bench/dist/
 
+# Generated dev-server fixture apps (bench/dev-server/gen.mjs recreates them;
+# 10k files plus their node_modules are not for the tree).
+bench/dev-server/apps/
+
 # The templates `esdev create` scaffolds are real, runnable projects, developed
 # and tested in place (crates/dev-cli/templates). What running them leaves
 # behind is not part of the template: a scaffolded project resolves and builds

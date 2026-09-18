@@ -22,8 +22,9 @@ TMP5="$(mktemp)"
 TMP6="$(mktemp)"
 TMP7="$(mktemp)"
 TMP8="$(mktemp)"
+TMP9="$(mktemp)"
 TMP_COMBINED="$(mktemp)"
-trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP_COMBINED"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP9" "$TMP_COMBINED"' EXIT
 
 # Scoped or full, one code path.
 #
@@ -38,7 +39,7 @@ trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TM
 # `workloads` is bench/run.sh and owns every charted row; the others own one
 # section each. Note the row-level workload update is the argument form above
 # (`gen-bench-data.sh regex strings`), which is cheaper still.
-ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia websocket http2 memory_safety"
+ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia devserver websocket http2 memory_safety"
 # Row names as arguments scope the `workloads` section to those rows. They used
 # to be a separate mode that could not be combined with anything, so adding a
 # row and a section in one pass was impossible: each failed validation waiting
@@ -104,6 +105,10 @@ run_rps_sustained() {
 # run.sh on purpose: its in-process `http` workload measures the server and the
 # client together, which is the thing rps.sh exists to avoid.
 run_rps_static() { SERVER=scripts/staticserver.js BENCH_JSON=1 bash rps.sh; }
+# Dev-server cold/warm/memory on the generated 10k-component React app —
+# vite dev vs oj dev --bundle vs esdev start. See bench/dev-server/run.mjs
+# for the legs and bench/README.md for what each number means.
+run_devserver() { BENCH_JSON=1 node dev-server/run.mjs 10000; }
 run_websocket() { BENCH_JSON=1 bash websocket-chat/run-chat.sh; }
 run_http2() { BENCH_JSON=1 bash http2.sh; }
 run_memory_safety() { BENCH_JSON=1 bash memory-safety.sh; }
@@ -115,6 +120,7 @@ run_section rps_sustained "$TMP7" run_rps_sustained
 run_section websocket "$TMP3" run_websocket
 run_section http2 "$TMP4" run_http2
 run_section rps_static "$TMP5" run_rps_static
+run_section devserver "$TMP9" run_devserver
 run_section memory_safety "$TMP6" run_memory_safety
 
 # Merge onto whatever the module already holds, so unselected sections survive.

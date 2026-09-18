@@ -742,6 +742,37 @@ SECTIONS=rps_elysia bench/gen-bench-data.sh
 SERVER=dist/elysia.bundle.js SERVER_KEY=elysia bench/rps.sh   # by hand
 ```
 
+### Dev-server startup (vite vs oj vs esdev)
+
+`bench/dev-server/` boots the same generated React app — 10,000 components in
+a fanout-10 tree, the shape of oj's bench fixture — under three dev servers
+and measures spawn-to-first-paint in a real (headless Chromium) browser, min
+of three cold+warm sessions each, plus peak RSS:
+
+| leg | command | mode |
+| --- | --- | --- |
+| `vite` | `vite dev` | default unbundled dev |
+| `oj` | `oj dev --bundle` | the mode oj's site charts for this app |
+| `esdev` | `esdev start` | the dev loop |
+
+Cold clears the tool's cache first (`node_modules/.vite`, `.oj-cache`,
+`dist`); warm restarts into the primed caches. Each session records server
+ready plus the full render to `[data-done]`, because an on-demand server
+reports ready before transforming anything and the render is the cost.
+
+```sh
+cargo install oj --locked          # oj 0.2.0
+node bench/dev-server/gen.mjs 10000
+(cd bench/dev-server/apps/app-10000 && npm install)   # react + vite
+node bench/dev-server/run.mjs 10000                   # human table
+SECTIONS=devserver bench/gen-bench-data.sh            # publish as `dev_server`
+```
+
+Needs a Chrome/Chromium binary (`CHROME_PATH`, else `/usr/bin/chromium` or
+`google-chrome`) and `puppeteer-core` (a bench dependency, installed with the
+rest). The fixture apps (`bench/dev-server/apps/`) are generated, not
+tracked.
+
 ### HTTP/1.1 vs HTTP/2
 
 `bench/http2.sh` measures the same hello-world server over HTTP/1.1 and over

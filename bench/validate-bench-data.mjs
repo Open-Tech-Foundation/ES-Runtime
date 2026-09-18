@@ -135,6 +135,7 @@ if (runtimes.includes("esrun") && esrunRows.length === 0) {
 const sections = [
   ["results_rps.hono", () => data.results_rps?.hono, "SECTIONS=rps"],
   ["results_rps.elysia", () => data.results_rps?.elysia, "SECTIONS=rps_elysia"],
+  ["dev_server", () => data.dev_server, "SECTIONS=devserver"],
   [
     "results_rps.hono_sustained",
     () => data.results_rps?.hono_sustained,
