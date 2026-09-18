@@ -337,6 +337,21 @@ fn types_is_refused_and_upgrade_is_a_subcommand() {
     );
 }
 
+/// `upgrade` takes no arguments, but like every other subcommand it answers
+/// `--help` — the top-level help promises each command takes it, and this one
+/// refused it.
+#[test]
+fn upgrade_answers_help() {
+    for flag in ["--help", "-h"] {
+        let out = esdev()
+            .args(["upgrade", flag])
+            .output()
+            .expect("spawn esdev upgrade --help");
+        assert!(out.status.success(), "{flag}: {}", stderr(&out));
+        assert!(stdout(&out).contains("esdev upgrade"), "{}", stdout(&out));
+    }
+}
+
 /// A flag that is taken and dropped is one somebody keeps passing and keeps
 /// believing. `esdev start` does not run your program — it runs a build's
 /// output as a child, under esdev.json's grants — so the run-shaping flags it

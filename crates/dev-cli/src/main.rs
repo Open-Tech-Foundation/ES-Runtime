@@ -247,6 +247,18 @@ it in production.
     Building:  https://esrun.opentechf.org/docs/esdev/build
 ";
 
+const UPGRADE_USAGE: &str = "\
+esdev upgrade — update esdev to the latest release
+
+USAGE:
+    esdev upgrade               Replace this binary with the newest release
+    esdev upgrade -h, --help    Show this help
+
+It finds the latest release, downloads it, and replaces the running binary
+in place — the same machinery `esrun upgrade` runs. There is nothing else
+to configure, and no other argument to give it.
+";
+
 const CREATE_USAGE: &str = "\
 esdev create — a project that already works
 
@@ -424,6 +436,11 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "upgrade" {
             if let Some(extra) = argv.next() {
+                let (flag, value) = split_flag_value(&extra);
+                if value.is_none() && (flag == "-h" || flag == "--help") {
+                    println!("{UPGRADE_USAGE}");
+                    std::process::exit(0);
+                }
                 return Err(format!(
                     "esdev upgrade takes no arguments; got {extra}.\n\n\
                      It replaces this binary with the newest esdev release."

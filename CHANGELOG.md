@@ -21,6 +21,8 @@ namespace) is unstable and may change between minor releases until the API freez
   `packages/types` type tests, add the unused `dropped` binding to its `void`
   tuple, and assert the two `void`-returning calls through a `() => void`
   (a `void` variable annotation and `return <void>` are both lint errors).
+- `esdev upgrade --help` (and `-h`) now prints usage instead of erroring, like
+  every other subcommand the top-level help promises it for.
 
 ## [0.29.0] - 2026-09-15
 
