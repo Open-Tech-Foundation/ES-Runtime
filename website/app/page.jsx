@@ -109,8 +109,8 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Benchmark chart replaces the usage snippet. */}
-          <div className="lg:pl-4">
+          {/* Benchmark card hugs the right edge; the text column hugs the left. */}
+          <div className="w-full lg:max-w-md lg:justify-self-end">
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
               <div className="mb-5 flex items-baseline justify-between">
                 <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
