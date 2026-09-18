@@ -5,7 +5,6 @@
 // fails the build when the error it names stops happening, so a declaration that
 // quietly widened to `any` breaks this file rather than passing it.
 
-import { inventory, metrics, span, subscribe } from "runtime:diagnostics";
 import type {
   AttributeValue,
   Batch,
@@ -19,6 +18,7 @@ import type {
   SpanStatus,
   Subscription,
 } from "runtime:diagnostics";
+import { inventory, metrics, span, subscribe } from "runtime:diagnostics";
 
 // --- subscribe ----------------------------------------------------------------
 
@@ -33,7 +33,7 @@ const sub: Subscription = subscribe({}, (batch: Batch) => {
     const source: "runtime" | "user" = record.source;
     const delay: number = record.startedAt - record.scheduledAt;
     const turn: number = record.tick;
-    void [id, parent, trace, kind, status, source, delay, turn];
+    void [id, parent, trace, kind, status, source, delay, turn, dropped];
   }
 });
 sub.close();
@@ -118,7 +118,29 @@ span("x", { attributes: { nested: { a: 1 } } });
 // frame per span, which this module refuses to capture.
 const origin: number = record.origin;
 
-export { attr, collections, handles, heap, hist, ids, kind, lag, m, nested, origin, p99, pauseP99, processCpu, processUptime, resource, rss, spaces, s, saturation, sub };
+export {
+  attr,
+  collections,
+  handles,
+  heap,
+  hist,
+  ids,
+  kind,
+  lag,
+  m,
+  nested,
+  origin,
+  p99,
+  pauseP99,
+  processCpu,
+  processUptime,
+  resource,
+  rss,
+  s,
+  saturation,
+  spaces,
+  sub,
+};
 
 // --- the two span forms -------------------------------------------------------
 
@@ -129,7 +151,11 @@ handle.end();
 // The callback form: active for that call, and transparent to what it returns.
 const scopedNumber: number = span("work", {}, () => 1);
 const scopedPromise: Promise<string> = span("work", {}, async () => "x");
-const scopedWithAttrs: void = span("work", { attributes: { table: "users" } }, () => {});
+// Transparent to what it returns, even when that is `void`: like above, the
+// `void` result is asserted through a `() => void` rather than a variable.
+const scopedWithAttrs: () => void = () =>
+  span("work", { attributes: { table: "users" } }, () => {});
+scopedWithAttrs();
 
 // @ts-expect-error — the callback takes no arguments; bind what it needs.
 span("work", {}, (a: number) => a);
@@ -137,4 +163,4 @@ span("work", {}, (a: number) => a);
 // @ts-expect-error — and `request` is the runtime's kind, not something to open.
 const notAKind: SpanKind = "microtask";
 
-export { handle, scopedNumber, scopedPromise, scopedWithAttrs, notAKind };
+export { handle, notAKind, scopedNumber, scopedPromise, scopedWithAttrs };

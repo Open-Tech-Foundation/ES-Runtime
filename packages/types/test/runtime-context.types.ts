@@ -11,8 +11,8 @@
 // trailing arguments against the callback's parameters. Getting that wrong is
 // invisible at runtime and ruins the module in an editor.
 
-import { bind, createContext, currentTask, snapshot, withTrace } from "runtime:context";
 import type { Context, ContextOptions, TaskInfo } from "runtime:context";
+import { bind, createContext, currentTask, snapshot, withTrace } from "runtime:context";
 
 // --- createContext ------------------------------------------------------------
 
@@ -51,7 +51,11 @@ const promised: Promise<string> = tenant.run("acme", async () => {
   await null;
   return tenant.get();
 });
-const nothing: void = tenant.run("acme", () => {});
+// ... and when the callback returns nothing, so does `run`. A `void` result
+// cannot sit in a variable, so it is asserted through a `() => void` —
+// which still fails to compile if the declaration ever returns something else.
+const nothing: () => void = () => tenant.run("acme", () => {});
+nothing();
 
 // Trailing arguments are typed against the callback's parameters.
 const summed: number = tenant.run("acme", (a: number, b: number) => a + b, 1, 2);
@@ -136,4 +140,34 @@ tenant.disable();
 // @ts-expect-error — `getStore` is Node's name; here it is `get`.
 tenant.getStore();
 
-export { added, adder, bare, bound, fromSnapshot, fromSnapshotAsync, id, inferred, kind, label, n, named, nothing, options, parent, promised, resume, returned, summed, trace, traced, tracedAsync, typed, unknownValue, value, withArgs, notNullable, task, adder as _adder };
+export {
+  added,
+  adder,
+  adder as _adder,
+  bare,
+  bound,
+  fromSnapshot,
+  fromSnapshotAsync,
+  id,
+  inferred,
+  kind,
+  label,
+  n,
+  named,
+  nothing,
+  notNullable,
+  options,
+  parent,
+  promised,
+  resume,
+  returned,
+  summed,
+  task,
+  trace,
+  traced,
+  tracedAsync,
+  typed,
+  unknownValue,
+  value,
+  withArgs,
+};
