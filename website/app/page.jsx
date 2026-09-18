@@ -1,7 +1,6 @@
 import BenchRoller from "../components/BenchRoller.jsx";
 import CodeTabs from "../components/CodeTabs.jsx";
 import FrameworkTabs from "../components/FrameworkTabs.jsx";
-import RpsChart from "../components/RpsChart.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import SandboxDiagram from "../components/SandboxDiagram.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
@@ -118,10 +117,7 @@ export default function HomePage() {
                   Benchmarks
                 </h2>
               </div>
-              <RpsChart />
-              <div className="mt-5 border-t border-zinc-100 pt-5 dark:border-zinc-800">
-                <BenchRoller />
-              </div>
+              <BenchRoller />
               <a
                 href="/docs/benchmarks"
                 className="mt-5 inline-block text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
