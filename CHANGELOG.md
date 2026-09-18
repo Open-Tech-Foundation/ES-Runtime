@@ -14,6 +14,9 @@ namespace) is unstable and may change between minor releases until the API freez
   `aws-lc-rs` 1.18.1) to fix RUSTSEC-2026-0285 (TLS 1.3 handshake messages
   accepted across encryption-level boundaries). `cargo audit` and
   `cargo deny check` pass again.
+- Drop the stale `Unicode-DFS-2016` allowance from `deny.toml`: `unicode-ident`
+  is now `(MIT OR Apache-2.0) AND Unicode-3.0`, which was already allowed, so
+  the entry matched nothing.
 
 ## [0.29.0] - 2026-09-15
 

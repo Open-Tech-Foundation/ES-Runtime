@@ -39,7 +39,6 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "CC0-1.0",
     # Permissive *data* license — covers the rustls root-certificate bundle
     # (webpki-root-certs), pulled in transitively via reqwest's TLS (D20).
