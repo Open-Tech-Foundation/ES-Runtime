@@ -17,15 +17,6 @@ namespace) is unstable and may change between minor releases until the API freez
 - Drop the stale `Unicode-DFS-2016` allowance from `deny.toml`: `unicode-ident`
   is now `(MIT OR Apache-2.0) AND Unicode-3.0`, which was already allowed, so
   the entry matched nothing.
-- Fix `tsr lint:ci` on main: apply Biome's format/organize-imports fixes in the
-  `packages/types` type tests, add the unused `dropped` binding to its `void`
-  tuple, and assert the two `void`-returning calls through a `() => void`
-  (a `void` variable annotation and `return <void>` are both lint errors).
-- `esdev upgrade --help` (and `-h`) now prints usage instead of erroring, like
-  every other subcommand the top-level help promises it for.
-- `esdev upgrade --dry-run` asks whether a newer release exists and changes
-  nothing: same listing as the upgrade, stops at the comparison, and names
-  the version to `upgrade` to (or that this platform has no build yet).
 
 ## [0.29.0] - 2026-09-15
 

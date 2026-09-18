@@ -24,6 +24,14 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `upgrade --help` (and `-h`) now prints usage instead of erroring, like every
+  other subcommand the top-level help promises it for.
+- `upgrade --dry-run` asks whether a newer release exists and changes nothing:
+  the same listing as the upgrade, stopping at the comparison, naming the
+  version to `upgrade` to (or that this platform has no build yet).
+
 ## [0.7.0] - 2026-09-15
 
 ### Changed

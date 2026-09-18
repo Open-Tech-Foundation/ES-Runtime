@@ -13,6 +13,13 @@ itself.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `tsr lint:ci` on main: apply Biome's format/organize-imports fixes in the
+  type tests, add the unused `dropped` binding to its `void` tuple, and assert
+  the two `void`-returning calls through a `() => void` (a `void` variable
+  annotation and `return <void>` are both lint errors).
+
 ## [0.5.0] - 2026-09-15
 
 ### Added
