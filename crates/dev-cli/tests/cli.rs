@@ -3138,6 +3138,48 @@ fn test_dom_reflects_common_attributes_and_form_defaults() {
 }
 
 #[test]
+fn test_dom_inline_styles_track_the_style_attribute() {
+    let dir = build_dir("t_test_dom_css");
+    write_in(
+        &dir,
+        "styles.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('properties and attributes stay synchronized', () => {\n\
+           const element = document.createElement('div');\n\
+           element.style.width = '10px';\n\
+           element.style.setProperty('--tone', 'red', 'important');\n\
+           assertEquals(element.getAttribute('style'), 'width: 10px; --tone: red !important;');\n\
+           assertEquals(element.style.length, 2);\n\
+           assertEquals(element.style[0], 'width');\n\
+           assertEquals(element.style.getPropertyPriority('--tone'), 'important');\n\
+           assertEquals(element.style.removeProperty('width'), '10px');\n\
+           assertEquals(element.style.width, '');\n\
+           element.setAttribute('style', 'background-color: rgb(1, 2, 3); padding: 1px !important;');\n\
+           assertEquals(element.style.backgroundColor, 'rgb(1, 2, 3)');\n\
+           assertEquals(element.style.padding, '1px');\n\
+           assertEquals(element.style.getPropertyPriority('padding'), 'important');\n\
+         });\n\
+         test('invalid declarations fail loudly', () => {\n\
+           const element = document.createElement('div');\n\
+           assertThrows(() => { element.style.cssText = 'width'; }, SyntaxError);\n\
+           assertThrows(() => element.style.setProperty('width', '1px', 'urgent'), SyntaxError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom styles");
+    assert!(
+        ran.status.success(),
+        "DOM style test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(

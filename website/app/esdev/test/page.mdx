@@ -29,6 +29,8 @@ combinators; unsupported selector syntax throws `SyntaxError`.
 `HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLFormElement`, and
 `HTMLLabelElement` are also available, with common reflected attributes and
 the basic checkbox, radio, and submit-button click defaults.
+Inline styles are supported through `element.style` and stay synchronized with
+the `style` attribute; stylesheet cascade and computed values are not present.
 
 ```sh
 esdev test --dom
