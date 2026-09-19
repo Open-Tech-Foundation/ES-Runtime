@@ -3229,6 +3229,118 @@ fn test_dom_custom_elements_upgrade_and_react_to_tree_changes() {
 }
 
 #[test]
+fn test_dom_custom_element_registry_validates_and_settles_waiters() {
+    let dir = build_dir("t_test_dom_custom_registry");
+    write_in(
+        &dir,
+        "registry.test.mjs",
+        "import { test, assertEquals, assertThrows, assertRejects } from 'runtime:test';\n\
+         test('registry contracts', async () => {\n\
+           assertEquals(customElements.get('x-later'), undefined);\n\
+           assertRejects(() => customElements.whenDefined('plain'), DOMException);\n\
+           assertThrows(() => customElements.define('plain', class Plain extends HTMLElement {}), DOMException);\n\
+           assertThrows(() => customElements.define('x-invalid', class Invalid {}), TypeError);\n\
+           const waiting = customElements.whenDefined('x-later');\n\
+           class Later extends HTMLElement {}\n\
+           customElements.define('x-later', Later);\n\
+           assertEquals(await waiting, Later);\n\
+           assertEquals(customElements.get('x-later'), Later);\n\
+           assertThrows(() => customElements.define('x-later', Later), DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn custom registry test");
+    assert!(
+        ran.status.success(),
+        "registry test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_custom_elements_upgrade_detached_and_parser_nodes() {
+    let dir = build_dir("t_test_dom_custom_upgrade");
+    write_in(
+        &dir,
+        "upgrade.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('detached and parsed upgrades', () => {\n\
+           const calls = [];\n\
+           const detached = document.createElement('x-detached');\n\
+           class Detached extends HTMLElement { constructor() { super(); calls.push('detached constructed'); } connectedCallback() { calls.push('detached connected'); } }\n\
+           customElements.define('x-detached', Detached);\n\
+           assertEquals(detached instanceof Detached, false);\n\
+           customElements.upgrade(detached);\n\
+           assertEquals(detached instanceof Detached, true);\n\
+           document.body.appendChild(detached);\n\
+           class Parsed extends HTMLElement {\n\
+             static observedAttributes = ['state'];\n\
+             constructor() { super(); calls.push('parsed constructed'); }\n\
+             connectedCallback() { calls.push('parsed connected'); }\n\
+             attributeChangedCallback(name, oldValue, newValue) { calls.push(`${name}:${oldValue}:${newValue}`); }\n\
+           }\n\
+           customElements.define('x-parsed', Parsed);\n\
+           document.body.innerHTML = '<x-parsed state=ready></x-parsed>';\n\
+           assertEquals(document.body.firstChild instanceof Parsed, true);\n\
+           assertEquals(calls, ['detached constructed', 'detached connected', 'parsed constructed', 'state:null:ready', 'parsed connected']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn custom upgrade test");
+    assert!(
+        ran.status.success(),
+        "upgrade test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_custom_element_reactions_filter_attributes_and_track_moves() {
+    let dir = build_dir("t_test_dom_custom_reactions");
+    write_in(
+        &dir,
+        "reactions.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('attribute filtering and tree reaction order', () => {\n\
+           const calls = [];\n\
+           class Life extends HTMLElement {\n\
+             static observedAttributes = ['state'];\n\
+             connectedCallback() { calls.push(`connected:${this.id}`); }\n\
+             disconnectedCallback() { calls.push(`disconnected:${this.id}`); }\n\
+             attributeChangedCallback(name, oldValue, newValue) { calls.push(`${name}:${oldValue}:${newValue}`); }\n\
+           }\n\
+           customElements.define('x-life', Life);\n\
+           const one = document.createElement('x-life'); one.id = 'one';\n\
+           const two = document.createElement('x-life'); two.id = 'two';\n\
+           const fragment = document.createDocumentFragment(); fragment.append(one, two);\n\
+           document.body.appendChild(fragment);\n\
+           one.setAttribute('other', 'ignored'); one.setAttribute('state', 'one'); one.setAttribute('state', 'one'); one.removeAttribute('state');\n\
+           document.body.appendChild(one); two.remove();\n\
+           assertEquals(calls, ['connected:one', 'connected:two', 'state:null:one', 'state:one:null', 'disconnected:one', 'connected:one', 'disconnected:two']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn custom reaction test");
+    assert!(
+        ran.status.success(),
+        "reaction test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(

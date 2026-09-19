@@ -101,6 +101,7 @@ export function createElements(tree) {
       definitions.set(name, constructor);
       for (const document of documents) {
         walk(document, (element) => {
+          if (element.localName !== name) return;
           const wasUpgraded = element instanceof constructor;
           upgrade(element);
           if (!wasUpgraded && element.isConnected) react(element, "connectedCallback");

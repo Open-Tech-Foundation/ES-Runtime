@@ -42,6 +42,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM custom elements: `define`, `get`, `whenDefined` and `upgrade`,
   with existing-element upgrades plus connected, disconnected, adopted and
   observed-attribute reactions.
+- Fix custom-element definition so it upgrades and connects only elements of
+  the newly defined name, without replaying lifecycle callbacks on unrelated
+  registered elements.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every
