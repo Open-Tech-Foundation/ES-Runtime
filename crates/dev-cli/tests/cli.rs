@@ -3436,6 +3436,132 @@ fn test_dom_focus_returns_to_body_when_the_active_subtree_is_removed() {
 }
 
 #[test]
+fn test_dom_mutation_observer_delivers_child_list_records_at_microtasks() {
+    let dir = build_dir("t_test_dom_mutation_child_list");
+    write_in(
+        &dir,
+        "child-list.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('child-list records batch until the microtask checkpoint', async () => {\n\
+           const parent = document.createElement('section'); document.body.appendChild(parent);\n\
+           const first = document.createElement('i'); const second = document.createElement('b');\n\
+           const deliveries = []; const observer = new MutationObserver((records, same) => deliveries.push([same === observer, records]));\n\
+           observer.observe(parent, { childList: true });\n\
+           parent.append(first, second); parent.removeChild(first);\n\
+           assertEquals(deliveries.length, 0); await Promise.resolve();\n\
+           assertEquals(deliveries.length, 1);\n\
+           const records = deliveries[0][1]; assertEquals(deliveries[0][0], true); assertEquals(records.length, 3);\n\
+           assertEquals(records.map((record) => [record.type, record.target, record.addedNodes.item(0), record.removedNodes.item(0), record.previousSibling, record.nextSibling]), [\n\
+             ['childList', parent, first, null, null, null],\n\
+             ['childList', parent, second, null, first, null],\n\
+             ['childList', parent, null, first, null, second],\n\
+           ]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM mutation child-list test");
+    assert!(
+        ran.status.success(),
+        "mutation child-list test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_mutation_observer_filters_attributes_and_preserves_old_values() {
+    let dir = build_dir("t_test_dom_mutation_attributes");
+    write_in(
+        &dir,
+        "attributes.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('attribute filters and old values', async () => {\n\
+           const element = document.createElement('div'); document.body.appendChild(element);\n\
+           const observer = new MutationObserver(() => {});\n\
+           observer.observe(element, { attributes: true, attributeFilter: ['state'], attributeOldValue: true });\n\
+           element.setAttribute('other', 'ignored'); element.setAttribute('state', 'first'); element.setAttribute('state', 'second'); element.removeAttribute('state');\n\
+           const records = observer.takeRecords();\n\
+           assertEquals(records.map((record) => [record.attributeName, record.oldValue, record.attributeNamespace]), [['state', null, null], ['state', 'first', null], ['state', 'second', null]]);\n\
+           assertThrows(() => observer.observe(element, {}), TypeError);\n\
+           assertThrows(() => observer.observe(element, { attributes: false, attributeOldValue: true }), TypeError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM mutation attribute test");
+    assert!(
+        ran.status.success(),
+        "mutation attribute test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_mutation_observer_tracks_subtree_character_data_and_disconnects() {
+    let dir = build_dir("t_test_dom_mutation_character_data");
+    write_in(
+        &dir,
+        "character-data.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('subtree character data and observer lifecycle', async () => {\n\
+           const parent = document.createElement('div'); const child = document.createElement('span'); const text = document.createTextNode('before');\n\
+           child.appendChild(text); parent.appendChild(child); document.body.appendChild(parent);\n\
+           const calls = []; const observer = new MutationObserver((records) => calls.push(records));\n\
+           observer.observe(parent, { characterData: true, characterDataOldValue: true, subtree: true });\n\
+           text.data = 'after'; await Promise.resolve();\n\
+           assertEquals(calls.length, 1); assertEquals(calls[0].map((record) => [record.type, record.target, record.oldValue]), [['characterData', text, 'before']]);\n\
+           observer.disconnect(); text.data = 'final'; await Promise.resolve();\n\
+           assertEquals(calls.length, 1); assertEquals(observer.takeRecords(), []);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM mutation character-data test");
+    assert!(
+        ran.status.success(),
+        "mutation character-data test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_mutation_observer_reschedules_changes_made_by_its_callback() {
+    let dir = build_dir("t_test_dom_mutation_reschedule");
+    write_in(
+        &dir,
+        "reschedule.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('callback changes are delivered in a later microtask', async () => {\n\
+           const element = document.createElement('div'); document.body.appendChild(element); const batches = [];\n\
+           const observer = new MutationObserver((records) => { batches.push(records.map((record) => record.attributeName)); if (batches.length === 1) element.setAttribute('second', 'yes'); });\n\
+           observer.observe(element, { attributes: true }); element.setAttribute('first', 'yes');\n\
+           await Promise.resolve(); assertEquals(batches, [['first']]);\n\
+           await Promise.resolve(); assertEquals(batches, [['first'], ['second']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM mutation reschedule test");
+    assert!(
+        ran.status.success(),
+        "mutation reschedule test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_window_location_and_history_are_in_memory() {
     let dir = build_dir("t_test_dom_history");
     write_in(

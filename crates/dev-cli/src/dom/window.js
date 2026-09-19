@@ -143,6 +143,80 @@ class NeverObserver {
   takeRecords() { return []; }
 }
 
+class SnapshotNodeList {
+  constructor(values) {
+    this.values = [...values];
+    for (const [index, value] of this.values.entries()) this[index] = value;
+  }
+  get length() { return this.values.length; }
+  item(index) { return this.values[Number(index)] ?? null; }
+  [Symbol.iterator]() { return this.values[Symbol.iterator](); }
+}
+
+const mutationObservers = new Set();
+let mutationDeliveryQueued = false;
+function scheduleMutationDelivery() {
+  if (mutationDeliveryQueued) return;
+  mutationDeliveryQueued = true;
+  queueMicrotask(() => {
+    mutationDeliveryQueued = false;
+    for (const observer of mutationObservers) {
+      const records = observer.takeRecords();
+      if (records.length) observer.callback(records, observer);
+    }
+  });
+}
+
+class MutationObserver {
+  constructor(callback) {
+    if (typeof callback !== "function") throw new TypeError("MutationObserver callback must be a function");
+    this.callback = callback;
+    this.records = [];
+    this.registrations = new Map();
+    mutationObservers.add(this);
+  }
+  observe(target, options = {}) {
+    if (!(target instanceof tree.Node)) throw new TypeError("MutationObserver target must be a Node");
+    const settings = { ...options };
+    if (settings.attributeOldValue || settings.attributeFilter) settings.attributes ??= true;
+    if (settings.characterDataOldValue) settings.characterData ??= true;
+    for (const type of ["attributes", "childList", "characterData", "subtree"]) settings[type] = Boolean(settings[type]);
+    if (!settings.attributes && !settings.childList && !settings.characterData) throw new TypeError("MutationObserver must observe at least one mutation type");
+    if (settings.attributeOldValue && !settings.attributes) throw new TypeError("attributeOldValue requires attributes");
+    if (settings.attributeFilter && !settings.attributes) throw new TypeError("attributeFilter requires attributes");
+    if (settings.characterDataOldValue && !settings.characterData) throw new TypeError("characterDataOldValue requires characterData");
+    if (settings.attributeFilter) settings.attributeFilter = Array.from(settings.attributeFilter, String);
+    this.registrations.set(target, settings);
+  }
+  disconnect() { this.registrations.clear(); this.records.length = 0; }
+  takeRecords() { const records = this.records; this.records = []; return records; }
+  _enqueue(change) {
+    let settings;
+    for (let current = change.target; current; current = current.parentNode) {
+      const candidate = this.registrations.get(current);
+      if (candidate && (current === change.target || candidate.subtree)) { settings = candidate; break; }
+    }
+    if (!settings || !settings[change.type]) return;
+    if (change.type === "attributes" && settings.attributeFilter && !settings.attributeFilter.includes(change.attributeName)) return;
+    this.records.push({
+      type: change.type,
+      target: change.target,
+      addedNodes: new SnapshotNodeList(change.addedNodes ?? []),
+      removedNodes: new SnapshotNodeList(change.removedNodes ?? []),
+      previousSibling: change.previousSibling ?? null,
+      nextSibling: change.nextSibling ?? null,
+      attributeName: change.attributeName ?? null,
+      attributeNamespace: null,
+      oldValue: change.type === "attributes" ? settings.attributeOldValue ? change.oldValue : null : change.type === "characterData" && settings.characterDataOldValue ? change.oldValue : null,
+    });
+    scheduleMutationDelivery();
+  }
+}
+
+Object.defineProperty(document, "_queueMutation", {
+  value(change) { for (const observer of mutationObservers) observer._enqueue(change); },
+});
+
 function getComputedStyle(element) {
   const source = element.style;
   const read = {
@@ -195,6 +269,7 @@ Object.assign(globalThis, {
   IntersectionObserver: NeverObserver,
   Location,
   MediaQueryList,
+  MutationObserver,
   ResizeObserver: NeverObserver,
   Storage,
   cancelAnimationFrame,

@@ -208,7 +208,10 @@ No `CSSStyleSheet`, no `document.styleSheets`, no `adoptedStyleSheets`. A `<styl
 
 **Constructible, never firing**
 
-`matchMedia` (returns a `MediaQueryList` that never matches and never changes), `IntersectionObserver`, `ResizeObserver`, `MutationObserver` excepted. These exist so components that observe on mount do not crash; they will not deliver entries, and the docs must say so rather than letting someone discover it in a failing test.
+`matchMedia` (returns a `MediaQueryList` that never matches and never changes),
+`IntersectionObserver`, and `ResizeObserver`. These exist so components that
+observe on mount do not crash; they will not deliver entries, and the docs must
+say so rather than letting someone discover it in a failing test.
 
 **Custom elements: in.**
 

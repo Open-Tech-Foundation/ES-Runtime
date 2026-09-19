@@ -5,6 +5,7 @@
 
 const SLOT = Symbol("esdev DOM slots");
 const ATTRS = Symbol("esdev DOM attributes");
+const DATA = Symbol("esdev DOM character data");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -215,6 +216,7 @@ export function createTree(events = {}) {
         if (previous) slots(previous).next = candidate; else target.first = candidate;
         if (next) slots(next).previous = candidate; else target.last = candidate;
         this._touch();
+        document._queueMutation?.({ type: "childList", target: this, addedNodes: [candidate], removedNodes: [], previousSibling: previous, nextSibling: next });
       }
     }
 
@@ -222,12 +224,15 @@ export function createTree(events = {}) {
       child.ownerDocument?._activeElementRemoved?.(child);
       const state = slots(child);
       const parent = slots(this);
+      const previousSibling = state.previous;
+      const nextSibling = state.next;
       if (state.previous) slots(state.previous).next = state.next; else parent.first = state.next;
       if (state.next) slots(state.next).previous = state.previous; else parent.last = state.previous;
       state.parent = null;
       state.previous = null;
       state.next = null;
       this._touch();
+      (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes: [], removedNodes: [child], previousSibling, nextSibling });
     }
 
     _touch() { slots(this.ownerDocument ?? this).version += 1; }
@@ -266,7 +271,16 @@ export function createTree(events = {}) {
   }
 
   class CharacterData extends Node {
-    constructor(type, name, data, ownerDocument) { super(type, name, ownerDocument); this.data = String(data); }
+    constructor(type, name, data, ownerDocument) {
+      super(type, name, ownerDocument);
+      Object.defineProperty(this, DATA, { value: String(data), writable: true });
+    }
+    get data() { return this[DATA]; }
+    set data(value) {
+      const oldValue = this[DATA];
+      this[DATA] = String(value);
+      this.ownerDocument?._queueMutation?.({ type: "characterData", target: this, oldValue });
+    }
     get nodeValue() { return this.data; }
     set nodeValue(value) { this.data = String(value ?? ""); }
   }
@@ -327,10 +341,30 @@ export function createTree(events = {}) {
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
-    setAttribute(name, value) { this.attributes.setNamedItem(new Attr(String(name), value, this.ownerDocument)); this._touch(); }
-    setAttributeNode(attribute) { const previous = this.attributes.setNamedItem(attribute); this._touch(); return previous; }
-    removeAttribute(name) { const attribute = this.getAttributeNode(name); if (attribute) { this.attributes.removeNamedItem(name); this._touch(); } }
-    removeAttributeNode(attribute) { if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element."); const removed = this.attributes.removeNamedItem(attribute.name); this._touch(); return removed; }
+    setAttribute(name, value) {
+      name = String(name);
+      const oldValue = this.getAttribute(name);
+      this.attributes.setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
+      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
+    }
+    setAttributeNode(attribute) {
+      const previous = this.attributes.setNamedItem(attribute); this._touch();
+      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: previous?.value ?? null });
+      return previous;
+    }
+    removeAttribute(name) {
+      const attribute = this.getAttributeNode(name);
+      if (attribute) {
+        this.attributes.removeNamedItem(name); this._touch();
+        this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
+      }
+    }
+    removeAttributeNode(attribute) {
+      if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element.");
+      const removed = this.attributes.removeNamedItem(attribute.name); this._touch();
+      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: removed.name, oldValue: removed.value });
+      return removed;
+    }
     get id() { return this.getAttribute("id") ?? ""; }
     set id(value) { this.setAttribute("id", value); }
     get className() { return this.getAttribute("class") ?? ""; }
