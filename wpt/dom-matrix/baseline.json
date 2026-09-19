@@ -4,7 +4,11 @@
       "group": "tree",
       "name": "append-and-replace-children",
       "esdev": {
-        "error": "TypeError"
+        "result": [
+          "two",
+          1,
+          "b"
+        ]
       },
       "happy-dom": {
         "result": [
@@ -20,7 +24,7 @@
           "b"
         ]
       },
-      "status": "gap"
+      "status": "match"
     },
     {
       "group": "tree",
@@ -52,7 +56,11 @@
       "group": "tree",
       "name": "deep-clone-is-independent",
       "esdev": {
-        "error": "TypeError"
+        "result": [
+          "one",
+          "two",
+          true
+        ]
       },
       "happy-dom": {
         "result": [
@@ -68,13 +76,16 @@
           true
         ]
       },
-      "status": "gap"
+      "status": "match"
     },
     {
       "group": "tree",
       "name": "collections-stay-live",
       "esdev": {
-        "error": "TypeError"
+        "result": [
+          1,
+          "b"
+        ]
       },
       "happy-dom": {
         "result": [
@@ -88,7 +99,7 @@
           "b"
         ]
       },
-      "status": "gap"
+      "status": "match"
     },
     {
       "group": "events",
@@ -182,7 +193,11 @@
       "group": "parsing",
       "name": "raw-text-is-not-parsed-as-elements",
       "esdev": {
-        "error": "TypeError"
+        "result": [
+          "script",
+          "one < two",
+          0
+        ]
       },
       "happy-dom": {
         "result": [
@@ -198,7 +213,7 @@
           0
         ]
       },
-      "status": "gap"
+      "status": "match"
     },
     {
       "group": "parsing",
@@ -494,8 +509,7 @@
     }
   ],
   "summary": {
-    "gap": 4,
-    "match": 15,
+    "match": 19,
     "intentional-limit": 1,
     "reference-disagreement": 4
   }

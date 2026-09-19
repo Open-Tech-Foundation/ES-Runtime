@@ -4007,6 +4007,89 @@ fn test_dom_value_as_accessors_reject_unsupported_input_types() {
 }
 
 #[test]
+fn test_dom_replace_children_coerces_strings_and_moves_fragments() {
+    let dir = build_dir("t_test_dom_replace_children");
+    write_in(
+        &dir,
+        "replace-children.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('replaceChildren coerces strings and empties fragments', () => {
+  const host = document.createElement('div'); host.append('old', document.createElement('i'));
+  const fragment = document.createDocumentFragment(); fragment.append(document.createElement('b'), 'tail');
+  host.replaceChildren('head', fragment);
+  assertEquals([host.innerHTML, fragment.childNodes.length], ['head<b></b>tail', 0]);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM replaceChildren test");
+    assert!(
+        ran.status.success(),
+        "replaceChildren test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_element_child_accessors_skip_non_elements() {
+    let dir = build_dir("t_test_dom_element_child_accessors");
+    write_in(
+        &dir,
+        "element-children.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('element child accessors skip text and comments', () => {
+  const parent = document.createElement('div'); const first = document.createElement('i'); const last = document.createElement('b');
+  parent.append('before', first, document.createComment('note'), last, 'after');
+  assertEquals([parent.childElementCount, parent.firstElementChild, parent.lastElementChild], [2, first, last]);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM element child accessors test");
+    assert!(
+        ran.status.success(),
+        "element child accessors test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_element_sibling_accessors_follow_tree_mutations() {
+    let dir = build_dir("t_test_dom_element_sibling_accessors");
+    write_in(
+        &dir,
+        "element-siblings.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('element sibling accessors follow insertions and removals', () => {
+  const parent = document.createElement('div'); const first = document.createElement('i'); const middle = document.createElement('b'); const last = document.createElement('em');
+  parent.append(first, 'text', middle, document.createComment('note'), last);
+  assertEquals([middle.previousElementSibling, middle.nextElementSibling], [first, last]);
+  middle.remove(); assertEquals([first.nextElementSibling, last.previousElementSibling], [last, first]);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM element sibling accessors test");
+    assert!(
+        ran.status.success(),
+        "element sibling accessors test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_submit_buttons_honor_form_settings_and_validation_bypasses() {
     let dir = build_dir("t_test_dom_submit_settings");
     write_in(

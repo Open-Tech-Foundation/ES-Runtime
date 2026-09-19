@@ -105,6 +105,14 @@ export function createTree(events = {}) {
     get lastChild() { return slots(this).last; }
     get previousSibling() { return slots(this).previous; }
     get nextSibling() { return slots(this).next; }
+    get previousElementSibling() {
+      for (let sibling = this.previousSibling; sibling; sibling = sibling.previousSibling) if (sibling instanceof Element) return sibling;
+      return null;
+    }
+    get nextElementSibling() {
+      for (let sibling = this.nextSibling; sibling; sibling = sibling.nextSibling) if (sibling instanceof Element) return sibling;
+      return null;
+    }
     get parentElement() { return this.parentNode instanceof Element ? this.parentNode : null; }
     get childNodes() {
       const state = slots(this);
@@ -175,6 +183,11 @@ export function createTree(events = {}) {
 
     append(...items) { this._insertMany(asNodes(items, this.ownerDocument ?? this, Node), null); }
     prepend(...items) { this._insertMany(asNodes(items, this.ownerDocument ?? this, Node), this.firstChild); }
+    replaceChildren(...items) {
+      const nodes = asNodes(items, this.ownerDocument ?? this, Node);
+      while (this.firstChild) this._remove(this.firstChild);
+      this._insertMany(nodes, null);
+    }
 
     _insertMany(nodes, before) {
       for (const node of nodes) this._preInsert(node, before);
@@ -387,6 +400,9 @@ export function createTree(events = {}) {
       const state = slots(this);
       return state.children ??= new HTMLCollection(this, (root) => Array.from(root._children()).filter((node) => node instanceof Element));
     }
+    get firstElementChild() { return this.children.item(0); }
+    get lastElementChild() { return this.children.item(this.children.length - 1); }
+    get childElementCount() { return this.children.length; }
     getElementsByTagName(name) {
       name = String(name);
       return new HTMLCollection(this, (root) => collect(root, (element) => name === "*" || element.localName === name));
