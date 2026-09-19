@@ -4173,6 +4173,88 @@ test('requestSubmit rejects a non-submit input', () => {
 }
 
 #[test]
+fn test_dom_reset_button_restores_dirty_control_state() {
+    let dir = build_dir("t_test_dom_reset_button");
+    write_in(
+        &dir,
+        "reset-button.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('reset button restores dirty input state', () => {
+  const form = document.createElement('form'); const text = document.createElement('input'); text.defaultValue = 'markup'; const check = document.createElement('input'); check.type = 'checkbox'; check.defaultChecked = true; const reset = document.createElement('button'); reset.type = 'reset'; form.append(text, check, reset); document.body.appendChild(form);
+  text.value = 'changed'; check.checked = false; reset.click();
+  assertEquals([text.value, check.checked], ['markup', true]);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM reset button test");
+    assert!(
+        ran.status.success(),
+        "reset button test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_reset_input_restores_select_and_textarea_state() {
+    let dir = build_dir("t_test_dom_reset_input");
+    write_in(
+        &dir,
+        "reset-input.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('reset input restores select and textarea state', () => {
+  const form = document.createElement('form'); const select = document.createElement('select'); const first = document.createElement('option'); first.value = 'one'; const second = document.createElement('option'); second.value = 'two'; second.defaultSelected = true; select.append(first, second); const area = document.createElement('textarea'); area.defaultValue = 'markup'; const reset = document.createElement('input'); reset.type = 'reset'; form.append(select, area, reset); document.body.appendChild(form);
+  select.value = 'one'; area.value = 'changed'; reset.click();
+  assertEquals([select.value, area.value], ['two', 'markup']);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM reset input test");
+    assert!(
+        ran.status.success(),
+        "reset input test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_reset_control_honors_cancelled_events_and_disabled_state() {
+    let dir = build_dir("t_test_dom_reset_cancellation");
+    write_in(
+        &dir,
+        "reset-cancellation.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('reset activation respects cancellation and disabled controls', () => {
+  const form = document.createElement('form'); const text = document.createElement('input'); text.defaultValue = 'markup'; const reset = document.createElement('button'); reset.type = 'reset'; form.append(text, reset); document.body.appendChild(form);
+  text.value = 'changed'; form.addEventListener('reset', (event) => event.preventDefault(), { once: true }); reset.click(); assertEquals(text.value, 'changed');
+  reset.disabled = true; reset.click(); assertEquals(text.value, 'changed');
+  reset.disabled = false; reset.click(); assertEquals(text.value, 'markup');
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM reset cancellation test");
+    assert!(
+        ran.status.success(),
+        "reset cancellation test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

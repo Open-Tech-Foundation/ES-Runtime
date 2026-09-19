@@ -49,6 +49,8 @@ Form action, method, encoding, target, and no-validate settings are reflected;
 submit-button clicks and `requestSubmit()` dispatch events but never perform
 navigation. `button` and `input[type="submit"]` controls expose their reflected
 per-submitter form settings and can bypass validation with `formNoValidate`.
+`button[type="reset"]` and `input[type="reset"]` activate the form's
+cancelable reset algorithm.
 Inline styles are supported through `element.style` and stay synchronized with
 the `style` attribute. `getComputedStyle` exposes those inline values only;
 stylesheet cascade and resolved values are not present.

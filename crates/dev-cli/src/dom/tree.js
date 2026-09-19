@@ -434,6 +434,7 @@ export function createTree(events = {}) {
         this.checked = true;
       }
       if (this.type === "submit") this.form?.requestSubmit(this);
+      if (this.type === "reset") this.form?.reset();
     }
   }
 
@@ -441,8 +442,9 @@ export function createTree(events = {}) {
     click() {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
-      if (!this.dispatchEvent(event) || this.type !== "submit") return;
-      this.form?.requestSubmit(this);
+      if (!this.dispatchEvent(event)) return;
+      if (this.type === "submit") this.form?.requestSubmit(this);
+      if (this.type === "reset") this.form?.reset();
     }
   }
 

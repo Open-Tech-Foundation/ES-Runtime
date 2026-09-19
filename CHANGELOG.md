@@ -60,6 +60,7 @@ namespace) is unstable and may change between minor releases until the API freez
   defaults without performing navigation.
 - Add esdev DOM `input[type="submit"]` activation and reflected per-submitter
   form settings.
+- Add esdev DOM button and input reset-control activation.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.
