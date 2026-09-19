@@ -38,6 +38,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add structural esdev DOM selector pseudo-classes: root/empty, child and type
   positions, `:nth-*()` formulas, and focus-state matching.
 - Add esdev DOM selector matching for form/link state and `:scope`.
+- Add esdev DOM Range boundary points, text extraction, comparisons, and
+  contextual fragment creation.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

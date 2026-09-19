@@ -3414,6 +3414,95 @@ fn test_dom_reflects_common_attributes_and_form_defaults() {
 }
 
 #[test]
+fn test_dom_range_tracks_and_validates_boundary_points() {
+    let dir = build_dir("t_test_dom_range_boundaries");
+    write_in(
+        &dir,
+        "boundaries.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('boundary setters collapse and reject invalid offsets', () => {\n\
+           const parent = document.createElement('div'); const first = document.createElement('i'); const second = document.createElement('b'); parent.append(first, second); document.body.appendChild(parent);\n\
+           const range = document.createRange(); assertEquals(range instanceof Range, true); assertEquals(range.collapsed, true);\n\
+           range.setStart(parent, 1); range.setEnd(parent, 2); assertEquals([range.startOffset, range.endOffset, range.collapsed], [1, 2, false]);\n\
+           range.setStart(parent, 2); assertEquals([range.startOffset, range.endOffset, range.collapsed], [2, 2, true]);\n\
+           range.setEnd(parent, 0); assertEquals([range.startOffset, range.endOffset, range.collapsed], [0, 0, true]);\n\
+           range.setStartBefore(second); range.setEndAfter(second); assertEquals([range.startOffset, range.endOffset], [1, 2]);\n\
+           assertThrows(() => range.setStart(parent, 3), DOMException); assertThrows(() => range.setEnd(parent, -1), DOMException);\n\
+           const other = new Document().createElement('div'); assertThrows(() => range.setStart(other, 0), DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range boundary test");
+    assert!(
+        ran.status.success(),
+        "range boundary test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_range_extracts_text_across_tree_boundaries() {
+    let dir = build_dir("t_test_dom_range_text");
+    write_in(
+        &dir,
+        "text.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('range text walks text nodes between boundaries', () => {\n\
+           document.body.innerHTML = '<p>one <b>two</b> three</p>'; const paragraph = document.querySelector('p');\n\
+           const first = paragraph.firstChild; const last = paragraph.lastChild; const range = document.createRange();\n\
+           range.setStart(first, 1); range.setEnd(last, 2); assertEquals(range.toString(), 'ne two t');\n\
+           const selected = document.createRange(); selected.selectNode(paragraph.querySelector('b'));\n\
+           assertEquals(selected.toString(), 'two'); assertEquals(selected.commonAncestorContainer, paragraph);\n\
+           assertEquals(range.compareBoundaryPoints(Range.START_TO_START, selected), -1);\n\
+           assertEquals(range.compareBoundaryPoints(Range.END_TO_END, selected), 1);\n\
+           range.collapse(true); assertEquals(range.toString(), '');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range text test");
+    assert!(
+        ran.status.success(),
+        "range text test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_range_creates_contextual_fragments() {
+    let dir = build_dir("t_test_dom_range_fragment");
+    write_in(
+        &dir,
+        "fragment.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('contextual fragments use the start container context', () => {\n\
+           const host = document.createElement('section'); const range = document.createRange(); document.body.appendChild(host); range.selectNodeContents(host);\n\
+           const fragment = range.createContextualFragment('<em class=note>new</em><!--tail-->');\n\
+           assertEquals(fragment.nodeType, Node.DOCUMENT_FRAGMENT_NODE); assertEquals(fragment.firstChild.localName, 'em'); assertEquals(fragment.firstChild.className, 'note');\n\
+           host.appendChild(fragment); assertEquals(host.innerHTML, '<em class=\"note\">new</em><!--tail-->');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range fragment test");
+    assert!(
+        ran.status.success(),
+        "range fragment test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(

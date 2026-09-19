@@ -6,6 +6,7 @@ import { createParsing } from "runtime:dom/parse";
 import { createSelectors } from "runtime:dom/select";
 import { createCss } from "runtime:dom/css";
 import { createElements } from "runtime:dom/elements";
+import { createRanges } from "runtime:dom/range";
 
 const events = createEvents();
 const tree = createTree(events);
@@ -30,6 +31,8 @@ parse.install();
 selectors.install();
 css.install();
 const customElements = elements.install(document);
+const ranges = createRanges(tree, parse);
+ranges.install(document);
 
 let activeElement = body;
 Object.defineProperty(document, "activeElement", { get: () => activeElement });
@@ -271,6 +274,7 @@ Object.assign(globalThis, {
   MediaQueryList,
   MutationObserver,
   ResizeObserver: NeverObserver,
+  Range: ranges.Range,
   Storage,
   cancelAnimationFrame,
   getComputedStyle,

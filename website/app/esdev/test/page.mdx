@@ -43,6 +43,8 @@ dispatch the standard focus event sequence.
 `MutationObserver` records child-list, attribute, and character-data changes
 and delivers them at the microtask checkpoint; subtree, attribute-filter, and
 old-value options are supported.
+`document.createRange()` supports node and text boundary points, text extraction,
+boundary comparisons, and `createContextualFragment()`.
 The DOM realm also includes in-memory `location`, `history`, `localStorage`,
 and `sessionStorage`. Animation frames use the test clock, while media, resize,
 and intersection observers are safe never-firing stubs.
