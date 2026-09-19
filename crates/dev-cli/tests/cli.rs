@@ -3503,6 +3503,89 @@ fn test_dom_range_creates_contextual_fragments() {
 }
 
 #[test]
+fn test_dom_range_inserts_nodes_at_text_and_element_boundaries() {
+    let dir = build_dir("t_test_dom_range_insert");
+    write_in(
+        &dir,
+        "insert.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('insertNode splits text and honors child offsets', () => {\n\
+           const paragraph = document.createElement('p'); const text = document.createTextNode('ab'); paragraph.appendChild(text); document.body.appendChild(paragraph);\n\
+           const inside = document.createRange(); inside.setStart(text, 1); const emphasis = document.createElement('em'); emphasis.textContent = 'x'; inside.insertNode(emphasis);\n\
+           assertEquals(paragraph.innerHTML, 'a<em>x</em>b');\n\
+           const edge = document.createRange(); edge.setStart(paragraph, 0); const strong = document.createElement('strong'); strong.textContent = 'first'; edge.insertNode(strong);\n\
+           assertEquals(paragraph.innerHTML, '<strong>first</strong>a<em>x</em>b');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range insertion test");
+    assert!(
+        ran.status.success(),
+        "range insertion test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_range_deletes_same_text_and_child_boundaries() {
+    let dir = build_dir("t_test_dom_range_delete_simple");
+    write_in(
+        &dir,
+        "delete-simple.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('deleteContents removes text slices and complete child nodes', () => {\n\
+           const text = document.createTextNode('abcdef'); document.body.appendChild(text); const characters = document.createRange();\n\
+           characters.setStart(text, 2); characters.setEnd(text, 4); characters.deleteContents();\n\
+           assertEquals(text.data, 'abef'); assertEquals([characters.startOffset, characters.endOffset, characters.collapsed], [2, 2, true]);\n\
+           const parent = document.createElement('div'); parent.innerHTML = '<i>one</i><b>two</b><em>three</em>'; document.body.appendChild(parent); const children = document.createRange();\n\
+           children.setStart(parent, 1); children.setEnd(parent, 3); children.deleteContents();\n\
+           assertEquals(parent.innerHTML, '<i>one</i>'); assertEquals([children.startOffset, children.endOffset], [1, 1]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM simple range deletion test");
+    assert!(
+        ran.status.success(),
+        "simple range deletion test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_range_deletes_across_nested_text_boundaries() {
+    let dir = build_dir("t_test_dom_range_delete_nested");
+    write_in(
+        &dir,
+        "delete-nested.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('deleteContents removes covered descendants between partial text nodes', () => {\n\
+           document.body.innerHTML = '<p>one <b>two</b> three</p>'; const paragraph = document.querySelector('p'); const range = document.createRange();\n\
+           range.setStart(paragraph.firstChild, 2); range.setEnd(paragraph.lastChild, 2); range.deleteContents();\n\
+           assertEquals(paragraph.innerHTML, 'onhree'); assertEquals(range.collapsed, true); assertEquals(range.toString(), '');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM nested range deletion test");
+    assert!(
+        ran.status.success(),
+        "nested range deletion test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(

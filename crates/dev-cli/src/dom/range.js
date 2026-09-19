@@ -48,6 +48,14 @@ export function createRanges({ Node, Element, Text }, parse) {
     return values;
   }
 
+  function descendants(node, values = []) {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      values.push(child);
+      descendants(child, values);
+    }
+    return values;
+  }
+
   class Range {
     static START_TO_START = 0;
     static START_TO_END = 1;
@@ -101,6 +109,47 @@ export function createRanges({ Node, Element, Text }, parse) {
         value += text.data.slice(start, end);
       }
       return value;
+    }
+    insertNode(node) {
+      if (!(node instanceof Node)) throw new TypeError("insertNode expects a Node");
+      const container = this.startContainer;
+      if (container instanceof Text) {
+        const parent = container.parentNode;
+        if (!parent) rangeError("HierarchyRequestError", "Cannot insert beside a detached text node.");
+        const tail = container.data.slice(this.startOffset);
+        container.data = container.data.slice(0, this.startOffset);
+        const reference = tail === "" ? container.nextSibling : this.document.createTextNode(tail);
+        if (tail !== "") parent.insertBefore(reference, container.nextSibling);
+        parent.insertBefore(node, reference);
+        return;
+      }
+      container.insertBefore(node, container.childNodes.item(this.startOffset));
+    }
+    deleteContents() {
+      if (this.collapsed) return;
+      if (this.startContainer === this.endContainer && this.startContainer instanceof Text) {
+        const text = this.startContainer;
+        text.data = text.data.slice(0, this.startOffset) + text.data.slice(this.endOffset);
+        this.setEnd(text, this.startOffset);
+        return;
+      }
+      const start = { node: this.startContainer, offset: this.startOffset };
+      const end = { node: this.endContainer, offset: this.endOffset };
+      if (start.node instanceof Text) start.node.data = start.node.data.slice(0, start.offset);
+      if (end.node instanceof Text) end.node.data = end.node.data.slice(end.offset);
+      const selected = [];
+      for (const node of descendants(root(start.node))) {
+        if (!node.parentNode) continue;
+        const index = childIndex(node);
+        if (comparePoints(node.parentNode, index, start.node, start.offset) >= 0
+          && comparePoints(node.parentNode, index + 1, end.node, end.offset) <= 0
+          && !selected.some((ancestor) => {
+            for (let current = node.parentNode; current; current = current.parentNode) if (current === ancestor) return true;
+            return false;
+          })) selected.push(node);
+      }
+      for (const node of selected) node.remove();
+      this.setEnd(this.startContainer, this.startOffset);
     }
     createContextualFragment(source) {
       const container = this.startContainer instanceof Element ? this.startContainer : this.startContainer.parentElement ?? this.document.body;
