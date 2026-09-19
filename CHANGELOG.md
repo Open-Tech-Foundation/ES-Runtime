@@ -10,9 +10,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
-- Add a 24-case esdev DOM behavior matrix that compares layout-free behavior
-  with jsdom and happy-dom, distinguishing matches, intentional limits, and
-  implementation gaps.
+- Add a 24-case esdev DOM behavior matrix that uses headless Chrome as the
+  layout-free behavior oracle while reporting jsdom and happy-dom compatibility
+  differences separately.
 - Add esdev DOM element-child traversal accessors and `replaceChildren()`.
 - Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
   It parses explicit nesting, void elements, attributes, comments, templates,

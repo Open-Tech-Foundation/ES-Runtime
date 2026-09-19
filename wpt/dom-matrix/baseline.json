@@ -3,6 +3,13 @@
     {
       "group": "tree",
       "name": "append-and-replace-children",
+      "chrome": {
+        "result": [
+          "two",
+          1,
+          "b"
+        ]
+      },
       "esdev": {
         "result": [
           "two",
@@ -24,11 +31,19 @@
           "b"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "tree",
       "name": "fragment-contents-move-on-append",
+      "chrome": {
+        "result": [
+          0,
+          2,
+          "<i></i><b></b>"
+        ]
+      },
       "esdev": {
         "result": [
           0,
@@ -50,11 +65,19 @@
           "<i></i><b></b>"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "tree",
       "name": "deep-clone-is-independent",
+      "chrome": {
+        "result": [
+          "one",
+          "two",
+          true
+        ]
+      },
       "esdev": {
         "result": [
           "one",
@@ -76,11 +99,18 @@
           true
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "tree",
       "name": "collections-stay-live",
+      "chrome": {
+        "result": [
+          1,
+          "b"
+        ]
+      },
       "esdev": {
         "result": [
           1,
@@ -99,11 +129,19 @@
           "b"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "events",
       "name": "capturing-and-bubbling-order",
+      "chrome": {
+        "result": [
+          "outer-capture",
+          "target",
+          "outer-bubble"
+        ]
+      },
       "esdev": {
         "result": [
           "outer-capture",
@@ -125,11 +163,15 @@
           "outer-bubble"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "events",
       "name": "cancelled-event-returns-false",
+      "chrome": {
+        "result": false
+      },
       "esdev": {
         "result": false
       },
@@ -139,11 +181,15 @@
       "jsdom": {
         "result": false
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "events",
       "name": "once-listener-runs-once",
+      "chrome": {
+        "result": 1
+      },
       "esdev": {
         "result": 1
       },
@@ -153,11 +199,17 @@
       "jsdom": {
         "result": 1
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "events",
       "name": "stopped-propagation-does-not-reach-parent",
+      "chrome": {
+        "result": [
+          "child"
+        ]
+      },
       "esdev": {
         "result": [
           "child"
@@ -173,11 +225,15 @@
           "child"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "parsing",
       "name": "fragment-serializes-text-and-attributes",
+      "chrome": {
+        "result": "<p title=\"a&amp;b\">one &lt; two</p>"
+      },
       "esdev": {
         "result": "<p title=\"a&amp;b\">one &lt; two</p>"
       },
@@ -187,11 +243,19 @@
       "jsdom": {
         "result": "<p title=\"a&amp;b\">one &lt; two</p>"
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "parsing",
       "name": "raw-text-is-not-parsed-as-elements",
+      "chrome": {
+        "result": [
+          "script",
+          "one < two",
+          0
+        ]
+      },
       "esdev": {
         "result": [
           "script",
@@ -213,6 +277,7 @@
           0
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
@@ -222,6 +287,9 @@
       "expectedEsdev": {
         "result": "SyntaxError"
       },
+      "chrome": {
+        "result": null
+      },
       "esdev": {
         "result": "SyntaxError"
       },
@@ -231,11 +299,15 @@
       "jsdom": {
         "result": null
       },
+      "emulatorDisagreement": false,
       "status": "intentional-limit"
     },
     {
       "group": "selectors",
       "name": "compound-and-attribute-selector",
+      "chrome": {
+        "result": "x"
+      },
       "esdev": {
         "result": "x"
       },
@@ -245,11 +317,18 @@
       "jsdom": {
         "result": "x"
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "selectors",
       "name": "logical-selector-list",
+      "chrome": {
+        "result": [
+          "a",
+          "b"
+        ]
+      },
       "esdev": {
         "result": [
           "a",
@@ -268,11 +347,18 @@
           "b"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "selectors",
       "name": "structural-selector",
+      "chrome": {
+        "result": [
+          "one",
+          "three"
+        ]
+      },
       "esdev": {
         "result": [
           "one",
@@ -291,11 +377,15 @@
           "three"
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "selectors",
       "name": "invalid-selector-throws-syntax-error",
+      "chrome": {
+        "result": "SyntaxError"
+      },
       "esdev": {
         "result": "SyntaxError"
       },
@@ -305,11 +395,18 @@
       "jsdom": {
         "result": "SyntaxError"
       },
-      "status": "reference-disagreement"
+      "emulatorDisagreement": true,
+      "status": "match"
     },
     {
       "group": "forms",
       "name": "form-owner-follows-form-attribute",
+      "chrome": {
+        "result": [
+          true,
+          1
+        ]
+      },
       "esdev": {
         "result": [
           true,
@@ -328,11 +425,20 @@
           1
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "forms",
       "name": "form-and-submitter-settings-reflect",
+      "chrome": {
+        "result": [
+          "",
+          "post",
+          "",
+          "dialog"
+        ]
+      },
       "esdev": {
         "result": [
           "/form",
@@ -357,11 +463,24 @@
           "dialog"
         ]
       },
-      "status": "reference-disagreement"
+      "emulatorDisagreement": true,
+      "status": "gap"
     },
     {
       "group": "forms",
       "name": "form-data-uses-successful-controls",
+      "chrome": {
+        "result": [
+          [
+            "text",
+            "one"
+          ],
+          [
+            "check",
+            "on"
+          ]
+        ]
+      },
       "esdev": {
         "result": [
           [
@@ -398,11 +517,15 @@
           ]
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "forms",
       "name": "required-control-blocks-submit",
+      "chrome": {
+        "result": 0
+      },
       "esdev": {
         "result": 0
       },
@@ -412,11 +535,15 @@
       "jsdom": {
         "result": 0
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "forms",
       "name": "submitter-no-validate-bypasses-constraints",
+      "chrome": {
+        "result": true
+      },
       "esdev": {
         "result": true
       },
@@ -426,11 +553,15 @@
       "jsdom": {
         "result": false
       },
-      "status": "reference-disagreement"
+      "emulatorDisagreement": true,
+      "status": "match"
     },
     {
       "group": "forms",
       "name": "reset-control-restores-default-value",
+      "chrome": {
+        "result": "markup"
+      },
       "esdev": {
         "result": "markup"
       },
@@ -440,11 +571,18 @@
       "jsdom": {
         "result": "markup"
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "forms",
       "name": "radio-click-is-exclusive-by-form-owner",
+      "chrome": {
+        "result": [
+          false,
+          true
+        ]
+      },
       "esdev": {
         "result": [
           false,
@@ -463,11 +601,15 @@
           true
         ]
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "forms",
       "name": "label-click-activates-nested-checkbox",
+      "chrome": {
+        "result": true
+      },
       "esdev": {
         "result": true
       },
@@ -477,11 +619,18 @@
       "jsdom": {
         "result": true
       },
+      "emulatorDisagreement": false,
       "status": "match"
     },
     {
       "group": "forms",
       "name": "disabled-fieldset-excludes-validation-and-data",
+      "chrome": {
+        "result": [
+          true,
+          []
+        ]
+      },
       "esdev": {
         "result": [
           true,
@@ -505,12 +654,13 @@
           []
         ]
       },
-      "status": "reference-disagreement"
+      "emulatorDisagreement": true,
+      "status": "match"
     }
   ],
   "summary": {
-    "match": 19,
+    "match": 22,
     "intentional-limit": 1,
-    "reference-disagreement": 4
+    "gap": 1
   }
 }

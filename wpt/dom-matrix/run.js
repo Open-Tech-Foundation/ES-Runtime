@@ -1,29 +1,29 @@
-// Compare layout-free DOM cases under esdev, jsdom, and happy-dom.
+// Compare layout-free DOM cases against headless Chrome, with Node DOM emulators
+// retained as compatibility context only.
 import { Window } from "happy-dom";
 import { JSDOM } from "jsdom";
+import puppeteer from "puppeteer-core";
 import { cases, runCases } from "./cases.js";
+import { classify, equivalent, outcome } from "./report.js";
 
 const root = new URL("../../", import.meta.url);
 const defaultEsdev = new URL("target/debug/esdev", root).pathname;
-const flags = { esdev: defaultEsdev, json: "", strict: false };
+const flags = {
+  chrome: "/usr/bin/google-chrome",
+  esdev: defaultEsdev,
+  json: "",
+  strict: false,
+};
 
 for (const argument of Deno.args) {
   if (argument === "--strict") flags.strict = true;
-  else if (argument.startsWith("--esdev=")) {
+  else if (argument.startsWith("--chrome=")) {
+    flags.chrome = argument.slice("--chrome=".length);
+  } else if (argument.startsWith("--esdev=")) {
     flags.esdev = argument.slice("--esdev=".length);
   } else if (argument.startsWith("--json=")) {
     flags.json = argument.slice("--json=".length);
   } else throw new Error(`unknown argument: ${argument}`);
-}
-
-function equivalent(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function outcome(result) {
-  return Object.hasOwn(result, "error")
-    ? { error: result.error }
-    : { result: result.result };
 }
 
 async function runEsdev() {
@@ -77,25 +77,55 @@ function runHappyDom() {
   }
 }
 
-const [esdev, jsdom, happyDom] = await Promise.all([
+async function runChrome() {
+  const browser = await puppeteer.launch({
+    executablePath: flags.chrome,
+    headless: true,
+  });
+  try {
+    const page = await browser.newPage();
+    const source = await Deno.readTextFile(
+      new URL("./cases.js", import.meta.url),
+    );
+    return await page.evaluate(async (moduleSource) => {
+      const url = URL.createObjectURL(
+        new Blob([moduleSource], { type: "text/javascript" }),
+      );
+      try {
+        const { runCases } = await import(url);
+        return runCases(globalThis);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }, source);
+  } finally {
+    await browser.close();
+  }
+}
+
+const [chrome, esdev, jsdom, happyDom] = await Promise.all([
+  runChrome(),
   runEsdev(),
   runJsdom(),
   runHappyDom(),
 ]);
 const report = cases.map((test, index) => {
   const values = {
+    chrome: outcome(chrome[index]),
     esdev: outcome(esdev[index]),
     "happy-dom": outcome(happyDom[index]),
     jsdom: outcome(jsdom[index]),
   };
-  const referenceMatch = equivalent(values.jsdom, values["happy-dom"]);
-  let status = "gap";
-  if (test.limit && equivalent(values.esdev, test.expectedEsdev)) {
-    status = "intentional-limit";
-  } else if (referenceMatch && equivalent(values.esdev, values.jsdom)) {
-    status = "match";
-  } else if (!referenceMatch) status = "reference-disagreement";
-  return { ...test, ...values, status, run: undefined };
+  const emulatorDisagreement = !equivalent(values.jsdom, values["happy-dom"]) ||
+    !equivalent(values.chrome, values.jsdom) ||
+    !equivalent(values.chrome, values["happy-dom"]);
+  return {
+    ...test,
+    ...values,
+    emulatorDisagreement,
+    status: classify(test, values),
+    run: undefined,
+  };
 });
 
 const counts = Object.groupBy(report, ({ status }) => status);
@@ -107,6 +137,6 @@ if (flags.json) {
   await Deno.writeTextFile(flags.json, `${JSON.stringify(output, null, 2)}\n`);
 }
 console.log(JSON.stringify(output, null, 2));
-if (flags.strict && (summary.gap || summary["reference-disagreement"])) {
+if (flags.strict && summary.gap) {
   Deno.exit(1);
 }
