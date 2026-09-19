@@ -40,6 +40,8 @@ Labels resolve their `for` target or nested control; checkbox and radio groups
 use their form owner when applying click defaults.
 Input and textarea values, plus checked controls, retain their markup defaults
 and are restored by `form.reset()`.
+Number and date inputs normalize their values and expose `valueAsNumber` and
+`valueAsDate` without locale or layout dependencies.
 Inputs, selects, and textareas expose layout-free constraint validation
 (`validity`, `checkValidity()`, `reportValidity()`, and custom errors); form
 `requestSubmit()` validates before dispatching `submit`.

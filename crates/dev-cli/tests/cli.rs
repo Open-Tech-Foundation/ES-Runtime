@@ -3925,6 +3925,88 @@ fn test_dom_form_data_uses_dirty_input_values_before_and_after_reset() {
 }
 
 #[test]
+fn test_dom_number_inputs_normalize_values_and_expose_numeric_state() {
+    let dir = build_dir("t_test_dom_number_inputs");
+    write_in(
+        &dir,
+        "number.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('number inputs sanitize and convert values', () => {\n\
+           const input = document.createElement('input'); input.type = 'number';\n\
+           input.value = '004.50'; assertEquals([input.value, input.valueAsNumber], ['4.5', 4.5]);\n\
+           input.value = 'not-a-number'; assertEquals([input.value, Number.isNaN(input.valueAsNumber)], ['', true]);\n\
+           input.valueAsNumber = 12.25; assertEquals([input.value, input.valueAsNumber], ['12.25', 12.25]);\n\
+           input.valueAsNumber = NaN; assertEquals(input.value, '');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM number input test");
+    assert!(
+        ran.status.success(),
+        "number input test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_date_inputs_validate_calendar_values_and_dates() {
+    let dir = build_dir("t_test_dom_date_inputs");
+    write_in(
+        &dir,
+        "date.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('date inputs reject impossible dates and use UTC dates', () => {\n\
+           const input = document.createElement('input'); input.type = 'date'; input.value = '2024-02-29';\n\
+           assertEquals([input.value, input.valueAsDate.toISOString(), input.valueAsNumber], ['2024-02-29', '2024-02-29T00:00:00.000Z', Date.UTC(2024, 1, 29)]);\n\
+           input.value = '2023-02-29'; assertEquals([input.value, input.valueAsDate, Number.isNaN(input.valueAsNumber)], ['', null, true]);\n\
+           input.valueAsDate = new Date('2025-03-04T12:00:00Z'); assertEquals(input.value, '2025-03-04');\n\
+           input.valueAsDate = null; assertEquals(input.value, '');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM date input test");
+    assert!(
+        ran.status.success(),
+        "date input test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_value_as_accessors_reject_unsupported_input_types() {
+    let dir = build_dir("t_test_dom_value_as_type_errors");
+    write_in(
+        &dir,
+        "value-as-errors.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('valueAs accessors are strict outside number and date types', () => {\n\
+           const text = document.createElement('input'); text.type = 'text'; text.value = 'plain';\n\
+           assertEquals([Number.isNaN(text.valueAsNumber), text.valueAsDate], [true, null]);\n\
+           assertThrows(() => { text.valueAsNumber = 1; }, DOMException); assertThrows(() => { text.valueAsDate = new Date(); }, DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM valueAs type error test");
+    assert!(
+        ran.status.success(),
+        "valueAs type error test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

@@ -608,6 +608,25 @@ export function createTree(events = {}) {
 
   function isLabelable(element) { return ["button", "input", "select", "textarea"].includes(element.localName); }
 
+  function validDate(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return false;
+    const [year, month, day] = match.slice(1).map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  }
+
+  function sanitizeInputValue(type, value) {
+    value = String(value);
+    if (type === "number") {
+      if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) return "";
+      const number = Number(value);
+      return Number.isFinite(number) ? String(number) : "";
+    }
+    if (type === "date") return validDate(value) ? value : "";
+    return value;
+  }
+
   function reflectString(attribute) {
     return {
       get() { return this.getAttribute(attribute) ?? ""; },
@@ -672,8 +691,8 @@ export function createTree(events = {}) {
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
     value: {
-      get() { return this[INPUT_VALUE] ?? this.defaultValue; },
-      set(value) { this[INPUT_VALUE] = String(value); },
+      get() { return sanitizeInputValue(this.type, this[INPUT_VALUE] ?? this.defaultValue); },
+      set(value) { this[INPUT_VALUE] = sanitizeInputValue(this.type, value); },
     },
     defaultValue: {
       get() { return this.getAttribute("value") ?? (["checkbox", "radio"].includes(this.type) ? "on" : ""); },
@@ -684,6 +703,28 @@ export function createTree(events = {}) {
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
     pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
+    valueAsNumber: {
+      get() {
+        if (this.type === "number") return this.value === "" ? NaN : Number(this.value);
+        if (this.type === "date") return this.value === "" ? NaN : Date.parse(`${this.value}T00:00:00.000Z`);
+        return NaN;
+      },
+      set(value) {
+        if (!(["number", "date"].includes(this.type))) throw new DOMException("This input type has no numeric value.", "InvalidStateError");
+        if (Number.isNaN(Number(value))) { this.value = ""; return; }
+        if (this.type === "number") { this.value = Number(value); return; }
+        this.valueAsDate = new Date(Number(value));
+      },
+    },
+    valueAsDate: {
+      get() { return this.type === "date" && this.value !== "" ? new Date(`${this.value}T00:00:00.000Z`) : null; },
+      set(value) {
+        if (this.type !== "date") throw new DOMException("This input type has no date value.", "InvalidStateError");
+        if (value === null) { this.value = ""; return; }
+        if (!(value instanceof Date) || Number.isNaN(value.getTime())) throw new TypeError("valueAsDate expects a valid Date");
+        this.value = `${value.getUTCFullYear().toString().padStart(4, "0")}-${(value.getUTCMonth() + 1).toString().padStart(2, "0")}-${value.getUTCDate().toString().padStart(2, "0")}`;
+      },
+    },
   });
   Object.defineProperties(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
