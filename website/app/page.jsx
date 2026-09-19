@@ -153,6 +153,16 @@ export default function HomePage() {
               </div>
             ))}
           </div>
+
+          <p className="mx-auto mt-10 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Choosing a runtime?{" "}
+            <a
+              href="/docs/comparison"
+              className="font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+            >
+              How esrun compares to Node.js, Bun and Deno →
+            </a>
+          </p>
         </div>
       </section>
 

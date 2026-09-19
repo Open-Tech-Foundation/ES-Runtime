@@ -28,6 +28,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Postgres QPS benchmark (100 rows × 100 in flight, queries/sec plus peak
   RSS, across Node, Bun, Deno and esrun), published as `results_pg_qps` and
   charted in a fourth tab.
+- Home page "Why ES-Runtime?" section links to the esrun vs Node.js · Bun ·
+  Deno comparison page.
 
 ### Fixed
 
