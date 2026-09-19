@@ -25,6 +25,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add the strict-parser bridge for esdev DOM: compact Rust parse records, JS
   decoding, context-aware fragment hooks, and `innerHTML`/`outerHTML`
   serialization. Operation registration remains part of the `--dom` phase.
+- `esdev test --dom` now preloads a fresh, test-only DOM realm for each
+  isolated test file. It exposes the current tree, event and strict
+  `innerHTML` parser surface without making DOM globals available to ordinary
+  `esdev` runs.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every

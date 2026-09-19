@@ -29,7 +29,13 @@ use es_runtime_cli_common::HostExtension;
 
 /// Every extension `esdev` installs on a run.
 pub fn extensions() -> Vec<Box<dyn HostExtension>> {
-    with_build(build::BuildExtension::new())
+    with_build(build::BuildExtension::new(), false)
+}
+
+/// Extensions for a test run. The DOM module exists only when `esdev test
+/// --dom` requested its preload; ordinary development programs never see it.
+pub fn test_extensions(dom: bool) -> Vec<Box<dyn HostExtension>> {
+    with_build(build::BuildExtension::new(), dom)
 }
 
 /// The same set, for the run that holds a project's configured plugins open
@@ -39,13 +45,17 @@ pub fn extensions() -> Vec<Box<dyn HostExtension>> {
 /// runtime, and one that watches a file or runs a compiler as a child process
 /// should find the same namespace any other program does.
 pub fn extensions_hosting(hosted: build::Hosted) -> Vec<Box<dyn HostExtension>> {
-    with_build(build::BuildExtension::hosting(hosted))
+    with_build(build::BuildExtension::hosting(hosted), false)
 }
 
-fn with_build(build: build::BuildExtension) -> Vec<Box<dyn HostExtension>> {
-    vec![
+fn with_build(build: build::BuildExtension, dom: bool) -> Vec<Box<dyn HostExtension>> {
+    let mut extensions: Vec<Box<dyn HostExtension>> = vec![
         Box::new(build),
         Box::new(test::TestExtension),
         Box::new(watch::WatchExtension),
-    ]
+    ];
+    if dom {
+        extensions.push(Box::new(crate::dom::DomExtension));
+    }
+    extensions
 }

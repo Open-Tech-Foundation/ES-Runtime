@@ -2986,6 +2986,35 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_installs_a_fresh_document_and_uses_the_strict_parser() {
+    let dir = build_dir("t_test_dom");
+    write_in(
+        &dir,
+        "dom.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('tree and parser', () => {\n\
+           assertEquals(document.body.localName, 'body');\n\
+           document.body.innerHTML = '<p id=x>hello<!-- note --></p>';\n\
+           assertEquals(document.body.firstChild.textContent, 'hello');\n\
+           assertEquals(document.body.innerHTML, '<p id=\"x\">hello<!-- note --></p>');\n\
+           assertThrows(() => { document.body.innerHTML = '<p>'; }, SyntaxError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom");
+    assert!(
+        ran.status.success(),
+        "DOM test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(

@@ -180,6 +180,7 @@ OPTIONS:
     --isolation=<mode>          process (default), or none to run all selected
                                 files serially in one process and retain caches
     --watch                     Run them again whenever a source file changes
+    --dom                       Install esdev's test-only DOM globals
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1216,6 +1217,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut ci = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
     let mut full_diff = false;
     let mut snapshot_prune = None;
+    let mut dom = false;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1257,6 +1259,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--watch" => {
                 reject_value(flag, value)?;
                 watch = true;
+            }
+            "--dom" => {
+                reject_value(flag, value)?;
+                dom = true;
             }
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
             "--timeout" | "-t" => {
@@ -1321,6 +1327,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     }
     let snapshot_prune = snapshot_prune.unwrap_or(file.is_some());
     Ok(TestConfig {
+        dom,
         file,
         filters,
         jobs,
@@ -1415,12 +1422,16 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         // from the `runtime:test` the file imported. What makes this a *test*
         // run is what `finish()` finds afterwards, not anything done to the
         // source.
-        let stripper = if config.setup.is_empty() {
+        let stripper = if config.setup.is_empty() && !config.dom {
             TypeStripper::new()
         } else {
             let entry = std::fs::canonicalize(&file)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
-            TypeStripper::before(&entry, config.setup.clone())
+            TypeStripper::before_with(
+                &entry,
+                config.dom.then(|| "runtime:dom".to_string()),
+                config.setup.clone(),
+            )
         };
         let run = Config {
             source: Source::File(file.clone()),
@@ -1430,7 +1441,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             options: RunOptions::default(),
             transform: Some(std::sync::Arc::new(stripper)),
             bundler_style_resolution: true,
-            extensions: guest::extensions(),
+            extensions: guest::test_extensions(config.dom),
             observer: None,
             inspector: None,
         };
@@ -1539,6 +1550,9 @@ pub(crate) async fn run_tests_unisolated(
         config.snapshot_prune,
     );
     let mut source = String::new();
+    if config.dom {
+        source.push_str("import \"runtime:dom\";");
+    }
     source.push_str("import { __setTestFile } from \"runtime:test\";");
     for file in files {
         for setup in &config.setup {
@@ -1561,7 +1575,7 @@ pub(crate) async fn run_tests_unisolated(
         options: RunOptions::default(),
         transform: Some(std::sync::Arc::new(TypeStripper::new())),
         bundler_style_resolution: true,
-        extensions: guest::extensions(),
+        extensions: guest::test_extensions(config.dom),
         observer: None,
         inspector: None,
     };

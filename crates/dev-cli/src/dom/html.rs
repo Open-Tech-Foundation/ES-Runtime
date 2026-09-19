@@ -65,6 +65,10 @@ impl std::error::Error for Error {}
 /// A document may contain one `<!doctype html>` before its root element. The
 /// root itself is not synthesized: callers that want the test runner's empty
 /// document construct it explicitly.
+#[allow(
+    dead_code,
+    reason = "document parsing is wired with starting-HTML test directives"
+)]
 pub fn parse_document(source: &str) -> Result<Document, Error> {
     let mut parser = Parser::new(source);
     let document = parser.nodes(None, true)?;

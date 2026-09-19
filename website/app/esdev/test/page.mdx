@@ -17,6 +17,17 @@ esdev test math               # ...whose path contains "math"
 esdev test --file=x.test.ts   # exactly one file
 ```
 
+## DOM tests
+
+Pass `--dom` when a test needs the browser-like DOM surface currently provided
+by esdev. It installs a fresh realm for each isolated test file, including
+`document`, the core node and event classes, and strict `innerHTML` parsing.
+It is test-runner-only: ordinary `esdev` runs do not receive these globals.
+
+```sh
+esdev test --dom
+```
+
 ## Test guide
 
 - [Writing tests](/esdev/test/writing) — assertions, helpers, and table-driven

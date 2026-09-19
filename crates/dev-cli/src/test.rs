@@ -43,6 +43,8 @@ use crate::config::TestIsolation;
 
 /// What `esdev test` was asked to do.
 pub struct TestConfig {
+    /// Install the esdev-only DOM realm before the test module evaluates.
+    pub dom: bool,
     /// Run exactly this file, harness installed. This is what the parent
     /// invokes for each child, and it is a supported way to run one file
     /// directly.
@@ -135,21 +137,27 @@ pub async fn run_all(
     // What the parent hands down. A child runs one file and must run it the way
     // the parent was asked to, or the run reports something nobody configured.
     let flags: Vec<String> = config
-        .setup
-        .iter()
-        .map(|module| format!("--setup={module}"))
-        .chain(config.reporter.iter().map(|r| format!("--reporter={r}")))
+        .dom
+        .then(|| "--dom".to_string())
+        .into_iter()
         .chain(
             config
-                .update_snapshots
-                .then(|| "--update-snapshots".to_string()),
+                .setup
+                .iter()
+                .map(|module| format!("--setup={module}"))
+                .chain(config.reporter.iter().map(|r| format!("--reporter={r}")))
+                .chain(
+                    config
+                        .update_snapshots
+                        .then(|| "--update-snapshots".to_string()),
+                )
+                .chain(config.ci.then(|| "--ci".to_string()))
+                .chain(config.full_diff.then(|| "--full-diff".to_string()))
+                .chain(std::iter::once(format!(
+                    "--_snapshot-prune={}",
+                    u8::from(config.snapshot_prune)
+                ))),
         )
-        .chain(config.ci.then(|| "--ci".to_string()))
-        .chain(config.full_diff.then(|| "--full-diff".to_string()))
-        .chain(std::iter::once(format!(
-            "--_snapshot-prune={}",
-            u8::from(config.snapshot_prune)
-        )))
         .collect();
 
     let named = |file: &Path| {

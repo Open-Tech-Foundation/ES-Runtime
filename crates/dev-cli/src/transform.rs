@@ -75,6 +75,15 @@ impl TypeStripper {
         }
     }
 
+    /// Adds one module before the existing prelude. The DOM has to exist
+    /// before a user setup module evaluates, because setup commonly imports
+    /// helpers that read `document` at module scope.
+    pub fn before_with(entry: &Path, first: Option<String>, modules: Vec<String>) -> Self {
+        let mut prelude = first.into_iter().collect::<Vec<_>>();
+        prelude.extend(modules);
+        Self::before(entry, prelude)
+    }
+
     /// The prelude for this module, or empty for every other module.
     fn prelude_for(&self, specifier: &str, path: &str) -> String {
         let Some((entry, modules)) = &self.prelude else {
