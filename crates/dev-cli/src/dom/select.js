@@ -101,7 +101,7 @@ function parseCompound(source, offset, text) {
     if (kind === ":") {
       const match = /^[A-Za-z-]+/.exec(text.slice(at + 1));
       const functional = new Set(["is", "where", "not", "has", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
-      const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus"]);
+      const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus", "scope", "checked", "disabled", "enabled", "required", "optional", "link"]);
       if (!match || !functional.has(match[0]) && !bare.has(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
       const name = match[0];
       const open = at + match[0].length + 1;
@@ -238,18 +238,25 @@ function nthMatches(position, { a, b }) {
 }
 
 export function createSelectors({ Element, Document, DocumentFragment }) {
-  function matchesCompound(element, simples) {
+  function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
       if (simple.type === "tag") return element.localName === simple.name;
       if (simple.type === "id") return element.id === simple.name;
       if (simple.type === "class") return (element.className || "").split(/\s+/).includes(simple.name);
-      if (simple.type === "is" || simple.type === "where") return simple.selectors.some((parts) => matchesParts(element, parts));
-      if (simple.type === "not") return !simple.selectors.some((parts) => matchesParts(element, parts));
-      if (simple.type === "has") return simple.selectors.some((relative) => matchesRelative(element, relative));
+      if (simple.type === "is" || simple.type === "where") return simple.selectors.some((parts) => matchesParts(element, parts, parts.length - 1, scope));
+      if (simple.type === "not") return !simple.selectors.some((parts) => matchesParts(element, parts, parts.length - 1, scope));
+      if (simple.type === "has") return simple.selectors.some((relative) => matchesRelative(element, relative, scope));
       if (simple.type === "root") return element === element.ownerDocument.documentElement;
       if (simple.type === "empty") return element.firstChild === null;
       if (simple.type === "focus") return element === element.ownerDocument.activeElement;
+      if (simple.type === "scope") return element === scope;
+      if (simple.type === "checked") return element.checked === true;
+      if (simple.type === "disabled") return element.hasAttribute("disabled");
+      if (simple.type === "enabled") return ["button", "input", "select", "textarea", "option", "optgroup", "fieldset"].includes(element.localName) && !element.hasAttribute("disabled");
+      if (simple.type === "required") return element.hasAttribute("required");
+      if (simple.type === "optional") return ["input", "select", "textarea"].includes(element.localName) && !element.hasAttribute("required");
+      if (simple.type === "link") return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
       if (simple.type.endsWith("child")) {
         const siblings = elementSiblings(element);
         const index = siblings.indexOf(element);
@@ -277,36 +284,36 @@ export function createSelectors({ Element, Document, DocumentFragment }) {
     return null;
   }
 
-  function matchesRelative(element, relative) {
+  function matchesRelative(element, relative, scope) {
     if (relative.relation === ">") {
-      for (let child = element.firstChild; child; child = child.nextSibling) if (child instanceof Element && matchesParts(child, relative.parts)) return true;
+      for (let child = element.firstChild; child; child = child.nextSibling) if (child instanceof Element && matchesParts(child, relative.parts, relative.parts.length - 1, scope)) return true;
       return false;
     }
     if (relative.relation === "+") {
       const sibling = nextElement(element);
-      return sibling !== null && matchesParts(sibling, relative.parts);
+      return sibling !== null && matchesParts(sibling, relative.parts, relative.parts.length - 1, scope);
     }
     if (relative.relation === "~") {
-      for (let sibling = nextElement(element); sibling; sibling = nextElement(sibling)) if (matchesParts(sibling, relative.parts)) return true;
+      for (let sibling = nextElement(element); sibling; sibling = nextElement(sibling)) if (matchesParts(sibling, relative.parts, relative.parts.length - 1, scope)) return true;
       return false;
     }
-    return descendants(element).some((child) => matchesParts(child, relative.parts));
+    return descendants(element).some((child) => matchesParts(child, relative.parts, relative.parts.length - 1, scope));
   }
 
-  function matchesParts(element, parts, index = parts.length - 1) {
-    if (!matchesCompound(element, parts[index].simples)) return false;
+  function matchesParts(element, parts, index = parts.length - 1, scope = element) {
+    if (!matchesCompound(element, parts[index].simples, scope)) return false;
     if (index === 0) return true;
     const relation = parts[index].relation;
-    if (relation === ">") return element.parentElement !== null && matchesParts(element.parentElement, parts, index - 1);
+    if (relation === ">") return element.parentElement !== null && matchesParts(element.parentElement, parts, index - 1, scope);
     if (relation === "+") {
       const sibling = previousElement(element);
-      return sibling !== null && matchesParts(sibling, parts, index - 1);
+      return sibling !== null && matchesParts(sibling, parts, index - 1, scope);
     }
     if (relation === "~") {
-      for (let sibling = previousElement(element); sibling; sibling = previousElement(sibling)) if (matchesParts(sibling, parts, index - 1)) return true;
+      for (let sibling = previousElement(element); sibling; sibling = previousElement(sibling)) if (matchesParts(sibling, parts, index - 1, scope)) return true;
       return false;
     }
-    for (let parent = element.parentElement; parent; parent = parent.parentElement) if (matchesParts(parent, parts, index - 1)) return true;
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) if (matchesParts(parent, parts, index - 1, scope)) return true;
     return false;
   }
 
@@ -317,7 +324,7 @@ export function createSelectors({ Element, Document, DocumentFragment }) {
 
   function matches(element, source) {
     if (!(element instanceof Element)) return false;
-    return compile(source).some((parts) => matchesParts(element, parts));
+    return compile(source).some((parts) => matchesParts(element, parts, parts.length - 1, element));
   }
 
   function descendants(root) {
@@ -343,9 +350,15 @@ export function createSelectors({ Element, Document, DocumentFragment }) {
     });
   }
 
+  function usesScope(parts) {
+    return parts.some(({ simples }) => simples.some((simple) => simple.type === "scope" || simple.selectors?.some((nested) => usesScope(nested))));
+  }
+
   function queryAll(root, source) {
     const compiled = compile(source);
-    return staticList(descendants(root).filter((element) => compiled.some((parts) => matchesParts(element, parts))));
+    const candidates = root instanceof Element && compiled.some(usesScope) ? [root, ...descendants(root)] : descendants(root);
+    const scope = root instanceof Element ? root : null;
+    return staticList(candidates.filter((element) => compiled.some((parts) => matchesParts(element, parts, parts.length - 1, scope))));
   }
 
   function install() {

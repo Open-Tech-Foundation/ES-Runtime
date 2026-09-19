@@ -3242,6 +3242,100 @@ fn test_dom_focus_selector_follows_focus_transitions() {
 }
 
 #[test]
+fn test_dom_selectors_match_dynamic_form_state() {
+    let dir = build_dir("t_test_dom_selector_form_state");
+    write_in(
+        &dir,
+        "form-state.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('form state selectors follow reflected attributes and defaults', () => {\n\
+           const checked = document.createElement('input'); checked.type = 'checkbox'; checked.checked = true;\n\
+           const disabled = document.createElement('button'); disabled.disabled = true;\n\
+           const required = document.createElement('input'); required.required = true;\n\
+           const optional = document.createElement('input'); const plain = document.createElement('div');\n\
+           document.body.append(checked, disabled, required, optional, plain);\n\
+           assertEquals(Array.from(document.querySelectorAll(':checked')), [checked]);\n\
+           assertEquals(Array.from(document.querySelectorAll(':disabled')), [disabled]);\n\
+           assertEquals(Array.from(document.querySelectorAll(':enabled')), [checked, required, optional]);\n\
+           assertEquals(Array.from(document.querySelectorAll(':required')), [required]);\n\
+           assertEquals(Array.from(document.querySelectorAll(':optional')), [checked, optional]);\n\
+           checked.checked = false; disabled.disabled = false; required.required = false;\n\
+           assertEquals(document.querySelectorAll(':checked').length, 0);\n\
+           assertEquals(document.querySelectorAll(':disabled').length, 0);\n\
+           assertEquals(Array.from(document.querySelectorAll(':optional')), [checked, required, optional]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM form-state selector test");
+    assert!(
+        ran.status.success(),
+        "form-state selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_selectors_match_links_without_treating_plain_anchors_as_links() {
+    let dir = build_dir("t_test_dom_selector_links");
+    write_in(
+        &dir,
+        "links.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('link state is driven by href', () => {\n\
+           const anchor = document.createElement('a'); const area = document.createElement('area'); const plain = document.createElement('a');\n\
+           anchor.setAttribute('href', '/docs'); area.setAttribute('href', '/map'); document.body.append(anchor, area, plain);\n\
+           assertEquals(Array.from(document.querySelectorAll(':link')), [anchor, area]);\n\
+           anchor.removeAttribute('href'); assertEquals(Array.from(document.querySelectorAll(':link')), [area]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM link selector test");
+    assert!(
+        ran.status.success(),
+        "link selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_scope_selector_respects_the_query_root() {
+    let dir = build_dir("t_test_dom_selector_scope");
+    write_in(
+        &dir,
+        "scope.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('scope includes the element root only when requested', () => {\n\
+           const root = document.createElement('div'); const child = document.createElement('div'); const grandchild = document.createElement('span');\n\
+           child.className = 'child'; grandchild.className = 'grandchild'; child.appendChild(grandchild); root.appendChild(child); document.body.appendChild(root);\n\
+           assertEquals(Array.from(root.querySelectorAll(':scope')), [root]);\n\
+           assertEquals(Array.from(root.querySelectorAll(':scope > .child')), [child]);\n\
+           assertEquals(Array.from(root.querySelectorAll(':scope .grandchild')), [grandchild]);\n\
+           assertEquals(Array.from(root.querySelectorAll('div')), [child]);\n\
+           assertEquals(root.matches(':scope'), true);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM scope selector test");
+    assert!(
+        ran.status.success(),
+        "scope selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     let dir = build_dir("t_test_dom_selector_pseudo_errors");
     write_in(
@@ -3253,7 +3347,7 @@ fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
            assertThrows(() => document.querySelector(':has(>)'), SyntaxError);\n\
            assertThrows(() => document.querySelector(':not(.one'), SyntaxError);\n\
            assertThrows(() => document.querySelector(':hover'), SyntaxError);\n\
-           assertThrows(() => document.querySelector(':checked'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':placeholder-shown'), SyntaxError);\n\
          });\n",
     );
     let ran = esdev_in(&dir)

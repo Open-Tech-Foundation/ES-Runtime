@@ -166,7 +166,8 @@ The parser handles the Selectors Level 4 grammar that non-layout matching allows
 Pseudo-classes implemented: `:is()`, `:where()`, `:not()`, `:has()`, `:root`,
 `:empty`, child and type positions (`:first-*`, `:last-*`, `:only-*`),
 `:nth-child()`, `:nth-last-child()`, `:nth-of-type()`, `:nth-last-of-type()`,
-and `:focus`.
+`:focus`, `:scope`, `:checked`, `:disabled`, `:enabled`, `:required`,
+`:optional`, and `:link`.
 
 Other pseudo-classes are rejected with `SyntaxError` until their state and
 matching rules are implemented.
