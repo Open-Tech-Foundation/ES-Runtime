@@ -138,7 +138,17 @@ choosing explicitly:
 
 Menus show the proper name — `SPA`, not `spa` — while flags stay lowercase:
 what is chosen still resolves to the flag spelling, so `--template=spa`,
-`SPA`, and `1` all reach the same starter.
+`SPA`, and `1` all reach the same starter. Behind the group entry:
+
+```text
+? Which OTF Web Starter?
+  ❯ SPA                 An OTF Web single-page app — browser-only UI, static deploy, no server
+    FullStack           An OTF Web fullstack app — middleware, loaders, API routes, SSR on demand
+    Docs                An OTF Web documentation site — MDX docs, sidebar, search, optional blog
+    Component Library   An OTF Web component library — publishable components, esdev-tested
+
+  ↑/↓ move · 1-9 jump · enter select · esc back
+```
 
 It is drawn where the cursor already is and is replaced in place by one line
 naming the answer, so the scrollback is left holding a transcript of what was
