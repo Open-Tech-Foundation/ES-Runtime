@@ -433,6 +433,7 @@ export function createTree(events = {}) {
         }
         this.checked = true;
       }
+      if (this.type === "submit") this.form?.requestSubmit(this);
     }
   }
 
@@ -443,6 +444,10 @@ export function createTree(events = {}) {
       if (!this.dispatchEvent(event) || this.type !== "submit") return;
       this.form?.requestSubmit(this);
     }
+  }
+
+  function isSubmitter(control) {
+    return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
   }
 
   function formOwner(control) {
@@ -478,8 +483,8 @@ export function createTree(events = {}) {
     checkValidity() { return Array.from(this.elements, (control) => control.checkValidity?.() ?? true).every(Boolean); }
     reportValidity() { return this.checkValidity(); }
     requestSubmit(submitter = null) {
-      if (submitter !== null && (!(submitter instanceof HTMLButtonElement) || submitter.form !== this)) throw new TypeError("requestSubmit submitter must belong to this form");
-      submitter ??= Array.from(this.elements).find((control) => control instanceof HTMLButtonElement && control.type === "submit") ?? null;
+      if (submitter !== null && (!isSubmitter(submitter) || submitter.form !== this)) throw new TypeError("requestSubmit submitter must be a submit button belonging to this form");
+      submitter ??= Array.from(this.elements).find(isSubmitter) ?? null;
       if (!this.noValidate && !submitter?.formNoValidate && !this.checkValidity()) return;
       this.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter }));
     }
@@ -669,11 +674,11 @@ export function createTree(events = {}) {
     { hidden: "hidden", inert: "inert" },
     { tabIndex: ["tabindex", -1, Number.NEGATIVE_INFINITY] });
   installReflectors(HTMLInputElement,
-    { accept: "accept", alt: "alt", autocomplete: "autocomplete", name: "name", placeholder: "placeholder" },
-    { disabled: "disabled", multiple: "multiple", readOnly: "readonly", required: "required" },
+    { accept: "accept", alt: "alt", autocomplete: "autocomplete", formAction: "formaction", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", placeholder: "placeholder" },
+    { disabled: "disabled", formNoValidate: "formnovalidate", multiple: "multiple", readOnly: "readonly", required: "required" },
     { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1] });
   installReflectors(HTMLButtonElement,
-    { name: "name", value: "value" },
+    { formAction: "formaction", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
   installReflectors(HTMLFormElement, { action: "action", target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });

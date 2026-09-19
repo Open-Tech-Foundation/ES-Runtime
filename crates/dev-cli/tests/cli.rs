@@ -4090,6 +4090,89 @@ test('submit button activation is cancelable and disabled-aware', () => {
 }
 
 #[test]
+fn test_dom_submit_inputs_validate_and_can_bypass_validation() {
+    let dir = build_dir("t_test_dom_submit_input_validation");
+    write_in(
+        &dir,
+        "submit-input-validation.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('submit inputs validate and honor formNoValidate', () => {
+  const form = document.createElement('form'); const required = document.createElement('input'); required.required = true; const submit = document.createElement('input'); submit.type = 'submit'; form.append(required, submit); document.body.appendChild(form);
+  let submitter = null; form.addEventListener('submit', (event) => { submitter = event.submitter; });
+  submit.click(); assertEquals(submitter, null);
+  submit.formNoValidate = true; submit.click(); assertEquals(submitter, submit);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM submit input validation test");
+    assert!(
+        ran.status.success(),
+        "submit input validation test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_submitters_reflect_form_override_settings() {
+    let dir = build_dir("t_test_dom_submitter_overrides");
+    write_in(
+        &dir,
+        "submitter-overrides.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('submitters reflect their form overrides', () => {
+  const button = document.createElement('button'); const input = document.createElement('input'); input.type = 'submit';
+  button.formAction = '/button'; button.formMethod = 'post'; button.formEnctype = 'text/plain'; button.formTarget = '_blank'; button.formNoValidate = true;
+  input.formAction = '/input'; input.formMethod = 'dialog'; input.formEnctype = 'multipart/form-data'; input.formTarget = 'result'; input.formNoValidate = true;
+  assertEquals([button.formAction, button.formMethod, button.formEnctype, button.formTarget, button.formNoValidate], ['/button', 'post', 'text/plain', '_blank', true]);
+  assertEquals([input.formAction, input.formMethod, input.formEnctype, input.formTarget, input.formNoValidate], ['/input', 'dialog', 'multipart/form-data', 'result', true]);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM submitter override test");
+    assert!(
+        ran.status.success(),
+        "submitter override test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_request_submit_rejects_non_submit_inputs() {
+    let dir = build_dir("t_test_dom_non_submit_request");
+    write_in(
+        &dir,
+        "non-submitter.test.mjs",
+        r#"import { test, assertThrows } from 'runtime:test';
+test('requestSubmit rejects a non-submit input', () => {
+  const form = document.createElement('form'); const text = document.createElement('input'); form.appendChild(text); document.body.appendChild(form);
+  assertThrows(() => form.requestSubmit(text), TypeError);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM non-submitter test");
+    assert!(
+        ran.status.success(),
+        "non-submitter test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(
