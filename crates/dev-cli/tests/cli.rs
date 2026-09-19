@@ -3414,6 +3414,94 @@ fn test_dom_reflects_common_attributes_and_form_defaults() {
 }
 
 #[test]
+fn test_dom_select_controls_choose_values_and_expose_live_options() {
+    let dir = build_dir("t_test_dom_select_controls");
+    write_in(
+        &dir,
+        "select.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('single selects expose fallback values and selection state', () => {\n\
+           const select = document.createElement('select'); const one = document.createElement('option'); const two = document.createElement('option');\n\
+           one.textContent = 'one'; two.value = 'second'; two.textContent = 'two'; select.append(one, two); document.body.appendChild(select);\n\
+           const options = select.options; assertEquals(select instanceof HTMLSelectElement, true); assertEquals(one instanceof HTMLOptionElement, true);\n\
+           assertEquals([select.length, select.selectedIndex, select.value, Array.from(select.selectedOptions)], [2, 0, 'one', [one]]);\n\
+           select.value = 'second'; assertEquals([select.selectedIndex, select.value, one.selected, two.selected], [1, 'second', false, true]);\n\
+           select.selectedIndex = -1; assertEquals([select.selectedIndex, select.value], [0, 'one']);\n\
+           const three = document.createElement('option'); three.value = 'third'; select.add(three, 1); assertEquals([options.length, options.item(1)], [3, three]);\n\
+           select.remove(1); assertEquals(options.length, 2);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM select-control test");
+    assert!(
+        ran.status.success(),
+        "select-control test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_multiple_selects_keep_each_selected_option() {
+    let dir = build_dir("t_test_dom_multiple_select");
+    write_in(
+        &dir,
+        "multiple.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('multiple select does not deselect sibling options', () => {\n\
+           const select = document.createElement('select'); select.multiple = true;\n\
+           const first = document.createElement('option'); first.value = 'first'; const second = document.createElement('option'); second.value = 'second'; const third = document.createElement('option'); third.value = 'third';\n\
+           select.append(first, second, third); document.body.appendChild(select); first.selected = true; third.selected = true;\n\
+           assertEquals([select.selectedIndex, select.value, Array.from(select.selectedOptions)], [0, 'first', [first, third]]);\n\
+           second.selected = true; assertEquals(Array.from(select.selectedOptions), [first, second, third]);\n\
+           select.length = 2; assertEquals([select.options.length, Array.from(select.selectedOptions)], [2, [first, second]]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM multiple-select test");
+    assert!(
+        ran.status.success(),
+        "multiple-select test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_reset_restores_select_and_textarea_defaults() {
+    let dir = build_dir("t_test_dom_form_reset_controls");
+    write_in(
+        &dir,
+        "reset.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('form controls retain defaults and reset dirty values', () => {\n\
+           document.body.innerHTML = '<form><select name=choice><option value=one>one</option><option value=two selected>two</option></select><textarea name=note>initial</textarea></form>';\n\
+           const form = document.querySelector('form'); const select = document.querySelector('select'); const textarea = document.querySelector('textarea'); const controls = form.elements;\n\
+           assertEquals([form instanceof HTMLFormElement, textarea instanceof HTMLTextAreaElement, select.value, textarea.defaultValue, textarea.value, controls.length], [true, true, 'two', 'initial', 'initial', 2]);\n\
+           select.value = 'one'; textarea.value = 'changed'; assertEquals([select.value, textarea.value], ['one', 'changed']);\n\
+           form.reset(); assertEquals([select.value, textarea.value, Array.from(controls)], ['two', 'initial', [select, textarea]]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM form reset controls test");
+    assert!(
+        ran.status.success(),
+        "form reset controls test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

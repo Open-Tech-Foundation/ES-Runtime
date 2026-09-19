@@ -29,8 +29,10 @@ combinators, plus logical, structural, `:nth-*()`, and `:focus`
 pseudo-classes, form/link state, and `:scope`; unsupported selector syntax
 throws `SyntaxError`.
 `HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLFormElement`, and
-`HTMLLabelElement` are also available, with common reflected attributes and
-the basic checkbox, radio, and submit-button click defaults.
+`HTMLLabelElement`, `HTMLSelectElement`, `HTMLOptionElement`, and
+`HTMLTextAreaElement` are also available, with common reflected attributes,
+select values/options, form reset, and the basic checkbox, radio, and
+submit-button click defaults.
 Inline styles are supported through `element.style` and stay synchronized with
 the `style` attribute. `getComputedStyle` exposes those inline values only;
 stylesheet cascade and resolved values are not present.

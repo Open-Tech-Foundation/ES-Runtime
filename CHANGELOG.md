@@ -43,6 +43,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM Range insertion and deletion across text and node boundaries.
 - Complete esdev DOM Range content operations with cloning, extraction,
   surrounding contents, and mutation-aware boundary adjustment.
+- Add esdev DOM select, option, and textarea controls with form reset and
+  live option/form collections.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

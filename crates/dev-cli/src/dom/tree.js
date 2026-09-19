@@ -6,6 +6,8 @@
 const SLOT = Symbol("esdev DOM slots");
 const ATTRS = Symbol("esdev DOM attributes");
 const DATA = Symbol("esdev DOM character data");
+const SELECTED = Symbol("esdev DOM option selected state");
+const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -40,7 +42,7 @@ function asNodes(value, document, NodeClass) {
 }
 
 export function createTree(events = {}) {
-  const { EventTarget = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
+  const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
   const customConstruction = [];
   class LiveCollection {
     constructor(root, filter) {
@@ -444,7 +446,91 @@ export function createTree(events = {}) {
     }
   }
 
-  class HTMLFormElement extends HTMLElement {}
+  class HTMLFormElement extends HTMLElement {
+    get elements() {
+      return new HTMLCollection(this, (root) => collect(root, (element) => ["button", "input", "select", "textarea"].includes(element.localName)));
+    }
+    reset() {
+      const event = new Event("reset", { bubbles: true, cancelable: true });
+      if (!this.dispatchEvent(event)) return;
+      for (const control of this.elements) {
+        if (control instanceof HTMLSelectElement) for (const option of control.options) option[SELECTED] = null;
+        if (control instanceof HTMLTextAreaElement) control[TEXTAREA_VALUE] = null;
+        if (control instanceof HTMLInputElement) control.checked = control.defaultChecked;
+      }
+    }
+  }
+
+  class HTMLOptionElement extends HTMLElement {
+    constructor(name, ownerDocument) { super(name, ownerDocument); this[SELECTED] = null; }
+    get defaultSelected() { return this.hasAttribute("selected"); }
+    set defaultSelected(value) { if (value) this.setAttribute("selected", ""); else this.removeAttribute("selected"); }
+    get selected() { return this[SELECTED] ?? this.defaultSelected; }
+    set selected(value) {
+      this[SELECTED] = Boolean(value);
+      if (value) {
+        for (let parent = this.parentElement; parent; parent = parent.parentElement) {
+          if (parent instanceof HTMLSelectElement) {
+            if (!parent.multiple) for (const option of parent.options) if (option !== this) option[SELECTED] = false;
+            break;
+          }
+        }
+      }
+    }
+    get value() { return this.getAttribute("value") ?? this.textContent; }
+    set value(value) { this.setAttribute("value", String(value)); }
+    get index() {
+      for (let parent = this.parentElement; parent; parent = parent.parentElement) {
+        if (parent instanceof HTMLSelectElement) return Array.from(parent.options).indexOf(this);
+      }
+      return -1;
+    }
+  }
+
+  class HTMLSelectElement extends HTMLElement {
+    get options() { return new HTMLCollection(this, (root) => collect(root, (element) => element instanceof HTMLOptionElement)); }
+    get length() { return this.options.length; }
+    set length(value) {
+      value = Math.max(0, Math.trunc(Number(value) || 0));
+      while (this.options.length > value) this.options.item(this.options.length - 1).remove();
+      while (this.options.length < value) this.appendChild(this.ownerDocument.createElement("option"));
+    }
+    get selectedIndex() {
+      const options = Array.from(this.options);
+      const selected = options.findIndex((option) => option.selected);
+      return selected >= 0 ? selected : !this.multiple && options.length ? 0 : -1;
+    }
+    set selectedIndex(index) {
+      index = Math.trunc(Number(index));
+      for (const [at, option] of Array.from(this.options).entries()) option[SELECTED] = at === index;
+    }
+    get value() { const option = this.options.item(this.selectedIndex); return option?.value ?? ""; }
+    set value(value) {
+      const option = Array.from(this.options).find((candidate) => candidate.value === String(value));
+      if (option) this.selectedIndex = option.index; else this.selectedIndex = -1;
+    }
+    get selectedOptions() {
+      return new HTMLCollection(this, (root) => {
+        const options = collect(root, (element) => element instanceof HTMLOptionElement);
+        const chosen = options.filter((option) => option.selected);
+        return chosen.length || this.multiple ? chosen : options.slice(0, 1);
+      });
+    }
+    add(item, before = null) {
+      if (!(item instanceof HTMLOptionElement)) throw new TypeError("select.add expects an option");
+      if (typeof before === "number") before = this.options.item(before);
+      this.insertBefore(item, before ?? null);
+    }
+    remove(index) { this.options.item(Number(index))?.remove(); }
+  }
+
+  class HTMLTextAreaElement extends HTMLElement {
+    constructor(name, ownerDocument) { super(name, ownerDocument); this[TEXTAREA_VALUE] = null; }
+    get defaultValue() { return this.textContent; }
+    set defaultValue(value) { this.textContent = String(value); if (this[TEXTAREA_VALUE] === null) this[TEXTAREA_VALUE] = null; }
+    get value() { return this[TEXTAREA_VALUE] ?? this.defaultValue; }
+    set value(value) { this[TEXTAREA_VALUE] = String(value); }
+  }
 
   class HTMLLabelElement extends HTMLElement {
     click() {
@@ -505,6 +591,14 @@ export function createTree(events = {}) {
     { name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
+  installReflectors(HTMLSelectElement,
+    { name: "name" },
+    { disabled: "disabled", multiple: "multiple", required: "required" },
+    { size: ["size", 0, 0] });
+  installReflectors(HTMLTextAreaElement,
+    { name: "name", placeholder: "placeholder" },
+    { disabled: "disabled", readOnly: "readonly", required: "required" },
+    { cols: ["cols", 20, 1], rows: ["rows", 2, 1] });
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
   });
@@ -562,6 +656,9 @@ export function createTree(events = {}) {
     form: HTMLFormElement,
     input: HTMLInputElement,
     label: HTMLLabelElement,
+    option: HTMLOptionElement,
+    select: HTMLSelectElement,
+    textarea: HTMLTextAreaElement,
   };
 
   function upgradeCustom(element, constructor) {
@@ -589,5 +686,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, Text, Comment, Attr, NamedNodeMap, VOID, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, upgradeCustom };
 }
