@@ -125,7 +125,7 @@ second menu; neither menu preselects — the template is the one answer worth
 choosing explicitly:
 
 ```text
-? Which template?
+? Which Template?
   ❯ api      A JSON API — one route, a URLPattern router, a narrow grant
     lib      A publishable TypeScript package — module tree, .d.ts
     react    React + react-router — a static site, or an app with a server
@@ -138,8 +138,10 @@ choosing explicitly:
 
 It is drawn where the cursor already is and is replaced in place by one line
 naming the answer, so the scrollback is left holding a transcript of what was
-asked and what was chosen rather than a cleared screen. `Esc` at the first
-question cancels: nothing is written, and the exit status is zero.
+asked and what was chosen rather than a cleared screen. `Esc` steps back to
+the previous question — the second OTF menu returns to the first — and `Esc`
+at the first question cancels: nothing is written, and the exit status is
+zero.
 
 Away from one — a pipe, a CI job, anything with `CI` set — it takes the
 defaults and says nothing. A prompt in a script is a script that hangs.

@@ -76,6 +76,16 @@ pub struct Choice<'a> {
     pub description: &'a str,
 }
 
+/// What Esc means in a [`select`]. The key always ends the question with no
+/// answer; whether that steps back or cancels is the caller's flow to know.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OnEsc {
+    /// There is nowhere back to go: the run stops.
+    Cancel,
+    /// An earlier question showed a menu: Esc returns to it.
+    Back,
+}
+
 /// Asks `question` and returns the index of the chosen option.
 ///
 /// `None` is a deliberate cancel — Esc, or ^C. It is not the same as taking the
@@ -89,7 +99,12 @@ pub struct Choice<'a> {
 /// End of input *is* the default: a closed stdin is not a decision, and looping
 /// on it would hang exactly where this is written not to. With no default it
 /// is a cancel instead, for the same reason.
-pub fn select(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> Option<usize> {
+pub fn select(
+    question: &str,
+    choices: &[Choice<'_>],
+    default: Option<usize>,
+    esc: OnEsc,
+) -> Option<usize> {
     if choices.is_empty() {
         return None;
     }
@@ -98,7 +113,7 @@ pub fn select(question: &str, choices: &[Choice<'_>], default: Option<usize>) ->
     // A terminal that will not go into raw mode is not a terminal this can draw
     // on, and the question still has to be asked. The fallback is the plain
     // numbered list, which needs nothing but a line of input.
-    let chosen = match menu(question, choices, default) {
+    let chosen = match menu(question, choices, default, esc) {
         Ok(chosen) => chosen,
         Err(_) => numbered(question, choices, default),
     }?;
@@ -112,6 +127,7 @@ fn menu(
     question: &str,
     choices: &[Choice<'_>],
     default: Option<usize>,
+    esc: OnEsc,
 ) -> std::io::Result<Option<usize>> {
     enable_raw_mode()?;
     // Held for the rest of the function so raw mode is given back even if
@@ -140,7 +156,7 @@ fn menu(
         terminal.draw(|frame| {
             origin = frame.area().as_position();
             frame.render_widget(
-                Paragraph::new(render(question, choices, cursor, default, colour)),
+                Paragraph::new(render(question, choices, cursor, default, esc, colour)),
                 frame.area(),
             );
         })?;
@@ -197,6 +213,7 @@ fn render<'a>(
     choices: &'a [Choice<'a>],
     cursor: usize,
     default: Option<usize>,
+    esc: OnEsc,
     colour: bool,
 ) -> Vec<Line<'a>> {
     let accent = if colour {
@@ -247,8 +264,12 @@ fn render<'a>(
     }
 
     lines.push(Line::default());
+    let esc_hint = match esc {
+        OnEsc::Cancel => "esc cancel",
+        OnEsc::Back => "esc back",
+    };
     lines.push(Line::from(Span::styled(
-        "  ↑/↓ move · 1-9 jump · enter select · esc cancel",
+        format!("  ↑/↓ move · 1-9 jump · enter select · {esc_hint}"),
         dim,
     )));
     lines
@@ -385,10 +406,10 @@ mod tests {
                 description: "a server",
             },
         ];
-        let lines = render("Which mode?", &choices, 1, Some(0), false);
+        let lines = render("Which Mode?", &choices, 1, Some(0), OnEsc::Cancel, false);
         let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
 
-        assert!(text.iter().any(|line| line.contains("Which mode?")));
+        assert!(text.iter().any(|line| line.contains("Which Mode?")));
         assert!(text.iter().any(|line| line.contains("no server")));
         assert_eq!(text.iter().filter(|line| line.contains('❯')).count(), 1);
         assert!(
@@ -427,7 +448,7 @@ mod tests {
                 description: "a site",
             },
         ];
-        let lines = render("Which template?", &choices, 0, None, false);
+        let lines = render("Which Template?", &choices, 0, None, OnEsc::Back, false);
         let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
 
         assert!(
@@ -439,6 +460,30 @@ mod tests {
                 .find(|line| line.contains("spa"))
                 .is_some_and(|line| line.contains('❯')),
             "the cursor still starts on the first choice: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("esc back")),
+            "going back is what Esc does here: {text:?}"
+        );
+        assert!(
+            !text.iter().any(|line| line.contains("esc cancel")),
+            "cancel is not on offer where back is: {text:?}"
+        );
+    }
+
+    /// Where there is nowhere back to go, Esc says cancel.
+    #[test]
+    fn the_first_menu_offers_cancel() {
+        let choices = [Choice {
+            name: "spa",
+            description: "an app",
+        }];
+        let lines = render("Which Template?", &choices, 0, None, OnEsc::Cancel, false);
+        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+
+        assert!(
+            text.iter().any(|line| line.contains("esc cancel")),
+            "cancel is what Esc does here: {text:?}"
         );
     }
 }

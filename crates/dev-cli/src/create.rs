@@ -16,7 +16,8 @@
 //! whether to install — and away from one it writes the files and says
 //! nothing, because every other command here is a flag grammar that works
 //! unattended and `create` stays one whenever it cannot see a person
-//! ([`crate::prompt::interactive`]).
+//! ([`crate::prompt::interactive`]). Esc steps back to the nearest question
+//! that was asked; Esc on the first cancels, having written nothing.
 //!
 //! **Everything a prompt asks has a flag**, so the interactive path is a
 //! convenience over the scriptable one and never the only way to an answer.
@@ -215,6 +216,8 @@ pub struct CreateConfig {
     /// Which package manager to install with, `Some(None)` for an explicit
     /// "do not install", and `None` to ask (or, unattended, not to).
     pub install: Option<Option<String>>,
+    /// `-y`: take every default and never ask, even on a terminal.
+    pub yes: bool,
 }
 
 /// The default template, when `--template` did not say and nobody was asked.
@@ -228,41 +231,176 @@ pub const DEFAULT_MANAGER: &str = "npm";
 
 /// Scaffolds a project and reports what to do next.
 pub fn create(config: &CreateConfig) -> Result<String, String> {
-    // Asked before anything is written, so a person who changes their mind at
-    // the prompt leaves no directory behind.
-    let template = match &config.template {
-        Some(named) => named.clone(),
-        // Esc at the first question, before anything has been written. Nothing
-        // to undo, nothing to report, and an exit status of zero: a person who
-        // changed their mind did not hit an error.
-        None if crate::prompt::interactive() => match ask_template() {
-            Some(template) => template,
-            None => return Ok(String::new()),
-        },
-        None => DEFAULT_TEMPLATE.to_string(),
+    // Everything below resolves before anything is written, so a person who
+    // changes their mind at a prompt leaves no directory behind.
+    let scripted = config.yes || !crate::prompt::interactive();
+    let mut answers = Answers::default();
+    if let Some(named) = &config.template {
+        answers.template = Some(named.clone());
+    }
+    // Steps that showed a menu, in order. Esc steps back to the nearest one
+    // before the current step; a step answered by a flag never appears here,
+    // so the retreat skips it — and with no prompted step behind, Esc cancels.
+    let mut prompted: Vec<Step> = Vec::new();
+    let mut step = 0;
+    while step < STEPS.len() {
+        let ask = Ask {
+            scripted,
+            back: STEPS[..step].iter().any(|s| prompted.contains(s)),
+        };
+        match STEPS[step] {
+            Step::Template => {
+                if answers.template.is_none() {
+                    if scripted {
+                        answers.template = Some(DEFAULT_TEMPLATE.to_string());
+                    } else {
+                        match ask_template() {
+                            Some(template) => {
+                                answers.template = Some(template);
+                                prompted.push(Step::Template);
+                            }
+                            // Esc on the first question, before anything has
+                            // been written. Nothing to undo, nothing to
+                            // report, and an exit status of zero: a person who
+                            // changed their mind did not hit an error.
+                            None => return Ok(String::new()),
+                        }
+                    }
+                }
+                let template = answers.template.as_deref().expect("answered above");
+                if TEMPLATES.iter().all(|(name, _)| *name != template) {
+                    return Err(format!(
+                        "there is no {template} template.\n\n{}",
+                        list().trim_end()
+                    ));
+                }
+                step += 1;
+            }
+            Step::Mode => {
+                let template = answers.template.as_deref().expect("template first");
+                match resolve_mode(template, config.mode.as_deref(), ask)? {
+                    Mode::Chosen(mode) => {
+                        answers.mode = Some(mode);
+                        if config.mode.is_none() && !scripted {
+                            prompted.push(Step::Mode);
+                        }
+                        step += 1;
+                    }
+                    Mode::None => {
+                        answers.mode = None;
+                        step += 1;
+                    }
+                    Mode::Back => match step_back_index(Step::Mode, &prompted) {
+                        Some(index) => step = index,
+                        None => return Ok(String::new()),
+                    },
+                }
+            }
+            Step::Language => {
+                let template = answers.template.as_deref().expect("template first");
+                match resolve_choice(
+                    template,
+                    "language",
+                    "language",
+                    is_otf(template),
+                    LANGUAGES,
+                    DEFAULT_LANGUAGE,
+                    config.language.as_deref(),
+                    "Select a Language?",
+                    ask,
+                )? {
+                    Choice::Chosen(language) => {
+                        answers.language = Some(language);
+                        if config.language.is_none() && !scripted {
+                            prompted.push(Step::Language);
+                        }
+                        step += 1;
+                    }
+                    Choice::NotApplicable => {
+                        answers.language = None;
+                        step += 1;
+                    }
+                    Choice::Back => match step_back_index(Step::Language, &prompted) {
+                        Some(index) => step = index,
+                        None => return Ok(String::new()),
+                    },
+                }
+            }
+            Step::Styling => {
+                let template = answers.template.as_deref().expect("template first");
+                match resolve_choice(
+                    template,
+                    "styling",
+                    "styling",
+                    template == "spa" || template == "fullstack",
+                    STYLINGS,
+                    DEFAULT_STYLING,
+                    config.styling.as_deref(),
+                    "Select a Styling Solution?",
+                    ask,
+                )? {
+                    Choice::Chosen(styling) => {
+                        answers.styling = Some(styling);
+                        if config.styling.is_none() && !scripted {
+                            prompted.push(Step::Styling);
+                        }
+                        step += 1;
+                    }
+                    Choice::NotApplicable => {
+                        answers.styling = None;
+                        step += 1;
+                    }
+                    Choice::Back => match step_back_index(Step::Styling, &prompted) {
+                        Some(index) => step = index,
+                        None => return Ok(String::new()),
+                    },
+                }
+            }
+            Step::Blog => {
+                let template = answers.template.as_deref().expect("template first");
+                match resolve_blog(template, config.blog, ask)? {
+                    Blog::On => {
+                        answers.blog = Some(true);
+                        if config.blog.is_none() && !scripted {
+                            prompted.push(Step::Blog);
+                        }
+                        step += 1;
+                    }
+                    Blog::Off => {
+                        answers.blog = Some(false);
+                        if config.blog.is_none() && !scripted {
+                            prompted.push(Step::Blog);
+                        }
+                        step += 1;
+                    }
+                    Blog::NotApplicable => {
+                        answers.blog = None;
+                        step += 1;
+                    }
+                    Blog::Back => match step_back_index(Step::Blog, &prompted) {
+                        Some(index) => step = index,
+                        None => return Ok(String::new()),
+                    },
+                }
+            }
+        }
+    }
+    let template = answers.template.expect("the loop answers it");
+    let mode = answers.mode;
+    let otf = match answers.language {
+        Some(language) => Some(Otf {
+            language,
+            styling: answers.styling,
+            blog: answers.blog,
+        }),
+        None => None,
     };
 
     let files = TEMPLATES
         .iter()
         .find(|(name, _)| *name == template)
         .map(|(_, files)| *files)
-        .ok_or_else(|| format!("there is no {template} template.\n\n{}", list().trim_end()))?;
-
-    // After the template, because which modes exist depends on which template
-    // it is — and still before anything is written, for the same reason.
-    let mode = match resolve_mode(&template, config.mode.as_deref())? {
-        Mode::Chosen(mode) => Some(mode),
-        Mode::None => None,
-        Mode::Cancelled => return Ok(String::new()),
-    };
-    // The OTF axes resolve after the mode for the same reason the mode
-    // resolves after the template: which questions exist depends on the
-    // answers so far — and still before anything is written.
-    let otf = match resolve_otf(&template, config)? {
-        OtfResolution::Answers(otf) => Some(otf),
-        OtfResolution::NotOtf => None,
-        OtfResolution::Cancelled => return Ok(String::new()),
-    };
+        .expect("validated above");
     let files = files_for(files, mode.as_deref());
     // OTF answers rewrite the file list — renames, patches, added and
     // withheld files — so from here the list is owned either way.
@@ -418,14 +556,76 @@ fn next_steps(
     steps
 }
 
+/// The pre-write questions, in order. Which of them appear depends on the
+/// answers so far — a modeless template has no mode, a non-OTF one no axes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Step {
+    Template,
+    Mode,
+    Language,
+    Styling,
+    Blog,
+}
+
+const STEPS: &[Step] = &[
+    Step::Template,
+    Step::Mode,
+    Step::Language,
+    Step::Styling,
+    Step::Blog,
+];
+
+/// The nearest earlier step that showed a menu, or `None` when Esc cancels.
+/// Pure, so the retreat rule tests without a terminal.
+fn step_back_index(current: Step, prompted: &[Step]) -> Option<usize> {
+    let position = STEPS.iter().position(|step| *step == current)?;
+    prompted
+        .iter()
+        .rev()
+        .filter_map(|step| STEPS.iter().position(|s| *s == *step))
+        .find(|index| *index < position)
+}
+
+/// The answers so far. Every forward pass overwrites each one, so switching
+/// template mid-run cannot leave a stale answer behind.
+#[derive(Default)]
+struct Answers {
+    template: Option<String>,
+    mode: Option<String>,
+    language: Option<String>,
+    styling: Option<String>,
+    blog: Option<bool>,
+}
+
+/// How one pre-write question resolves.
+#[derive(Clone, Copy)]
+struct Ask {
+    /// `-y`, or away from a terminal: menus never appear, defaults win. This
+    /// is what makes `-y`'s promise hold on a terminal, where `interactive()`
+    /// alone is true and a menu would otherwise appear.
+    scripted: bool,
+    /// Esc steps back: an earlier step showed a menu.
+    back: bool,
+}
+
+impl Ask {
+    fn esc(&self) -> crate::prompt::OnEsc {
+        if self.back {
+            crate::prompt::OnEsc::Back
+        } else {
+            crate::prompt::OnEsc::Cancel
+        }
+    }
+}
+
 /// What resolving `--mode` came to.
 enum Mode {
     /// This template has modes, and this is the one.
     Chosen(String),
     /// This template has one shape.
     None,
-    /// Esc at the question.
-    Cancelled,
+    /// Esc: back to the question before, or out if there is none.
+    Back,
 }
 
 /// The mode to write, from the flag, a question, or the default.
@@ -433,7 +633,7 @@ enum Mode {
 /// Naming a mode for a template that has none is refused rather than ignored: a
 /// flag that silently does nothing is one somebody will keep passing, and keep
 /// believing.
-fn resolve_mode(template: &str, asked_for: Option<&str>) -> Result<Mode, String> {
+fn resolve_mode(template: &str, asked_for: Option<&str>, ask: Ask) -> Result<Mode, String> {
     let Some(modes) = modes(template) else {
         return match asked_for {
             Some(mode) => Err(format!(
@@ -455,7 +655,7 @@ fn resolve_mode(template: &str, asked_for: Option<&str>) -> Result<Mode, String>
         return Ok(Mode::Chosen(mode.to_string()));
     }
 
-    if !crate::prompt::interactive() {
+    if ask.scripted || !crate::prompt::interactive() {
         return Ok(Mode::Chosen(
             default_mode(template)
                 .expect("a template with modes has a default")
@@ -467,9 +667,9 @@ fn resolve_mode(template: &str, asked_for: Option<&str>) -> Result<Mode, String>
         .iter()
         .map(|(name, description)| crate::prompt::Choice { name, description })
         .collect();
-    match crate::prompt::select("Which mode?", &choices, Some(0)) {
+    match crate::prompt::select("Which Mode?", &choices, Some(0), ask.esc()) {
         Some(chosen) => Ok(Mode::Chosen(choices[chosen].name.to_string())),
-        None => Ok(Mode::Cancelled),
+        None => Ok(Mode::Back),
     }
 }
 
@@ -541,7 +741,7 @@ const DEFAULT_BLOG: bool = true;
 enum Choice {
     Chosen(String),
     NotApplicable,
-    Cancelled,
+    Back,
 }
 
 /// Flag, question, or default — the same precedence the mode uses, for an
@@ -560,6 +760,7 @@ fn resolve_choice(
     default: &str,
     asked_for: Option<&str>,
     question: &str,
+    ask: Ask,
 ) -> Result<Choice, String> {
     if !takes {
         return match asked_for {
@@ -579,7 +780,7 @@ fn resolve_choice(
         }
         return Ok(Choice::Chosen(value.to_string()));
     }
-    if !crate::prompt::interactive() {
+    if ask.scripted || !crate::prompt::interactive() {
         return Ok(Choice::Chosen(default.to_string()));
     }
     let choices: Vec<crate::prompt::Choice<'_>> = options
@@ -590,9 +791,9 @@ fn resolve_choice(
         .iter()
         .position(|choice| choice.name == default)
         .unwrap_or(0);
-    match crate::prompt::select(question, &choices, Some(preselect)) {
+    match crate::prompt::select(question, &choices, Some(preselect), ask.esc()) {
         Some(chosen) => Ok(Choice::Chosen(choices[chosen].name.to_string())),
-        None => Ok(Choice::Cancelled),
+        None => Ok(Choice::Back),
     }
 }
 
@@ -602,12 +803,12 @@ enum Blog {
     On,
     Off,
     NotApplicable,
-    Cancelled,
+    Back,
 }
 
 /// The blog is a yes/no rather than a named choice, but the shape is the
 /// same: flags, a question, a default — and refused outside `docs`.
-fn resolve_blog(template: &str, asked_for: Option<bool>) -> Result<Blog, String> {
+fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blog, String> {
     if template != "docs" {
         return match asked_for {
             Some(_) => Err(format!(
@@ -619,7 +820,7 @@ fn resolve_blog(template: &str, asked_for: Option<bool>) -> Result<Blog, String>
     if let Some(on) = asked_for {
         return Ok(if on { Blog::On } else { Blog::Off });
     }
-    if !crate::prompt::interactive() {
+    if ask.scripted || !crate::prompt::interactive() {
         return Ok(if DEFAULT_BLOG { Blog::On } else { Blog::Off });
     }
     let choices = [
@@ -633,10 +834,15 @@ fn resolve_blog(template: &str, asked_for: Option<bool>) -> Result<Blog, String>
         },
     ];
     let preselect = if DEFAULT_BLOG { 0 } else { 1 };
-    match crate::prompt::select("Include a sample blog?", &choices, Some(preselect)) {
+    match crate::prompt::select(
+        "Include a Sample Blog?",
+        &choices,
+        Some(preselect),
+        ask.esc(),
+    ) {
         Some(0) => Ok(Blog::On),
         Some(_) => Ok(Blog::Off),
-        None => Ok(Blog::Cancelled),
+        None => Ok(Blog::Back),
     }
 }
 
@@ -647,65 +853,6 @@ struct Otf {
     language: String,
     styling: Option<String>,
     blog: Option<bool>,
-}
-
-/// What resolving the OTF axes came to.
-#[derive(Debug)]
-enum OtfResolution {
-    /// An OTF template, with its answers.
-    Answers(Otf),
-    /// Any other template, which takes none of these axes.
-    NotOtf,
-    /// Esc at one of the questions.
-    Cancelled,
-}
-
-/// The OTF answers from flags, questions, or defaults. Each axis refuses
-/// itself where it does not apply, so a stray flag errors rather than
-/// silently doing nothing — the same rule `--mode` follows.
-fn resolve_otf(template: &str, config: &CreateConfig) -> Result<OtfResolution, String> {
-    let language = match resolve_choice(
-        template,
-        "language",
-        "language",
-        is_otf(template),
-        LANGUAGES,
-        DEFAULT_LANGUAGE,
-        config.language.as_deref(),
-        "Select a language?",
-    )? {
-        Choice::Chosen(language) => Some(language),
-        Choice::NotApplicable => None,
-        Choice::Cancelled => return Ok(OtfResolution::Cancelled),
-    };
-    let styling = match resolve_choice(
-        template,
-        "styling",
-        "styling",
-        template == "spa" || template == "fullstack",
-        STYLINGS,
-        DEFAULT_STYLING,
-        config.styling.as_deref(),
-        "Select a styling solution?",
-    )? {
-        Choice::Chosen(styling) => Some(styling),
-        Choice::NotApplicable => None,
-        Choice::Cancelled => return Ok(OtfResolution::Cancelled),
-    };
-    let blog = match resolve_blog(template, config.blog)? {
-        Blog::On => Some(true),
-        Blog::Off => Some(false),
-        Blog::NotApplicable => None,
-        Blog::Cancelled => return Ok(OtfResolution::Cancelled),
-    };
-    match language {
-        Some(language) => Ok(OtfResolution::Answers(Otf {
-            language,
-            styling,
-            blog,
-        })),
-        None => Ok(OtfResolution::NotOtf),
-    }
 }
 
 /// Applies the OTF answers to the embedded files: renames, patches, added
@@ -1020,22 +1167,32 @@ fn template_menu_otf() -> Vec<(&'static str, &'static str)> {
 /// Two menus rather than nine lines: the OTF starters choose behind their
 /// group entry, in `create-web`'s order. Neither menu has a default — the
 /// template is the one answer worth choosing explicitly — while flags,
-/// `-y` and unattended runs resolve exactly as before.
+/// `-y` and unattended runs resolve exactly as before. Esc on the first
+/// menu cancels the run; Esc on the second steps back to the first.
 fn ask_template() -> Option<String> {
     let top: Vec<crate::prompt::Choice<'_>> = template_menu_top()
         .into_iter()
         .map(|(name, description)| crate::prompt::Choice { name, description })
         .collect();
-    let chosen = crate::prompt::select("Which template?", &top, None)?;
-    if top[chosen].name != OTF_GROUP {
-        return Some(top[chosen].name.to_string());
+    loop {
+        let chosen =
+            crate::prompt::select("Which Template?", &top, None, crate::prompt::OnEsc::Cancel)?;
+        if top[chosen].name != OTF_GROUP {
+            return Some(top[chosen].name.to_string());
+        }
+        let otf: Vec<crate::prompt::Choice<'_>> = template_menu_otf()
+            .into_iter()
+            .map(|(name, description)| crate::prompt::Choice { name, description })
+            .collect();
+        if let Some(chosen) = crate::prompt::select(
+            "Which OTF Web Starter?",
+            &otf,
+            None,
+            crate::prompt::OnEsc::Back,
+        ) {
+            return Some(otf[chosen].name.to_string());
+        }
     }
-    let otf: Vec<crate::prompt::Choice<'_>> = template_menu_otf()
-        .into_iter()
-        .map(|(name, description)| crate::prompt::Choice { name, description })
-        .collect();
-    let chosen = crate::prompt::select("Which OTF Web starter?", &otf, None)?;
-    Some(otf[chosen].name.to_string())
 }
 
 /// Whether to install, and with what.
@@ -1063,7 +1220,12 @@ fn ask_install() -> Option<crate::install::Manager> {
     // Esc lands on the same answer `skip` does: the project is already on disk
     // by now, and cancelling the *install* question is not cancelling the
     // project. Either way the next steps say how to install it.
-    let chosen = crate::prompt::select("Install the dependencies?", &choices, Some(0))?;
+    let chosen = crate::prompt::select(
+        "Install the Dependencies?",
+        &choices,
+        Some(0),
+        crate::prompt::OnEsc::Cancel,
+    )?;
     available.get(chosen).copied()
 }
 
@@ -1264,16 +1426,87 @@ mod tests {
         }
     }
 
+    /// The answers as asked: on a terminal menus appear, and Esc steps back.
+    const ASK: Ask = Ask {
+        scripted: false,
+        back: false,
+    };
+    /// `-y`, or away from a terminal: menus never appear, defaults win.
+    const SCRIPTED: Ask = Ask {
+        scripted: true,
+        back: false,
+    };
+
     /// Naming a mode a template does not have is refused rather than ignored.
     #[test]
     fn a_mode_that_is_not_one_is_refused() {
-        assert!(resolve_mode("react", Some("ssr")).is_err());
-        assert!(resolve_mode("api", Some("static")).is_err());
+        assert!(resolve_mode("react", Some("ssr"), ASK).is_err());
+        assert!(resolve_mode("api", Some("static"), ASK).is_err());
         assert!(matches!(
-            resolve_mode("react", Some("static")),
+            resolve_mode("react", Some("static"), ASK),
             Ok(Mode::Chosen(mode)) if mode == "static"
         ));
-        assert!(matches!(resolve_mode("api", None), Ok(Mode::None)));
+        assert!(matches!(resolve_mode("api", None, ASK), Ok(Mode::None)));
+    }
+
+    /// `-y` takes every default without asking: no menus, even where a
+    /// terminal would have shown them. A test never has a terminal, so the
+    /// scripted path is what pins this — the interactive one cannot run here.
+    #[test]
+    fn yes_resolves_every_default() {
+        assert!(matches!(
+            resolve_mode("react", None, SCRIPTED),
+            Ok(Mode::Chosen(mode)) if mode == "static"
+        ));
+        assert!(matches!(
+            resolve_choice(
+                "spa",
+                "language",
+                "language",
+                true,
+                LANGUAGES,
+                DEFAULT_LANGUAGE,
+                None,
+                "Select a Language?",
+                SCRIPTED,
+            ),
+            Ok(Choice::Chosen(language)) if language == DEFAULT_LANGUAGE
+        ));
+        assert!(matches!(
+            resolve_blog("docs", None, SCRIPTED),
+            Ok(Blog::On) if DEFAULT_BLOG
+        ));
+    }
+
+    /// Esc steps back to the nearest earlier step that showed a menu — past
+    /// steps answered by flags, and away from the first step, it cancels.
+    #[test]
+    fn esc_retreats_to_the_last_menu() {
+        use Step::{Blog, Language, Mode, Styling, Template};
+        // Nothing behind: out.
+        assert_eq!(step_back_index(Template, &[]), None);
+        assert_eq!(step_back_index(Mode, &[]), None);
+        // The nearest menu behind, skipping steps that never asked.
+        assert_eq!(
+            step_back_index(Mode, &[Template]),
+            Some(0),
+            "Esc at the mode returns to the template menu"
+        );
+        assert_eq!(
+            step_back_index(Blog, &[Template, Language]),
+            Some(2),
+            "a modeless step never asked, so it is skipped"
+        );
+        assert_eq!(
+            step_back_index(Styling, &[Template, Mode, Language, Styling]),
+            Some(2),
+            "a step's own earlier visit does not count as behind it"
+        );
+        assert_eq!(
+            step_back_index(Language, &[Template, Template]),
+            Some(0),
+            "re-asked steps retreat the same way"
+        );
     }
 
     /// What a *running* template leaves behind is not the template. Embedding
@@ -1456,59 +1689,71 @@ mod tests {
     /// Unit tests never see a TTY, so `None` here is the unattended default.
     #[test]
     fn the_otf_axes_default_and_refuse() {
-        let config = CreateConfig {
-            dir: "x".to_string(),
-            template: Some("spa".to_string()),
-            mode: None,
-            language: None,
-            styling: None,
-            blog: None,
-            force: false,
-            install: Some(None),
-        };
-        match resolve_otf("spa", &config).expect("spa resolves") {
-            OtfResolution::Answers(otf) => {
-                assert_eq!(otf.language, DEFAULT_LANGUAGE);
-                assert_eq!(otf.styling.as_deref(), Some(DEFAULT_STYLING));
-                assert_eq!(otf.blog, None);
-            }
-            other => panic!("spa takes language and styling: {other:?}"),
-        }
-        match resolve_otf("docs", &config).expect("docs resolves") {
-            OtfResolution::Answers(otf) => {
-                assert_eq!(otf.blog, Some(DEFAULT_BLOG));
-                assert_eq!(otf.styling, None);
-            }
-            other => panic!("docs takes a blog: {other:?}"),
-        }
         assert!(matches!(
-            resolve_otf("api", &config),
-            Ok(OtfResolution::NotOtf)
+            resolve_choice(
+                "spa",
+                "language",
+                "language",
+                true,
+                LANGUAGES,
+                DEFAULT_LANGUAGE,
+                None,
+                "Select a Language?",
+                ASK,
+            ),
+            Ok(Choice::Chosen(language)) if language == DEFAULT_LANGUAGE
+        ));
+        assert!(matches!(
+            resolve_choice(
+                "spa",
+                "styling",
+                "styling",
+                true,
+                STYLINGS,
+                DEFAULT_STYLING,
+                None,
+                "Select a Styling Solution?",
+                ASK,
+            ),
+            Ok(Choice::Chosen(styling)) if styling == DEFAULT_STYLING
+        ));
+        assert!(matches!(
+            resolve_blog("docs", None, ASK),
+            Ok(Blog::On) if DEFAULT_BLOG
+        ));
+        assert!(matches!(
+            resolve_choice(
+                "api",
+                "language",
+                "language",
+                false,
+                LANGUAGES,
+                DEFAULT_LANGUAGE,
+                None,
+                "Select a Language?",
+                ASK,
+            ),
+            Ok(Choice::NotApplicable)
         ));
 
-        let flagged = CreateConfig {
-            language: Some("ts".to_string()),
-            styling: Some("css".to_string()),
-            blog: None,
-            ..config_empty_dir()
-        };
-        match resolve_otf("fullstack", &flagged).expect("flags resolve") {
-            OtfResolution::Answers(otf) => {
-                assert_eq!(otf.language, "ts");
-                assert_eq!(otf.styling.as_deref(), Some("css"));
-            }
-            other => panic!("flags are answers: {other:?}"),
-        }
-        assert!(resolve_otf("react", &flagged).is_err());
-        let unblogged = CreateConfig {
-            blog: Some(false),
-            ..config_empty_dir()
-        };
-        match resolve_otf("docs", &unblogged).expect("the blog flag resolves") {
-            OtfResolution::Answers(otf) => assert_eq!(otf.blog, Some(false)),
-            other => panic!("--no-blog is an answer: {other:?}"),
-        }
-        assert!(resolve_otf("fullstack", &unblogged).is_err());
+        assert!(matches!(
+            resolve_choice(
+                "fullstack",
+                "language",
+                "language",
+                true,
+                LANGUAGES,
+                DEFAULT_LANGUAGE,
+                Some("ts"),
+                "Select a Language?",
+                ASK,
+            ),
+            Ok(Choice::Chosen(language)) if language == "ts"
+        ));
+        assert!(matches!(
+            resolve_blog("docs", Some(false), ASK),
+            Ok(Blog::Off)
+        ));
         assert!(
             resolve_choice(
                 "api",
@@ -1518,7 +1763,8 @@ mod tests {
                 LANGUAGES,
                 DEFAULT_LANGUAGE,
                 Some("elm"),
-                "Select a language?"
+                "Select a Language?",
+                ASK,
             )
             .is_err()
         );
@@ -1531,7 +1777,8 @@ mod tests {
                 LANGUAGES,
                 DEFAULT_LANGUAGE,
                 Some("elm"),
-                "Select a language?"
+                "Select a Language?",
+                ASK,
             )
             .is_err()
         );
@@ -1545,26 +1792,21 @@ mod tests {
                 STYLINGS,
                 DEFAULT_STYLING,
                 Some("css"),
-                "Select a styling solution?"
+                "Select a Styling Solution?",
+                ASK,
             )
             .is_err()
         );
-        assert!(resolve_blog("spa", Some(true)).is_err());
-        assert!(matches!(resolve_blog("spa", None), Ok(Blog::NotApplicable)));
-        assert!(matches!(resolve_blog("docs", Some(false)), Ok(Blog::Off)));
-    }
-
-    fn config_empty_dir() -> CreateConfig {
-        CreateConfig {
-            dir: "x".to_string(),
-            template: None,
-            mode: None,
-            language: None,
-            styling: None,
-            blog: None,
-            force: false,
-            install: Some(None),
-        }
+        assert!(resolve_blog("spa", Some(true), ASK).is_err());
+        assert!(resolve_blog("fullstack", Some(false), ASK).is_err());
+        assert!(matches!(
+            resolve_blog("spa", None, ASK),
+            Ok(Blog::NotApplicable)
+        ));
+        assert!(matches!(
+            resolve_blog("fullstack", None, ASK),
+            Ok(Blog::NotApplicable)
+        ));
     }
 
     /// The OTF answers applied, as `create` would write them.

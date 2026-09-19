@@ -1045,6 +1045,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     let mut blog: Option<bool> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
+    let mut yes = false;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1082,6 +1083,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
             // default rather than prompting, even on a terminal.
             "-y" | "--yes" => {
                 reject_value(flag, value)?;
+                yes = true;
                 template.get_or_insert_with(|| DEFAULT_TEMPLATE.to_string());
                 // Left as `None` on purpose: the default *mode* depends on
                 // which template this turned out to be, and only `create` knows
@@ -1117,6 +1119,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
         blog,
         force,
         install,
+        yes,
     })
 }
 

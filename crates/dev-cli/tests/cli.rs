@@ -6360,7 +6360,7 @@ fn create_never_asks_when_nobody_is_there() {
 
     // …and nothing was written to the question stream.
     assert!(
-        !stderr(&out).contains("Which template"),
+        !stderr(&out).contains("Which Template"),
         "it asked anyway:\n{}",
         stderr(&out)
     );

@@ -35,7 +35,9 @@ namespace) is unstable and may change between minor releases until the API freez
   its axes as flags: `--language=js|ts`, `--styling=css|tailwind` (spa,
   fullstack) and `--blog/--no-blog` (docs). The four choose behind an
   "OTF Web" group entry, and no template menu preselects — the template is
-  chosen explicitly. The library template's suite runs under `esdev test`
+  chosen explicitly. `Esc` steps back to the previous question instead of
+  cancelling the run, and `-y` takes every default without asking, even on
+  a terminal. The library template's suite runs under `esdev test`
   instead of `bun test`.
 
 ### Fixed
