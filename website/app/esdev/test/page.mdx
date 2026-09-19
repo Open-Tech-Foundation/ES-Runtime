@@ -34,6 +34,8 @@ throws `SyntaxError`.
 select values/options, form reset, and the basic checkbox, radio, and
 submit-button click defaults. Controls associate with a containing form or its
 `form` attribute; `new FormData(form)` serializes successful controls.
+Disabled `fieldset` and `optgroup` ancestors disable their descendant controls
+for validation and form-data serialization.
 Inputs, selects, and textareas expose layout-free constraint validation
 (`validity`, `checkValidity()`, `reportValidity()`, and custom errors); form
 `requestSubmit()` validates before dispatching `submit`.

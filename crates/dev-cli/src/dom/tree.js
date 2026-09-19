@@ -449,9 +449,19 @@ export function createTree(events = {}) {
     return null;
   }
 
+  function isDisabled(control) {
+    if (control.disabled) return true;
+    for (let parent = control.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLFieldSetElement || parent instanceof HTMLOptGroupElement) {
+        if (parent.disabled) return true;
+      }
+    }
+    return false;
+  }
+
   class HTMLFormElement extends HTMLElement {
     get elements() {
-      return new HTMLCollection(this, () => Array.from(this.ownerDocument.getElementsByTagName("*")).filter((element) => ["button", "input", "select", "textarea"].includes(element.localName) && formOwner(element) === this));
+      return new HTMLCollection(this, () => Array.from(this.ownerDocument.getElementsByTagName("*")).filter((element) => ["button", "fieldset", "input", "select", "textarea"].includes(element.localName) && formOwner(element) === this));
     }
     reset() {
       const event = new Event("reset", { bubbles: true, cancelable: true });
@@ -543,6 +553,9 @@ export function createTree(events = {}) {
     set value(value) { this[TEXTAREA_VALUE] = String(value); }
   }
 
+  class HTMLFieldSetElement extends HTMLElement {}
+  class HTMLOptGroupElement extends HTMLElement {}
+
   function validityFor(control) {
     const value = control.value ?? "";
     const required = control.required && (control instanceof HTMLSelectElement ? control.selectedIndex < 0 || value === "" : value === "");
@@ -569,7 +582,7 @@ export function createTree(events = {}) {
 
   function installValidation(Class) {
     Object.defineProperties(Class.prototype, {
-      willValidate: { get() { return !this.disabled; } },
+      willValidate: { get() { return !isDisabled(this); } },
       validity: { get() { return validityFor(this); } },
       validationMessage: { get() { return this.validity.valid ? "" : this[CUSTOM_VALIDITY] || "Constraints not satisfied"; } },
       setCustomValidity: { value(message) { this[CUSTOM_VALIDITY] = String(message); } },
@@ -645,6 +658,8 @@ export function createTree(events = {}) {
     { name: "name", placeholder: "placeholder" },
     { disabled: "disabled", readOnly: "readonly", required: "required" },
     { cols: ["cols", 20, 1], rows: ["rows", 2, 1] });
+  installReflectors(HTMLFieldSetElement, { name: "name" }, { disabled: "disabled" });
+  installReflectors(HTMLOptGroupElement, { label: "label" }, { disabled: "disabled" });
   installValidation(HTMLInputElement);
   installValidation(HTMLSelectElement);
   installValidation(HTMLTextAreaElement);
@@ -712,8 +727,10 @@ export function createTree(events = {}) {
     input: HTMLInputElement,
     label: HTMLLabelElement,
     option: HTMLOptionElement,
+    optgroup: HTMLOptGroupElement,
     select: HTMLSelectElement,
     textarea: HTMLTextAreaElement,
+    fieldset: HTMLFieldSetElement,
   };
 
   function upgradeCustom(element, constructor) {
@@ -741,5 +758,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, isDisabled, upgradeCustom };
 }

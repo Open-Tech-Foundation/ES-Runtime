@@ -3681,6 +3681,89 @@ fn test_dom_request_submit_validates_before_emitting_submit() {
 }
 
 #[test]
+fn test_dom_disabled_fieldsets_exclude_descendants_from_validation_and_form_data() {
+    let dir = build_dir("t_test_dom_fieldset_disabled");
+    write_in(
+        &dir,
+        "fieldset.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('disabled fieldsets suppress descendant controls', () => {\n\
+           const form = document.createElement('form'); const fieldset = document.createElement('fieldset'); fieldset.disabled = true; const blocked = document.createElement('input'); blocked.name = 'blocked'; blocked.required = true; blocked.value = '';\n\
+           const active = document.createElement('input'); active.name = 'active'; active.value = 'yes'; fieldset.appendChild(blocked); form.append(fieldset, active); document.body.appendChild(form);\n\
+           assertEquals([fieldset instanceof HTMLFieldSetElement, blocked.willValidate, blocked.checkValidity(), form.checkValidity(), Array.from(new FormData(form))], [true, false, true, true, [['active', 'yes']]]);\n\
+           fieldset.disabled = false; blocked.value = 'now'; assertEquals([blocked.willValidate, form.checkValidity(), Array.from(new FormData(form))], [true, true, [['blocked', 'now'], ['active', 'yes']]]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM fieldset disabled test");
+    assert!(
+        ran.status.success(),
+        "fieldset disabled test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_disabled_optgroups_exclude_selected_options_from_form_data() {
+    let dir = build_dir("t_test_dom_optgroup_disabled");
+    write_in(
+        &dir,
+        "optgroup.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('disabled optgroups leave selected options visible but unsuccessful', () => {\n\
+           const form = document.createElement('form'); const select = document.createElement('select'); select.name = 'choice'; select.multiple = true;\n\
+           const blockedGroup = document.createElement('optgroup'); blockedGroup.disabled = true; blockedGroup.label = 'blocked'; const blocked = document.createElement('option'); blocked.value = 'blocked'; blocked.selected = true; blockedGroup.appendChild(blocked);\n\
+           const activeGroup = document.createElement('optgroup'); const active = document.createElement('option'); active.value = 'active'; active.selected = true; activeGroup.appendChild(active);\n\
+           select.append(blockedGroup, activeGroup); form.appendChild(select); document.body.appendChild(form);\n\
+           assertEquals([blockedGroup instanceof HTMLOptGroupElement, Array.from(select.selectedOptions), Array.from(new FormData(form))], [true, [blocked, active], [['choice', 'active']]]);\n\
+           blockedGroup.disabled = false; assertEquals(Array.from(new FormData(form)), [['choice', 'blocked'], ['choice', 'active']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM optgroup disabled test");
+    assert!(
+        ran.status.success(),
+        "optgroup disabled test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_elements_include_live_fieldsets_and_associated_controls() {
+    let dir = build_dir("t_test_dom_fieldset_collections");
+    write_in(
+        &dir,
+        "fieldset-collections.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('form elements remain live across fieldset mutations', () => {\n\
+           const form = document.createElement('form'); form.id = 'settings'; const fieldset = document.createElement('fieldset'); const inside = document.createElement('input'); fieldset.appendChild(inside); form.appendChild(fieldset);\n\
+           const external = document.createElement('textarea'); external.setAttribute('form', 'settings'); document.body.append(form, external); const elements = form.elements;\n\
+           assertEquals(Array.from(elements), [fieldset, inside, external]);\n\
+           inside.remove(); assertEquals(Array.from(elements), [fieldset, external]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM fieldset collection test");
+    assert!(
+        ran.status.success(),
+        "fieldset collection test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

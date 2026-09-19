@@ -41,10 +41,10 @@ class DomFormData extends NativeFormData {
     if (form === undefined) return;
     if (!(form instanceof tree.HTMLFormElement)) throw new TypeError("FormData constructor expects an HTMLFormElement");
     for (const control of form.elements) {
-      if (control.disabled || !control.name || control instanceof tree.HTMLButtonElement) continue;
+      if (tree.isDisabled(control) || !control.name || control instanceof tree.HTMLButtonElement || control instanceof tree.HTMLFieldSetElement) continue;
       if (control instanceof tree.HTMLInputElement && ["checkbox", "radio"].includes(control.type) && !control.checked) continue;
       if (control instanceof tree.HTMLSelectElement) {
-        for (const option of control.selectedOptions) this.append(control.name, option.value);
+        for (const option of control.selectedOptions) if (!tree.isDisabled(option)) this.append(control.name, option.value);
       } else {
         this.append(control.name, control.value);
       }
