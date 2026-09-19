@@ -3088,6 +3088,56 @@ fn test_dom_selectors_match_strict_compounds_and_combinators() {
 }
 
 #[test]
+fn test_dom_reflects_common_attributes_and_form_defaults() {
+    let dir = build_dir("t_test_dom_elements");
+    write_in(
+        &dir,
+        "elements.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('reflection', () => {\n\
+           const input = document.createElement('input');\n\
+           input.id = 'email'; input.className = 'field'; input.disabled = true; input.size = 0; input.value = 42;\n\
+           assertEquals(input instanceof HTMLElement, true);\n\
+           assertEquals(input instanceof HTMLInputElement, true);\n\
+           assertEquals(input.getAttribute('id'), 'email');\n\
+           assertEquals(input.getAttribute('class'), 'field');\n\
+           assertEquals(input.disabled, true);\n\
+           assertEquals(input.hasAttribute('disabled'), true);\n\
+           assertEquals(input.size, 1);\n\
+           assertEquals(input.value, '42');\n\
+           input.disabled = false;\n\
+           assertEquals(input.hasAttribute('disabled'), false);\n\
+           const label = document.createElement('label'); label.htmlFor = 'email';\n\
+           assertEquals(label.getAttribute('for'), 'email');\n\
+         });\n\
+         test('click defaults', () => {\n\
+           const form = document.createElement('form');\n\
+           const checkbox = document.createElement('input'); checkbox.type = 'checkbox';\n\
+           const radioOne = document.createElement('input'); radioOne.type = 'radio'; radioOne.name = 'choice';\n\
+           const radioTwo = document.createElement('input'); radioTwo.type = 'radio'; radioTwo.name = 'choice';\n\
+           const submit = document.createElement('button');\n\
+           form.append(checkbox, radioOne, radioTwo, submit); document.body.appendChild(form);\n\
+           checkbox.click(); assertEquals(checkbox.checked, true);\n\
+           radioOne.click(); radioTwo.click(); assertEquals(radioOne.checked, false); assertEquals(radioTwo.checked, true);\n\
+           let submitted = 0; form.addEventListener('submit', () => { submitted += 1; }); submit.click();\n\
+           assertEquals(submitted, 1);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom elements");
+    assert!(
+        ran.status.success(),
+        "DOM element test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(

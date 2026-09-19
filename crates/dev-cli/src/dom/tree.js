@@ -32,7 +32,8 @@ function asNodes(value, document, NodeClass) {
   return value.map((item) => (item instanceof NodeClass ? item : document.createTextNode(String(item))));
 }
 
-export function createTree({ EventTarget = class {} } = {}) {
+export function createTree(events = {}) {
+  const { EventTarget = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
   class LiveCollection {
     constructor(root, filter) {
       this.root = root;
@@ -349,6 +350,114 @@ export function createTree({ EventTarget = class {} } = {}) {
     }
   }
 
+  // Reflection is table-driven: the attribute spelling, value kind and
+  // coercion live in one place instead of diverging across hand-written
+  // accessors. These are the common cross-element attributes; element-specific
+  // entries are installed below on the relevant subclass only.
+  class HTMLElement extends Element {
+    click() {
+      this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    }
+  }
+
+  class HTMLInputElement extends HTMLElement {
+    click() {
+      if (this.disabled) return;
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      if (!this.dispatchEvent(event)) return;
+      if (this.type === "checkbox") this.checked = !this.checked;
+      if (this.type === "radio" && !this.checked) {
+        const name = this.name;
+        for (const input of this.ownerDocument.getElementsByTagName("input")) {
+          if (input !== this && input.type === "radio" && input.name === name) input.checked = false;
+        }
+        this.checked = true;
+      }
+    }
+  }
+
+  class HTMLButtonElement extends HTMLElement {
+    click() {
+      if (this.disabled) return;
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      if (!this.dispatchEvent(event) || this.type !== "submit") return;
+      for (let parent = this.parentElement; parent; parent = parent.parentElement) {
+        if (parent instanceof HTMLFormElement) {
+          parent.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: this }));
+          break;
+        }
+      }
+    }
+  }
+
+  class HTMLFormElement extends HTMLElement {}
+
+  class HTMLLabelElement extends HTMLElement {
+    click() {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      if (!this.dispatchEvent(event)) return;
+      const target = this.htmlFor
+        ? Array.from(this.ownerDocument.getElementsByTagName("*")).find((element) => element.id === this.htmlFor)
+        : this.children.item(0);
+      target?.click?.();
+    }
+  }
+
+  function reflectString(attribute) {
+    return {
+      get() { return this.getAttribute(attribute) ?? ""; },
+      set(value) { this.setAttribute(attribute, String(value)); },
+    };
+  }
+
+  function reflectBoolean(attribute) {
+    return {
+      get() { return this.hasAttribute(attribute); },
+      set(value) { if (value) this.setAttribute(attribute, ""); else this.removeAttribute(attribute); },
+    };
+  }
+
+  function reflectInteger(attribute, fallback, minimum = Number.NEGATIVE_INFINITY) {
+    return {
+      get() {
+        const value = Number.parseInt(this.getAttribute(attribute) ?? "", 10);
+        return Number.isFinite(value) && value >= minimum ? value : fallback;
+      },
+      set(value) {
+        value = Number(value);
+        value = Number.isFinite(value) ? Math.max(minimum, Math.trunc(value)) : fallback;
+        this.setAttribute(attribute, String(value));
+      },
+    };
+  }
+
+  function installReflectors(Class, strings = {}, booleans = {}, integers = {}) {
+    const properties = {};
+    for (const [property, attribute] of Object.entries(strings)) properties[property] = reflectString(attribute);
+    for (const [property, attribute] of Object.entries(booleans)) properties[property] = reflectBoolean(attribute);
+    for (const [property, [attribute, fallback, minimum]] of Object.entries(integers)) properties[property] = reflectInteger(attribute, fallback, minimum);
+    Object.defineProperties(Class.prototype, properties);
+  }
+
+  installReflectors(HTMLElement,
+    { id: "id", className: "class", title: "title", lang: "lang", dir: "dir", slot: "slot" },
+    { hidden: "hidden", inert: "inert" },
+    { tabIndex: ["tabindex", -1, Number.NEGATIVE_INFINITY] });
+  installReflectors(HTMLInputElement,
+    { accept: "accept", alt: "alt", autocomplete: "autocomplete", name: "name", placeholder: "placeholder", value: "value" },
+    { checked: "checked", defaultChecked: "checked", disabled: "disabled", multiple: "multiple", readOnly: "readonly", required: "required" },
+    { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1] });
+  installReflectors(HTMLButtonElement,
+    { name: "name", value: "value" },
+    { disabled: "disabled", formNoValidate: "formnovalidate" });
+  installReflectors(HTMLLabelElement, { htmlFor: "for" });
+  Object.defineProperties(HTMLInputElement.prototype, {
+    type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
+  });
+  Object.defineProperties(HTMLButtonElement.prototype, {
+    type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
+  });
+
   class DocumentFragment extends Node {
     constructor(ownerDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }
   }
@@ -363,7 +472,7 @@ export function createTree({ EventTarget = class {} } = {}) {
     createElement(name) {
       name = String(name);
       if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be lowercase modern HTML names.");
-      return new Element(name, this);
+      return new (ELEMENT_CLASSES[name] ?? HTMLElement)(name, this);
     }
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
@@ -394,6 +503,13 @@ export function createTree({ EventTarget = class {} } = {}) {
     }
   }
 
+  const ELEMENT_CLASSES = {
+    button: HTMLButtonElement,
+    form: HTMLFormElement,
+    input: HTMLInputElement,
+    label: HTMLLabelElement,
+  };
+
   function collect(root, predicate) {
     const result = [];
     for (const child of root._children()) {
@@ -405,5 +521,5 @@ export function createTree({ EventTarget = class {} } = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, Text, Comment, Attr, NamedNodeMap, VOID };
+  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, Text, Comment, Attr, NamedNodeMap, VOID };
 }
