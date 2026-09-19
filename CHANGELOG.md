@@ -14,6 +14,9 @@ namespace) is unstable and may change between minor releases until the API freez
   It parses explicit nesting, void elements, attributes, comments, templates,
   raw-text script/style elements and a constrained entity set, while rejecting
   malformed and browser-recovery-dependent input with byte-offset diagnostics.
+- Add esdev's realm-local DOM tree core: linked nodes, mutation and adoption
+  algorithms, document fragments, `Attr`/`NamedNodeMap`, cloning and text
+  content. It remains internal until `esdev test --dom` installs it.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every
