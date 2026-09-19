@@ -33,6 +33,8 @@ namespace) is unstable and may change between minor releases until the API freez
   `matches` and `closest`, with selector lists, type/ID/class and attribute
   selectors, and descendant/child/sibling combinators. Unsupported selector
   syntax raises `SyntaxError` rather than silently matching nothing.
+- Add logical esdev DOM selector pseudo-classes: `:is()`, `:where()`, `:not()`,
+  and relative `:has()` matching for descendant, child, and sibling selectors.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

@@ -3088,6 +3088,97 @@ fn test_dom_selectors_match_strict_compounds_and_combinators() {
 }
 
 #[test]
+fn test_dom_selectors_match_logical_pseudo_classes_and_nested_lists() {
+    let dir = build_dir("t_test_dom_selector_logical");
+    write_in(
+        &dir,
+        "logical.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('is where and not compose selector lists', () => {\n\
+           document.body.innerHTML = '<main><button class=\"primary selected\">save</button><a class=link href=\"/docs\">docs</a><p class=muted>note</p></main>';
+           const [button, link, note] = document.querySelectorAll('main > *');\n\
+           assertEquals(document.querySelectorAll('main > :is(button, a.link)').length, 2);\n\
+           assertEquals(document.querySelectorAll('main > :where(button.primary, a[href])').length, 2);\n\
+           assertEquals(Array.from(document.querySelectorAll('main > :not(:is(.muted, a))')), [button]);\n\
+           assertEquals(button.matches(':not(.muted):is(.primary, .secondary)'), true);\n\
+           assertEquals(link.matches(':where(.link, .missing)'), true); assertEquals(note.matches(':not(button, a)'), true);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM logical selector test");
+    assert!(
+        ran.status.success(),
+        "logical selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_selectors_match_has_relative_descendant_and_sibling_forms() {
+    let dir = build_dir("t_test_dom_selector_has");
+    write_in(
+        &dir,
+        "has.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('has evaluates relative selectors from each candidate', () => {\n\
+           document.body.innerHTML = '<section id=one><span class=direct></span><div><i class=deep></i></div></section><section id=two></section><aside class=notice></aside><article id=three></article>';
+           const one = document.querySelector('#one'); const two = document.querySelector('#two'); const three = document.querySelector('#three');\n\
+           assertEquals(Array.from(document.querySelectorAll('section:has(> .direct)')), [one]);\n\
+           assertEquals(Array.from(document.querySelectorAll('section:has(.deep)')), [one]);\n\
+           assertEquals(Array.from(document.querySelectorAll('section:has(> .missing, .deep)')), [one]);\n\
+           assertEquals(Array.from(document.querySelectorAll('section:has(+ aside.notice)')), [two]);\n\
+           assertEquals(Array.from(document.querySelectorAll('section:has(~ article)')), [one, two]);\n\
+           two.appendChild(document.createElement('i')).className = 'deep';\n\
+           assertEquals(Array.from(document.querySelectorAll('section:has(.deep)')), [one, two]);\n\
+           assertEquals(three.matches(':has(+ .missing)'), false);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM has selector test");
+    assert!(
+        ran.status.success(),
+        "has selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
+    let dir = build_dir("t_test_dom_selector_pseudo_errors");
+    write_in(
+        &dir,
+        "pseudo-errors.test.mjs",
+        "import { test, assertThrows } from 'runtime:test';\n\
+         test('pseudo parsing stays strict', () => {\n\
+           assertThrows(() => document.querySelector(':is()'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':has(>)'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':not(.one'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':hover'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':first-child'), SyntaxError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM pseudo selector error test");
+    assert!(
+        ran.status.success(),
+        "pseudo selector error test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_reflects_common_attributes_and_form_defaults() {
     let dir = build_dir("t_test_dom_elements");
     write_in(

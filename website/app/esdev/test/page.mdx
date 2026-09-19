@@ -25,7 +25,8 @@ by esdev. It installs a fresh realm for each isolated test file, including
 It is test-runner-only: ordinary `esdev` runs do not receive these globals.
 The current selector surface includes `querySelector`, `querySelectorAll`,
 `matches`, `closest`, attribute selectors, selector lists, and structural
-combinators; unsupported selector syntax throws `SyntaxError`.
+combinators, plus `:is()`, `:where()`, `:not()`, and `:has()`; unsupported
+selector syntax throws `SyntaxError`.
 `HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLFormElement`, and
 `HTMLLabelElement` are also available, with common reflected attributes and
 the basic checkbox, radio, and submit-button click defaults.

@@ -11,6 +11,7 @@ function splitList(source) {
   let start = 0;
   let quote = null;
   let brackets = 0;
+  let parentheses = 0;
   for (let at = 0; at < source.length; at += 1) {
     const char = source[at];
     if (quote) {
@@ -22,7 +23,11 @@ function splitList(source) {
     else if (char === "]") {
       if (brackets === 0) syntax(source, at, "unexpected ]");
       brackets -= 1;
-    } else if (char === "," && brackets === 0) {
+    } else if (char === "(") parentheses += 1;
+    else if (char === ")") {
+      if (parentheses === 0) syntax(source, at, "unexpected )");
+      parentheses -= 1;
+    } else if (char === "," && brackets === 0 && parentheses === 0) {
       const part = source.slice(start, at).trim();
       if (!part) syntax(source, at, "empty selector in list");
       out.push(part);
@@ -31,6 +36,7 @@ function splitList(source) {
   }
   if (quote) syntax(source, source.length, "unterminated string");
   if (brackets) syntax(source, source.length, "unterminated attribute selector");
+  if (parentheses) syntax(source, source.length, "unterminated pseudo-class");
   const part = source.slice(start).trim();
   if (!part) syntax(source, source.length, "empty selector in list");
   out.push(part);
@@ -81,7 +87,33 @@ function parseCompound(source, offset, text) {
       at = end + 1;
       continue;
     }
-    if (kind === ":") syntax(source, offset + at, "pseudo-classes are not implemented yet");
+    if (kind === ":") {
+      const match = /^[A-Za-z-]+/.exec(text.slice(at + 1));
+      if (!match || !["is", "where", "not", "has"].includes(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
+      const name = match[0];
+      const open = at + match[0].length + 1;
+      if (text[open] !== "(") syntax(source, offset + at, `:${name} requires an argument list`);
+      let end = open + 1;
+      let depth = 1;
+      let quote = null;
+      let brackets = 0;
+      for (; end < text.length; end += 1) {
+        const char = text[end];
+        if (quote) { if (char === quote) quote = null; continue; }
+        if (char === "'" || char === '"') { quote = char; continue; }
+        if (char === "[") { brackets += 1; continue; }
+        if (char === "]") { brackets -= 1; continue; }
+        if (brackets) continue;
+        if (char === "(") depth += 1;
+        if (char === ")" && --depth === 0) break;
+      }
+      if (end === text.length || depth !== 0) syntax(source, offset + at, "unterminated pseudo-class");
+      const argument = text.slice(open + 1, end).trim();
+      if (!argument) syntax(source, offset + at, `:${name} requires a non-empty argument list`);
+      simples.push({ type: name, selectors: name === "has" ? parseRelativeList(argument) : splitList(argument).map(parseOne) });
+      at = end + 1;
+      continue;
+    }
     syntax(source, offset + at, `unexpected ${kind}`);
   }
   if (simples.length === 0) syntax(source, offset, "expected a simple selector");
@@ -102,6 +134,7 @@ function parseOne(source) {
     if (">+~".includes(source[at])) syntax(source, at, "combinator has no left selector");
     const start = at;
     let brackets = 0;
+    let parentheses = 0;
     let quote = null;
     while (at < source.length) {
       const char = source[at];
@@ -117,7 +150,13 @@ function parseOne(source) {
       } else if (char === "]") {
         brackets -= 1;
         at += 1;
-      } else if (brackets === 0 && (/\s/.test(char) || ">+~".includes(char))) break;
+      } else if (char === "(") {
+        parentheses += 1;
+        at += 1;
+      } else if (char === ")") {
+        parentheses -= 1;
+        at += 1;
+      } else if (brackets === 0 && parentheses === 0 && (/\s/.test(char) || ">+~".includes(char))) break;
       else at += 1;
     }
     parts.push({ simples: parseCompound(source, start, source.slice(start, at)), relation });
@@ -134,6 +173,15 @@ function parseOne(source) {
     if (at === source.length) syntax(source, at, "combinator has no right selector");
   }
   return parts;
+}
+
+function parseRelativeList(source) {
+  return splitList(source).map((part) => {
+    const relation = ">+~".includes(part[0]) ? part[0] : " ";
+    const selector = relation === " " ? part : part.slice(1).trim();
+    if (!selector) syntax(source, 0, "relative selector has no right selector");
+    return { relation, parts: parseOne(selector) };
+  });
 }
 
 function previousElement(element) {
@@ -165,8 +213,32 @@ export function createSelectors({ Element, Document, DocumentFragment }) {
       if (simple.type === "tag") return element.localName === simple.name;
       if (simple.type === "id") return element.id === simple.name;
       if (simple.type === "class") return (element.className || "").split(/\s+/).includes(simple.name);
+      if (simple.type === "is" || simple.type === "where") return simple.selectors.some((parts) => matchesParts(element, parts));
+      if (simple.type === "not") return !simple.selectors.some((parts) => matchesParts(element, parts));
+      if (simple.type === "has") return simple.selectors.some((relative) => matchesRelative(element, relative));
       return matchesAttribute(element, simple);
     });
+  }
+
+  function nextElement(element) {
+    for (let node = element.nextSibling; node; node = node.nextSibling) if (node.nodeType === 1) return node;
+    return null;
+  }
+
+  function matchesRelative(element, relative) {
+    if (relative.relation === ">") {
+      for (let child = element.firstChild; child; child = child.nextSibling) if (child instanceof Element && matchesParts(child, relative.parts)) return true;
+      return false;
+    }
+    if (relative.relation === "+") {
+      const sibling = nextElement(element);
+      return sibling !== null && matchesParts(sibling, relative.parts);
+    }
+    if (relative.relation === "~") {
+      for (let sibling = nextElement(element); sibling; sibling = nextElement(sibling)) if (matchesParts(sibling, relative.parts)) return true;
+      return false;
+    }
+    return descendants(element).some((child) => matchesParts(child, relative.parts));
   }
 
   function matchesParts(element, parts, index = parts.length - 1) {
