@@ -44,6 +44,10 @@ namespace) is unstable and may change between minor releases until the API freez
   nothing (the same read-half `esdev upgrade --dry-run` runs on). Stray
   arguments are now refused by name — the replacement used to run past them —
   and `upgrade --help` prints usage.
+- Documented that `serve`/`listen`/`bind` default `hostname` to `0.0.0.0`
+  (all interfaces): a local test server that omits it fails on hosts where
+  a wildcard bind is refused, with nothing pointing at `127.0.0.1` as the
+  fix (`docs/API.md`, site `api/http`, `api/net`, `api/websocket`).
 
 ## [0.29.0] - 2026-09-15
 
