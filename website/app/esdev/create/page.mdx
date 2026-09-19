@@ -41,9 +41,37 @@ esdev create my-app --template=react --mode=fullstack
 | `vanilla` | TypeScript and the DOM — no framework |
 | `micro-ui` | Micro apps with Micro-UI — framework-free UI with a tiny reactive core |
 | `lib` | A publishable package — module tree, `.d.ts`, `exports` wired |
+| `spa` | An OTF Web single-page app — browser-only UI, static deploy, no server |
+| `fullstack` | An OTF Web fullstack app — middleware, loaders, API routes, SSR on demand |
+| `docs` | An OTF Web documentation site — MDX docs, sidebar, search, optional blog |
+| `library` | An OTF Web component library — publishable components, `esdev`-tested |
 
 They are **baked into the binary**, so `create` works offline and always writes
 a project the `esdev` that wrote it can build. Nothing is downloaded.
+
+The OTF Web starters build with the OTF toolchain (`otfw`, itself an
+ES-runtime program) rather than `esdev build`, so they carry no `esdev.json` —
+their `dev`/`build` scripts call `otfw`, which runs on the `esdev` beside it.
+They take three extra axes, each with a flag, asked where the template takes
+them:
+
+```sh
+esdev create my-app --template=spa --language=ts --styling=tailwind
+esdev create my-app --template=docs --no-blog
+```
+
+| | |
+| --- | --- |
+| `--language=js\|ts` | `spa`, `fullstack`, `docs`, `library` — JavaScript (default) or TypeScript |
+| `--styling=css\|tailwind` | `spa`, `fullstack` — plain CSS or Tailwind v4 (default) |
+| `--blog`, `--no-blog` | `docs` — keep the demo blog (default) or withhold it |
+
+TypeScript is a conversion, not a second template: sources rename (`.jsx` to
+`.tsx`) and a `tsconfig.json` plus the compiler-macro declarations arrive
+beside them. The library's test suite converts with it — from the upstream
+`bun:test` click test, which needs a DOM and the OTF compiler, to a contract
+test (`entry resolves, re-export names the component`) that runs under
+`esdev test`.
 
 ## A template is a scaffold, not a demo
 
@@ -143,6 +171,9 @@ error: my-app is not empty.
 | --- | --- |
 | `--template=<name>` | Which template (default `react`) |
 | `--mode=<name>` | Which shape of it, where it has more than one: `static` or `fullstack` |
+| `--language=<name>` | OTF templates: `js` (default) or `ts` |
+| `--styling=<name>` | `spa` and `fullstack`: `css` or `tailwind` (default) |
+| `--blog`, `--no-blog` | `docs`: keep the demo blog (default) or not |
 | `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
 | `--no-install` | Write the files and stop |
 | `-y`, `--yes` | Take every default; never ask |

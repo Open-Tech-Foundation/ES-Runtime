@@ -273,9 +273,13 @@ USAGE:
     esdev create -h, --help     Show this help
 
 OPTIONS:
-    --template=<name>           react (default), api, vanilla, micro-ui or lib
+    --template=<name>           react (default), api, vanilla, micro-ui, lib,
+                                spa, fullstack, docs or library
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
+    --language=<name>           OTF templates only: js (default) or ts
+    --styling=<name>            spa and fullstack only: css or tailwind (default)
+    --blog, --no-blog           docs only: keep the demo blog (default) or not
     --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
     --no-install                Write the files and stop
     -y, --yes                   Take every default; never ask
@@ -288,8 +292,9 @@ the script tag in its index.html, and a permission line that is narrow from the
 first run. The templates are baked into this binary, so create works offline
 and always writes a project this esdev can build.
 
-On a terminal it asks which template, which mode where there is a choice, and
-whether to install. Anywhere else — a pipe, a CI job — it takes the defaults,
+On a terminal it asks which template, which mode where there is a choice, the
+OTF axes where the template takes them (language, styling, blog), and whether
+to install. Anywhere else — a pipe, a CI job — it takes the defaults,
 installs nothing and says nothing, because a prompt in a script is a script
 that hangs. Every question has a flag:
 
@@ -1035,6 +1040,9 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     // away from one becomes the default. A flag is always an answer.
     let mut template: Option<String> = None;
     let mut mode: Option<String> = None;
+    let mut language: Option<String> = None;
+    let mut styling: Option<String> = None;
+    let mut blog: Option<bool> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
     for arg in args {
@@ -1052,6 +1060,16 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
             }
             "--template" => template = Some(require_value(flag, value)?.to_string()),
             "--mode" => mode = Some(require_value(flag, value)?.to_string()),
+            "--language" => language = Some(require_value(flag, value)?.to_string()),
+            "--styling" => styling = Some(require_value(flag, value)?.to_string()),
+            "--blog" => {
+                reject_value(flag, value)?;
+                blog = Some(true);
+            }
+            "--no-blog" => {
+                reject_value(flag, value)?;
+                blog = Some(false);
+            }
             // `--install` alone means "with npm"; `--install=bun` names one.
             "--install" => {
                 install = Some(Some(value.unwrap_or(create::DEFAULT_MANAGER).to_string()));
@@ -1094,6 +1112,9 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
         dir: dirs.remove(0),
         template,
         mode,
+        language,
+        styling,
+        blog,
         force,
         install,
     })

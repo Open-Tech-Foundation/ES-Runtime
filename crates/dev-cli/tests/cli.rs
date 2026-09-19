@@ -6447,6 +6447,157 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The OTF Web starter set scaffolds through `esdev create`: four templates,
+/// each with the axes `create-web` asks about, as flags. stdin is closed
+/// throughout, so every answer here comes from a flag.
+#[test]
+fn otf_templates_scaffold_from_flags() {
+    let parent = watch_dir("c_otf");
+
+    // TypeScript + plain CSS: renames, config, and no Tailwind prepend.
+    let ts = esdev_in(&parent)
+        .args([
+            "create",
+            "shop-ts",
+            "--template=spa",
+            "--language=ts",
+            "--styling=css",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(ts.status.success(), "{}", stderr(&ts));
+    let dir = parent.join("shop-ts");
+    assert!(dir.join("app/page.tsx").is_file());
+    assert!(dir.join("tsconfig.json").is_file());
+    assert!(dir.join("app/otfw-env.d.ts").is_file());
+    assert!(!dir.join("app/page.jsx").exists());
+    assert!(!dir.join("jsconfig.json").exists());
+    let css = std::fs::read_to_string(dir.join("app/global.css")).expect("read");
+    assert!(!css.contains("@import"), "{css}");
+    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
+    assert!(manifest.contains(r#""name": "shop-ts""#), "{manifest}");
+    assert!(!manifest.contains("{{name}}"), "a placeholder survived");
+
+    // Defaults are JavaScript with Tailwind, mirroring `create-web`.
+    let js = esdev_in(&parent)
+        .args(["create", "shop-js", "--template=fullstack"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(js.status.success(), "{}", stderr(&js));
+    let dir = parent.join("shop-js");
+    assert!(dir.join("app/page.jsx").is_file());
+    assert!(dir.join("app/api/hello/route.js").is_file());
+    let css = std::fs::read_to_string(dir.join("app/global.css")).expect("read");
+    assert!(
+        css.starts_with("@import \"tailwindcss\";"),
+        "the Tailwind default prepends: {css}"
+    );
+
+    // The blog is files plus two patches — or neither.
+    let bare = esdev_in(&parent)
+        .args(["create", "manual", "--template=docs", "--no-blog"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(bare.status.success(), "{}", stderr(&bare));
+    let dir = parent.join("manual");
+    assert!(!dir.join("app/blog").exists(), "the blog was not withheld");
+    let config = std::fs::read_to_string(dir.join("otfw.config.js")).expect("read");
+    assert!(!config.contains("blog:"), "{config}");
+
+    let blogged = esdev_in(&parent)
+        .args(["create", "journal", "--template=docs", "--blog"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(blogged.status.success(), "{}", stderr(&blogged));
+    let dir = parent.join("journal");
+    assert!(dir.join("app/blog/hello-world/page.mdx").is_file());
+    let config = std::fs::read_to_string(dir.join("otfw.config.js")).expect("read");
+    assert!(config.contains("dir: \"blog\""), "{config}");
+
+    // The library ships an `esdev test` suite, not a Bun one — and it passes
+    // with no dependencies installed.
+    let lib = esdev_in(&parent)
+        .args(["create", "widgets", "--template=library", "--language=ts"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(lib.status.success(), "{}", stderr(&lib));
+    let dir = parent.join("widgets");
+    assert!(dir.join("index.ts").is_file());
+    assert!(dir.join("src/Counter.tsx").is_file());
+    assert!(!dir.join("bunfig.toml").exists(), "Bun-only file shipped");
+    assert!(
+        stdout(&lib).contains("run test"),
+        "a library has nothing to run dev: {}",
+        stdout(&lib)
+    );
+    let tested = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        tested.status.success(),
+        "the library template's own tests failed:\n{}{}",
+        stdout(&tested),
+        stderr(&tested)
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// An axis flag where it does not apply is refused, like a stray `--mode` —
+/// and a value that is not one is refused with the values that are.
+#[test]
+fn otf_axes_are_refused_where_they_do_not_apply() {
+    let parent = watch_dir("c_otf_axes");
+
+    for (template, flag, message) in [
+        ("api", "--language=ts", "has no language"),
+        ("docs", "--styling=css", "has no styling"),
+        ("spa", "--blog", "means nothing for spa"),
+        ("spa", "--language=elm", "no language elm"),
+        ("spa", "--styling=sass", "no styling sass"),
+    ] {
+        let dir = parent.join(format!("refused-{template}"));
+        let refused = esdev_in(&parent)
+            .args([
+                "create",
+                dir.file_name().unwrap().to_str().unwrap(),
+                &format!("--template={template}"),
+                flag,
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn esdev create");
+        assert!(!refused.status.success(), "{template} {flag} was accepted");
+        assert!(
+            stderr(&refused).contains(message),
+            "{template} {flag}: {}",
+            stderr(&refused)
+        );
+        assert!(!dir.exists(), "it wrote a project anyway");
+    }
+
+    // The list names the new templates, so the error above is actionable.
+    let listed = esdev_in(&parent)
+        .args(["create", "--list"])
+        .output()
+        .expect("spawn esdev create");
+    for template in ["spa", "fullstack", "docs", "library"] {
+        assert!(
+            stdout(&listed).contains(template),
+            "{template} is not listed:\n{}",
+            stdout(&listed)
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 // ---------------------------------------------------------------------------
 // `runtime:watch` — file events in guest JS (the esdev-only module).
 // ---------------------------------------------------------------------------

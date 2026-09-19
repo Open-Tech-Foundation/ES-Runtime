@@ -1,0 +1,27 @@
+{
+  "name": "{{name}}",
+  "version": "0.1.0",
+  "description": "An OTF Web component library",
+  "type": "module",
+  "scripts": {
+    "test": "esdev test"
+  },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src"
+  ],
+  "peerDependencies": {
+    "@opentf/web": "latest"
+  },
+  "devDependencies": {
+    "@opentf/web": "latest",
+    "@opentf/esrun-types": "latest"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}

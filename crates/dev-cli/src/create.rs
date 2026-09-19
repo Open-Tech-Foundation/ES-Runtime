@@ -11,11 +11,12 @@
 //! # It asks, or it writes files and stops
 //!
 //! Which of those depends on whether anybody is there. On a terminal it asks
-//! up to three questions — which template, which *mode* if that template has
-//! more than one shape, and whether to install — and away from one it writes
-//! the files and says nothing, because every other command here is a flag
-//! grammar that works unattended and `create` stays one whenever it cannot see
-//! a person ([`crate::prompt::interactive`]).
+//! which template, which *mode* if that template has more than one shape, the
+//! OTF axes where the template takes them (language, styling, blog), and
+//! whether to install — and away from one it writes the files and says
+//! nothing, because every other command here is a flag grammar that works
+//! unattended and `create` stays one whenever it cannot see a person
+//! ([`crate::prompt::interactive`]).
 //!
 //! **Everything a prompt asks has a flag**, so the interactive path is a
 //! convenience over the scriptable one and never the only way to an answer.
@@ -90,6 +91,22 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     (
         "micro-ui",
         "Micro apps with Micro-UI — framework-free UI with a tiny reactive core",
+    ),
+    (
+        "spa",
+        "An OTF Web single-page app — browser-only UI, static deploy, no server",
+    ),
+    (
+        "fullstack",
+        "An OTF Web fullstack app — middleware, loaders, API routes, SSR on demand",
+    ),
+    (
+        "docs",
+        "An OTF Web documentation site — MDX docs, sidebar, search, optional blog",
+    ),
+    (
+        "library",
+        "An OTF Web component library — publishable components, esdev-tested",
     ),
 ];
 
@@ -183,6 +200,16 @@ pub struct CreateConfig {
     /// Which mode of that template, or `None` to ask (or take the default).
     /// Meaningless — and refused — for a template that has only one shape.
     pub mode: Option<String>,
+    /// Which language an OTF template scaffolds, or `None` to ask (or take
+    /// the default). Meaningless — and refused — for other templates.
+    pub language: Option<String>,
+    /// Which stylesheet an OTF app template writes, or `None` to ask (or
+    /// take the default). Only `spa` and `fullstack` ship `app/global.css`;
+    /// refused everywhere else.
+    pub styling: Option<String>,
+    /// Whether the `docs` template keeps its demo blog, or `None` to ask
+    /// (or take the default). Refused for every other template.
+    pub blog: Option<bool>,
     /// Whether to write into a directory that already holds something.
     pub force: bool,
     /// Which package manager to install with, `Some(None)` for an explicit
@@ -228,7 +255,24 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
         Mode::None => None,
         Mode::Cancelled => return Ok(String::new()),
     };
+    // The OTF axes resolve after the mode for the same reason the mode
+    // resolves after the template: which questions exist depends on the
+    // answers so far — and still before anything is written.
+    let otf = match resolve_otf(&template, config)? {
+        OtfResolution::Answers(otf) => Some(otf),
+        OtfResolution::NotOtf => None,
+        OtfResolution::Cancelled => return Ok(String::new()),
+    };
     let files = files_for(files, mode.as_deref());
+    // OTF answers rewrite the file list — renames, patches, added and
+    // withheld files — so from here the list is owned either way.
+    let files: Vec<(String, Vec<u8>)> = match &otf {
+        Some(otf) => apply_otf(&template, otf, &files),
+        None => files
+            .into_iter()
+            .map(|(path, contents)| (path, contents.to_vec()))
+            .collect(),
+    };
 
     let target = PathBuf::from(&config.dir);
     if target.is_file() {
@@ -354,7 +398,7 @@ fn next_steps(
     // The command that actually starts it, which is not the same for every
     // template: a library has nothing to run.
     let run = match template {
-        "lib" => "test",
+        "lib" | "library" => "test",
         _ => "dev",
     };
     let manager = installed.map_or("npm", |m| m.name);
@@ -450,6 +494,480 @@ fn describe_modes(template: &str) -> String {
         report.push_str(&format!("  {name:<width$}  {description}\n"));
     }
     report
+}
+
+/// The templates that come from the OTF Web starter set rather than from this
+/// repository's own stack. They build with the OTF toolchain (`otfw`, itself
+/// an ES-runtime program) instead of `esdev build`, so they carry no
+/// `esdev.json` — and they take the axes `create-web` asks about, which the
+/// shared template → mode → install flow does not have.
+const OTF_TEMPLATES: &[&str] = &["spa", "fullstack", "docs", "library"];
+
+fn is_otf(template: &str) -> bool {
+    OTF_TEMPLATES.contains(&template)
+}
+
+/// The languages an OTF template scaffolds. `create-web` ships JavaScript and
+/// converts to TypeScript on request; the embedded files are the JavaScript
+/// half, and the conversion is re-applied here rather than embedded twice.
+const LANGUAGES: &[(&str, &str)] = &[
+    ("js", "JavaScript — .jsx source files"),
+    ("ts", "TypeScript — .tsx source files and a tsconfig.json"),
+];
+
+/// `create-web` starts its menu on JavaScript, so this does too.
+const DEFAULT_LANGUAGE: &str = "js";
+
+/// The stylesheets an OTF app template offers. Only `spa` and `fullstack`
+/// ship `app/global.css` (`docs` is always Tailwind, a library has no
+/// styles), so only they ask. Tailwind is a one-line prepend — the toolchain
+/// compiles it — not a second project.
+const STYLINGS: &[(&str, &str)] = &[
+    ("css", "Plain CSS — a small starter stylesheet"),
+    ("tailwind", "TailwindCSS v4, compiled by the toolchain"),
+];
+
+/// `create-web` starts its menu on Tailwind, so this does too.
+const DEFAULT_STYLING: &str = "tailwind";
+
+/// Whether the `docs` template keeps its demo blog. `create-web` starts on
+/// yes; the embedded files are the blog-on-disk state with the config and
+/// page unpatched, so "no" only withholds files and "yes" patches two.
+const DEFAULT_BLOG: bool = true;
+
+/// What resolving one named choice came to. `NotApplicable` is a template
+/// that does not take this axis at all.
+#[derive(Debug)]
+enum Choice {
+    Chosen(String),
+    NotApplicable,
+    Cancelled,
+}
+
+/// Flag, question, or default — the same precedence the mode uses, for an
+/// axis only some templates take.
+///
+/// Naming one for a template that does not take it is refused rather than
+/// ignored, for the same reason a stray `--mode` is: a flag that silently
+/// does nothing is one somebody keeps passing, and keeps believing.
+#[allow(clippy::too_many_arguments)]
+fn resolve_choice(
+    template: &str,
+    axis: &str,
+    flag: &str,
+    takes: bool,
+    options: &[(&str, &str)],
+    default: &str,
+    asked_for: Option<&str>,
+    question: &str,
+) -> Result<Choice, String> {
+    if !takes {
+        return match asked_for {
+            Some(value) => Err(format!(
+                "the {template} template has no {axis}, so --{flag}={value} means nothing here."
+            )),
+            None => Ok(Choice::NotApplicable),
+        };
+    }
+    if let Some(value) = asked_for {
+        if !options.iter().any(|(name, _)| *name == value) {
+            let valid: Vec<&str> = options.iter().map(|(name, _)| *name).collect();
+            return Err(format!(
+                "the {template} template has no {axis} {value}.\n\nValid {axis}s: {}.",
+                valid.join(", ")
+            ));
+        }
+        return Ok(Choice::Chosen(value.to_string()));
+    }
+    if !crate::prompt::interactive() {
+        return Ok(Choice::Chosen(default.to_string()));
+    }
+    let choices: Vec<crate::prompt::Choice<'_>> = options
+        .iter()
+        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .collect();
+    let preselect = choices
+        .iter()
+        .position(|choice| choice.name == default)
+        .unwrap_or(0);
+    match crate::prompt::select(question, &choices, preselect) {
+        Some(chosen) => Ok(Choice::Chosen(choices[chosen].name.to_string())),
+        None => Ok(Choice::Cancelled),
+    }
+}
+
+/// Whether the `docs` template keeps its demo blog, resolved.
+#[derive(Debug)]
+enum Blog {
+    On,
+    Off,
+    NotApplicable,
+    Cancelled,
+}
+
+/// The blog is a yes/no rather than a named choice, but the shape is the
+/// same: flags, a question, a default — and refused outside `docs`.
+fn resolve_blog(template: &str, asked_for: Option<bool>) -> Result<Blog, String> {
+    if template != "docs" {
+        return match asked_for {
+            Some(_) => Err(format!(
+                "only the docs template has a blog, so --blog means nothing for {template}."
+            )),
+            None => Ok(Blog::NotApplicable),
+        };
+    }
+    if let Some(on) = asked_for {
+        return Ok(if on { Blog::On } else { Blog::Off });
+    }
+    if !crate::prompt::interactive() {
+        return Ok(if DEFAULT_BLOG { Blog::On } else { Blog::Off });
+    }
+    let choices = [
+        crate::prompt::Choice {
+            name: "Yes — add demo blog",
+            description: "Adds app/blog/, a sample post, and a Blog link in the navbar",
+        },
+        crate::prompt::Choice {
+            name: "No — docs only",
+            description: "Documentation pages without a blog section",
+        },
+    ];
+    let preselect = if DEFAULT_BLOG { 0 } else { 1 };
+    match crate::prompt::select("Include a sample blog?", &choices, preselect) {
+        Some(0) => Ok(Blog::On),
+        Some(_) => Ok(Blog::Off),
+        None => Ok(Blog::Cancelled),
+    }
+}
+
+/// The extra answers an OTF Web template resolved to. `None` fields are axes
+/// the template does not take.
+#[derive(Debug)]
+struct Otf {
+    language: String,
+    styling: Option<String>,
+    blog: Option<bool>,
+}
+
+/// What resolving the OTF axes came to.
+#[derive(Debug)]
+enum OtfResolution {
+    /// An OTF template, with its answers.
+    Answers(Otf),
+    /// Any other template, which takes none of these axes.
+    NotOtf,
+    /// Esc at one of the questions.
+    Cancelled,
+}
+
+/// The OTF answers from flags, questions, or defaults. Each axis refuses
+/// itself where it does not apply, so a stray flag errors rather than
+/// silently doing nothing — the same rule `--mode` follows.
+fn resolve_otf(template: &str, config: &CreateConfig) -> Result<OtfResolution, String> {
+    let language = match resolve_choice(
+        template,
+        "language",
+        "language",
+        is_otf(template),
+        LANGUAGES,
+        DEFAULT_LANGUAGE,
+        config.language.as_deref(),
+        "Select a language?",
+    )? {
+        Choice::Chosen(language) => Some(language),
+        Choice::NotApplicable => None,
+        Choice::Cancelled => return Ok(OtfResolution::Cancelled),
+    };
+    let styling = match resolve_choice(
+        template,
+        "styling",
+        "styling",
+        template == "spa" || template == "fullstack",
+        STYLINGS,
+        DEFAULT_STYLING,
+        config.styling.as_deref(),
+        "Select a styling solution?",
+    )? {
+        Choice::Chosen(styling) => Some(styling),
+        Choice::NotApplicable => None,
+        Choice::Cancelled => return Ok(OtfResolution::Cancelled),
+    };
+    let blog = match resolve_blog(template, config.blog)? {
+        Blog::On => Some(true),
+        Blog::Off => Some(false),
+        Blog::NotApplicable => None,
+        Blog::Cancelled => return Ok(OtfResolution::Cancelled),
+    };
+    match language {
+        Some(language) => Ok(OtfResolution::Answers(Otf {
+            language,
+            styling,
+            blog,
+        })),
+        None => Ok(OtfResolution::NotOtf),
+    }
+}
+
+/// Applies the OTF answers to the embedded files: renames, patches, added
+/// and withheld files. This is `create-web`'s `applyTypescript`,
+/// `applyDocsBlog` and Tailwind prepend, re-applied to embedded bytes rather
+/// than to a directory — the transforms are deterministic over file contents,
+/// so they unit-test without touching the filesystem.
+fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(String, Vec<u8>)> {
+    let ts = otf.language == "ts";
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for (path, contents) in files {
+        // The demo blog is files on disk plus two patches: withholding it is
+        // withholding the files, and nothing else.
+        if template == "docs" && otf.blog == Some(false) && path.starts_with("app/blog/") {
+            continue;
+        }
+        if ts && path == "jsconfig.json" {
+            continue;
+        }
+        let mut new_path = path.clone();
+        let mut bytes = (*contents).to_vec();
+        if ts {
+            if let Some(renamed) = otf_rename(&new_path) {
+                new_path = renamed;
+                if let Ok(text) = std::str::from_utf8(&bytes) {
+                    let renamed_base = new_path.rsplit('/').next().unwrap_or(&new_path).to_string();
+                    bytes = otf_patch_source(template, &renamed_base, text).into_bytes();
+                }
+            } else if template == "library" && new_path == "index.js" {
+                new_path = "index.ts".to_string();
+                if let Ok(text) = std::str::from_utf8(&bytes) {
+                    bytes = otf_patch_source(template, "index.ts", text).into_bytes();
+                }
+            } else if new_path == "README.md" {
+                // READMEs name the file to edit; TypeScript renames it.
+                if let Ok(text) = std::str::from_utf8(&bytes) {
+                    bytes = otf_patch_source(template, "README.md", text).into_bytes();
+                }
+            }
+        }
+        if otf.styling.as_deref() == Some("tailwind")
+            && new_path == "app/global.css"
+            && let Ok(text) = std::str::from_utf8(&bytes)
+        {
+            bytes = format!("{OTF_TAILWIND_IMPORT}{text}").into_bytes();
+        }
+        if template == "docs" && otf.blog == Some(true) {
+            if new_path == "otfw.config.js"
+                && let Ok(text) = std::str::from_utf8(&bytes)
+            {
+                bytes = otf_patch_blog_config(text).into_bytes();
+            } else if new_path == "app/docs/page.mdx"
+                && let Ok(text) = std::str::from_utf8(&bytes)
+            {
+                bytes = otf_patch_blog_page(text).into_bytes();
+            }
+        }
+        if template == "library"
+            && ts
+            && new_path == "package.json"
+            && let Ok(text) = std::str::from_utf8(&bytes)
+        {
+            bytes = otf_patch_library_manifest(text).into_bytes();
+        }
+        // Tailwind is an `@import` the project resolves, so the project has
+        // to depend on it: `create-web` leans on npm hoisting (its default
+        // manager) to find the toolchain's copy, which a strict `node_modules`
+        // layout does not provide. `docs` always imports it; apps only on the
+        // Tailwind styling.
+        if new_path == "package.json"
+            && (template == "docs" || otf.styling.as_deref() == Some("tailwind"))
+            && let Ok(text) = std::str::from_utf8(&bytes)
+        {
+            bytes = otf_patch_tailwind_dep(text).into_bytes();
+        }
+        // The overlay wins, same as modes: a generated file replaces an
+        // embedded one rather than being written beside it.
+        match out.iter_mut().find(|(existing, _)| *existing == new_path) {
+            Some(entry) => entry.1 = bytes,
+            None => out.push((new_path, bytes)),
+        }
+    }
+    if ts {
+        for (path, contents) in otf_typescript_files(template) {
+            match out.iter_mut().find(|(existing, _)| *existing == path) {
+                Some(entry) => entry.1 = contents,
+                None => out.push((path, contents)),
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The TypeScript renames `create-web` applies: `.jsx` sources, and the
+/// server files the toolchain treats as code rather than components.
+fn otf_rename(path: &str) -> Option<String> {
+    if let Some(stem) = path.strip_suffix(".jsx") {
+        return Some(format!("{stem}.tsx"));
+    }
+    let base = path.rsplit('/').next().unwrap_or(path);
+    if (base == "route.js" && path.contains("/api/"))
+        || base == "_middleware.js"
+        || base == "loader.js"
+    {
+        return path.strip_suffix(".js").map(|stem| format!("{stem}.ts"));
+    }
+    None
+}
+
+/// The source patches: references follow the renames, layouts type their
+/// props, and the library's counter types its own.
+fn otf_patch_source(template: &str, basename: &str, content: &str) -> String {
+    let mut next = content
+        .replace("app/page.jsx", "app/page.tsx")
+        .replace("app/api/hello/route.js", "app/api/hello/route.ts")
+        .replace("app/_middleware.js", "app/_middleware.ts")
+        .replace("app/loader.js", "app/loader.ts")
+        .replace("route.js", "route.ts");
+    if template == "library" {
+        next = next
+            .replace("./src/Counter.jsx", "./src/Counter.tsx")
+            .replace("../src/Counter.jsx", "../src/Counter.tsx");
+    } else {
+        next = next.replace(".jsx", ".tsx");
+    }
+    next = otf_patch_layout_types(&next, basename);
+    next = otf_patch_component_types(&next, basename);
+    next
+}
+
+/// Layouts take children; TypeScript wants to know of what.
+fn otf_patch_layout_types(content: &str, basename: &str) -> String {
+    if !basename.starts_with("layout.") {
+        return content.to_string();
+    }
+    const PREFIX: &str = "export default function ";
+    let Some(start) = content.find(PREFIX) else {
+        return content.to_string();
+    };
+    let head = &content[..start + PREFIX.len()];
+    let after = &content[start + PREFIX.len()..];
+    let name_end = after
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(after.len());
+    let name = &after[..name_end];
+    let rest = &after[name_end..];
+    let tail = if let Some(after_params) = rest.strip_prefix("({ children })") {
+        format!("({{ children }}: {{ children: unknown }}){after_params}")
+    } else if let Some(after_params) = rest.strip_prefix("(props)") {
+        format!("(props: {{ children: unknown }}){after_params}")
+    } else {
+        return content.to_string();
+    };
+    format!("{head}{name}{tail}")
+}
+
+/// The library's counter types its one prop.
+fn otf_patch_component_types(content: &str, basename: &str) -> String {
+    if basename != "Counter.tsx" {
+        return content.to_string();
+    }
+    content.replace(
+        "export default function Counter({ initial = 0 })",
+        "export default function Counter({ initial = 0 }: { initial?: number })",
+    )
+}
+
+/// The library publishes its entry, and in TypeScript the entry is TypeScript.
+fn otf_patch_library_manifest(content: &str) -> String {
+    content
+        .replace("\"./index.js\"", "\"./index.ts\"")
+        .replace("\"index.js\"", "\"index.ts\"")
+}
+
+/// A project that imports `tailwindcss` depends on it, explicitly.
+fn otf_patch_tailwind_dep(content: &str) -> String {
+    content.replace(
+        "\"devDependencies\": {\n",
+        "\"devDependencies\": {\n    \"tailwindcss\": \"latest\",\n",
+    )
+}
+
+/// The compiler macros are build-time, not runtime: their declarations ship
+/// as a `.d.ts` beside the sources, exactly as `create-web` writes them.
+const OTF_ENV_DTS: &str = "/** OTF Web compiler macros — provided at build time, not runtime. */
+declare const $state: {
+  <T>(initial: T): T;
+  <T>(): T | undefined;
+};
+declare function $derived<T>(fn: () => T): T;
+declare function $effect(fn: () => void | (() => void)): void;
+";
+
+/// The `tsconfig.json` beside it, with the same per-template includes.
+fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
+    let (env_path, include, allow_js): (&str, Vec<&str>, bool) = match template {
+        "spa" | "fullstack" => ("app/otfw-env.d.ts", vec!["app"], false),
+        "library" => (
+            "otfw-env.d.ts",
+            vec!["src", "tests", "index.ts", "otfw-env.d.ts"],
+            false,
+        ),
+        _ => ("app/otfw-env.d.ts", vec!["app", "otfw.config.js"], true),
+    };
+    let mut compiler = serde_json::json!({
+        "lib": ["ESNext", "DOM", "DOM.Iterable"],
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "jsx": "preserve",
+        "jsxImportSource": "@opentf/web",
+        "strict": true,
+        "skipLibCheck": true,
+        "noEmit": true,
+        "isolatedModules": true,
+        "moduleDetection": "force",
+    });
+    if allow_js {
+        compiler["allowJs"] = serde_json::Value::Bool(true);
+    }
+    let tsconfig = serde_json::json!({
+        "compilerOptions": compiler,
+        "include": include,
+    });
+    let mut rendered = serde_json::to_string_pretty(&tsconfig).unwrap_or_default();
+    rendered.push('\n');
+    vec![
+        ("tsconfig.json".to_string(), rendered.into_bytes()),
+        (env_path.to_string(), OTF_ENV_DTS.as_bytes().to_vec()),
+    ]
+}
+
+/// The Tailwind choice is a one-line prepend — the toolchain compiles it.
+const OTF_TAILWIND_IMPORT: &str = "@import \"tailwindcss\";\n\n";
+
+/// The demo blog is files on disk plus two patches; this is what "yes" adds.
+const OTF_BLOG_NAV: &str = "nav: [\n      { label: \"Docs\", href: \"/docs\" },\n      { label: \"Blog\", href: \"/blog\" },\n    ],";
+const OTF_BLOG_CONFIG: &str = "\n  // Sample blog — demo post under app/blog/. Remove this block and app/blog/ if unused.\n  blog: {\n    dir: \"blog\",\n    lastUpdated: true,\n  },";
+const OTF_BLOG_DEMO_SECTION: &str = "\n## Blog (demo)\n\nThis starter includes a **demo blog** under `app/blog/` — one sample post plus a\n`/blog` link in the top navbar. Replace the placeholder post with your own MDX, or\nremove `app/blog/`, the `blog` block in `otfw.config.js`, and the Blog nav entry\nif you only need docs.\n";
+
+fn otf_patch_blog_config(content: &str) -> String {
+    let mut config = content.to_string();
+    if !config.contains("href: \"/blog\"") {
+        config = config.replace("nav: [{ label: \"Docs\", href: \"/docs\" }],", OTF_BLOG_NAV);
+    }
+    if !config.contains("blog:") {
+        let trimmed = config.trim_end();
+        let head = trimmed.strip_suffix("});").unwrap_or(trimmed);
+        config = format!("{head}{OTF_BLOG_CONFIG}\n}});\n");
+    }
+    config
+}
+
+fn otf_patch_blog_page(content: &str) -> String {
+    if content.contains("## Blog (demo)") {
+        return content.to_string();
+    }
+    content.replace(
+        "\n## Edit Content\n",
+        &format!("{OTF_BLOG_DEMO_SECTION}\n## Edit Content\n"),
+    )
 }
 
 /// Which template, asked on a terminal.
@@ -790,5 +1308,376 @@ mod tests {
         for (name, _) in TEMPLATES {
             assert!(listed.contains(name), "{name} is missing from:\n{listed}");
         }
+    }
+
+    /// The template menu shows a description beside every name; one without
+    /// reads as an option the scaffolder forgot to explain.
+    #[test]
+    fn every_template_has_a_description() {
+        for (name, _) in TEMPLATES {
+            let description = DESCRIPTIONS
+                .iter()
+                .find(|(template, _)| template == name)
+                .map(|(_, description)| *description)
+                .unwrap_or("");
+            assert!(
+                !description.is_empty(),
+                "{name} has no description in DESCRIPTIONS"
+            );
+        }
+    }
+
+    /// The OTF Web starter set is embedded whole: apps, docs with its demo
+    /// blog on disk, and the library without anything Bun-only.
+    #[test]
+    fn the_otf_templates_are_in_the_binary() {
+        for expected in [
+            "package.json",
+            "index.html",
+            "jsconfig.json",
+            "app/layout.jsx",
+            "app/page.jsx",
+            "app/global.css",
+            "README.md",
+            "_gitignore",
+        ] {
+            for template in ["spa", "fullstack"] {
+                assert!(
+                    resolved(template, None).iter().any(|path| path == expected),
+                    "{template} has no {expected}"
+                );
+            }
+        }
+        let docs = resolved("docs", None);
+        for expected in [
+            "package.json",
+            "otfw.config.js",
+            "app/docs/page.mdx",
+            "app/docs/_meta.js",
+            "app/blog/page.jsx",
+            "app/blog/hello-world/page.mdx",
+        ] {
+            assert!(
+                docs.iter().any(|path| path == expected),
+                "docs has no {expected}"
+            );
+        }
+        let library = resolved("library", None);
+        for expected in [
+            "package.json",
+            "index.js",
+            "src/Counter.jsx",
+            "tests/counter.test.js",
+            "jsconfig.json",
+        ] {
+            assert!(
+                library.iter().any(|path| path == expected),
+                "library has no {expected}"
+            );
+        }
+        for forbidden in ["bunfig.toml", "test-setup.js"] {
+            assert!(
+                !library.iter().any(|path| path == forbidden),
+                "library embeds {forbidden}, which needs Bun to run"
+            );
+        }
+    }
+
+    /// The OTF answers resolved from flags, without a terminal to ask on.
+    /// Unit tests never see a TTY, so `None` here is the unattended default.
+    #[test]
+    fn the_otf_axes_default_and_refuse() {
+        let config = CreateConfig {
+            dir: "x".to_string(),
+            template: Some("spa".to_string()),
+            mode: None,
+            language: None,
+            styling: None,
+            blog: None,
+            force: false,
+            install: Some(None),
+        };
+        match resolve_otf("spa", &config).expect("spa resolves") {
+            OtfResolution::Answers(otf) => {
+                assert_eq!(otf.language, DEFAULT_LANGUAGE);
+                assert_eq!(otf.styling.as_deref(), Some(DEFAULT_STYLING));
+                assert_eq!(otf.blog, None);
+            }
+            other => panic!("spa takes language and styling: {other:?}"),
+        }
+        match resolve_otf("docs", &config).expect("docs resolves") {
+            OtfResolution::Answers(otf) => {
+                assert_eq!(otf.blog, Some(DEFAULT_BLOG));
+                assert_eq!(otf.styling, None);
+            }
+            other => panic!("docs takes a blog: {other:?}"),
+        }
+        assert!(matches!(
+            resolve_otf("api", &config),
+            Ok(OtfResolution::NotOtf)
+        ));
+
+        let flagged = CreateConfig {
+            language: Some("ts".to_string()),
+            styling: Some("css".to_string()),
+            blog: None,
+            ..config_empty_dir()
+        };
+        match resolve_otf("fullstack", &flagged).expect("flags resolve") {
+            OtfResolution::Answers(otf) => {
+                assert_eq!(otf.language, "ts");
+                assert_eq!(otf.styling.as_deref(), Some("css"));
+            }
+            other => panic!("flags are answers: {other:?}"),
+        }
+        assert!(resolve_otf("react", &flagged).is_err());
+        let unblogged = CreateConfig {
+            blog: Some(false),
+            ..config_empty_dir()
+        };
+        match resolve_otf("docs", &unblogged).expect("the blog flag resolves") {
+            OtfResolution::Answers(otf) => assert_eq!(otf.blog, Some(false)),
+            other => panic!("--no-blog is an answer: {other:?}"),
+        }
+        assert!(resolve_otf("fullstack", &unblogged).is_err());
+        assert!(
+            resolve_choice(
+                "api",
+                "language",
+                "language",
+                false,
+                LANGUAGES,
+                DEFAULT_LANGUAGE,
+                Some("elm"),
+                "Select a language?"
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_choice(
+                "spa",
+                "language",
+                "language",
+                true,
+                LANGUAGES,
+                DEFAULT_LANGUAGE,
+                Some("elm"),
+                "Select a language?"
+            )
+            .is_err()
+        );
+        // Styling is not a docs axis, and the blog is not a spa one.
+        assert!(
+            resolve_choice(
+                "docs",
+                "styling",
+                "styling",
+                false,
+                STYLINGS,
+                DEFAULT_STYLING,
+                Some("css"),
+                "Select a styling solution?"
+            )
+            .is_err()
+        );
+        assert!(resolve_blog("spa", Some(true)).is_err());
+        assert!(matches!(resolve_blog("spa", None), Ok(Blog::NotApplicable)));
+        assert!(matches!(resolve_blog("docs", Some(false)), Ok(Blog::Off)));
+    }
+
+    fn config_empty_dir() -> CreateConfig {
+        CreateConfig {
+            dir: "x".to_string(),
+            template: None,
+            mode: None,
+            language: None,
+            styling: None,
+            blog: None,
+            force: false,
+            install: Some(None),
+        }
+    }
+
+    /// The OTF answers applied, as `create` would write them.
+    fn otf_written(
+        template: &str,
+        language: &str,
+        styling: Option<&str>,
+        blog: Option<bool>,
+    ) -> Vec<(String, Vec<u8>)> {
+        let (_, files) = TEMPLATES
+            .iter()
+            .find(|(name, _)| *name == template)
+            .expect("the template is embedded");
+        let files = files_for(files, None);
+        apply_otf(
+            template,
+            &Otf {
+                language: language.to_string(),
+                styling: styling.map(str::to_string),
+                blog,
+            },
+            &files,
+        )
+    }
+
+    fn otf_text(files: &[(String, Vec<u8>)], path: &str) -> String {
+        let (_, contents) = files
+            .iter()
+            .find(|(written, _)| written == path)
+            .unwrap_or_else(|| panic!("{path} was not written"));
+        String::from_utf8(contents.clone()).expect("template text is UTF-8")
+    }
+
+    /// TypeScript is renames plus patches: sources move, references follow,
+    /// layouts type their props, and the config arrives beside them.
+    #[test]
+    fn typescript_renames_patches_and_configures() {
+        let files = otf_written("spa", "ts", Some("css"), None);
+        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        assert!(paths.contains(&"app/page.tsx"));
+        assert!(paths.contains(&"app/layout.tsx"));
+        assert!(paths.contains(&"tsconfig.json"));
+        assert!(paths.contains(&"app/otfw-env.d.ts"));
+        assert!(!paths.contains(&"app/page.jsx"));
+        assert!(!paths.contains(&"jsconfig.json"));
+
+        let layout = otf_text(&files, "app/layout.tsx");
+        assert!(
+            layout.contains("({ children }: { children: unknown })"),
+            "the layout types its props: {layout}"
+        );
+        let page = otf_text(&files, "app/page.tsx");
+        assert!(
+            page.contains("app/page.tsx"),
+            "references follow the rename: {page}"
+        );
+        let readme = otf_text(&files, "README.md");
+        assert!(
+            readme.contains("app/page.tsx"),
+            "the README names the file that exists: {readme}"
+        );
+        let env = otf_text(&files, "app/otfw-env.d.ts");
+        assert!(
+            env.contains("declare const $state"),
+            "macros declared: {env}"
+        );
+
+        let tsconfig: serde_json::Value =
+            serde_json::from_str(&otf_text(&files, "tsconfig.json")).expect("valid JSON");
+        assert_eq!(
+            tsconfig["include"],
+            serde_json::json!(["app"]),
+            "apps include their tree"
+        );
+        assert!(
+            tsconfig["compilerOptions"].get("allowJs").is_none(),
+            "a TypeScript app is not half JavaScript"
+        );
+    }
+
+    /// The docs tree keeps its config include, and the library publishes its
+    /// entry — in TypeScript, the TypeScript entry.
+    #[test]
+    fn typescript_configures_docs_and_library() {
+        let docs = otf_written("docs", "ts", None, Some(false));
+        let tsconfig: serde_json::Value =
+            serde_json::from_str(&otf_text(&docs, "tsconfig.json")).expect("valid JSON");
+        assert_eq!(
+            tsconfig["include"],
+            serde_json::json!(["app", "otfw.config.js"])
+        );
+
+        let library = otf_written("library", "ts", None, None);
+        let paths: Vec<&str> = library.iter().map(|(path, _)| path.as_str()).collect();
+        assert!(paths.contains(&"index.ts"));
+        assert!(paths.contains(&"src/Counter.tsx"));
+        assert!(paths.contains(&"otfw-env.d.ts"));
+        assert!(!paths.contains(&"index.js"));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&otf_text(&library, "package.json")).expect("valid JSON");
+        assert_eq!(manifest["exports"]["."], serde_json::json!("./index.ts"));
+        assert_eq!(manifest["files"], serde_json::json!(["index.ts", "src"]));
+        let counter = otf_text(&library, "src/Counter.tsx");
+        assert!(
+            counter.contains("{ initial = 0 }: { initial?: number }"),
+            "the counter types its prop: {counter}"
+        );
+        // The esdev test reads the manifest, so it needs no patch per mode.
+        let test = otf_text(&library, "tests/counter.test.js");
+        assert!(test.contains("runtime:test"));
+        assert!(!test.contains("bun:test"));
+    }
+
+    /// JavaScript writes what is embedded: no config, no renames.
+    #[test]
+    fn javascript_writes_the_embedded_files() {
+        let files = otf_written("spa", "js", Some("css"), None);
+        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        assert!(paths.contains(&"app/page.jsx"));
+        assert!(paths.contains(&"jsconfig.json"));
+        assert!(!paths.contains(&"tsconfig.json"));
+        assert!(!paths.iter().any(|path| path.ends_with(".tsx")));
+    }
+
+    /// Tailwind is a prepend, not a project shape — and docs already has it.
+    #[test]
+    fn tailwind_prepends_the_import() {
+        let plain = otf_written("spa", "js", Some("css"), None);
+        assert!(!otf_text(&plain, "app/global.css").contains("@import"));
+        let plain_manifest: serde_json::Value =
+            serde_json::from_str(&otf_text(&plain, "package.json")).expect("valid JSON");
+        assert!(
+            plain_manifest["devDependencies"]
+                .get("tailwindcss")
+                .is_none(),
+            "plain CSS pulls no compiler"
+        );
+        let tw = otf_written("spa", "js", Some("tailwind"), None);
+        assert!(otf_text(&tw, "app/global.css").starts_with("@import \"tailwindcss\";\n\n:root {"));
+        // An `@import` the project resolves is a dependency the project
+        // declares: npm hoisting (upstream's default manager) finds the
+        // toolchain's copy, and a strict `node_modules` layout does not.
+        let tw_manifest: serde_json::Value =
+            serde_json::from_str(&otf_text(&tw, "package.json")).expect("valid JSON");
+        assert_eq!(
+            tw_manifest["devDependencies"]["tailwindcss"],
+            serde_json::json!("latest")
+        );
+        let docs = otf_written("docs", "js", None, Some(false));
+        let docs_manifest: serde_json::Value =
+            serde_json::from_str(&otf_text(&docs, "package.json")).expect("valid JSON");
+        assert_eq!(
+            docs_manifest["devDependencies"]["tailwindcss"],
+            serde_json::json!("latest"),
+            "docs always imports it"
+        );
+    }
+
+    /// Withholding the blog withholds its files; keeping it patches the two
+    /// files that point at it.
+    #[test]
+    fn the_blog_is_files_plus_two_patches() {
+        let bare = otf_written("docs", "js", None, Some(false));
+        assert!(
+            !bare.iter().any(|(path, _)| path.starts_with("app/blog/")),
+            "no blog means no blog files"
+        );
+        let config = otf_text(&bare, "otfw.config.js");
+        assert!(!config.contains("blog:"));
+
+        let blogged = otf_written("docs", "js", None, Some(true));
+        assert!(
+            blogged
+                .iter()
+                .any(|(path, _)| path == "app/blog/hello-world/page.mdx"),
+            "yes means the sample post"
+        );
+        let config = otf_text(&blogged, "otfw.config.js");
+        assert!(config.contains("href: \"/blog\""));
+        assert!(config.contains("dir: \"blog\""));
+        let page = otf_text(&blogged, "app/docs/page.mdx");
+        assert!(page.contains("## Blog (demo)"));
+        assert!(page.contains("## Edit Content"));
     }
 }
