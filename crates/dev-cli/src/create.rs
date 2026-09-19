@@ -665,7 +665,11 @@ fn resolve_mode(template: &str, asked_for: Option<&str>, ask: Ask) -> Result<Mod
 
     let choices: Vec<crate::prompt::Choice<'_>> = modes
         .iter()
-        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .map(|(name, description)| crate::prompt::Choice {
+            name,
+            label: display_name(name),
+            description,
+        })
         .collect();
     match crate::prompt::select("Which Mode?", &choices, Some(0), ask.esc()) {
         Some(chosen) => Ok(Mode::Chosen(choices[chosen].name.to_string())),
@@ -756,7 +760,7 @@ fn resolve_choice(
     axis: &str,
     flag: &str,
     takes: bool,
-    options: &[(&str, &str)],
+    options: &[(&'static str, &'static str)],
     default: &str,
     asked_for: Option<&str>,
     question: &str,
@@ -785,7 +789,11 @@ fn resolve_choice(
     }
     let choices: Vec<crate::prompt::Choice<'_>> = options
         .iter()
-        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .map(|(name, description)| crate::prompt::Choice {
+            name,
+            label: display_name(name),
+            description,
+        })
         .collect();
     let preselect = choices
         .iter()
@@ -826,10 +834,12 @@ fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blo
     let choices = [
         crate::prompt::Choice {
             name: "Yes — add demo blog",
+            label: "Yes — add demo blog",
             description: "Adds app/blog/, a sample post, and a Blog link in the navbar",
         },
         crate::prompt::Choice {
             name: "No — docs only",
+            label: "No — docs only",
             description: "Documentation pages without a blog section",
         },
     ];
@@ -1117,6 +1127,31 @@ fn otf_patch_blog_page(content: &str) -> String {
     )
 }
 
+/// How a menu value reads. Flags stay lowercase — what is chosen must match
+/// what `--template=spa` spells — so the menu shows the proper form beside
+/// the choice it stands for.
+fn display_name(name: &'static str) -> &'static str {
+    match name {
+        "api" => "API",
+        "docs" => "Docs",
+        "fullstack" => "FullStack",
+        "lib" => "Library",
+        // The OTF starter's display is provisional: `lib` above already
+        // reads "Library", so this needs its own (see OTF_GROUP below).
+        "library" => "Component Library",
+        "micro-ui" => "Micro-UI",
+        "react" => "ReactJS",
+        "spa" => "SPA",
+        "vanilla" => "Vanilla",
+        "static" => "Static",
+        "js" => "JS",
+        "ts" => "TS",
+        "css" => "CSS",
+        "tailwind" => "Tailwind",
+        _ => name,
+    }
+}
+
 /// The OTF starters in the order `create-web` asks them — the embedded
 /// `TEMPLATES` list is alphabetical, which is for `--list`, not for choosing.
 const OTF_ORDER: &[&str] = &["spa", "fullstack", "docs", "library"];
@@ -1172,7 +1207,11 @@ fn template_menu_otf() -> Vec<(&'static str, &'static str)> {
 fn ask_template() -> Option<String> {
     let top: Vec<crate::prompt::Choice<'_>> = template_menu_top()
         .into_iter()
-        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .map(|(name, description)| crate::prompt::Choice {
+            name,
+            label: display_name(name),
+            description,
+        })
         .collect();
     loop {
         let chosen =
@@ -1182,7 +1221,11 @@ fn ask_template() -> Option<String> {
         }
         let otf: Vec<crate::prompt::Choice<'_>> = template_menu_otf()
             .into_iter()
-            .map(|(name, description)| crate::prompt::Choice { name, description })
+            .map(|(name, description)| crate::prompt::Choice {
+                name,
+                label: display_name(name),
+                description,
+            })
             .collect();
         if let Some(chosen) = crate::prompt::select(
             "Which OTF Web Starter?",
@@ -1209,11 +1252,13 @@ fn ask_install() -> Option<crate::install::Manager> {
         .iter()
         .map(|manager| crate::prompt::Choice {
             name: manager.name,
+            label: manager.name,
             description: "",
         })
         .collect();
     choices.push(crate::prompt::Choice {
         name: "skip",
+        label: "Skip",
         description: "write the files and stop",
     });
 
@@ -1604,6 +1649,31 @@ mod tests {
                 !description.is_empty(),
                 "{name} has no description in DESCRIPTIONS"
             );
+        }
+    }
+
+    /// Menus show the proper form while flags stay lowercase: `SPA`, not
+    /// `spa` — and what is chosen still resolves to the flag spelling.
+    #[test]
+    fn menus_show_proper_names_for_lowercase_flags() {
+        for (flag, label) in [
+            ("api", "API"),
+            ("docs", "Docs"),
+            ("fullstack", "FullStack"),
+            ("lib", "Library"),
+            ("micro-ui", "Micro-UI"),
+            ("react", "ReactJS"),
+            ("spa", "SPA"),
+            ("vanilla", "Vanilla"),
+            ("static", "Static"),
+            ("js", "JS"),
+            ("ts", "TS"),
+            ("css", "CSS"),
+            ("tailwind", "Tailwind"),
+            ("OTF Web", "OTF Web"),
+            ("npm", "npm"),
+        ] {
+            assert_eq!(display_name(flag), label, "{flag} displays wrong");
         }
     }
 

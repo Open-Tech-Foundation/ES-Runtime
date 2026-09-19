@@ -70,8 +70,10 @@ fn colour() -> bool {
 
 /// One option in a [`select`].
 pub struct Choice<'a> {
-    /// The value, and what a flag would spell.
+    /// The value, and what a flag would spell. Lowercase, always.
     pub name: &'a str,
+    /// How the value reads in the menu: `SPA`, not `spa`.
+    pub label: &'a str,
     /// One line, for somebody choosing.
     pub description: &'a str,
 }
@@ -118,7 +120,7 @@ pub fn select(
         Err(_) => numbered(question, choices, default),
     }?;
 
-    answered(question, choices[chosen].name);
+    answered(question, choices[chosen].label);
     Some(chosen)
 }
 
@@ -227,7 +229,7 @@ fn render<'a>(
         Style::new()
     };
 
-    let width = choices.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let width = choices.iter().map(|c| c.label.len()).max().unwrap_or(0);
     let mut lines = vec![
         Line::default(),
         Line::from(vec![
@@ -252,7 +254,7 @@ fn render<'a>(
         };
         let mut spans = vec![
             Span::styled(marker, accent),
-            Span::styled(format!("{:width$}", choice.name), name),
+            Span::styled(format!("{:width$}", choice.label), name),
         ];
         if !choice.description.is_empty() {
             spans.push(Span::styled(format!("  {}", choice.description), dim));
@@ -300,7 +302,7 @@ impl Drop for RawMode {
 /// something nearby — a scaffolder writes a project, and a typo silently
 /// producing the wrong one is worse than a second question.
 fn numbered(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> Option<usize> {
-    let width = choices.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let width = choices.iter().map(|c| c.label.len()).max().unwrap_or(0);
 
     loop {
         eprintln!("\n{question}");
@@ -313,7 +315,7 @@ fn numbered(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> O
             let line = format!(
                 "  {}) {:width$}  {}{}",
                 index + 1,
-                choice.name,
+                choice.label,
                 choice.description,
                 marker,
             );
@@ -339,16 +341,17 @@ fn numbered(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> O
     }
 }
 
-/// One typed answer as an index: by number, or by name.
+/// One typed answer as an index: by number, by flag spelling, or by the label
+/// the menu showed — `spa`, `SPA` and `1` all reach the same starter.
 fn resolve(choices: &[Choice<'_>], answer: &str) -> Option<usize> {
     if let Ok(number) = answer.parse::<usize>()
         && (1..=choices.len()).contains(&number)
     {
         return Some(number - 1);
     }
-    choices
-        .iter()
-        .position(|choice| choice.name.eq_ignore_ascii_case(answer))
+    choices.iter().position(|choice| {
+        choice.name.eq_ignore_ascii_case(answer) || choice.label.eq_ignore_ascii_case(answer)
+    })
 }
 
 /// Reads one line, or `None` at end of input.
@@ -378,14 +381,18 @@ mod tests {
         let choices = [
             Choice {
                 name: "react",
+                label: "ReactJS",
                 description: "",
             },
             Choice {
                 name: "api",
+                label: "API",
                 description: "",
             },
         ];
         assert_eq!(resolve(&choices, "API"), Some(1));
+        assert_eq!(resolve(&choices, "api"), Some(1));
+        assert_eq!(resolve(&choices, "ReactJS"), Some(0));
         assert_eq!(resolve(&choices, "1"), Some(0));
         assert_eq!(resolve(&choices, "3"), None);
         assert_eq!(resolve(&choices, "svelte"), None);
@@ -399,10 +406,12 @@ mod tests {
         let choices = [
             Choice {
                 name: "static",
+                label: "Static",
                 description: "no server",
             },
             Choice {
                 name: "fullstack",
+                label: "FullStack",
                 description: "a server",
             },
         ];
@@ -414,13 +423,17 @@ mod tests {
         assert_eq!(text.iter().filter(|line| line.contains('❯')).count(), 1);
         assert!(
             text.iter()
-                .find(|line| line.contains("fullstack"))
+                .find(|line| line.contains("FullStack"))
                 .is_some_and(|line| line.contains('❯')),
             "the cursor is on the second choice: {text:?}"
         );
         assert!(
+            !text.iter().any(|line| line.contains("fullstack ")),
+            "the flag spelling is not what is shown: {text:?}"
+        );
+        assert!(
             text.iter()
-                .find(|line| line.contains("static"))
+                .find(|line| line.contains("Static"))
                 .is_some_and(|line| line.contains("(default)")),
             "the default is named: {text:?}"
         );
@@ -441,10 +454,12 @@ mod tests {
         let choices = [
             Choice {
                 name: "spa",
+                label: "SPA",
                 description: "an app",
             },
             Choice {
                 name: "docs",
+                label: "Docs",
                 description: "a site",
             },
         ];
@@ -457,7 +472,7 @@ mod tests {
         );
         assert!(
             text.iter()
-                .find(|line| line.contains("spa"))
+                .find(|line| line.contains("SPA"))
                 .is_some_and(|line| line.contains('❯')),
             "the cursor still starts on the first choice: {text:?}"
         );
@@ -476,6 +491,7 @@ mod tests {
     fn the_first_menu_offers_cancel() {
         let choices = [Choice {
             name: "spa",
+            label: "SPA",
             description: "an app",
         }];
         let lines = render("Which Template?", &choices, 0, None, OnEsc::Cancel, false);
