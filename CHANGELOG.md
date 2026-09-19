@@ -47,6 +47,8 @@ namespace) is unstable and may change between minor releases until the API freez
   live option/form collections.
 - Add esdev DOM form ownership and `FormData(form)` serialization for text,
   checked checkboxes/radios, selects, and textareas.
+- Add esdev DOM constraint validation and form `requestSubmit()` for common
+  required, pattern, range, length, type, and custom-error constraints.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

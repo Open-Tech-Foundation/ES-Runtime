@@ -8,6 +8,7 @@ const ATTRS = Symbol("esdev DOM attributes");
 const DATA = Symbol("esdev DOM character data");
 const SELECTED = Symbol("esdev DOM option selected state");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
+const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -461,6 +462,14 @@ export function createTree(events = {}) {
         if (control instanceof HTMLInputElement) control.checked = control.defaultChecked;
       }
     }
+    checkValidity() { return Array.from(this.elements, (control) => control.checkValidity?.() ?? true).every(Boolean); }
+    reportValidity() { return this.checkValidity(); }
+    requestSubmit(submitter = null) {
+      if (submitter !== null && (!(submitter instanceof HTMLButtonElement) || submitter.form !== this)) throw new TypeError("requestSubmit submitter must belong to this form");
+      if (!this.checkValidity()) return;
+      this.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter }));
+    }
+    submit() {}
   }
 
   class HTMLOptionElement extends HTMLElement {
@@ -534,6 +543,41 @@ export function createTree(events = {}) {
     set value(value) { this[TEXTAREA_VALUE] = String(value); }
   }
 
+  function validityFor(control) {
+    const value = control.value ?? "";
+    const required = control.required && (control instanceof HTMLSelectElement ? control.selectedIndex < 0 || value === "" : value === "");
+    const typeMismatch = control instanceof HTMLInputElement && value !== "" && (
+      control.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+      || control.type === "url" && (() => { try { new URL(value); return false; } catch { return true; } })()
+    );
+    let patternMismatch = false;
+    if (control instanceof HTMLInputElement && value !== "" && control.pattern) {
+      try { patternMismatch = !(new RegExp(`^(?:${control.pattern})$`, "u")).test(value); } catch {}
+    }
+    const number = Number(value);
+    const rangeUnderflow = control instanceof HTMLInputElement && control.type === "number" && value !== "" && control.min !== "" && Number.isFinite(number) && number < Number(control.min);
+    const rangeOverflow = control instanceof HTMLInputElement && control.type === "number" && value !== "" && control.max !== "" && Number.isFinite(number) && number > Number(control.max);
+    const tooShort = control.minLength >= 0 && value !== "" && value.length < control.minLength;
+    const tooLong = control.maxLength >= 0 && value.length > control.maxLength;
+    const customError = Boolean(control[CUSTOM_VALIDITY]);
+    return Object.freeze({
+      badInput: false, customError, patternMismatch, rangeOverflow, rangeUnderflow,
+      stepMismatch: false, tooLong, tooShort, typeMismatch, valid: !(required || typeMismatch || patternMismatch || rangeUnderflow || rangeOverflow || tooShort || tooLong || customError),
+      valueMissing: required,
+    });
+  }
+
+  function installValidation(Class) {
+    Object.defineProperties(Class.prototype, {
+      willValidate: { get() { return !this.disabled; } },
+      validity: { get() { return validityFor(this); } },
+      validationMessage: { get() { return this.validity.valid ? "" : this[CUSTOM_VALIDITY] || "Constraints not satisfied"; } },
+      setCustomValidity: { value(message) { this[CUSTOM_VALIDITY] = String(message); } },
+      checkValidity: { value() { if (!this.willValidate || this.validity.valid) return true; this.dispatchEvent(new Event("invalid", { cancelable: true })); return false; } },
+      reportValidity: { value() { return this.checkValidity(); } },
+    });
+  }
+
   class HTMLLabelElement extends HTMLElement {
     click() {
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -601,8 +645,14 @@ export function createTree(events = {}) {
     { name: "name", placeholder: "placeholder" },
     { disabled: "disabled", readOnly: "readonly", required: "required" },
     { cols: ["cols", 20, 1], rows: ["rows", 2, 1] });
+  installValidation(HTMLInputElement);
+  installValidation(HTMLSelectElement);
+  installValidation(HTMLTextAreaElement);
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
+    min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
+    max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
+    pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
   });
   Object.defineProperties(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },

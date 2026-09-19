@@ -3591,6 +3591,96 @@ fn test_dom_form_data_includes_externally_associated_controls() {
 }
 
 #[test]
+fn test_dom_controls_report_common_constraint_validity_flags() {
+    let dir = build_dir("t_test_dom_constraint_flags");
+    write_in(
+        &dir,
+        "validity.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('required pattern type range and length constraints are distinct', () => {\n\
+           const required = document.createElement('input'); required.required = true;\n\
+           const pattern = document.createElement('input'); pattern.pattern = '[0-9]{3}'; pattern.value = 'no';\n\
+           const email = document.createElement('input'); email.type = 'email'; email.value = 'not-an-email';\n\
+           const number = document.createElement('input'); number.type = 'number'; number.min = '2'; number.max = '4'; number.value = '5';\n\
+           const length = document.createElement('input'); length.minLength = 3; length.maxLength = 4; length.value = 'ab';\n\
+           assertEquals([required.validity.valueMissing, pattern.validity.patternMismatch, email.validity.typeMismatch, number.validity.rangeOverflow, length.validity.tooShort], [true, true, true, true, true]);\n\
+           assertEquals([required.checkValidity(), required.validationMessage], [false, 'Constraints not satisfied']);\n\
+           required.value = 'ok'; pattern.value = '123'; email.value = 'ada@example.test'; number.value = '3'; length.value = 'abcd';\n\
+           assertEquals([required.validity.valid, pattern.validity.valid, email.validity.valid, number.validity.valid, length.validity.valid], [true, true, true, true, true]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM constraint flag test");
+    assert!(
+        ran.status.success(),
+        "constraint flag test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_constraint_validation_dispatches_invalid_and_honors_custom_errors() {
+    let dir = build_dir("t_test_dom_constraint_events");
+    write_in(
+        &dir,
+        "invalid.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('invalid events and custom messages follow checkValidity', () => {\n\
+           const input = document.createElement('input'); input.required = true; document.body.appendChild(input); let invalid = 0; let bubbled = 0;\n\
+           input.addEventListener('invalid', (event) => { invalid += 1; assertEquals(event.bubbles, false); }); document.body.addEventListener('invalid', () => { bubbled += 1; });\n\
+           assertEquals(input.reportValidity(), false); assertEquals([invalid, bubbled], [1, 0]);\n\
+           input.value = 'present'; input.setCustomValidity('server rejected it');\n\
+           assertEquals([input.validity.customError, input.validity.valid, input.validationMessage, input.checkValidity()], [true, false, 'server rejected it', false]);\n\
+           input.setCustomValidity(''); assertEquals(input.checkValidity(), true);\n\
+           input.disabled = true; input.value = ''; assertEquals([input.willValidate, input.checkValidity()], [false, true]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM constraint event test");
+    assert!(
+        ran.status.success(),
+        "constraint event test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_request_submit_validates_before_emitting_submit() {
+    let dir = build_dir("t_test_dom_request_submit");
+    write_in(
+        &dir,
+        "request-submit.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('requestSubmit stops on invalid controls then names its submitter', () => {\n\
+           const form = document.createElement('form'); const input = document.createElement('input'); input.required = true; const button = document.createElement('button'); form.append(input, button); document.body.appendChild(form);\n\
+           let invalid = 0; let submitted = 0; input.addEventListener('invalid', () => { invalid += 1; }); form.addEventListener('submit', (event) => { submitted += 1; assertEquals(event.submitter, button); });\n\
+           form.requestSubmit(button); assertEquals([invalid, submitted], [1, 0]);\n\
+           input.value = 'ready'; form.requestSubmit(button); assertEquals([invalid, submitted], [1, 1]);\n\
+           input.setCustomValidity('no'); assertEquals(form.checkValidity(), false); input.setCustomValidity(''); assertEquals(form.reportValidity(), true);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM request-submit test");
+    assert!(
+        ran.status.success(),
+        "request-submit test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

@@ -34,6 +34,9 @@ throws `SyntaxError`.
 select values/options, form reset, and the basic checkbox, radio, and
 submit-button click defaults. Controls associate with a containing form or its
 `form` attribute; `new FormData(form)` serializes successful controls.
+Inputs, selects, and textareas expose layout-free constraint validation
+(`validity`, `checkValidity()`, `reportValidity()`, and custom errors); form
+`requestSubmit()` validates before dispatching `submit`.
 Inline styles are supported through `element.style` and stay synchronized with
 the `style` attribute. `getComputedStyle` exposes those inline values only;
 stylesheet cascade and resolved values are not present.
