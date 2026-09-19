@@ -38,6 +38,10 @@ const MODULES: &[HostModule] = &[
         specifier: "runtime:dom/css",
         source: include_str!("css.js"),
     },
+    HostModule {
+        specifier: "runtime:dom/elements",
+        source: include_str!("elements.js"),
+    },
 ];
 
 impl HostExtension for DomExtension {

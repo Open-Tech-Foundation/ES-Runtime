@@ -39,6 +39,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM's inline `CSSStyleDeclaration`: property and `cssText` writes
   stay synchronized with `style`, preserve `!important`, support custom
   properties and camel-case access, and reject malformed declarations.
+- Add esdev DOM custom elements: `define`, `get`, `whenDefined` and `upgrade`,
+  with existing-element upgrades plus connected, disconnected, adopted and
+  observed-attribute reactions.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every

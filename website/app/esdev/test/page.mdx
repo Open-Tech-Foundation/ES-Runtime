@@ -31,6 +31,9 @@ combinators; unsupported selector syntax throws `SyntaxError`.
 the basic checkbox, radio, and submit-button click defaults.
 Inline styles are supported through `element.style` and stay synchronized with
 the `style` attribute; stylesheet cascade and computed values are not present.
+`customElements` supports registration, lookup, `whenDefined`, and upgrades;
+its registered elements receive connected, disconnected, adopted, and observed
+attribute callbacks.
 
 ```sh
 esdev test --dom

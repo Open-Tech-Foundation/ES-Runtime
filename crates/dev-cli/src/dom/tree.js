@@ -34,6 +34,7 @@ function asNodes(value, document, NodeClass) {
 
 export function createTree(events = {}) {
   const { EventTarget = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
+  const customConstruction = [];
   class LiveCollection {
     constructor(root, filter) {
       this.root = root;
@@ -355,6 +356,15 @@ export function createTree(events = {}) {
   // accessors. These are the common cross-element attributes; element-specific
   // entries are installed below on the relevant subclass only.
   class HTMLElement extends Element {
+    constructor(name, ownerDocument) {
+      const context = customConstruction.at(-1);
+      if (context && name === undefined && ownerDocument === undefined) {
+        super(context.name, context.document);
+        return context.element;
+      }
+      if (name === undefined || ownerDocument === undefined) throw new TypeError("Illegal constructor");
+      super(name, ownerDocument);
+    }
     click() {
       this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     }
@@ -510,6 +520,20 @@ export function createTree(events = {}) {
     label: HTMLLabelElement,
   };
 
+  function upgradeCustom(element, constructor) {
+    if (Object.getPrototypeOf(element) === constructor.prototype) return element;
+    if (!(constructor.prototype instanceof HTMLElement)) throw new TypeError("Custom element constructors must extend HTMLElement");
+    Object.setPrototypeOf(element, constructor.prototype);
+    customConstruction.push({ element, name: element.localName, document: element.ownerDocument });
+    try {
+      const constructed = new constructor();
+      if (constructed !== element) throw new TypeError("Custom element constructor returned a different object");
+    } finally {
+      customConstruction.pop();
+    }
+    return element;
+  }
+
   function collect(root, predicate) {
     const result = [];
     for (const child of root._children()) {
@@ -521,5 +545,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, Text, Comment, Attr, NamedNodeMap, VOID };
+  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, Text, Comment, Attr, NamedNodeMap, VOID, upgradeCustom };
 }

@@ -5,6 +5,7 @@ import { createTree } from "runtime:dom/tree";
 import { createParsing } from "runtime:dom/parse";
 import { createSelectors } from "runtime:dom/select";
 import { createCss } from "runtime:dom/css";
+import { createElements } from "runtime:dom/elements";
 
 const events = createEvents();
 const tree = createTree(events);
@@ -12,6 +13,7 @@ const parse = createParsing(tree, (source, context) =>
   globalThis.__ops.dom_parse_fragment(source, context));
 const selectors = createSelectors(tree);
 const css = createCss(tree);
+const elements = createElements(tree);
 
 const document = new tree.Document();
 const html = document.createElement("html");
@@ -27,6 +29,7 @@ Object.defineProperties(document, {
 parse.install();
 selectors.install();
 css.install();
+const customElements = elements.install(document);
 
-Object.assign(globalThis, events, tree, css, { document });
+Object.assign(globalThis, events, tree, css, elements, { document, customElements });
 globalThis.window = globalThis;

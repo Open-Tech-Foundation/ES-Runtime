@@ -3180,6 +3180,55 @@ fn test_dom_inline_styles_track_the_style_attribute() {
 }
 
 #[test]
+fn test_dom_custom_elements_upgrade_and_react_to_tree_changes() {
+    let dir = build_dir("t_test_dom_custom_elements");
+    write_in(
+        &dir,
+        "custom-elements.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('definition upgrades existing elements and runs reactions', async () => {\n\
+           const calls = [];\n\
+           const prior = document.createElement('x-probe'); prior.setAttribute('state', 'ready'); document.body.appendChild(prior);\n\
+           const pending = customElements.whenDefined('x-probe');\n\
+           class Probe extends HTMLElement {\n\
+             static observedAttributes = ['state'];\n\
+             constructor() { super(); calls.push('constructed'); }\n\
+             connectedCallback() { calls.push('connected'); }\n\
+             disconnectedCallback() { calls.push('disconnected'); }\n\
+             adoptedCallback() { calls.push('adopted'); }\n\
+             attributeChangedCallback(name, oldValue, newValue) { calls.push(`${name}:${oldValue}:${newValue}`); }\n\
+           }\n\
+           customElements.define('x-probe', Probe);\n\
+           assertEquals(await pending, Probe);\n\
+           assertEquals(prior instanceof Probe, true);\n\
+           assertEquals(calls, ['constructed', 'state:null:ready', 'connected']);\n\
+           prior.setAttribute('state', 'next'); prior.remove();\n\
+           const secondDocument = new Document(); secondDocument.adoptNode(prior);\n\
+           assertEquals(calls, ['constructed', 'state:null:ready', 'connected', 'state:ready:next', 'disconnected', 'adopted']);\n\
+         });\n\
+         test('the registry validates names and duplicate definitions', () => {\n\
+           class Good extends HTMLElement {}\n\
+           customElements.define('x-good', Good);\n\
+           assertEquals(document.createElement('x-good') instanceof Good, true);\n\
+           assertThrows(() => customElements.define('plain', Good), DOMException);\n\
+           assertThrows(() => customElements.define('x-good', Good), DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom custom elements");
+    assert!(
+        ran.status.success(),
+        "DOM custom-element test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(
