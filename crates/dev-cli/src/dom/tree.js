@@ -426,7 +426,7 @@ export function createTree(events = {}) {
       if (this.type === "radio" && !this.checked) {
         const name = this.name;
         for (const input of this.ownerDocument.getElementsByTagName("input")) {
-          if (input !== this && input.type === "radio" && input.name === name) input.checked = false;
+          if (input !== this && input.type === "radio" && input.name === name && formOwner(input) === formOwner(this)) input.checked = false;
         }
         this.checked = true;
       }
@@ -595,12 +595,15 @@ export function createTree(events = {}) {
     click() {
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event)) return;
-      const target = this.htmlFor
-        ? Array.from(this.ownerDocument.getElementsByTagName("*")).find((element) => element.id === this.htmlFor)
-        : this.children.item(0);
-      target?.click?.();
+      this.control?.click?.();
+    }
+    get control() {
+      if (this.htmlFor) return Array.from(this.ownerDocument.getElementsByTagName("*")).find((element) => element.id === this.htmlFor && isLabelable(element)) ?? null;
+      return collect(this, isLabelable)[0] ?? null;
     }
   }
+
+  function isLabelable(element) { return ["button", "input", "select", "textarea"].includes(element.localName); }
 
   function reflectString(attribute) {
     return {
@@ -643,7 +646,7 @@ export function createTree(events = {}) {
     { hidden: "hidden", inert: "inert" },
     { tabIndex: ["tabindex", -1, Number.NEGATIVE_INFINITY] });
   installReflectors(HTMLInputElement,
-    { accept: "accept", alt: "alt", autocomplete: "autocomplete", name: "name", placeholder: "placeholder", value: "value" },
+    { accept: "accept", alt: "alt", autocomplete: "autocomplete", name: "name", placeholder: "placeholder" },
     { checked: "checked", defaultChecked: "checked", disabled: "disabled", multiple: "multiple", readOnly: "readonly", required: "required" },
     { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1] });
   installReflectors(HTMLButtonElement,
@@ -665,6 +668,10 @@ export function createTree(events = {}) {
   installValidation(HTMLTextAreaElement);
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
+    value: {
+      get() { return this.getAttribute("value") ?? (["checkbox", "radio"].includes(this.type) ? "on" : ""); },
+      set(value) { this.setAttribute("value", String(value)); },
+    },
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
     pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
@@ -674,6 +681,11 @@ export function createTree(events = {}) {
   });
   for (const Class of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement]) {
     Object.defineProperty(Class.prototype, "form", { get() { return formOwner(this); } });
+    Object.defineProperty(Class.prototype, "labels", {
+      get() {
+        return new HTMLCollection(this.ownerDocument, (root) => collect(root, (element) => element instanceof HTMLLabelElement && element.control === this));
+      },
+    });
   }
 
   class DocumentFragment extends Node {

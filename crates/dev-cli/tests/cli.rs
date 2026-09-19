@@ -3764,6 +3764,88 @@ fn test_dom_form_elements_include_live_fieldsets_and_associated_controls() {
 }
 
 #[test]
+fn test_dom_radio_clicks_are_exclusive_within_one_form_only() {
+    let dir = build_dir("t_test_dom_radio_form_scope");
+    write_in(
+        &dir,
+        "radios.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('same-name radios do not cross form ownership', () => {\n\
+           const one = document.createElement('form'); const two = document.createElement('form');\n\
+           const first = document.createElement('input'); first.type = 'radio'; first.name = 'choice'; const second = document.createElement('input'); second.type = 'radio'; second.name = 'choice'; const other = document.createElement('input'); other.type = 'radio'; other.name = 'choice';\n\
+           one.append(first, second); two.appendChild(other); document.body.append(one, two);\n\
+           first.click(); other.click(); assertEquals([first.checked, second.checked, other.checked], [true, false, true]);\n\
+           second.click(); assertEquals([first.checked, second.checked, other.checked], [false, true, true]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM radio form-scope test");
+    assert!(
+        ran.status.success(),
+        "radio form-scope test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_labels_resolve_controls_and_expose_live_control_labels() {
+    let dir = build_dir("t_test_dom_label_association");
+    write_in(
+        &dir,
+        "labels.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('explicit and nested labels share control association', () => {\n\
+           const input = document.createElement('input'); input.id = 'email'; const explicit = document.createElement('label'); explicit.htmlFor = 'email'; const nested = document.createElement('label'); nested.appendChild(input); document.body.append(explicit, nested);\n\
+           assertEquals([explicit.control, nested.control, Array.from(input.labels)], [input, input, [explicit, nested]]);\n\
+           let clicks = 0; input.addEventListener('click', () => { clicks += 1; }); explicit.click(); nested.click(); assertEquals(clicks, 2);\n\
+           const extra = document.createElement('label'); extra.htmlFor = 'email'; document.body.appendChild(extra); assertEquals(Array.from(input.labels), [explicit, nested, extra]);\n\
+           extra.remove(); assertEquals(Array.from(input.labels), [explicit, nested]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM label association test");
+    assert!(
+        ran.status.success(),
+        "label association test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_checkbox_and_radio_form_data_default_to_on() {
+    let dir = build_dir("t_test_dom_checkable_default_value");
+    write_in(
+        &dir,
+        "checkable-values.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('successful checkable controls default their value to on', () => {\n\
+           const form = document.createElement('form'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.name = 'check'; checkbox.checked = true; const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'radio'; radio.checked = true;\n\
+           form.append(checkbox, radio); document.body.appendChild(form);\n\
+           assertEquals([checkbox.value, radio.value, Array.from(new FormData(form))], ['on', 'on', [['check', 'on'], ['radio', 'on']]]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM checkable value test");
+    assert!(
+        ran.status.success(),
+        "checkable value test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

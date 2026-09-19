@@ -51,6 +51,7 @@ namespace) is unstable and may change between minor releases until the API freez
   required, pattern, range, length, type, and custom-error constraints.
 - Add esdev DOM fieldset and optgroup disabled inheritance for validation and
   form-data serialization.
+- Add esdev DOM label/control association and form-scoped radio click behavior.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.
