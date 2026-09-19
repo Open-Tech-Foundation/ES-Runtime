@@ -45,6 +45,8 @@ namespace) is unstable and may change between minor releases until the API freez
   surrounding contents, and mutation-aware boundary adjustment.
 - Add esdev DOM select, option, and textarea controls with form reset and
   live option/form collections.
+- Add esdev DOM form ownership and `FormData(form)` serialization for text,
+  checked checkboxes/radios, selects, and textareas.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

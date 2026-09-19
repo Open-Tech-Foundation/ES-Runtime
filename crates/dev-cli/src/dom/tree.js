@@ -437,18 +437,20 @@ export function createTree(events = {}) {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event) || this.type !== "submit") return;
-      for (let parent = this.parentElement; parent; parent = parent.parentElement) {
-        if (parent instanceof HTMLFormElement) {
-          parent.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: this }));
-          break;
-        }
-      }
+      this.form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: this }));
     }
+  }
+
+  function formOwner(control) {
+    const id = control.getAttribute("form");
+    if (id !== null) return Array.from(control.ownerDocument.getElementsByTagName("form")).find((form) => form.id === id) ?? null;
+    for (let parent = control.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLFormElement) return parent;
+    return null;
   }
 
   class HTMLFormElement extends HTMLElement {
     get elements() {
-      return new HTMLCollection(this, (root) => collect(root, (element) => ["button", "input", "select", "textarea"].includes(element.localName)));
+      return new HTMLCollection(this, () => Array.from(this.ownerDocument.getElementsByTagName("*")).filter((element) => ["button", "input", "select", "textarea"].includes(element.localName) && formOwner(element) === this));
     }
     reset() {
       const event = new Event("reset", { bubbles: true, cancelable: true });
@@ -605,6 +607,9 @@ export function createTree(events = {}) {
   Object.defineProperties(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
   });
+  for (const Class of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement]) {
+    Object.defineProperty(Class.prototype, "form", { get() { return formOwner(this); } });
+  }
 
   class DocumentFragment extends Node {
     constructor(ownerDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }

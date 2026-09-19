@@ -34,6 +34,24 @@ const customElements = elements.install(document);
 const ranges = createRanges(tree, parse);
 ranges.install(document);
 
+const NativeFormData = globalThis.FormData;
+class DomFormData extends NativeFormData {
+  constructor(form) {
+    super();
+    if (form === undefined) return;
+    if (!(form instanceof tree.HTMLFormElement)) throw new TypeError("FormData constructor expects an HTMLFormElement");
+    for (const control of form.elements) {
+      if (control.disabled || !control.name || control instanceof tree.HTMLButtonElement) continue;
+      if (control instanceof tree.HTMLInputElement && ["checkbox", "radio"].includes(control.type) && !control.checked) continue;
+      if (control instanceof tree.HTMLSelectElement) {
+        for (const option of control.selectedOptions) this.append(control.name, option.value);
+      } else {
+        this.append(control.name, control.value);
+      }
+    }
+  }
+}
+
 let activeElement = body;
 Object.defineProperty(document, "activeElement", { get: () => activeElement });
 
@@ -269,6 +287,7 @@ Object.assign(globalThis, events, tree, css, elements, { document, customElement
 globalThis.window = globalThis;
 Object.assign(globalThis, {
   History,
+  FormData: DomFormData,
   IntersectionObserver: NeverObserver,
   Location,
   MediaQueryList,

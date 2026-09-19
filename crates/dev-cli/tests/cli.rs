@@ -3502,6 +3502,95 @@ fn test_dom_form_reset_restores_select_and_textarea_defaults() {
 }
 
 #[test]
+fn test_dom_form_controls_associate_by_ancestor_or_form_attribute() {
+    let dir = build_dir("t_test_dom_form_ownership");
+    write_in(
+        &dir,
+        "ownership.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('form ownership includes associated controls outside the form', () => {\n\
+           const form = document.createElement('form'); form.id = 'profile'; const inside = document.createElement('input'); inside.name = 'inside';\n\
+           const outside = document.createElement('textarea'); outside.name = 'outside'; outside.setAttribute('form', 'profile');\n\
+           const foreign = document.createElement('input'); foreign.name = 'foreign'; foreign.setAttribute('form', 'other');\n\
+           form.appendChild(inside); document.body.append(form, outside, foreign); const controls = form.elements;\n\
+           assertEquals([inside.form, outside.form, foreign.form], [form, form, null]);\n\
+           assertEquals(Array.from(controls), [inside, outside]);\n\
+           const button = document.createElement('button'); button.setAttribute('form', 'profile'); let submitted = 0; form.addEventListener('submit', (event) => { submitted += 1; assertEquals(event.submitter, button); });\n\
+           document.body.appendChild(button); button.click(); assertEquals(submitted, 1);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM form ownership test");
+    assert!(
+        ran.status.success(),
+        "form ownership test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_data_serializes_successful_controls_in_tree_order() {
+    let dir = build_dir("t_test_dom_form_data");
+    write_in(
+        &dir,
+        "form-data.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('FormData(form) includes successful controls only', () => {\n\
+           const form = document.createElement('form'); form.id = 'survey';\n\
+           const text = document.createElement('input'); text.name = 'name'; text.value = 'Ada';\n\
+           const checked = document.createElement('input'); checked.type = 'checkbox'; checked.name = 'newsletter'; checked.value = 'yes'; checked.checked = true;\n\
+           const unchecked = document.createElement('input'); unchecked.type = 'checkbox'; unchecked.name = 'skip'; unchecked.value = 'no';\n\
+           const select = document.createElement('select'); select.multiple = true; select.name = 'tag'; const one = document.createElement('option'); one.value = 'one'; one.selected = true; const two = document.createElement('option'); two.value = 'two'; two.selected = true; select.append(one, two);\n\
+           const note = document.createElement('textarea'); note.name = 'note'; note.value = 'hello'; const disabled = document.createElement('input'); disabled.name = 'disabled'; disabled.value = 'never'; disabled.disabled = true;\n\
+           form.append(text, checked, unchecked, select, note, disabled); document.body.appendChild(form);\n\
+           assertEquals(Array.from(new FormData(form)), [['name', 'Ada'], ['newsletter', 'yes'], ['tag', 'one'], ['tag', 'two'], ['note', 'hello']]);\n\
+           assertEquals(Array.from(new FormData()), []);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM FormData test");
+    assert!(
+        ran.status.success(),
+        "FormData test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_data_includes_externally_associated_controls() {
+    let dir = build_dir("t_test_dom_form_data_external");
+    write_in(
+        &dir,
+        "form-data-external.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('FormData follows form ownership rather than subtree only', () => {\n\
+           const form = document.createElement('form'); form.id = 'checkout'; const local = document.createElement('input'); local.name = 'local'; local.value = 'one'; form.appendChild(local);\n\
+           const external = document.createElement('select'); external.name = 'external'; external.setAttribute('form', 'checkout'); const option = document.createElement('option'); option.value = 'two'; external.appendChild(option);\n\
+           document.body.append(form, external); assertEquals(Array.from(new FormData(form)), [['local', 'one'], ['external', 'two']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn external DOM FormData test");
+    assert!(
+        ran.status.success(),
+        "external FormData test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(
