@@ -3767,20 +3767,24 @@ export default {
   },
   "build_time": {
     "vite": {
-      "build_ms": 868,
-      "out_kb": 1855
+      "build_ms": 854,
+      "out_kb": 1855,
+      "peak_mb": 642
     },
     "oj": {
-      "build_ms": 11068,
-      "out_kb": 1857
+      "build_ms": 10333,
+      "out_kb": 1857,
+      "peak_mb": 744
     },
     "esdev": {
-      "build_ms": 1199,
-      "out_kb": 1855
+      "build_ms": 1175,
+      "out_kb": 1855,
+      "peak_mb": 399
     },
     "bun": {
-      "build_ms": 218,
-      "out_kb": 1488
+      "build_ms": 234,
+      "out_kb": 1488,
+      "peak_mb": 228
     }
   },
   "build_time_method": {

@@ -86,7 +86,8 @@ export default function FrameworkTabs() {
             Same app, minified production build, min of three runs — every
             leg minifies and builds production React (bun needs an explicit{" "}
             <code className="font-mono">NODE_ENV=production</code>, which the
-            other three default to). Each output must mount in a real browser
+            other three default to). Memory is the peak RSS sampled during
+            the fastest run. Each output must mount in a real browser
             before its numbers publish.
           </p>
         </div>

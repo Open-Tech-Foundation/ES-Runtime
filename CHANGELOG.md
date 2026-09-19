@@ -23,7 +23,8 @@ namespace) is unstable and may change between minor releases until the API freez
   cold/warm/peak-RSS), published as `dev_server` and charted in a second tab
   of the home-page Benchmarks section.
 - Production-build benchmark (same four tools, wall time plus output bytes),
-  published as `build_time` and charted in a third tab.
+  published as `build_time` and charted in a third tab. Memory is the peak
+  RSS polled off the build child during the fastest rep.
 - Postgres QPS benchmark (100 rows × 100 in flight, queries/sec plus peak
   RSS, across Node, Bun, Deno and esrun), published as `results_pg_qps` and
   charted in a fourth tab.

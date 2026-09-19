@@ -773,9 +773,11 @@ SECTIONS=devserver bench/gen-bench-data.sh            # publish as `dev_server`
 ### Production build (vite vs oj vs esdev vs bun)
 
 Same app, minified production build into per-tool outdirs, min of three runs
-each, plus output bytes (`bench/dev-server/build.mjs`, published as
+each, plus output bytes and peak RSS (`bench/dev-server/build.mjs`, published as
 `build_time`). Every leg minifies — the default for vite and oj, `--minify`
-for esdev and bun — so time and size compare like for like. After its reps,
+for esdev and bun — so time and size compare like for like. Memory is the peak
+RSS polled off the build child while it runs (a finished build leaves no
+`/proc` entry for a `VmHWM` read), taken from the fastest rep. After its reps,
 each tool's output is served statically and must mount in a real browser
 before its numbers publish.
 

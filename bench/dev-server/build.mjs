@@ -4,9 +4,13 @@
 // Each leg runs the tool's default production build into its own outdir,
 // with minification on everywhere it is a flag (vite and oj minify by
 // default; esdev and bun get --minify), so time and size compare like for
-// like. Every rep clears the outdir first and records wall time + output
-// bytes. Published time per cell is the MIN over reps (repo convention).
-// After its reps, each tool's output is served statically and must mount in
+// like. Every rep clears the outdir first and records wall time, peak RSS
+// (polled off the child while it runs — a finished build leaves no /proc
+// entry for a VmHWM read, so the high-water mark is sampled, not read once)
+// and output bytes. Published time per cell is the MIN over reps (repo
+// convention); published memory is the peak of the fastest rep, so the row
+// describes one real run. After its reps, each tool's output is served
+// statically and must mount in
 // a real browser ([data-done]) before its numbers publish — a build that
 // does not render is a failure, not a fast time.
 //
@@ -77,16 +81,45 @@ function outBytes(tool) {
   return total;
 }
 
+function readRssKb(pid) {
+  try {
+    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+    const m = status.match(/^VmRSS:\s+(\d+)\s+kB/m);
+    if (m) return parseInt(m[1], 10);
+  } catch {}
+  try {
+    const out = execFileSync("ps", ["-o", "rss=", "-p", String(pid)], {
+      stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
+    const kb = parseInt(out, 10);
+    if (Number.isFinite(kb)) return kb;
+  } catch {}
+  return null;
+}
+
 function runOnce(tool) {
   const { cmd, opts } = TOOLS[tool];
   fs.rmSync(path.join(app, OUTDIRS[tool]), { recursive: true, force: true });
   const t0 = Date.now();
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd[0], cmd[1], { stdio: "ignore", ...opts });
-    proc.on("error", reject);
+    let peakKb = null;
+    const sample = () => {
+      if (proc.pid === undefined) return;
+      const kb = readRssKb(proc.pid);
+      if (kb !== null && (peakKb === null || kb > peakKb)) peakKb = kb;
+    };
+    sample();
+    const timer = setInterval(sample, 10);
+    proc.on("error", (err) => {
+      clearInterval(timer);
+      reject(err);
+    });
     proc.on("exit", (code) => {
+      clearInterval(timer);
+      sample();
       if (code !== 0) reject(new Error(`${tool} build exited ${code}`));
-      else resolve(Date.now() - t0);
+      else resolve({ ms: Date.now() - t0, peakKb });
     });
   });
 }
@@ -107,8 +140,6 @@ function toolVersions() {
   } catch { out.esdev = null; }
   return out;
 }
-
-const min = (xs) => Math.min(...xs);
 
 function chromePath() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -192,11 +223,17 @@ async function main() {
   try {
     for (const tool of Object.keys(TOOLS)) {
       console.error(`build: ${tool} on ${N} components…`);
-      const times = [];
-      for (let i = 0; i < ITERS; i++) times.push(await runOnce(tool));
+      const reps = [];
+      for (let i = 0; i < ITERS; i++) reps.push(await runOnce(tool));
       await verifyBuild(tool, browser, verifyPort++);
       console.error(`build: ${tool} output renders`);
-      rows.push({ tool, ms: min(times), bytes: outBytes(tool), reps: times });
+      // The published row describes the fastest rep: its time, and the peak
+      // RSS sampled during that same run. Peak RSS is a floor contention
+      // cannot inflate, so no further aggregation is needed.
+      let best = reps[0];
+      for (const r of reps) if (r.ms < best.ms) best = r;
+      const peakMb = best.peakKb === null ? null : Math.round(best.peakKb / 1024);
+      rows.push({ tool, ms: best.ms, bytes: outBytes(tool), peakMb, reps });
     }
   } finally {
     await browser.close();
@@ -205,7 +242,7 @@ async function main() {
   const versions = toolVersions();
   if (process.env.BENCH_JSON) {
     const build_time = {};
-    for (const r of rows) build_time[r.tool] = { build_ms: r.ms, out_kb: Math.round(r.bytes / 1024) };
+    for (const r of rows) build_time[r.tool] = { build_ms: r.ms, out_kb: Math.round(r.bytes / 1024), peak_mb: r.peakMb };
     console.log(JSON.stringify({
       build_time,
       build_time_method: {
@@ -225,15 +262,15 @@ async function main() {
   }
 
   console.log(`\n${N} components (fanout-10 tree), production build, min of ${ITERS}`);
-  console.log("tool  | build time | output size");
-  console.log("------|------------|-------------");
+  console.log("tool  | build time | output size | peak RSS");
+  console.log("------|------------|-------------|----------");
   for (const r of rows) {
     console.log(
-      `${r.tool.padEnd(5)} | ${String((r.ms / 1000).toFixed(1) + "s").padEnd(10)} | ${(r.bytes / 1048576).toFixed(1)} MB`
+      `${r.tool.padEnd(5)} | ${String((r.ms / 1000).toFixed(1) + "s").padEnd(10)} | ${(r.bytes / 1048576).toFixed(1).padEnd(7)} MB | ${r.peakMb === null ? "n/a" : r.peakMb + " MB"}`
     );
   }
   console.error(`versions: ${JSON.stringify(versions)}`);
-  for (const r of rows) console.error(`${r.tool} reps: ${r.reps.join(",")}ms`);
+  for (const r of rows) console.error(`${r.tool} reps: ${r.reps.map((x) => x.ms).join(",")}ms; peak: ${r.reps.map((x) => x.peakKb === null ? "n/a" : Math.round(x.peakKb / 1024) + "MB").join(",")}`);
 }
 
 await main();

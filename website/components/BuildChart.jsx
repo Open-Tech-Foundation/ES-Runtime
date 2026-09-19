@@ -1,6 +1,6 @@
-// Production-build chart: wall time and output size for vite build,
-// oj build, esdev build and bun build on the generated 10k-component React
-// fixture. Same visual language as DevServerChart (rows are tools, bar
+// Production-build chart: wall time, output size and peak RSS for vite
+// build, oj build, esdev build and bun build on the generated 10k-component
+// React fixture. Same visual language as DevServerChart (rows are tools, bar
 // columns are metrics, the winner of each column is drawn bold); data comes
 // from bench/dev-server/build.mjs via bench.build_time.
 //
@@ -47,6 +47,11 @@ function fmtKb(v) {
   return v >= 1024 ? (v / 1024).toFixed(1) + " MB" : v + " KB";
 }
 
+function fmtMb(v) {
+  if (typeof v !== "number") return "n/a";
+  return v >= 1024 ? (v / 1024).toFixed(1) + " GB" : v + " MB";
+}
+
 function getVal(tool, key) {
   return bench.build_time?.[tool]?.[key] ?? null;
 }
@@ -83,6 +88,7 @@ function getPct(tools, key, tool) {
 const COLUMNS = [
   { key: "build_ms", title: "Build time (lower ↓)", fmt: fmtMs },
   { key: "out_kb", title: "Output size (lower ↓)", fmt: fmtKb },
+  { key: "peak_mb", title: "Peak memory (lower ↓)", fmt: fmtMb },
 ];
 
 export default function BuildChart({ large = false }) {
@@ -120,9 +126,10 @@ export default function BuildChart({ large = false }) {
       </div>
 
       <div className={"mb-2 grid grid-cols-12 gap-2 " + headCls}>
-        <div className="col-span-4">Tool</div>
-        <div className="col-span-4 text-left">Build time (lower ↓)</div>
-        <div className="col-span-4 text-left">Output size (lower ↓)</div>
+        <div className="col-span-3">Tool</div>
+        <div className="col-span-3 text-left">Build time (lower ↓)</div>
+        <div className="col-span-3 text-left">Output size (lower ↓)</div>
+        <div className="col-span-3 text-left">Peak memory (lower ↓)</div>
       </div>
 
       <div className={large ? "space-y-3" : "space-y-2"}>
@@ -135,13 +142,13 @@ export default function BuildChart({ large = false }) {
           };
           return (
             <div className="grid grid-cols-12 items-center gap-2">
-              <div className={"col-span-4 " + nameCls}>
+              <div className={"col-span-3 " + nameCls}>
                 {meta.label}
               </div>
               {COLUMNS.map((col) => {
                 const isWin = tool === getWinner(tools, col.key);
                 return (
-                  <div className="col-span-4 flex items-center gap-1.5 pr-1">
+                  <div className="col-span-3 flex items-center gap-1.5 pr-1">
                     <div className={barCls}>
                       <div
                         className={"h-full rounded-full " + meta.bar}
