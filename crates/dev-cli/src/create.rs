@@ -467,7 +467,7 @@ fn resolve_mode(template: &str, asked_for: Option<&str>) -> Result<Mode, String>
         .iter()
         .map(|(name, description)| crate::prompt::Choice { name, description })
         .collect();
-    match crate::prompt::select("Which mode?", &choices, 0) {
+    match crate::prompt::select("Which mode?", &choices, Some(0)) {
         Some(chosen) => Ok(Mode::Chosen(choices[chosen].name.to_string())),
         None => Ok(Mode::Cancelled),
     }
@@ -590,7 +590,7 @@ fn resolve_choice(
         .iter()
         .position(|choice| choice.name == default)
         .unwrap_or(0);
-    match crate::prompt::select(question, &choices, preselect) {
+    match crate::prompt::select(question, &choices, Some(preselect)) {
         Some(chosen) => Ok(Choice::Chosen(choices[chosen].name.to_string())),
         None => Ok(Choice::Cancelled),
     }
@@ -633,7 +633,7 @@ fn resolve_blog(template: &str, asked_for: Option<bool>) -> Result<Blog, String>
         },
     ];
     let preselect = if DEFAULT_BLOG { 0 } else { 1 };
-    match crate::prompt::select("Include a sample blog?", &choices, preselect) {
+    match crate::prompt::select("Include a sample blog?", &choices, Some(preselect)) {
         Some(0) => Ok(Blog::On),
         Some(_) => Ok(Blog::Off),
         None => Ok(Blog::Cancelled),
@@ -970,25 +970,72 @@ fn otf_patch_blog_page(content: &str) -> String {
     )
 }
 
-/// Which template, asked on a terminal.
-fn ask_template() -> Option<String> {
-    let choices: Vec<crate::prompt::Choice<'_>> = TEMPLATES
+/// The OTF starters in the order `create-web` asks them — the embedded
+/// `TEMPLATES` list is alphabetical, which is for `--list`, not for choosing.
+const OTF_ORDER: &[&str] = &["spa", "fullstack", "docs", "library"];
+
+/// The group entry that stands in for the four OTF starters in the first
+/// menu. A name no flag spells, so it never leaks into the scriptable path.
+const OTF_GROUP: &str = "OTF Web";
+const OTF_GROUP_DESCRIPTION: &str = "OTF Web starters — SPA, fullstack, docs or library";
+
+/// The first menu: this repository's own templates, then the OTF Web group.
+/// Pure, so a test can read what somebody choosing sees.
+fn template_menu_top() -> Vec<(&'static str, &'static str)> {
+    let mut menu: Vec<(&'static str, &'static str)> = TEMPLATES
         .iter()
-        .map(|(name, _)| crate::prompt::Choice {
-            name,
-            description: DESCRIPTIONS
-                .iter()
-                .find(|(template, _)| template == name)
-                .map_or("", |(_, description)| description),
+        .filter(|(name, _)| !is_otf(name))
+        .map(|(name, _)| {
+            (
+                *name,
+                DESCRIPTIONS
+                    .iter()
+                    .find(|(template, _)| template == name)
+                    .map_or("", |(_, description)| *description),
+            )
         })
         .collect();
-    let default = choices
-        .iter()
-        .position(|choice| choice.name == DEFAULT_TEMPLATE)
-        .unwrap_or(0);
+    menu.push((OTF_GROUP, OTF_GROUP_DESCRIPTION));
+    menu
+}
 
-    let chosen = crate::prompt::select("Which template?", &choices, default)?;
-    Some(choices[chosen].name.to_string())
+/// The second menu, behind the group entry: the four OTF starters.
+fn template_menu_otf() -> Vec<(&'static str, &'static str)> {
+    OTF_ORDER
+        .iter()
+        .map(|name| {
+            (
+                *name,
+                DESCRIPTIONS
+                    .iter()
+                    .find(|(template, _)| template == name)
+                    .map_or("", |(_, description)| *description),
+            )
+        })
+        .collect()
+}
+
+/// Which template, asked on a terminal.
+///
+/// Two menus rather than nine lines: the OTF starters choose behind their
+/// group entry, in `create-web`'s order. Neither menu has a default — the
+/// template is the one answer worth choosing explicitly — while flags,
+/// `-y` and unattended runs resolve exactly as before.
+fn ask_template() -> Option<String> {
+    let top: Vec<crate::prompt::Choice<'_>> = template_menu_top()
+        .into_iter()
+        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .collect();
+    let chosen = crate::prompt::select("Which template?", &top, None)?;
+    if top[chosen].name != OTF_GROUP {
+        return Some(top[chosen].name.to_string());
+    }
+    let otf: Vec<crate::prompt::Choice<'_>> = template_menu_otf()
+        .into_iter()
+        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .collect();
+    let chosen = crate::prompt::select("Which OTF Web starter?", &otf, None)?;
+    Some(otf[chosen].name.to_string())
 }
 
 /// Whether to install, and with what.
@@ -1016,7 +1063,7 @@ fn ask_install() -> Option<crate::install::Manager> {
     // Esc lands on the same answer `skip` does: the project is already on disk
     // by now, and cancelling the *install* question is not cancelling the
     // project. Either way the next steps say how to install it.
-    let chosen = crate::prompt::select("Install the dependencies?", &choices, 0)?;
+    let chosen = crate::prompt::select("Install the dependencies?", &choices, Some(0))?;
     available.get(chosen).copied()
 }
 
@@ -1325,6 +1372,28 @@ mod tests {
                 "{name} has no description in DESCRIPTIONS"
             );
         }
+    }
+
+    /// The first menu holds this repository's templates plus the OTF group —
+    /// four more lines there is the flat list this grouping replaces.
+    #[test]
+    fn the_template_menu_groups_the_otf_starters() {
+        let top = template_menu_top();
+        let names: Vec<&str> = top.iter().map(|(name, _)| *name).collect();
+        for otf in OTF_ORDER {
+            assert!(!names.contains(otf), "{otf} leaked into the first menu");
+        }
+        assert_eq!(top.last().map(|(name, _)| *name), Some(OTF_GROUP));
+        for (_, description) in &top {
+            assert!(
+                !description.is_empty(),
+                "the menu shows an unexplained entry"
+            );
+        }
+        // Behind the group: the four starters, in `create-web`'s order.
+        let otf = template_menu_otf();
+        let names: Vec<&str> = otf.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, OTF_ORDER);
     }
 
     /// The OTF Web starter set is embedded whole: apps, docs with its demo

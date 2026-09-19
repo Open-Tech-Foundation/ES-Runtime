@@ -119,15 +119,20 @@ headers and nothing after them, and one JSON log line per request.
 ## It asks, or it writes files and stops
 
 On a terminal it asks which template, which mode if that template has more than
-one, and whether to install — as a menu you arrow through:
+one, the OTF axes where the template takes them, and whether to install — as
+a menu you arrow through. The OTF starters choose behind one group entry, in a
+second menu; neither menu preselects — the template is the one answer worth
+choosing explicitly:
 
 ```text
 ? Which template?
-    api      A JSON API — one route, a URLPattern router, a narrow grant
+  ❯ api      A JSON API — one route, a URLPattern router, a narrow grant
     lib      A publishable TypeScript package — module tree, .d.ts
-  ❯ react    React + react-router — a static site, or an app with a server  (default)
+    react    React + react-router — a static site, or an app with a server
     vanilla  TypeScript and the DOM — no framework
     micro-ui  Micro apps with Micro-UI — framework-free UI
+    OTF Web  OTF Web starters — SPA, fullstack, docs or library
+
   ↑/↓ move · 1-9 jump · enter select · esc cancel
 ```
 

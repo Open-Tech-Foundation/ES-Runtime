@@ -33,8 +33,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - `esdev create` scaffolds the OTF Web starter set (`spa`, `fullstack`,
   `docs`, `library`, embedded in the binary like the other templates) with
   its axes as flags: `--language=js|ts`, `--styling=css|tailwind` (spa,
-  fullstack) and `--blog/--no-blog` (docs). The library template's suite
-  runs under `esdev test` instead of `bun test`.
+  fullstack) and `--blog/--no-blog` (docs). The four choose behind an
+  "OTF Web" group entry, and no template menu preselects — the template is
+  chosen explicitly. The library template's suite runs under `esdev test`
+  instead of `bun test`.
 
 ### Fixed
 

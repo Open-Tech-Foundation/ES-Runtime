@@ -82,13 +82,18 @@ pub struct Choice<'a> {
 /// default, and callers are expected to stop rather than to guess: somebody who
 /// pressed Esc at "which template?" did not ask for the default template.
 ///
+/// The default is `None` where the question has none: no option is marked, the
+/// cursor starts on the first one, and choosing still means pressing enter on
+/// it. `Some` marks the option and is what end of input resolves to.
+///
 /// End of input *is* the default: a closed stdin is not a decision, and looping
-/// on it would hang exactly where this is written not to.
-pub fn select(question: &str, choices: &[Choice<'_>], default: usize) -> Option<usize> {
+/// on it would hang exactly where this is written not to. With no default it
+/// is a cancel instead, for the same reason.
+pub fn select(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> Option<usize> {
     if choices.is_empty() {
         return None;
     }
-    let default = default.min(choices.len() - 1);
+    let default = default.map(|default| default.min(choices.len() - 1));
 
     // A terminal that will not go into raw mode is not a terminal this can draw
     // on, and the question still has to be asked. The fallback is the plain
@@ -103,17 +108,21 @@ pub fn select(question: &str, choices: &[Choice<'_>], default: usize) -> Option<
 }
 
 /// The menu, drawn and driven. `Err` means the terminal would not cooperate.
-fn menu(question: &str, choices: &[Choice<'_>], default: usize) -> std::io::Result<Option<usize>> {
+fn menu(
+    question: &str,
+    choices: &[Choice<'_>],
+    default: Option<usize>,
+) -> std::io::Result<Option<usize>> {
     enable_raw_mode()?;
     // Held for the rest of the function so raw mode is given back even if
     // drawing panics — a terminal left in raw mode is one the user's shell
     // stops echoing into, and they have no way to know why.
     let _raw = RawMode;
 
-    // A blank line, the question, the choices, and the key hint.
+    // A blank line, the question, the choices, a breath before the key hint.
     let height = u16::try_from(choices.len())
         .unwrap_or(u16::MAX)
-        .saturating_add(3);
+        .saturating_add(4);
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(std::io::stderr()),
         TerminalOptions {
@@ -123,7 +132,7 @@ fn menu(question: &str, choices: &[Choice<'_>], default: usize) -> std::io::Resu
     terminal.hide_cursor()?;
 
     let colour = colour();
-    let mut cursor = default;
+    let mut cursor = default.unwrap_or(0);
     let mut origin = Position::ORIGIN;
     let last = choices.len() - 1;
 
@@ -187,7 +196,7 @@ fn render<'a>(
     question: &'a str,
     choices: &'a [Choice<'a>],
     cursor: usize,
-    default: usize,
+    default: Option<usize>,
     colour: bool,
 ) -> Vec<Line<'a>> {
     let accent = if colour {
@@ -231,12 +240,13 @@ fn render<'a>(
         if !choice.description.is_empty() {
             spans.push(Span::styled(format!("  {}", choice.description), dim));
         }
-        if index == default {
+        if Some(index) == default {
             spans.push(Span::styled("  (default)", dim));
         }
         lines.push(Line::from(spans));
     }
 
+    lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         "  ↑/↓ move · 1-9 jump · enter select · esc cancel",
         dim,
@@ -268,13 +278,17 @@ impl Drop for RawMode {
 /// not. An answer that is not an option is re-asked rather than resolved to
 /// something nearby — a scaffolder writes a project, and a typo silently
 /// producing the wrong one is worse than a second question.
-fn numbered(question: &str, choices: &[Choice<'_>], default: usize) -> Option<usize> {
+fn numbered(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> Option<usize> {
     let width = choices.iter().map(|c| c.name.len()).max().unwrap_or(0);
 
     loop {
         eprintln!("\n{question}");
         for (index, choice) in choices.iter().enumerate() {
-            let marker = if index == default { " (default)" } else { "" };
+            let marker = if Some(index) == default {
+                " (default)"
+            } else {
+                ""
+            };
             let line = format!(
                 "  {}) {:width$}  {}{}",
                 index + 1,
@@ -291,11 +305,11 @@ fn numbered(question: &str, choices: &[Choice<'_>], default: usize) -> Option<us
 
         let Some(line) = read_line() else {
             eprintln!();
-            return Some(default);
+            return default;
         };
         let answer = line.trim();
         if answer.is_empty() {
-            return Some(default);
+            return default;
         }
         if let Some(found) = resolve(choices, answer) {
             return Some(found);
@@ -357,8 +371,8 @@ mod tests {
     }
 
     /// The frame is what somebody chooses from, so what is on it is worth
-    /// asserting: every choice, the marker on exactly one of them, and the
-    /// default named as such.
+    /// asserting: every choice, the marker on exactly one of them, the
+    /// default named as such — and a breath between the choices and the keys.
     #[test]
     fn the_menu_draws_every_choice_and_marks_one() {
         let choices = [
@@ -371,7 +385,7 @@ mod tests {
                 description: "a server",
             },
         ];
-        let lines = render("Which mode?", &choices, 1, 0, false);
+        let lines = render("Which mode?", &choices, 1, Some(0), false);
         let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
 
         assert!(text.iter().any(|line| line.contains("Which mode?")));
@@ -388,6 +402,43 @@ mod tests {
                 .find(|line| line.contains("static"))
                 .is_some_and(|line| line.contains("(default)")),
             "the default is named: {text:?}"
+        );
+        let hint = text
+            .iter()
+            .position(|line| line.contains("enter select"))
+            .expect("the key hint is drawn");
+        assert!(
+            text[hint - 1].trim().is_empty(),
+            "the hint stands apart from the choices: {text:?}"
+        );
+    }
+
+    /// A question with no default marks nothing and still starts somewhere —
+    /// choosing means pressing enter on it, explicitly.
+    #[test]
+    fn a_menu_without_a_default_marks_nothing() {
+        let choices = [
+            Choice {
+                name: "spa",
+                description: "an app",
+            },
+            Choice {
+                name: "docs",
+                description: "a site",
+            },
+        ];
+        let lines = render("Which template?", &choices, 0, None, false);
+        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+
+        assert!(
+            !text.iter().any(|line| line.contains("(default)")),
+            "nothing is the default: {text:?}"
+        );
+        assert!(
+            text.iter()
+                .find(|line| line.contains("spa"))
+                .is_some_and(|line| line.contains('❯')),
+            "the cursor still starts on the first choice: {text:?}"
         );
     }
 }
