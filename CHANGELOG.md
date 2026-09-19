@@ -10,6 +10,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
+  It parses explicit nesting, void elements, attributes, comments, templates,
+  raw-text script/style elements and a constrained entity set, while rejecting
+  malformed and browser-recovery-dependent input with byte-offset diagnostics.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every

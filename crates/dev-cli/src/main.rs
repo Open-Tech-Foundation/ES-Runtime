@@ -49,6 +49,7 @@ mod css;
 mod cssmodules;
 mod declarations;
 mod devserver;
+mod dom;
 mod dts;
 mod guest;
 mod html;

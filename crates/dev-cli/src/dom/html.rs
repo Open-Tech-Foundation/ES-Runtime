@@ -1,0 +1,532 @@
+//! A small, strict parser for the modern HTML accepted by the esdev test DOM.
+//!
+//! This is not an HTML5 error-recovery parser. Input is either well-nested,
+//! modern markup or an error with a byte offset. In particular, the parser
+//! does not invent omitted end tags, foster-parent table content, or repair
+//! misnested formatting elements. Those browser compatibility behaviours are
+//! valuable to a browser; silently changing a test fixture is not.
+
+use std::fmt;
+
+/// A parsed HTML document or fragment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Document {
+    /// The optional HTML5 doctype. Only `<!doctype html>` is accepted.
+    pub doctype: bool,
+    pub children: Vec<Node>,
+}
+
+/// A node produced by the strict parser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Node {
+    Element(Element),
+    Text(String),
+    Comment(String),
+}
+
+/// An element and its descendants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Element {
+    pub name: String,
+    pub attributes: Vec<Attribute>,
+    pub children: Vec<Node>,
+}
+
+/// One attribute, kept in source order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: String,
+    pub value: String,
+}
+
+/// A parse error whose position is a byte offset into the supplied UTF-8 text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Error {
+    pub offset: usize,
+    pub message: String,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            out,
+            "HTML parse error at byte {}: {}",
+            self.offset, self.message
+        )
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// Parses a complete document.
+///
+/// A document may contain one `<!doctype html>` before its root element. The
+/// root itself is not synthesized: callers that want the test runner's empty
+/// document construct it explicitly.
+pub fn parse_document(source: &str) -> Result<Document, Error> {
+    let mut parser = Parser::new(source);
+    let document = parser.nodes(None, true)?;
+    if !parser.eof() {
+        return Err(parser.error("unexpected content after the document"));
+    }
+    Ok(document)
+}
+
+/// Parses nodes for an element's `innerHTML`.
+///
+/// Fragment parsing shares exactly the same strict grammar as documents but
+/// never accepts a doctype.
+pub fn parse_fragment(source: &str) -> Result<Vec<Node>, Error> {
+    let mut parser = Parser::new(source);
+    let document = parser.nodes(None, false)?;
+    if !parser.eof() {
+        return Err(parser.error("unexpected content after the fragment"));
+    }
+    Ok(document.children)
+}
+
+struct Parser<'a> {
+    source: &'a str,
+    at: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn new(source: &'a str) -> Self {
+        Self { source, at: 0 }
+    }
+
+    fn eof(&self) -> bool {
+        self.at == self.source.len()
+    }
+
+    fn rest(&self) -> &'a str {
+        &self.source[self.at..]
+    }
+
+    fn error(&self, message: impl Into<String>) -> Error {
+        Error {
+            offset: self.at,
+            message: message.into(),
+        }
+    }
+
+    fn nodes(&mut self, closing: Option<&str>, document: bool) -> Result<Document, Error> {
+        let mut out = Document::default();
+        loop {
+            if self.eof() {
+                if let Some(name) = closing {
+                    return Err(self.error(format!("unclosed <{name}> element")));
+                }
+                return Ok(out);
+            }
+            if self.rest().starts_with("</") {
+                let end_at = self.at;
+                let name = self.end_tag()?;
+                let Some(expected) = closing else {
+                    return Err(Error {
+                        offset: end_at,
+                        message: format!("unexpected closing </{name}> tag"),
+                    });
+                };
+                if name != expected {
+                    return Err(Error {
+                        offset: end_at,
+                        message: format!("closing </{name}> tag does not match <{expected}>"),
+                    });
+                }
+                return Ok(out);
+            }
+            if self.rest().starts_with("<!--") {
+                out.children.push(Node::Comment(self.comment()?));
+            } else if self.rest().starts_with("<!") {
+                if !document || out.doctype || !out.children.is_empty() {
+                    return Err(self.error("doctype must appear once, before document content"));
+                }
+                self.doctype()?;
+                out.doctype = true;
+            } else if self.rest().starts_with('<') {
+                out.children.push(Node::Element(self.element()?));
+            } else {
+                out.children.push(Node::Text(self.text()?));
+            }
+        }
+    }
+
+    fn element(&mut self) -> Result<Element, Error> {
+        self.expect("<")?;
+        let name = self.name("element")?;
+        let mut attributes = Vec::new();
+        loop {
+            self.whitespace();
+            if self.take("/>") {
+                if !is_void(&name) {
+                    return Err(self.error(format!("<{name}/> is not a void element")));
+                }
+                return Ok(Element {
+                    name,
+                    attributes,
+                    children: Vec::new(),
+                });
+            }
+            if self.take(">") {
+                break;
+            }
+            if self.eof() {
+                return Err(self.error("unterminated start tag"));
+            }
+            let attribute_at = self.at;
+            let attribute_name = self.name("attribute")?;
+            if attributes
+                .iter()
+                .any(|attribute: &Attribute| attribute.name == attribute_name)
+            {
+                return Err(Error {
+                    offset: attribute_at,
+                    message: format!("duplicate {attribute_name} attribute"),
+                });
+            }
+            self.whitespace();
+            let value = if self.take("=") {
+                self.whitespace();
+                self.attribute_value()?
+            } else {
+                String::new()
+            };
+            attributes.push(Attribute {
+                name: attribute_name,
+                value,
+            });
+        }
+        if is_void(&name) {
+            return Ok(Element {
+                name,
+                attributes,
+                children: Vec::new(),
+            });
+        }
+        let children = if is_raw_text(&name) {
+            vec![Node::Text(self.raw_text(&name)?)]
+        } else {
+            self.nodes(Some(&name), false)?.children
+        };
+        Ok(Element {
+            name,
+            attributes,
+            children,
+        })
+    }
+
+    fn end_tag(&mut self) -> Result<String, Error> {
+        self.expect("</")?;
+        let name = self.name("end-tag")?;
+        self.whitespace();
+        self.expect(">")?;
+        if is_void(&name) {
+            return Err(self.error(format!("void element <{name}> must not have an end tag")));
+        }
+        Ok(name)
+    }
+
+    fn comment(&mut self) -> Result<String, Error> {
+        self.expect("<!--")?;
+        let start = self.at;
+        let Some(end) = self.rest().find("-->") else {
+            return Err(self.error("unterminated comment"));
+        };
+        let value = &self.source[start..start + end];
+        if value.contains("--") {
+            return Err(Error {
+                offset: start,
+                message: "comments must not contain --".to_string(),
+            });
+        }
+        self.at += end + 3;
+        Ok(value.to_string())
+    }
+
+    fn doctype(&mut self) -> Result<(), Error> {
+        let at = self.at;
+        let Some(end) = self.rest().find('>') else {
+            return Err(self.error("unterminated doctype"));
+        };
+        let value = &self.source[self.at..self.at + end + 1];
+        self.at += end + 1;
+        if !value.eq_ignore_ascii_case("<!doctype html>") {
+            return Err(Error {
+                offset: at,
+                message: "only <!doctype html> is supported".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn raw_text(&mut self, name: &str) -> Result<String, Error> {
+        let start = self.at;
+        let needle = format!("</{name}");
+        let mut at = self.at;
+        while let Some(relative) = self.source[at..].find("</") {
+            let candidate = at + relative;
+            if self.source[candidate..]
+                .get(..needle.len())
+                .is_some_and(|text| text.eq_ignore_ascii_case(&needle))
+            {
+                let after = candidate + needle.len();
+                if self.source[after..].starts_with('>')
+                    || self.source[after..].starts_with(char::is_whitespace)
+                {
+                    let text = self.source[start..candidate].to_string();
+                    self.at = candidate;
+                    let end = self.end_tag()?;
+                    if end != name {
+                        return Err(
+                            self.error(format!("closing </{end}> tag does not match <{name}>"))
+                        );
+                    }
+                    return Ok(text);
+                }
+            }
+            at = candidate + 2;
+        }
+        Err(Error {
+            offset: start,
+            message: format!("unclosed <{name}> element"),
+        })
+    }
+
+    fn text(&mut self) -> Result<String, Error> {
+        let start = self.at;
+        let end = self
+            .rest()
+            .find('<')
+            .map_or(self.source.len(), |offset| self.at + offset);
+        self.at = end;
+        decode_entities(&self.source[start..end], start)
+    }
+
+    fn attribute_value(&mut self) -> Result<String, Error> {
+        let start = self.at;
+        let quote = self
+            .rest()
+            .chars()
+            .next()
+            .filter(|character| matches!(character, '\'' | '"'));
+        if let Some(quote) = quote {
+            self.at += quote.len_utf8();
+            let content = self.at;
+            let Some(end) = self.rest().find(quote) else {
+                return Err(Error {
+                    offset: start,
+                    message: "unterminated quoted attribute value".to_string(),
+                });
+            };
+            self.at += end;
+            let value = decode_entities(&self.source[content..self.at], content)?;
+            self.at += quote.len_utf8();
+            return Ok(value);
+        }
+        let end = self
+            .rest()
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '>' | '/')
+            })
+            .map_or(self.source.len(), |offset| self.at + offset);
+        if end == self.at {
+            return Err(self.error("attribute value is missing"));
+        }
+        self.at = end;
+        decode_entities(&self.source[start..end], start)
+    }
+
+    fn name(&mut self, kind: &str) -> Result<String, Error> {
+        let start = self.at;
+        let mut characters = self.rest().char_indices();
+        let Some((_, first)) = characters.next() else {
+            return Err(self.error(format!("{kind} name is missing")));
+        };
+        if !first.is_ascii_lowercase() {
+            return Err(self.error(format!(
+                "{kind} names must start with a lowercase ASCII letter"
+            )));
+        }
+        let mut end = first.len_utf8();
+        for (index, character) in characters {
+            if character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '-' | '_' | ':')
+            {
+                end = index + character.len_utf8();
+            } else {
+                break;
+            }
+        }
+        self.at = start + end;
+        Ok(self.source[start..self.at].to_string())
+    }
+
+    fn whitespace(&mut self) {
+        self.at += self
+            .rest()
+            .chars()
+            .take_while(|character| character.is_ascii_whitespace())
+            .map(char::len_utf8)
+            .sum::<usize>();
+    }
+
+    fn take(&mut self, expected: &str) -> bool {
+        if self.rest().starts_with(expected) {
+            self.at += expected.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, expected: &str) -> Result<(), Error> {
+        self.take(expected)
+            .then_some(())
+            .ok_or_else(|| self.error(format!("expected {expected:?}")))
+    }
+}
+
+fn is_void(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+fn is_raw_text(name: &str) -> bool {
+    matches!(name, "script" | "style")
+}
+
+fn decode_entities(value: &str, offset: usize) -> Result<String, Error> {
+    let mut output = String::with_capacity(value.len());
+    let mut at = 0;
+    while let Some(relative) = value[at..].find('&') {
+        let entity_at = at + relative;
+        output.push_str(&value[at..entity_at]);
+        let tail = &value[entity_at + 1..];
+        let Some(end) = tail.find(';') else {
+            return Err(Error {
+                offset: offset + entity_at,
+                message: "unterminated character reference".to_string(),
+            });
+        };
+        let name = &tail[..end];
+        let character = match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some('\u{a0}'),
+            _ if name.starts_with("#x") || name.starts_with("#X") => {
+                u32::from_str_radix(&name[2..], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+            }
+            _ if name.starts_with('#') => name[1..].parse::<u32>().ok().and_then(char::from_u32),
+            _ => None,
+        }
+        .ok_or_else(|| Error {
+            offset: offset + entity_at,
+            message: format!("unknown character reference &{name};"),
+        })?;
+        output.push(character);
+        at = entity_at + end + 2;
+    }
+    output.push_str(&value[at..]);
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_modern_document() {
+        let document = parse_document("<!doctype html><main id=app><img alt=\"&lt;logo&gt;\"><p>Hello &amp; goodbye</p></main>").expect("parse");
+        assert!(document.doctype);
+        assert_eq!(
+            document.children,
+            vec![Node::Element(Element {
+                name: "main".to_string(),
+                attributes: vec![Attribute {
+                    name: "id".to_string(),
+                    value: "app".to_string()
+                }],
+                children: vec![
+                    Node::Element(Element {
+                        name: "img".to_string(),
+                        attributes: vec![Attribute {
+                            name: "alt".to_string(),
+                            value: "<logo>".to_string()
+                        }],
+                        children: vec![]
+                    }),
+                    Node::Element(Element {
+                        name: "p".to_string(),
+                        attributes: vec![],
+                        children: vec![Node::Text("Hello & goodbye".to_string())]
+                    }),
+                ],
+            })]
+        );
+    }
+
+    #[test]
+    fn parses_template_and_raw_text_without_interpreting_markup() {
+        let nodes = parse_fragment(
+            "<template><button>Save</button></template><script>if (a < b) c()</script>",
+        )
+        .expect("parse");
+        assert_eq!(nodes.len(), 2);
+        let Node::Element(template) = &nodes[0] else {
+            panic!("template")
+        };
+        assert_eq!(template.children.len(), 1);
+        let Node::Element(script) = &nodes[1] else {
+            panic!("script")
+        };
+        assert_eq!(
+            script.children,
+            vec![Node::Text("if (a < b) c()".to_string())]
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_recovery_cases() {
+        for source in [
+            "<p><strong>x</p></strong>",
+            "<table><tr><td>x</table>",
+            "<p>one<p>two",
+        ] {
+            assert!(parse_fragment(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_or_ambiguous_syntax() {
+        for source in [
+            "<DIV></DIV>",
+            "<input></input>",
+            "<x a=1 a=2></x>",
+            "text &copy",
+            "<!-- x -- y -->",
+        ] {
+            assert!(parse_fragment(source).is_err(), "{source}");
+        }
+    }
+}
