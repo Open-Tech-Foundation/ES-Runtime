@@ -10,6 +10,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Add a 24-case esdev DOM behavior matrix that compares layout-free behavior
+  with jsdom and happy-dom, distinguishing matches, intentional limits, and
+  implementation gaps.
 - Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
   It parses explicit nesting, void elements, attributes, comments, templates,
   raw-text script/style elements and a constrained entity set, while rejecting

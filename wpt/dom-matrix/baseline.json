@@ -1,0 +1,502 @@
+{
+  "cases": [
+    {
+      "group": "tree",
+      "name": "append-and-replace-children",
+      "esdev": {
+        "error": "TypeError"
+      },
+      "happy-dom": {
+        "result": [
+          "two",
+          1,
+          "b"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "two",
+          1,
+          "b"
+        ]
+      },
+      "status": "gap"
+    },
+    {
+      "group": "tree",
+      "name": "fragment-contents-move-on-append",
+      "esdev": {
+        "result": [
+          0,
+          2,
+          "<i></i><b></b>"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          0,
+          2,
+          "<i></i><b></b>"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          0,
+          2,
+          "<i></i><b></b>"
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "tree",
+      "name": "deep-clone-is-independent",
+      "esdev": {
+        "error": "TypeError"
+      },
+      "happy-dom": {
+        "result": [
+          "one",
+          "two",
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "one",
+          "two",
+          true
+        ]
+      },
+      "status": "gap"
+    },
+    {
+      "group": "tree",
+      "name": "collections-stay-live",
+      "esdev": {
+        "error": "TypeError"
+      },
+      "happy-dom": {
+        "result": [
+          1,
+          "b"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          1,
+          "b"
+        ]
+      },
+      "status": "gap"
+    },
+    {
+      "group": "events",
+      "name": "capturing-and-bubbling-order",
+      "esdev": {
+        "result": [
+          "outer-capture",
+          "target",
+          "outer-bubble"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "outer-capture",
+          "target",
+          "outer-bubble"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "outer-capture",
+          "target",
+          "outer-bubble"
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "events",
+      "name": "cancelled-event-returns-false",
+      "esdev": {
+        "result": false
+      },
+      "happy-dom": {
+        "result": false
+      },
+      "jsdom": {
+        "result": false
+      },
+      "status": "match"
+    },
+    {
+      "group": "events",
+      "name": "once-listener-runs-once",
+      "esdev": {
+        "result": 1
+      },
+      "happy-dom": {
+        "result": 1
+      },
+      "jsdom": {
+        "result": 1
+      },
+      "status": "match"
+    },
+    {
+      "group": "events",
+      "name": "stopped-propagation-does-not-reach-parent",
+      "esdev": {
+        "result": [
+          "child"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "child"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "child"
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "parsing",
+      "name": "fragment-serializes-text-and-attributes",
+      "esdev": {
+        "result": "<p title=\"a&amp;b\">one &lt; two</p>"
+      },
+      "happy-dom": {
+        "result": "<p title=\"a&amp;b\">one &lt; two</p>"
+      },
+      "jsdom": {
+        "result": "<p title=\"a&amp;b\">one &lt; two</p>"
+      },
+      "status": "match"
+    },
+    {
+      "group": "parsing",
+      "name": "raw-text-is-not-parsed-as-elements",
+      "esdev": {
+        "error": "TypeError"
+      },
+      "happy-dom": {
+        "result": [
+          "script",
+          "one < two",
+          0
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "script",
+          "one < two",
+          0
+        ]
+      },
+      "status": "gap"
+    },
+    {
+      "group": "parsing",
+      "name": "malformed-markup-is-a-strict-esdev-limit",
+      "limit": "esdev rejects malformed HTML instead of applying browser recovery",
+      "expectedEsdev": {
+        "result": "SyntaxError"
+      },
+      "esdev": {
+        "result": "SyntaxError"
+      },
+      "happy-dom": {
+        "result": null
+      },
+      "jsdom": {
+        "result": null
+      },
+      "status": "intentional-limit"
+    },
+    {
+      "group": "selectors",
+      "name": "compound-and-attribute-selector",
+      "esdev": {
+        "result": "x"
+      },
+      "happy-dom": {
+        "result": "x"
+      },
+      "jsdom": {
+        "result": "x"
+      },
+      "status": "match"
+    },
+    {
+      "group": "selectors",
+      "name": "logical-selector-list",
+      "esdev": {
+        "result": [
+          "a",
+          "b"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "a",
+          "b"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "a",
+          "b"
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "selectors",
+      "name": "structural-selector",
+      "esdev": {
+        "result": [
+          "one",
+          "three"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "one",
+          "three"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "one",
+          "three"
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "selectors",
+      "name": "invalid-selector-throws-syntax-error",
+      "esdev": {
+        "result": "SyntaxError"
+      },
+      "happy-dom": {
+        "result": null
+      },
+      "jsdom": {
+        "result": "SyntaxError"
+      },
+      "status": "reference-disagreement"
+    },
+    {
+      "group": "forms",
+      "name": "form-owner-follows-form-attribute",
+      "esdev": {
+        "result": [
+          true,
+          1
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          true,
+          1
+        ]
+      },
+      "jsdom": {
+        "result": [
+          true,
+          1
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "forms",
+      "name": "form-and-submitter-settings-reflect",
+      "esdev": {
+        "result": [
+          "/form",
+          "post",
+          "/submit",
+          "dialog"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "https://matrix.invalid/form",
+          "post",
+          "https://matrix.invalid/submit",
+          "dialog"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "https://matrix.invalid/form",
+          "post",
+          "/submit",
+          "dialog"
+        ]
+      },
+      "status": "reference-disagreement"
+    },
+    {
+      "group": "forms",
+      "name": "form-data-uses-successful-controls",
+      "esdev": {
+        "result": [
+          [
+            "text",
+            "one"
+          ],
+          [
+            "check",
+            "on"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "text",
+            "one"
+          ],
+          [
+            "check",
+            "on"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "text",
+            "one"
+          ],
+          [
+            "check",
+            "on"
+          ]
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "forms",
+      "name": "required-control-blocks-submit",
+      "esdev": {
+        "result": 0
+      },
+      "happy-dom": {
+        "result": 0
+      },
+      "jsdom": {
+        "result": 0
+      },
+      "status": "match"
+    },
+    {
+      "group": "forms",
+      "name": "submitter-no-validate-bypasses-constraints",
+      "esdev": {
+        "result": true
+      },
+      "happy-dom": {
+        "result": true
+      },
+      "jsdom": {
+        "result": false
+      },
+      "status": "reference-disagreement"
+    },
+    {
+      "group": "forms",
+      "name": "reset-control-restores-default-value",
+      "esdev": {
+        "result": "markup"
+      },
+      "happy-dom": {
+        "result": "markup"
+      },
+      "jsdom": {
+        "result": "markup"
+      },
+      "status": "match"
+    },
+    {
+      "group": "forms",
+      "name": "radio-click-is-exclusive-by-form-owner",
+      "esdev": {
+        "result": [
+          false,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          false,
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          false,
+          true
+        ]
+      },
+      "status": "match"
+    },
+    {
+      "group": "forms",
+      "name": "label-click-activates-nested-checkbox",
+      "esdev": {
+        "result": true
+      },
+      "happy-dom": {
+        "result": true
+      },
+      "jsdom": {
+        "result": true
+      },
+      "status": "match"
+    },
+    {
+      "group": "forms",
+      "name": "disabled-fieldset-excludes-validation-and-data",
+      "esdev": {
+        "result": [
+          true,
+          []
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          true,
+          [
+            [
+              "hidden",
+              "value"
+            ]
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          true,
+          []
+        ]
+      },
+      "status": "reference-disagreement"
+    }
+  ],
+  "summary": {
+    "gap": 4,
+    "match": 15,
+    "intentional-limit": 1,
+    "reference-disagreement": 4
+  }
+}

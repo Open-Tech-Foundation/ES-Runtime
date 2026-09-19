@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "happy-dom": "npm:happy-dom@20.0.11",
+    "jsdom": "npm:jsdom@28.1.0"
+  },
+  "nodeModulesDir": "none"
+}

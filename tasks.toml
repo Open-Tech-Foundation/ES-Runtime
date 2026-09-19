@@ -133,6 +133,12 @@ run = "esdev test"
 dir = "crates/runtime/js"
 env = { PATH = "../../../target/release:${PATH}" }
 
+# A portable baseline for the test-only DOM. The report is diagnostic while it
+# maps compatibility gaps; each case still has a Deno harness test, and the
+# command runs the actual esdev binary alongside jsdom and happy-dom.
+[tasks."test:dom-matrix"]
+run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-read --allow-run --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js"
+
 [tasks."test:unit"]
 deps = ["test:protocol", "test:serialization"]
 
