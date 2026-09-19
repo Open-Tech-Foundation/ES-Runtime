@@ -3846,6 +3846,85 @@ fn test_dom_checkbox_and_radio_form_data_default_to_on() {
 }
 
 #[test]
+fn test_dom_form_reset_restores_dirty_input_values_to_default_values() {
+    let dir = build_dir("t_test_dom_input_value_reset");
+    write_in(
+        &dir,
+        "input-values.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('value changes are dirty state rather than attribute writes', () => {\n\
+           const form = document.createElement('form'); const input = document.createElement('input'); input.defaultValue = 'markup'; form.appendChild(input); document.body.appendChild(form);\n\
+           input.value = 'typed'; assertEquals([input.value, input.defaultValue, input.getAttribute('value')], ['typed', 'markup', 'markup']);\n\
+           form.reset(); assertEquals(input.value, 'markup');\n\
+           input.defaultValue = 'revised'; assertEquals([input.value, input.defaultValue], ['revised', 'revised']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM input value reset test");
+    assert!(
+        ran.status.success(),
+        "input value reset test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_reset_restores_checkable_defaults_without_rewriting_attributes() {
+    let dir = build_dir("t_test_dom_checked_reset");
+    write_in(
+        &dir,
+        "checked-reset.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('checked state is independent from defaultChecked', () => {\n\
+           const form = document.createElement('form'); const checked = document.createElement('input'); checked.type = 'checkbox'; checked.defaultChecked = true; const clear = document.createElement('input'); clear.type = 'checkbox'; form.append(checked, clear); document.body.appendChild(form);\n\
+           checked.checked = false; clear.checked = true; assertEquals([checked.checked, checked.defaultChecked, clear.checked, clear.defaultChecked, checked.hasAttribute('checked')], [false, true, true, false, true]);\n\
+           form.reset(); assertEquals([checked.checked, clear.checked], [true, false]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM checked reset test");
+    assert!(
+        ran.status.success(),
+        "checked reset test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_data_uses_dirty_input_values_before_and_after_reset() {
+    let dir = build_dir("t_test_dom_dirty_form_data");
+    write_in(
+        &dir,
+        "dirty-form-data.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('FormData reads current dirty values', () => {\n\
+           const form = document.createElement('form'); const input = document.createElement('input'); input.name = 'message'; input.defaultValue = 'initial'; form.appendChild(input); document.body.appendChild(form);\n\
+           input.value = 'edited'; assertEquals(Array.from(new FormData(form)), [['message', 'edited']]);\n\
+           form.reset(); assertEquals(Array.from(new FormData(form)), [['message', 'initial']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM dirty FormData test");
+    assert!(
+        ran.status.success(),
+        "dirty FormData test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

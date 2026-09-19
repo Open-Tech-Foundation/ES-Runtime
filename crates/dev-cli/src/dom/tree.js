@@ -9,6 +9,8 @@ const DATA = Symbol("esdev DOM character data");
 const SELECTED = Symbol("esdev DOM option selected state");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
+const INPUT_VALUE = Symbol("esdev DOM input value state");
+const INPUT_CHECKED = Symbol("esdev DOM input checked state");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -418,6 +420,7 @@ export function createTree(events = {}) {
   }
 
   class HTMLInputElement extends HTMLElement {
+    constructor(name, ownerDocument) { super(name, ownerDocument); this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; }
     click() {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -469,7 +472,7 @@ export function createTree(events = {}) {
       for (const control of this.elements) {
         if (control instanceof HTMLSelectElement) for (const option of control.options) option[SELECTED] = null;
         if (control instanceof HTMLTextAreaElement) control[TEXTAREA_VALUE] = null;
-        if (control instanceof HTMLInputElement) control.checked = control.defaultChecked;
+        if (control instanceof HTMLInputElement) { control[INPUT_VALUE] = null; control[INPUT_CHECKED] = null; }
       }
     }
     checkValidity() { return Array.from(this.elements, (control) => control.checkValidity?.() ?? true).every(Boolean); }
@@ -647,7 +650,7 @@ export function createTree(events = {}) {
     { tabIndex: ["tabindex", -1, Number.NEGATIVE_INFINITY] });
   installReflectors(HTMLInputElement,
     { accept: "accept", alt: "alt", autocomplete: "autocomplete", name: "name", placeholder: "placeholder" },
-    { checked: "checked", defaultChecked: "checked", disabled: "disabled", multiple: "multiple", readOnly: "readonly", required: "required" },
+    { disabled: "disabled", multiple: "multiple", readOnly: "readonly", required: "required" },
     { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1] });
   installReflectors(HTMLButtonElement,
     { name: "name", value: "value" },
@@ -669,9 +672,15 @@ export function createTree(events = {}) {
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
     value: {
+      get() { return this[INPUT_VALUE] ?? this.defaultValue; },
+      set(value) { this[INPUT_VALUE] = String(value); },
+    },
+    defaultValue: {
       get() { return this.getAttribute("value") ?? (["checkbox", "radio"].includes(this.type) ? "on" : ""); },
       set(value) { this.setAttribute("value", String(value)); },
     },
+    checked: { get() { return this[INPUT_CHECKED] ?? this.defaultChecked; }, set(value) { this[INPUT_CHECKED] = Boolean(value); } },
+    defaultChecked: { get() { return this.hasAttribute("checked"); }, set(value) { if (value) this.setAttribute("checked", ""); else this.removeAttribute("checked"); } },
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
     pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
