@@ -4685,6 +4685,35 @@ fn test_dom_ranges_adjust_boundaries_for_tree_and_text_mutations() {
 }
 
 #[test]
+fn test_dom_document_ids_and_indexed_attributes_follow_browser_collections() {
+    let dir = build_dir("t_test_dom_document_ids_and_attributes");
+    write_in(
+        &dir,
+        "document-ids.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('document IDs and named attributes follow document order and mutations', () => {\n\
+           const first = document.createElement('article'); const second = document.createElement('aside');\n\
+           first.id = 'duplicate'; second.id = 'duplicate'; second.setAttribute('data-state', 'ready'); second.setAttribute('title', 'second');\n\
+           document.body.append(first, second); const attributes = second.attributes;\n\
+           assertEquals(document.getElementById('duplicate'), first); assertEquals(attributes[0].name, 'id'); assertEquals(attributes[1].value, 'ready'); assertEquals(attributes[3], undefined); assertEquals(attributes.item(3), null);\n\
+           first.remove(); second.removeAttribute('id');\n\
+           assertEquals(document.getElementById('duplicate'), null); assertEquals(attributes[0].name, 'data-state'); assertEquals(attributes.length, 2);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom document IDs and attributes");
+    assert!(
+        ran.status.success(),
+        "DOM document ID and attribute test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(

@@ -65,6 +65,37 @@ test("attributes are Attr nodes with ownership rules", () => {
   expect(second.getAttribute("title")).toBe("hello");
 });
 
+test("named node maps expose live numeric attribute entries", () => {
+  const document = new Document();
+  const element = document.createElement("a");
+  const attributes = element.attributes;
+  element.setAttribute("first", "one");
+  element.setAttribute("second", "two");
+
+  expect(attributes[0].name).toBe("first");
+  expect(attributes[1].value).toBe("two");
+  expect(attributes[2]).toBeUndefined();
+  element.removeAttribute("first");
+  expect(attributes[0].name).toBe("second");
+  expect(attributes.item(1)).toBeNull();
+});
+
+test("documents return the first matching element by ID in tree order", () => {
+  const document = new Document();
+  const root = document.createElement("main");
+  const first = document.createElement("a");
+  const second = document.createElement("b");
+  first.id = "duplicate";
+  second.id = "duplicate";
+  root.append(first, second);
+  document.appendChild(root);
+
+  expect(document.getElementById("duplicate")).toBe(first);
+  first.remove();
+  expect(document.getElementById("duplicate")).toBe(second);
+  expect(document.getElementById("missing")).toBeNull();
+});
+
 test("replaceChild retains the following sibling and imports attribute ownership", () => {
   const left = new Document();
   const right = new Document();

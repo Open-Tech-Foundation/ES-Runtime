@@ -332,7 +332,15 @@ export function createTree(events = {}) {
   }
 
   class NamedNodeMap {
-    constructor(element) { Object.defineProperty(this, ATTRS, { value: element }); }
+    constructor(element) {
+      Object.defineProperty(this, ATTRS, { value: element });
+      return new Proxy(this, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target._list()[Number(property)];
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    }
     _list() { return slots(this[ATTRS]).attributes; }
     get length() { return this._list().length; }
     item(index) { return this._list()[index] ?? null; }
@@ -807,6 +815,10 @@ export function createTree(events = {}) {
         const classes = new Set((element.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean));
         return expected.every((name) => classes.has(name));
       }));
+    }
+    getElementById(id) {
+      id = String(id);
+      return collect(this, (element) => element.id === id)[0] ?? null;
     }
     adoptNode(node) {
       if (!(node instanceof Node) || node instanceof Document) throw domError("NotSupportedError", "A document cannot be adopted.");

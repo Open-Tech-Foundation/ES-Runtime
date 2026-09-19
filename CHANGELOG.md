@@ -16,6 +16,7 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM element-child traversal accessors and `replaceChildren()`.
 - Resolve esdev DOM form and submitter action properties against the in-memory
   location.
+- Add esdev DOM `document.getElementById()` and indexed `NamedNodeMap` access.
 - Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
   It parses explicit nesting, void elements, attributes, comments, templates,
   raw-text script/style elements and a constrained entity set, while rejecting
