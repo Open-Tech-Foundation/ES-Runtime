@@ -50,6 +50,17 @@ function parseAttribute(source, at, body) {
   return { type: "attribute", name, operator, value: quoted ?? bare, insensitive: flag?.toLowerCase() === "i" };
 }
 
+function parseNth(source, at, argument) {
+  const text = argument.replace(/\s+/g, "").toLowerCase();
+  if (text === "odd") return { a: 2, b: 1 };
+  if (text === "even") return { a: 2, b: 0 };
+  if (/^[+-]?\d+$/.test(text)) return { a: 0, b: Number(text) };
+  const match = /^([+-]?\d*)n([+-]\d+)?$/.exec(text);
+  if (!match) syntax(source, at, "malformed nth expression");
+  const coefficient = match[1] === "" || match[1] === "+" ? 1 : match[1] === "-" ? -1 : Number(match[1]);
+  return { a: coefficient, b: Number(match[2] ?? 0) };
+}
+
 function parseCompound(source, offset, text) {
   const simples = [];
   let at = 0;
@@ -89,9 +100,17 @@ function parseCompound(source, offset, text) {
     }
     if (kind === ":") {
       const match = /^[A-Za-z-]+/.exec(text.slice(at + 1));
-      if (!match || !["is", "where", "not", "has"].includes(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
+      const functional = new Set(["is", "where", "not", "has", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
+      const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus"]);
+      if (!match || !functional.has(match[0]) && !bare.has(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
       const name = match[0];
       const open = at + match[0].length + 1;
+      if (bare.has(name)) {
+        if (text[open] === "(") syntax(source, offset + at, `:${name} does not take arguments`);
+        simples.push({ type: name });
+        at = open;
+        continue;
+      }
       if (text[open] !== "(") syntax(source, offset + at, `:${name} requires an argument list`);
       let end = open + 1;
       let depth = 1;
@@ -110,7 +129,9 @@ function parseCompound(source, offset, text) {
       if (end === text.length || depth !== 0) syntax(source, offset + at, "unterminated pseudo-class");
       const argument = text.slice(open + 1, end).trim();
       if (!argument) syntax(source, offset + at, `:${name} requires a non-empty argument list`);
-      simples.push({ type: name, selectors: name === "has" ? parseRelativeList(argument) : splitList(argument).map(parseOne) });
+      simples.push(name.startsWith("nth-")
+        ? { type: name, nth: parseNth(source, offset + at, argument) }
+        : { type: name, selectors: name === "has" ? parseRelativeList(argument) : splitList(argument).map(parseOne) });
       at = end + 1;
       continue;
     }
@@ -206,6 +227,16 @@ function matchesAttribute(element, simple) {
   }
 }
 
+function elementSiblings(element) {
+  return Array.from(element.parentElement?._children() ?? []).filter((node) => node.nodeType === 1);
+}
+
+function nthMatches(position, { a, b }) {
+  if (a === 0) return position === b;
+  const quotient = (position - b) / a;
+  return Number.isInteger(quotient) && quotient >= 0;
+}
+
 export function createSelectors({ Element, Document, DocumentFragment }) {
   function matchesCompound(element, simples) {
     return simples.every((simple) => {
@@ -216,6 +247,27 @@ export function createSelectors({ Element, Document, DocumentFragment }) {
       if (simple.type === "is" || simple.type === "where") return simple.selectors.some((parts) => matchesParts(element, parts));
       if (simple.type === "not") return !simple.selectors.some((parts) => matchesParts(element, parts));
       if (simple.type === "has") return simple.selectors.some((relative) => matchesRelative(element, relative));
+      if (simple.type === "root") return element === element.ownerDocument.documentElement;
+      if (simple.type === "empty") return element.firstChild === null;
+      if (simple.type === "focus") return element === element.ownerDocument.activeElement;
+      if (simple.type.endsWith("child")) {
+        const siblings = elementSiblings(element);
+        const index = siblings.indexOf(element);
+        if (simple.type === "first-child") return index === 0;
+        if (simple.type === "last-child") return index === siblings.length - 1;
+        if (simple.type === "only-child") return siblings.length === 1;
+        const position = simple.type === "nth-last-child" ? siblings.length - index : index + 1;
+        return nthMatches(position, simple.nth);
+      }
+      if (simple.type.endsWith("type")) {
+        const siblings = elementSiblings(element).filter((sibling) => sibling.localName === element.localName);
+        const index = siblings.indexOf(element);
+        if (simple.type === "first-of-type") return index === 0;
+        if (simple.type === "last-of-type") return index === siblings.length - 1;
+        if (simple.type === "only-of-type") return siblings.length === 1;
+        const position = simple.type === "nth-last-of-type" ? siblings.length - index : index + 1;
+        return nthMatches(position, simple.nth);
+      }
       return matchesAttribute(element, simple);
     });
   }

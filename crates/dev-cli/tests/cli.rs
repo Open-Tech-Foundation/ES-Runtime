@@ -3151,6 +3151,97 @@ fn test_dom_selectors_match_has_relative_descendant_and_sibling_forms() {
 }
 
 #[test]
+fn test_dom_selectors_match_root_empty_and_child_positions() {
+    let dir = build_dir("t_test_dom_selector_structure");
+    write_in(
+        &dir,
+        "structure.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('root empty and child positions count elements', () => {\n\
+           document.body.innerHTML = '<section id=parent><i id=one></i>text<b id=two></b><em id=three></em></section><aside id=empty></aside>';\n\
+           const parent = document.querySelector('#parent'); const [one, two, three] = parent.children; const empty = document.querySelector('#empty');\n\
+           assertEquals(document.documentElement.matches(':root'), true); assertEquals(parent.matches(':root'), false);\n\
+           assertEquals(empty.matches(':empty'), true); assertEquals(parent.matches(':empty'), false);\n\
+           assertEquals(Array.from(parent.querySelectorAll(':first-child')), [one]);\n\
+           assertEquals(Array.from(parent.querySelectorAll(':last-child')), [three]);\n\
+           assertEquals(two.matches(':only-child'), false);\n\
+           parent.innerHTML = '<strong id=single></strong>'; assertEquals(parent.firstChild.matches(':only-child'), true);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM structural selector test");
+    assert!(
+        ran.status.success(),
+        "structural selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_selectors_match_type_positions_and_nth_formulas() {
+    let dir = build_dir("t_test_dom_selector_nth");
+    write_in(
+        &dir,
+        "nth.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('type positions and An+B formulas', () => {\n\
+           document.body.innerHTML = '<ul><li id=one></li><li id=two></li><div></div><li id=three></li><li id=four></li><li id=five></li></ul>';\n\
+           const list = document.querySelector('ul'); const one = document.querySelector('#one'); const three = document.querySelector('#three'); const five = document.querySelector('#five');\n\
+           assertEquals(Array.from(list.querySelectorAll('li:first-of-type')), [one]);\n\
+           assertEquals(Array.from(list.querySelectorAll('li:last-of-type')), [five]);\n\
+           assertEquals(Array.from(list.querySelectorAll('li:nth-child(2n + 1)')), [one, document.querySelector('#four')]);\n\
+           assertEquals(Array.from(list.querySelectorAll('li:nth-of-type(2n + 1)')), [one, three, five]);\n\
+           assertEquals(Array.from(list.querySelectorAll('li:nth-of-type(even)')), [document.querySelector('#two'), document.querySelector('#four')]);\n\
+           assertEquals(Array.from(list.querySelectorAll('li:nth-last-of-type(2)')), [document.querySelector('#four')]);\n\
+           assertThrows(() => list.querySelector(':nth-child(two)'), SyntaxError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM nth selector test");
+    assert!(
+        ran.status.success(),
+        "nth selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_focus_selector_follows_focus_transitions() {
+    let dir = build_dir("t_test_dom_selector_focus");
+    write_in(
+        &dir,
+        "focus.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('focus selection follows the active element', () => {\n\
+           const first = document.createElement('input'); const second = document.createElement('button'); document.body.append(first, second);\n\
+           assertEquals(document.querySelector(':focus'), document.body);\n\
+           first.focus(); assertEquals(document.querySelector(':focus'), first); assertEquals(second.matches(':focus'), false);\n\
+           second.focus(); assertEquals(document.querySelector(':focus'), second);\n\
+           second.blur(); assertEquals(document.querySelector(':focus'), document.body);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM focus selector test");
+    assert!(
+        ran.status.success(),
+        "focus selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     let dir = build_dir("t_test_dom_selector_pseudo_errors");
     write_in(
@@ -3162,7 +3253,7 @@ fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
            assertThrows(() => document.querySelector(':has(>)'), SyntaxError);\n\
            assertThrows(() => document.querySelector(':not(.one'), SyntaxError);\n\
            assertThrows(() => document.querySelector(':hover'), SyntaxError);\n\
-           assertThrows(() => document.querySelector(':first-child'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':checked'), SyntaxError);\n\
          });\n",
     );
     let ran = esdev_in(&dir)

@@ -163,11 +163,13 @@ A JS selector parser producing a compiled matcher, cached by selector string.
 
 The parser handles the Selectors Level 4 grammar that non-layout matching allows: type, universal, `#id`, `.class`, `[attr]` with all six operators and case-insensitivity flags, descendant, child, next-sibling, subsequent-sibling, and the selector list.
 
-Pseudo-classes implemented: `:is()`, `:where()`, `:not()`, and `:has()`.
+Pseudo-classes implemented: `:is()`, `:where()`, `:not()`, `:has()`, `:root`,
+`:empty`, child and type positions (`:first-*`, `:last-*`, `:only-*`),
+`:nth-child()`, `:nth-last-child()`, `:nth-of-type()`, `:nth-last-of-type()`,
+and `:focus`.
 
 Other pseudo-classes are rejected with `SyntaxError` until their state and
-matching rules are implemented. In particular, `:focus` now has tracked focus
-state available, but selector matching for it remains a separate feature.
+matching rules are implemented.
 
 Deliberately absent, with the reason: `:hover`, `:focus-visible`, `:active` need user interaction state; `:visited` needs history; `:target` needs navigation. `:focus` is supported, because `document.activeElement` is tracked — see the window section.
 
