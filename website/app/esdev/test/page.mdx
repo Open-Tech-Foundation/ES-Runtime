@@ -45,6 +45,9 @@ Number and date inputs normalize their values and expose `valueAsNumber` and
 Inputs, selects, and textareas expose layout-free constraint validation
 (`validity`, `checkValidity()`, `reportValidity()`, and custom errors); form
 `requestSubmit()` validates before dispatching `submit`.
+Form action, method, encoding, target, and no-validate settings are reflected;
+submit-button clicks and `requestSubmit()` dispatch events but never perform
+navigation.
 Inline styles are supported through `element.style` and stay synchronized with
 the `style` attribute. `getComputedStyle` exposes those inline values only;
 stylesheet cascade and resolved values are not present.

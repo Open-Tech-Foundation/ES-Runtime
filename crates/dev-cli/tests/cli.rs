@@ -4007,6 +4007,89 @@ fn test_dom_value_as_accessors_reject_unsupported_input_types() {
 }
 
 #[test]
+fn test_dom_submit_buttons_honor_form_settings_and_validation_bypasses() {
+    let dir = build_dir("t_test_dom_submit_settings");
+    write_in(
+        &dir,
+        "submit.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+      test('submit settings and bypasses', () => {\n\
+        const form = document.createElement('form'); form.action = '/send'; form.method = 'POST'; form.enctype = 'multipart/form-data'; form.target = '_blank';\n\
+        const input = document.createElement('input'); input.required = true; const button = document.createElement('button'); form.append(input, button); document.body.appendChild(form); let submits = 0; form.addEventListener('submit', () => { submits += 1; });\n\
+        button.click(); assertEquals(submits, 0); button.formNoValidate = true; button.click(); assertEquals(submits, 1);\n\
+        button.formNoValidate = false; form.noValidate = true; form.requestSubmit(); assertEquals(submits, 2);\n\
+        assertEquals([form.action, form.method, form.enctype, form.target], ['/send', 'post', 'multipart/form-data', '_blank']);\n\
+      });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM submit settings test");
+    assert!(
+        ran.status.success(),
+        "submit settings test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_request_submit_uses_default_submitter_and_rejects_foreign_button() {
+    let dir = build_dir("t_test_dom_submit_default");
+    write_in(
+        &dir,
+        "submit-default.test.mjs",
+        r#"import { test, assertEquals, assertThrows } from 'runtime:test';
+test('requestSubmit selects the default submitter', () => {
+  const form = document.createElement('form'); const first = document.createElement('button'); const second = document.createElement('button'); form.append(first, second); document.body.appendChild(form);
+  let submitter = null; form.addEventListener('submit', (event) => { submitter = event.submitter; }); form.requestSubmit(); assertEquals(submitter, first);
+  const foreign = document.createElement('button'); assertThrows(() => form.requestSubmit(foreign), TypeError);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM default submitter test");
+    assert!(
+        ran.status.success(),
+        "default submitter test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_submit_button_respects_cancelled_clicks_and_disabled_state() {
+    let dir = build_dir("t_test_dom_submit_click");
+    write_in(
+        &dir,
+        "submit-click.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('submit button activation is cancelable and disabled-aware', () => {
+  const form = document.createElement('form'); const button = document.createElement('button'); form.appendChild(button); document.body.appendChild(form);
+  let submissions = 0; form.addEventListener('submit', () => { submissions += 1; }); button.addEventListener('click', (event) => event.preventDefault(), { once: true });
+  button.click(); assertEquals(submissions, 0); button.disabled = true; button.click(); assertEquals(submissions, 0);
+  button.disabled = false; button.click(); assertEquals(submissions, 1);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM submit click test");
+    assert!(
+        ran.status.success(),
+        "submit click test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_range_tracks_and_validates_boundary_points() {
     let dir = build_dir("t_test_dom_range_boundaries");
     write_in(

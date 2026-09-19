@@ -56,6 +56,8 @@ namespace) is unstable and may change between minor releases until the API freez
   their default markup values.
 - Add normalized number/date DOM input values with `valueAsNumber` and
   `valueAsDate`.
+- Add esdev DOM form submission settings and validation-aware submit-button
+  defaults without performing navigation.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

@@ -441,7 +441,7 @@ export function createTree(events = {}) {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event) || this.type !== "submit") return;
-      this.form?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: this }));
+      this.form?.requestSubmit(this);
     }
   }
 
@@ -479,7 +479,8 @@ export function createTree(events = {}) {
     reportValidity() { return this.checkValidity(); }
     requestSubmit(submitter = null) {
       if (submitter !== null && (!(submitter instanceof HTMLButtonElement) || submitter.form !== this)) throw new TypeError("requestSubmit submitter must belong to this form");
-      if (!this.checkValidity()) return;
+      submitter ??= Array.from(this.elements).find((control) => control instanceof HTMLButtonElement && control.type === "submit") ?? null;
+      if (!this.noValidate && !submitter?.formNoValidate && !this.checkValidity()) return;
       this.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter }));
     }
     submit() {}
@@ -674,6 +675,7 @@ export function createTree(events = {}) {
   installReflectors(HTMLButtonElement,
     { name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
+  installReflectors(HTMLFormElement, { action: "action", target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
     { name: "name" },
@@ -728,6 +730,10 @@ export function createTree(events = {}) {
   });
   Object.defineProperties(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
+  });
+  Object.defineProperties(HTMLFormElement.prototype, {
+    method: { get() { return (this.getAttribute("method") ?? "get").toLowerCase(); }, set(value) { this.setAttribute("method", String(value).toLowerCase()); } },
+    enctype: { get() { return this.getAttribute("enctype") ?? "application/x-www-form-urlencoded"; }, set(value) { this.setAttribute("enctype", String(value)); } },
   });
   for (const Class of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement]) {
     Object.defineProperty(Class.prototype, "form", { get() { return formOwner(this); } });
