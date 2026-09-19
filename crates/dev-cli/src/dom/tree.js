@@ -32,7 +32,7 @@ function asNodes(value, document, NodeClass) {
   return value.map((item) => (item instanceof NodeClass ? item : document.createTextNode(String(item))));
 }
 
-export function createTree() {
+export function createTree({ EventTarget = class {} } = {}) {
   class LiveCollection {
     constructor(root, filter) {
       this.root = root;
@@ -68,7 +68,7 @@ export function createTree() {
     }
   }
 
-  class Node {
+  class Node extends EventTarget {
     static ELEMENT_NODE = 1;
     static ATTRIBUTE_NODE = 2;
     static TEXT_NODE = 3;
@@ -77,6 +77,7 @@ export function createTree() {
     static DOCUMENT_FRAGMENT_NODE = 11;
 
     constructor(type, name, ownerDocument) {
+      super();
       Object.defineProperty(this, SLOT, {
         value: { type, name, ownerDocument, parent: null, first: null, last: null, previous: null, next: null, childNodes: null },
       });
@@ -106,6 +107,8 @@ export function createTree() {
       while (root.parentNode) root = root.parentNode;
       return root;
     }
+
+    _eventParent() { return this.parentNode; }
 
     hasChildNodes() { return this.firstChild !== null; }
 
