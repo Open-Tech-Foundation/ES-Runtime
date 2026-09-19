@@ -35,6 +35,9 @@ stylesheet cascade and resolved values are not present.
 `customElements` supports registration, lookup, `whenDefined`, and upgrades;
 its registered elements receive connected, disconnected, adopted, and observed
 attribute callbacks.
+Focus is tracked without layout: supported controls and elements with a
+`tabindex` can use `focus()` and `blur()`, update `document.activeElement`, and
+dispatch the standard focus event sequence.
 The DOM realm also includes in-memory `location`, `history`, `localStorage`,
 and `sessionStorage`. Animation frames use the test clock, while media, resize,
 and intersection observers are safe never-firing stubs.

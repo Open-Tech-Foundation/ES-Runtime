@@ -3341,6 +3341,101 @@ fn test_dom_custom_element_reactions_filter_attributes_and_track_moves() {
 }
 
 #[test]
+fn test_dom_focus_tracks_active_element_and_event_order() {
+    let dir = build_dir("t_test_dom_focus_events");
+    write_in(
+        &dir,
+        "focus-events.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('focus transfer has browser event ordering', () => {\n\
+           const first = document.createElement('input'); const second = document.createElement('button');\n\
+           document.body.append(first, second);\n\
+           const calls = [];\n\
+           for (const [element, name] of [[first, 'first'], [second, 'second']]) {\n\
+             for (const type of ['blur', 'focusout', 'focus', 'focusin']) element.addEventListener(type, (event) => calls.push(`${name}:${type}:${event.relatedTarget === first ? 'first' : event.relatedTarget === second ? 'second' : 'body'}`));\n\
+           }\n\
+           assertEquals(document.activeElement, document.body);\n\
+           first.focus(); assertEquals(document.activeElement, first);\n\
+           second.focus(); assertEquals(document.activeElement, second);\n\
+           assertEquals(calls, ['first:focus:body', 'first:focusin:body', 'first:blur:second', 'first:focusout:second', 'second:focus:first', 'second:focusin:first']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM focus event test");
+    assert!(
+        ran.status.success(),
+        "focus event test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_focusability_is_connection_and_attribute_driven() {
+    let dir = build_dir("t_test_dom_focusability");
+    write_in(
+        &dir,
+        "focusability.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('only connected enabled native or tabindex elements focus', () => {\n\
+           const plain = document.createElement('div'); const indexed = document.createElement('div'); indexed.tabIndex = -1;\n\
+           const disabled = document.createElement('button'); disabled.disabled = true;\n\
+           const hidden = document.createElement('input'); hidden.type = 'hidden';\n\
+           const link = document.createElement('a'); const detached = document.createElement('input');\n\
+           document.body.append(plain, indexed, disabled, hidden, link);\n\
+           plain.focus(); assertEquals(document.activeElement, document.body);\n\
+           disabled.focus(); hidden.focus(); detached.focus(); assertEquals(document.activeElement, document.body);\n\
+           indexed.focus(); assertEquals(document.activeElement, indexed);\n\
+           link.focus(); assertEquals(document.activeElement, indexed);\n\
+           link.setAttribute('href', '/target'); link.focus(); assertEquals(document.activeElement, link);\n\
+           link.blur(); assertEquals(document.activeElement, document.body);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM focusability test");
+    assert!(
+        ran.status.success(),
+        "focusability test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_focus_returns_to_body_when_the_active_subtree_is_removed() {
+    let dir = build_dir("t_test_dom_focus_removal");
+    write_in(
+        &dir,
+        "focus-removal.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('removing a focused descendant clears focus once', () => {\n\
+           const wrapper = document.createElement('section'); const input = document.createElement('input');\n\
+           let blurred = 0; input.addEventListener('blur', () => { blurred += 1; });\n\
+           wrapper.appendChild(input); document.body.appendChild(wrapper); input.focus();\n\
+           wrapper.remove();\n\
+           assertEquals(document.activeElement, document.body); assertEquals(blurred, 1);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM focus removal test");
+    assert!(
+        ran.status.success(),
+        "focus removal test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_window_location_and_history_are_in_memory() {
     let dir = build_dir("t_test_dom_history");
     write_in(

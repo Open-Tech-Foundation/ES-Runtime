@@ -48,6 +48,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM's in-memory window surface: `location`/`history`, navigator,
   per-realm storage, timer-backed animation frames, inline-only
   `getComputedStyle`, and never-firing media, resize, and intersection stubs.
+- Add layout-free esdev DOM focus tracking: `document.activeElement`, element
+  `focus()`/`blur()`, focus events, and conservative native/tabindex focusability.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every

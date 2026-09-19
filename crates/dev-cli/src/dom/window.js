@@ -31,6 +31,42 @@ selectors.install();
 css.install();
 const customElements = elements.install(document);
 
+let activeElement = body;
+Object.defineProperty(document, "activeElement", { get: () => activeElement });
+
+function isFocusable(element) {
+  if (!element.isConnected || element.disabled || element.localName === "input" && element.type === "hidden") return false;
+  if (element.hasAttribute("tabindex")) return true;
+  if (["button", "input", "select", "textarea", "iframe"].includes(element.localName)) return true;
+  return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
+}
+
+function changeFocus(next) {
+  const previous = activeElement;
+  if (previous === next) return;
+  activeElement = next;
+  if (previous) {
+    previous.dispatchEvent(new events.FocusEvent("blur", { relatedTarget: next }));
+    previous.dispatchEvent(new events.FocusEvent("focusout", { bubbles: true, relatedTarget: next }));
+  }
+  if (next) {
+    next.dispatchEvent(new events.FocusEvent("focus", { relatedTarget: previous }));
+    next.dispatchEvent(new events.FocusEvent("focusin", { bubbles: true, relatedTarget: previous }));
+  }
+}
+
+Object.defineProperties(tree.HTMLElement.prototype, {
+  focus: { value() { if (isFocusable(this)) changeFocus(this); } },
+  blur: { value() { if (activeElement === this) changeFocus(body); } },
+});
+Object.defineProperty(document, "_activeElementRemoved", {
+  value(node) {
+    for (let current = activeElement; current; current = current.parentNode) {
+      if (current === node) { changeFocus(body); return; }
+    }
+  },
+});
+
 class Storage {
   #values = new Map();
   get length() { return this.#values.size; }

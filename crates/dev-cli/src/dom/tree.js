@@ -219,6 +219,7 @@ export function createTree(events = {}) {
     }
 
     _remove(child) {
+      child.ownerDocument?._activeElementRemoved?.(child);
       const state = slots(child);
       const parent = slots(this);
       if (state.previous) slots(state.previous).next = state.next; else parent.first = state.next;
