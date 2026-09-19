@@ -29,6 +29,10 @@ namespace) is unstable and may change between minor releases until the API freez
   isolated test file. It exposes the current tree, event and strict
   `innerHTML` parser and serializer surface without making DOM globals
   available to ordinary `esdev` runs.
+- Add esdev DOM's strict selector core: `querySelector`, `querySelectorAll`,
+  `matches` and `closest`, with selector lists, type/ID/class and attribute
+  selectors, and descendant/child/sibling combinators. Unsupported selector
+  syntax raises `SyntaxError` rather than silently matching nothing.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every

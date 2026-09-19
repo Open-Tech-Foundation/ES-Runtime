@@ -3,11 +3,13 @@
 import { createEvents } from "runtime:dom/events";
 import { createTree } from "runtime:dom/tree";
 import { createParsing } from "runtime:dom/parse";
+import { createSelectors } from "runtime:dom/select";
 
 const events = createEvents();
 const tree = createTree(events);
 const parse = createParsing(tree, (source, context) =>
   globalThis.__ops.dom_parse_fragment(source, context));
+const selectors = createSelectors(tree);
 
 const document = new tree.Document();
 const html = document.createElement("html");
@@ -21,6 +23,7 @@ Object.defineProperties(document, {
   body: { get: () => body },
 });
 parse.install();
+selectors.install();
 
 Object.assign(globalThis, events, tree, { document });
 globalThis.window = globalThis;

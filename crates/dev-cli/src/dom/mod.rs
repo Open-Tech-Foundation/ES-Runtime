@@ -30,6 +30,10 @@ const MODULES: &[HostModule] = &[
         specifier: "runtime:dom/parse",
         source: include_str!("parse.js"),
     },
+    HostModule {
+        specifier: "runtime:dom/select",
+        source: include_str!("select.js"),
+    },
 ];
 
 impl HostExtension for DomExtension {

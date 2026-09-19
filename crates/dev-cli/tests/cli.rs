@@ -3051,6 +3051,43 @@ fn test_dom_serializes_text_attributes_raw_text_voids_and_replacements() {
 }
 
 #[test]
+fn test_dom_selectors_match_strict_compounds_and_combinators() {
+    let dir = build_dir("t_test_dom_selectors");
+    write_in(
+        &dir,
+        "selectors.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('selector core', () => {\n\
+           document.body.innerHTML = '<section id=panel><article class=\"card selected\" data-tags=\"new hot\"><span class=label data-state=\"Ready-item\">one</span></article><article class=card data-tags=old>two</article></section>';\n\
+           const panel = document.querySelector('#panel');\n\
+           const label = panel.querySelector('article.card.selected > span.label[data-state|=ready i]');\n\
+           assertEquals(label.textContent, 'one');\n\
+           assertEquals(document.querySelectorAll('#panel > article').length, 2);\n\
+           assertEquals(document.querySelector('#panel > article + article').textContent, 'two');\n\
+           assertEquals(document.querySelectorAll('#panel > article ~ article').length, 1);\n\
+           assertEquals(document.querySelector('[data-tags~=hot]').textContent, 'one');\n\
+           assertEquals(document.querySelector('[data-state^=Ready][data-state$=item][data-state*=dy]').textContent, 'one');\n\
+           assertEquals(document.querySelector('.missing, .label'), label);\n\
+           assertEquals(label.matches('span.label[data-state=Ready-item]'), true);\n\
+           assertEquals(label.closest('section#panel'), panel);\n\
+           assertThrows(() => document.querySelector(':hover'), SyntaxError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom selectors");
+    assert!(
+        ran.status.success(),
+        "DOM selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(
