@@ -3015,6 +3015,42 @@ fn test_dom_installs_a_fresh_document_and_uses_the_strict_parser() {
 }
 
 #[test]
+fn test_dom_serializes_text_attributes_raw_text_voids_and_replacements() {
+    let dir = build_dir("t_test_dom_serialize");
+    write_in(
+        &dir,
+        "serialize.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('serialization contexts', () => {\n\
+           const text = document.createTextNode('&<>');\n\
+           const image = document.createElement('img');\n\
+           image.setAttribute('title', 'a&\\\"b\\u00a0');\n\
+           const script = document.createElement('script');\n\
+           script.textContent = 'a < b && c > d';\n\
+           document.body.append(text, image, script);\n\
+           assertEquals(document.body.innerHTML, '&amp;&lt;&gt;<img title=\"a&amp;&quot;b&nbsp;\"><script>a < b && c > d</script>');\n\
+         });\n\
+         test('outerHTML replacement', () => {\n\
+           document.body.innerHTML = '<p>old</p><br>';\n\
+           document.body.firstChild.outerHTML = '<em>new</em><!--tail-->';
+           assertEquals(document.body.innerHTML, '<em>new</em><!--tail--><br>');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom serializer cases");
+    assert!(
+        ran.status.success(),
+        "DOM serializer cases did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(
