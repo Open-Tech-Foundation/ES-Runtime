@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use es_runtime_cli_common::Value;
+
 /// A parsed HTML document or fragment.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Document {
@@ -83,6 +85,65 @@ pub fn parse_fragment(source: &str) -> Result<Vec<Node>, Error> {
         return Err(parser.error("unexpected content after the fragment"));
     }
     Ok(document.children)
+}
+
+/// Encodes a strict fragment parse in the compact records the JS DOM decoder
+/// consumes: `[kind, parentIndex, name, attributes, text]`.
+///
+/// Parent indices point into the same pre-order record array; `-1` denotes a
+/// fragment root. Keeping this structural boundary free of V8 handles makes
+/// the parser independently testable and the eventual synchronous op one
+/// crossing regardless of fragment size.
+pub fn fragment_records(source: &str) -> Result<Value, Error> {
+    let nodes = parse_fragment(source)?;
+    let mut records = Vec::new();
+    for node in &nodes {
+        encode_node(node, -1, &mut records);
+    }
+    Ok(Value::Array(records))
+}
+
+fn encode_node(node: &Node, parent: isize, records: &mut Vec<Value>) {
+    let index = records.len() as isize;
+    match node {
+        Node::Element(element) => {
+            records.push(Value::Array(vec![
+                Value::Number(1.0),
+                Value::Number(parent as f64),
+                Value::String(element.name.clone()),
+                Value::Array(
+                    element
+                        .attributes
+                        .iter()
+                        .map(|attribute| {
+                            Value::Array(vec![
+                                Value::String(attribute.name.clone()),
+                                Value::String(attribute.value.clone()),
+                            ])
+                        })
+                        .collect(),
+                ),
+                Value::String(String::new()),
+            ]));
+            for child in &element.children {
+                encode_node(child, index, records);
+            }
+        }
+        Node::Text(text) => records.push(Value::Array(vec![
+            Value::Number(3.0),
+            Value::Number(parent as f64),
+            Value::String(String::new()),
+            Value::Array(Vec::new()),
+            Value::String(text.clone()),
+        ])),
+        Node::Comment(text) => records.push(Value::Array(vec![
+            Value::Number(8.0),
+            Value::Number(parent as f64),
+            Value::String(String::new()),
+            Value::Array(Vec::new()),
+            Value::String(text.clone()),
+        ])),
+    }
 }
 
 struct Parser<'a> {
@@ -528,5 +589,39 @@ mod tests {
         ] {
             assert!(parse_fragment(source).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn encodes_a_fragment_as_flat_preorder_records() {
+        let records = fragment_records("<p id=x>one<!--two--></p>").expect("parse");
+        assert_eq!(
+            records,
+            Value::Array(vec![
+                Value::Array(vec![
+                    Value::Number(1.0),
+                    Value::Number(-1.0),
+                    Value::String("p".to_string()),
+                    Value::Array(vec![Value::Array(vec![
+                        Value::String("id".to_string()),
+                        Value::String("x".to_string()),
+                    ])]),
+                    Value::String(String::new()),
+                ]),
+                Value::Array(vec![
+                    Value::Number(3.0),
+                    Value::Number(0.0),
+                    Value::String(String::new()),
+                    Value::Array(vec![]),
+                    Value::String("one".to_string()),
+                ]),
+                Value::Array(vec![
+                    Value::Number(8.0),
+                    Value::Number(0.0),
+                    Value::String(String::new()),
+                    Value::Array(vec![]),
+                    Value::String("two".to_string()),
+                ]),
+            ])
+        );
     }
 }

@@ -22,6 +22,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM event dispatch with captured propagation paths, capture and
   bubble listeners, `once`, passive and abort-signal options, and the UI event
   constructor family. It remains internal until `esdev test --dom` installs it.
+- Add the strict-parser bridge for esdev DOM: compact Rust parse records, JS
+  decoding, context-aware fragment hooks, and `innerHTML`/`outerHTML`
+  serialization. Operation registration remains part of the `--dom` phase.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every
