@@ -3586,6 +3586,98 @@ fn test_dom_range_deletes_across_nested_text_boundaries() {
 }
 
 #[test]
+fn test_dom_range_clones_and_extracts_partial_nested_contents() {
+    let dir = build_dir("t_test_dom_range_clone_extract");
+    write_in(
+        &dir,
+        "clone-extract.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('cloneContents preserves selected structure without mutation', () => {\n\
+           document.body.innerHTML = '<p>one <b>two</b> three</p>'; const paragraph = document.querySelector('p'); const range = document.createRange();\n\
+           range.setStart(paragraph.firstChild, 1); range.setEnd(paragraph.lastChild, 2);\n\
+           const copy = range.cloneContents(); const holder = document.createElement('div'); holder.appendChild(copy);\n\
+           assertEquals(holder.innerHTML, 'ne <b>two</b> t'); assertEquals(paragraph.innerHTML, 'one <b>two</b> three');\n\
+         });\n\
+         test('extractContents returns the same structure and removes it', () => {\n\
+           const paragraph = document.querySelector('p'); const range = document.createRange(); range.setStart(paragraph.firstChild, 1); range.setEnd(paragraph.lastChild, 2);\n\
+           const extracted = range.extractContents(); const holder = document.createElement('div'); holder.appendChild(extracted);\n\
+           assertEquals(holder.innerHTML, 'ne <b>two</b> t'); assertEquals(paragraph.innerHTML, 'ohree'); assertEquals(range.collapsed, true);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range clone/extract test");
+    assert!(
+        ran.status.success(),
+        "range clone/extract test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_range_surrounds_complete_contents_and_rejects_partial_elements() {
+    let dir = build_dir("t_test_dom_range_surround");
+    write_in(
+        &dir,
+        "surround.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('surroundContents wraps complete nodes', () => {\n\
+           document.body.innerHTML = '<p>one <b>two</b> three</p>'; const paragraph = document.querySelector('p'); const bold = paragraph.querySelector('b'); const range = document.createRange();\n\
+           range.selectNode(bold); const mark = document.createElement('mark'); range.surroundContents(mark);\n\
+           assertEquals(paragraph.innerHTML, 'one <mark><b>two</b></mark> three'); assertEquals(range.toString(), 'two'); assertEquals(range.commonAncestorContainer, paragraph);\n\
+         });\n\
+         test('partial non-text nodes refuse wrapping', () => {\n\
+           const paragraph = document.querySelector('p'); const range = document.createRange(); range.setStart(paragraph.firstChild, 1); range.setEnd(paragraph.querySelector('b').firstChild, 1);\n\
+           assertThrows(() => range.surroundContents(document.createElement('mark')), DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range surround test");
+    assert!(
+        ran.status.success(),
+        "range surround test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_ranges_adjust_boundaries_for_tree_and_text_mutations() {
+    let dir = build_dir("t_test_dom_range_adjustment");
+    write_in(
+        &dir,
+        "adjustment.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('unrelated inserts, removals, and shortening text retain valid boundaries', () => {\n\
+           const parent = document.createElement('div'); const first = document.createElement('i'); const second = document.createElement('b'); const third = document.createElement('em'); parent.append(first, second, third); document.body.appendChild(parent);\n\
+           const children = document.createRange(); children.setStart(parent, 2); children.setEnd(parent, 3);\n\
+           parent.insertBefore(document.createElement('strong'), second); assertEquals([children.startOffset, children.endOffset], [3, 4]);\n\
+           first.remove(); assertEquals([children.startOffset, children.endOffset], [2, 3]);\n\
+           const inside = document.createRange(); inside.selectNodeContents(second); second.remove(); assertEquals([inside.startContainer, inside.startOffset, inside.endContainer, inside.endOffset], [parent, 1, parent, 1]);\n\
+           const text = document.createTextNode('abcdef'); parent.appendChild(text); const characters = document.createRange(); characters.setStart(text, 1); characters.setEnd(text, 5); text.data = 'xy';\n\
+           assertEquals([characters.startOffset, characters.endOffset], [1, 2]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM range adjustment test");
+    assert!(
+        ran.status.success(),
+        "range adjustment test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(

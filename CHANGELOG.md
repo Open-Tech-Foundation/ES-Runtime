@@ -41,6 +41,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev DOM Range boundary points, text extraction, comparisons, and
   contextual fragment creation.
 - Add esdev DOM Range insertion and deletion across text and node boundaries.
+- Complete esdev DOM Range content operations with cloning, extraction,
+  surrounding contents, and mutation-aware boundary adjustment.
 - Add esdev DOM's table-driven core HTML element reflection: common string,
   boolean and integer attributes, `HTMLElement` and input/button/form/label
   subclasses, and checkbox/radio/submit click defaults.

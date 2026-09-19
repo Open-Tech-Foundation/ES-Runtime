@@ -6,6 +6,7 @@ function rangeError(name, message) {
 }
 
 export function createRanges({ Node, Element, Text }, parse) {
+  const ranges = new Set();
   function childIndex(node) {
     let index = 0;
     for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) index += 1;
@@ -56,6 +57,19 @@ export function createRanges({ Node, Element, Text }, parse) {
     return values;
   }
 
+  function nodeStart(node) {
+    return node instanceof Text ? { node, offset: 0 } : { node: node.parentNode, offset: childIndex(node) };
+  }
+
+  function nodeEnd(node) {
+    return node instanceof Text ? { node, offset: node.data.length } : { node: node.parentNode, offset: childIndex(node) + 1 };
+  }
+
+  function contains(ancestor, node) {
+    for (; node; node = node.parentNode) if (node === ancestor) return true;
+    return false;
+  }
+
   class Range {
     static START_TO_START = 0;
     static START_TO_END = 1;
@@ -67,6 +81,7 @@ export function createRanges({ Node, Element, Text }, parse) {
       this.startOffset = 0;
       this.endContainer = document;
       this.endOffset = 0;
+      ranges.add(this);
     }
     get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
     get commonAncestorContainer() {
@@ -151,15 +166,109 @@ export function createRanges({ Node, Element, Text }, parse) {
       for (const node of selected) node.remove();
       this.setEnd(this.startContainer, this.startOffset);
     }
+    cloneContents() {
+      const fragment = this.document.createDocumentFragment();
+      const intersects = (node) => {
+        const start = nodeStart(node);
+        const end = nodeEnd(node);
+        return comparePoints(end.node, end.offset, this.startContainer, this.startOffset) > 0
+          && comparePoints(start.node, start.offset, this.endContainer, this.endOffset) < 0;
+      };
+      const contained = (node) => {
+        const start = nodeStart(node);
+        const end = nodeEnd(node);
+        return comparePoints(start.node, start.offset, this.startContainer, this.startOffset) >= 0
+          && comparePoints(end.node, end.offset, this.endContainer, this.endOffset) <= 0;
+      };
+      const clone = (node) => {
+        if (!intersects(node)) return null;
+        if (contained(node)) return node.cloneNode(true);
+        if (node instanceof Text) {
+          const start = node === this.startContainer ? this.startOffset : 0;
+          const end = node === this.endContainer ? this.endOffset : node.data.length;
+          return this.document.createTextNode(node.data.slice(start, end));
+        }
+        const copy = node.cloneNode(false);
+        for (let child = node.firstChild; child; child = child.nextSibling) {
+          const selected = clone(child);
+          if (selected) copy.appendChild(selected);
+        }
+        return copy.hasChildNodes() ? copy : null;
+      };
+      if (this.startContainer === this.endContainer && this.startContainer instanceof Text) {
+        fragment.appendChild(this.document.createTextNode(this.startContainer.data.slice(this.startOffset, this.endOffset)));
+        return fragment;
+      }
+      const common = this.commonAncestorContainer;
+      for (let child = common.firstChild; child; child = child.nextSibling) {
+        const selected = clone(child);
+        if (selected) fragment.appendChild(selected);
+      }
+      return fragment;
+    }
+    extractContents() {
+      const fragment = this.cloneContents();
+      this.deleteContents();
+      return fragment;
+    }
+    surroundContents(node) {
+      if (!(node instanceof Element)) throw new TypeError("surroundContents expects an Element");
+      for (const candidate of descendants(this.commonAncestorContainer)) {
+        if (candidate instanceof Text || candidate === this.commonAncestorContainer || !candidate.parentNode) continue;
+        const start = nodeStart(candidate);
+        const end = nodeEnd(candidate);
+        const intersects = comparePoints(end.node, end.offset, this.startContainer, this.startOffset) > 0
+          && comparePoints(start.node, start.offset, this.endContainer, this.endOffset) < 0;
+        const contained = comparePoints(start.node, start.offset, this.startContainer, this.startOffset) >= 0
+          && comparePoints(end.node, end.offset, this.endContainer, this.endOffset) <= 0;
+        if (intersects && !contained) rangeError("InvalidStateError", "Range partially contains a non-text node.");
+      }
+      const fragment = this.extractContents();
+      this.insertNode(node);
+      node.appendChild(fragment);
+      this.selectNode(node);
+    }
     createContextualFragment(source) {
       const container = this.startContainer instanceof Element ? this.startContainer : this.startContainer.parentElement ?? this.document.body;
       return parse.parseFragment(source, container);
     }
-    detach() {}
+    detach() { ranges.delete(this); }
   }
 
   function install(document) {
     Object.defineProperty(document, "createRange", { value: () => new Range(document) });
+    Object.defineProperty(document, "_adjustRanges", {
+      value: {
+        insert(parent, index) {
+          for (const range of ranges) {
+            if (range.document !== document) continue;
+            if (range.startContainer === parent && range.startOffset > index) range.startOffset += 1;
+            if (range.endContainer === parent && range.endOffset > index) range.endOffset += 1;
+          }
+        },
+        remove(parent, node, index) {
+          for (const range of ranges) {
+            if (range.document !== document) continue;
+            for (const boundary of ["start", "end"]) {
+              const container = range[`${boundary}Container`];
+              if (contains(node, container)) {
+                range[`${boundary}Container`] = parent;
+                range[`${boundary}Offset`] = index;
+              } else if (container === parent && range[`${boundary}Offset`] > index) {
+                range[`${boundary}Offset`] -= 1;
+              }
+            }
+          }
+        },
+        characterData(node, _oldLength, newLength) {
+          for (const range of ranges) {
+            if (range.document !== document) continue;
+            if (range.startContainer === node) range.startOffset = Math.min(range.startOffset, newLength);
+            if (range.endContainer === node) range.endOffset = Math.min(range.endOffset, newLength);
+          }
+        },
+      },
+    });
   }
 
   return { Range, install };

@@ -16,6 +16,12 @@ function slots(node) {
   return node[SLOT];
 }
 
+function childIndex(node) {
+  let index = 0;
+  for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) index += 1;
+  return index;
+}
+
 function descendants(node, visitor) {
   visitor(node);
   for (const attribute of slots(node).attributes ?? []) visitor(attribute);
@@ -215,6 +221,7 @@ export function createTree(events = {}) {
         state.next = next;
         if (previous) slots(previous).next = candidate; else target.first = candidate;
         if (next) slots(next).previous = candidate; else target.last = candidate;
+        document._adjustRanges?.insert(this, childIndex(candidate));
         this._touch();
         document._queueMutation?.({ type: "childList", target: this, addedNodes: [candidate], removedNodes: [], previousSibling: previous, nextSibling: next });
       }
@@ -226,6 +233,7 @@ export function createTree(events = {}) {
       const parent = slots(this);
       const previousSibling = state.previous;
       const nextSibling = state.next;
+      (this.ownerDocument ?? this)._adjustRanges?.remove(this, child, childIndex(child));
       if (state.previous) slots(state.previous).next = state.next; else parent.first = state.next;
       if (state.next) slots(state.next).previous = state.previous; else parent.last = state.previous;
       state.parent = null;
@@ -279,6 +287,7 @@ export function createTree(events = {}) {
     set data(value) {
       const oldValue = this[DATA];
       this[DATA] = String(value);
+      this.ownerDocument?._adjustRanges?.characterData(this, oldValue.length, this[DATA].length);
       this.ownerDocument?._queueMutation?.({ type: "characterData", target: this, oldValue });
     }
     get nodeValue() { return this.data; }
