@@ -3341,6 +3341,156 @@ fn test_dom_custom_element_reactions_filter_attributes_and_track_moves() {
 }
 
 #[test]
+fn test_dom_window_location_and_history_are_in_memory() {
+    let dir = build_dir("t_test_dom_history");
+    write_in(
+        &dir,
+        "history.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('location and history', () => {\n\
+           const popped = []; window.addEventListener('popstate', (event) => popped.push(event.state.page));\n\
+           history.pushState({ page: 1 }, '', '/one?x=1#top');\n\
+           history.pushState({ page: 2 }, '', '/two');\n\
+           assertEquals(location.pathname, '/two'); assertEquals(history.length, 3); assertEquals(history.state.page, 2);\n\
+           history.back(); assertEquals(location.href, 'http://localhost/one?x=1#top'); assertEquals(history.state.page, 1);\n\
+           history.forward(); assertEquals(popped, [1, 2]);\n\
+           history.replaceState({ page: 3 }, '', '/three');\n\
+           assertEquals(location.pathname, '/three'); assertEquals(history.state.page, 3);\n\
+           location.assign('/recorded'); assertEquals(location.pathname, '/recorded');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM history test");
+    assert!(
+        ran.status.success(),
+        "history test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_window_storage_and_navigator_are_realm_local() {
+    let dir = build_dir("t_test_dom_storage");
+    write_in(
+        &dir,
+        "storage.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('storage and navigator', () => {\n\
+           localStorage.setItem('answer', 42); sessionStorage.setItem('answer', 'session');\n\
+           assertEquals(localStorage.getItem('answer'), '42'); assertEquals(sessionStorage.getItem('answer'), 'session');\n\
+           assertEquals(localStorage.key(0), 'answer'); assertEquals(localStorage.key(1), null);\n\
+           localStorage.removeItem('answer'); sessionStorage.clear();\n\
+           assertEquals(localStorage.length, 0); assertEquals(sessionStorage.length, 0);\n\
+           assertEquals(navigator.userAgent, 'esdev DOM'); assertEquals(navigator.language, 'en-US'); assertEquals(navigator.languages, ['en-US']);\n\
+           assertEquals(window, globalThis);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM storage test");
+    assert!(
+        ran.status.success(),
+        "storage test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_storage_is_not_shared_by_isolated_test_files() {
+    let dir = build_dir("t_test_dom_storage_isolation");
+    write_in(
+        &dir,
+        "first.test.mjs",
+        "import { test } from 'runtime:test';\n\
+         test('writes storage', () => { localStorage.setItem('leak', 'no'); });\n",
+    );
+    write_in(
+        &dir,
+        "second.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('starts with clean storage', () => { assertEquals(localStorage.getItem('leak'), null); });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom", "--jobs=1"])
+        .output()
+        .expect("spawn DOM storage isolation test");
+    assert!(
+        ran.status.success(),
+        "storage isolation test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_window_computed_styles_and_observers_are_strict_stubs() {
+    let dir = build_dir("t_test_dom_window_stubs");
+    write_in(
+        &dir,
+        "stubs.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('computed styles and stubs', () => {\n\
+           const element = document.createElement('div'); element.style.width = '10px';\n\
+           const computed = getComputedStyle(element);\n\
+           assertEquals(computed.width, '10px'); assertEquals(computed.getPropertyValue('width'), '10px');\n\
+           assertThrows(() => { computed.width = '20px'; }, TypeError);\n\
+           const query = matchMedia('(min-width: 1px)'); assertEquals(query.matches, false); assertEquals(query.media, '(min-width: 1px)');\n\
+           let delivered = 0; const resize = new ResizeObserver(() => { delivered += 1; }); resize.observe(element);\n\
+           const intersection = new IntersectionObserver(() => { delivered += 1; }); intersection.observe(element);\n\
+           assertEquals(resize.takeRecords(), []); assertEquals(intersection.takeRecords(), []); assertEquals(delivered, 0);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM window stub test");
+    assert!(
+        ran.status.success(),
+        "window stub test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_animation_frames_follow_the_test_clock() {
+    let dir = build_dir("t_test_dom_raf");
+    write_in(
+        &dir,
+        "raf.test.mjs",
+        "import { test, assertEquals, clock } from 'runtime:test';\n\
+         test('animation frames', () => {\n\
+           clock.freeze(new Date('2020-01-01T00:00:00Z'));\n\
+           const frames = []; const cancelled = requestAnimationFrame(() => frames.push('cancelled'));\n\
+           cancelAnimationFrame(cancelled); requestAnimationFrame((at) => frames.push(at));\n\
+           clock.advance(15); assertEquals(frames, []);\n\
+           clock.advance(1); assertEquals(frames, [Date.now()]);\n\
+           clock.release();\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM rAF test");
+    assert!(
+        ran.status.success(),
+        "rAF test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
     write_in(

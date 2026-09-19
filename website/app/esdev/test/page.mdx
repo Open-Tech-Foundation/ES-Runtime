@@ -30,10 +30,14 @@ combinators; unsupported selector syntax throws `SyntaxError`.
 `HTMLLabelElement` are also available, with common reflected attributes and
 the basic checkbox, radio, and submit-button click defaults.
 Inline styles are supported through `element.style` and stay synchronized with
-the `style` attribute; stylesheet cascade and computed values are not present.
+the `style` attribute. `getComputedStyle` exposes those inline values only;
+stylesheet cascade and resolved values are not present.
 `customElements` supports registration, lookup, `whenDefined`, and upgrades;
 its registered elements receive connected, disconnected, adopted, and observed
 attribute callbacks.
+The DOM realm also includes in-memory `location`, `history`, `localStorage`,
+and `sessionStorage`. Animation frames use the test clock, while media, resize,
+and intersection observers are safe never-firing stubs.
 
 ```sh
 esdev test --dom
