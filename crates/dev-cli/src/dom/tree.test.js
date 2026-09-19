@@ -13,7 +13,7 @@ test("inserts fragments as siblings and retains linked-tree identity", () => {
   document.appendChild(root);
   root.append("before", fragment, "after");
 
-  expect(root.childNodes.map((node) => node.nodeName)).toEqual(["#text", "ONE", "TWO", "#text"]);
+  expect(Array.from(root.childNodes, (node) => node.nodeName)).toEqual(["#text", "ONE", "TWO", "#text"]);
   expect(fragment.firstChild).toBeNull();
   expect(one.previousSibling).toBe(root.firstChild);
   expect(two.nextSibling).toBe(root.lastChild);
@@ -76,7 +76,7 @@ test("replaceChild retains the following sibling and imports attribute ownership
   replacement.setAttribute("role", "status");
   root.replaceChild(replacement, first);
 
-  expect(root.childNodes).toEqual([replacement, last]);
+  expect(Array.from(root.childNodes)).toEqual([replacement, last]);
   expect(replacement.nextSibling).toBe(last);
   expect(replacement.ownerDocument).toBe(left);
   expect(replacement.getAttributeNode("role").ownerDocument).toBe(left);
@@ -90,4 +90,29 @@ test("textContent replaces descendants and excludes comments", () => {
   root.textContent = "fresh";
   expect(root.childNodes).toHaveLength(1);
   expect(root.firstChild.data).toBe("fresh");
+});
+
+test("node lists and HTML collections are live, indexed, and named", () => {
+  const document = new Document();
+  const root = document.createElement("main");
+  const childNodes = root.childNodes;
+  const children = root.children;
+  const cards = document.getElementsByClassName("card selected");
+  document.appendChild(root);
+  const card = document.createElement("article");
+  card.id = "primary";
+  card.className = "card selected";
+  root.append("text", card);
+
+  expect(root.childNodes).toBe(childNodes);
+  expect(root.children).toBe(children);
+  expect(childNodes.length).toBe(2);
+  expect(childNodes[1]).toBe(card);
+  expect(children.item(0)).toBe(card);
+  expect(cards.length).toBe(1);
+  expect(cards.namedItem("primary")).toBe(card);
+  card.className = "card";
+  expect(cards.length).toBe(0);
+  root.removeChild(card);
+  expect(children.length).toBe(0);
 });

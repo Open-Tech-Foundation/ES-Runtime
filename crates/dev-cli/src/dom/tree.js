@@ -33,6 +33,41 @@ function asNodes(value, document, NodeClass) {
 }
 
 export function createTree() {
+  class LiveCollection {
+    constructor(root, filter) {
+      this.root = root;
+      this.filter = filter;
+      this.version = -1;
+      this.values = [];
+      return new Proxy(this, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target._values()[Number(property)];
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    }
+    _values() {
+      const document = this.root.ownerDocument ?? this.root;
+      const version = slots(document).version;
+      if (this.version !== version) {
+        this.values = this.filter(this.root);
+        this.version = version;
+      }
+      return this.values;
+    }
+    get length() { return this._values().length; }
+    item(index) { return this._values()[index] ?? null; }
+    [Symbol.iterator]() { return this._values()[Symbol.iterator](); }
+  }
+
+  class NodeList extends LiveCollection {}
+  class HTMLCollection extends LiveCollection {
+    namedItem(name) {
+      name = String(name);
+      return this._values().find((element) => element.id === name || element.getAttribute("name") === name) ?? null;
+    }
+  }
+
   class Node {
     static ELEMENT_NODE = 1;
     static ATTRIBUTE_NODE = 2;
@@ -43,7 +78,7 @@ export function createTree() {
 
     constructor(type, name, ownerDocument) {
       Object.defineProperty(this, SLOT, {
-        value: { type, name, ownerDocument, parent: null, first: null, last: null, previous: null, next: null },
+        value: { type, name, ownerDocument, parent: null, first: null, last: null, previous: null, next: null, childNodes: null },
       });
     }
 
@@ -56,7 +91,10 @@ export function createTree() {
     get previousSibling() { return slots(this).previous; }
     get nextSibling() { return slots(this).next; }
     get parentElement() { return this.parentNode instanceof Element ? this.parentNode : null; }
-    get childNodes() { return Array.from(this._children()); }
+    get childNodes() {
+      const state = slots(this);
+      return state.childNodes ??= new NodeList(this, (root) => Array.from(root._children()));
+    }
     get isConnected() { return this.getRootNode() instanceof Document; }
 
     *_children() {
@@ -171,6 +209,7 @@ export function createTree() {
         state.next = next;
         if (previous) slots(previous).next = candidate; else target.first = candidate;
         if (next) slots(next).previous = candidate; else target.last = candidate;
+        this._touch();
       }
     }
 
@@ -182,7 +221,10 @@ export function createTree() {
       state.parent = null;
       state.previous = null;
       state.next = null;
+      this._touch();
     }
+
+    _touch() { slots(this.ownerDocument ?? this).version += 1; }
 
     get textContent() {
       if (this instanceof Text || this instanceof Comment) return this.data;
@@ -273,20 +315,35 @@ export function createTree() {
       this.localName = name;
       this.tagName = name.toUpperCase();
       slots(this).attributes = [];
+      slots(this).children = null;
       Object.defineProperty(this, "attributes", { value: new NamedNodeMap(this) });
     }
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
-    setAttribute(name, value) { this.attributes.setNamedItem(new Attr(String(name), value, this.ownerDocument)); }
-    setAttributeNode(attribute) { return this.attributes.setNamedItem(attribute); }
-    removeAttribute(name) { const attribute = this.getAttributeNode(name); if (attribute) this.attributes.removeNamedItem(name); }
-    removeAttributeNode(attribute) { if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element."); return this.attributes.removeNamedItem(attribute.name); }
+    setAttribute(name, value) { this.attributes.setNamedItem(new Attr(String(name), value, this.ownerDocument)); this._touch(); }
+    setAttributeNode(attribute) { const previous = this.attributes.setNamedItem(attribute); this._touch(); return previous; }
+    removeAttribute(name) { const attribute = this.getAttributeNode(name); if (attribute) { this.attributes.removeNamedItem(name); this._touch(); } }
+    removeAttributeNode(attribute) { if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element."); const removed = this.attributes.removeNamedItem(attribute.name); this._touch(); return removed; }
     get id() { return this.getAttribute("id") ?? ""; }
     set id(value) { this.setAttribute("id", value); }
     get className() { return this.getAttribute("class") ?? ""; }
     set className(value) { this.setAttribute("class", value); }
-    get children() { return Array.from(this._children()).filter((node) => node instanceof Element); }
+    get children() {
+      const state = slots(this);
+      return state.children ??= new HTMLCollection(this, (root) => Array.from(root._children()).filter((node) => node instanceof Element));
+    }
+    getElementsByTagName(name) {
+      name = String(name);
+      return new HTMLCollection(this, (root) => collect(root, (element) => name === "*" || element.localName === name));
+    }
+    getElementsByClassName(names) {
+      const expected = String(names).trim().split(/\s+/).filter(Boolean);
+      return new HTMLCollection(this, (root) => collect(root, (element) => {
+        const classes = new Set((element.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean));
+        return expected.every((name) => classes.has(name));
+      }));
+    }
   }
 
   class DocumentFragment extends Node {
@@ -297,6 +354,7 @@ export function createTree() {
     constructor() {
       super(Node.DOCUMENT_NODE, "#document", null);
       slots(this).ownerDocument = this;
+      slots(this).version = 0;
     }
     get documentElement() { return Array.from(this._children()).find((node) => node instanceof Element) ?? null; }
     createElement(name) {
@@ -308,6 +366,17 @@ export function createTree() {
     createComment(data) { return new Comment(data, this); }
     createDocumentFragment() { return new DocumentFragment(this); }
     createAttribute(name) { return new Attr(String(name), "", this); }
+    getElementsByTagName(name) {
+      name = String(name);
+      return new HTMLCollection(this, (root) => collect(root, (element) => name === "*" || element.localName === name));
+    }
+    getElementsByClassName(names) {
+      const expected = String(names).trim().split(/\s+/).filter(Boolean);
+      return new HTMLCollection(this, (root) => collect(root, (element) => {
+        const classes = new Set((element.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean));
+        return expected.every((name) => classes.has(name));
+      }));
+    }
     adoptNode(node) {
       if (!(node instanceof Node) || node instanceof Document) throw domError("NotSupportedError", "A document cannot be adopted.");
       if (node.parentNode) node.parentNode.removeChild(node);
@@ -322,5 +391,16 @@ export function createTree() {
     }
   }
 
-  return { Node, Document, DocumentFragment, Element, Text, Comment, Attr, NamedNodeMap, VOID };
+  function collect(root, predicate) {
+    const result = [];
+    for (const child of root._children()) {
+      if (child instanceof Element) {
+        if (predicate(child)) result.push(child);
+        result.push(...collect(child, predicate));
+      }
+    }
+    return result;
+  }
+
+  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, Text, Comment, Attr, NamedNodeMap, VOID };
 }

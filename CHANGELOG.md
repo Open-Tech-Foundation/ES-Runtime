@@ -17,6 +17,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add esdev's realm-local DOM tree core: linked nodes, mutation and adoption
   algorithms, document fragments, `Attr`/`NamedNodeMap`, cloning and text
   content. It remains internal until `esdev test --dom` installs it.
+- Make esdev DOM `childNodes`, `children`, `getElementsByTagName` and
+  `getElementsByClassName` live collections with indexed and named access.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
   esrun (`bench/scripts/elysia.js`, new `rps_elysia` section in
   `bench/gen-bench-data.sh`). Elysia is measured on the esdev bundle every
