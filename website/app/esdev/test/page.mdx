@@ -47,7 +47,8 @@ Number and date inputs normalize their values and expose `valueAsNumber` and
 Inputs, selects, and textareas expose layout-free constraint validation
 (`validity`, `checkValidity()`, `reportValidity()`, and custom errors); form
 `requestSubmit()` validates before dispatching `submit`.
-Form action, method, encoding, target, and no-validate settings are reflected;
+Form action settings resolve against the in-memory location; method, encoding,
+target, and no-validate settings are reflected;
 submit-button clicks and `requestSubmit()` dispatch events but never perform
 navigation. `button` and `input[type="submit"]` controls expose their reflected
 per-submitter form settings and can bypass validation with `formNoValidate`.

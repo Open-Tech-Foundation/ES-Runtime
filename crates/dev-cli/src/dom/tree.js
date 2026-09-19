@@ -658,6 +658,13 @@ export function createTree(events = {}) {
     };
   }
 
+  function reflectUrl(attribute) {
+    return {
+      get() { return new URL(this.getAttribute(attribute) ?? "", globalThis.location?.href ?? "http://localhost/").href; },
+      set(value) { this.setAttribute(attribute, String(value)); },
+    };
+  }
+
   function reflectBoolean(attribute) {
     return {
       get() { return this.hasAttribute(attribute); },
@@ -692,13 +699,13 @@ export function createTree(events = {}) {
     { hidden: "hidden", inert: "inert" },
     { tabIndex: ["tabindex", -1, Number.NEGATIVE_INFINITY] });
   installReflectors(HTMLInputElement,
-    { accept: "accept", alt: "alt", autocomplete: "autocomplete", formAction: "formaction", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", placeholder: "placeholder" },
+    { accept: "accept", alt: "alt", autocomplete: "autocomplete", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", placeholder: "placeholder" },
     { disabled: "disabled", formNoValidate: "formnovalidate", multiple: "multiple", readOnly: "readonly", required: "required" },
     { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1] });
   installReflectors(HTMLButtonElement,
-    { formAction: "formaction", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
+    { formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
-  installReflectors(HTMLFormElement, { action: "action", target: "target" }, { noValidate: "novalidate" });
+  installReflectors(HTMLFormElement, { target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
     { name: "name" },
@@ -755,9 +762,12 @@ export function createTree(events = {}) {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
   });
   Object.defineProperties(HTMLFormElement.prototype, {
+    action: reflectUrl("action"),
     method: { get() { return (this.getAttribute("method") ?? "get").toLowerCase(); }, set(value) { this.setAttribute("method", String(value).toLowerCase()); } },
     enctype: { get() { return this.getAttribute("enctype") ?? "application/x-www-form-urlencoded"; }, set(value) { this.setAttribute("enctype", String(value)); } },
   });
+  Object.defineProperties(HTMLButtonElement.prototype, { formAction: reflectUrl("formaction") });
+  Object.defineProperties(HTMLInputElement.prototype, { formAction: reflectUrl("formaction") });
   for (const Class of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement]) {
     Object.defineProperty(Class.prototype, "form", { get() { return formOwner(this); } });
     Object.defineProperty(Class.prototype, "labels", {

@@ -58,9 +58,12 @@ async function runEsdev() {
 }
 
 function runJsdom() {
-  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-    url: "https://matrix.invalid/",
-  });
+  const dom = new JSDOM(
+    '<!doctype html><html><head><base href="http://localhost/"></head><body></body></html>',
+    {
+      url: "http://localhost/",
+    },
+  );
   try {
     return runCases(dom.window);
   } finally {
@@ -69,7 +72,8 @@ function runJsdom() {
 }
 
 function runHappyDom() {
-  const window = new Window({ url: "https://matrix.invalid/" });
+  const window = new Window({ url: "http://localhost/" });
+  window.document.head.innerHTML = '<base href="http://localhost/">';
   try {
     return runCases(window);
   } finally {
@@ -84,6 +88,9 @@ async function runChrome() {
   });
   try {
     const page = await browser.newPage();
+    await page.setContent(
+      '<!doctype html><html><head><base href="http://localhost/"></head><body></body></html>',
+    );
     const source = await Deno.readTextFile(
       new URL("./cases.js", import.meta.url),
     );

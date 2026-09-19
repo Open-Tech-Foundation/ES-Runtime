@@ -4101,7 +4101,7 @@ fn test_dom_submit_buttons_honor_form_settings_and_validation_bypasses() {
         const input = document.createElement('input'); input.required = true; const button = document.createElement('button'); form.append(input, button); document.body.appendChild(form); let submits = 0; form.addEventListener('submit', () => { submits += 1; });\n\
         button.click(); assertEquals(submits, 0); button.formNoValidate = true; button.click(); assertEquals(submits, 1);\n\
         button.formNoValidate = false; form.noValidate = true; form.requestSubmit(); assertEquals(submits, 2);\n\
-        assertEquals([form.action, form.method, form.enctype, form.target], ['/send', 'post', 'multipart/form-data', '_blank']);\n\
+        assertEquals([form.action, form.method, form.enctype, form.target], ['http://localhost/send', 'post', 'multipart/form-data', '_blank']);\n\
       });\n",
     );
     let ran = esdev_in(&dir)
@@ -4111,6 +4111,89 @@ fn test_dom_submit_buttons_honor_form_settings_and_validation_bypasses() {
     assert!(
         ran.status.success(),
         "submit settings test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_action_resolves_against_the_current_location() {
+    let dir = build_dir("t_test_dom_form_action_resolution");
+    write_in(
+        &dir,
+        "form-action.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('form actions resolve from the in-memory location', () => {
+  const form = document.createElement('form'); form.action = '/send';
+  assertEquals([form.getAttribute('action'), form.action], ['/send', 'http://localhost/send']);
+  history.pushState(null, '', '/nested/page'); form.action = 'next';
+  assertEquals(form.action, 'http://localhost/nested/next');
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM form action test");
+    assert!(
+        ran.status.success(),
+        "form action test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_submitter_actions_resolve_and_preserve_their_attributes() {
+    let dir = build_dir("t_test_dom_submitter_action_resolution");
+    write_in(
+        &dir,
+        "submitter-action.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('submitter actions resolve without rewriting attributes', () => {
+  const button = document.createElement('button'); const input = document.createElement('input'); input.type = 'submit';
+  button.formAction = '/button'; input.formAction = 'input';
+  assertEquals([button.getAttribute('formaction'), button.formAction], ['/button', 'http://localhost/button']);
+  assertEquals([input.getAttribute('formaction'), input.formAction], ['input', 'http://localhost/input']);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM submitter action test");
+    assert!(
+        ran.status.success(),
+        "submitter action test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_form_action_defaults_to_the_current_location() {
+    let dir = build_dir("t_test_dom_form_action_default");
+    write_in(
+        &dir,
+        "form-action-default.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('missing form action uses the current location', () => {
+  const form = document.createElement('form'); const submit = document.createElement('button');
+  assertEquals([form.action, submit.formAction], ['http://localhost/', 'http://localhost/']);
+  history.replaceState(null, '', '/current'); assertEquals([form.action, submit.formAction], ['http://localhost/current', 'http://localhost/current']);
+});
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM form action default test");
+    assert!(
+        ran.status.success(),
+        "form action default test did not run:\n{}{}",
         stdout(&ran),
         stderr(&ran)
     );
@@ -4211,8 +4294,8 @@ test('submitters reflect their form overrides', () => {
   const button = document.createElement('button'); const input = document.createElement('input'); input.type = 'submit';
   button.formAction = '/button'; button.formMethod = 'post'; button.formEnctype = 'text/plain'; button.formTarget = '_blank'; button.formNoValidate = true;
   input.formAction = '/input'; input.formMethod = 'dialog'; input.formEnctype = 'multipart/form-data'; input.formTarget = 'result'; input.formNoValidate = true;
-  assertEquals([button.formAction, button.formMethod, button.formEnctype, button.formTarget, button.formNoValidate], ['/button', 'post', 'text/plain', '_blank', true]);
-  assertEquals([input.formAction, input.formMethod, input.formEnctype, input.formTarget, input.formNoValidate], ['/input', 'dialog', 'multipart/form-data', 'result', true]);
+  assertEquals([button.formAction, button.formMethod, button.formEnctype, button.formTarget, button.formNoValidate], ['http://localhost/button', 'post', 'text/plain', '_blank', true]);
+  assertEquals([input.formAction, input.formMethod, input.formEnctype, input.formTarget, input.formNoValidate], ['http://localhost/input', 'dialog', 'multipart/form-data', 'result', true]);
 });
 "#,
     );
