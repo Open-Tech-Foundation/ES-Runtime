@@ -3916,7 +3916,7 @@ mismatched `Promise`; `await` them.
 | `toBeGreaterThan(n)` / `toBeGreaterThanOrEqual(n)` / `toBeLessThan(n)` / `toBeLessThanOrEqual(n)` | |
 | `toBeCloseTo(n, digits?)` | Two digits by default. |
 | `toThrow(want?)` / `toThrowError(want?)` | Calls the function; `want` is the expectation `assertThrows` takes. |
-| `toHaveBeenCalled()` / `toHaveBeenCalledTimes(n)` / `toHaveBeenCalledWith(...)` | Needs a mock; anything else is a `TypeError` naming the matcher. |
+| `toHaveBeenCalled()` / `toHaveBeenCalledTimes(n)` / `toHaveBeenCalledOnce()` / `toHaveBeenCalledWith(...)` | Needs a mock; anything else is a `TypeError` naming the matcher. |
 | `toHaveBeenLastCalledWith(...)` / `toHaveBeenNthCalledWith(n, ...)` | 1-based. |
 | `toHaveReturned()` / `toHaveReturnedTimes(n)` / `toHaveReturnedWith(v)` | Returned **without throwing**. |
 | `toHaveLastReturnedWith(v)` / `toHaveNthReturnedWith(n, v)` | |
@@ -3962,7 +3962,7 @@ Functions that stand in for real ones.
 | | |
 | --- | --- |
 | `mock.fn(impl?)` | A function that records what it was called with. |
-| `mock.spyOn(object, key)` | …installed over a real method, **still calling the original**. `mockRestore()` puts the property back exactly as it was, including deleting one that was inherited. |
+| `mock.spyOn(object, key[, "get" \| "set"])` | …installed over a real method or accessor, **still calling the original**. `mockRestore()` puts the property back exactly as it was, including deleting one that was inherited. |
 | `mock.is(v)` | Whether a value is one. |
 | `mock.typed(v)` | Identity — for telling a type checker that a real function is a mock. |
 | `mock.global(name, v)` | Replaces a global for the file. |

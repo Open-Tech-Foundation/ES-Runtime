@@ -6246,6 +6246,8 @@ test("a mock records what it was asked", () => {
   expect(add).toBeCalledTimes(2);
   expect(add).lastCalledWith(4, 5);
   expect(add.mock.calls).toEqual([[1, 2], [4, 5]]);
+  const once = mock.fn(); once();
+  expect(once).toHaveBeenCalledOnce();
 });
 
 test("it answers however it was told, once and then always", () => {
@@ -6299,6 +6301,26 @@ test("an inherited method goes back to the prototype", () => {
   expect(greeter.hello()).toBe("hi");
   spy.mockRestore();
   expect(Object.hasOwn(greeter, "hello")).toBe(false);
+});
+
+test("accessor spies call through and restore inherited descriptors", () => {
+  class Meter {
+    #value = 2;
+    get value() { return this.#value; }
+    set value(next: number) { this.#value = next; }
+  }
+  const meter = new Meter();
+  const read = mock.spyOn(meter, "value", "get");
+  expect(meter.value).toBe(2);
+  expect(read).toHaveBeenCalledOnce();
+  read.mockRestore();
+  expect(Object.hasOwn(meter, "value")).toBe(false);
+  const write = mock.spyOn(meter, "value", "set");
+  meter.value = 7;
+  expect(write).toHaveBeenCalledWith(7);
+  write.mockRestore();
+  expect(Object.hasOwn(meter, "value")).toBe(false);
+  expect(meter.value).toBe(7);
 });
 
 test("a replaced global is put back by restoreAll", () => {
@@ -6406,7 +6428,7 @@ test("a file may end with time stopped", () => {
         .expect("spawn esdev test");
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(out.status.success(), "{text}");
-    assert!(text.contains("16 passed, 0 failed"), "{text}");
+    assert!(text.contains("17 passed, 0 failed"), "{text}");
 }
 
 /// The vocabulary a suite written elsewhere reaches for: `it`/`suite`, a table,

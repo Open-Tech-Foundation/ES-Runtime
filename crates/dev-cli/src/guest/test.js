@@ -984,6 +984,12 @@ function expectation(actual, negated) {
         fail(calls.length, n, negated, "have been called this many times:"),
       );
     },
+    toHaveBeenCalledOnce() {
+      const calls = callsOf(actual, "toHaveBeenCalledOnce");
+      check(calls.length === 1, negated, () =>
+        fail(calls.length, 1, negated, "have been called this many times:"),
+      );
+    },
     toHaveBeenCalledWith(...args) {
       const calls = callsOf(actual, "toHaveBeenCalledWith");
       check(calls.some((call) => equal(call, args, [])), negated, () =>
@@ -1277,14 +1283,26 @@ function mockFn(implementation) {
 /// installed to *watch* something work, and one that silently returned
 /// `undefined` would change the result of every test that installed it.
 /// `.mockImplementation(...)` is how a test says otherwise.
-function spyOn(object, key) {
+function descriptorFor(object, key) {
+  for (let current = object; current !== null; current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (descriptor) return descriptor;
+  }
+  return undefined;
+}
+
+function spyOn(object, key, accessType) {
   if (object === null || (typeof object !== "object" && typeof object !== "function")) {
     throw new TypeError("mock.spyOn needs an object or a function to take the method from");
   }
   const own = Object.getOwnPropertyDescriptor(object, key);
-  const original = own ? own.value : object[key];
+  const descriptor = descriptorFor(object, key);
+  if (accessType !== undefined && accessType !== "get" && accessType !== "set") {
+    throw new TypeError("mock.spyOn access type must be 'get' or 'set'");
+  }
+  const original = accessType === undefined ? (own ? own.value : object[key]) : descriptor?.[accessType];
   if (typeof original !== "function") {
-    throw new TypeError(`mock.spyOn: ${String(key)} is not a method of that object`);
+    throw new TypeError(`mock.spyOn: ${String(key)} is not a ${accessType ?? "method"} of that object`);
   }
   const spy = mockFn(function (...args) {
     return Reflect.apply(original, this, args);
@@ -1296,12 +1314,21 @@ function spyOn(object, key) {
     if (own) Object.defineProperty(object, key, own);
     else delete object[key];
   });
-  Object.defineProperty(object, key, {
-    value: spy,
-    writable: true,
-    configurable: true,
-    enumerable: own ? own.enumerable : true,
-  });
+  if (accessType === undefined) {
+    Object.defineProperty(object, key, {
+      value: spy,
+      writable: true,
+      configurable: true,
+      enumerable: own ? own.enumerable : true,
+    });
+  } else {
+    Object.defineProperty(object, key, {
+      get: accessType === "get" ? spy : descriptor?.get,
+      set: accessType === "set" ? spy : descriptor?.set,
+      configurable: true,
+      enumerable: own?.enumerable ?? descriptor?.enumerable ?? true,
+    });
+  }
   return spy;
 }
 

@@ -253,6 +253,7 @@ declare module "runtime:test" {
     /** Needs a {@link Mock}: `mock.fn()` or `mock.spyOn()`. */
     toHaveBeenCalled(): void;
     toHaveBeenCalledTimes(n: number): void;
+    toHaveBeenCalledOnce(): void;
     toHaveBeenCalledWith(...args: unknown[]): void;
     toHaveBeenLastCalledWith(...args: unknown[]): void;
     /** 1-based: the first call is `1`. */
@@ -399,6 +400,8 @@ declare module "runtime:test" {
      * `.mockRestore()` puts the property back exactly as it was.
      */
     spyOn<T extends object, K extends keyof T>(object: T, key: K): Mock;
+    /** Watches a getter or setter while preserving the other accessor. */
+    spyOn<T extends object, K extends keyof T>(object: T, key: K, accessType: "get" | "set"): Mock;
     /** Whether a value is one of these. */
     is(value: unknown): boolean;
     /** Identity — for telling a type checker that a real function is a mock. */
