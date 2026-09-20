@@ -419,7 +419,8 @@ impl<'a> Parser<'a> {
         let Some((_, first)) = characters.next() else {
             return Err(self.error(format!("{kind} name is missing")));
         };
-        if !(first.is_ascii_lowercase() || allow_svg_case && first.is_ascii_uppercase()) {
+        let template_marker = kind == "attribute" && matches!(first, '@' | '?' | '.' | '$');
+        if !(first.is_ascii_lowercase() || allow_svg_case && first.is_ascii_uppercase() || template_marker) {
             return Err(self.error(format!(
                 "{kind} names must start with a lowercase ASCII letter"
             )));
@@ -429,7 +430,10 @@ impl<'a> Parser<'a> {
             if character.is_ascii_lowercase()
                 || allow_svg_case && character.is_ascii_uppercase()
                 || character.is_ascii_digit()
-                || matches!(character, '-' | '_' | ':')
+                // Template compilers use `$` in inert marker attributes. It
+                // is an ordinary HTML attribute-name character, not recovery
+                // syntax, so accepting it keeps strict nesting intact.
+                || matches!(character, '-' | '_' | ':' | '$' | '@' | '?' | '.')
             {
                 end = index + character.len_utf8();
             } else {
@@ -649,6 +653,14 @@ mod tests {
         ] {
             assert!(parse_fragment(source).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn accepts_template_marker_attributes() {
+        let nodes = parse_fragment("<template lit$123$><i @click$part ?hidden$part .value$part data$part=one></i></template>")
+            .expect("template marker attributes parse");
+        let Node::Element(template) = &nodes[0] else { panic!("template") };
+        assert_eq!(template.attributes[0].name, "lit$123$");
     }
 
     #[test]

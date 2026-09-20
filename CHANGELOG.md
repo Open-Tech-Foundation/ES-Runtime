@@ -13,6 +13,7 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add layout-free Shadow DOM roots with open/closed visibility, scoped parsing
   and selectors, composed-root traversal, and composed event propagation.
 - Add DOM TreeWalker traversal and NodeFilter masks for template runtimes.
+- Accept `$` template-marker attribute names in strict HTML fragments.
 
 - Add a 24-case esdev DOM behavior matrix that uses headless Chrome as the
   layout-free behavior oracle while reporting jsdom and happy-dom compatibility
