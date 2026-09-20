@@ -29,8 +29,8 @@ The target is spec fidelity without layout. Algorithms that do not need a box mo
 - Navigation: no real `location` changes, no history side effects, no `document.write`.
 - `XMLHttpRequest`. `fetch` is the runtime's own.
 - Shadow DOM has tree and event-boundary support (`attachShadow`, open/closed
-  roots, scoped selectors, composed events, and basic named/default slot
-  assignment), but does not implement event retargeting or style scoping.
+  roots, scoped selectors, composed events with host retargeting, and basic
+  named/default slot assignment), but does not implement style scoping.
 - `contenteditable`, drag and drop, pointer capture, focus rings.
 
 This is not a headless browser and will never pass a test that depends on how something looks. Pixel tests belong to the GUI driver harness.

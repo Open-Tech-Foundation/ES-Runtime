@@ -4924,6 +4924,38 @@ fn test_dom_shadow_slots_assign_named_default_and_fallback_content() {
 }
 
 #[test]
+fn test_dom_composed_shadow_events_retarget_at_host_boundaries() {
+    let dir = build_dir("t_test_dom_shadow_event_retargeting");
+    write_in(
+        &dir,
+        "retarget.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('composed events expose the host outside a shadow root', () => {\n\
+           const host = document.createElement('section'); document.body.appendChild(host);\n\
+           const root = host.attachShadow({ mode: 'open' }); root.innerHTML = '<button>inside</button>';\n\
+           const button = root.querySelector('button'); const seen = [];\n\
+           button.addEventListener('go', (event) => seen.push(['button', event.target.localName]));\n\
+           root.addEventListener('go', (event) => seen.push(['root', event.target.localName]));\n\
+           host.addEventListener('go', (event) => seen.push(['host', event.target.localName]));\n\
+           document.addEventListener('go', (event) => seen.push(['document', event.target.localName]));\n\
+           button.dispatchEvent(new Event('go', { bubbles: true, composed: true }));\n\
+           assertEquals(seen, [['button', 'button'], ['root', 'button'], ['host', 'section'], ['document', 'section']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom shadow event retargeting");
+    assert!(
+        ran.status.success(),
+        "DOM shadow-event retargeting test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_deep_template_clones_preserve_inert_content() {
     let dir = build_dir("t_test_dom_template_clone");
     write_in(

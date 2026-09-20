@@ -6,6 +6,16 @@ const STATE = Symbol("esdev event state");
 const LISTENERS = Symbol("esdev event listeners");
 
 export function createEvents() {
+  function retarget(original, current) {
+    let target = original;
+    while (target?.getRootNode) {
+      const root = target.getRootNode();
+      if (!root?.host || current === root || current?.getRootNode?.() === root) return target;
+      target = root.host;
+    }
+    return target;
+  }
+
   class Event {
     static NONE = 0;
     static CAPTURING_PHASE = 1;
@@ -116,13 +126,13 @@ export function createEvents() {
         }
         if (state.bubbles) for (let index = 1; index < path.length && !state.propagationStopped; index += 1) this._invoke(path[index], event, Event.BUBBLING_PHASE, false);
       } finally {
-        state.currentTarget = null; state.phase = Event.NONE; state.passive = false; state.dispatching = false;
+        state.target = this; state.currentTarget = null; state.phase = Event.NONE; state.passive = false; state.dispatching = false;
       }
       return !state.defaultPrevented;
     }
     _invoke(target, event, phase, capture) {
       const state = event[STATE];
-      state.currentTarget = target; state.phase = phase;
+      state.target = retarget(this, target); state.currentTarget = target; state.phase = phase;
       const listeners = [...(target[LISTENERS].get(event.type) ?? [])];
       for (const listener of listeners) {
         if (listener.capture !== capture || !target[LISTENERS].get(event.type)?.includes(listener)) continue;
