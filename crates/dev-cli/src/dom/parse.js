@@ -34,7 +34,11 @@ export function createParsing(tree, parseRecords) {
         const context = target instanceof Element ? target : parent;
         const namespace = elementNamespace(name, context);
         const qualifiedName = namespace === SVG_NAMESPACE ? SVG_ELEMENT_NAMES.get(name.toLowerCase()) ?? name : name;
-        node = document.createElementNS(namespace, qualifiedName);
+        // HTML parser-created elements do not go through the public
+        // createElementNS hook; retain that observable construction path.
+        node = namespace === HTML_NAMESPACE
+          ? document.createElement(qualifiedName)
+          : document.createElementNS(namespace, qualifiedName);
         if (!Array.isArray(attributes)) throw new TypeError("Element attributes must be an array");
         for (const attribute of attributes) {
           if (!Array.isArray(attribute) || attribute.length !== 2) throw new TypeError("Invalid DOM parser attribute");

@@ -5174,7 +5174,9 @@ fn test_dom_parser_keeps_svg_foreign_object_namespaces() {
         "foreign-object.test.mjs",
         "import { test, assertEquals } from 'runtime:test';\n\
          test('parsed SVG foreignObject enters and exits the HTML namespace', () => {\n\
+           const createElementNS = document.createElementNS; let htmlNamespaceCalls = 0; document.createElementNS = function(namespace, name) { if (namespace === 'http://www.w3.org/1999/xhtml') htmlNamespaceCalls += 1; return createElementNS.call(this, namespace, name); };\n\
            document.body.innerHTML = '<svg><foreignObject><div id=html-child>ok</div></foreignObject><clipPath id=clip/></svg>';\n\
+           document.createElementNS = createElementNS; assertEquals(htmlNamespaceCalls, 0);\n\
            const foreignObject = document.body.querySelector('foreignObject'); const htmlChild = foreignObject.querySelector('#html-child');\n\
            assertEquals([foreignObject.tagName, foreignObject.namespaceURI, htmlChild.namespaceURI], ['foreignObject', 'http://www.w3.org/2000/svg', 'http://www.w3.org/1999/xhtml']);\n\
            assertEquals(document.body.querySelector('clipPath').tagName, 'clipPath');\n\
