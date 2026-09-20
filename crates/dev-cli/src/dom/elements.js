@@ -54,7 +54,12 @@ export function createElements(tree) {
     const inserted = node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? Array.from(node.childNodes) : [node];
     for (const child of inserted) upgradeTree(child);
     const result = originalInsert.call(this, node, before);
-    for (const child of inserted) walk(child, (element) => { if (element.isConnected) react(element, "connectedCallback"); });
+    // A connected callback may synchronously add a custom-element child.  It
+    // receives its own insertion reaction, so walk a pre-reaction snapshot to
+    // avoid invoking that child a second time while descending the parent.
+    const connected = [];
+    for (const child of inserted) walk(child, (element) => { if (element.isConnected) connected.push(element); });
+    for (const element of connected) react(element, "connectedCallback");
     return result;
   };
 

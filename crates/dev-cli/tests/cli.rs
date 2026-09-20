@@ -5287,6 +5287,36 @@ fn test_dom_custom_elements_upgrade_and_react_to_tree_changes() {
 }
 
 #[test]
+fn test_dom_connected_callbacks_do_not_repeat_for_new_descendants() {
+    let dir = build_dir("t_test_dom_connected_callback_descendant");
+    write_in(
+        &dir,
+        "connected.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('a descendant inserted by a connected callback reacts once', () => {
+             let childConnections = 0;
+             class Child extends HTMLElement { connectedCallback() { childConnections += 1; } }
+             class Parent extends HTMLElement { connectedCallback() { this.appendChild(document.createElement('x-connected-child')); } }
+             customElements.define('x-connected-child', Child); customElements.define('x-connected-parent', Parent);
+             document.body.appendChild(document.createElement('x-connected-parent'));
+             assertEquals(childConnections, 1);
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn connected custom-element descendant test");
+    assert!(
+        ran.status.success(),
+        "connected custom-element descendant test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_custom_element_registry_validates_and_settles_waiters() {
     let dir = build_dir("t_test_dom_custom_registry");
     write_in(

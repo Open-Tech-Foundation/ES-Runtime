@@ -16,6 +16,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Deliver one connected callback when a parent callback synchronously inserts
+  a custom-element descendant.
 - Preserve an explicitly empty single-select selection instead of falsely
   reporting its first option as selected.
 - Expose element named attributes through the standard prototype accessor.
