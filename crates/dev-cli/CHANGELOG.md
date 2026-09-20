@@ -24,6 +24,16 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- Document DOM-test isolation, strict modern-HTML parsing, browser-only
+  boundaries, and the WPT audit policy in the site test guide.
+
+### Added
+
+- Add a JavaScript WPT DOM audit runner for the DOM, custom-elements, and
+  Shadow DOM upstream suites.
+
 ### Fixed
 
 - `upgrade --help` (and `-h`) now prints usage instead of erroring, like every

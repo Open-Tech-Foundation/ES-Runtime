@@ -8,15 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
-### Changed
-
-- Document esdev DOM-test isolation, strict modern-HTML parsing, browser-only
-  boundaries, and the WPT audit policy in the site test guide.
-
 ### Added
 
-- Add a JavaScript WPT DOM audit runner for the DOM, custom-elements, and
-  Shadow DOM upstream suites.
 - Add realm-local logical Selection ranges for caret-preserving updates.
 - Expose progress values and table border reflection, and make inline style
   properties observable through standard property checks.
