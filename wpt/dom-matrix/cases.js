@@ -168,6 +168,24 @@ export const cases = [
   },
   {
     group: "parsing",
+    name: "svg-attributes-and-self-closing-children",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      document.body.innerHTML =
+        '<svg viewbox="0 0 10 10" gradientUnits="userSpaceOnUse"><circle cx="5" cy="5" r="4"/></svg>';
+      const svg = document.body.firstElementChild;
+      const circle = svg.firstElementChild;
+      return [
+        svg.getAttribute("viewBox"),
+        svg.getAttribute("gradientUnits"),
+        circle.localName,
+        circle.getAttribute("r"),
+      ];
+    },
+  },
+  {
+    group: "parsing",
     name: "malformed-markup-is-a-strict-esdev-limit",
     limit: "esdev rejects malformed HTML instead of applying browser recovery",
     expectedEsdev: { result: "SyntaxError" },

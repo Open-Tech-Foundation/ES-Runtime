@@ -71,7 +71,7 @@ impl std::error::Error for Error {}
 )]
 pub fn parse_document(source: &str) -> Result<Document, Error> {
     let mut parser = Parser::new(source);
-    let document = parser.nodes(None, true)?;
+    let document = parser.nodes(None, true, false)?;
     if !parser.eof() {
         return Err(parser.error("unexpected content after the document"));
     }
@@ -84,7 +84,7 @@ pub fn parse_document(source: &str) -> Result<Document, Error> {
 /// never accepts a doctype.
 pub fn parse_fragment(source: &str) -> Result<Vec<Node>, Error> {
     let mut parser = Parser::new(source);
-    let document = parser.nodes(None, false)?;
+    let document = parser.nodes(None, false, false)?;
     if !parser.eof() {
         return Err(parser.error("unexpected content after the fragment"));
     }
@@ -175,7 +175,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn nodes(&mut self, closing: Option<&str>, document: bool) -> Result<Document, Error> {
+    fn nodes(
+        &mut self,
+        closing: Option<&str>,
+        document: bool,
+        in_svg: bool,
+    ) -> Result<Document, Error> {
         let mut out = Document::default();
         loop {
             if self.eof() {
@@ -186,7 +191,7 @@ impl<'a> Parser<'a> {
             }
             if self.rest().starts_with("</") {
                 let end_at = self.at;
-                let name = self.end_tag()?;
+                let name = self.end_tag(in_svg)?;
                 let Some(expected) = closing else {
                     return Err(Error {
                         offset: end_at,
@@ -210,21 +215,22 @@ impl<'a> Parser<'a> {
                 self.doctype()?;
                 out.doctype = true;
             } else if self.rest().starts_with('<') {
-                out.children.push(Node::Element(self.element()?));
+                out.children.push(Node::Element(self.element(in_svg)?));
             } else {
                 out.children.push(Node::Text(self.text()?));
             }
         }
     }
 
-    fn element(&mut self) -> Result<Element, Error> {
+    fn element(&mut self, in_svg: bool) -> Result<Element, Error> {
         self.expect("<")?;
-        let name = self.name("element")?;
+        let name = self.name("element", in_svg)?;
+        let in_svg = in_svg || is_svg_root(&name);
         let mut attributes = Vec::new();
         loop {
             self.whitespace();
             if self.take("/>") {
-                if !is_void(&name) {
+                if !in_svg && !is_void(&name) {
                     return Err(self.error(format!("<{name}/> is not a void element")));
                 }
                 return Ok(Element {
@@ -240,7 +246,12 @@ impl<'a> Parser<'a> {
                 return Err(self.error("unterminated start tag"));
             }
             let attribute_at = self.at;
-            let attribute_name = self.name("attribute")?;
+            let attribute_name = self.name("attribute", in_svg)?;
+            let attribute_name = if in_svg {
+                svg_attribute_name(&attribute_name).to_string()
+            } else {
+                attribute_name
+            };
             if attributes
                 .iter()
                 .any(|attribute: &Attribute| attribute.name == attribute_name)
@@ -262,7 +273,7 @@ impl<'a> Parser<'a> {
                 value,
             });
         }
-        if is_void(&name) {
+        if !in_svg && is_void(&name) {
             return Ok(Element {
                 name,
                 attributes,
@@ -272,7 +283,7 @@ impl<'a> Parser<'a> {
         let children = if is_raw_text(&name) {
             vec![Node::Text(self.raw_text(&name)?)]
         } else {
-            self.nodes(Some(&name), false)?.children
+            self.nodes(Some(&name), false, in_svg)?.children
         };
         Ok(Element {
             name,
@@ -281,12 +292,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn end_tag(&mut self) -> Result<String, Error> {
+    fn end_tag(&mut self, in_svg: bool) -> Result<String, Error> {
         self.expect("</")?;
-        let name = self.name("end-tag")?;
+        let name = self.name("end-tag", in_svg)?;
         self.whitespace();
         self.expect(">")?;
-        if is_void(&name) {
+        if !in_svg && is_void(&name) {
             return Err(self.error(format!("void element <{name}> must not have an end tag")));
         }
         Ok(name)
@@ -341,7 +352,7 @@ impl<'a> Parser<'a> {
                 {
                     let text = self.source[start..candidate].to_string();
                     self.at = candidate;
-                    let end = self.end_tag()?;
+                    let end = self.end_tag(false)?;
                     if end != name {
                         return Err(
                             self.error(format!("closing </{end}> tag does not match <{name}>"))
@@ -402,13 +413,13 @@ impl<'a> Parser<'a> {
         decode_entities(&self.source[start..end], start)
     }
 
-    fn name(&mut self, kind: &str) -> Result<String, Error> {
+    fn name(&mut self, kind: &str, allow_svg_case: bool) -> Result<String, Error> {
         let start = self.at;
         let mut characters = self.rest().char_indices();
         let Some((_, first)) = characters.next() else {
             return Err(self.error(format!("{kind} name is missing")));
         };
-        if !first.is_ascii_lowercase() {
+        if !(first.is_ascii_lowercase() || allow_svg_case && first.is_ascii_uppercase()) {
             return Err(self.error(format!(
                 "{kind} names must start with a lowercase ASCII letter"
             )));
@@ -416,6 +427,7 @@ impl<'a> Parser<'a> {
         let mut end = first.len_utf8();
         for (index, character) in characters {
             if character.is_ascii_lowercase()
+                || allow_svg_case && character.is_ascii_uppercase()
                 || character.is_ascii_digit()
                 || matches!(character, '-' | '_' | ':')
             {
@@ -474,6 +486,50 @@ fn is_void(name: &str) -> bool {
 
 fn is_raw_text(name: &str) -> bool {
     matches!(name, "script" | "style")
+}
+
+fn is_svg_root(name: &str) -> bool {
+    matches!(name, "svg" | "svg:svg")
+}
+
+fn svg_attribute_name(name: &str) -> &str {
+    match name {
+        "attributename" => "attributeName",
+        "basefrequency" => "baseFrequency",
+        "clippathunits" => "clipPathUnits",
+        "gradienttransform" => "gradientTransform",
+        "gradientunits" => "gradientUnits",
+        "kernelmatrix" => "kernelMatrix",
+        "kernelunitlength" => "kernelUnitLength",
+        "lengthadjust" => "lengthAdjust",
+        "markerheight" => "markerHeight",
+        "markerunits" => "markerUnits",
+        "markerwidth" => "markerWidth",
+        "maskcontentunits" => "maskContentUnits",
+        "maskunits" => "maskUnits",
+        "numoctaves" => "numOctaves",
+        "pathlength" => "pathLength",
+        "patterncontentunits" => "patternContentUnits",
+        "patterntransform" => "patternTransform",
+        "patternunits" => "patternUnits",
+        "preserveaspectratio" => "preserveAspectRatio",
+        "primitiveunits" => "primitiveUnits",
+        "refx" => "refX",
+        "refy" => "refY",
+        "specularconstant" => "specularConstant",
+        "specularexponent" => "specularExponent",
+        "spreadmethod" => "spreadMethod",
+        "startoffset" => "startOffset",
+        "stddeviation" => "stdDeviation",
+        "surfacescale" => "surfaceScale",
+        "systemlanguage" => "systemLanguage",
+        "tablevalues" => "tableValues",
+        "viewbox" => "viewBox",
+        "viewtarget" => "viewTarget",
+        "xchannelselector" => "xChannelSelector",
+        "ychannelselector" => "yChannelSelector",
+        _ => name,
+    }
 }
 
 fn decode_entities(value: &str, offset: usize) -> Result<String, Error> {
@@ -593,6 +649,40 @@ mod tests {
         ] {
             assert!(parse_fragment(source).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn parses_well_formed_svg_foreign_content() {
+        let nodes = parse_fragment("<svg viewbox='0 0 10 10'><circle cx='5' cy='5' r='4'/></svg>")
+            .expect("parse SVG");
+        assert_eq!(
+            nodes,
+            vec![Node::Element(Element {
+                name: "svg".to_string(),
+                attributes: vec![Attribute {
+                    name: "viewBox".to_string(),
+                    value: "0 0 10 10".to_string(),
+                }],
+                children: vec![Node::Element(Element {
+                    name: "circle".to_string(),
+                    attributes: vec![
+                        Attribute {
+                            name: "cx".to_string(),
+                            value: "5".to_string(),
+                        },
+                        Attribute {
+                            name: "cy".to_string(),
+                            value: "5".to_string(),
+                        },
+                        Attribute {
+                            name: "r".to_string(),
+                            value: "4".to_string(),
+                        },
+                    ],
+                    children: vec![],
+                })],
+            })]
+        );
     }
 
     #[test]

@@ -282,6 +282,44 @@
     },
     {
       "group": "parsing",
+      "name": "svg-attributes-and-self-closing-children",
+      "chrome": {
+        "result": [
+          "0 0 10 10",
+          "userSpaceOnUse",
+          "circle",
+          "4"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "0 0 10 10",
+          "userSpaceOnUse",
+          "circle",
+          "4"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          null,
+          "userSpaceOnUse",
+          "circle",
+          "4"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "0 0 10 10",
+          "userSpaceOnUse",
+          "circle",
+          "4"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match"
+    },
+    {
+      "group": "parsing",
       "name": "malformed-markup-is-a-strict-esdev-limit",
       "limit": "esdev rejects malformed HTML instead of applying browser recovery",
       "expectedEsdev": {
@@ -659,7 +697,7 @@
     }
   ],
   "summary": {
-    "match": 23,
+    "match": 24,
     "intentional-limit": 1
   }
 }

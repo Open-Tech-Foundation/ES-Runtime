@@ -4747,6 +4747,35 @@ fn test_dom_class_lists_track_attributes_and_validate_tokens() {
 }
 
 #[test]
+fn test_dom_parser_accepts_well_formed_svg_foreign_content() {
+    let dir = build_dir("t_test_dom_svg_foreign_content");
+    write_in(
+        &dir,
+        "svg.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('SVG attributes and self-closing descendants parse without HTML recovery', () => {\n\
+           document.body.innerHTML = '<svg viewbox=\"0 0 10 10\" gradientUnits=\"userSpaceOnUse\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>';\n\
+           const svg = document.body.firstElementChild; const circle = svg.firstElementChild;\n\
+           assertEquals(svg.getAttribute('viewBox'), '0 0 10 10'); assertEquals(svg.getAttribute('gradientUnits'), 'userSpaceOnUse'); assertEquals(circle.localName, 'circle'); assertEquals(circle.getAttribute('r'), '4');\n\
+           document.body.innerHTML = '<div><svg:svg><svg:circle cx=\"1\"/></svg:svg></div>';\n\
+           assertEquals(document.body.firstElementChild.firstElementChild.firstElementChild.getAttribute('cx'), '1');\n\
+           assertThrows(() => { document.body.innerHTML = '<div/>'; }, SyntaxError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom SVG foreign content");
+    assert!(
+        ran.status.success(),
+        "DOM SVG foreign-content test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(
