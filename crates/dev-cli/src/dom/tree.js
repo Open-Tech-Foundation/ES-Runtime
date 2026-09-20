@@ -768,7 +768,13 @@ export function createTree(events = {}) {
     get selectedIndex() {
       const options = Array.from(this.options);
       const selected = options.findIndex((option) => option.selected);
-      return selected >= 0 ? selected : !this.multiple && options.length ? 0 : -1;
+      // A single-select initially selects its first option, but an explicit
+      // selectedIndex = -1 or unmatched value must remain an empty selection.
+      // The option selectedness flags distinguish that dirty state from an
+      // untouched option list.
+      return selected >= 0 || this.multiple || !options.every((option) => option[SELECTED] === null)
+        ? selected
+        : options.length ? 0 : -1;
     }
     set selectedIndex(index) {
       index = Math.trunc(Number(index));
@@ -783,7 +789,9 @@ export function createTree(events = {}) {
       return new HTMLCollection(this, (root) => {
         const options = collect(root, (element) => element instanceof HTMLOptionElement);
         const chosen = options.filter((option) => option.selected);
-        return chosen.length || this.multiple ? chosen : options.slice(0, 1);
+        return chosen.length || this.multiple || !options.every((option) => option[SELECTED] === null)
+          ? chosen
+          : options.slice(0, 1);
       });
     }
     add(item, before = null) {

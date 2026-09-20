@@ -3519,7 +3519,7 @@ fn test_dom_select_controls_choose_values_and_expose_live_options() {
            const options = select.options; assertEquals(select instanceof HTMLSelectElement, true); assertEquals(one instanceof HTMLOptionElement, true);\n\
            assertEquals([select.length, select.selectedIndex, select.value, Array.from(select.selectedOptions)], [2, 0, 'one', [one]]);\n\
            select.value = 'second'; assertEquals([select.selectedIndex, select.value, one.selected, two.selected], [1, 'second', false, true]);\n\
-           select.selectedIndex = -1; assertEquals([select.selectedIndex, select.value], [0, 'one']);\n\
+           select.selectedIndex = -1; assertEquals([select.selectedIndex, select.value, Array.from(select.selectedOptions)], [-1, '', []]);\n\
            const three = document.createElement('option'); three.value = 'third'; select.add(three, 1); assertEquals([options.length, options.item(1)], [3, three]);\n\
            select.remove(1); assertEquals(options.length, 2);\n\
          });\n",
