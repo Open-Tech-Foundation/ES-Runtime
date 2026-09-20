@@ -5,6 +5,7 @@
 
 const SLOT = Symbol("esdev DOM slots");
 const ATTRS = Symbol("esdev DOM attributes");
+const CLASS_LIST = Symbol("esdev DOM class list");
 const DATA = Symbol("esdev DOM character data");
 const SELECTED = Symbol("esdev DOM option selected state");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
@@ -80,6 +81,62 @@ export function createTree(events = {}) {
       name = String(name);
       return this._values().find((element) => element.id === name || element.getAttribute("name") === name) ?? null;
     }
+  }
+
+  class DOMTokenList {
+    constructor(element) {
+      Object.defineProperty(this, ATTRS, { value: element });
+      return new Proxy(this, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target._tokens()[Number(property)];
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    }
+    _tokens() {
+      return [...new Set((this[ATTRS].getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean))];
+    }
+    _set(tokens) { this[ATTRS].setAttribute("class", tokens.join(" ")); }
+    _validate(token) {
+      token = String(token);
+      if (token === "") throw domError("SyntaxError", "The token must not be empty.");
+      if (/\s/.test(token)) throw domError("InvalidCharacterError", "The token must not contain ASCII whitespace.");
+      return token;
+    }
+    get length() { return this._tokens().length; }
+    get value() { return this[ATTRS].getAttribute("class") ?? ""; }
+    set value(value) { this[ATTRS].setAttribute("class", String(value)); }
+    item(index) { return this._tokens()[Number(index)] ?? null; }
+    contains(token) { return this._tokens().includes(this._validate(token)); }
+    add(...tokens) {
+      tokens = tokens.map((token) => this._validate(token));
+      const next = this._tokens();
+      for (const token of tokens) if (!next.includes(token)) next.push(token);
+      this._set(next);
+    }
+    remove(...tokens) {
+      tokens = new Set(tokens.map((token) => this._validate(token)));
+      this._set(this._tokens().filter((token) => !tokens.has(token)));
+    }
+    toggle(token, force) {
+      token = this._validate(token);
+      const has = this._tokens().includes(token);
+      const add = force === undefined ? !has : Boolean(force);
+      if (add && !has) this.add(token);
+      if (!add && has) this.remove(token);
+      return add;
+    }
+    replace(token, replacement) {
+      token = this._validate(token);
+      replacement = this._validate(replacement);
+      const tokens = this._tokens();
+      const index = tokens.indexOf(token);
+      if (index === -1) return false;
+      tokens[index] = replacement;
+      this._set([...new Set(tokens)]);
+      return true;
+    }
+    [Symbol.iterator]() { return this._tokens()[Symbol.iterator](); }
   }
 
   class Node extends EventTarget {
@@ -372,6 +429,7 @@ export function createTree(events = {}) {
       slots(this).attributes = [];
       slots(this).children = null;
       Object.defineProperty(this, "attributes", { value: new NamedNodeMap(this) });
+      Object.defineProperty(this, CLASS_LIST, { value: new DOMTokenList(this) });
     }
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
@@ -404,6 +462,7 @@ export function createTree(events = {}) {
     set id(value) { this.setAttribute("id", value); }
     get className() { return this.getAttribute("class") ?? ""; }
     set className(value) { this.setAttribute("class", value); }
+    get classList() { return this[CLASS_LIST]; }
     get children() {
       const state = slots(this);
       return state.children ??= new HTMLCollection(this, (root) => Array.from(root._children()).filter((node) => node instanceof Element));
@@ -871,5 +930,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, isDisabled, upgradeCustom };
 }

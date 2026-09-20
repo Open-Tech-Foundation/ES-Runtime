@@ -96,6 +96,35 @@ test("documents return the first matching element by ID in tree order", () => {
   expect(document.getElementById("missing")).toBeNull();
 });
 
+test("class lists are live unique token collections", () => {
+  const document = new Document();
+  const element = document.createElement("a");
+  const classes = element.classList;
+  element.className = "one one two";
+
+  expect(classes).toBe(element.classList);
+  expect(Array.from(classes)).toEqual(["one", "two"]);
+  expect(classes[1]).toBe("two");
+  expect(classes.item(2)).toBeNull();
+  classes.add("three", "one");
+  classes.remove("two");
+  expect(element.getAttribute("class")).toBe("one three");
+  expect(classes.replace("one", "first")).toBe(true);
+  expect(classes.toggle("three")).toBe(false);
+  expect(classes.toggle("four", true)).toBe(true);
+  expect(element.className).toBe("first four");
+});
+
+test("class list token validation happens before mutations", () => {
+  const document = new Document();
+  const element = document.createElement("a");
+  element.className = "ready";
+
+  expect(() => element.classList.add("next", "bad token")).toThrow("whitespace");
+  expect(() => element.classList.contains("")).toThrow("empty");
+  expect(element.className).toBe("ready");
+});
+
 test("replaceChild retains the following sibling and imports attribute ownership", () => {
   const left = new Document();
   const right = new Document();

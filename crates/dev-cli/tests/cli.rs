@@ -4714,6 +4714,39 @@ fn test_dom_document_ids_and_indexed_attributes_follow_browser_collections() {
 }
 
 #[test]
+fn test_dom_class_lists_track_attributes_and_validate_tokens() {
+    let dir = build_dir("t_test_dom_class_lists");
+    write_in(
+        &dir,
+        "class-list.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('class list mutations preserve ordered unique tokens', () => {\n\
+           const element = document.createElement('div'); element.className = 'one one two'; const classes = element.classList;\n\
+           assertEquals(classes, element.classList); assertEquals([...classes], ['one', 'two']); assertEquals(classes[1], 'two'); assertEquals(classes.item(2), null);\n\
+           classes.add('three', 'one'); classes.remove('two'); assertEquals(element.className, 'one three');\n\
+           assertEquals(classes.replace('one', 'first'), true); assertEquals(classes.toggle('three'), false); assertEquals(classes.toggle('four', true), true);\n\
+           assertEquals(element.getAttribute('class'), 'first four');\n\
+         });\n\
+         test('class list rejects invalid tokens without partial changes', () => {\n\
+           const element = document.createElement('div'); element.className = 'ready';\n\
+           assertThrows(() => element.classList.add('next', 'bad token'), DOMException); assertThrows(() => element.classList.contains(''), DOMException);\n\
+           assertEquals(element.className, 'ready');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom class lists");
+    assert!(
+        ran.status.success(),
+        "DOM class list test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(
