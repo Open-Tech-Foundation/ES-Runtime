@@ -13,6 +13,7 @@ const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
 const INPUT_CHECKED = Symbol("esdev DOM input checked state");
+const INPUT_INDETERMINATE = Symbol("esdev DOM input indeterminate state");
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -610,7 +611,7 @@ export function createTree(events = {}) {
   }
 
   class HTMLInputElement extends HTMLElement {
-    constructor(name, ownerDocument) { super(name, ownerDocument); this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; }
+    constructor(name, ownerDocument) { super(name, ownerDocument); this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; this[INPUT_INDETERMINATE] = false; }
     click() {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -905,6 +906,7 @@ export function createTree(events = {}) {
       set(value) { this.setAttribute("value", String(value)); },
     },
     checked: { get() { return this[INPUT_CHECKED] ?? this.defaultChecked; }, set(value) { this[INPUT_CHECKED] = Boolean(value); } },
+    indeterminate: { get() { return this[INPUT_INDETERMINATE]; }, set(value) { this[INPUT_INDETERMINATE] = Boolean(value); } },
     defaultChecked: { get() { return this.hasAttribute("checked"); }, set(value) { if (value) this.setAttribute("checked", ""); else this.removeAttribute("checked"); } },
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },

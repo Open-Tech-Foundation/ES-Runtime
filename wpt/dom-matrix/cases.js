@@ -290,6 +290,19 @@ export const cases = [
   },
   {
     group: "forms",
+    name: "input-indeterminate-is-non-reflecting-state",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      const initial = input.indeterminate;
+      input.indeterminate = true;
+      return [initial, input.indeterminate, input.hasAttribute("indeterminate")];
+    },
+  },
+  {
+    group: "forms",
     name: "form-owner-follows-form-attribute",
     run(window) {
       const { document } = window;

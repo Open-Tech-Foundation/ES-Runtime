@@ -4772,6 +4772,33 @@ fn test_dom_datasets_follow_live_data_attributes_and_html_name_conversion() {
 }
 
 #[test]
+fn test_dom_input_indeterminate_is_boolean_non_reflecting_state() {
+    let dir = build_dir("t_test_dom_input_indeterminate");
+    write_in(
+        &dir,
+        "indeterminate.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('input indeterminate defaults false and remains independent of checked and attributes', () => {\n\
+           const input = document.createElement('input'); input.type = 'checkbox';\n\
+           assertEquals([input.indeterminate, input.hasAttribute('indeterminate')], [false, false]);\n\
+           input.indeterminate = 1; input.checked = true;\n\
+           assertEquals([input.indeterminate, input.checked, input.hasAttribute('indeterminate')], [true, true, false]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom input indeterminate");
+    assert!(
+        ran.status.success(),
+        "DOM input indeterminate test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(

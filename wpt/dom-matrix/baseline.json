@@ -525,6 +525,40 @@
     },
     {
       "group": "forms",
+      "name": "input-indeterminate-is-non-reflecting-state",
+      "chrome": {
+        "result": [
+          false,
+          true,
+          false
+        ]
+      },
+      "esdev": {
+        "result": [
+          false,
+          true,
+          false
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          false,
+          true,
+          false
+        ]
+      },
+      "jsdom": {
+        "result": [
+          false,
+          true,
+          false
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match"
+    },
+    {
+      "group": "forms",
       "name": "form-owner-follows-form-attribute",
       "chrome": {
         "result": [
@@ -784,7 +818,7 @@
     }
   ],
   "summary": {
-    "match": 26,
+    "match": 27,
     "intentional-limit": 1
   }
 }

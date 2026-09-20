@@ -193,6 +193,17 @@ test("datasets use HTML name conversion and reject unrepresentable property name
   expect(element.hasAttribute("data-record-id")).toBe(true);
 });
 
+test("input indeterminate state defaults to false and does not reflect an attribute", () => {
+  const document = new Document();
+  const input = document.createElement("input");
+  input.type = "checkbox";
+
+  expect(input.indeterminate).toBe(false);
+  input.indeterminate = 1;
+  expect(input.indeterminate).toBe(true);
+  expect(input.hasAttribute("indeterminate")).toBe(false);
+});
+
 test("replaceChild retains the following sibling and imports attribute ownership", () => {
   const left = new Document();
   const right = new Document();

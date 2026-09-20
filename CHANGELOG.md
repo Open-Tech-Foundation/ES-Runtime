@@ -24,6 +24,8 @@ namespace) is unstable and may change between minor releases until the API freez
   cloning through the `*AttributeNS` APIs.
 - Add live `HTMLElement.dataset` data-attribute reflection with HTML property
   name conversion, enumeration, assignment, and deletion.
+- Add non-reflecting `HTMLInputElement.indeterminate` state with a `false`
+  default.
 - Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
   It parses explicit nesting, void elements, attributes, comments, templates,
   raw-text script/style elements and a constrained entity set, while rejecting
