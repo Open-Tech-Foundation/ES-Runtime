@@ -10,6 +10,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Reflect content editing, translation, dragging, spell checking, and default
+  tab-index state on HTMLElement.
+- Expose HTMLAnchorElement URL reflection and focusable-link defaults.
 - Install browser-realm console methods as writable configurable own properties.
 - Expose HTMLCanvasElement width and height reflection without a drawing
   context or layout engine.

@@ -686,6 +686,7 @@ export function createTree(events = {}) {
   class HTMLDialogElement extends HTMLElement {}
   class HTMLDivElement extends HTMLElement {}
   class HTMLCanvasElement extends HTMLElement {}
+  class HTMLAnchorElement extends HTMLElement {}
 
   function isSubmitter(control) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
@@ -927,8 +928,7 @@ export function createTree(events = {}) {
 
   installReflectors(HTMLElement,
     { id: "id", className: "class", title: "title", lang: "lang", dir: "dir", slot: "slot" },
-    { hidden: "hidden", inert: "inert" },
-    { tabIndex: ["tabindex", -1, Number.NEGATIVE_INFINITY] });
+    { hidden: "hidden", inert: "inert" });
   installReflectors(HTMLInputElement,
     { accept: "accept", alt: "alt", autocomplete: "autocomplete", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", placeholder: "placeholder" },
     { disabled: "disabled", formNoValidate: "formnovalidate", multiple: "multiple", readOnly: "readonly", required: "required" },
@@ -938,6 +938,7 @@ export function createTree(events = {}) {
     { disabled: "disabled", formNoValidate: "formnovalidate" });
   installReflectors(HTMLDialogElement, {}, { open: "open" });
   installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
+  Object.defineProperties(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
   installReflectors(HTMLFormElement, { target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
@@ -953,6 +954,56 @@ export function createTree(events = {}) {
   installValidation(HTMLInputElement);
   installValidation(HTMLSelectElement);
   installValidation(HTMLTextAreaElement);
+  Object.defineProperties(HTMLElement.prototype, {
+    contentEditable: {
+      get() {
+        const value = this.getAttribute("contenteditable");
+        return value === null ? "inherit" : ["true", "false", "plaintext-only"].includes(value.toLowerCase()) ? value.toLowerCase() : "inherit";
+      },
+      set(value) {
+        value = String(value).toLowerCase();
+        if (!["true", "false", "plaintext-only", "inherit"].includes(value)) throw new SyntaxError("contentEditable must be 'true', 'false', 'plaintext-only', or 'inherit'.");
+        if (value === "inherit") this.removeAttribute("contenteditable"); else this.setAttribute("contenteditable", value);
+      },
+    },
+    isContentEditable: {
+      get() {
+        for (let element = this; element; element = element.parentElement) {
+          const value = element.contentEditable;
+          if (value === "true" || value === "plaintext-only") return true;
+          if (value === "false") return false;
+        }
+        return false;
+      },
+    },
+    translate: {
+      get() { return this.getAttribute("translate")?.toLowerCase() !== "no"; },
+      set(value) { this.setAttribute("translate", value ? "yes" : "no"); },
+    },
+    draggable: {
+      get() {
+        const value = this.getAttribute("draggable");
+        if (value !== null) return value.toLowerCase() === "true";
+        return (this.localName === "a" || this.localName === "area") && this.hasAttribute("href") || this.localName === "img";
+      },
+      set(value) { this.setAttribute("draggable", value ? "true" : "false"); },
+    },
+    spellcheck: {
+      get() { return this.getAttribute("spellcheck")?.toLowerCase() !== "false"; },
+      set(value) { this.setAttribute("spellcheck", value ? "true" : "false"); },
+    },
+    tabIndex: {
+      get() {
+        const value = Number.parseInt(this.getAttribute("tabindex") ?? "", 10);
+        if (Number.isFinite(value)) return value;
+        return ["button", "input", "select", "textarea", "iframe"].includes(this.localName) || ["a", "area"].includes(this.localName) && this.hasAttribute("href") ? 0 : -1;
+      },
+      set(value) {
+        value = Number(value);
+        this.setAttribute("tabindex", String(Number.isFinite(value) ? Math.trunc(value) : -1));
+      },
+    },
+  });
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
     value: {
@@ -1208,6 +1259,7 @@ export function createTree(events = {}) {
 
   const ELEMENT_CLASSES = {
     button: HTMLButtonElement,
+    a: HTMLAnchorElement,
     canvas: HTMLCanvasElement,
     dialog: HTMLDialogElement,
     div: HTMLDivElement,
@@ -1248,5 +1300,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

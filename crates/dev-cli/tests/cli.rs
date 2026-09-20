@@ -5271,6 +5271,38 @@ fn test_dom_inline_styles_track_the_style_attribute() {
 }
 
 #[test]
+fn test_dom_html_element_reflects_editing_and_interaction_state() {
+    let dir = build_dir("t_test_dom_html_interaction_reflection");
+    write_in(
+        &dir,
+        "interaction.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('common HTMLElement state matches browser defaults and reflection', () => {
+             const div = document.createElement('div');
+             const anchor = document.createElement('a'); anchor.href = '#target';
+             const input = document.createElement('input');
+             assertEquals([div.contentEditable, div.isContentEditable, div.translate, div.draggable, div.spellcheck, div.tabIndex, anchor.draggable, anchor.tabIndex, input.tabIndex], ['inherit', false, true, false, true, -1, true, 0, 0]);
+             div.contentEditable = 'plaintext-only'; div.translate = false; div.draggable = true; div.spellcheck = false; div.tabIndex = 3;
+             assertEquals([div.isContentEditable, div.getAttribute('contenteditable'), div.getAttribute('translate'), div.getAttribute('draggable'), div.getAttribute('spellcheck'), div.getAttribute('tabindex')], [true, 'plaintext-only', 'no', 'true', 'false', '3']);
+             const child = document.createElement('span'); div.appendChild(child);
+             assertEquals(child.isContentEditable, true);
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn HTMLElement interaction reflection test");
+    assert!(
+        ran.status.success(),
+        "HTMLElement interaction reflection test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_canvas_elements_reflect_bitmap_dimensions() {
     let dir = build_dir("t_test_dom_canvas_dimensions");
     write_in(
