@@ -5,6 +5,7 @@
 
 const SLOT = Symbol("esdev DOM slots");
 const ATTRS = Symbol("esdev DOM attributes");
+const NAMED_ATTRIBUTES = Symbol("esdev DOM named attributes");
 const CLASS_LIST = Symbol("esdev DOM class list");
 const DATASET = Symbol("esdev DOM dataset");
 const DATA = Symbol("esdev DOM character data");
@@ -546,10 +547,11 @@ export function createTree(events = {}) {
       this.tagName = html ? name.toUpperCase() : name;
       slots(this).attributes = [];
       slots(this).children = null;
-      Object.defineProperty(this, "attributes", { value: new NamedNodeMap(this) });
+      Object.defineProperty(this, NAMED_ATTRIBUTES, { value: new NamedNodeMap(this) });
       Object.defineProperty(this, CLASS_LIST, { value: new DOMTokenList(this) });
       Object.defineProperty(this, DATASET, { value: new DOMStringMap(this) });
     }
+    get attributes() { return this[NAMED_ATTRIBUTES]; }
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
     getAttributeNames() { return Array.from(this.attributes, (attribute) => attribute.name); }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }

@@ -3364,6 +3364,36 @@ fn test_dom_selector_node_lists_support_for_each() {
 }
 
 #[test]
+fn test_dom_attributes_are_exposed_by_an_element_prototype_getter() {
+    let dir = build_dir("t_test_dom_attributes_accessor");
+    write_in(
+        &dir,
+        "attributes-accessor.test.mjs",
+        "import { test, expect, mock } from 'runtime:test';\n\
+         test('attributes has one inherited, spyable named-node-map getter', () => {\n\
+           const element = document.createElement('article'); element.setAttribute('data-id', 'one');\n\
+           const read = mock.spyOn(Element.prototype, 'attributes', 'get');\n\
+           expect(Object.hasOwn(element, 'attributes')).toBe(false);\n\
+           expect(element.attributes.item(0).value).toBe('one');\n\
+           expect(read).toHaveBeenCalledOnce();\n\
+           read.mockRestore();\n\
+           expect(element.attributes.getNamedItem('data-id').value).toBe('one');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom attributes accessor");
+    assert!(
+        ran.status.success(),
+        "DOM attributes-accessor test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     let dir = build_dir("t_test_dom_selector_pseudo_errors");
     write_in(
