@@ -282,6 +282,17 @@ const navigator = Object.freeze({
 const history = new History();
 const localStorage = new Storage();
 const sessionStorage = new Storage();
+const hostConsole = globalThis.console;
+const browserConsole = Object.create(null);
+for (const method of Object.getOwnPropertyNames(hostConsole)) {
+  const value = hostConsole[method];
+  Object.defineProperty(browserConsole, method, {
+    value: typeof value === "function" ? value.bind(hostConsole) : value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
 
 Object.assign(globalThis, events, tree, css, elements, { document, customElements });
 globalThis.window = globalThis;
@@ -296,6 +307,7 @@ Object.assign(globalThis, {
   Range: ranges.Range,
   Storage,
   cancelAnimationFrame,
+  console: browserConsole,
   getComputedStyle,
   history,
   localStorage,

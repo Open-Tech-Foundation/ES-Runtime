@@ -5679,6 +5679,36 @@ fn test_dom_mutation_observer_reschedules_changes_made_by_its_callback() {
 }
 
 #[test]
+fn test_dom_window_console_methods_are_writable() {
+    let dir = build_dir("t_test_dom_browser_console");
+    write_in(
+        &dir,
+        "console.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('console methods are writable own properties', () => {
+             const descriptor = Object.getOwnPropertyDescriptor(console, 'warn');
+             const previous = console.warn; let called = false;
+             console.warn = () => { called = true; };
+             console.warn('test');
+             console.warn = previous;
+             assertEquals([descriptor.writable, descriptor.configurable, called], [true, true, true]);
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn browser console DOM test");
+    assert!(
+        ran.status.success(),
+        "browser console DOM test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_window_location_and_history_are_in_memory() {
     let dir = build_dir("t_test_dom_history");
     write_in(

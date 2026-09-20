@@ -10,6 +10,7 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Install browser-realm console methods as writable configurable own properties.
 - Expose HTMLCanvasElement width and height reflection without a drawing
   context or layout engine.
 - Add text-input selection range APIs for controlled form fields.
