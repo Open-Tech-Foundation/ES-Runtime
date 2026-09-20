@@ -98,6 +98,7 @@ namespace) is unstable and may change between minor releases until the API freez
   `getComputedStyle`, and never-firing media, resize, and intersection stubs.
 - Add layout-free esdev DOM focus tracking: `document.activeElement`, element
   `focus()`/`blur()`, focus events, and conservative native/tabindex focusability.
+
 - Add esdev DOM `MutationObserver` support for child-list, attributes, and
   character data, including subtree, filtering, old-value, and microtask delivery.
 - Benchmark the Elysia framework alongside Hono across Node, Bun, Deno and
@@ -133,6 +134,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Restore structural esdev DOM selectors after the internal child iterator was
+  renamed, and expose specialized HTML, SVG, and MathML element interfaces from
+  `document.createElementNS()`.
 - Bump `rustls` 0.23.42 → 0.23.45 (with `rustls-webpki` 0.103.15 and
   `aws-lc-rs` 1.18.1) to fix RUSTSEC-2026-0285 (TLS 1.3 handshake messages
   accepted across encryption-level boundaries). `cargo audit` and

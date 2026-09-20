@@ -15,6 +15,8 @@ const INPUT_VALUE = Symbol("esdev DOM input value state");
 const INPUT_CHECKED = Symbol("esdev DOM input checked state");
 const INPUT_INDETERMINATE = Symbol("esdev DOM input indeterminate state");
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -406,7 +408,8 @@ export function createTree(events = {}) {
       if (this instanceof Document) clone = new Document();
       else if (this instanceof DocumentFragment) clone = document.createDocumentFragment();
       else if (this instanceof Element) {
-        clone = document.createElement(this.localName);
+        const qualifiedName = this.prefix ? `${this.prefix}:${this.localName}` : this.localName;
+        clone = document.createElementNS(this.namespaceURI, qualifiedName);
         for (const attribute of this.attributes) {
           clone.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
         }
@@ -614,6 +617,11 @@ export function createTree(events = {}) {
       this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     }
   }
+
+  // Namespace-specific base classes are observable browser API, even when this
+  // layout-free DOM has no SVG or MathML rendering behaviour of its own.
+  class SVGElement extends Element {}
+  class MathMLElement extends Element {}
 
   class HTMLInputElement extends HTMLElement {
     constructor(name, ownerDocument) { super(name, ownerDocument); this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; this[INPUT_INDETERMINATE] = false; }
@@ -978,7 +986,9 @@ export function createTree(events = {}) {
       namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
       qualifiedName = String(qualifiedName);
       if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
-      if (namespaceURI === HTML_NAMESPACE) return new Element(qualifiedName, this, namespaceURI);
+      if (namespaceURI === HTML_NAMESPACE) return new (ELEMENT_CLASSES[qualifiedName] ?? HTMLElement)(qualifiedName, this);
+      if (namespaceURI === SVG_NAMESPACE) return new SVGElement(qualifiedName, this, namespaceURI);
+      if (namespaceURI === MATHML_NAMESPACE) return new MathMLElement(qualifiedName, this, namespaceURI);
       return new Element(qualifiedName, this, namespaceURI);
     }
     createTextNode(data) { return new Text(data, this); }
@@ -1052,5 +1062,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

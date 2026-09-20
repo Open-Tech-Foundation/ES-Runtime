@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createTree } from "./tree.js";
 
-const { Document, Element, Text } = createTree();
+const { Document, Element, HTMLInputElement, SVGElement, Text } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -124,10 +124,13 @@ test("createElementNS preserves modern namespace identity", () => {
   const document = new Document();
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const use = document.createElementNS("http://www.w3.org/2000/svg", "xlink:use");
-  const html = document.createElementNS("http://www.w3.org/1999/xhtml", "DIV");
+  const input = document.createElementNS("http://www.w3.org/1999/xhtml", "input");
 
   expect([svg.namespaceURI, svg.nodeName, use.prefix, use.localName]).toEqual(["http://www.w3.org/2000/svg", "svg", "xlink", "use"]);
-  expect([html.namespaceURI, html.localName, html.tagName]).toEqual(["http://www.w3.org/1999/xhtml", "DIV", "DIV"]);
+  expect(svg).toBeInstanceOf(SVGElement);
+  expect(input).toBeInstanceOf(HTMLInputElement);
+  input.value = "modern";
+  expect(input.value).toBe("modern");
 });
 
 test("DOM internals do not collide with framework child bookkeeping", () => {

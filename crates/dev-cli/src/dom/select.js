@@ -228,7 +228,7 @@ function matchesAttribute(element, simple) {
 }
 
 function elementSiblings(element) {
-  return Array.from(element.parentElement?._children() ?? []).filter((node) => node.nodeType === 1);
+  return Array.from(element.parentElement?._esdevChildren() ?? []).filter((node) => node.nodeType === 1);
 }
 
 function nthMatches(position, { a, b }) {

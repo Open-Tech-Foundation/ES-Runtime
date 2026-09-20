@@ -4832,11 +4832,14 @@ fn test_dom_create_element_ns_preserves_modern_namespace_identity() {
         &dir,
         "element-ns.test.mjs",
         "import { test, assertEquals } from 'runtime:test';\n\
-         test('createElementNS distinguishes SVG and HTML qualified names', () => {\n\
+         test('createElementNS installs namespace and specialized interfaces', () => {\n\
            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');\n\
            const use = document.createElementNS('http://www.w3.org/2000/svg', 'xlink:use');\n\
-           const html = document.createElementNS('http://www.w3.org/1999/xhtml', 'DIV');\n\
-           assertEquals([svg.namespaceURI, svg.nodeName, use.prefix, use.localName, html.localName, html.tagName], ['http://www.w3.org/2000/svg', 'svg', 'xlink', 'use', 'DIV', 'DIV']);\n\
+           const input = document.createElementNS('http://www.w3.org/1999/xhtml', 'input');\n\
+           const math = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math');\n\
+           const inputCopy = input.cloneNode(); const svgCopy = svg.cloneNode();\n\
+           input.value = 'modern';\n\
+           assertEquals([svg instanceof SVGElement, svg.namespaceURI, svg.nodeName, use.prefix, use.localName, input instanceof HTMLInputElement, input.value, math instanceof MathMLElement, inputCopy instanceof HTMLInputElement, svgCopy instanceof SVGElement], [true, 'http://www.w3.org/2000/svg', 'svg', 'xlink', 'use', true, 'modern', true, true, true]);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
