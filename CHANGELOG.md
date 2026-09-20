@@ -10,6 +10,7 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Add `NodeList.forEach()` for standard collection iteration.
 - Add inclusive `Node.contains()` checks for document and tree teardown code.
 - Retarget composed Shadow DOM events at each host boundary.
 - Add basic named/default Shadow DOM slot assignment and fallback discovery.

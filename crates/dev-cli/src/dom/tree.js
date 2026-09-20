@@ -89,7 +89,13 @@ export function createTree(events = {}) {
     [Symbol.iterator]() { return this._values()[Symbol.iterator](); }
   }
 
-  class NodeList extends LiveCollection {}
+  class NodeList extends LiveCollection {
+    forEach(callback, thisArg) {
+      if (typeof callback !== "function") throw new TypeError("NodeList.forEach expects a function");
+      const values = this._values();
+      values.forEach((value, index) => callback.call(thisArg, value, index, this));
+    }
+  }
   class HTMLCollection extends LiveCollection {
     namedItem(name) {
       name = String(name);

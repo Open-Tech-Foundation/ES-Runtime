@@ -307,3 +307,16 @@ test("node lists and HTML collections are live, indexed, and named", () => {
   root.removeChild(card);
   expect(children.length).toBe(0);
 });
+
+test("node lists iterate snapshots with forEach", () => {
+  const document = new Document();
+  const root = document.createElement("main");
+  root.append(document.createElement("a"), document.createElement("b"));
+  const seen = [];
+  root.childNodes.forEach(function(node, index, list) {
+    seen.push([this.prefix, node.localName, index, list === root.childNodes]);
+  }, { prefix: "node" });
+
+  expect(seen).toEqual([["node", "a", 0, true], ["node", "b", 1, true]]);
+  expect(() => root.childNodes.forEach(null)).toThrow("function");
+});
