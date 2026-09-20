@@ -50,3 +50,15 @@ test("event constructors preserve their defined values", () => {
   expect(pointer.clientX).toBe(12);
   expect(custom.detail).toEqual({ ok: true });
 });
+
+test("legacy events initialize before dispatch and invoke inline handlers", () => {
+  const document = new Document();
+  const target = document.createElement("button");
+  const event = document.createEvent("Event");
+  const calls = [];
+  target.onclick = (received) => { calls.push(received.type); received.preventDefault(); };
+  event.initEvent("click", true, true);
+
+  expect(target.dispatchEvent(event)).toBe(false);
+  expect(calls).toEqual(["click"]);
+});

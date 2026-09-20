@@ -109,6 +109,19 @@ export const cases = [
   },
   {
     group: "events",
+    name: "legacy-events-invoke-inline-handlers",
+    run(window) {
+      const { document } = window;
+      const target = document.createElement("div");
+      const event = document.createEvent("Event");
+      const calls = [];
+      target.onclick = (received) => { calls.push(received.type); received.preventDefault(); };
+      event.initEvent("click", true, true);
+      return [target.dispatchEvent(event), calls];
+    },
+  },
+  {
+    group: "events",
     name: "once-listener-runs-once",
     run(window) {
       const { document, Event } = window;

@@ -972,6 +972,10 @@ export function createTree(events = {}) {
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
     createDocumentFragment() { return new DocumentFragment(this); }
+    createEvent(type) {
+      if (String(type).toLowerCase() !== "event") throw domError("NotSupportedError", "Only Event is supported by createEvent.");
+      return new Event("");
+    }
     createAttribute(name) { return new Attr(String(name), "", this); }
     createAttributeNS(namespaceURI, qualifiedName) { return new Attr(String(qualifiedName), "", this, namespaceURI); }
     getElementsByTagName(name) {

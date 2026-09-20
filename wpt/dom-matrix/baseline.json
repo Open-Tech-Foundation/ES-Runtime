@@ -186,6 +186,44 @@
     },
     {
       "group": "events",
+      "name": "legacy-events-invoke-inline-handlers",
+      "chrome": {
+        "result": [
+          false,
+          [
+            "click"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          false,
+          [
+            "click"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          false,
+          [
+            "click"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          false,
+          [
+            "click"
+          ]
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match"
+    },
+    {
+      "group": "events",
       "name": "once-listener-runs-once",
       "chrome": {
         "result": 1
@@ -818,7 +856,7 @@
     }
   ],
   "summary": {
-    "match": 27,
+    "match": 28,
     "intentional-limit": 1
   }
 }

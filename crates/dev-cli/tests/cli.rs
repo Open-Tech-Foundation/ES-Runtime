@@ -4799,6 +4799,33 @@ fn test_dom_input_indeterminate_is_boolean_non_reflecting_state() {
 }
 
 #[test]
+fn test_dom_legacy_events_invoke_inline_handlers() {
+    let dir = build_dir("t_test_dom_legacy_events");
+    write_in(
+        &dir,
+        "legacy-events.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('createEvent and initEvent dispatch inline handlers', () => {\n\
+           const button = document.createElement('button'); const calls = [];\n\
+           button.onclick = (event) => { calls.push(event.type); event.preventDefault(); };\n\
+           const event = document.createEvent('Event'); event.initEvent('click', true, true);\n\
+           assertEquals([button.dispatchEvent(event), calls], [false, ['click']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom legacy events");
+    assert!(
+        ran.status.success(),
+        "DOM legacy event test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(
