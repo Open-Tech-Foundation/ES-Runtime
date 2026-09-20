@@ -4893,6 +4893,35 @@ fn test_dom_shadow_roots_keep_content_scoped_and_cross_only_composed_events() {
 }
 
 #[test]
+fn test_dom_tree_walker_filters_depth_first_nodes() {
+    let dir = build_dir("t_test_dom_tree_walker");
+    write_in(
+        &dir,
+        "walker.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+      test('TreeWalker walks accepted nodes and rejects subtrees', () => {\n\
+        const root = document.createElement('div'); root.innerHTML = '<i>one</i><!--note--><b><em>two</em></b>';\n\
+        const all = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_COMMENT);\n\
+        const names = []; for (let node; node = all.nextNode();) names.push(node.nodeName);\n\
+        const filtered = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, node => node.localName === 'b' ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT);\n\
+        const kept = []; for (let node; node = filtered.nextNode();) kept.push(node.nodeName);\n\
+        assertEquals([names, kept], [['I', '#comment', 'B', 'EM'], ['I']]);\n\
+      });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM tree-walker test");
+    assert!(
+        ran.status.success(),
+        "tree-walker test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(

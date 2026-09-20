@@ -54,6 +54,10 @@ function asNodes(value, document, NodeClass) {
 export function createTree(events = {}) {
   const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
   const customConstruction = [];
+  const NodeFilter = Object.freeze({
+    FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3,
+    SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_TEXT: 0x4, SHOW_COMMENT: 0x80,
+  });
   class LiveCollection {
     constructor(root, filter) {
       this.root = root;
@@ -1024,6 +1028,10 @@ export function createTree(events = {}) {
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
     createDocumentFragment() { return new DocumentFragment(this); }
+    createTreeWalker(root, whatToShow = NodeFilter.SHOW_ALL, filter = null) {
+      if (!(root instanceof Node)) throw new TypeError("createTreeWalker root must be a Node");
+      return new TreeWalker(root, whatToShow, filter);
+    }
     createAttribute(name) { return new Attr(String(name), "", this); }
     createAttributeNS(namespaceURI, qualifiedName) { return new Attr(String(qualifiedName), "", this, namespaceURI); }
     getElementsByTagName(name) {
@@ -1052,6 +1060,41 @@ export function createTree(events = {}) {
       const copy = node.cloneNode(deep);
       descendants(copy, (item) => { slots(item).ownerDocument = this; });
       return copy;
+    }
+  }
+
+  function showMask(node) {
+    return node.nodeType === Node.ELEMENT_NODE ? NodeFilter.SHOW_ELEMENT
+      : node.nodeType === Node.TEXT_NODE ? NodeFilter.SHOW_TEXT
+        : node.nodeType === Node.COMMENT_NODE ? NodeFilter.SHOW_COMMENT : 0;
+  }
+
+  class TreeWalker {
+    constructor(root, whatToShow, filter) {
+      this.root = root;
+      this.whatToShow = Number(whatToShow) >>> 0;
+      this.filter = filter;
+      this.currentNode = root;
+    }
+    _result(node) {
+      if (!(this.whatToShow & showMask(node))) return NodeFilter.FILTER_SKIP;
+      if (this.filter === null) return NodeFilter.FILTER_ACCEPT;
+      const result = typeof this.filter === "function" ? this.filter(node) : this.filter.acceptNode(node);
+      return [NodeFilter.FILTER_ACCEPT, NodeFilter.FILTER_REJECT, NodeFilter.FILTER_SKIP].includes(result) ? result : NodeFilter.FILTER_SKIP;
+    }
+    nextNode() {
+      let node = this.currentNode;
+      while (node) {
+        const result = node === this.currentNode ? NodeFilter.FILTER_SKIP : this._result(node);
+        if (node.firstChild && result !== NodeFilter.FILTER_REJECT) node = node.firstChild;
+        else {
+          while (node && node !== this.root && !node.nextSibling) node = node.parentNode;
+          if (!node || node === this.root) return null;
+          node = node.nextSibling;
+        }
+        if (this._result(node) === NodeFilter.FILTER_ACCEPT) { this.currentNode = node; return node; }
+      }
+      return null;
     }
   }
 
@@ -1093,5 +1136,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }
