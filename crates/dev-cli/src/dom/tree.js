@@ -19,6 +19,7 @@ const INPUT_SELECTION_START = Symbol("esdev DOM input selection start");
 const INPUT_SELECTION_END = Symbol("esdev DOM input selection end");
 const INPUT_SELECTION_DIRECTION = Symbol("esdev DOM input selection direction");
 const SHADOW_ROOT = Symbol("esdev DOM shadow root");
+const COLLECTION = Symbol("esdev DOM live collection state");
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
@@ -64,30 +65,49 @@ export function createTree(events = {}) {
   });
   class LiveCollection {
     constructor(root, filter) {
-      this.root = root;
-      this.filter = filter;
-      this.version = -1;
-      this.values = [];
+      Object.defineProperty(this, COLLECTION, { value: { root, filter, version: -1, values: [] } });
       return new Proxy(this, {
         get(target, property, receiver) {
           if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target._values()[Number(property)];
+          if (typeof property === "string") {
+            const named = target._namedProperty(property);
+            if (named !== undefined) return named;
+          }
           return Reflect.get(target, property, receiver);
         },
         has(target, property) {
           if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return Number(property) < target._values().length;
+          if (typeof property === "string" && target._namedProperty(property) !== undefined) return true;
           return Reflect.has(target, property);
+        },
+        ownKeys(target) {
+          return [...target._values().keys()].map(String).concat(target._namedProperties(), Reflect.ownKeys(target));
+        },
+        getOwnPropertyDescriptor(target, property) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) {
+            const value = target._values()[Number(property)];
+            return value === undefined ? undefined : { configurable: true, enumerable: true, value, writable: false };
+          }
+          if (typeof property === "string") {
+            const value = target._namedProperty(property);
+            if (value !== undefined) return { configurable: true, enumerable: false, value, writable: false };
+          }
+          return Reflect.getOwnPropertyDescriptor(target, property);
         },
       });
     }
     _values() {
-      const document = this.root.ownerDocument ?? this.root;
+      const state = this[COLLECTION];
+      const document = state.root.ownerDocument ?? state.root;
       const version = slots(document).version;
-      if (this.version !== version) {
-        this.values = this.filter(this.root);
-        this.version = version;
+      if (state.version !== version) {
+        state.values = state.filter(state.root);
+        state.version = version;
       }
-      return this.values;
+      return state.values;
     }
+    _namedProperties() { return []; }
+    _namedProperty(name) { return undefined; }
     get length() { return this._values().length; }
     item(index) { return this._values()[index] ?? null; }
     [Symbol.iterator]() { return this._values()[Symbol.iterator](); }
@@ -101,9 +121,24 @@ export function createTree(events = {}) {
     }
   }
   class HTMLCollection extends LiveCollection {
+    _namedProperties() {
+      const values = this._values();
+      const names = [];
+      const seen = new Set();
+      for (const attribute of ["id", "name"]) {
+        for (const element of values) {
+          const name = element.getAttribute(attribute);
+          if (name && !/^(0|[1-9][0-9]*)$/.test(name) && !seen.has(name)) { seen.add(name); names.push(name); }
+        }
+      }
+      return names;
+    }
+    _namedProperty(name) {
+      return this._values().find((element) => element.id === name || element.getAttribute("name") === name);
+    }
     namedItem(name) {
       name = String(name);
-      return this._values().find((element) => element.id === name || element.getAttribute("name") === name) ?? null;
+      return this._namedProperty(name) ?? null;
     }
   }
 

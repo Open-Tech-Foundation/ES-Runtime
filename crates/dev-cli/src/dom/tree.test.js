@@ -94,6 +94,34 @@ test("toggleAttribute follows presence and its optional force", () => {
   expect(element.hasAttribute("disabled")).toBe(false);
 });
 
+test("live NodeLists expose only their indexed own properties", () => {
+  const document = new Document();
+  const root = document.createElement("div");
+  const nodes = root.childNodes;
+
+  expect(Object.getOwnPropertyNames(nodes)).toEqual([]);
+  root.append(document.createElement("i"), document.createElement("b"));
+  expect(Object.getOwnPropertyNames(nodes)).toEqual(["0", "1"]);
+  expect(Object.keys(nodes)).toEqual(["0", "1"]);
+});
+
+test("live HTMLCollections expose indexed and named properties", () => {
+  const document = new Document();
+  const root = document.createElement("div");
+  const collection = root.getElementsByTagName("span");
+  const first = document.createElement("span");
+  const second = document.createElement("span");
+  first.id = "first";
+  second.setAttribute("name", "second");
+
+  root.append(first, second);
+  expect(collection.first).toBe(first);
+  expect(collection.second).toBe(second);
+  expect(Object.getOwnPropertyNames(collection)).toEqual(["0", "1", "first", "second"]);
+  root.removeChild(first);
+  expect(Object.getOwnPropertyNames(collection)).toEqual(["0", "second"]);
+});
+
 test("namespace attribute access treats null namespaces as ordinary attributes", () => {
   const document = new Document();
   const element = document.createElement("a");
