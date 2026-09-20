@@ -130,6 +130,16 @@ test("createElementNS preserves modern namespace identity", () => {
   expect([html.namespaceURI, html.localName, html.tagName]).toEqual(["http://www.w3.org/1999/xhtml", "DIV", "DIV"]);
 });
 
+test("DOM internals do not collide with framework child bookkeeping", () => {
+  const document = new Document();
+  const element = document.createElement("div");
+  element.append(document.createElement("span"));
+  element._children = { framework: true };
+
+  expect(element.childNodes.length).toBe(1);
+  expect(element.children.item(0).localName).toBe("span");
+});
+
 test("documents return the first matching element by ID in tree order", () => {
   const document = new Document();
   const root = document.createElement("main");

@@ -236,11 +236,11 @@ export function createTree(events = {}) {
     get parentElement() { return this.parentNode instanceof Element ? this.parentNode : null; }
     get childNodes() {
       const state = slots(this);
-      return state.childNodes ??= new NodeList(this, (root) => Array.from(root._children()));
+      return state.childNodes ??= new NodeList(this, (root) => Array.from(root._esdevChildren()));
     }
     get isConnected() { return this.getRootNode() instanceof Document; }
 
-    *_children() {
+    *_esdevChildren() {
       for (let child = this.firstChild; child; child = child.nextSibling) yield child;
     }
 
@@ -325,14 +325,14 @@ export function createTree(events = {}) {
       if (isInclusiveAncestor(node, this)) {
         throw domError("HierarchyRequestError", "A node cannot be inserted into one of its descendants.");
       }
-      const candidates = node instanceof DocumentFragment ? Array.from(node._children()) : [node];
+      const candidates = node instanceof DocumentFragment ? Array.from(node._esdevChildren()) : [node];
       for (const candidate of candidates) {
         if (candidate instanceof Document || candidate instanceof Attr) {
           throw domError("HierarchyRequestError", "Document and attribute nodes cannot be inserted here.");
         }
       }
       if (this instanceof Document) {
-        const elements = Array.from(this._children()).filter((node) => node instanceof Element && node !== replacing);
+        const elements = Array.from(this._esdevChildren()).filter((node) => node instanceof Element && node !== replacing);
         const incoming = candidates.filter((node) => node instanceof Element);
         if (candidates.some((node) => node instanceof Text && node.data.trim() !== "")) {
           throw domError("HierarchyRequestError", "A document cannot have text-node children.");
@@ -346,7 +346,7 @@ export function createTree(events = {}) {
 
     _insert(node, before) {
       const document = this instanceof Document ? this : this.ownerDocument;
-      const candidates = node instanceof DocumentFragment ? Array.from(node._children()) : [node];
+      const candidates = node instanceof DocumentFragment ? Array.from(node._esdevChildren()) : [node];
       for (const candidate of candidates) {
         if (candidate.ownerDocument !== document) document.adoptNode(candidate);
         if (candidate.parentNode) candidate.parentNode._remove(candidate);
@@ -387,7 +387,7 @@ export function createTree(events = {}) {
       if (this instanceof Text || this instanceof Comment) return this.data;
       if (this instanceof Attr) return this.value;
       let text = "";
-      for (const child of this._children()) {
+      for (const child of this._esdevChildren()) {
         if (!(child instanceof Comment)) text += child.textContent;
       }
       return text;
@@ -413,7 +413,7 @@ export function createTree(events = {}) {
       } else if (this instanceof Text) clone = document.createTextNode(this.data);
       else if (this instanceof Comment) clone = document.createComment(this.data);
       else throw domError("NotSupportedError", "This node cannot be cloned.");
-      if (deep) for (const child of this._children()) clone.appendChild(child.cloneNode(true));
+      if (deep) for (const child of this._esdevChildren()) clone.appendChild(child.cloneNode(true));
       return clone;
     }
   }
@@ -578,7 +578,7 @@ export function createTree(events = {}) {
     get dataset() { return this[DATASET]; }
     get children() {
       const state = slots(this);
-      return state.children ??= new HTMLCollection(this, (root) => Array.from(root._children()).filter((node) => node instanceof Element));
+      return state.children ??= new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((node) => node instanceof Element));
     }
     get firstElementChild() { return this.children.item(0); }
     get lastElementChild() { return this.children.item(this.children.length - 1); }
@@ -968,7 +968,7 @@ export function createTree(events = {}) {
       slots(this).ownerDocument = this;
       slots(this).version = 0;
     }
-    get documentElement() { return Array.from(this._children()).find((node) => node instanceof Element) ?? null; }
+    get documentElement() { return Array.from(this._esdevChildren()).find((node) => node instanceof Element) ?? null; }
     createElement(name) {
       name = String(name);
       if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be lowercase modern HTML names.");
@@ -1043,7 +1043,7 @@ export function createTree(events = {}) {
 
   function collect(root, predicate) {
     const result = [];
-    for (const child of root._children()) {
+    for (const child of root._esdevChildren()) {
       if (child instanceof Element) {
         if (predicate(child)) result.push(child);
         result.push(...collect(child, predicate));
