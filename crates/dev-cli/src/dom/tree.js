@@ -426,7 +426,11 @@ export function createTree(events = {}) {
       } else if (this instanceof Text) clone = document.createTextNode(this.data);
       else if (this instanceof Comment) clone = document.createComment(this.data);
       else throw domError("NotSupportedError", "This node cannot be cloned.");
-      if (deep) for (const child of this._esdevChildren()) clone.appendChild(child.cloneNode(true));
+      if (deep) {
+        const source = this instanceof HTMLTemplateElement ? this.content : this;
+        const target = clone instanceof HTMLTemplateElement ? clone.content : clone;
+        for (const child of source._esdevChildren()) target.appendChild(child.cloneNode(true));
+      }
       return clone;
     }
   }
@@ -982,6 +986,13 @@ export function createTree(events = {}) {
 
   class DocumentFragment extends Node {
     constructor(ownerDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }
+    get children() {
+      const state = slots(this);
+      return state.children ??= new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((node) => node instanceof Element));
+    }
+    get firstElementChild() { return this.children.item(0); }
+    get lastElementChild() { return this.children.item(this.children.length - 1); }
+    get childElementCount() { return this.children.length; }
   }
 
   class ShadowRoot extends DocumentFragment {

@@ -4893,6 +4893,36 @@ fn test_dom_shadow_roots_keep_content_scoped_and_cross_only_composed_events() {
 }
 
 #[test]
+fn test_dom_deep_template_clones_preserve_inert_content() {
+    let dir = build_dir("t_test_dom_template_clone");
+    write_in(
+        &dir,
+        "template-clone.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('deep template clones copy content without populating the host', () => {\n\
+           const template = document.createElement('template');\n\
+           template.innerHTML = '<article data-kind=card><strong>hello</strong></article>';\n\
+           const clone = template.cloneNode(true);\n\
+           const imported = document.importNode(template, true);\n\
+           assertEquals([template.childNodes.length, clone.childNodes.length, clone.content.childNodes.length, clone.content.firstElementChild.outerHTML, imported.content.firstElementChild.outerHTML], [0, 0, 1, '<article data-kind=\"card\"><strong>hello</strong></article>', '<article data-kind=\"card\"><strong>hello</strong></article>']);\n\
+           clone.content.querySelector('strong').textContent = 'changed';\n\
+           assertEquals([template.content.querySelector('strong').textContent, clone.content.querySelector('strong').textContent], ['hello', 'changed']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom template clone");
+    assert!(
+        ran.status.success(),
+        "DOM template-clone test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_tree_walker_filters_depth_first_nodes() {
     let dir = build_dir("t_test_dom_tree_walker");
     write_in(
