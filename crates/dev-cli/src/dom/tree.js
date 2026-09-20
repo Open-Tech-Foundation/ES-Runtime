@@ -264,6 +264,7 @@ export function createTree(events = {}) {
     _eventParent(event) { return this.parentNode; }
 
     hasChildNodes() { return this.firstChild !== null; }
+    hasAttributes() { return this instanceof Element && this.attributes.length !== 0; }
 
     appendChild(node) { return this.insertBefore(node, null); }
 
@@ -992,6 +993,13 @@ export function createTree(events = {}) {
     _eventParent(event) { return event.composed ? this.host : null; }
   }
 
+  class HTMLTemplateElement extends HTMLElement {
+    constructor(name, ownerDocument) {
+      super(name, ownerDocument);
+      this.content = new DocumentFragment(ownerDocument);
+    }
+  }
+
   Object.defineProperties(Element.prototype, {
     attachShadow: { value(options = {}) {
       if (this[SHADOW_ROOT]) throw domError("NotSupportedError", "This element already hosts a shadow root.");
@@ -1108,6 +1116,7 @@ export function createTree(events = {}) {
     optgroup: HTMLOptGroupElement,
     select: HTMLSelectElement,
     textarea: HTMLTextAreaElement,
+    template: HTMLTemplateElement,
     fieldset: HTMLFieldSetElement,
   };
 
@@ -1136,5 +1145,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

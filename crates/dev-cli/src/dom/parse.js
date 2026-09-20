@@ -3,7 +3,7 @@
 // pure JS and directly testable before the --dom runner integration lands.
 
 export function createParsing(tree, parseRecords) {
-  const { Node, DocumentFragment, ShadowRoot, Element, Text, Comment, VOID } = tree;
+  const { Node, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID } = tree;
 
   function decode(records, parent) {
     if (!Array.isArray(records)) throw new TypeError("DOM parser records must be an array");
@@ -24,7 +24,8 @@ export function createParsing(tree, parseRecords) {
       } else if (kind === Node.TEXT_NODE) node = document.createTextNode(text);
       else if (kind === Node.COMMENT_NODE) node = document.createComment(text);
       else throw new TypeError(`Unsupported DOM parser node kind: ${kind}`);
-      const target = parentIndex === -1 ? parent : nodes[parentIndex];
+      let target = parentIndex === -1 ? parent : nodes[parentIndex];
+      if (target instanceof HTMLTemplateElement) target = target.content;
       if (!target || parentIndex >= index) throw new TypeError("DOM parser parent index is invalid");
       target.appendChild(node);
       nodes.push(node);
@@ -42,7 +43,8 @@ export function createParsing(tree, parseRecords) {
     const attributes = Array.from(node.attributes, (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
     if (VOID.has(node.localName)) return `<${node.localName}${attributes}>`;
     const raw = node.localName === "script" || node.localName === "style";
-    const children = Array.from(node.childNodes, (child) => raw && child instanceof Text ? child.data : serialize(child)).join("");
+    const contents = node instanceof HTMLTemplateElement ? node.content.childNodes : node.childNodes;
+    const children = Array.from(contents, (child) => raw && child instanceof Text ? child.data : serialize(child)).join("");
     return `<${node.localName}${attributes}>${children}</${node.localName}>`;
   }
 
@@ -64,6 +66,12 @@ export function createParsing(tree, parseRecords) {
           if (!this.parentNode) return;
           this.parentNode.replaceChild(parseFragment(source, this), this);
         },
+      },
+    });
+    Object.defineProperties(HTMLTemplateElement.prototype, {
+      innerHTML: {
+        get() { return Array.from(this.content.childNodes, serialize).join(""); },
+        set(source) { this.content.replaceChildren(parseFragment(source, this)); },
       },
     });
     Node.prototype.replaceChildren = function (...nodes) {
