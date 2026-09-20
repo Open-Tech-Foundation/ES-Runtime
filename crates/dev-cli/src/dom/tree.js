@@ -540,6 +540,7 @@ export function createTree(events = {}) {
       Object.defineProperty(this, DATASET, { value: new DOMStringMap(this) });
     }
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
+    getAttributeNames() { return Array.from(this.attributes, (attribute) => attribute.name); }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
     getAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName)?.value ?? null; }

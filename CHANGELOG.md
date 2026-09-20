@@ -16,6 +16,7 @@ namespace) is unstable and may change between minor releases until the API freez
 - Accept `$` template-marker attribute names in strict HTML fragments.
 - Parse `<?…>` template placeholders as inert HTML bogus comments.
 - Add inert `<template>.content` fragments for compiler template cloning.
+- Add `Element.getAttributeNames()` for compiler template-part discovery.
 
 - Add a 24-case esdev DOM behavior matrix that uses headless Chrome as the
   layout-free behavior oracle while reporting jsdom and happy-dom compatibility
