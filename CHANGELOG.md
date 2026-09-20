@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Added
 
 - Add text-input selection range APIs for controlled form fields.
+- Preserve SVG namespaces, canonical foreign-content element names, and HTML
+  descendants of parsed `<foreignObject>` trees.
 
 ### Fixed
 

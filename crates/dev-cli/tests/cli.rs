@@ -5167,6 +5167,33 @@ fn test_dom_parser_accepts_well_formed_svg_foreign_content() {
 }
 
 #[test]
+fn test_dom_parser_keeps_svg_foreign_object_namespaces() {
+    let dir = build_dir("t_test_dom_svg_foreign_object_namespaces");
+    write_in(
+        &dir,
+        "foreign-object.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('parsed SVG foreignObject enters and exits the HTML namespace', () => {\n\
+           document.body.innerHTML = '<svg><foreignObject><div id=html-child>ok</div></foreignObject><clipPath id=clip/></svg>';\n\
+           const foreignObject = document.body.querySelector('foreignObject'); const htmlChild = foreignObject.querySelector('#html-child');\n\
+           assertEquals([foreignObject.tagName, foreignObject.namespaceURI, htmlChild.namespaceURI], ['foreignObject', 'http://www.w3.org/2000/svg', 'http://www.w3.org/1999/xhtml']);\n\
+           assertEquals(document.body.querySelector('clipPath').tagName, 'clipPath');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom SVG foreignObject namespaces");
+    assert!(
+        ran.status.success(),
+        "DOM SVG foreignObject namespace test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inline_styles_track_the_style_attribute() {
     let dir = build_dir("t_test_dom_css");
     write_in(

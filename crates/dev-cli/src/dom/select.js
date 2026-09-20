@@ -71,7 +71,7 @@ function parseCompound(source, offset, text) {
   } else {
     const match = name.exec(text.slice(at));
     if (match) {
-      simples.push({ type: "tag", name: match[0].toLowerCase() });
+      simples.push({ type: "tag", name: match[0] });
       at += match[0].length;
     }
   }
@@ -237,11 +237,11 @@ function nthMatches(position, { a, b }) {
   return Number.isInteger(quotient) && quotient >= 0;
 }
 
-export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot }) {
+export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
-      if (simple.type === "tag") return element.localName === simple.name;
+      if (simple.type === "tag") return element.localName === (element.namespaceURI === HTML_NAMESPACE ? simple.name.toLowerCase() : simple.name);
       if (simple.type === "id") return element.id === simple.name;
       if (simple.type === "class") return (element.className || "").split(/\s+/).includes(simple.name);
       if (simple.type === "is" || simple.type === "where") return simple.selectors.some((parts) => matchesParts(element, parts, parts.length - 1, scope));

@@ -3,7 +3,22 @@
 // pure JS and directly testable before the --dom runner integration lands.
 
 export function createParsing(tree, parseRecords) {
-  const { Node, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID } = tree;
+  const { Node, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE } = tree;
+
+  const SVG_ELEMENT_NAMES = new Map([
+    ["clippath", "clipPath"],
+    ["foreignobject", "foreignObject"],
+    ["lineargradient", "linearGradient"],
+  ]);
+
+  function elementNamespace(name, parent) {
+    const namespace = parent instanceof Element ? parent.namespaceURI : HTML_NAMESPACE;
+    if (namespace === SVG_NAMESPACE) return parent.localName === "foreignObject" ? HTML_NAMESPACE : SVG_NAMESPACE;
+    if (namespace === MATHML_NAMESPACE) return MATHML_NAMESPACE;
+    if (name.toLowerCase() === "svg" || name === "svg:svg") return SVG_NAMESPACE;
+    if (name.toLowerCase() === "math") return MATHML_NAMESPACE;
+    return HTML_NAMESPACE;
+  }
 
   function decode(records, parent) {
     if (!Array.isArray(records)) throw new TypeError("DOM parser records must be an array");
@@ -15,7 +30,11 @@ export function createParsing(tree, parseRecords) {
       const [kind, parentIndex, name, attributes, text] = record;
       let node;
       if (kind === Node.ELEMENT_NODE) {
-        node = document.createElement(name);
+        const target = parentIndex === -1 ? parent : nodes[parentIndex];
+        const context = target instanceof Element ? target : parent;
+        const namespace = elementNamespace(name, context);
+        const qualifiedName = namespace === SVG_NAMESPACE ? SVG_ELEMENT_NAMES.get(name.toLowerCase()) ?? name : name;
+        node = document.createElementNS(namespace, qualifiedName);
         if (!Array.isArray(attributes)) throw new TypeError("Element attributes must be an array");
         for (const attribute of attributes) {
           if (!Array.isArray(attribute) || attribute.length !== 2) throw new TypeError("Invalid DOM parser attribute");
