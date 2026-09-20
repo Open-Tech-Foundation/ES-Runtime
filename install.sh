@@ -2,7 +2,7 @@
 #
 # ES Runtime installer for Linux and macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
+#   curl -fsSL https://esrun.opentechf.org/install.sh | bash
 #
 # Installs both binaries by default — `esrun`, the server runtime, and `esdev`,
 # the development toolchain — into ~/.es-runtime/bin, verifying each SHA-256

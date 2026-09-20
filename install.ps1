@@ -1,6 +1,6 @@
 # ES Runtime installer for Windows (PowerShell).
 #
-#   irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
+#   irm https://esrun.opentechf.org/install.ps1 | iex
 #
 # Installs both binaries by default - `esrun`, the server runtime, and `esdev`,
 # the development toolchain - into $HOME\.es-runtime\bin, verifying each SHA-256

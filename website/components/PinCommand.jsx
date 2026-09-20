@@ -12,7 +12,7 @@ export default function PinCommand() {
     <CodeBlock
       lang="sh"
       name="Terminal"
-      code={`ESRUN_VERSION=${versions.esrun} ESDEV_VERSION=${versions.esdev} curl -fsSL .../install.sh | bash`}
+      code={`ESRUN_VERSION=${versions.esrun} ESDEV_VERSION=${versions.esdev} curl -fsSL https://esrun.opentechf.org/install.sh | bash`}
     />
   );
 }

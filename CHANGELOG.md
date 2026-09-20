@@ -8,6 +8,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **The installer one-liners come from the site, not GitHub.** `install.sh` and
+  `install.ps1` are served from `https://esrun.opentechf.org` — the site build
+  copies the repo-root scripts into its output, so the canonical copies stay in
+  the repository. README, the install pages, and the scripts' own headers now
+  point at the site; the scripts still resolve versions and download release
+  binaries from the GitHub repository behind the scenes.
+
+### Fixed
+
+- **`tsr versions` ran the site-version generator under `node`, which cannot
+  import a `Cargo.toml`.** The task now invokes `bun` (`tasks.toml`), and
+  `website/src/versions.js` is regenerated to the released `0.30.0` / `0.8.0`.
+
 ## [0.30.0] - 2026-09-20
 
 ### Added

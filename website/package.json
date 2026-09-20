@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "otfw build --ssg"
+    "build": "otfw build --ssg && cp ../install.sh dist/install.sh && cp ../install.ps1 dist/install.ps1"
   },
   "dependencies": {
     "@opentf/web": "^0.28.0",

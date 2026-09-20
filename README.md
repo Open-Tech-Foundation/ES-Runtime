@@ -27,19 +27,19 @@ server runtime, and **`esdev`**, the development toolchain.
 Linux / macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
+curl -fsSL https://esrun.opentechf.org/install.sh | bash
 
 # Just one of them — a server or CI image has no use for esdev:
-curl -fsSL .../install.sh | bash -s -- --only=esrun
+curl -fsSL https://esrun.opentechf.org/install.sh | bash -s -- --only=esrun
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
+irm https://esrun.opentechf.org/install.ps1 | iex
 
 # Just one of them (`irm | iex` cannot pass arguments):
-$env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
+$env:ES_RUNTIME_ONLY = 'esrun'; irm https://esrun.opentechf.org/install.ps1 | iex
 ```
 
 Each binary is released under its own tag — `esrun@0.25.0`, `esdev@0.3.0` — and

@@ -15,7 +15,7 @@ export const installTabs = [
       <CodeBlock
         lang="sh"
         name="Terminal"
-        code="curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash"
+        code="curl -fsSL https://esrun.opentechf.org/install.sh | bash"
       />
     ),
   },
@@ -25,7 +25,7 @@ export const installTabs = [
       <CodeBlock
         lang="powershell"
         name="PowerShell"
-        code="irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex"
+        code="irm https://esrun.opentechf.org/install.ps1 | iex"
       />
     ),
   },
@@ -50,13 +50,13 @@ A server or CI image has no use for the development binary — and `esdev` is
 
 ```sh
 # Linux / macOS
-curl -fsSL .../install.sh | bash -s -- --only=esrun
-curl -fsSL .../install.sh | bash -s -- --only=esdev
+curl -fsSL https://esrun.opentechf.org/install.sh | bash -s -- --only=esrun
+curl -fsSL https://esrun.opentechf.org/install.sh | bash -s -- --only=esdev
 ```
 
 ```powershell
 # Windows (PowerShell) — `irm | iex` cannot pass arguments, so this is an env var.
-$env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
+$env:ES_RUNTIME_ONLY = 'esrun'; irm https://esrun.opentechf.org/install.ps1 | iex
 ```
 
 ## Pinning a version
