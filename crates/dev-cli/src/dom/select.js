@@ -341,6 +341,10 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
     return new Proxy({
       length: values.length,
       item(index) { return values[index] ?? null; },
+      forEach(callback, thisArg) {
+        if (typeof callback !== "function") throw new TypeError("NodeList.forEach expects a function");
+        values.forEach((value, index) => callback.call(thisArg, value, index, this));
+      },
       [Symbol.iterator]() { return values[Symbol.iterator](); },
     }, {
       get(target, property, receiver) {

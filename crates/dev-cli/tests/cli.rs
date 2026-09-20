@@ -3336,6 +3336,34 @@ fn test_dom_scope_selector_respects_the_query_root() {
 }
 
 #[test]
+fn test_dom_selector_node_lists_support_for_each() {
+    let dir = build_dir("t_test_dom_selector_node_list_for_each");
+    write_in(
+        &dir,
+        "selector-list.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('selector node lists expose indexed forEach iteration', () => {\n\
+           const root = document.createElement('div'); root.innerHTML = '<i>one</i><b>two</b>'; document.body.appendChild(root);\n\
+           const list = root.querySelectorAll('*'); const seen = [];\n\
+           list.forEach(function(node, index, received) { seen.push([this.prefix, node.localName, index, received === list]); }, { prefix: 'node' });\n\
+           assertEquals(seen, [['node', 'i', 0, true], ['node', 'b', 1, true]]);\n\
+           assertThrows(() => list.forEach(null), TypeError);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM selector NodeList forEach test");
+    assert!(
+        ran.status.success(),
+        "selector NodeList forEach test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     let dir = build_dir("t_test_dom_selector_pseudo_errors");
     write_in(
@@ -4839,11 +4867,11 @@ fn test_dom_create_element_ns_preserves_modern_namespace_identity() {
          test('createElementNS installs namespace and specialized interfaces', () => {\n\
            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');\n\
            const use = document.createElementNS('http://www.w3.org/2000/svg', 'xlink:use');\n\
-           const input = document.createElementNS('http://www.w3.org/1999/xhtml', 'input');\n\
+           const input = document.createElementNS('http://www.w3.org/1999/xhtml', 'input'); const div = document.createElement('div');\n\
            const math = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math');\n\
            const inputCopy = input.cloneNode(); const svgCopy = svg.cloneNode();\n\
            input.value = 'modern';\n\
-           assertEquals([svg instanceof SVGElement, svg.namespaceURI, svg.nodeName, use.prefix, use.localName, input instanceof HTMLInputElement, input.value, math instanceof MathMLElement, inputCopy instanceof HTMLInputElement, svgCopy instanceof SVGElement], [true, 'http://www.w3.org/2000/svg', 'svg', 'xlink', 'use', true, 'modern', true, true, true]);\n\
+           assertEquals([svg instanceof SVGElement, svg.namespaceURI, svg.nodeName, use.prefix, use.localName, input instanceof HTMLInputElement, input.value, div instanceof HTMLDivElement, math instanceof MathMLElement, inputCopy instanceof HTMLInputElement, svgCopy instanceof SVGElement], [true, 'http://www.w3.org/2000/svg', 'svg', 'xlink', 'use', true, 'modern', true, true, true, true]);\n\
          });\n",
     );
     let ran = esdev_in(&dir)

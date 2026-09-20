@@ -675,6 +675,7 @@ export function createTree(events = {}) {
   }
 
   class HTMLDialogElement extends HTMLElement {}
+  class HTMLDivElement extends HTMLElement {}
 
   function isSubmitter(control) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
@@ -1155,6 +1156,7 @@ export function createTree(events = {}) {
   const ELEMENT_CLASSES = {
     button: HTMLButtonElement,
     dialog: HTMLDialogElement,
+    div: HTMLDivElement,
     form: HTMLFormElement,
     input: HTMLInputElement,
     label: HTMLLabelElement,
@@ -1192,5 +1194,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }
