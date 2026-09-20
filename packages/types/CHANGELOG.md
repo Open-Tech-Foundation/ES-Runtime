@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-20
+
 ### Fixed
 
 - Fix `tsr lint:ci` on main: apply Biome's format/organize-imports fixes in the
