@@ -185,6 +185,27 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "namespace-attribute-access-and-replacement",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const use = document.createElement("use");
+      const xlink = "http://www.w3.org/1999/xlink";
+      use.setAttribute("href", "plain");
+      use.setAttributeNS(xlink, "xlink:href", "#first");
+      use.setAttributeNS(xlink, "xlink:href", "#next");
+      const clone = use.cloneNode();
+      use.removeAttributeNS(xlink, "href");
+      return [
+        use.getAttributeNS(null, "href"),
+        use.hasAttributeNS(xlink, "href"),
+        clone.getAttributeNS(xlink, "href"),
+        clone.attributes.length,
+      ];
+    },
+  },
+  {
     group: "parsing",
     name: "malformed-markup-is-a-strict-esdev-limit",
     limit: "esdev rejects malformed HTML instead of applying browser recovery",

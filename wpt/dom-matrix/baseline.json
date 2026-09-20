@@ -319,6 +319,44 @@
       "status": "match"
     },
     {
+      "group": "tree",
+      "name": "namespace-attribute-access-and-replacement",
+      "chrome": {
+        "result": [
+          "plain",
+          false,
+          "#next",
+          2
+        ]
+      },
+      "esdev": {
+        "result": [
+          "plain",
+          false,
+          "#next",
+          2
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "plain",
+          false,
+          "#next",
+          2
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "plain",
+          false,
+          "#next",
+          2
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match"
+    },
+    {
       "group": "parsing",
       "name": "malformed-markup-is-a-strict-esdev-limit",
       "limit": "esdev rejects malformed HTML instead of applying browser recovery",
@@ -697,7 +735,7 @@
     }
   ],
   "summary": {
-    "match": 24,
+    "match": 25,
     "intentional-limit": 1
   }
 }

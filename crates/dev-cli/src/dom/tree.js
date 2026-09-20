@@ -344,7 +344,9 @@ export function createTree(events = {}) {
       else if (this instanceof DocumentFragment) clone = document.createDocumentFragment();
       else if (this instanceof Element) {
         clone = document.createElement(this.localName);
-        for (const attribute of this.attributes) clone.setAttribute(attribute.name, attribute.value);
+        for (const attribute of this.attributes) {
+          clone.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+        }
       } else if (this instanceof Text) clone = document.createTextNode(this.data);
       else if (this instanceof Comment) clone = document.createComment(this.data);
       else throw domError("NotSupportedError", "This node cannot be cloned.");
@@ -378,11 +380,15 @@ export function createTree(events = {}) {
   }
 
   class Attr extends Node {
-    constructor(name, value, ownerDocument) {
+    constructor(name, value, ownerDocument, namespaceURI = null) {
       super(Node.ATTRIBUTE_NODE, name, ownerDocument);
       this.name = name;
       this.value = String(value);
       this.ownerElement = null;
+      this.namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+      const separator = name.indexOf(":");
+      this.prefix = separator === -1 ? null : name.slice(0, separator);
+      this.localName = separator === -1 ? name : name.slice(separator + 1);
     }
     get nodeValue() { return this.value; }
     set nodeValue(value) { this.value = String(value ?? ""); }
@@ -402,6 +408,11 @@ export function createTree(events = {}) {
     get length() { return this._list().length; }
     item(index) { return this._list()[index] ?? null; }
     getNamedItem(name) { return this._list().find((attribute) => attribute.name === String(name)) ?? null; }
+    getNamedItemNS(namespaceURI, localName) {
+      namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+      localName = String(localName);
+      return this._list().find((attribute) => attribute.namespaceURI === namespaceURI && attribute.localName === localName) ?? null;
+    }
     setNamedItem(attribute) {
       if (!(attribute instanceof Attr)) throw new TypeError("setNamedItem expects an Attr");
       const existing = this.getNamedItem(attribute.name);
@@ -411,8 +422,24 @@ export function createTree(events = {}) {
       if (existing) existing.ownerElement = null;
       return existing;
     }
+    setNamedItemNS(attribute) {
+      if (!(attribute instanceof Attr)) throw new TypeError("setNamedItemNS expects an Attr");
+      const existing = this.getNamedItemNS(attribute.namespaceURI, attribute.localName);
+      if (attribute.ownerElement && attribute.ownerElement !== this[ATTRS]) throw domError("InUseAttributeError", "The attribute is already in use.");
+      if (existing) this._list()[this._list().indexOf(existing)] = attribute; else this._list().push(attribute);
+      attribute.ownerElement = this[ATTRS];
+      if (existing) existing.ownerElement = null;
+      return existing;
+    }
     removeNamedItem(name) {
       const attribute = this.getNamedItem(name);
+      if (!attribute) throw domError("NotFoundError", "No such attribute.");
+      this._list().splice(this._list().indexOf(attribute), 1);
+      attribute.ownerElement = null;
+      return attribute;
+    }
+    removeNamedItemNS(namespaceURI, localName) {
+      const attribute = this.getNamedItemNS(namespaceURI, localName);
       if (!attribute) throw domError("NotFoundError", "No such attribute.");
       this._list().splice(this._list().indexOf(attribute), 1);
       attribute.ownerElement = null;
@@ -434,11 +461,21 @@ export function createTree(events = {}) {
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
+    getAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName)?.value ?? null; }
+    getAttributeNodeNS(namespaceURI, localName) { return this.attributes.getNamedItemNS(namespaceURI, localName); }
+    hasAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName) !== null; }
     setAttribute(name, value) {
       name = String(name);
       const oldValue = this.getAttribute(name);
       this.attributes.setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
+    }
+    setAttributeNS(namespaceURI, qualifiedName, value) {
+      qualifiedName = String(qualifiedName);
+      const attribute = new Attr(qualifiedName, value, this.ownerDocument, namespaceURI);
+      const oldValue = this.getAttributeNS(attribute.namespaceURI, attribute.localName);
+      this.attributes.setNamedItemNS(attribute); this._touch();
+      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: qualifiedName, oldValue });
     }
     setAttributeNode(attribute) {
       const previous = this.attributes.setNamedItem(attribute); this._touch();
@@ -449,6 +486,13 @@ export function createTree(events = {}) {
       const attribute = this.getAttributeNode(name);
       if (attribute) {
         this.attributes.removeNamedItem(name); this._touch();
+        this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
+      }
+    }
+    removeAttributeNS(namespaceURI, localName) {
+      const attribute = this.getAttributeNodeNS(namespaceURI, localName);
+      if (attribute) {
+        this.attributes.removeNamedItemNS(namespaceURI, localName); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
       }
     }
@@ -864,6 +908,7 @@ export function createTree(events = {}) {
     createComment(data) { return new Comment(data, this); }
     createDocumentFragment() { return new DocumentFragment(this); }
     createAttribute(name) { return new Attr(String(name), "", this); }
+    createAttributeNS(namespaceURI, qualifiedName) { return new Attr(String(qualifiedName), "", this, namespaceURI); }
     getElementsByTagName(name) {
       name = String(name);
       return new HTMLCollection(this, (root) => collect(root, (element) => name === "*" || element.localName === name));

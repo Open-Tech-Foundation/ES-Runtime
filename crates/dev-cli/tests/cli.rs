@@ -4714,6 +4714,35 @@ fn test_dom_document_ids_and_indexed_attributes_follow_browser_collections() {
 }
 
 #[test]
+fn test_dom_namespace_attribute_operations_follow_named_node_maps() {
+    let dir = build_dir("t_test_dom_namespace_attributes");
+    write_in(
+        &dir,
+        "namespace-attributes.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('namespace attribute methods keep ordinary and namespaced attributes distinct', () => {\n\
+           const use = document.createElement('use'); const xlink = 'http://www.w3.org/1999/xlink';\n\
+           use.setAttribute('href', 'plain'); use.setAttributeNS(xlink, 'xlink:href', '#first');\n\
+           assertEquals([use.getAttributeNS(null, 'href'), use.getAttributeNS(xlink, 'href'), use.hasAttributeNS(xlink, 'href')], ['plain', '#first', true]);\n\
+           use.setAttributeNS(xlink, 'xlink:href', '#next'); assertEquals(use.attributes.length, 2);\n\
+           const clone = use.cloneNode(); assertEquals(clone.getAttributeNS(xlink, 'href'), '#next');\n\
+           use.removeAttributeNS(xlink, 'href'); assertEquals([use.hasAttribute('href'), use.hasAttributeNS(xlink, 'href')], [true, false]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom namespace attributes");
+    assert!(
+        ran.status.success(),
+        "DOM namespace attribute test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(

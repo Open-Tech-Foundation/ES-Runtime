@@ -80,6 +80,37 @@ test("named node maps expose live numeric attribute entries", () => {
   expect(attributes.item(1)).toBeNull();
 });
 
+test("namespace attribute access treats null namespaces as ordinary attributes", () => {
+  const document = new Document();
+  const element = document.createElement("a");
+  element.setAttribute("title", "first");
+
+  expect(element.getAttributeNS(null, "title")).toBe("first");
+  expect(element.hasAttributeNS(null, "title")).toBe(true);
+  element.setAttributeNS(null, "title", "second");
+  expect(element.getAttribute("title")).toBe("second");
+  element.removeAttributeNS(null, "title");
+  expect(element.hasAttribute("title")).toBe(false);
+});
+
+test("namespace attribute operations distinguish local names and preserve clones", () => {
+  const document = new Document();
+  const element = document.createElement("use");
+  const xlink = "http://www.w3.org/1999/xlink";
+  element.setAttributeNS(xlink, "xlink:href", "#first");
+  element.setAttributeNS("urn:example", "example:href", "#second");
+
+  expect(element.getAttributeNS(xlink, "href")).toBe("#first");
+  expect(element.attributes.getNamedItemNS("urn:example", "href").prefix).toBe("example");
+  element.setAttributeNS(xlink, "xlink:href", "#next");
+  expect(element.attributes.length).toBe(2);
+  const clone = element.cloneNode();
+  expect(clone.getAttributeNS(xlink, "href")).toBe("#next");
+  element.removeAttributeNS(xlink, "href");
+  expect(element.hasAttributeNS(xlink, "href")).toBe(false);
+  expect(element.hasAttributeNS("urn:example", "href")).toBe(true);
+});
+
 test("documents return the first matching element by ID in tree order", () => {
   const document = new Document();
   const root = document.createElement("main");
