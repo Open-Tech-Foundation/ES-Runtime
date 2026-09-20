@@ -50,7 +50,10 @@ export function createParsing(tree, parseRecords) {
       let target = parentIndex === -1 ? parent : nodes[parentIndex];
       if (target instanceof HTMLTemplateElement) target = target.content;
       if (!target || parentIndex >= index) throw new TypeError("DOM parser parent index is invalid");
-      target.appendChild(node);
+      // HTML parser tree construction is not observable through an overridden
+      // Element.prototype.appendChild.  Use the base Node operation directly
+      // while retaining the normal internal insertion reactions.
+      Node.prototype.appendChild.call(target, node);
       nodes.push(node);
     }
     return nodes.filter((_, index) => records[index][1] === -1);

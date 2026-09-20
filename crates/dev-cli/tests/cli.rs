@@ -5138,6 +5138,39 @@ fn test_dom_class_lists_track_attributes_and_validate_tokens() {
 }
 
 #[test]
+fn test_dom_parser_does_not_call_overridden_element_append_child() {
+    let dir = build_dir("t_test_dom_parser_public_append");
+    write_in(
+        &dir,
+        "parser-append.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('parser construction bypasses public appendChild overrides', () => {
+             const appendChild = Element.prototype.appendChild;
+             Element.prototype.appendChild = function() { throw new Error('public append'); };
+             try {
+               const template = document.createElement('template');
+               template.innerHTML = '<ul><li>one</li><li>two</li></ul>';
+               assertEquals(template.content.querySelectorAll('li').length, 2);
+             } finally {
+               Element.prototype.appendChild = appendChild;
+             }
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn parser public append test");
+    assert!(
+        ran.status.success(),
+        "parser public append test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_parser_accepts_well_formed_svg_foreign_content() {
     let dir = build_dir("t_test_dom_svg_foreign_content");
     write_in(

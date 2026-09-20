@@ -19,6 +19,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Keep parser tree construction independent from overridden public
+  Element.appendChild methods.
 - Deliver one connected callback when a parent callback synchronously inserts
   a custom-element descendant.
 - Preserve an explicitly empty single-select selection instead of falsely
