@@ -186,7 +186,7 @@
     },
     {
       "group": "events",
-      "name": "legacy-events-invoke-inline-handlers",
+      "name": "inline-handlers-run-for-modern-events",
       "chrome": {
         "result": [
           false,

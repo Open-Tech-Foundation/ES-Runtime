@@ -33,12 +33,6 @@ export function createEvents() {
     get defaultPrevented() { return this[STATE].defaultPrevented; }
     get timeStamp() { return this[STATE].timeStamp; }
     get isTrusted() { return false; }
-    initEvent(type, bubbles = false, cancelable = false) {
-      if (this[STATE].dispatching) return;
-      this[STATE].type = String(type);
-      this[STATE].bubbles = Boolean(bubbles);
-      this[STATE].cancelable = Boolean(cancelable);
-    }
     composedPath() { return [...this[STATE].path]; }
     stopPropagation() { this[STATE].propagationStopped = true; }
     stopImmediatePropagation() { this[STATE].propagationStopped = true; this[STATE].immediateStopped = true; }

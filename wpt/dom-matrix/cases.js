@@ -109,14 +109,13 @@ export const cases = [
   },
   {
     group: "events",
-    name: "legacy-events-invoke-inline-handlers",
+    name: "inline-handlers-run-for-modern-events",
     run(window) {
       const { document } = window;
       const target = document.createElement("div");
-      const event = document.createEvent("Event");
       const calls = [];
       target.onclick = (received) => { calls.push(received.type); received.preventDefault(); };
-      event.initEvent("click", true, true);
+      const event = new window.Event("click", { bubbles: true, cancelable: true });
       return [target.dispatchEvent(event), calls];
     },
   },

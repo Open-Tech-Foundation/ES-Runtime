@@ -51,14 +51,12 @@ test("event constructors preserve their defined values", () => {
   expect(custom.detail).toEqual({ ok: true });
 });
 
-test("legacy events initialize before dispatch and invoke inline handlers", () => {
+test("inline handlers run during modern event dispatch", () => {
   const document = new Document();
   const target = document.createElement("button");
-  const event = document.createEvent("Event");
   const calls = [];
   target.onclick = (received) => { calls.push(received.type); received.preventDefault(); };
-  event.initEvent("click", true, true);
 
-  expect(target.dispatchEvent(event)).toBe(false);
+  expect(target.dispatchEvent(new events.Event("click", { bubbles: true, cancelable: true }))).toBe(false);
   expect(calls).toEqual(["click"]);
 });

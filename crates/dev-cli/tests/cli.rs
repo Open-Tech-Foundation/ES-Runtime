@@ -4799,26 +4799,26 @@ fn test_dom_input_indeterminate_is_boolean_non_reflecting_state() {
 }
 
 #[test]
-fn test_dom_legacy_events_invoke_inline_handlers() {
-    let dir = build_dir("t_test_dom_legacy_events");
+fn test_dom_inline_handlers_run_for_modern_events() {
+    let dir = build_dir("t_test_dom_inline_events");
     write_in(
         &dir,
-        "legacy-events.test.mjs",
+        "inline-events.test.mjs",
         "import { test, assertEquals } from 'runtime:test';\n\
-         test('createEvent and initEvent dispatch inline handlers', () => {\n\
+         test('modern Event dispatch invokes inline handlers', () => {\n\
            const button = document.createElement('button'); const calls = [];\n\
            button.onclick = (event) => { calls.push(event.type); event.preventDefault(); };\n\
-           const event = document.createEvent('Event'); event.initEvent('click', true, true);\n\
+           const event = new Event('click', { bubbles: true, cancelable: true });\n\
            assertEquals([button.dispatchEvent(event), calls], [false, ['click']]);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
         .args(["test", "--dom"])
         .output()
-        .expect("spawn esdev test --dom legacy events");
+        .expect("spawn esdev test --dom inline events");
     assert!(
         ran.status.success(),
-        "DOM legacy event test did not run:\n{}{}",
+        "DOM inline event test did not run:\n{}{}",
         stdout(&ran),
         stderr(&ran)
     );
