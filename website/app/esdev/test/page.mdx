@@ -73,6 +73,9 @@ The DOM realm also includes in-memory `location`, `history`, `localStorage`,
 and `sessionStorage`. Animation frames use the test clock, while media, resize,
 and intersection observers are safe never-firing stubs.
 
+For the strict-parser contract, browser-only boundaries, and WPT conformance
+audit, see [DOM testing](/esdev/test/dom).
+
 ```sh
 esdev test --dom
 ```
@@ -81,6 +84,8 @@ esdev test --dom
 
 - [Writing tests](/esdev/test/writing) — assertions, helpers, and table-driven
   cases.
+- [DOM testing](/esdev/test/dom) — strict modern markup, isolation, and DOM
+  boundaries.
 - [Running and isolating tests](/esdev/test/running) — filters, process
   boundaries, and hangs.
 - [Mocks, setup, and imports](/esdev/test/mocks) — mock behavior, clocks,

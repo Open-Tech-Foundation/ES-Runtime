@@ -10,7 +10,7 @@ set -euo pipefail
 # expectations.json in the same commit.
 REV=ce9441ee673c68c5d175d2363c9ff2e4893b827c
 
-DIRS=(resources common workers webmessaging html/webappapis/structured-clone)
+DIRS=(resources common workers webmessaging html/webappapis/structured-clone dom custom-elements shadow-dom)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dest="$here/upstream"

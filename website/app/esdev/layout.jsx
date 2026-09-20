@@ -49,6 +49,7 @@ const NAV = [
         title: "Testing",
         items: [
           { title: "Overview", path: "/esdev/test" },
+          { title: "DOM testing", path: "/esdev/test/dom" },
           { title: "Writing tests", path: "/esdev/test/writing" },
           { title: "Running & isolating", path: "/esdev/test/running" },
           { title: "Mocks, setup & imports", path: "/esdev/test/mocks" },

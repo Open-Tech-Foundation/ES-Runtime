@@ -1,0 +1,78 @@
+---
+title: DOM testing
+description: Test browser-facing components with esdev's isolated, strict modern DOM realm.
+---
+
+# DOM testing
+
+Use `--dom` for component and browser-facing unit tests:
+
+```sh
+esdev test --dom
+esdev test --dom --file=src/button.test.ts
+```
+
+`--dom` is deliberately test-runner-only. It creates a fresh in-memory DOM
+realm for every test file; normal `esdev` programs do not receive `window` or
+`document`. Fresh realms prevent event listeners, custom-element registrations,
+storage, and document mutations leaking into another test file.
+
+## What it is for
+
+The DOM realm is intended for modern component tests: creating and querying
+nodes, mutating attributes and text, dispatching events, rendering templates,
+using forms, custom elements, Shadow DOM, `MutationObserver`, and focused
+controls. It is a DOM implementation, not a browser renderer.
+
+```js
+import { test, assertEquals } from "runtime:test";
+
+test("updates a control", () => {
+  const input = document.createElement("input");
+  input.value = "ready";
+  document.body.append(input);
+
+  assertEquals(document.querySelector("input")?.value, "ready");
+});
+```
+
+Use the built-in [`runtime:test`](/api/test) assertions and runner. `--dom`
+does not add compatibility layers for other test frameworks.
+
+## Strict modern HTML
+
+`innerHTML` and fragment parsing accept well-formed modern HTML. They preserve
+the explicit structure supplied by the test and reject malformed input with a
+diagnostic instead of applying legacy browser error recovery. Keep fixtures
+well formed: close non-void elements, quote attributes, and do not rely on
+implicit element insertion or misnested-tag repair.
+
+This is intentional. A test that depends on parser recovery does not state the
+DOM tree it expects, and is outside this test DOM's contract.
+
+## Boundaries
+
+The realm has no rendering engine, network, browsing contexts, or navigation.
+In particular, do not use it to test layout, stylesheet cascade, geometry,
+media loading, XHR, iframe behavior, script execution, or page navigation.
+`getComputedStyle()` reports inline style values only; it does not calculate a
+stylesheet cascade or browser defaults.
+
+`location`, `history`, and web storage are in-memory test state. Form submit
+events are dispatched, but no navigation occurs. Animation frames use the test
+clock. Media, resize, and intersection observers are safe never-firing stubs.
+
+## Conformance checks
+
+Maintainers audit the implemented surface against the JavaScript portions of
+Web Platform Tests (WPT). The audit runs upstream `testharness.js` against an
+`esdev test --dom` realm and records each reported WPT subtest. Its explicit
+scope rules cover inputs that are inapplicable by design—for example, WPT-server
+substitution, multiple browsing contexts, rendering, network clients, classic
+script execution, and legacy APIs. Unsupported modern DOM behavior remains a
+failure until it is implemented.
+
+The audit is an implementation check, not a browser-compatibility claim: WPT
+HTML/layout fixtures still require a real browser. Its commands and scoped
+inputs live in [`wpt/`](https://github.com/Open-Tech-Foundation/ES-Runtime/tree/main/wpt)
+in the repository.
