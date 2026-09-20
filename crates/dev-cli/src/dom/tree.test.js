@@ -80,6 +80,20 @@ test("named node maps expose live numeric attribute entries", () => {
   expect(attributes.item(1)).toBeNull();
 });
 
+test("toggleAttribute follows presence and its optional force", () => {
+  const document = new Document();
+  const element = document.createElement("button");
+
+  expect(element.toggleAttribute("disabled")).toBe(true);
+  expect(element.getAttribute("disabled")).toBe("");
+  expect(element.toggleAttribute("disabled")).toBe(false);
+  expect(element.hasAttribute("disabled")).toBe(false);
+  expect(element.toggleAttribute("disabled", true)).toBe(true);
+  expect(element.toggleAttribute("disabled", true)).toBe(true);
+  expect(element.toggleAttribute("disabled", false)).toBe(false);
+  expect(element.hasAttribute("disabled")).toBe(false);
+});
+
 test("namespace attribute access treats null namespaces as ordinary attributes", () => {
   const document = new Document();
   const element = document.createElement("a");

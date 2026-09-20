@@ -559,6 +559,16 @@ export function createTree(events = {}) {
     getAttributeNames() { return Array.from(this.attributes, (attribute) => attribute.name); }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
+    toggleAttribute(name, force) {
+      name = String(name);
+      const present = this.hasAttribute(name);
+      if (force === undefined ? !present : Boolean(force)) {
+        if (!present) this.setAttribute(name, "");
+        return true;
+      }
+      if (present) this.removeAttribute(name);
+      return false;
+    }
     getAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName)?.value ?? null; }
     getAttributeNodeNS(namespaceURI, localName) { return this.attributes.getNamedItemNS(namespaceURI, localName); }
     hasAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName) !== null; }
