@@ -1005,6 +1005,33 @@ export function createTree(events = {}) {
     _eventParent(event) { return event.composed ? this.host : null; }
   }
 
+  class HTMLSlotElement extends HTMLElement {
+    get name() { return this.getAttribute("name") ?? ""; }
+    set name(value) { this.setAttribute("name", String(value)); }
+    _assignedNodes() {
+      const root = this.getRootNode();
+      if (!(root instanceof ShadowRoot)) return [];
+      const name = this.name;
+      return Array.from(root.host._esdevChildren()).filter((node) => {
+        const slot = node instanceof Element ? node.getAttribute("slot") ?? "" : "";
+        return slot === name;
+      });
+    }
+    assignedNodes(options = {}) {
+      const assigned = this._assignedNodes();
+      if (!options.flatten || assigned.length) return assigned;
+      const flattened = [];
+      for (const child of this._esdevChildren()) {
+        if (child instanceof HTMLSlotElement) flattened.push(...child.assignedNodes({ flatten: true }));
+        else flattened.push(child);
+      }
+      return flattened;
+    }
+    assignedElements(options = {}) {
+      return this.assignedNodes(options).filter((node) => node instanceof Element);
+    }
+  }
+
   class HTMLTemplateElement extends HTMLElement {
     constructor(name, ownerDocument) {
       super(name, ownerDocument);
@@ -1127,6 +1154,7 @@ export function createTree(events = {}) {
     option: HTMLOptionElement,
     optgroup: HTMLOptGroupElement,
     select: HTMLSelectElement,
+    slot: HTMLSlotElement,
     textarea: HTMLTextAreaElement,
     template: HTMLTemplateElement,
     fieldset: HTMLFieldSetElement,
@@ -1157,5 +1185,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

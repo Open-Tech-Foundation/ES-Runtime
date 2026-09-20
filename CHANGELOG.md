@@ -10,6 +10,7 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Add basic named/default Shadow DOM slot assignment and fallback discovery.
 - Preserve inert template content in deep DOM clones and imports.
 - Add layout-free Shadow DOM roots with open/closed visibility, scoped parsing
   and selectors, composed-root traversal, and composed event propagation.

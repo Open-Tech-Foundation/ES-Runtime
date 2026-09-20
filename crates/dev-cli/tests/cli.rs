@@ -4893,6 +4893,37 @@ fn test_dom_shadow_roots_keep_content_scoped_and_cross_only_composed_events() {
 }
 
 #[test]
+fn test_dom_shadow_slots_assign_named_default_and_fallback_content() {
+    let dir = build_dir("t_test_dom_shadow_slots");
+    write_in(
+        &dir,
+        "slots.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('slots discover distributed light children and fallback content', () => {\n\
+           const host = document.createElement('section');\n\
+           host.innerHTML = '<h1 slot=title>Title</h1>light text<p>default</p>';\n\
+           const root = host.attachShadow({ mode: 'open' });\n\
+           root.innerHTML = '<header><slot name=title><i>title fallback</i></slot></header><main><slot><em>default fallback</em></slot></main><footer><slot name=missing><b>missing fallback</b></slot></footer>';\n\
+           const [title, standard, missing] = root.querySelectorAll('slot');\n\
+           assertEquals([title instanceof HTMLSlotElement, title.assignedElements().map((node) => node.localName), standard.assignedNodes().map((node) => node.nodeName), missing.assignedNodes().length, missing.assignedElements({ flatten: true }).map((node) => node.localName)], [true, ['h1'], ['#text', 'P'], 0, ['b']]);\n\
+           title.name = 'other';\n\
+           assertEquals([title.assignedNodes().length, title.assignedElements({ flatten: true }).map((node) => node.localName)], [0, ['i']]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom shadow slots");
+    assert!(
+        ran.status.success(),
+        "DOM shadow-slot test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_deep_template_clones_preserve_inert_content() {
     let dir = build_dir("t_test_dom_template_clone");
     write_in(
