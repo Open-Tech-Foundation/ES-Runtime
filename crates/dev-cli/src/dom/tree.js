@@ -14,6 +14,7 @@ const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
 const INPUT_CHECKED = Symbol("esdev DOM input checked state");
 const INPUT_INDETERMINATE = Symbol("esdev DOM input indeterminate state");
+const SHADOW_ROOT = Symbol("esdev DOM shadow root");
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
@@ -244,19 +245,19 @@ export function createTree(events = {}) {
       const state = slots(this);
       return state.childNodes ??= new NodeList(this, (root) => Array.from(root._esdevChildren()));
     }
-    get isConnected() { return this.getRootNode() instanceof Document; }
+    get isConnected() { return this.getRootNode({ composed: true }) instanceof Document; }
 
     *_esdevChildren() {
       for (let child = this.firstChild; child; child = child.nextSibling) yield child;
     }
 
-    getRootNode() {
+    getRootNode(options = {}) {
       let root = this;
-      while (root.parentNode) root = root.parentNode;
+      while (root.parentNode || options.composed && root instanceof ShadowRoot) root = root.parentNode ?? root.host;
       return root;
     }
 
-    _eventParent() { return this.parentNode; }
+    _eventParent(event) { return this.parentNode; }
 
     hasChildNodes() { return this.firstChild !== null; }
 
@@ -977,6 +978,28 @@ export function createTree(events = {}) {
     constructor(ownerDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }
   }
 
+  class ShadowRoot extends DocumentFragment {
+    constructor(host, mode) {
+      super(host.ownerDocument);
+      this.host = host;
+      this.mode = mode;
+      this.delegatesFocus = false;
+    }
+    _eventParent(event) { return event.composed ? this.host : null; }
+  }
+
+  Object.defineProperties(Element.prototype, {
+    attachShadow: { value(options = {}) {
+      if (this[SHADOW_ROOT]) throw domError("NotSupportedError", "This element already hosts a shadow root.");
+      const mode = options.mode;
+      if (mode !== "open" && mode !== "closed") throw new TypeError("attachShadow requires mode 'open' or 'closed'.");
+      const root = new ShadowRoot(this, mode);
+      this[SHADOW_ROOT] = root;
+      return root;
+    } },
+    shadowRoot: { get() { const root = this[SHADOW_ROOT]; return root?.mode === "open" ? root : null; } },
+  });
+
   class Document extends Node {
     constructor() {
       super(Node.DOCUMENT_NODE, "#document", null);
@@ -1070,5 +1093,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

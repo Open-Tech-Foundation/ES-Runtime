@@ -106,7 +106,7 @@ export function createEvents() {
       const state = event[STATE];
       if (state.dispatching) throw new DOMException("The event is already being dispatched.", "InvalidStateError");
       const path = [this];
-      for (let current = this._eventParent?.() ?? null; current; current = current._eventParent?.() ?? null) path.push(current);
+      for (let current = this._eventParent?.(event) ?? null; current; current = current._eventParent?.(event) ?? null) path.push(current);
       state.dispatching = true; state.target = this; state.path = path;
       try {
         for (let index = path.length - 1; index > 0 && !state.propagationStopped; index -= 1) this._invoke(path[index], event, Event.CAPTURING_PHASE, true);

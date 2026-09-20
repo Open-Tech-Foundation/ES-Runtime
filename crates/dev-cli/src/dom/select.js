@@ -237,7 +237,7 @@ function nthMatches(position, { a, b }) {
   return Number.isInteger(quotient) && quotient >= 0;
 }
 
-export function createSelectors({ Element, Document, DocumentFragment }) {
+export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
@@ -362,7 +362,7 @@ export function createSelectors({ Element, Document, DocumentFragment }) {
   }
 
   function install() {
-    for (const Class of [Element, Document, DocumentFragment]) {
+    for (const Class of [Element, Document, DocumentFragment, ShadowRoot]) {
       Object.defineProperties(Class.prototype, {
         querySelector: { value(source) { return queryAll(this, source).item(0); } },
         querySelectorAll: { value(source) { return queryAll(this, source); } },

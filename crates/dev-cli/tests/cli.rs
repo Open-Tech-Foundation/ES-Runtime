@@ -4860,6 +4860,39 @@ fn test_dom_create_element_ns_preserves_modern_namespace_identity() {
 }
 
 #[test]
+fn test_dom_shadow_roots_keep_content_scoped_and_cross_only_composed_events() {
+    let dir = build_dir("t_test_dom_shadow_root");
+    write_in(
+        &dir,
+        "shadow.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('open and closed shadow roots preserve tree boundaries', () => {\n\
+           const host = document.createElement('section'); document.body.appendChild(host);\n\
+           const root = host.attachShadow({ mode: 'open' }); root.innerHTML = '<button>inside</button>';\n\
+           const button = root.querySelector('button'); const events = [];\n\
+           host.addEventListener('go', () => events.push('host')); button.addEventListener('go', () => events.push('button'));\n\
+           button.dispatchEvent(new Event('go', { bubbles: true }));\n\
+           assertEquals([host.shadowRoot, root.host, root.mode, root.innerHTML, document.querySelector('button'), button.getRootNode(), button.getRootNode({ composed: true }), events], [root, host, 'open', '<button>inside</button>', null, root, document, ['button']]);\n\
+           button.dispatchEvent(new Event('go', { bubbles: true, composed: true })); assertEquals(events, ['button', 'button', 'host']);\n\
+           assertThrows(() => host.attachShadow({ mode: 'open' }), DOMException);\n\
+           const closedHost = document.createElement('div'); const closed = closedHost.attachShadow({ mode: 'closed' });\n\
+           assertEquals([closed instanceof ShadowRoot, closedHost.shadowRoot], [true, null]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM shadow-root test");
+    assert!(
+        ran.status.success(),
+        "shadow-root test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(

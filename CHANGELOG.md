@@ -10,6 +10,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Add layout-free Shadow DOM roots with open/closed visibility, scoped parsing
+  and selectors, composed-root traversal, and composed event propagation.
+
 - Add a 24-case esdev DOM behavior matrix that uses headless Chrome as the
   layout-free behavior oracle while reporting jsdom and happy-dom compatibility
   differences separately.

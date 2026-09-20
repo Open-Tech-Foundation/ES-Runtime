@@ -3,7 +3,7 @@
 // pure JS and directly testable before the --dom runner integration lands.
 
 export function createParsing(tree, parseRecords) {
-  const { Node, DocumentFragment, Element, Text, Comment, VOID } = tree;
+  const { Node, DocumentFragment, ShadowRoot, Element, Text, Comment, VOID } = tree;
 
   function decode(records, parent) {
     if (!Array.isArray(records)) throw new TypeError("DOM parser records must be an array");
@@ -37,7 +37,7 @@ export function createParsing(tree, parseRecords) {
   function serialize(node) {
     if (node instanceof Text) return escapeText(node.data);
     if (node instanceof Comment) return `<!--${node.data}-->`;
-    if (node instanceof DocumentFragment || node.nodeType === Node.DOCUMENT_NODE) return Array.from(node.childNodes, serialize).join("");
+    if (node instanceof DocumentFragment || node instanceof ShadowRoot || node.nodeType === Node.DOCUMENT_NODE) return Array.from(node.childNodes, serialize).join("");
     if (!(node instanceof Element)) throw new TypeError("Cannot serialize this node type");
     const attributes = Array.from(node.attributes, (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
     if (VOID.has(node.localName)) return `<${node.localName}${attributes}>`;
@@ -53,7 +53,7 @@ export function createParsing(tree, parseRecords) {
   }
 
   function install() {
-    Object.defineProperties(Element.prototype, {
+    for (const Class of [Element, ShadowRoot]) Object.defineProperties(Class.prototype, {
       innerHTML: {
         get() { return Array.from(this.childNodes, serialize).join(""); },
         set(source) { this.replaceChildren(parseFragment(source, this)); },
