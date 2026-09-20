@@ -181,7 +181,7 @@ dir = "website"
 # imports. Run it after a version bump: nothing else notices that the navbar
 # badge and the install page have fallen behind the tags.
 [tasks.versions]
-run = "node scripts/site-versions.mjs"
+run = "bun scripts/site-versions.mjs"
 
 # --- aggregates --------------------------------------------------------------
 
