@@ -4743,6 +4743,35 @@ fn test_dom_namespace_attribute_operations_follow_named_node_maps() {
 }
 
 #[test]
+fn test_dom_datasets_follow_live_data_attributes_and_html_name_conversion() {
+    let dir = build_dir("t_test_dom_datasets");
+    write_in(
+        &dir,
+        "datasets.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('dataset properties reflect data attributes, enumeration, deletion, and conversion', () => {\n\
+           const element = document.createElement('article'); const dataset = element.dataset;\n\
+           element.setAttribute('data-user-id', 'first'); element.setAttribute('data-ready', '');\n\
+           assertEquals([dataset === element.dataset, dataset.userId, Object.keys(dataset)], [true, 'first', ['userId', 'ready']]);\n\
+           dataset.userId = 42; delete dataset.ready; dataset.recordId = 'next';\n\
+           assertEquals([element.getAttribute('data-user-id'), element.hasAttribute('data-ready'), element.getAttribute('data-record-id')], ['42', false, 'next']);\n\
+           assertThrows(() => { dataset['record-id'] = 'no'; }, DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom datasets");
+    assert!(
+        ran.status.success(),
+        "DOM dataset test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(

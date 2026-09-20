@@ -111,6 +111,15 @@ test("namespace attribute operations distinguish local names and preserve clones
   expect(element.hasAttributeNS("urn:example", "href")).toBe(true);
 });
 
+test("ordinary colon attributes retain their complete local name", () => {
+  const document = new Document();
+  const element = document.createElement("use");
+  element.setAttribute("xlink:href", "#first");
+
+  expect(element.getAttributeNS(null, "xlink:href")).toBe("#first");
+  expect(element.hasAttributeNS(null, "href")).toBe(false);
+});
+
 test("documents return the first matching element by ID in tree order", () => {
   const document = new Document();
   const root = document.createElement("main");
@@ -154,6 +163,34 @@ test("class list token validation happens before mutations", () => {
   expect(() => element.classList.add("next", "bad token")).toThrow("whitespace");
   expect(() => element.classList.contains("")).toThrow("empty");
   expect(element.className).toBe("ready");
+});
+
+test("datasets stay live with data attributes and enumerate property names", () => {
+  const document = new Document();
+  const element = document.createElement("article");
+  const dataset = element.dataset;
+  element.setAttribute("data-user-id", "first");
+  element.setAttribute("data-ready", "");
+
+  expect(dataset).toBe(element.dataset);
+  expect(dataset.userId).toBe("first");
+  expect(Object.keys(dataset)).toEqual(["userId", "ready"]);
+  dataset.userId = 42;
+  expect(element.getAttribute("data-user-id")).toBe("42");
+  delete dataset.ready;
+  expect(element.hasAttribute("data-ready")).toBe(false);
+});
+
+test("datasets use HTML name conversion and reject unrepresentable property names", () => {
+  const document = new Document();
+  const element = document.createElement("article");
+  element.dataset.recordId = "one";
+  element.setAttribute("data--leading", "two");
+
+  expect(element.getAttribute("data-record-id")).toBe("one");
+  expect(element.dataset.Leading).toBe("two");
+  expect(() => { element.dataset["record-id"] = "no"; }).toThrow("hyphen");
+  expect(element.hasAttribute("data-record-id")).toBe(true);
 });
 
 test("replaceChild retains the following sibling and imports attribute ownership", () => {

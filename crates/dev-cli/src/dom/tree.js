@@ -6,6 +6,7 @@
 const SLOT = Symbol("esdev DOM slots");
 const ATTRS = Symbol("esdev DOM attributes");
 const CLASS_LIST = Symbol("esdev DOM class list");
+const DATASET = Symbol("esdev DOM dataset");
 const DATA = Symbol("esdev DOM character data");
 const SELECTED = Symbol("esdev DOM option selected state");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
@@ -137,6 +138,66 @@ export function createTree(events = {}) {
       return true;
     }
     [Symbol.iterator]() { return this._tokens()[Symbol.iterator](); }
+  }
+
+  function datasetProperty(name) {
+    if (!name.startsWith("data-")) return null;
+    return name.slice(5).replace(/-([a-z])/g, (_, character) => character.toUpperCase());
+  }
+
+  function datasetAttribute(property) {
+    property = String(property);
+    if (/-[a-z]/.test(property)) return null;
+    return `data-${property.replace(/[A-Z]/g, (character) => `-${character.toLowerCase()}`)}`;
+  }
+
+  class DOMStringMap {
+    constructor(element) {
+      Object.defineProperty(this, ATTRS, { value: element });
+      return new Proxy(this, {
+        get(target, property, receiver) {
+          if (typeof property === "string") {
+            const attribute = datasetAttribute(property);
+            if (attribute && target[ATTRS].hasAttribute(attribute)) return target[ATTRS].getAttribute(attribute);
+          }
+          if (property === Symbol.toStringTag) return "DOMStringMap";
+          return Reflect.get(target, property, receiver);
+        },
+        set(target, property, value, receiver) {
+          if (typeof property !== "string") return Reflect.set(target, property, value, receiver);
+          const attribute = datasetAttribute(property);
+          if (!attribute) throw domError("SyntaxError", "Dataset property names must not contain a hyphen followed by a lowercase letter.");
+          target[ATTRS].setAttribute(attribute, String(value));
+          return true;
+        },
+        has(target, property) {
+          if (typeof property === "string") {
+            const attribute = datasetAttribute(property);
+            if (attribute && target[ATTRS].hasAttribute(attribute)) return true;
+          }
+          return Reflect.has(target, property);
+        },
+        deleteProperty(target, property) {
+          if (typeof property !== "string") return Reflect.deleteProperty(target, property);
+          const attribute = datasetAttribute(property);
+          if (!attribute) return true;
+          target[ATTRS].removeAttribute(attribute);
+          return true;
+        },
+        ownKeys(target) {
+          return [...new Set([
+            ...Reflect.ownKeys(target),
+            ...Array.from(target[ATTRS].attributes, (attribute) => datasetProperty(attribute.name)).filter((property) => property !== null),
+          ])];
+        },
+        getOwnPropertyDescriptor(target, property) {
+          if (typeof property !== "string") return Reflect.getOwnPropertyDescriptor(target, property);
+          const attribute = datasetAttribute(property);
+          if (!attribute || !target[ATTRS].hasAttribute(attribute)) return undefined;
+          return { configurable: true, enumerable: true, writable: true, value: target[ATTRS].getAttribute(attribute) };
+        },
+      });
+    }
   }
 
   class Node extends EventTarget {
@@ -387,8 +448,8 @@ export function createTree(events = {}) {
       this.ownerElement = null;
       this.namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
       const separator = name.indexOf(":");
-      this.prefix = separator === -1 ? null : name.slice(0, separator);
-      this.localName = separator === -1 ? name : name.slice(separator + 1);
+      this.prefix = this.namespaceURI === null || separator === -1 ? null : name.slice(0, separator);
+      this.localName = this.namespaceURI === null || separator === -1 ? name : name.slice(separator + 1);
     }
     get nodeValue() { return this.value; }
     set nodeValue(value) { this.value = String(value ?? ""); }
@@ -457,6 +518,7 @@ export function createTree(events = {}) {
       slots(this).children = null;
       Object.defineProperty(this, "attributes", { value: new NamedNodeMap(this) });
       Object.defineProperty(this, CLASS_LIST, { value: new DOMTokenList(this) });
+      Object.defineProperty(this, DATASET, { value: new DOMStringMap(this) });
     }
     getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
     getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
@@ -507,6 +569,7 @@ export function createTree(events = {}) {
     get className() { return this.getAttribute("class") ?? ""; }
     set className(value) { this.setAttribute("class", value); }
     get classList() { return this[CLASS_LIST]; }
+    get dataset() { return this[DATASET]; }
     get children() {
       const state = slots(this);
       return state.children ??= new HTMLCollection(this, (root) => Array.from(root._children()).filter((node) => node instanceof Element));

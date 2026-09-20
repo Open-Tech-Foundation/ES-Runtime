@@ -206,6 +206,26 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "dataset-reflects-data-attributes",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("article");
+      element.setAttribute("data-user-id", "first");
+      element.dataset.userId = "next";
+      element.dataset.ready = "";
+      const keys = Object.keys(element.dataset);
+      delete element.dataset.ready;
+      return [
+        element.dataset.userId,
+        element.getAttribute("data-user-id"),
+        keys,
+        element.hasAttribute("data-ready"),
+      ];
+    },
+  },
+  {
     group: "parsing",
     name: "malformed-markup-is-a-strict-esdev-limit",
     limit: "esdev rejects malformed HTML instead of applying browser recovery",

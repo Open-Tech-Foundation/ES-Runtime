@@ -22,6 +22,8 @@ namespace) is unstable and may change between minor releases until the API freez
   attribute casing and self-closing SVG elements.
 - Add namespace-aware DOM attribute access, mutation, named-map lookup, and
   cloning through the `*AttributeNS` APIs.
+- Add live `HTMLElement.dataset` data-attribute reflection with HTML property
+  name conversion, enumeration, assignment, and deletion.
 - Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
   It parses explicit nesting, void elements, attributes, comments, templates,
   raw-text script/style elements and a constrained entity set, while rejecting
