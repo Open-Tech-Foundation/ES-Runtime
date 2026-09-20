@@ -137,6 +137,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Restore structural esdev DOM selectors after the internal child iterator was
   renamed, and expose specialized HTML, SVG, and MathML element interfaces from
   `document.createElementNS()`.
+- Add `HTMLDialogElement.open` boolean reflection so modern renderers serialize
+  the `open` attribute with browser semantics.
 - Bump `rustls` 0.23.42 → 0.23.45 (with `rustls-webpki` 0.103.15 and
   `aws-lc-rs` 1.18.1) to fix RUSTSEC-2026-0285 (TLS 1.3 handshake messages
   accepted across encryption-level boundaries). `cargo audit` and

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createTree } from "./tree.js";
 
-const { Document, Element, HTMLInputElement, SVGElement, Text } = createTree();
+const { Document, Element, HTMLDialogElement, HTMLInputElement, SVGElement, Text } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -141,6 +141,17 @@ test("DOM internals do not collide with framework child bookkeeping", () => {
 
   expect(element.childNodes.length).toBe(1);
   expect(element.children.item(0).localName).toBe("span");
+});
+
+test("dialog open reflects as a boolean attribute", () => {
+  const document = new Document();
+  const dialog = document.createElement("dialog");
+
+  expect(dialog).toBeInstanceOf(HTMLDialogElement);
+  dialog.open = true;
+  expect([dialog.open, dialog.getAttribute("open")]).toEqual([true, ""]);
+  dialog.open = false;
+  expect([dialog.open, dialog.hasAttribute("open")]).toEqual([false, false]);
 });
 
 test("documents return the first matching element by ID in tree order", () => {

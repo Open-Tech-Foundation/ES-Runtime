@@ -652,6 +652,8 @@ export function createTree(events = {}) {
     }
   }
 
+  class HTMLDialogElement extends HTMLElement {}
+
   function isSubmitter(control) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
   }
@@ -893,6 +895,7 @@ export function createTree(events = {}) {
   installReflectors(HTMLButtonElement,
     { formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
+  installReflectors(HTMLDialogElement, {}, { open: "open" });
   installReflectors(HTMLFormElement, { target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
@@ -1027,6 +1030,7 @@ export function createTree(events = {}) {
 
   const ELEMENT_CLASSES = {
     button: HTMLButtonElement,
+    dialog: HTMLDialogElement,
     form: HTMLFormElement,
     input: HTMLInputElement,
     label: HTMLLabelElement,
@@ -1062,5 +1066,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

@@ -3385,6 +3385,9 @@ fn test_dom_reflects_common_attributes_and_form_defaults() {
            assertEquals(input.hasAttribute('disabled'), false);\n\
            const label = document.createElement('label'); label.htmlFor = 'email';\n\
            assertEquals(label.getAttribute('for'), 'email');\n\
+           const dialog = document.createElement('dialog'); dialog.open = true;\n\
+           assertEquals([dialog instanceof HTMLDialogElement, dialog.open, dialog.getAttribute('open')], [true, true, '']);\n\
+           dialog.open = false; assertEquals([dialog.open, dialog.hasAttribute('open')], [false, false]);\n\
          });\n\
          test('click defaults', () => {\n\
            const form = document.createElement('form');\n\
