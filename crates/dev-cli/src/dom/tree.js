@@ -264,6 +264,7 @@ export function createTree(events = {}) {
     _eventParent(event) { return this.parentNode; }
 
     hasChildNodes() { return this.firstChild !== null; }
+    contains(other) { return other instanceof Node && isInclusiveAncestor(this, other); }
     hasAttributes() { return this instanceof Element && this.attributes.length !== 0; }
 
     appendChild(node) { return this.insertBefore(node, null); }

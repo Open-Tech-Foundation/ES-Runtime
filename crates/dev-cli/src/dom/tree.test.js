@@ -265,6 +265,22 @@ test("textContent replaces descendants and excludes comments", () => {
   expect(root.firstChild.data).toBe("fresh");
 });
 
+test("contains includes the receiver and follows only descendant links", () => {
+  const document = new Document();
+  const root = document.createElement("main");
+  const child = document.createElement("article");
+  const detached = document.createElement("aside");
+  document.appendChild(root);
+  root.appendChild(child);
+
+  expect(document.contains(document)).toBe(true);
+  expect(document.contains(child)).toBe(true);
+  expect(root.contains(child)).toBe(true);
+  expect(child.contains(root)).toBe(false);
+  expect(root.contains(detached)).toBe(false);
+  expect(root.contains(null)).toBe(false);
+});
+
 test("node lists and HTML collections are live, indexed, and named", () => {
   const document = new Document();
   const root = document.createElement("main");
