@@ -14,6 +14,7 @@ const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
 const INPUT_CHECKED = Symbol("esdev DOM input checked state");
 const INPUT_INDETERMINATE = Symbol("esdev DOM input indeterminate state");
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -511,10 +512,14 @@ export function createTree(events = {}) {
   }
 
   class Element extends Node {
-    constructor(name, ownerDocument) {
-      super(Node.ELEMENT_NODE, name.toUpperCase(), ownerDocument);
-      this.localName = name;
-      this.tagName = name.toUpperCase();
+    constructor(name, ownerDocument, namespaceURI = HTML_NAMESPACE) {
+      const html = namespaceURI === HTML_NAMESPACE;
+      super(Node.ELEMENT_NODE, html ? name.toUpperCase() : name, ownerDocument);
+      this.namespaceURI = namespaceURI;
+      const separator = name.indexOf(":");
+      this.prefix = separator === -1 ? null : name.slice(0, separator);
+      this.localName = separator === -1 ? name : name.slice(separator + 1);
+      this.tagName = html ? name.toUpperCase() : name;
       slots(this).attributes = [];
       slots(this).children = null;
       Object.defineProperty(this, "attributes", { value: new NamedNodeMap(this) });
@@ -969,6 +974,13 @@ export function createTree(events = {}) {
       if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be lowercase modern HTML names.");
       return new (ELEMENT_CLASSES[name] ?? HTMLElement)(name, this);
     }
+    createElementNS(namespaceURI, qualifiedName) {
+      namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+      qualifiedName = String(qualifiedName);
+      if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
+      if (namespaceURI === HTML_NAMESPACE) return new Element(qualifiedName, this, namespaceURI);
+      return new Element(qualifiedName, this, namespaceURI);
+    }
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
     createDocumentFragment() { return new DocumentFragment(this); }
@@ -1040,5 +1052,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, Document, DocumentFragment, Element, HTMLElement, HTMLInputElement, HTMLButtonElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, isDisabled, upgradeCustom };
 }

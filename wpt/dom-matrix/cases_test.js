@@ -2,9 +2,9 @@ import { assertEquals } from "jsr:@std/assert@1.0.16";
 import { cases } from "./cases.js";
 import { classify } from "./report.js";
 
-Deno.test("the baseline has 29 uniquely named cases", () => {
-  assertEquals(cases.length, 29);
-  assertEquals(new Set(cases.map((test) => test.name)).size, 29);
+Deno.test("the baseline has 30 uniquely named cases", () => {
+  assertEquals(cases.length, 30);
+  assertEquals(new Set(cases.map((test) => test.name)).size, 30);
 });
 
 Deno.test("the baseline covers the prioritized layout-free groups", () => {

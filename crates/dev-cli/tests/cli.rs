@@ -4826,6 +4826,33 @@ fn test_dom_inline_handlers_run_for_modern_events() {
 }
 
 #[test]
+fn test_dom_create_element_ns_preserves_modern_namespace_identity() {
+    let dir = build_dir("t_test_dom_create_element_ns");
+    write_in(
+        &dir,
+        "element-ns.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('createElementNS distinguishes SVG and HTML qualified names', () => {\n\
+           const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');\n\
+           const use = document.createElementNS('http://www.w3.org/2000/svg', 'xlink:use');\n\
+           const html = document.createElementNS('http://www.w3.org/1999/xhtml', 'DIV');\n\
+           assertEquals([svg.namespaceURI, svg.nodeName, use.prefix, use.localName, html.localName, html.tagName], ['http://www.w3.org/2000/svg', 'svg', 'xlink', 'use', 'DIV', 'DIV']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom createElementNS");
+    assert!(
+        ran.status.success(),
+        "DOM createElementNS test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_class_lists_track_attributes_and_validate_tokens() {
     let dir = build_dir("t_test_dom_class_lists");
     write_in(

@@ -120,6 +120,16 @@ test("ordinary colon attributes retain their complete local name", () => {
   expect(element.hasAttributeNS(null, "href")).toBe(false);
 });
 
+test("createElementNS preserves modern namespace identity", () => {
+  const document = new Document();
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "xlink:use");
+  const html = document.createElementNS("http://www.w3.org/1999/xhtml", "DIV");
+
+  expect([svg.namespaceURI, svg.nodeName, use.prefix, use.localName]).toEqual(["http://www.w3.org/2000/svg", "svg", "xlink", "use"]);
+  expect([html.namespaceURI, html.localName, html.tagName]).toEqual(["http://www.w3.org/1999/xhtml", "DIV", "DIV"]);
+});
+
 test("documents return the first matching element by ID in tree order", () => {
   const document = new Document();
   const root = document.createElement("main");

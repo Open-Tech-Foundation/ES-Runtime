@@ -444,6 +444,52 @@
       "status": "match"
     },
     {
+      "group": "tree",
+      "name": "create-element-ns-preserves-identity",
+      "chrome": {
+        "result": [
+          "http://www.w3.org/2000/svg",
+          "svg",
+          "xlink",
+          "use",
+          "DIV",
+          "DIV"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "http://www.w3.org/2000/svg",
+          "svg",
+          "xlink",
+          "use",
+          "DIV",
+          "DIV"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "http://www.w3.org/2000/svg",
+          "svg",
+          "xlink",
+          "use",
+          "DIV",
+          "DIV"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "http://www.w3.org/2000/svg",
+          "svg",
+          "xlink",
+          "use",
+          "DIV",
+          "DIV"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match"
+    },
+    {
       "group": "parsing",
       "name": "malformed-markup-is-a-strict-esdev-limit",
       "limit": "esdev rejects malformed HTML instead of applying browser recovery",
@@ -856,7 +902,7 @@
     }
   ],
   "summary": {
-    "match": 28,
+    "match": 29,
     "intentional-limit": 1
   }
 }

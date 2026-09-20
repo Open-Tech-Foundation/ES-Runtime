@@ -27,6 +27,7 @@ namespace) is unstable and may change between minor releases until the API freez
 - Add non-reflecting `HTMLInputElement.indeterminate` state with a `false`
   default.
 - Add inline event-handler dispatch for modern DOM compatibility tests.
+- Add modern `document.createElementNS()` namespace identity and qualified-name support.
 - Begin esdev's DOM implementation with an in-tree strict modern-HTML parser.
   It parses explicit nesting, void elements, attributes, comments, templates,
   raw-text script/style elements and a constrained entity set, while rejecting

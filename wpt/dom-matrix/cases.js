@@ -238,6 +238,17 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "create-element-ns-preserves-identity",
+    run(window) {
+      const { document } = window;
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      const use = document.createElementNS("http://www.w3.org/2000/svg", "xlink:use");
+      const html = document.createElementNS("http://www.w3.org/1999/xhtml", "DIV");
+      return [svg.namespaceURI, svg.nodeName, use.prefix, use.localName, html.localName, html.tagName];
+    },
+  },
+  {
     group: "parsing",
     name: "malformed-markup-is-a-strict-esdev-limit",
     limit: "esdev rejects malformed HTML instead of applying browser recovery",
