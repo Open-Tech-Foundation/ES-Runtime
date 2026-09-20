@@ -685,6 +685,7 @@ export function createTree(events = {}) {
 
   class HTMLDialogElement extends HTMLElement {}
   class HTMLDivElement extends HTMLElement {}
+  class HTMLCanvasElement extends HTMLElement {}
 
   function isSubmitter(control) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
@@ -936,6 +937,7 @@ export function createTree(events = {}) {
     { formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
   installReflectors(HTMLDialogElement, {}, { open: "open" });
+  installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
   installReflectors(HTMLFormElement, { target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
@@ -1206,6 +1208,7 @@ export function createTree(events = {}) {
 
   const ELEMENT_CLASSES = {
     button: HTMLButtonElement,
+    canvas: HTMLCanvasElement,
     dialog: HTMLDialogElement,
     div: HTMLDivElement,
     form: HTMLFormElement,
@@ -1245,5 +1248,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

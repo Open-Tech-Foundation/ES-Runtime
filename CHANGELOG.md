@@ -10,6 +10,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Expose HTMLCanvasElement width and height reflection without a drawing
+  context or layout engine.
 - Add text-input selection range APIs for controlled form fields.
 - Preserve SVG namespaces, canonical foreign-content element names, and HTML
   descendants of parsed `<foreignObject>` trees.

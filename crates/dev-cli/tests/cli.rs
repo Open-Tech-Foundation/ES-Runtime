@@ -5238,6 +5238,35 @@ fn test_dom_inline_styles_track_the_style_attribute() {
 }
 
 #[test]
+fn test_dom_canvas_elements_reflect_bitmap_dimensions() {
+    let dir = build_dir("t_test_dom_canvas_dimensions");
+    write_in(
+        &dir,
+        "canvas.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('canvas dimensions are reflected integer properties', () => {
+             const canvas = document.createElement('canvas');
+             assertEquals(canvas instanceof HTMLCanvasElement, true);
+             assertEquals([canvas.width, canvas.height], [300, 150]);
+             canvas.width = 80; canvas.height = 40;
+             assertEquals([canvas.getAttribute('width'), canvas.getAttribute('height'), canvas.width, canvas.height], ['80', '40', 80, 40]);
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn canvas dimension reflection test");
+    assert!(
+        ran.status.success(),
+        "canvas dimension reflection test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_custom_elements_upgrade_and_react_to_tree_changes() {
     let dir = build_dir("t_test_dom_custom_elements");
     write_in(
