@@ -208,6 +208,8 @@ impl<'a> Parser<'a> {
             }
             if self.rest().starts_with("<!--") {
                 out.children.push(Node::Comment(self.comment()?));
+            } else if self.rest().starts_with("<?") {
+                out.children.push(Node::Comment(self.bogus_comment()?));
             } else if self.rest().starts_with("<!") {
                 if !document || out.doctype || !out.children.is_empty() {
                     return Err(self.error("doctype must appear once, before document content"));
@@ -318,6 +320,19 @@ impl<'a> Parser<'a> {
         }
         self.at += end + 3;
         Ok(value.to_string())
+    }
+
+    /// HTML's bogus-comment token, used by template compilers for inert
+    /// placeholders such as `<?lit$…>`. This is a comment, never an element.
+    fn bogus_comment(&mut self) -> Result<String, Error> {
+        self.expect("<")?;
+        let start = self.at;
+        let Some(end) = self.rest().find('>') else {
+            return Err(self.error("unterminated bogus comment"));
+        };
+        let value = self.source[start..start + end].to_string();
+        self.at += end + 1;
+        Ok(value)
     }
 
     fn doctype(&mut self) -> Result<(), Error> {
@@ -661,6 +676,15 @@ mod tests {
             .expect("template marker attributes parse");
         let Node::Element(template) = &nodes[0] else { panic!("template") };
         assert_eq!(template.attributes[0].name, "lit$123$");
+    }
+
+    #[test]
+    fn parses_processing_instruction_markers_as_bogus_comments() {
+        let nodes = parse_fragment("<p>before<?lit$123$>after</p>").expect("marker parses");
+        let Node::Element(paragraph) = &nodes[0] else { panic!("paragraph") };
+        assert_eq!(paragraph.children, vec![
+            Node::Text("before".to_string()), Node::Comment("?lit$123$".to_string()), Node::Text("after".to_string()),
+        ]);
     }
 
     #[test]
