@@ -147,6 +147,34 @@ class History {
   go(delta = 0) { this.#move(this.#at + Number(delta)); }
 }
 
+class Selection {
+  #ranges = [];
+  get rangeCount() { return this.#ranges.length; }
+  get anchorNode() { return this.#ranges[0]?.startContainer ?? null; }
+  get anchorOffset() { return this.#ranges[0]?.startOffset ?? 0; }
+  get focusNode() { return this.#ranges[0]?.endContainer ?? null; }
+  get focusOffset() { return this.#ranges[0]?.endOffset ?? 0; }
+  get isCollapsed() { return this.#ranges.length === 0 || this.#ranges.every((range) => range.collapsed); }
+  addRange(range) {
+    if (!(range instanceof ranges.Range)) throw new TypeError("Selection.addRange expects a Range");
+    if (range.document !== document) throw new DOMException("The range belongs to another document.", "WrongDocumentError");
+    this.#ranges = [range];
+  }
+  removeAllRanges() { this.#ranges = []; }
+  removeRange(range) { this.#ranges = this.#ranges.filter((candidate) => candidate !== range); }
+  getRangeAt(index) {
+    const range = this.#ranges[Number(index)];
+    if (!range) throw new DOMException("The range index is out of bounds.", "IndexSizeError");
+    return range;
+  }
+  collapse(node, offset = 0) {
+    if (node === null) return this.removeAllRanges();
+    const range = new ranges.Range(document);
+    range.setStart(node, offset); range.collapse(true);
+    this.#ranges = [range];
+  }
+}
+
 class MediaQueryList extends events.EventTarget {
   constructor(media) { super(); this.media = String(media); this.matches = false; }
   addListener(listener) { this.addEventListener("change", listener); }
@@ -282,6 +310,8 @@ const navigator = Object.freeze({
 const history = new History();
 const localStorage = new Storage();
 const sessionStorage = new Storage();
+const selection = new Selection();
+Object.defineProperty(document, "getSelection", { value: () => selection });
 const hostConsole = globalThis.console;
 const browserConsole = Object.create(null);
 for (const method of Object.getOwnPropertyNames(hostConsole)) {
@@ -305,6 +335,7 @@ Object.assign(globalThis, {
   MutationObserver,
   ResizeObserver: NeverObserver,
   Range: ranges.Range,
+  Selection,
   Storage,
   cancelAnimationFrame,
   console: browserConsole,
@@ -316,6 +347,7 @@ Object.assign(globalThis, {
   navigator,
   requestAnimationFrame,
   sessionStorage,
+  getSelection: () => selection,
 });
 for (const method of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
   globalThis[method] = windowEvents[method].bind(windowEvents);

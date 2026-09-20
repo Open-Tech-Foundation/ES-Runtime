@@ -5271,6 +5271,65 @@ fn test_dom_inline_styles_track_the_style_attribute() {
 }
 
 #[test]
+fn test_dom_window_selection_keeps_logical_range_boundaries() {
+    let dir = build_dir("t_test_dom_selection");
+    write_in(
+        &dir,
+        "selection.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('window and document expose the realm selection', () => {
+             const text = document.createTextNode('hello'); document.body.appendChild(text);
+             const range = document.createRange(); range.setStart(text, 2); range.collapse(true);
+             const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+             assertEquals([selection === document.getSelection(), selection.rangeCount, selection.isCollapsed, selection.getRangeAt(0).startOffset], [true, 1, true, 2]);
+             selection.removeAllRanges(); assertEquals(selection.rangeCount, 0);
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn DOM selection test");
+    assert!(
+        ran.status.success(),
+        "DOM selection test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_style_properties_and_progress_values_are_observable() {
+    let dir = build_dir("t_test_dom_style_and_progress");
+    write_in(
+        &dir,
+        "style-progress.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+           test('style property checks and common HTML reflectors work', () => {
+             const div = document.createElement('div');
+             div.style.opacity = 0; div.style.animationIterationCount = 2.5;
+             const progress = document.createElement('progress');
+             const table = document.createElement('table');
+             progress.value = 0; table.border = false;
+             assertEquals(['opacity' in div.style, 'animationIterationCount' in div.style, div.style.opacity, div.style.animationIterationCount, progress instanceof HTMLProgressElement, progress.value, table.getAttribute('border')], [true, true, '0', '2.5', true, 0, 'false']);
+           });
+"#,
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn style and progress DOM test");
+    assert!(
+        ran.status.success(),
+        "style and progress DOM test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_html_element_reflects_editing_and_interaction_state() {
     let dir = build_dir("t_test_dom_html_interaction_reflection");
     write_in(

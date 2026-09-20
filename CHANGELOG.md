@@ -10,6 +10,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Add realm-local logical Selection ranges for caret-preserving updates.
+- Expose progress values and table border reflection, and make inline style
+  properties observable through standard property checks.
 - Reflect content editing, translation, dragging, spell checking, and default
   tab-index state on HTMLElement.
 - Expose HTMLAnchorElement URL reflection and focusable-link defaults.

@@ -687,6 +687,19 @@ export function createTree(events = {}) {
   class HTMLDivElement extends HTMLElement {}
   class HTMLCanvasElement extends HTMLElement {}
   class HTMLAnchorElement extends HTMLElement {}
+  class HTMLProgressElement extends HTMLElement {
+    get value() {
+      const value = Number(this.getAttribute("value"));
+      return Number.isFinite(value) && value >= 0 ? value : 0;
+    }
+    set value(value) { this.setAttribute("value", String(Number(value))); }
+    get max() {
+      const value = Number(this.getAttribute("max"));
+      return Number.isFinite(value) && value > 0 ? value : 1;
+    }
+    set max(value) { this.setAttribute("max", String(Number(value))); }
+  }
+  class HTMLTableElement extends HTMLElement {}
 
   function isSubmitter(control) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
@@ -939,6 +952,7 @@ export function createTree(events = {}) {
   installReflectors(HTMLDialogElement, {}, { open: "open" });
   installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
   Object.defineProperties(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
+  installReflectors(HTMLTableElement, { border: "border" });
   installReflectors(HTMLFormElement, { target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
@@ -1268,10 +1282,12 @@ export function createTree(events = {}) {
     label: HTMLLabelElement,
     option: HTMLOptionElement,
     optgroup: HTMLOptGroupElement,
+    progress: HTMLProgressElement,
     select: HTMLSelectElement,
     slot: HTMLSlotElement,
     textarea: HTMLTextAreaElement,
     template: HTMLTemplateElement,
+    table: HTMLTableElement,
     fieldset: HTMLFieldSetElement,
   };
 
@@ -1300,5 +1316,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

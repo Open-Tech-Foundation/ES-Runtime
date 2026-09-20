@@ -90,6 +90,10 @@ export function createCss({ Element }) {
           if (typeof property === "string" && !(property in target)) return target.getPropertyValue(kebab(property));
           return Reflect.get(target, property, receiver);
         },
+        has(target, property) {
+          if (typeof property === "string" && !(property in target)) return /^--[A-Za-z0-9_-]+$|^[A-Za-z][A-Za-z0-9]*$/.test(property);
+          return Reflect.has(target, property);
+        },
         set(target, property, value, receiver) {
           if (typeof property === "string" && !(property in target)) {
             target.setProperty(kebab(property), value);
