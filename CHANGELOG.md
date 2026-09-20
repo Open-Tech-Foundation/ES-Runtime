@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-09-20
+
 ### Added
 
 - Add realm-local logical Selection ranges for caret-preserving updates.

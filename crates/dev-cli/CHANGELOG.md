@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-20
+
 ### Changed
 
 - Document DOM-test isolation, strict modern-HTML parsing, browser-only
