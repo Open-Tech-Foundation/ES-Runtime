@@ -3394,6 +3394,38 @@ fn test_dom_attributes_are_exposed_by_an_element_prototype_getter() {
 }
 
 #[test]
+fn test_dom_text_inputs_keep_and_clamp_selection_ranges() {
+    let dir = build_dir("t_test_dom_input_selection");
+    write_in(
+        &dir,
+        "selection.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('text inputs expose browser selection state', () => {\n\
+           const input = document.createElement('input'); input.value = 'hello';\n\
+           input.setSelectionRange(1, 4, 'backward');\n\
+           assertEquals([input.selectionStart, input.selectionEnd, input.selectionDirection], [1, 4, 'backward']);\n\
+           input.value = 'hi';\n\
+           assertEquals([input.selectionStart, input.selectionEnd, input.selectionDirection], [2, 2, 'none']);\n\
+           input.setSelectionRange(-1, 99); assertEquals([input.selectionStart, input.selectionEnd], [0, 2]);\n\
+           input.type = 'number';\n\
+           assertEquals([input.selectionStart, input.selectionEnd, input.selectionDirection], [null, null, null]);\n\
+           assertThrows(() => input.setSelectionRange(0, 1), DOMException);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom input selection");
+    assert!(
+        ran.status.success(),
+        "DOM input-selection test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     let dir = build_dir("t_test_dom_selector_pseudo_errors");
     write_in(

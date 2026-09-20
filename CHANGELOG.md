@@ -10,6 +10,7 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Add text-input selection range APIs for controlled form fields.
 - Expose element named attributes through the standard prototype accessor.
 - Add once-call assertions and getter/setter spies to `runtime:test` mocks.
 - Expose `HTMLDivElement` for HTML namespace transitions.

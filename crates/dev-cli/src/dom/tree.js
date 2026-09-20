@@ -15,6 +15,9 @@ const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
 const INPUT_CHECKED = Symbol("esdev DOM input checked state");
 const INPUT_INDETERMINATE = Symbol("esdev DOM input indeterminate state");
+const INPUT_SELECTION_START = Symbol("esdev DOM input selection start");
+const INPUT_SELECTION_END = Symbol("esdev DOM input selection end");
+const INPUT_SELECTION_DIRECTION = Symbol("esdev DOM input selection direction");
 const SHADOW_ROOT = Symbol("esdev DOM shadow root");
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -648,7 +651,11 @@ export function createTree(events = {}) {
   class MathMLElement extends Element {}
 
   class HTMLInputElement extends HTMLElement {
-    constructor(name, ownerDocument) { super(name, ownerDocument); this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; this[INPUT_INDETERMINATE] = false; }
+    constructor(name, ownerDocument) {
+      super(name, ownerDocument);
+      this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; this[INPUT_INDETERMINATE] = false;
+      this[INPUT_SELECTION_START] = null; this[INPUT_SELECTION_END] = null; this[INPUT_SELECTION_DIRECTION] = "none";
+    }
     click() {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -940,7 +947,13 @@ export function createTree(events = {}) {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
     value: {
       get() { return sanitizeInputValue(this.type, this[INPUT_VALUE] ?? this.defaultValue); },
-      set(value) { this[INPUT_VALUE] = sanitizeInputValue(this.type, value); },
+      set(value) {
+        this[INPUT_VALUE] = sanitizeInputValue(this.type, value);
+        if (selectionCapable(this)) {
+          const end = this[INPUT_VALUE].length;
+          this[INPUT_SELECTION_START] = end; this[INPUT_SELECTION_END] = end; this[INPUT_SELECTION_DIRECTION] = "none";
+        }
+      },
     },
     defaultValue: {
       get() { return this.getAttribute("value") ?? (["checkbox", "radio"].includes(this.type) ? "on" : ""); },
@@ -952,6 +965,18 @@ export function createTree(events = {}) {
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
     pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
+    selectionStart: {
+      get() { return selectionCapable(this) ? selectionRange(this)[0] : null; },
+      set(value) { this.setSelectionRange(value, this.selectionEnd ?? value, this.selectionDirection); },
+    },
+    selectionEnd: {
+      get() { return selectionCapable(this) ? selectionRange(this)[1] : null; },
+      set(value) { this.setSelectionRange(this.selectionStart ?? value, value, this.selectionDirection); },
+    },
+    selectionDirection: {
+      get() { return selectionCapable(this) ? this[INPUT_SELECTION_DIRECTION] : null; },
+      set(value) { this.setSelectionRange(this.selectionStart ?? 0, this.selectionEnd ?? 0, value); },
+    },
     valueAsNumber: {
       get() {
         if (this.type === "number") return this.value === "" ? NaN : Number(this.value);
@@ -975,6 +1000,22 @@ export function createTree(events = {}) {
       },
     },
   });
+
+  function selectionCapable(input) { return ["text", "search", "tel", "url", "password"].includes(input.type); }
+  function selectionRange(input) {
+    const end = input.value.length;
+    const start = input[INPUT_SELECTION_START] ?? end;
+    return [Math.min(start, end), Math.min(input[INPUT_SELECTION_END] ?? end, end)];
+  }
+  HTMLInputElement.prototype.setSelectionRange = function(start, end, direction = "none") {
+    if (!selectionCapable(this)) throw domError("InvalidStateError", "This input type does not support selection.");
+    if (!["forward", "backward", "none"].includes(direction)) throw new TypeError("selection direction must be forward, backward, or none.");
+    const length = this.value.length;
+    start = Math.max(0, Math.min(length, Number(start)));
+    end = Math.max(0, Math.min(length, Number(end)));
+    if (end < start) start = end;
+    this[INPUT_SELECTION_START] = start; this[INPUT_SELECTION_END] = end; this[INPUT_SELECTION_DIRECTION] = direction;
+  };
   Object.defineProperties(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
   });
