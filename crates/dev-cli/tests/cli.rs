@@ -4048,6 +4048,7 @@ test('element child accessors skip text and comments', () => {
   const parent = document.createElement('div'); const first = document.createElement('i'); const last = document.createElement('b');
   parent.append('before', first, document.createComment('note'), last, 'after');
   assertEquals([parent.childElementCount, parent.firstElementChild, parent.lastElementChild], [2, first, last]);
+  assertEquals(Array.prototype.slice.call(parent.childNodes), Array.from(parent.childNodes));
 });
 "#,
     );

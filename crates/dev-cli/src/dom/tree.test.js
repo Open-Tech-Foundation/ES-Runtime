@@ -281,6 +281,8 @@ test("node lists and HTML collections are live, indexed, and named", () => {
   expect(root.children).toBe(children);
   expect(childNodes.length).toBe(2);
   expect(childNodes[1]).toBe(card);
+  expect(1 in childNodes).toBe(true);
+  expect(Array.prototype.slice.call(childNodes)).toEqual([root.firstChild, card]);
   expect(children.item(0)).toBe(card);
   expect(cards.length).toBe(1);
   expect(cards.namedItem("primary")).toBe(card);

@@ -139,6 +139,8 @@ namespace) is unstable and may change between minor releases until the API freez
   `document.createElementNS()`.
 - Add `HTMLDialogElement.open` boolean reflection so modern renderers serialize
   the `open` attribute with browser semantics.
+- Make live DOM collections fully indexed properties so array-like consumers can
+  copy hydrated child nodes.
 - Bump `rustls` 0.23.42 → 0.23.45 (with `rustls-webpki` 0.103.15 and
   `aws-lc-rs` 1.18.1) to fix RUSTSEC-2026-0285 (TLS 1.3 handshake messages
   accepted across encryption-level boundaries). `cargo audit` and

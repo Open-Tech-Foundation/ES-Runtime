@@ -64,6 +64,10 @@ export function createTree(events = {}) {
           if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target._values()[Number(property)];
           return Reflect.get(target, property, receiver);
         },
+        has(target, property) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return Number(property) < target._values().length;
+          return Reflect.has(target, property);
+        },
       });
     }
     _values() {
