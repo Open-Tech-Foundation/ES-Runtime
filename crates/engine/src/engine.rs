@@ -269,7 +269,7 @@ pub trait Engine {
     ) -> Result<()> {
         let _ = (transport, options);
         Err(Error::Unsupported(
-            "this build has no inspector: rebuild with ES_RUNTIME_INSPECTOR=1".into(),
+            crate::inspector::NO_INSPECTOR_MESSAGE.into(),
         ))
     }
 

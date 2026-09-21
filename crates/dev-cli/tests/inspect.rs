@@ -8,9 +8,10 @@
 //!
 //! **They adapt to the build.** The inspector is compiled in only when
 //! `ES_RUNTIME_INSPECTOR=1` was set (DECISIONS D59), so each test first asks the
-//! binary which build it is. Without the inspector there is exactly one thing to
-//! assert — that `--inspect` fails with the line telling you how to get one — and
-//! [`inspector_available`] is itself that assertion.
+//! binary which build it is. Without the inspector there are two things to
+//! assert — that `--inspect` fails with the line telling you how to get one,
+//! and that it prints no endpoint first — and [`inspector_available`] is itself
+//! those assertions.
 
 // A test reporting why it skipped is talking to whoever reads the run.
 #![allow(clippy::print_stderr)]
@@ -58,6 +59,17 @@ fn inspector_available() -> bool {
     assert!(
         message.contains("ES_RUNTIME_INSPECTOR=1"),
         "a build without an inspector must say how to get one, got: {message}"
+    );
+    // And it must say so *instead of* serving: no bound port, no announced
+    // endpoint. Printing "Debugger listening on …" first would hand a client a
+    // URL that dies when the engine refuses to attach.
+    assert!(
+        !message.contains("Debugger listening"),
+        "a build without an inspector must not announce an endpoint, got: {message}"
+    );
+    assert!(
+        !message.contains("ws://"),
+        "a build without an inspector must not print a debugger URL, got: {message}"
     );
     false
 }

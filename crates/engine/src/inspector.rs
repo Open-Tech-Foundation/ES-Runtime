@@ -30,6 +30,20 @@
 //! client is a WebSocket — the server lives in `esdev`, where its dependencies
 //! stay, exactly as `oxc` and `rolldown` do.
 
+/// Whether the V8 inspector was compiled into this build: true only when
+/// `ES_RUNTIME_INSPECTOR=1` was in the environment of the `cargo` invocation
+/// that built the engine (see `build.rs`). An embedder asks this *before*
+/// doing anything observable for a debugger — binding a port, printing an
+/// endpoint — so a build that cannot attach fails with [`NO_INSPECTOR_MESSAGE`]
+/// instead of announcing a debugger that will never arrive.
+pub const HAS_INSPECTOR: bool = cfg!(inspector);
+
+/// Reported when a debugger was asked for and [`HAS_INSPECTOR`] is false. One
+/// home for the sentence, so the engine's refusal and an embedder's fail-fast
+/// check cannot drift apart.
+pub const NO_INSPECTOR_MESSAGE: &str =
+    "this build has no inspector: rebuild with ES_RUNTIME_INSPECTOR=1";
+
 /// The two-way channel an inspector session speaks the Chrome DevTools Protocol
 /// over.
 ///

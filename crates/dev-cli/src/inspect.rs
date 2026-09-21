@@ -180,7 +180,14 @@ struct Target {
 /// Binding happens **here**, on the calling thread, so a port already in use is
 /// an error before the program runs rather than a silent failure on a thread
 /// nobody is watching.
+///
+/// Refused before any of that when this build has no inspector compiled in:
+/// the engine could never attach, so binding a port and printing `Debugger
+/// listening on …` first would announce a debugger that dies on arrival.
 pub fn start(config: &InspectConfig, entry: &str) -> Result<Rc<dyn InspectorTransport>, String> {
+    if !es_runtime_cli_common::HAS_INSPECTOR {
+        return Err(es_runtime_cli_common::NO_INSPECTOR_MESSAGE.to_string());
+    }
     let listener = bind(config.address)
         .map_err(|e| format!("cannot listen for a debugger on {}: {e}", config.address))?;
     let address = listener

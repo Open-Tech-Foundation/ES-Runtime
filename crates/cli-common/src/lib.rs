@@ -40,6 +40,11 @@ pub use es_runtime::{AsyncOp, FileSystem, OpDecl, OpError, OpResult, Value};
 /// only implementation there is).
 pub use es_runtime::InspectorTransport;
 
+/// Whether this build can attach a debugger, and what to say when it cannot —
+/// re-exported so `esdev` can fail fast on `--inspect` before binding a port or
+/// printing an endpoint, with the engine's own sentence rather than a copy.
+pub use es_runtime::{HAS_INSPECTOR, NO_INSPECTOR_MESSAGE};
+
 /// The capability vocabulary and the hook that watches it, re-exported for the
 /// same reason: `esdev --trace-permissions` implements the observer and writes
 /// its report in these names, and should reach for one crate to do it.

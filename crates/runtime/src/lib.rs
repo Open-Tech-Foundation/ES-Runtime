@@ -60,8 +60,9 @@ use crate::timer::TimerQueue;
 pub use es_runtime_common::{Capability, CapabilitySet, UncaughtError};
 pub use es_runtime_engine::diagnostics;
 pub use es_runtime_engine::{
-    AsyncOp, CapabilityObserver, Engine, InspectorOptions, InspectorTransport, InterruptHandle,
-    ModuleEvalState, ModuleId, OpDecl, OpError, OpResult, SharedObserver, V8Engine, Value,
+    AsyncOp, CapabilityObserver, Engine, HAS_INSPECTOR, InspectorOptions, InspectorTransport,
+    InterruptHandle, ModuleEvalState, ModuleId, NO_INSPECTOR_MESSAGE, OpDecl, OpError, OpResult,
+    SharedObserver, V8Engine, Value,
 };
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,

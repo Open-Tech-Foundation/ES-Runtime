@@ -43,6 +43,10 @@ is the point, since none of the three has any business in a deployment.
 - Honor DOM `EventTarget` listener options in `esdev test --dom`, including
   passive listeners and signal validation; align constructed event state,
   `window.event`, and event dispatch cleanup with the DOM contract.
+- Fail fast on `--inspect` when this build has no inspector compiled in, instead
+  of printing `Debugger listening on …` and then erroring when the engine
+  refuses to attach. The refusal is the engine's own sentence, shared rather
+  than copied, so the two cannot drift apart.
 
 ## [0.8.0] - 2026-09-20
 
