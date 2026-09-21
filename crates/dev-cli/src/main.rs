@@ -1483,7 +1483,10 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     let files = test::discover(&root, &config.filters);
     config.snapshot_prune = config.filters.is_empty();
     if files.is_empty() {
-        eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
+        eprintln!(
+            "no test files found (looked for {})",
+            test::sought_description()
+        );
         return ExitCode::FAILURE;
     }
 

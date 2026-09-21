@@ -116,6 +116,35 @@ const TEST_SUFFIXES: &[&str] = &[
 /// Directories discovery never descends into.
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "target", ".cache"];
 
+/// What the "no test files found" message claims was looked for.
+///
+/// Derived from [`TEST_SUFFIXES`] rather than written out, so the two cannot
+/// drift apart again: `*.test.js/.mjs/.ts/.tsx/.jsx/.mts and
+/// *.spec.js/.mjs/.ts/.tsx/.jsx/.mts`, whatever the list becomes.
+pub(crate) fn sought_description() -> String {
+    let mut stems: Vec<&str> = Vec::new();
+    let mut exts: Vec<Vec<&str>> = Vec::new();
+    for suffix in TEST_SUFFIXES {
+        // ".test.js" is the stem ".test" plus the extension "js".
+        let rest = &suffix[1..];
+        let dot = rest.find('.').expect("a test suffix names an extension");
+        let (stem, ext) = (&suffix[..dot + 1], &rest[dot + 1..]);
+        match stems.iter().position(|s| *s == stem) {
+            Some(i) => exts[i].push(ext),
+            None => {
+                stems.push(stem);
+                exts.push(vec![ext]);
+            }
+        }
+    }
+    stems
+        .iter()
+        .zip(exts.iter())
+        .map(|(stem, exts)| format!("*.{}.{}", &stem[1..], exts.join("/.")))
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
 /// Runs each file in its own process, up to `jobs` at a time, and reports how
 /// many failed.
 ///
@@ -351,7 +380,7 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
     loop {
         let files = discover(root, &config.filters);
         if files.is_empty() {
-            eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
+            eprintln!("no test files found (looked for {})", sought_description());
         } else {
             if config.isolation == Some(TestIsolation::None) {
                 let code = crate::run_tests_unisolated(&files, config).await;
@@ -467,6 +496,24 @@ mod tests {
         assert!(found[0].ends_with("a.test.mjs"), "{found:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The "no test files" message names what discovery looks for, and it is
+    /// derived from the suffix list rather than written out — so adding a
+    /// suffix updates the message, or fails here.
+    #[test]
+    fn the_no_tests_message_names_what_discovery_looks_for() {
+        assert_eq!(
+            sought_description(),
+            "*.test.js/.mjs/.ts/.tsx/.jsx/.mts and *.spec.js/.mjs/.ts/.tsx/.jsx/.mts"
+        );
+        for suffix in TEST_SUFFIXES {
+            let ext = suffix.rsplit('.').next().expect("an extension");
+            assert!(
+                sought_description().contains(ext),
+                "the message is missing {suffix}"
+            );
+        }
     }
 
     #[test]

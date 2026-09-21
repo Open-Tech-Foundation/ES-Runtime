@@ -32,7 +32,13 @@ is the point, since none of the three has any business in a deployment.
   target output is mirrored underneath it (`dist/server.js` is rebuilt as
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
-  a target's `out`/`outdir`, escape the project, or be the project root.
+   a target's `out`/`outdir`, escape the project, or be the project root.
+
+### Fixed
+
+- Name both discovery conventions in the "no test files found" message, which
+  still listed only `*.test.*` after `*.spec.*` discovery arrived. The message
+  is derived from the suffix list now, so the two cannot drift apart again.
 
 ### Changed
 

@@ -7602,7 +7602,11 @@ fn no_test_files_is_an_error_rather_than_a_silent_pass() {
         !out.status.success(),
         "an empty run must not look like success"
     );
-    assert!(stderr(&out).contains("no test files"), "{}", stderr(&out));
+    let message = stderr(&out);
+    assert!(message.contains("no test files"), "{message}");
+    // Both discovery conventions, since 0.6.0 looks for either.
+    assert!(message.contains("*.test."), "{message}");
+    assert!(message.contains("*.spec."), "{message}");
 }
 
 // ---------------------------------------------------------------------------
