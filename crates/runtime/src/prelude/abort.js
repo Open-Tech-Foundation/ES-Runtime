@@ -4,11 +4,18 @@
 (() => {
   "use strict";
   const INTERNAL = Symbol("AbortSignal.construct");
+  // `esdev test --dom` replaces the public Event constructor with its
+  // realm-local DOM implementation after this prelude has installed
+  // AbortSignal. AbortSignal itself remains an EventTarget from this realm, so
+  // retain its matching constructor instead of looking up the subsequently
+  // replaced global when an abort is dispatched.
+  const AbortEvent = Event;
 
   class AbortSignal extends EventTarget {
     #aborted = false;
     #reason = undefined;
     #onabort = null;
+    #dependents = new Set();
 
     constructor(key) {
       if (key !== INTERNAL) {
@@ -38,13 +45,29 @@
 
     // Internal: abort this signal with `reason` (default AbortError).
     _signalAbort(reason) {
+      // Mark the whole dependent graph before dispatching any event. A listener
+      // may inspect or compose another signal while handling an abort, and it
+      // must already observe every dependent as aborted. Breadth-first marking
+      // also keeps event order at each dependency level deterministic.
       if (this.#aborted) return;
       this.#aborted = true;
       this.#reason =
         reason !== undefined
           ? reason
           : new DOMException("signal is aborted without reason", "AbortError");
-      this.dispatchEvent(new Event("abort"));
+      const pending = [this];
+      for (let index = 0; index < pending.length; index += 1) {
+        const signal = pending[index];
+        for (const dependent of signal.#dependents) {
+          if (dependent.#aborted) continue;
+          dependent.#aborted = true;
+          dependent.#reason = signal.#reason;
+          pending.push(dependent);
+        }
+      }
+      for (const signal of pending) {
+        signal.dispatchEvent(new AbortEvent("abort")[__internal.trustEvent]());
+      }
     }
 
     static abort(reason) {
@@ -70,9 +93,7 @@
           result._signalAbort(source.reason);
           break;
         }
-        source.addEventListener("abort", () => result._signalAbort(source.reason), {
-          once: true,
-        });
+        source.#dependents.add(result);
       }
       return result;
     }

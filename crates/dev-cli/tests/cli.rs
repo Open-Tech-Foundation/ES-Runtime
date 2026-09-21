@@ -2986,6 +2986,43 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_abort_signals_dispatch_in_their_own_event_realm() {
+    let dir = build_dir("t_test_dom_abort_signal_events");
+    write_in(
+        &dir,
+        "abort.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('abort signals notify DOM event targets', () => {\n\
+           const controller = new AbortController();\n\
+           const target = document.createElement('button');\n\
+           let abort = null; let calls = 0;\n\
+           controller.signal.addEventListener('abort', event => { abort = [event.type, event.isTrusted]; });\n\
+           target.addEventListener('go', () => calls++, { signal: controller.signal });\n\
+           controller.abort('finished');\n\
+           target.dispatchEvent(new Event('go'));\n\
+           assertEquals([controller.signal.aborted, controller.signal.reason, abort, calls], [true, 'finished', ['abort', true], 0]);\n\
+           const root = new AbortController();\n\
+           const signals = [root.signal, AbortSignal.any([root.signal]), AbortSignal.any([root.signal])];\n\
+           signals.push(AbortSignal.any([signals[0]]), AbortSignal.any([signals[1]]));\n\
+           const order = []; signals.forEach((signal, index) => signal.addEventListener('abort', () => order.push(index)));\n\
+           root.abort();\n\
+           assertEquals(order, [0, 1, 2, 3, 4]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom abort signal events");
+    assert!(
+        ran.status.success(),
+        "DOM abort-signal test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_installs_a_fresh_document_and_uses_the_strict_parser() {
     let dir = build_dir("t_test_dom");
     write_in(

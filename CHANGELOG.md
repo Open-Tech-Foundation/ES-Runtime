@@ -19,6 +19,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Keep `AbortSignal` event dispatch in its original realm when `esdev test
+  --dom` installs DOM event globals, including ordered propagation through
+  `AbortSignal.any()` dependencies.
 - **`tsr versions` ran the site-version generator under `node`, which cannot
   import a `Cargo.toml`.** The task now invokes `bun` (`tasks.toml`), and
   `website/src/versions.js` is regenerated to the released `0.30.0` / `0.8.0`.
