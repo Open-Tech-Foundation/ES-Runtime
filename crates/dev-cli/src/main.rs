@@ -54,6 +54,7 @@ mod dom;
 mod dts;
 mod guest;
 mod html;
+mod init;
 mod inspect;
 mod install;
 mod plugins;
@@ -71,6 +72,7 @@ mod watch;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
 use config::TestIsolation;
 use create::{CreateConfig, DEFAULT_TEMPLATE};
+use init::InitConfig;
 use inspect::InspectConfig;
 use preview::PreviewConfig;
 use start::StartConfig;
@@ -97,6 +99,8 @@ enum Command {
     Start(Box<StartConfig>),
     /// Write a new project from a template.
     Create(CreateConfig),
+    /// Start a bare project, or adopt an existing directory.
+    Init(InitConfig),
     /// Serve what a build wrote, the way it will be served.
     Preview(PreviewConfig),
     /// Typecheck the project with its own TypeScript.
@@ -116,6 +120,7 @@ USAGE:
 
 COMMANDS:
     create <dir>                Write a new project that already works
+    init [dir]                  Start a bare project, or adopt this one
     start                       Build, run, and keep both current
     build [entry]               Bundle to deploy, or --lib to publish
     test [filter...]            Run the test files
@@ -291,6 +296,37 @@ USAGE:
 It finds the latest release, downloads it, and replaces the running binary
 in place — the same machinery `esrun upgrade` runs. There is nothing else
 to configure, and no other argument to give it.
+";
+
+const INIT_USAGE: &str = "\
+esdev init — start a bare project, or adopt this one
+
+USAGE:
+    esdev init [dir] [options]
+                                Start a bare project in <dir> (. for here),
+                                or adopt the project in it
+    esdev init -h, --help       Show this help
+
+OPTIONS:
+    --name=<name>             The package name. Asked with the directory's
+                              name as the default; new projects only
+    --language=<name>         js or ts. Asked outright; new projects only
+    --entry=<path>            The file to adopt. Asked with the detected
+                              entry as the default; existing projects only
+    --install[=<manager>]     Install after writing: npm, bun, pnpm or yarn.
+                              New projects only
+    --no-install              Write the files and stop
+    -y, --yes                 Take every default; never ask
+    --force                   Write a new project among what is there. It
+                              still never replaces a file
+
+An empty directory gets the bare minimal setup — a greeting server, built
+and run by esdev. A directory with a project in it gets the one file it is
+missing: a working esdev.json, plus its types installed. An esdev.json
+already there is refused outright; so are the other flow's flags, which name
+what to drop rather than being quietly ignored.
+
+    The templates:  https://esrun.opentechf.org/docs/esdev/create
 ";
 
 const CREATE_USAGE: &str = "\
@@ -470,6 +506,9 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "create" {
             return parse_create(argv).map(Command::Create);
+        }
+        if first == "init" {
+            return parse_init(argv).map(Command::Init);
         }
         if first == "preview" {
             return parse_preview(argv).map(Command::Preview);
@@ -1185,6 +1224,71 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     })
 }
 
+/// Parses `esdev init [dir] [options]`.
+///
+/// The directory is optional where `create` requires one: no argument means
+/// this directory, which is what adopting means. Everything else mirrors
+/// `create` — one directory at most, every question answered by a flag, `-y`
+/// answering all of them.
+fn parse_init(args: impl Iterator<Item = String>) -> Result<InitConfig, String> {
+    let mut dirs: Vec<String> = Vec::new();
+    let mut name: Option<String> = None;
+    let mut language: Option<String> = None;
+    let mut entry: Option<String> = None;
+    let mut install: Option<Option<String>> = None;
+    let mut force = false;
+    let mut yes = false;
+    for arg in args {
+        let (flag, value) = split_flag_value(&arg);
+        match flag {
+            "-h" | "--help" => {
+                reject_value(flag, value)?;
+                println!("{INIT_USAGE}");
+                std::process::exit(0);
+            }
+            "--name" => name = Some(require_value(flag, value)?.to_string()),
+            "--language" => language = Some(require_value(flag, value)?.to_string()),
+            "--entry" => entry = Some(require_value(flag, value)?.to_string()),
+            "--install" => {
+                install = Some(Some(
+                    value.unwrap_or(crate::create::DEFAULT_MANAGER).to_string(),
+                ));
+            }
+            "--no-install" => {
+                reject_value(flag, value)?;
+                install = Some(None);
+            }
+            "-y" | "--yes" => {
+                reject_value(flag, value)?;
+                yes = true;
+            }
+            "--force" => {
+                reject_value(flag, value)?;
+                force = true;
+            }
+            flag if flag.starts_with('-') && flag.len() > 1 => {
+                return Err(format!("unknown option: {flag}\n\n{INIT_USAGE}"));
+            }
+            dir => dirs.push(dir.to_string()),
+        }
+    }
+    if dirs.len() > 1 {
+        return Err(format!(
+            "esdev init writes one project; got {} directories.\n\n{INIT_USAGE}",
+            dirs.len()
+        ));
+    }
+    Ok(InitConfig {
+        dir: dirs.into_iter().next().unwrap_or_else(|| ".".to_string()),
+        name,
+        language,
+        entry,
+        install,
+        force,
+        yes,
+    })
+}
+
 /// Parses `esdev start [options]`.
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
@@ -1773,6 +1877,13 @@ async fn main() -> ExitCode {
             Err(e) => Err(format!("cannot read working directory: {e}")),
         },
         Ok(Command::Create(config)) => match create::create(&config) {
+            Ok(report) => {
+                print!("{report}");
+                Ok(())
+            }
+            Err(err) => Err(err),
+        },
+        Ok(Command::Init(config)) => match init::init(&config) {
             Ok(report) => {
                 print!("{report}");
                 Ok(())

@@ -1,0 +1,17 @@
+{
+  "targets": {
+    "server": {
+      "entry": "src/index.ts",
+      "out": "dist/index.js"
+    }
+  },
+  "start": {
+    "run": "server"
+  },
+  "permissions": {
+    "allow": {
+      "listen": ["8080"],
+      "env": ["PORT"]
+    }
+  }
+}

@@ -354,6 +354,24 @@ fn resolve(choices: &[Choice<'_>], answer: &str) -> Option<usize> {
     })
 }
 
+/// A free-text answer with a default, npm-init style.
+///
+/// Empty is the default and end of input is too — a closed stdin is not a
+/// decision. Unlike [`select`], anything typed is an answer: the caller
+/// validates what needs validating. Ask only when [`interactive`] says
+/// somebody is there; away from a terminal the defaults decide.
+pub fn ask_text(question: &str, default: &str) -> Option<String> {
+    eprint!("\n{question} ({default}): ");
+    let _ = std::io::stderr().flush();
+    let line = read_line()?;
+    let answer = line.trim();
+    Some(if answer.is_empty() {
+        default.to_string()
+    } else {
+        answer.to_string()
+    })
+}
+
 /// Reads one line, or `None` at end of input.
 fn read_line() -> Option<String> {
     let mut line = String::new();

@@ -190,7 +190,7 @@ fn files_for<'a>(files: &'a [TemplateFile], mode: Option<&str>) -> Vec<(String, 
 /// repository would stop tracking the very file it means to ship. npm's
 /// packaging has the same problem and the same fix, which is why the convention
 /// is one somebody scaffolding will already have seen.
-const RENAMED: &[(&str, &str)] = &[("_gitignore", ".gitignore")];
+pub(crate) const RENAMED: &[(&str, &str)] = &[("_gitignore", ".gitignore")];
 
 /// What `esdev create` was asked to do.
 pub struct CreateConfig {
@@ -1242,7 +1242,7 @@ fn ask_template() -> Option<String> {
 ///
 /// Only what this machine actually has is offered: naming a package manager
 /// that is not installed is offering an error message.
-fn ask_install() -> Option<crate::install::Manager> {
+pub(crate) fn ask_install() -> Option<crate::install::Manager> {
     let available = crate::install::available();
     if available.is_empty() {
         return None;
@@ -1290,7 +1290,7 @@ fn write(destination: &Path, contents: &[u8], name: &str) -> Result<(), String> 
 }
 
 /// The one thing a template can ask about the project being created.
-const PLACEHOLDER: &str = "{{name}}";
+pub(crate) const PLACEHOLDER: &str = "{{name}}";
 
 /// The project's name, from the directory it is being created in.
 ///
@@ -1298,7 +1298,7 @@ const PLACEHOLDER: &str = "{{name}}";
 /// than a filesystem's: a directory called `My App` would otherwise produce a
 /// manifest that every package manager rejects, on the first command the user
 /// runs.
-fn package_name(target: &Path) -> String {
+pub(crate) fn package_name(target: &Path) -> String {
     let raw = target
         .file_name()
         .or_else(|| target.parent().and_then(Path::file_name))

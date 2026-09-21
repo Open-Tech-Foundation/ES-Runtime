@@ -186,6 +186,29 @@ too", never "write over".
 error: my-app is not empty.
 ```
 
+## Starting from existing code: esdev init
+
+`create` starts from a template; `init` starts from a directory. An empty one
+gets the bare minimal setup — a greeting server in JS or TS, built and run by
+esdev:
+
+```sh
+esdev init my-app
+```
+
+It asks the name (defaulting to the directory), the language, and whether to
+install — `esdev init my-app --language=ts --install=bun` answers all three.
+A directory with a project in it gets the one file it is missing instead: a
+working `esdev.json` with the detected entry, plus its types installed:
+
+```sh
+esdev init            # adopt this directory
+esdev init --entry=src/server.ts
+```
+
+An `esdev.json` already there is refused outright, and each flow refuses the
+other's flags by name. Nothing is ever overwritten.
+
 ## Options
 
 | | |

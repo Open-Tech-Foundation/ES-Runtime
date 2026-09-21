@@ -26,6 +26,13 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- `esdev init` starts a bare project or adopts an existing directory. An
+  empty directory gets the bare minimal setup — a greeting server in JS or
+  TS, built and run by esdev — asked by name, language and package manager.
+  A directory with a project in it gets the one file it is missing: a
+  working `esdev.json` with the detected entry, plus its types installed. An
+  existing `esdev.json` is never overwritten, and each flow refuses the
+  other's flags by name.
 - `esdev check` typechecks the project with its own TypeScript: the
   project's package manager (found the way `--install-types` finds it) runs
   `tsc --noEmit`, with output and exit code handed back unchanged. Anything

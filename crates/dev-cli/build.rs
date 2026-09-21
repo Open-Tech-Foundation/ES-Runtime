@@ -80,6 +80,32 @@ fn main() {
     }
     generated.push_str("];\n");
 
+    // The bare project `esdev init` writes for a new directory: internal, and
+    // deliberately not one of the templates above — `create` lists, validates
+    // and tests every entry of `TEMPLATES`, none of which may know this name.
+    // Paths keep their `shared/` + language overlay prefixes; `init` merges
+    // them.
+    let bare = manifest.join("bare");
+    println!("cargo:rerun-if-changed={}", bare.display());
+    let mut bare_files = Vec::new();
+    collect(&bare, &bare, &mut bare_files);
+    bare_files.sort();
+    generated.push_str(
+        "/// The files `esdev init` scaffolds for a new project: shared files\n\
+         /// plus one language overlay (`js/` or `ts/`).\n\
+         pub static BARE_FILES: &[TemplateFile] = &[\n",
+    );
+    for (relative, absolute) in bare_files {
+        println!("cargo:rerun-if-changed={}", absolute.display());
+        writeln!(
+            generated,
+            "    ({relative:?}, include_bytes!({:?})),",
+            absolute.display().to_string()
+        )
+        .expect("write");
+    }
+    generated.push_str("];\n");
+
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("templates.rs");
     std::fs::write(&out, generated).expect("write templates.rs");
 

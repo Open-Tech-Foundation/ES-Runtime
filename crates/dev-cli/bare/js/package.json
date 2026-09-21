@@ -1,0 +1,15 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esdev start",
+    "build": "esdev build --minify",
+    "build:debug": "esdev build",
+    "start": "esrun --allow-listen=8080 --allow-env=PORT dist/index.js",
+    "test": "esdev test"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "latest"
+  }
+}

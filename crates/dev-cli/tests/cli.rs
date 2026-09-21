@@ -7678,6 +7678,100 @@ fn check_without_typescript_names_the_install() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `esdev init` in an empty directory scaffolds the bare project: the files,
+/// the package named for the directory, and JavaScript unless asked.
+#[test]
+fn init_starts_a_bare_project() {
+    let parent = temp("t_init_new");
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).expect("create parent");
+    let out = esdev()
+        .args(["init", "hello", "-y", "--no-install"])
+        .current_dir(&parent)
+        .output()
+        .expect("spawn esdev init");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let dir = parent.join("hello");
+    for expected in [
+        "package.json",
+        "esdev.json",
+        "src/index.js",
+        ".gitignore",
+        "README.md",
+    ] {
+        assert!(dir.join(expected).is_file(), "{expected} missing");
+    }
+    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read manifest");
+    assert!(manifest.contains("\"name\": \"hello\""), "{manifest}");
+    assert!(
+        !dir.join("node_modules").exists(),
+        "installed despite --no-install"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// `--language=ts` scaffolds the TypeScript overlay instead.
+#[test]
+fn init_bare_typescript_has_its_config() {
+    let parent = temp("t_init_ts");
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).expect("create parent");
+    let out = esdev()
+        .args(["init", "tsapp", "--language=ts", "-y", "--no-install"])
+        .current_dir(&parent)
+        .output()
+        .expect("spawn esdev init");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let dir = parent.join("tsapp");
+    assert!(dir.join("src/index.ts").is_file());
+    assert!(dir.join("tsconfig.json").is_file());
+    assert!(!dir.join("src/index.js").exists());
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// Adopting writes the one missing file: a server entry becomes a run
+/// server target. Without a manifest the types step warns rather than
+/// failing, and offline-friendly.
+#[test]
+fn init_adopts_an_existing_project() {
+    let dir = build_dir("t_init_adopt");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/server.js", "console.log(\"legacy\");\n");
+
+    let out = esdev_in(&dir)
+        .args(["init", "-y"])
+        .output()
+        .expect("spawn esdev init");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let manifest = std::fs::read_to_string(dir.join("esdev.json")).expect("read esdev.json");
+    assert!(
+        manifest.contains("\"entry\": \"src/server.js\""),
+        "{manifest}"
+    );
+    assert!(manifest.contains("\"run\": \"server\""), "{manifest}");
+    assert!(
+        stdout(&out).contains("types not installed"),
+        "{}",
+        stdout(&out)
+    );
+
+    // Twice is a refusal, never an overwrite.
+    let again = esdev_in(&dir)
+        .args(["init", "-y"])
+        .output()
+        .expect("spawn esdev init");
+    assert!(!again.status.success());
+    assert!(
+        stderr(&again).contains("already exists"),
+        "{}",
+        stderr(&again)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An OTF Web project is built and run by `otfw`, not esdev — so `esdev
 /// build` and `esdev start` name that toolchain rather than refusing with
 /// the missing `esdev.json`, which reads as a misconfiguration.
