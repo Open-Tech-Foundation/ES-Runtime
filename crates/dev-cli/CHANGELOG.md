@@ -26,6 +26,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- `esdev check` typechecks the project with its own TypeScript: the
+  project's package manager (found the way `--install-types` finds it) runs
+  `tsc --noEmit`, with output and exit code handed back unchanged. Anything
+  past `check` is `tsc`'s own. Missing dependencies fail with the install
+  rather than fetching behind the toolchain's back.
 - `esdev test` accepts the permission flags (`--deny-all`, `--deny-<name>`,
   `--allow-<name>[=<list>]`) to rehearse the production grant: each test file
   runs under the named capabilities, so a path the suite covers meets its

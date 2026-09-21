@@ -7597,6 +7597,87 @@ fn a_filter_selects_by_path() {
     assert!(!stdout(&out).contains("beta.test.mjs"), "{}", stdout(&out));
 }
 
+/// `esdev check` runs the project's TypeScript through its package manager:
+/// a fake `npm` records the invocation, so no network and no real install is
+/// involved. Unix-only: the fake is a shell script.
+#[cfg(unix)]
+#[test]
+fn check_runs_tsc_through_the_projects_package_manager() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = build_dir("t_check");
+    write_in(
+        &dir,
+        "package.json",
+        r#"{ "packageManager": "npm@1.0.0", "devDependencies": { "typescript": "^5" } }"#,
+    );
+    std::fs::create_dir_all(dir.join("node_modules/typescript")).expect("create ts");
+    write_in(&dir, "node_modules/typescript/package.json", "{}");
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let npm = bin.join("npm");
+    std::fs::write(
+        &npm,
+        "#!/bin/sh\necho \"$@\" >> \"$ESDEV_CHECK_CAPTURE\"\nexit \"${ESDEV_CHECK_EXIT:-0}\"\n",
+    )
+    .expect("write fake npm");
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let capture = dir.join("args.txt");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let out = esdev_in(&dir)
+        .arg("check")
+        .env("PATH", &path)
+        .env("ESDEV_CHECK_CAPTURE", &capture)
+        .env("ESDEV_CHECK_EXIT", "0")
+        .output()
+        .expect("spawn esdev check");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let invoked = std::fs::read_to_string(&capture).expect("read capture");
+    assert!(
+        invoked.contains("exec -- tsc --noEmit"),
+        "tsc was not invoked through npm exec: {invoked}"
+    );
+
+    // The exit code is tsc's own: a failing check fails the command.
+    let out = esdev_in(&dir)
+        .arg("check")
+        .env("PATH", &path)
+        .env("ESDEV_CHECK_CAPTURE", &capture)
+        .env("ESDEV_CHECK_EXIT", "3")
+        .output()
+        .expect("spawn esdev check");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("tsc failed"), "{}", stderr(&out));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without TypeScript installed there is nothing to run: the error names the
+/// install rather than failing inside the package manager.
+#[test]
+fn check_without_typescript_names_the_install() {
+    let dir = build_dir("t_check_missing");
+    write_in(
+        &dir,
+        "package.json",
+        r#"{ "packageManager": "npm@1.0.0", "devDependencies": { "typescript": "^5" } }"#,
+    );
+
+    let out = esdev_in(&dir)
+        .arg("check")
+        .output()
+        .expect("spawn esdev check");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("npm install"), "{}", stderr(&out));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An OTF Web project is built and run by `otfw`, not esdev — so `esdev
 /// build` and `esdev start` name that toolchain rather than refusing with
 /// the missing `esdev.json`, which reads as a misconfiguration.

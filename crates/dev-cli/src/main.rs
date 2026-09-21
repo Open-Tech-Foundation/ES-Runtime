@@ -42,6 +42,7 @@ mod adapter;
 mod assets;
 mod build;
 mod bundler;
+mod check;
 mod config;
 mod contract;
 mod create;
@@ -98,6 +99,8 @@ enum Command {
     Create(CreateConfig),
     /// Serve what a build wrote, the way it will be served.
     Preview(PreviewConfig),
+    /// Typecheck the project with its own TypeScript.
+    Check(Vec<String>),
 }
 
 const USAGE: &str = "\
@@ -116,6 +119,7 @@ COMMANDS:
     start                       Build, run, and keep both current
     build [entry]               Bundle to deploy, or --lib to publish
     test [filter...]            Run the test files
+    check [args...]             Typecheck the project with its own tsc
     preview                     Serve the built output before deploying it
     upgrade [--dry-run]         Update esdev to the latest release
 
@@ -257,6 +261,22 @@ server bundle has nothing to serve: run it under esrun, which is what will run
 it in production.
 
     Building:  https://esrun.opentechf.org/docs/esdev/build
+";
+
+const CHECK_USAGE: &str = "\
+esdev check — typecheck the project with its own TypeScript
+
+USAGE:
+    esdev check [args...]     Run tsc --noEmit through the project's package
+                              manager, passing args through untouched
+    esdev check -h, --help    Show this help
+
+Finds the project's package manager the way --install-types does — the
+packageManager field, then the lockfile, then what is installed — and runs
+its tsc, so the version checked with is the version the project uses.
+Output is tsc's own; a failure adds only the exit code.
+
+    Type definitions:  https://esrun.opentechf.org/esdev/typescript
 ";
 
 const UPGRADE_USAGE: &str = "\
@@ -453,6 +473,14 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "preview" {
             return parse_preview(argv).map(Command::Preview);
+        }
+        if first == "check" {
+            let args: Vec<String> = argv.collect();
+            if args.len() == 1 && (args[0] == "-h" || args[0] == "--help") {
+                println!("{CHECK_USAGE}");
+                std::process::exit(0);
+            }
+            return Ok(Command::Check(args));
         }
         if first == "upgrade" {
             if let Some(extra) = argv.next() {
@@ -1740,6 +1768,10 @@ async fn main() -> ExitCode {
         Ok(Command::Build(request)) => build::run(request).await,
         Ok(Command::Start(config)) => start::start(*config).await,
         Ok(Command::Preview(config)) => preview::run(config).await,
+        Ok(Command::Check(args)) => match std::env::current_dir() {
+            Ok(root) => check::check(&root, &args).await,
+            Err(e) => Err(format!("cannot read working directory: {e}")),
+        },
         Ok(Command::Create(config)) => match create::create(&config) {
             Ok(report) => {
                 print!("{report}");

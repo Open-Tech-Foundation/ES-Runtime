@@ -101,7 +101,7 @@ fn add_dependency() -> (String, bool) {
 /// "usually" is exactly the assumption that produces `npm: command not found`
 /// in a container that ships only bun.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum PackageManager {
+pub(crate) enum PackageManager {
     Bun,
     Pnpm,
     Yarn,
@@ -110,7 +110,7 @@ enum PackageManager {
 
 impl PackageManager {
     /// The program's name, which is also the name it is declared under.
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             PackageManager::Bun => "bun",
             PackageManager::Pnpm => "pnpm",
@@ -130,7 +130,7 @@ impl PackageManager {
         .find(|manager| manager.name().eq_ignore_ascii_case(name))
     }
 
-    fn detect() -> PackageManager {
+    pub(crate) fn detect() -> PackageManager {
         Self::detected(
             || std::fs::read_to_string("package.json").ok(),
             |name| Path::new(name).exists(),
