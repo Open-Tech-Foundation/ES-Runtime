@@ -26,6 +26,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- Build a `.css` command-line entry as a bundled stylesheet instead of silently
+  writing an empty JavaScript file; `--lib` now preserves source-relative CSS
+  files at stable, exports-map-compatible paths. CSS minification also shortens
+  safe hexadecimal colours and zero dimensions, collapses shorthand sides, and
+  removes safely overridden adjacent declarations. `esdev build --help` now
+  names the supported module and stylesheet entry types.
 - Keep `AbortSignal` event dispatch in its original realm when `esdev test
   --dom` installs DOM event globals, including ordered propagation through
   `AbortSignal.any()` dependencies.

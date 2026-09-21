@@ -22,10 +22,15 @@ such as `NODE_ENV`, `worker`, and asset URLs are the consumer's to make.
 | **Dependencies stay external** | Consumers can dedupe, override or patch them. |
 | **Module structure preserved** | An `exports` subpath is a real file and a stack trace names a module. |
 | **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
+| **Stylesheets keep their names** | `src/styles.css` is `dist/styles.css`, so an `exports` map can name it exactly. |
 
 Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
 project is refused rather than replaced. A single-entry application build
 replaces nothing; whole-project application builds replace their `outdir`s.
+
+Library stylesheets are CSS passthrough files: their source-relative paths and
+their relative `@import`s are kept intact. A library cannot hash a stylesheet
+whose exact path its consumer's `exports` map must name.
 
 ## Declarations
 

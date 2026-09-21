@@ -20,9 +20,9 @@
 //! * [`print`] — the tree back to text, losslessly or minified.
 //! * [`bundle`] — the two passes that exist today: `@import` and `url()`.
 //!
-//! A new pass — value minification, syntax lowering, prefixing, CSS modules —
-//! is a module beside `bundle`, over the same tree. None of them is blocked by
-//! anything here, and none of them requires touching the layers below.
+//! A new pass — syntax lowering, prefixing, CSS modules — is a module beside
+//! `bundle`, over the same tree. None of them is blocked by anything here, and
+//! none of them requires touching the layers below.
 //!
 //! # Lossless by construction
 //!
@@ -55,16 +55,16 @@
 //! **Syntax lowering** (nesting, `color-mix()`, logical properties) and
 //! **vendor prefixing** — every one is supported by every browser in the range
 //! this targets, so lowering them today produces a larger file and changes
-//! nothing. **Value minification** (`#ffffff` → `#fff`) — needs a per-property
-//! value grammar, which is the unbounded layer. **CSS modules** and
-//! `import "./x.css"` from JavaScript — one feature, and it needs a stylesheet
-//! to be a *module*, which is a bundler change rather than a CSS one.
+//! nothing. **CSS modules** and `import "./x.css"` from JavaScript — one
+//! feature, and it needs a stylesheet to be a *module*, which is a bundler
+//! change rather than a CSS one.
 //!
 //! [tok]: https://www.w3.org/TR/css-syntax-3/#tokenization
 //! [parse]: https://www.w3.org/TR/css-syntax-3/#parsing
 
 pub mod ast;
 pub mod bundle;
+pub mod minify;
 pub mod modules;
 pub mod parse;
 pub mod print;
@@ -90,7 +90,10 @@ pub struct Stylesheet {
 /// The one entry point [`crate::html`] uses. The layers behind it are public so
 /// that a new pass can be added without routing it through here.
 pub fn build(entry: &Path, minify: bool) -> Result<Stylesheet, String> {
-    let bundled = bundle::bundle(entry)?;
+    let mut bundled = bundle::bundle(entry)?;
+    if minify {
+        minify::apply(&mut bundled.sheet);
+    }
     let code = if minify {
         print::print_minified(&bundled.sheet)
     } else {
@@ -223,6 +226,19 @@ mod tests {
             built.code
         );
         assert_eq!(built.sources, 2);
+    }
+
+    #[test]
+    fn minifying_rewrites_safe_values_and_declarations() {
+        let entry = project(
+            "values",
+            &[(
+                "styles.css",
+                "a { color: #ffffff; margin: 0px 0px 0px 0px; padding: 1px 2px 1px 2px; color: #ff0000 }",
+            )],
+        );
+        let built = build(&entry, true).expect("minifies");
+        assert_eq!(built.code, "a{margin:0;padding:1px 2px;color:#f00}");
     }
 
     /// An `@import` one directory down naming a sibling of *its own*, which is

@@ -61,9 +61,11 @@ against the entry module's directory and is copied into the deployment.
 
 ## Stylesheets and CSS Modules
 
-A `<link rel="stylesheet">` is an entry too. It and everything it `@import`s
-become one hashed file, and a relative `url()` is followed, so fonts and images
-travel with the stylesheet. `--minify` drops comments and collapses whitespace.
+A `<link rel="stylesheet">` is an entry too; so is `esdev build styles.css`.
+It and everything it `@import`s become one bundled stylesheet, and a relative
+`url()` is followed, so fonts and images travel with the stylesheet. `--minify`
+drops comments, collapses whitespace, shortens safe colours and zero dimensions,
+and merges safe repeated declarations.
 
 A `*.module.css` imported from JavaScript is scoped to the file that declares
 it, and the import resolves to the mapping:
@@ -81,8 +83,7 @@ mapping's value becomes a transitive list of class names. A `.css` that is not
 `.module.css` is emitted unscoped for third-party stylesheets.
 
 <Callout type="note" title="What the CSS pipeline does not do">
-  No syntax lowering or vendor prefixing, no value-level minification, and no
-  per-file typed class names.
+  No syntax lowering or vendor prefixing, and no per-file typed class names.
 </Callout>
 
 ## Output layout

@@ -117,6 +117,18 @@ fn reports_its_own_name_in_version_and_help() {
     }
 }
 
+#[test]
+fn build_help_names_module_and_stylesheet_entry_types() {
+    let out = esdev()
+        .args(["build", "--help"])
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let help = stdout(&out);
+    assert!(help.contains(".js/.mjs/.ts/.tsx/.jsx module"), "{help}");
+    assert!(help.contains("<entry.css>"), "{help}");
+}
+
 /// The help used to claim every flag but `--file`/`--watch` was also an
 /// esdev.json key; `--update-snapshots`, `--ci` and `--full-diff` are flags
 /// only. Both halves are pinned: what the help says, and that the file
@@ -8034,6 +8046,60 @@ fn a_stylesheet_is_bundled_with_what_it_imports_and_references() {
     write_in(&dir, "theme/dark.css", ":root { --ink: #111 }\n");
     let (changed, _) = build();
     assert_ne!(url, changed, "an imported file changed and the URL did not");
+}
+
+/// A stylesheet can be the command-line entry too. Previously it travelled
+/// through the JavaScript CSS-import adapter and `rolldown` faithfully wrote
+/// the adapter's empty module as a zero-byte `.js` file.
+#[test]
+fn a_css_entry_bundles_its_imports_to_a_stylesheet() {
+    let dir = build_dir("css_entry");
+    write_in(
+        &dir,
+        "styles.css",
+        "@import './theme.css';\nbody { color: #ffffff }",
+    );
+    write_in(&dir, "theme.css", ":root { margin: 0px 0px 0px 0px }");
+
+    let out = esdev_in(&dir)
+        .args(["build", "styles.css", "--minify"])
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let css = std::fs::read_to_string(dir.join("dist/styles.css")).expect("read stylesheet");
+    assert!(!css.contains("@import"), "{css}");
+    assert_eq!(css, ":root{margin:0}body{color:#fff}");
+    assert!(
+        !dir.join("dist/styles.js").exists(),
+        "wrote a JavaScript shell"
+    );
+}
+
+#[test]
+fn a_library_keeps_css_at_its_exports_map_path() {
+    let dir = build_dir("lib_css");
+    std::fs::create_dir_all(dir.join("src")).expect("create source");
+    write_in(&dir, "src/index.ts", "export const answer: number = 42;\n");
+    write_in(
+        &dir,
+        "src/styles.css",
+        "@import './theme.css';\n.button { color: red }\n",
+    );
+    write_in(&dir, "src/theme.css", ":root { --brand: #123456 }\n");
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src"])
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/styles.css")).expect("fixed stylesheet"),
+        "@import './theme.css';\n.button { color: red }\n"
+    );
+    assert!(
+        dir.join("dist/theme.css").is_file(),
+        "keeps imported sibling"
+    );
 }
 
 /// CSS Modules: a stylesheet the *JavaScript* imports, rather than one the

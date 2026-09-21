@@ -343,7 +343,8 @@ esdev build — build an application to deploy, or a library to publish
 
 USAGE:
     esdev build                          Every target in esdev.json
-    esdev build <entry> [options]        One deployable ES module
+    esdev build <entry> [options]        One deployable .js/.mjs/.ts/.tsx/.jsx module
+    esdev build <entry.css> [options]    One bundled stylesheet
     esdev build --lib <srcdir> [options] A publishable library
 
 OPTIONS:

@@ -361,8 +361,20 @@ fn default_out(entry: &str) -> PathBuf {
     PathBuf::from("dist").join(format!("{stem}.js"))
 }
 
+/// The equivalent of [`default_out`] for a stylesheet entry. CSS is its own
+/// output type, so preserving the old JavaScript suffix here would recreate
+/// the empty-module bug in a less obvious form.
+fn default_stylesheet_out(entry: &str) -> PathBuf {
+    let stem = Path::new(entry)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("styles");
+    PathBuf::from("dist").join(format!("{stem}.css"))
+}
+
 /// The extensions a library's source tree is built from.
 const SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "mjs", "jsx"];
+const CSS_EXTENSION: &str = "css";
 
 /// Every source module under `root`, as an entry: its path, and the name the
 /// output takes (the path relative to `root`, without the extension).
@@ -417,6 +429,81 @@ fn collect_sources(root: &Path, dir: &Path, entries: &mut Vec<(String, String)>)
             path.to_string_lossy().into_owned(),
         ));
     }
+}
+
+/// CSS is a published library surface too: packages commonly export
+/// `./styles.css`, and an exports map cannot name a content-hashed file.  Keep
+/// each stylesheet at its source-relative name, so its own relative @imports
+/// continue to work without inventing a URL policy for the consumer.
+fn copy_library_styles(root: &Path, dir: &Path, out: &Path) -> Result<usize, String> {
+    let mut copied = 0;
+    let read = std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    for entry in read.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') || name == "node_modules" {
+            continue;
+        }
+        if path.is_dir() {
+            copied += copy_library_styles(root, &path, out)?;
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == CSS_EXTENSION)
+        {
+            let relative = path.strip_prefix(root).expect("walked below root");
+            let target = out.join(relative);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+            }
+            std::fs::copy(&path, &target)
+                .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
+/// A stylesheet named directly on the command line is an entry in its own
+/// right, not an empty JavaScript module.  Its imports are bundled just as they
+/// are for an HTML target.
+fn build_stylesheet_entry(config: &BuildConfig, cwd: &Path) -> Result<String, String> {
+    let source = cwd.join(&config.source);
+    let out = config
+        .out
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_stylesheet_out(&config.source));
+    let out = if out.is_absolute() {
+        out
+    } else {
+        cwd.join(out)
+    };
+    let assets = out
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(crate::html::ASSET_DIR);
+    let bundled = crate::css::build(&source, config.minify)?;
+    let mut code = bundled.code;
+    for referenced in bundled.referenced {
+        let bytes = std::fs::read(&referenced.path)
+            .map_err(|e| format!("cannot read {}: {e}", referenced.path.display()))?;
+        let name = crate::html::hashed_name(&referenced.path, &bytes);
+        std::fs::create_dir_all(&assets)
+            .map_err(|e| format!("cannot create {}: {e}", assets.display()))?;
+        std::fs::write(assets.join(&name), bytes)
+            .map_err(|e| format!("cannot write {name}: {e}"))?;
+        code = code.replace(
+            &referenced.placeholder,
+            &format!("{}/{}", crate::html::ASSET_DIR, name),
+        );
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&out, code).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    Ok(out.strip_prefix(cwd).unwrap_or(&out).display().to_string())
 }
 
 /// Whether a specifier names a file in the project rather than a package.
@@ -574,6 +661,13 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     };
     if !cwd.join(&config.source).exists() {
         return Err(format!("cannot read {}", config.source));
+    }
+    if !config.lib
+        && Path::new(&config.source)
+            .extension()
+            .is_some_and(|extension| extension == CSS_EXTENSION)
+    {
+        return build_stylesheet_entry(&config, &cwd);
     }
 
     // An application build names one file; a library build names a source
@@ -938,8 +1032,15 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     // most needs them — npm shows the README on the package page — and until
     // `esdev.json` could describe a library build, a `--lib` target had no way
     // to name them at all.
+    let styles = copy_library_styles(&root, &root, &out_dir)?;
     let copied = copy_assets(&config.assets, &cwd, &out_dir)?;
     counted.push_str(&copied);
+    if styles > 0 {
+        counted.push_str(&format!(
+            ", {styles} stylesheet{}",
+            if styles == 1 { "" } else { "s" }
+        ));
+    }
     warn_about_runtime_imports(&formats, &runtime_imports);
     Ok(format!("{}/ ({counted})", out_dir.display()))
 }
@@ -1812,10 +1913,19 @@ async fn build_single(mut config: BuildConfig) -> Result<String, String> {
     } else if let Some(dir) = config.out_dir.clone() {
         config.out_dir = Some(staging.path(dir).to_string_lossy().into_owned());
     } else {
-        let out = config
-            .out
-            .as_ref()
-            .map_or_else(|| default_out(&config.source), PathBuf::from);
+        let out = config.out.as_ref().map_or_else(
+            || {
+                if Path::new(&config.source)
+                    .extension()
+                    .is_some_and(|extension| extension == CSS_EXTENSION)
+                {
+                    default_stylesheet_out(&config.source)
+                } else {
+                    default_out(&config.source)
+                }
+            },
+            PathBuf::from,
+        );
         config.out = Some(staging.path(out).to_string_lossy().into_owned());
     }
 
