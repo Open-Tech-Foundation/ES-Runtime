@@ -129,7 +129,7 @@ OPTIONS:
     --install-types             Add the runtime: TypeScript definitions to this
                                 project and wire up tsconfig.json
     -h, --help                  Show this help
-    -v, --version               Show the version
+    -v, -V, --version         Show the version
 
 RUN OPTIONS (esrun's, with one deliberate difference):
     esdev grants every capability by default; esrun grants none. The vocabulary

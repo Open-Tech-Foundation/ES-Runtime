@@ -42,6 +42,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- Document `-V` in `esdev --help`, which printed the version all along like
+  `-v` without ever being documented.
+- Say `esdev --watch` is still watching after the program exits instead of
+  going silent until the next save.
+- Label `esdev start`'s update channel as what pages reconnect to on their
+  own, so its WebSocket URL is not mistaken for the app to open.
 - Warn in `--trace-permissions` that the report traces permissions, not
   scopes: the printed line grants every variable and every path, and the old
   footnote said so only for `--allow-read`. Narrowing examples included, so

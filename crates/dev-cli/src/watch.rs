@@ -147,8 +147,12 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
         let restart = tokio::select! {
             status = child.wait() => {
                 match status {
-                    Ok(status) if status.success() => eprintln!("esdev: program exited"),
-                    Ok(status) => eprintln!("esdev: program exited ({status})"),
+                    Ok(status) if status.success() => {
+                        eprintln!("esdev: program exited — waiting for changes")
+                    }
+                    Ok(status) => {
+                        eprintln!("esdev: program exited ({status}) — waiting for changes")
+                    }
                     Err(e) => eprintln!("esdev: cannot wait for the program: {e}"),
                 }
                 // It is gone; there is nothing to stop. Hold here until

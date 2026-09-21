@@ -100,10 +100,17 @@ fn reports_its_own_name_in_version_and_help() {
         "{}",
         stdout(&version)
     );
+    // `-v` and `-V` are the same flag in two spellings, and the help says so.
+    for flag in ["-v", "-V"] {
+        let out = esdev().arg(flag).output().expect("spawn esdev");
+        assert!(out.status.success(), "{flag} failed");
+        assert!(stdout(&out).starts_with("esdev "), "{flag}");
+    }
 
     let help = esdev().arg("--help").output().expect("spawn esdev");
     let text = stdout(&help);
     assert!(text.contains("esdev"), "{text}");
+    assert!(text.contains("-V"), "{text}");
     // The boundary is part of the help, not just the docs: this binary is not a
     // deployment target and the usage text has to say so.
     assert!(text.contains("not a deployment target"), "{text}");

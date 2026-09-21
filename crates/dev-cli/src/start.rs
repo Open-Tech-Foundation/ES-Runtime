@@ -351,7 +351,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             paint.cyan(format_args!("http://127.0.0.1:{port}"))
         ),
         None => eprintln!(
-            "{tag} update channel on {}",
+            "{tag} update channel on {} — pages reconnect on their own",
             paint.cyan(format_args!("ws://127.0.0.1:{port}{HMR_PATH}"))
         ),
     }
