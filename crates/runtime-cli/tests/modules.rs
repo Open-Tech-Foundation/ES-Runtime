@@ -1661,6 +1661,18 @@ fn version_flag_succeeds() {
     assert!(stdout(&out).contains("esrun"), "{}", stdout(&out));
 }
 
+/// `-v` and `-V` are the same flag in two spellings, and the help says so.
+#[test]
+fn short_version_flags_agree_with_the_help() {
+    for flag in ["-v", "-V"] {
+        let out = esrun().arg(flag).output().expect("spawn esrun");
+        assert!(out.status.success(), "{flag} failed");
+        assert!(stdout(&out).contains("esrun"), "{flag}: {}", stdout(&out));
+    }
+    let help = esrun().arg("--help").output().expect("spawn esrun");
+    assert!(stdout(&help).contains("-V"), "{}", stdout(&help));
+}
+
 #[test]
 fn unhandled_rejection_reports_stack_trace() {
     let out = esrun()

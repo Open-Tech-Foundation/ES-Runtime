@@ -57,7 +57,7 @@ USAGE:
     esrun -e=<code>             Run an inline module snippet
     esrun upgrade [--dry-run]   Update esrun to the latest release
     esrun -h, --help            Show this help
-    esrun -v, --version         Show the version
+    esrun -v, -V, --version     Show the version
 
 PERMISSIONS:
     --allow-<name>[=<list>]     Grant one capability, optionally narrowed to a

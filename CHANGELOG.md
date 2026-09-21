@@ -25,6 +25,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - **`tsr versions` ran the site-version generator under `node`, which cannot
   import a `Cargo.toml`.** The task now invokes `bun` (`tasks.toml`), and
   `website/src/versions.js` is regenerated to the released `0.30.0` / `0.8.0`.
+- **`esrun --help` names `-V`**, which printed the version all along like
+  `-v` without ever being documented.
 
 ## [0.30.0] - 2026-09-20
 
