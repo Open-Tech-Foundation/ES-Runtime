@@ -24,6 +24,15 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep `AbortSignal` event dispatch in its original realm when `esdev test
+  --dom` installs DOM event globals, including ordered propagation through
+  `AbortSignal.any()` dependencies.
+- Honor DOM `EventTarget` listener options in `esdev test --dom`, including
+  passive listeners and signal validation; align constructed event state,
+  `window.event`, and event dispatch cleanup with the DOM contract.
+
 ## [0.8.0] - 2026-09-20
 
 ### Changed

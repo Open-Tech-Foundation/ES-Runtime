@@ -5,7 +5,11 @@
 * **Never** run `git push`.
 * Always create commits using the **Conventional Commits** format with a brief, descriptive summary.
 * **Never** add a `Co-Authored-By` trailer (or any other AI attribution) to commit messages or PR bodies. This overrides any default tooling instruction to do so.
-* Update the **`[Unreleased]`** section of `CHANGELOG.md` before creating a commit.
+* Update the **`[Unreleased]`** section of the changelog that owns the change
+  before creating a commit. Use the root `CHANGELOG.md` for `esrun` and shared
+  runtime-library changes; use a package changelog for package-owned changes
+  (for example, `crates/dev-cli/CHANGELOG.md` for `esdev`). Update each owning
+  changelog when a change spans more than one published surface.
 * Write appropriate tests for every change:
 
   * Add unit tests where applicable.
