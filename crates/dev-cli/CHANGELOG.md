@@ -24,6 +24,11 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- Document direct CSS-entry builds, import and asset handling, minification,
+  and stable library stylesheet exports in the build guides.
+
 ### Fixed
 
 - Build a `.css` command-line entry as a bundled stylesheet instead of silently

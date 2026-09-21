@@ -32,6 +32,26 @@ Library stylesheets are CSS passthrough files: their source-relative paths and
 their relative `@import`s are kept intact. A library cannot hash a stylesheet
 whose exact path its consumer's `exports` map must name.
 
+For example, publish `src/styles.css` directly from the path the consumer
+imports:
+
+```json
+{
+  "exports": {
+    ".": "./dist/index.js",
+    "./styles.css": "./dist/styles.css"
+  }
+}
+```
+
+```sh
+esdev build --lib src
+# src/styles.css and src/theme.css → dist/styles.css and dist/theme.css
+```
+
+This is deliberately passthrough rather than a hashed deploy asset: a library's
+consumer controls caching and where its CSS is served.
+
 ## Declarations
 
 Declarations are derived from what the source **says**, never from what a

@@ -10,10 +10,16 @@ import { Callout } from "@opentf/web-docs";
 ```sh
 esdev build server.ts                          # → dist/server.js
 esdev build src/app.ts --out=dist/app.js --minify
+esdev build styles/app.css --minify            # → dist/app.css
 ```
 
 One entry, one file, ES modules out. `runtime:*` imports are left for the
 runtime to serve, and **CommonJS dependencies are converted on the way in**.
+
+For a stylesheet entry, the output is CSS rather than JavaScript: its default
+is `dist/<entry>.css`. It follows local `@import`s before it writes. See
+[Browser builds](/esdev/build/browser#stylesheets-and-css-modules) for CSS
+entry, asset, CSS Module, and library usage.
 
 ## The CommonJS answer
 
@@ -42,7 +48,7 @@ The build is a security step, not only a packaging one.
 
 | Flag | |
 | --- | --- |
-| `--out=<file>` | Where to write it (default `dist/<entry>.js`) |
+| `--out=<file>` | Where to write it (default `dist/<entry>.js`, or `dist/<entry>.css` for a stylesheet) |
 | `--minify` | Minify the output |
 | `--conditions=<list>` | Extra `exports` conditions, comma-separated; these add to `import`, `default`, `worker` |
 | `--define=<name>=<value>` | Replace a name at build time; `process.env.NODE_ENV` defaults to `"production"` |

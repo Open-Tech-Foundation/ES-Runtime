@@ -67,6 +67,43 @@ It and everything it `@import`s become one bundled stylesheet, and a relative
 drops comments, collapses whitespace, shortens safe colours and zero dimensions,
 and merges safe repeated declarations.
 
+### Build a stylesheet directly
+
+Use a CSS entry when the stylesheet is the deployable artifact rather than part
+of an HTML target:
+
+```text
+styles/
+  app.css
+  theme.css
+```
+
+```css
+/* styles/app.css */
+@import "./theme.css";
+
+.button { color: #ffffff; margin: 0px 0px 0px 0px; }
+```
+
+```sh
+esdev build styles/app.css --minify
+# → dist/app.css
+```
+
+`dist/app.css` contains the imported rules, with no local `@import` left to
+fetch. In this example its declaration becomes `.button{color:#fff;margin:0}`.
+Use `--out=public/site.css` when the deployment expects a specific filename.
+The build writes a relative `url(./font.woff2)` under an `assets/` directory
+beside the CSS and rewrites the URL to that emitted file.
+
+### Choose the entry that owns the stylesheet
+
+Use an HTML entry for a browser application: esdev hashes the stylesheet and
+rewrites the document's `<link>`. Use a direct CSS entry when another system
+links or publishes the output and needs the stable filename you selected. A
+rooted, absolute, or remote `@import` is outside the build and remains in the
+stylesheet exactly as written.
+
 A `*.module.css` imported from JavaScript is scoped to the file that declares
 it, and the import resolves to the mapping:
 
