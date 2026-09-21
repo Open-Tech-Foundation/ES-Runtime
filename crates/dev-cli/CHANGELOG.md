@@ -26,6 +26,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- `esdev test` accepts the permission flags (`--deny-all`, `--deny-<name>`,
+  `--allow-<name>[=<list>]`) to rehearse the production grant: each test file
+  runs under the named capabilities, so a path the suite covers meets its
+  deployment's grants before deployment. Forwarded to every child, resolved
+  for `--isolation=none`, and refused up front when the combination cannot
+  exist. Flags only, like the other per-run test options.
 - `esdev start` writes development builds into a dev directory (`.dev` by
   default, `devdir` under `"start"` to name another) instead of into the
   deploy outputs, so a save never overwrites what `esdev build` wrote. Every

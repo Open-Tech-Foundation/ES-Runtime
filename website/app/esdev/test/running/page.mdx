@@ -62,6 +62,34 @@ JSON reporter are unavailable with it.
 
 The default, `--isolation=process`, retains the process-per-file behavior.
 
+## Rehearse the production grant
+
+By default each file runs with every capability, the way `esdev` runs
+anything. That is the loop you develop in — and it is wider than what
+production grants, so a path the suite covers can pass here and die there with
+`NotAllowedError`.
+
+The permission flags narrow each file's run to a production-shaped grant, so a
+covered path meets its deployment's capabilities before deployment:
+
+```sh
+esdev test --deny-all --allow-read=./data --allow-env=DATABASE_URL
+```
+
+`--deny-all` takes everything; `--allow-*` grants back what the suite needs —
+the same flags, resolved the same way, as a run. `--deny-<name>` subtracts a
+single capability instead: `esdev test --deny-net` fails a suite the moment
+anything in it touches the network. A combination that cannot exist
+(`--allow-env=X` without `--deny-all`) is refused before anything runs, not
+once per file.
+
+Grant what the harness needs too, not just the program: snapshot writes need
+`--allow-write`, helper imports `--allow-imports`. The flags travel to every
+child, and `--isolation=none` resolves them for its single process. They are
+flags only, never `esdev.json` keys — a rehearsal decides a single run. Run
+with none of them and nothing changes: full grant, full fidelity, exactly as
+before.
+
 ## Snapshots
 
 Use `toMatchSnapshot` for a reviewed, versioned record of a value. The snapshot

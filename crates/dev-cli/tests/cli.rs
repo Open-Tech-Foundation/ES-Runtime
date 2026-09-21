@@ -7617,6 +7617,89 @@ fn an_otfw_project_is_pointed_at_otfw() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A rehearsal runs each file under the named grants: `--deny-all` takes
+/// everything, and `--allow-*` grants back what the suite needs — the same
+/// flags, resolved the same way, as a run. A path the suite covers this way
+/// meets its deployment's capabilities before deployment.
+#[test]
+fn test_permission_flags_rehearse_the_production_grant() {
+    let dir = build_dir("t_rehearse");
+    write_in(
+        &dir,
+        "env.test.mjs",
+        "import { test, expect } from \"runtime:test\";\n\
+         import { env } from \"runtime:process\";\n\
+         test(\"reads its grant\", () => { expect(env.GREETING).toBe(\"hi\"); });\n",
+    );
+
+    // The grant the suite needs: green.
+    let ok = esdev_in(&dir)
+        .args(["test", "--deny-all", "--allow-env=GREETING"])
+        .env("GREETING", "hi")
+        .output()
+        .expect("spawn esdev test");
+    assert!(ok.status.success(), "{}{}", stdout(&ok), stderr(&ok));
+
+    // Without it: the file fails on the denied capability, not on its logic.
+    // The failure detail is the child's harness report on stdout; the
+    // parent's own stderr carries only the tally.
+    let denied = esdev_in(&dir)
+        .args(["test", "--deny-all"])
+        .env("GREETING", "hi")
+        .output()
+        .expect("spawn esdev test");
+    assert!(!denied.status.success());
+    let denied_output = format!("{}{}", stdout(&denied), stderr(&denied));
+    assert!(denied_output.contains("NotAllowedError"), "{denied_output}");
+
+    // A grant without the denial it narrows is refused up front, not once per
+    // file in every child.
+    let bad = esdev_in(&dir)
+        .args(["test", "--allow-env=GREETING"])
+        .env("GREETING", "hi")
+        .output()
+        .expect("spawn esdev test");
+    assert!(!bad.status.success());
+    assert!(stderr(&bad).contains("--deny-all"), "{}", stderr(&bad));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Filesystem access rehearses the same way: denied by default under
+/// `--deny-all`, granted back narrowed to the directory the suite reads.
+#[test]
+fn test_deny_all_covers_filesystem_access() {
+    let dir = build_dir("t_rehearse_fs");
+    std::fs::create_dir_all(dir.join("data")).expect("create data");
+    write_in(&dir, "data/msg.txt", "hello\n");
+    write_in(
+        &dir,
+        "read.test.mjs",
+        "import { test, expect } from \"runtime:test\";\n\
+         import { file } from \"runtime:fs\";\n\
+         test(\"reads its file\", async () => {\n\
+         \x20 const text = await (await file(\"data/msg.txt\")).text();\n\
+         \x20 expect(text).toBe(\"hello\\n\");\n\
+         });\n",
+    );
+
+    let denied = esdev_in(&dir)
+        .args(["test", "--deny-all"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!denied.status.success());
+    let denied_output = format!("{}{}", stdout(&denied), stderr(&denied));
+    assert!(denied_output.contains("NotAllowedError"), "{denied_output}");
+
+    let ok = esdev_in(&dir)
+        .args(["test", "--deny-all", "--allow-read=./data"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(ok.status.success(), "{}{}", stdout(&ok), stderr(&ok));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn no_test_files_is_an_error_rather_than_a_silent_pass() {
     let dir = build_dir("t_empty");

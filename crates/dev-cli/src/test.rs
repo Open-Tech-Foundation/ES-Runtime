@@ -76,6 +76,13 @@ pub struct TestConfig {
     /// Internal parent-to-child signal: only a complete, unfiltered discovery
     /// pass may prune obsolete entries.
     pub snapshot_prune: bool,
+    /// Permission flags shaping each test file's run (`--deny-all`,
+    /// `--allow-read=…`): a rehearsal of the production grant, so a path the
+    /// suite covers meets its deployment's capabilities before deployment.
+    /// Forwarded to every child, which re-parses them as its own run; the
+    /// parent keeps its full grant for discovery and reporting. Flags only,
+    /// never an `esdev.json` key: a rehearsal decides a single run.
+    pub permission_args: Vec<String>,
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -182,6 +189,7 @@ pub async fn run_all(
                 )
                 .chain(config.ci.then(|| "--ci".to_string()))
                 .chain(config.full_diff.then(|| "--full-diff".to_string()))
+                .chain(config.permission_args.iter().cloned())
                 .chain(std::iter::once(format!(
                     "--_snapshot-prune={}",
                     u8::from(config.snapshot_prune)

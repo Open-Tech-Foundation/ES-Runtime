@@ -187,10 +187,18 @@ OPTIONS:
     -u, --update-snapshots       Write new and changed snapshots
     --ci                         Require every snapshot to be pre-existing
     --full-diff                  Do not truncate a large snapshot diff
+    --deny-all                  Rehearse the production grant: run each file
+                                with no host access, granting back only what
+                                --allow-<name>[=<list>] names
+    --deny-<name>               Deny one capability for each file; repeatable
+    --allow-<name>[=<list>]     Grant one back, optionally narrowed; requires
+                                --deny-all. <name> is one of: read, write,
+                                imports, net, listen, env, run, signals, workers
 
 `setup`, `timeout`, `jobs`, `isolation` and `reporter` are also esdev.json
-keys, under \"test\" — the rest (`--update-snapshots`, `--ci`, `--full-diff`)
-are flags only: they decide a single run, not the project:
+keys, under \"test\" — the rest (`--update-snapshots`, `--ci`, `--full-diff`
+and the permission flags) are flags only: they decide a single run, not the
+project:
 
     { \"test\": { \"setup\": [\"./test/setup.ts\"], \"timeout\": 5000,
                 \"jobs\": 4, \"isolation\": \"process\", \"reporter\": \"json\" } }
@@ -1257,8 +1265,17 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut full_diff = false;
     let mut snapshot_prune = None;
     let mut dom = false;
+    let mut permissions = Permissions::new(Baseline::Everything);
+    let mut permission_args = Vec::new();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
+        // A rehearsal shapes each test file's run, not the parent's
+        // discovery: the raw flags travel to every child, which re-parses
+        // them as its own run, and `--isolation=none` resolves them below.
+        if try_permission_flag(&mut permissions, flag, value)? {
+            permission_args.push(arg);
+            continue;
+        }
         match flag {
             "-h" | "--help" => {
                 reject_value(flag, value)?;
@@ -1365,6 +1382,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             .to_string());
     }
     let snapshot_prune = snapshot_prune.unwrap_or(file.is_some());
+    // A rehearsal of a grant that cannot exist fails before running anything,
+    // not once per file in every child.
+    test_capabilities(&permission_args)?;
     Ok(TestConfig {
         dom,
         file,
@@ -1379,7 +1399,34 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         ci,
         full_diff,
         snapshot_prune,
+        permission_args,
     })
+}
+
+/// Resolves `esdev test`'s permission flags the way a run resolves them.
+///
+/// Shared by the fail-fast validation in [`parse_test`] and the
+/// `--isolation=none` run, which executes files in this process rather than
+/// in children that could re-parse their own command line.
+fn test_capabilities(
+    args: &[String],
+) -> Result<
+    (
+        es_runtime_common::CapabilitySet,
+        es_runtime_cli_common::permissions::Scopes,
+    ),
+    String,
+> {
+    let mut permissions = Permissions::new(Baseline::Everything);
+    for arg in args {
+        let (flag, value) = split_flag_value(arg);
+        // Validated when the command line was parsed; an arg that is not a
+        // permission flag here is an internal caller passing nonsense.
+        if !try_permission_flag(&mut permissions, flag, value)? {
+            return Err(format!("{arg} is not a permission flag."));
+        }
+    }
+    Ok((permissions.resolve()?, permissions.scopes()?))
 }
 
 /// Fills in what `esdev.json`'s `test` section says and the flags did not.
@@ -1472,11 +1519,21 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
                 config.setup.clone(),
             )
         };
+        // A rehearsal still applies here: this is also how every child of a
+        // restricted parent executes, and the flags arrived on its command
+        // line for exactly this run.
+        let (capabilities, scopes) = match test_capabilities(&config.permission_args) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                print_error(&err);
+                return ExitCode::FAILURE;
+            }
+        };
         let run = Config {
             source: Source::File(file.clone()),
             args: Vec::new(),
-            capabilities: es_runtime_common::CapabilitySet::all(),
-            scopes: std::collections::HashMap::new(),
+            capabilities,
+            scopes,
             options: RunOptions::default(),
             transform: Some(std::sync::Arc::new(stripper)),
             bundler_style_resolution: true,
@@ -1609,11 +1666,20 @@ pub(crate) async fn run_tests_unisolated(
         source.push_str(&serde_json::to_string(&url).expect("a URL always serializes as JSON"));
         source.push_str(");");
     }
+    // A rehearsal resolved like any run: these files execute here rather than
+    // in children, so there is no command line for them to re-parse.
+    let (capabilities, scopes) = match test_capabilities(&config.permission_args) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            print_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
     let run = Config {
         source: Source::Inline(source),
         args: Vec::new(),
-        capabilities: es_runtime_common::CapabilitySet::all(),
-        scopes: std::collections::HashMap::new(),
+        capabilities,
+        scopes,
         options: RunOptions::default(),
         transform: Some(std::sync::Arc::new(TypeStripper::new())),
         bundler_style_resolution: true,
