@@ -6,6 +6,9 @@ pre-`1.0` and the public API (the Rust crates and the `runtime:` standard-module
 namespace) is unstable and may change between minor releases until the API freeze
 (SPEC §14).
 
+> This changelog is for **`esrun`** and the shared runtime library. For
+> **`esdev`** changes, see [`crates/dev-cli/CHANGELOG.md`](crates/dev-cli/CHANGELOG.md).
+
 ## [Unreleased]
 
 ### Changed
