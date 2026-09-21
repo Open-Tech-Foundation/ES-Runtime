@@ -435,7 +435,10 @@ impl<'a> Parser<'a> {
             return Err(self.error(format!("{kind} name is missing")));
         };
         let template_marker = kind == "attribute" && matches!(first, '@' | '?' | '.' | '$');
-        if !(first.is_ascii_lowercase() || allow_svg_case && first.is_ascii_uppercase() || template_marker) {
+        if !(first.is_ascii_lowercase()
+            || allow_svg_case && first.is_ascii_uppercase()
+            || template_marker)
+        {
             return Err(self.error(format!(
                 "{kind} names must start with a lowercase ASCII letter"
             )));
@@ -674,17 +677,26 @@ mod tests {
     fn accepts_template_marker_attributes() {
         let nodes = parse_fragment("<template lit$123$><i @click$part ?hidden$part .value$part data$part=one></i></template>")
             .expect("template marker attributes parse");
-        let Node::Element(template) = &nodes[0] else { panic!("template") };
+        let Node::Element(template) = &nodes[0] else {
+            panic!("template")
+        };
         assert_eq!(template.attributes[0].name, "lit$123$");
     }
 
     #[test]
     fn parses_processing_instruction_markers_as_bogus_comments() {
         let nodes = parse_fragment("<p>before<?lit$123$>after</p>").expect("marker parses");
-        let Node::Element(paragraph) = &nodes[0] else { panic!("paragraph") };
-        assert_eq!(paragraph.children, vec![
-            Node::Text("before".to_string()), Node::Comment("?lit$123$".to_string()), Node::Text("after".to_string()),
-        ]);
+        let Node::Element(paragraph) = &nodes[0] else {
+            panic!("paragraph")
+        };
+        assert_eq!(
+            paragraph.children,
+            vec![
+                Node::Text("before".to_string()),
+                Node::Comment("?lit$123$".to_string()),
+                Node::Text("after".to_string()),
+            ]
+        );
     }
 
     #[test]
