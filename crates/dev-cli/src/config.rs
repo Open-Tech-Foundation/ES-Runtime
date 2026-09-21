@@ -257,7 +257,7 @@ impl Target {
 }
 
 /// Whether an entry names a document rather than a module.
-fn is_html_entry(entry: &str) -> bool {
+pub(crate) fn is_html_entry(entry: &str) -> bool {
     Path::new(entry)
         .extension()
         .and_then(|e| e.to_str())

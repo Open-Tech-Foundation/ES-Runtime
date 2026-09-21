@@ -1901,6 +1901,25 @@ async fn build_single(mut config: BuildConfig) -> Result<String, String> {
             std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?
         }
     };
+    // Before anything is staged: a missing entry is missing, whatever its
+    // suffix — and a document is not a module. An HTML entry is built from an
+    // esdev.json target, where the output directory it needs is described, so
+    // naming one here is refused with where it belongs rather than fed to the
+    // module bundler, whose JSX parse error is three steps from the cause.
+    if !root.join(&config.source).exists() {
+        return Err(format!("cannot read {}", config.source));
+    }
+    if crate::config::is_html_entry(&config.source) {
+        return Err(format!(
+            "{} is a document, and `esdev build <entry>` bundles a module.\n\n\
+             An HTML entry is built from an {file} target, where the output \
+             directory it needs is described:\n\n\
+             \x20   {{ \"targets\": {{ \"web\": {{ \"entry\": \"index.html\", \"outdir\": \"dist\" }} }} }}\n\n\
+             `esdev build` with no entry builds what the project describes.",
+            config.source,
+            file = crate::config::FILE_NAME,
+        ));
+    }
     let mut staging = crate::staging::Staging::new(&root, true)?;
 
     if config.lib {
@@ -2078,6 +2097,45 @@ mod tests {
         let err = guard_replacement(&dir.join("bundle.js"), &dir.join("src")).expect_err("refused");
         assert!(err.contains("is a file"), "{err}");
         assert!(dir.join("bundle.js").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A document named on the command line is refused with where it belongs,
+    /// not fed to the module bundler: its JSX parse error names the file and
+    /// nothing more. Refused before anything is staged, so there is no output
+    /// directory left behind to explain.
+    #[tokio::test]
+    async fn a_document_entry_is_refused_with_a_pointer_to_targets() {
+        let dir = clean_fixture("html");
+        std::fs::write(dir.join("index.html"), "<!DOCTYPE html>").expect("write");
+
+        let config = BuildConfig {
+            source: "index.html".to_string(),
+            out: None,
+            out_dir: None,
+            platform: crate::config::Platform::Server,
+            assets: Vec::new(),
+            root: Some(dir.clone()),
+            dev: false,
+            minify: false,
+            conditions: Vec::new(),
+            defines: Vec::new(),
+            sourcemap: None,
+            alias: Vec::new(),
+            lib: false,
+            formats: Vec::new(),
+            types: true,
+            dts_bundle: None,
+            plugins: Vec::new(),
+        };
+        let err = build_single(config).await.expect_err("refused");
+        assert!(err.contains("is a document"), "{err}");
+        assert!(err.contains(crate::config::FILE_NAME), "{err}");
+        assert!(
+            dir.read_dir().expect("read").count() == 3,
+            "the refusal staged something: {:?}",
+            dir.read_dir().expect("read").collect::<Vec<_>>()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

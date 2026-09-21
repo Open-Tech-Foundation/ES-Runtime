@@ -47,6 +47,11 @@ is the point, since none of the three has any business in a deployment.
   of printing `Debugger listening on …` and then erroring when the engine
   refuses to attach. The refusal is the engine's own sentence, shared rather
   than copied, so the two cannot drift apart.
+- Refuse an `.html`/`.htm` file named as `esdev build <entry>` with where it
+  belongs — an `esdev.json` target — instead of feeding the document to the
+  module bundler, whose JSX parse error is three steps from the cause. The
+  refusal happens before anything is staged, so no output directory is left
+  behind.
 
 ## [0.8.0] - 2026-09-20
 

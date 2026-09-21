@@ -129,6 +129,23 @@ fn build_help_names_module_and_stylesheet_entry_types() {
     assert!(help.contains("<entry.css>"), "{help}");
 }
 
+/// A document is not a module: naming an HTML file as the build entry is
+/// refused with where it belongs (an esdev.json target), rather than fed to
+/// the module bundler whose JSX parse error is three steps from the cause.
+#[test]
+fn a_document_build_entry_is_refused_with_a_pointer_to_targets() {
+    write("build-entry-index.html", "<!DOCTYPE html>\n");
+    let out = esdev()
+        .args(["build", "./build-entry-index.html"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!out.status.success(), "built a document as a module");
+    let message = slash_paths(&stderr(&out));
+    assert!(message.contains("is a document"), "{message}");
+    assert!(message.contains("esdev.json"), "{message}");
+    assert!(!message.contains("JSX"), "{message}");
+}
+
 /// The help used to claim every flag but `--file`/`--watch` was also an
 /// esdev.json key; `--update-snapshots`, `--ci` and `--full-diff` are flags
 /// only. Both halves are pinned: what the help says, and that the file
