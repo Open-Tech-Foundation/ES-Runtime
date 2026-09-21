@@ -579,6 +579,7 @@ async fn rebuild(project: &Arc<Project>, watched: &[String], port: u16, hot: boo
         dev: Some(Dev {
             reload_port: port,
             hot,
+            outdir: PathBuf::from(project.start.devdir()),
         }),
     }));
     match crate::build::run(request).await {
@@ -760,7 +761,12 @@ fn running_output(project: &Project, name: &str) -> Result<PathBuf, String> {
              `run` out and esdev serves the output itself."
         ));
     }
-    Ok(project.dir.join(crate::build::output_path(target)))
+    // Under the dev directory: the loop runs the development build, which is
+    // what the last rebuild wrote — never the deployment in `dist/`.
+    Ok(project
+        .dir
+        .join(project.start.devdir())
+        .join(crate::build::output_path(target)))
 }
 
 /// The directory to serve when no target is run.
@@ -792,27 +798,22 @@ fn serve_dir(project: &Project) -> Result<Option<PathBuf>, String> {
     let Output::Dir(dir) = &first.output else {
         return Err("an HTML target writes a directory".to_string());
     };
-    Ok(Some(project.dir.join(dir)))
+    // The development build, like everything else the loop reads: a `serve`
+    // directory names somewhere as it stands and is left alone.
+    Ok(Some(project.dir.join(project.start.devdir()).join(dir)))
 }
 
 /// Every directory the build writes into.
 ///
-/// The watcher has to ignore these or it never settles: a rebuild writes files,
-/// the watcher sees them, and it rebuilds. `dist` and `target` are ignored by
+/// That is one directory: the dev loop mirrors every target output underneath
+/// it, so ignoring it ignores them all. `dist` and `target` are ignored by
 /// name already ([`crate::watch`]), but an output directory is whatever the
 /// config called it, and only the config knows.
+///
+/// The watcher has to ignore these or it never settles: a rebuild writes files,
+/// the watcher sees them, and it rebuilds.
 fn output_dirs(project: &Project) -> Vec<PathBuf> {
-    project
-        .targets
-        .iter()
-        .filter_map(|target| match &target.output {
-            Output::Dir(dir) => Some(project.dir.join(dir)),
-            Output::File(file) => Path::new(file)
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .map(|parent| project.dir.join(parent)),
-        })
-        .collect()
+    vec![project.dir.join(project.start.devdir())]
 }
 
 /// Whether a changed path is one to rebuild for.
@@ -1114,11 +1115,11 @@ mod tests {
         ));
     }
 
-    /// A build target's output directory is whatever the config called it, so
-    /// the watcher's fixed list of machine-written names cannot be the whole
-    /// answer.
+    /// The dev loop mirrors every target output under one directory, so the
+    /// watcher ignores that directory rather than each output in turn — and a
+    /// save can never rebuild into the deployment.
     #[test]
-    fn the_output_directories_come_from_the_config() {
+    fn the_dev_directory_is_what_the_watcher_ignores() {
         let project = crate::config::parse(
             r#"{ "targets": {
                    "server": { "entry": "src/s.ts", "out": "build/server.js" },
@@ -1129,9 +1130,61 @@ mod tests {
         .expect("parsed")
         .expect("a config");
 
-        let dirs = output_dirs(&project);
-        assert!(dirs.contains(&PathBuf::from("/p/build")), "{dirs:?}");
-        assert!(dirs.contains(&PathBuf::from("/p/public_html")), "{dirs:?}");
+        assert_eq!(output_dirs(&project), vec![PathBuf::from("/p/.dev")]);
+    }
+
+    /// A named dev directory is the same directory by another name, for the
+    /// watcher and for everything the loop runs or serves.
+    #[test]
+    fn a_named_dev_directory_is_used_everywhere() {
+        let project = crate::config::parse(
+            r#"{ "targets": {
+                   "server": { "entry": "src/s.ts", "out": "dist/server.js" },
+                   "web": { "entry": "index.html", "outdir": "dist" } },
+                 "start": { "run": "server", "devdir": "tmp-dev" } }"#,
+            PathBuf::from("/p"),
+            "esdev.json",
+        )
+        .expect("parsed")
+        .expect("a config");
+
+        assert_eq!(output_dirs(&project), vec![PathBuf::from("/p/tmp-dev")]);
+        assert_eq!(
+            running_output(&project, "server").expect("output"),
+            PathBuf::from("/p/tmp-dev/dist/server.js")
+        );
+    }
+
+    /// What the loop runs and serves is the development build: the server
+    /// bundle it restarts, and the directory it serves a frontend from, both
+    /// mirrored under the dev directory rather than read from the deployment.
+    #[test]
+    fn the_loop_runs_and_serves_the_development_builds() {
+        let backend = crate::config::parse(
+            r#"{ "targets": { "server": { "entry": "src/s.ts", "out": "dist/server.js" } },
+                 "start": { "run": "server" } }"#,
+            PathBuf::from("/p"),
+            "esdev.json",
+        )
+        .expect("parsed")
+        .expect("a config");
+        assert_eq!(
+            running_output(&backend, "server").expect("output"),
+            PathBuf::from("/p/.dev/dist/server.js")
+        );
+        assert!(serve_dir(&backend).expect("served").is_none());
+
+        let frontend = crate::config::parse(
+            r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+            PathBuf::from("/p"),
+            "esdev.json",
+        )
+        .expect("parsed")
+        .expect("a config");
+        assert_eq!(
+            serve_dir(&frontend).expect("served"),
+            Some(PathBuf::from("/p/.dev/dist"))
+        );
     }
 
     #[test]

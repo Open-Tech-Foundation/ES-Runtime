@@ -24,6 +24,16 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- `esdev start` writes development builds into a dev directory (`.dev` by
+  default, `devdir` under `"start"` to name another) instead of into the
+  deploy outputs, so a save never overwrites what `esdev build` wrote. Every
+  target output is mirrored underneath it (`dist/server.js` is rebuilt as
+  `.dev/dist/server.js`); the loop runs and serves those builds, and the
+  watcher ignores the directory. The name refuses anything that would overlap
+  a target's `out`/`outdir`, escape the project, or be the project root.
+
 ### Changed
 
 - Document direct CSS-entry builds, import and asset handling, minification,

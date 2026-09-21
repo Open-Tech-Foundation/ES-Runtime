@@ -10,9 +10,10 @@ esdev start
 ```
 
 It is [`esdev build`](/esdev/build) on a loop. A dev build differs from a
-release build in three ways and no more: `process.env.NODE_ENV` is
-`"development"`, nothing is content-hashed, and the browser bundle is built so
-a module can be replaced in place.
+release build in four ways and no more: `process.env.NODE_ENV` is
+`"development"`, nothing is content-hashed, the browser bundle is built so
+a module can be replaced in place — and it is written under the dev
+directory (`.dev` by default) rather than where `esdev build` deploys.
 
 On a change: rebuild, restart the server if its bundle moved, and patch the
 page — or reload it if nothing accepted the change. Read the details in
@@ -29,9 +30,21 @@ process under the config's `permissions` and restarts it with a `SIGTERM` — th
 graceful stop production gets, so a request in flight when you save is answered
 rather than dropped.
 
-**It is the same file production runs.** No dev server stands in for it,
-nothing wraps it, and there is no second code path that exists only on your
-machine.
+**It is the same build production runs, in development profile.** No dev
+server stands in for it, nothing wraps it, and there is no second code path
+that exists only on your machine. What differs is only where its bytes land:
+every target output is mirrored under `.dev/` (`dist/server.js` is rebuilt
+as `.dev/dist/server.js`), so a save never overwrites the deployment. Run
+[`esdev build`](/esdev/build) again before deploying — `dist/` is only ever
+a release build now.
+
+```json
+"start": { "devdir": "tmp-dev" }
+```
+
+names another directory for the loop's builds. It must stay inside the
+project and clear of every target's `out` and `outdir`; anything overlapping
+is refused when the file is read.
 
 A project with no server of its own — a static site or single-page app — has
 nothing to run, so esdev serves the output directory itself: files, an
@@ -73,7 +86,7 @@ pin the endpoint.
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
 
 ```json
-"start": { "run": "server", "watch": ["server", "web"], "serve": "dist", "port": 8080 }
+"start": { "run": "server", "watch": ["server", "web"], "serve": "dist", "port": 8080, "devdir": ".dev" }
 ```
 
 `watch` narrows what gets rebuilt; leaving it out rebuilds everything. `serve`
@@ -83,9 +96,10 @@ overrides the directory served when there is no `run`.
 
 `esdev start` watches the project root, every explicitly scoped `--allow-read`
 path from `esdev.json` or the command line, and the build inputs those paths
-may contain. Target output directories are always excluded so a build cannot
-trigger itself. Rules in the project's root `.gitignore` also exclude matching
-paths; other directory names are not hardcoded exclusions.
+may contain. The dev directory is always excluded, which covers every target
+output at once since the loop mirrors them all underneath it — so a build
+cannot trigger itself. Rules in the project's root `.gitignore` also exclude
+matching paths; other directory names are not hardcoded exclusions.
 
 That includes modules and the things a build consumes that a run does not:
 `index.html`, stylesheets, images and fonts. An explicit allowed path is both

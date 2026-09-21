@@ -1645,6 +1645,14 @@ pub struct Dev {
     /// between editing a form and refilling it. Both numbers are development
     /// only; nothing shipped is affected either way.
     pub hot: bool,
+    /// Where this build writes, relative to the project: the dev loop's own
+    /// directory (`Start::devdir`), mirroring the project's layout
+    /// (`dist/server.js` becomes `.dev/dist/server.js`).
+    ///
+    /// A release build has no such directory — its outputs *are* the
+    /// deployment — which is the whole of the difference this field makes: a
+    /// save rebuilds under here, and never overwrites what `esdev build` wrote.
+    pub outdir: PathBuf,
 }
 
 /// Where a target's bundle lands.
@@ -1743,6 +1751,15 @@ async fn build_targets(
     // cost forty times a minute. A project with no `plugins` starts nothing.
     let host = crate::plugins::host(&project.project.dir, &project.project.plugins).await?;
 
+    // Where a target writes. A release build writes its outputs — the
+    // deployment. A dev-loop build writes them mirrored under its own
+    // directory, so a save never overwrites the deployment.
+    let devdir: Option<&Path> = project.dev.as_ref().map(|dev| dev.outdir.as_path());
+    let place = |path: &Path| match devdir {
+        Some(dev) => dev.join(path),
+        None => path.to_path_buf(),
+    };
+
     for target in selected {
         // The scheme this target named, and only where it can mean anything: a
         // hot dev loop. A release build has no replacement to keep state
@@ -1775,7 +1792,7 @@ async fn build_targets(
                     target.name
                 ));
             };
-            let out_dir = staging.path(dir);
+            let out_dir = staging.path(place(Path::new(dir)));
             let written = crate::html::build(
                 target,
                 &project.project.dir,
@@ -1807,10 +1824,12 @@ async fn build_targets(
 
         let (out, out_dir) = match &target.output {
             crate::config::Output::File(out) => {
-                (Some(staging.path(out).to_string_lossy().into_owned()), None)
+                let out = staging.path(place(Path::new(out)));
+                (Some(out.to_string_lossy().into_owned()), None)
             }
             crate::config::Output::Dir(dir) => {
-                (None, Some(staging.path(dir).to_string_lossy().into_owned()))
+                let dir = staging.path(place(Path::new(dir)));
+                (None, Some(dir.to_string_lossy().into_owned()))
             }
         };
         let written = build(BuildConfig {
@@ -1871,7 +1890,7 @@ async fn build_targets(
     // it after the whole build is the difference between generating HTML that
     // points at a file and HTML that points at one that does not exist yet.
     for target in selected.iter().filter(|target| target.run_after_build) {
-        let output = staging.path(output_path(target));
+        let output = staging.path(place(&output_path(target)));
         run_output(&project.project.dir, &output)
             .await
             .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;

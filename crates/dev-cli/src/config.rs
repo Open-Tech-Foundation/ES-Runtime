@@ -46,6 +46,14 @@ use serde_json::{Map, Value};
 /// The file looked for when `--config` did not name one.
 pub const FILE_NAME: &str = "esdev.json";
 
+/// Where the dev loop writes when `start` does not name a directory.
+///
+/// A hidden sibling of the deploy outputs rather than one of them, so a save
+/// never overwrites a deployment: `dist/server.js` is built for development
+/// as `.dev/dist/server.js`. The same name the OTF toolchain uses for its own
+/// dev-server working dir, so the two never collide.
+pub const DEFAULT_DEV_DIR: &str = ".dev";
+
 /// A parsed `esdev.json`.
 #[derive(Debug)]
 pub struct Project {
@@ -133,6 +141,23 @@ pub struct Start {
     /// output itself, it is esdev's listener. Either way it is the address a
     /// developer types, which is why it has the plain name.
     pub port: Option<u16>,
+    /// Where the dev loop writes its builds, as a directory in the project.
+    /// `None` is [`DEFAULT_DEV_DIR`].
+    ///
+    /// Every target output is mirrored underneath it (`dist/server.js` becomes
+    /// `.dev/dist/server.js`), so what a save rebuilds never touches what
+    /// `esdev build` deploys. A directory of the loop's own, not a second
+    /// spelling of an output: it may not overlap any target's `out` or
+    /// `outdir`, and it stays inside the project.
+    pub devdir: Option<String>,
+}
+
+impl Start {
+    /// Where the dev loop writes: `devdir`, or [`DEFAULT_DEV_DIR`] when the
+    /// file is silent.
+    pub fn devdir(&self) -> &str {
+        self.devdir.as_deref().unwrap_or(DEFAULT_DEV_DIR)
+    }
 }
 
 /// What `esdev test` is configured to do in this project.
@@ -326,7 +351,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// command that uses it has not been written yet is deliberate: a typo in
 /// `start` should be reported by the build that read the file, not held until
 /// the day somebody runs the other command.
-const START_KEYS: &[&str] = &["run", "watch", "serve", "port"];
+const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "devdir"];
 
 /// The keys `test` may carry.
 const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "isolation", "reporter"];
@@ -800,12 +825,83 @@ fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, St
         Some(serve) => Some(string(serve, file, "`start`'s `serve`")?.to_string()),
     };
     let port = read_port(map, "port", file)?;
+    let devdir = read_devdir(map, file, targets)?;
     Ok(Start {
         run,
         watch,
         serve,
         port,
+        devdir,
     })
+}
+
+/// `start`'s `devdir`: the directory the dev loop's builds go into.
+///
+/// Validated against the targets it is defined to stay clear of: a dev
+/// directory that *is* a deploy output, contains one, or sits inside one
+/// recreates the overwrite the separation exists to prevent — silently, one
+/// save at a time.
+fn read_devdir(
+    map: &Map<String, Value>,
+    file: &str,
+    targets: &[Target],
+) -> Result<Option<String>, String> {
+    let Some(value) = map.get("devdir") else {
+        return Ok(None);
+    };
+    let devdir = string(value, file, "`start`'s `devdir`")?;
+    if devdir.is_empty() {
+        return Err(format!(
+            "{file}: `start`'s `devdir` is empty — name the directory the dev loop writes into (\"{DEFAULT_DEV_DIR}\")."
+        ));
+    }
+    let path = Path::new(devdir);
+    if path.is_absolute() {
+        return Err(format!(
+            "{file}: `start`'s `devdir` is absolute, and the dev loop writes inside the project — write \"{DEFAULT_DEV_DIR}\", not \"{devdir}\"."
+        ));
+    }
+    let flat = flatten(path);
+    if flat.as_os_str().is_empty() {
+        return Err(format!(
+            "{file}: `start`'s `devdir` is the project root, which is where `esdev build` deploys — \
+             the dev loop needs a directory of its own (\"{DEFAULT_DEV_DIR}\"), or every save overwrites the deployment."
+        ));
+    }
+    if flat
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "{file}: `start`'s `devdir` escapes the project, and the dev loop writes inside it — keep it under the project (\"{DEFAULT_DEV_DIR}\")."
+        ));
+    }
+    for target in targets {
+        let out = match &target.output {
+            Output::File(out) | Output::Dir(out) => out,
+        };
+        if overlaps(&flat, &flatten(Path::new(out))) {
+            return Err(format!(
+                "{file}: `start`'s `devdir` (\"{devdir}\") overlaps target \"{}\"'s output (\"{out}\") — \
+                 the dev loop would write into what `esdev build` deploys. Give it a directory of its own.",
+                target.name
+            ));
+        }
+    }
+    Ok(Some(devdir.to_string()))
+}
+
+/// A path with its `.` components removed, so `dist/` and `dist` compare as
+/// the same directory and `./` flattens to the project root.
+fn flatten(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect()
+}
+
+/// Whether two project-relative paths overlap: equal, or one inside the other.
+fn overlaps(a: &Path, b: &Path) -> bool {
+    a == b || a.starts_with(b) || b.starts_with(a)
 }
 
 /// One of `start`'s port numbers, checked for being one.
@@ -1747,6 +1843,70 @@ mod tests {
                  "start": { "run": "server", "watch": ["server"], "port": 5173 } }"#,
         )
         .expect("parsed");
+    }
+
+    /// The dev loop writes into `.dev` unless the file says otherwise, and the
+    /// directory it names has to be a directory of its own: overlapping a
+    /// deploy output recreates the overwrite the separation exists to prevent.
+    #[test]
+    fn devdir_defaults_and_stays_clear_of_deploy_outputs() {
+        let silent =
+            read(r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } } }"#)
+                .expect("parsed");
+        assert_eq!(silent.start.devdir(), DEFAULT_DEV_DIR);
+        assert_eq!(silent.start.devdir, None);
+
+        let named = read(
+            r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } },
+                 "start": { "devdir": "tmp-dev" } }"#,
+        )
+        .expect("parsed");
+        assert_eq!(named.start.devdir(), "tmp-dev");
+
+        // Each overlap in turn: the output itself, the directory holding it,
+        // and a directory beneath an output directory. All three would put
+        // dev builds where `esdev build` deploys.
+        let err = read(
+            r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } },
+                 "start": { "devdir": "dist/server.js" } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("overlaps"), "{err}");
+
+        let err = read(
+            r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } },
+                 "start": { "devdir": "dist" } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("overlaps"), "{err}");
+
+        let err = read(
+            r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } },
+                 "start": { "devdir": "dist/dev" } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("overlaps"), "{err}");
+
+        // And the three ways to leave the project or name nothing at all.
+        for (devdir, needle) in [
+            (".", "project root"),
+            ("/tmp/dev", "absolute"),
+            ("../shared", "escapes"),
+        ] {
+            let err = read(&format!(
+                r#"{{ "targets": {{ "server": {{ "entry": "s.ts" }} }},
+                     "start": {{ "devdir": "{devdir}" }} }}"#,
+            ))
+            .expect_err("refused");
+            assert!(err.contains(needle), "{err}");
+        }
+
+        let empty = read(
+            r#"{ "targets": { "server": { "entry": "s.ts" } },
+                 "start": { "devdir": "" } }"#,
+        )
+        .expect_err("refused");
+        assert!(empty.contains("empty"), "{empty}");
     }
 
     /// Permissions go through the flag parser, so the file cannot mean anything

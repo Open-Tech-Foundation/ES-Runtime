@@ -9111,9 +9111,10 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
     assert!(first.contains("SERVER-A"), "never came up: {first}");
     let nonce = nonce_of(&first);
 
-    // A browser-only edit. The client bundle is rebuilt…
+    // A browser-only edit. The client bundle is rebuilt, under the dev
+    // directory like every other development build…
     write_in(&dir, "src/main.mjs", "document.title = 'CLIENT-TWO';\n");
-    let bundle = dir.join("dist/assets/main.js");
+    let bundle = dir.join(".dev/dist/assets/main.js");
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
         if std::fs::read_to_string(&bundle)
