@@ -36,6 +36,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- Warn in `--trace-permissions` that the report traces permissions, not
+  scopes: the printed line grants every variable and every path, and the old
+  footnote said so only for `--allow-read`. Narrowing examples included, so
+  the deploy line is not mistaken for a narrow grant.
 - Point at `otfw` from `esdev build` and `esdev start` in an OTF Web project
   instead of refusing with the missing `esdev.json`, which reads as a
   misconfiguration rather than a different toolchain in use. Recognised by

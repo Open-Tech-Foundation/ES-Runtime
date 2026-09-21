@@ -107,9 +107,14 @@ impl PermissionTrace {
                 .collect::<String>(),
             self.entry
         ));
+        // The line above grants capabilities, not scopes: `--allow-env` means
+        // every variable, `--allow-read` every path. Saying so here is what
+        // keeps the line honest until scopes are traced too — and what that
+        // work replaces, rather than contradicts.
         out.push_str(
-            "\n  Scopes are not traced: --allow-read grants every path this way. Narrow each\n  \
-             grant by hand (--allow-read=./data) once you know what the program needs.\n",
+            "\n  warning: this traces permissions, not scopes — `--allow-env` here means every\n  \
+             variable, `--allow-read` every path. Narrow each grant by hand\n  \
+             (`--allow-env=APP_NAME`, `--allow-read=./data`) before deploying.\n",
         );
         out
     }
@@ -221,6 +226,25 @@ mod tests {
         trace.observed("now", Capability::Clock, true);
         let report = trace.report();
         assert!(report.contains("nothing at all"), "{report}");
+    }
+
+    /// The grant line is capabilities, never scopes — so every report carries
+    /// the warning saying so, with what narrowing looks like. When scopes are
+    /// traced too, it is this paragraph that goes away.
+    #[test]
+    fn every_report_warns_it_traces_permissions_not_scopes() {
+        for report in [trace().report(), {
+            let trace = trace();
+            trace.observed("fs_read", Capability::FileRead, true);
+            trace.report()
+        }] {
+            assert!(
+                report.contains("traces permissions, not scopes"),
+                "{report}"
+            );
+            assert!(report.contains("--allow-env=APP_NAME"), "{report}");
+            assert!(report.contains("--allow-read=./data"), "{report}");
+        }
     }
 
     #[test]
