@@ -45,7 +45,6 @@ use serde_json::{Map, Value};
 
 /// The file looked for when `--config` did not name one.
 pub const FILE_NAME: &str = "esdev.json";
-
 /// Where the dev loop writes when `start` does not name a directory.
 ///
 /// A hidden sibling of the deploy outputs rather than one of them, so a save
@@ -396,6 +395,45 @@ pub fn load(named: Option<&str>) -> Result<Option<Project>, String> {
     let dir =
         dunce::canonicalize(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     parse(&text, dir, &path.display().to_string())
+}
+
+/// Why a directory looks like an OTF Web project: one the OTF toolchain
+/// (`otfw`) builds, not esdev.
+///
+/// `esdev create` scaffolds these alongside its own templates, and nothing
+/// else about them is esdev's — no `esdev.json`, no targets. `esdev build`
+/// and `esdev start` refuse with where they belong rather than the
+/// missing-file errors, which read as if something were misconfigured rather
+/// than a different toolchain in use. A malformed or absent `package.json`
+/// is not evidence either way, so this says nothing then.
+pub(crate) fn otfw_reason(dir: &Path) -> Option<String> {
+    if dir.join("otfw.config.js").is_file() {
+        return Some("it carries an `otfw.config.js`".to_string());
+    }
+    let package = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let package: Value = serde_json::from_str(&package).ok()?;
+    let scripts = package.get("scripts")?.as_object()?;
+    let mut names: Vec<&str> = scripts
+        .iter()
+        .filter(|(_, cmd)| {
+            cmd.as_str()
+                .is_some_and(|cmd| cmd == "otfw" || cmd.starts_with("otfw "))
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort();
+    let scripts = match &names[..] {
+        [one] => format!("its \"{one}\" script calls `otfw`"),
+        [head @ .., last] => {
+            let head: Vec<String> = head.iter().map(|n| format!("\"{n}\"")).collect();
+            format!("its {} and \"{last}\" scripts call `otfw`", head.join(", "))
+        }
+        [] => unreachable!("names is not empty"),
+    };
+    Some(scripts)
 }
 
 /// Parses the text of an `esdev.json`.
@@ -1444,6 +1482,59 @@ mod tests {
     /// Parses `text` as a config, or returns the error message.
     fn read(text: &str) -> Result<Project, String> {
         parse(text, PathBuf::from("."), "esdev.json").map(|p| p.expect("a config"))
+    }
+
+    /// A directory holding a fixture project, removed when the test ends.
+    /// `otfw_reason` reads the filesystem, so unlike `parse` it cannot be
+    /// tested without one.
+    fn fixture(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("esdev-otfw-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture");
+        for (name, contents) in files {
+            std::fs::write(dir.join(name), contents).expect("write the fixture");
+        }
+        dir
+    }
+
+    /// An OTF Web project is recognised by what builds it: an `otfw.config.js`,
+    /// or scripts calling `otfw`. Anything else — an esdev project, an empty
+    /// directory, a broken `package.json` — is not evidence either way.
+    #[test]
+    fn an_otfw_project_is_recognised_by_what_builds_it() {
+        let scripts = fixture(
+            "scripts",
+            &[(
+                "package.json",
+                r#"{ "scripts": { "dev": "otfw dev", "build": "otfw build" } }"#,
+            )],
+        );
+        let reason = otfw_reason(&scripts).expect("recognised");
+        assert!(reason.contains("\"dev\""), "{reason}");
+        assert!(reason.contains("\"build\""), "{reason}");
+
+        let config = fixture("config", &[("otfw.config.js", "export default {};\n")]);
+        let reason = otfw_reason(&config).expect("recognised");
+        assert!(reason.contains("otfw.config.js"), "{reason}");
+
+        let esdev = fixture(
+            "esdev",
+            &[(
+                "package.json",
+                r#"{ "scripts": { "dev": "esdev start", "build": "esdev build" } }"#,
+            )],
+        );
+        assert!(otfw_reason(&esdev).is_none());
+
+        let empty = fixture("empty", &[]);
+        assert!(otfw_reason(&empty).is_none());
+
+        let broken = fixture("broken", &[("package.json", "{ not json")]);
+        assert!(otfw_reason(&broken).is_none());
+
+        for dir in [&scripts, &config, &esdev, &empty, &broken] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

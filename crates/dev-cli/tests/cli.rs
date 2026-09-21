@@ -7590,6 +7590,33 @@ fn a_filter_selects_by_path() {
     assert!(!stdout(&out).contains("beta.test.mjs"), "{}", stdout(&out));
 }
 
+/// An OTF Web project is built and run by `otfw`, not esdev — so `esdev
+/// build` and `esdev start` name that toolchain rather than refusing with
+/// the missing `esdev.json`, which reads as a misconfiguration.
+#[test]
+fn an_otfw_project_is_pointed_at_otfw() {
+    let dir = build_dir("t_otfw");
+    write_in(
+        &dir,
+        "package.json",
+        r#"{ "scripts": { "dev": "otfw dev", "build": "otfw build" } }"#,
+    );
+
+    let build = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!build.status.success());
+    let message = stderr(&build);
+    assert!(message.contains("otfw"), "{message}");
+    assert!(message.contains("npm run build"), "{message}");
+
+    let start = esdev_in(&dir).arg("start").output().expect("spawn esdev");
+    assert!(!start.status.success());
+    let message = stderr(&start);
+    assert!(message.contains("otfw"), "{message}");
+    assert!(message.contains("npm run dev"), "{message}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn no_test_files_is_an_error_rather_than_a_silent_pass() {
     let dir = build_dir("t_empty");

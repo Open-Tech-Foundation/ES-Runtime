@@ -36,6 +36,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- Point at `otfw` from `esdev build` and `esdev start` in an OTF Web project
+  instead of refusing with the missing `esdev.json`, which reads as a
+  misconfiguration rather than a different toolchain in use. Recognised by
+  what builds it — an `otfw.config.js`, or `package.json` scripts calling
+  `otfw` — and left alone everywhere else, including `esdev test`, which the
+  `library` template uses.
 - Name both discovery conventions in the "no test files found" message, which
   still listed only `*.test.*` after `*.spec.*` discovery arrived. The message
   is derived from the suffix list now, so the two cannot drift apart again.

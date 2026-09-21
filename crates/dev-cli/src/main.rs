@@ -678,6 +678,19 @@ fn reject_esdev_flags_after_source(args: &[String], source: &str) -> Result<(), 
     Ok(())
 }
 
+/// Why the working directory looks like an OTF Web project, if it does.
+///
+/// `esdev create` scaffolds these alongside its own templates, and `esdev
+/// build` / `esdev start` are meaningless there — so the missing-`esdev.json`
+/// errors consult this first and name `otfw` instead of reading as a
+/// misconfiguration. `None` anywhere else, including when the directory
+/// cannot be read, so the ordinary errors stand.
+fn otfw_project_reason() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| config::otfw_reason(&cwd))
+}
+
 /// Parses `esdev build [entry] [options]`.
 fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, String> {
     let mut sources: Vec<String> = Vec::new();
@@ -863,6 +876,16 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                 conditions,
                 dev: None,
             })));
+        }
+        // No esdev.json — but an OTF Web project was never going to have one.
+        // Refusing with the missing entry is a dead end there; name the
+        // toolchain its scripts call instead.
+        if let Some(reason) = otfw_project_reason() {
+            return Err(format!(
+                "this project builds with otfw, not `esdev build`.\n\n\
+                 {reason}, and there is no esdev.json describing targets for this toolchain. \
+                 Build it the project's way:\n\n  npm run build"
+            ));
         }
         if let Some(name) = target {
             return Err(format!(
@@ -1182,16 +1205,31 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
         }
     }
-    let mut project = config::load(config_path.as_deref())?.ok_or_else(|| {
-        format!(
-            "esdev start needs a {0}, and there is none here.\n\n\
-             It describes what this project builds and what to run:\n\n  \
-             {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }},\n    \
-             \"start\": {{ \"run\": \"server\" }} }}\n\n\
-             See `esdev build --help` for the rest of {0}.",
-            config::FILE_NAME
-        )
-    })?;
+    let mut project = match config::load(config_path.as_deref())? {
+        Some(project) => project,
+        // No esdev.json — but an OTF Web project was never going to have one.
+        // Refusing with the missing file is a dead end there; name the
+        // toolchain its scripts call instead.
+        None => match otfw_project_reason() {
+            Some(reason) => {
+                return Err(format!(
+                    "this project runs with otfw, not `esdev start`.\n\n\
+                     {reason}, and there is no esdev.json describing what to run. \
+                     Start it the project's way:\n\n  npm run dev"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "esdev start needs a {0}, and there is none here.\n\n\
+                     It describes what this project builds and what to run:\n\n  \
+                     {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }},\n    \
+                     \"start\": {{ \"run\": \"server\" }} }}\n\n\
+                     See `esdev build --help` for the rest of {0}.",
+                    config::FILE_NAME
+                ));
+            }
+        },
+    };
     // A flag beats the file, the same way it does for a build.
     if let Some(port) = port {
         project.start.port = Some(port);
