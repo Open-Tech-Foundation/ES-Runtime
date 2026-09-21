@@ -60,3 +60,24 @@ test("inline handlers run during modern event dispatch", () => {
   expect(target.dispatchEvent(new events.Event("click", { bubbles: true, cancelable: true }))).toBe(false);
   expect(calls).toEqual(["click"]);
 });
+
+test("constructed targets expose standard event state and listener options", () => {
+  const target = new events.EventTarget();
+  const event = new events.Event("go", { cancelable: true });
+  let seenEvent;
+  target.addEventListener("go", { get handleEvent() { seenEvent = globalThis.event; return (received) => received.returnValue = false; } });
+  target.dispatchEvent(event);
+
+  expect(seenEvent).toBe(event);
+  expect(event.srcElement).toBe(target);
+  expect(event.defaultPrevented).toBe(true);
+  expect(event.composedPath()).toEqual([]);
+  expect(Object.getOwnPropertyDescriptor(event, "isTrusted")?.get).toBe(Object.getOwnPropertyDescriptor(new events.Event("go"), "isTrusted")?.get);
+  event.initEvent("again", true, false);
+  expect([event.type, event.bubbles, event.cancelable, event.defaultPrevented]).toEqual(["again", true, false, false]);
+
+  const passive = new events.Event("passive", { cancelable: true });
+  target.addEventListener("passive", (received) => received.preventDefault(), { passive: true });
+  expect(target.dispatchEvent(passive)).toBe(true);
+  expect(passive.defaultPrevented).toBe(false);
+});

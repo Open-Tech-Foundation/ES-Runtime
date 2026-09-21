@@ -19,6 +19,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Honor DOM `EventTarget` listener options in `esdev test --dom`, including
+  passive listeners and signal validation; align constructed event state,
+  `window.event`, and event dispatch cleanup with the DOM contract.
 - Keep `AbortSignal` event dispatch in its original realm when `esdev test
   --dom` installs DOM event globals, including ordered propagation through
   `AbortSignal.any()` dependencies.

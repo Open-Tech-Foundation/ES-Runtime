@@ -3023,6 +3023,38 @@ fn test_dom_abort_signals_dispatch_in_their_own_event_realm() {
 }
 
 #[test]
+fn test_dom_event_targets_honor_listener_options_and_event_state() {
+    let dir = build_dir("t_test_dom_event_target_options");
+    write_in(
+        &dir,
+        "events.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         test('event target listener options and state', () => {\n\
+           const target = new EventTarget();\n\
+           const passive = new Event('passive', { cancelable: true });\n\
+           target.addEventListener('passive', event => { event.returnValue = false; }, { passive: true });\n\
+           assertEquals(target.dispatchEvent(passive), true); assertEquals(passive.defaultPrevented, false);\n\
+           assertThrows(() => target.addEventListener('x', null, { signal: null }), TypeError);\n\
+           let duringDispatch; target.addEventListener('state', { get handleEvent() { duringDispatch = window.event; return () => {}; } });\n\
+           const state = new Event('state'); target.dispatchEvent(state);\n\
+           assertEquals([duringDispatch, state.srcElement, state.composedPath().length, typeof Object.getOwnPropertyDescriptor(state, 'isTrusted').get], [state, target, 0, 'function']);\n\
+           assertEquals(state.timeStamp > 0, true);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom event target options");
+    assert!(
+        ran.status.success(),
+        "DOM event-target-options test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_installs_a_fresh_document_and_uses_the_strict_parser() {
     let dir = build_dir("t_test_dom");
     write_in(

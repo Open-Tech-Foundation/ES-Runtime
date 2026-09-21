@@ -4,6 +4,7 @@
 
 const STATE = Symbol("esdev event state");
 const LISTENERS = Symbol("esdev event listeners");
+const isTrusted = () => false;
 
 export function createEvents() {
   function retarget(original, current) {
@@ -29,24 +30,39 @@ export function createEvents() {
           type: String(type), bubbles: Boolean(options.bubbles), cancelable: Boolean(options.cancelable), composed: Boolean(options.composed),
           target: null, currentTarget: null, phase: Event.NONE, path: [], defaultPrevented: false,
           propagationStopped: false, immediateStopped: false, passive: false, dispatching: false,
-          timeStamp: globalThis.performance?.now?.() ?? Date.now(),
+          // The test clock (and its Date) starts at zero. Event timestamps are
+          // positive on construction, so keep a nonzero value until it moves.
+          timeStamp: globalThis.performance?.now?.() || Date.now() || Number.EPSILON,
         },
       });
+      // Web IDL exposes this as a same-realm own accessor. Keeping one shared
+      // getter also makes the descriptor stable across Event instances.
+      Object.defineProperty(this, "isTrusted", { get: isTrusted });
     }
     get type() { return this[STATE].type; }
     get bubbles() { return this[STATE].bubbles; }
     get cancelable() { return this[STATE].cancelable; }
     get composed() { return this[STATE].composed; }
     get target() { return this[STATE].target; }
+    get srcElement() { return this[STATE].target; }
     get currentTarget() { return this[STATE].currentTarget; }
     get eventPhase() { return this[STATE].phase; }
     get defaultPrevented() { return this[STATE].defaultPrevented; }
     get timeStamp() { return this[STATE].timeStamp; }
-    get isTrusted() { return false; }
     composedPath() { return [...this[STATE].path]; }
     stopPropagation() { this[STATE].propagationStopped = true; }
     stopImmediatePropagation() { this[STATE].propagationStopped = true; this[STATE].immediateStopped = true; }
     preventDefault() { if (this.cancelable && !this[STATE].passive) this[STATE].defaultPrevented = true; }
+    get returnValue() { return !this[STATE].defaultPrevented; }
+    set returnValue(value) { if (!value) this.preventDefault(); }
+    initEvent(type, bubbles = false, cancelable = false) {
+      const state = this[STATE];
+      if (state.dispatching) return;
+      state.type = String(type);
+      state.bubbles = Boolean(bubbles);
+      state.cancelable = Boolean(cancelable);
+      state.defaultPrevented = false;
+    }
   }
 
   class CustomEvent extends Event {
@@ -89,12 +105,18 @@ export function createEvents() {
   class EventTarget {
     constructor() { Object.defineProperty(this, LISTENERS, { value: new Map() }); }
     addEventListener(type, callback, options = {}) {
+      const opts = typeof options === "boolean" ? { capture: options } : options ?? {};
+      // The signal dictionary member is not nullable. Resolve it before
+      // returning for a null callback: Web IDL conversion is observable.
+      const signal = opts.signal;
+      const passive = Boolean(opts.passive);
+      if (signal === null || (signal !== undefined && !(signal instanceof AbortSignal))) throw new TypeError("signal must be an AbortSignal");
       if (callback == null) return;
-      if (typeof callback !== "function" && typeof callback.handleEvent !== "function") throw new TypeError("The listener must be a function or EventListener object");
-      const capture = typeof options === "boolean" ? options : Boolean(options.capture);
+      if (typeof callback !== "function" && typeof callback !== "object") throw new TypeError("The listener must be a function or EventListener object");
+      const capture = Boolean(opts.capture);
       const list = this[LISTENERS].get(String(type)) ?? [];
       if (list.some((listener) => listener.callback === callback && listener.capture === capture)) return;
-      const listener = { callback, capture, once: Boolean(options.once), passive: Boolean(options.passive), signal: options.signal ?? null };
+      const listener = { callback, capture, once: Boolean(opts.once), passive, signal };
       if (listener.signal?.aborted) return;
       if (listener.signal) listener.abort = () => this.removeEventListener(type, callback, { capture });
       listener.signal?.addEventListener?.("abort", listener.abort, { once: true });
@@ -126,7 +148,7 @@ export function createEvents() {
         }
         if (state.bubbles) for (let index = 1; index < path.length && !state.propagationStopped; index += 1) this._invoke(path[index], event, Event.BUBBLING_PHASE, false);
       } finally {
-        state.target = this; state.currentTarget = null; state.phase = Event.NONE; state.passive = false; state.dispatching = false;
+        state.target = this; state.currentTarget = null; state.phase = Event.NONE; state.path = []; state.passive = false; state.dispatching = false;
       }
       return !state.defaultPrevented;
     }
@@ -138,9 +160,17 @@ export function createEvents() {
         if (listener.capture !== capture || !target[LISTENERS].get(event.type)?.includes(listener)) continue;
         if (listener.once) target.removeEventListener(event.type, listener.callback, { capture: listener.capture });
         state.passive = listener.passive;
-        if (typeof listener.callback === "function") listener.callback.call(target, event);
-        else listener.callback.handleEvent.call(listener.callback, event);
-        state.passive = false;
+        const hadEvent = Object.hasOwn(globalThis, "event");
+        const previousEvent = globalThis.event;
+        globalThis.event = event;
+        try {
+          if (typeof listener.callback === "function") listener.callback.call(target, event);
+          else listener.callback.handleEvent.call(listener.callback, event);
+        } finally {
+          state.passive = false;
+          if (hadEvent) globalThis.event = previousEvent;
+          else delete globalThis.event;
+        }
         if (state.immediateStopped) break;
       }
       const handler = !capture && target[`on${event.type}`];
