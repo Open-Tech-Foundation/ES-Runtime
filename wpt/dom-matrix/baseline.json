@@ -4097,10 +4097,248 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "a-value-a-property-cannot-take-is-dropped",
+      "chrome": {
+        "result": [
+          [
+            "width",
+            "23",
+            false,
+            false
+          ],
+          [
+            "mask-position",
+            "23",
+            false,
+            false
+          ],
+          [
+            "margin",
+            "5px 23",
+            false,
+            false
+          ],
+          [
+            "line-height",
+            "1.5",
+            true,
+            true
+          ],
+          [
+            "z-index",
+            "3",
+            true,
+            true
+          ],
+          [
+            "padding",
+            "0",
+            true,
+            true
+          ],
+          [
+            "opacity",
+            "2px",
+            false,
+            false
+          ],
+          [
+            "border-image-slice",
+            "2px",
+            false,
+            false
+          ],
+          [
+            "stroke-width",
+            "2px",
+            true,
+            true
+          ],
+          [
+            "width",
+            "5foo",
+            false,
+            false
+          ],
+          [
+            "width",
+            "calc(100% - 23px)",
+            true,
+            true
+          ],
+          [
+            "color",
+            "var(--x)",
+            true,
+            true
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "width",
+            "23",
+            false,
+            false
+          ],
+          [
+            "mask-position",
+            "23",
+            false,
+            false
+          ],
+          [
+            "margin",
+            "5px 23",
+            false,
+            false
+          ],
+          [
+            "line-height",
+            "1.5",
+            true,
+            true
+          ],
+          [
+            "z-index",
+            "3",
+            true,
+            true
+          ],
+          [
+            "padding",
+            "0",
+            true,
+            true
+          ],
+          [
+            "opacity",
+            "2px",
+            false,
+            false
+          ],
+          [
+            "border-image-slice",
+            "2px",
+            false,
+            false
+          ],
+          [
+            "stroke-width",
+            "2px",
+            true,
+            true
+          ],
+          [
+            "width",
+            "5foo",
+            false,
+            false
+          ],
+          [
+            "width",
+            "calc(100% - 23px)",
+            true,
+            true
+          ],
+          [
+            "color",
+            "var(--x)",
+            true,
+            true
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "width",
+            "23",
+            true,
+            false
+          ],
+          [
+            "mask-position",
+            "23",
+            true,
+            true
+          ],
+          [
+            "margin",
+            "5px 23",
+            true,
+            false
+          ],
+          [
+            "line-height",
+            "1.5",
+            true,
+            true
+          ],
+          [
+            "z-index",
+            "3",
+            true,
+            true
+          ],
+          [
+            "padding",
+            "0",
+            true,
+            true
+          ],
+          [
+            "opacity",
+            "2px",
+            true,
+            true
+          ],
+          [
+            "border-image-slice",
+            "2px",
+            true,
+            false
+          ],
+          [
+            "stroke-width",
+            "2px",
+            true,
+            true
+          ],
+          [
+            "width",
+            "5foo",
+            true,
+            false
+          ],
+          [
+            "width",
+            "calc(100% - 23px)",
+            true,
+            true
+          ],
+          [
+            "color",
+            "var(--x)",
+            true,
+            true
+          ]
+        ]
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 87,
+    "match": 88,
     "intentional-limit": 2,
     "drift": 0
   }

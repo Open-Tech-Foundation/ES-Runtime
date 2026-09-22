@@ -98,6 +98,21 @@ stop-opacity stroke-dasharray stroke-dashoffset stroke-miterlimit stroke-opacity
 x y z-index zoom
 `.trim().split(/\s+/));
 
+// Of those, the ones that also take a length, and the ones that also take a
+// percentage — Chrome keeps neither `opacity: 2px` nor `border-image-slice:
+// 2px`, and a renderer that appends "px" to a unitless value is asking exactly
+// this question. Outside this family a dimension with a known unit is accepted,
+// because that would need each property's grammar.
+const NUMBER_WITH_LENGTH = new Set(`
+border-image-outset border-image-width cx cy flex line-height r rx ry stroke-dasharray stroke-dashoffset
+stroke-width tab-size x y
+`.trim().split(/\s+/));
+
+const NUMBER_WITH_PERCENT = new Set(`
+border-image-slice border-image-width cx cy fill-opacity flex flood-opacity line-height opacity r rx ry scale
+shape-image-threshold stop-opacity stroke-dasharray stroke-dashoffset stroke-opacity stroke-width x y zoom
+`.trim().split(/\s+/));
+
 const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 const DIMENSION = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?([A-Za-z%]+)$/i;
 
@@ -130,14 +145,20 @@ export function validDeclaration(name, value) {
   const property = String(name);
   // A custom property's value is an arbitrary token sequence, by design.
   if (property.startsWith("--")) return value.trim() !== "";
-  const numbers = NUMBER_VALUED.has(property === "cssFloat" ? "float" : property.toLowerCase());
+  const lower = property === "cssFloat" ? "float" : property.toLowerCase();
+  const numbers = NUMBER_VALUED.has(lower);
   for (const component of components(value)) {
     if (NUMBER.test(component)) {
       if (!numbers && Number(component) !== 0) return false;
       continue;
     }
     const dimension = DIMENSION.exec(component);
-    if (dimension && !UNITS.has(dimension[1].toLowerCase())) return false;
+    if (!dimension) continue;
+    const unit = dimension[1].toLowerCase();
+    if (!UNITS.has(unit)) return false;
+    // A property that takes a number does not necessarily take a length or a
+    // percentage as well, and which it takes is recorded above.
+    if (numbers && !(unit === "%" ? NUMBER_WITH_PERCENT : NUMBER_WITH_LENGTH).has(lower)) return false;
   }
   return true;
 }

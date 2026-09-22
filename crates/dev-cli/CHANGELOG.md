@@ -348,9 +348,11 @@ is the point, since none of the three has any business in a deployment.
   value. Values are now checked by type — a number only where a number is
   allowed, and then only with a known unit, zero excepted — so a bare number is
   refused for the 400-odd properties that want a length, and kept for the
-  forty-odd that take one. `CSS.supports`, the inline declaration and a
-  stylesheet rule's kept declarations all answer from that one check, which is
-  how a browser behaves in standards mode. It is a check of value types, not of
+  forty-odd that take one — and, within those forty, a length or a percentage
+  only where the property takes one, so `opacity: 2px` and `border-image-slice:
+  2px` go the way `mask-position: 23` does. `CSS.supports`, the inline
+  declaration and a stylesheet rule's kept declarations all answer from that one
+  check, which is how a browser behaves in standards mode. It is a check of value types, not of
   each property's full grammar: a browser also knows that `width` takes no
   negative length, and this does not.
 - **Every interface says its own name.** `Object.prototype.toString.call(node)`

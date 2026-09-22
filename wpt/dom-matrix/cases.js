@@ -1830,6 +1830,30 @@ export const cases = [
       return result;
     },
   },
+  {
+    group: "cascade",
+    name: "a-value-a-property-cannot-take-is-dropped",
+    run(window) {
+      const { document, CSS } = window;
+      reset(document);
+      const element = document.createElement("div");
+      const pairs = [
+        // A bare number needs a unit, except where the property takes one.
+        ["width", "23"], ["mask-position", "23"], ["margin", "5px 23"],
+        ["line-height", "1.5"], ["z-index", "3"], ["padding", "0"],
+        // And a property that takes a number does not always take a length.
+        ["opacity", "2px"], ["border-image-slice", "2px"], ["stroke-width", "2px"],
+        // Unknown units, and the functions that are nobody's business here.
+        ["width", "5foo"], ["width", "calc(100% - 23px)"], ["color", "var(--x)"],
+      ];
+      return pairs.map(([property, value]) => {
+        element.style.setProperty(property, value);
+        const kept = element.style.getPropertyValue(property) !== "";
+        element.style.removeProperty(property);
+        return [property, value, CSS.supports(property, value), kept];
+      });
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at
