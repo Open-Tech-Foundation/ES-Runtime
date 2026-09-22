@@ -323,7 +323,23 @@ The acceptance gate for this phase is otfw's existing component test suite passi
 
 ## Conformance
 
-"Close to spec" only means something if it is measured. Three suites, all external, all vendored and run in CI.
+"Close to spec" only means something if it is measured. Four measurements, and
+[`ESDEV-DOM-PARITY.md`](ESDEV-DOM-PARITY.md) publishes what they record.
+
+| Measurement | Task | What it gates |
+| --- | --- | --- |
+| Module unit tests | `tsr test:dom-unit` | the tree, events, parsing, ranges, sheets and selectors, on esdev's own binary |
+| WPT slice | `tsr test:dom-wpt` | `dom`, `custom-elements`, `shadow-dom` against `wpt/dom-expectations.json` |
+| Behaviour matrix | `tsr test:dom-matrix` | every case matching headless Chrome, and no drift |
+| Surface probe | `tsr test:dom-surface` | no drift in what 192 features answer, in all four runtimes |
+
+The matrix and the probe run the same code under Chrome, esdev, jsdom and
+happy-dom. Chrome is the oracle; the emulators are context, never a verdict. A
+difference from Chrome is either fixed or written down with its reason — the
+parity document fails to generate if one has no reason, which is what keeps the
+boundary from quietly moving.
+
+The WPT slice is the external half of the same question.
 
 | Suite | Covers | Notes |
 | --- | --- | --- |

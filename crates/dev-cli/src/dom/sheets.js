@@ -81,6 +81,7 @@ const INITIAL = new Map([
   ["list-style-position", "outside"],
   ["border-collapse", "separate"],
   ["pointer-events", "auto"],
+  ["position", "static"],
   ["color", "rgb(0, 0, 0)"],
 ]);
 
@@ -433,6 +434,43 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
         configurable: true,
       });
     }
+    // `offsetParent` is an algorithm over the tree and the computed `position`,
+    // not a measurement, so it can be answered: nothing for an element that is
+    // not rendered, otherwise the nearest positioned ancestor, table part, or
+    // the body.
+    Object.defineProperty(Element.prototype, "offsetParent", {
+      get() {
+        if (!this.isConnected || this.localName === "body" || this.localName === "html") return null;
+        // Not rendered — its own `display: none` or an ancestor's — has no
+        // offset parent, which is the walk `checkVisibility` already does.
+        if (!this.checkVisibility()) return null;
+        if (getComputedStyle(this).getPropertyValue("position") === "fixed") return null;
+        for (let element = this.parentElement; element; element = element.parentElement) {
+          if (element.localName === "body") return element;
+          if (["td", "th", "table"].includes(element.localName)) return element;
+          if (getComputedStyle(element).getPropertyValue("position") !== "static") return element;
+        }
+        return null;
+      },
+      configurable: true,
+    });
+    // The one layout question the cascade can answer: whether an element is
+    // rendered at all. The geometry stays zero; `display: none` is knowable.
+    Object.defineProperty(Element.prototype, "checkVisibility", {
+      value(options = {}) {
+        if (!this.isConnected) return false;
+        for (let element = this; element instanceof Element; element = element.parentElement) {
+          const computed = getComputedStyle(element);
+          if (computed.getPropertyValue("display") === "none") return false;
+          if ((options.checkVisibilityCSS || options.visibilityProperty)
+            && ["hidden", "collapse"].includes(computed.getPropertyValue("visibility"))) return false;
+          if ((options.checkOpacity || options.opacityProperty) && computed.getPropertyValue("opacity") === "0") return false;
+        }
+        return true;
+      },
+      writable: true,
+      configurable: true,
+    });
     Object.defineProperty(tree.HTMLStyleElement.prototype, "sheet", {
       get() { return styleSheetFor(this); },
       configurable: true,

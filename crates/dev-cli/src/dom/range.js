@@ -7,7 +7,7 @@ function rangeError(name, message) {
 
 const POINTS = Symbol("esdev DOM range boundary points");
 
-export function createRanges({ Node, Element, Text, DocumentType, Attr }, parse) {
+export function createRanges({ Node, Element, Text, DocumentType, Attr, DOMRect }, parse) {
   const ranges = new Set();
   function childIndex(node) {
     let index = 0;
@@ -85,6 +85,10 @@ export function createRanges({ Node, Element, Text, DocumentType, Attr }, parse)
     get endContainer() { return this[POINTS].endContainer; }
     get endOffset() { return this[POINTS].endOffset; }
     get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
+    // Zeros, like an element's: the members exist so probing code runs, and
+    // there is no layout behind them.
+    getBoundingClientRect() { return new DOMRect(); }
+    getClientRects() { return Object.freeze([]); }
   }
 
   // A snapshot: it records four values and never follows the tree afterwards,

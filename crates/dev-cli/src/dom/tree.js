@@ -1501,6 +1501,51 @@ export function createTree(events = {}) {
     });
   }
 
+  // Geometry, as zeros. There is no box model, so every number here is 0 and
+  // every scroll is a no-op — but the members exist, because feature-probing
+  // code reads them before it does anything interesting and should not explode.
+  // `docs/ESDEV-DOM.md` records this as the layout non-goal.
+  class DOMRectReadOnly {
+    constructor(x = 0, y = 0, width = 0, height = 0) {
+      Object.defineProperties(this, {
+        x: { value: Number(x), enumerable: true },
+        y: { value: Number(y), enumerable: true },
+        width: { value: Number(width), enumerable: true },
+        height: { value: Number(height), enumerable: true },
+      });
+    }
+    get top() { return Math.min(this.y, this.y + this.height); }
+    get bottom() { return Math.max(this.y, this.y + this.height); }
+    get left() { return Math.min(this.x, this.x + this.width); }
+    get right() { return Math.max(this.x, this.x + this.width); }
+    toJSON() {
+      const { x, y, width, height, top, right, bottom, left } = this;
+      return { x, y, width, height, top, right, bottom, left };
+    }
+  }
+
+  class DOMRect extends DOMRectReadOnly {
+    static fromRect(other = {}) { return new DOMRect(other.x, other.y, other.width, other.height); }
+  }
+
+  const ZERO_METRICS = ["offsetWidth", "offsetHeight", "offsetTop", "offsetLeft", "clientWidth", "clientHeight", "clientTop", "clientLeft", "scrollWidth", "scrollHeight"];
+
+  for (const name of ZERO_METRICS) {
+    Object.defineProperty(Element.prototype, name, { get() { return 0; }, configurable: true });
+  }
+  Object.defineProperties(Element.prototype, {
+    // Assignable and still zero, which is what a browser answers for an element
+    // that cannot scroll — and without layout, none of them can.
+    scrollTop: { get() { return 0; }, set(_value) {}, configurable: true },
+    scrollLeft: { get() { return 0; }, set(_value) {}, configurable: true },
+    getBoundingClientRect: { value() { return new DOMRect(); }, writable: true, configurable: true },
+    getClientRects: { value() { return Object.freeze([]); }, writable: true, configurable: true },
+    scrollIntoView: { value() {}, writable: true, configurable: true },
+    scroll: { value() {}, writable: true, configurable: true },
+    scrollTo: { value() {}, writable: true, configurable: true },
+    scrollBy: { value() {}, writable: true, configurable: true },
+  });
+
   Object.defineProperty(HTMLElement.prototype, "attachInternals", {
     value() {
       // Only a custom element has internals, and only one set of them: a
@@ -1883,5 +1928,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

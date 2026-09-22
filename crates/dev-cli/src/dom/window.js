@@ -512,6 +512,15 @@ Object.defineProperties(globalThis, {
     enumerable: true,
     configurable: true,
   },
+  // The window's own geometry and scrolling, zero and inert for the same reason
+  // an element's is: there is no rendered page to scroll.
+  scrollX: { get: () => 0, enumerable: true, configurable: true },
+  scrollY: { get: () => 0, enumerable: true, configurable: true },
+  pageXOffset: { get: () => 0, enumerable: true, configurable: true },
+  pageYOffset: { get: () => 0, enumerable: true, configurable: true },
+  scroll: { value() {}, writable: true, configurable: true },
+  scrollTo: { value() {}, writable: true, configurable: true },
+  scrollBy: { value() {}, writable: true, configurable: true },
   outerWidth: { get: () => viewport.width, enumerable: true, configurable: true },
   outerHeight: { get: () => viewport.height, enumerable: true, configurable: true },
   devicePixelRatio: { get: () => 1, enumerable: true, configurable: true },

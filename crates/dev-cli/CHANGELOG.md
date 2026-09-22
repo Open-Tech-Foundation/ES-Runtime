@@ -50,6 +50,17 @@ is the point, since none of the three has any business in a deployment.
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
+- **Geometry answers zero instead of throwing, and rendering is knowable.**
+  `getBoundingClientRect`, `getClientRects`, `offsetWidth`/`offsetHeight`/
+  `offsetTop`/`offsetLeft`, `clientWidth`/`clientHeight`/`clientTop`/
+  `clientLeft`, `scrollWidth`/`scrollHeight`, `scrollTop`/`scrollLeft`,
+  `scrollIntoView`, `scroll`/`scrollTo`/`scrollBy` and the window's
+  `scrollX`/`scrollY` exist and are zero or inert, so feature-detecting code
+  runs instead of exploding — which is what `docs/ESDEV-DOM.md` has said all
+  along. `DOMRect` and `DOMRectReadOnly` are exposed. Two members are real
+  rather than stubbed, because they are algorithms over the tree and the
+  cascade rather than measurements: `checkVisibility()` and `offsetParent`.
+
 - **Stylesheets and the CSS cascade in `esdev test --dom`.** A `<style>`
   element has a real `sheet`, `document.styleSheets` lists them, `CSSStyleSheet`
   is constructable with `replaceSync`/`insertRule`/`deleteRule`, and

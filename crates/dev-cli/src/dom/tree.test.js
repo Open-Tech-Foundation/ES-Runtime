@@ -1,7 +1,7 @@
 import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 
-const { CDATASection, CharacterData, Document, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState } = createTree();
+const { CDATASection, CharacterData, DOMRect, Document, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -545,4 +545,22 @@ test("indexes rows and cells against the tree they are in", () => {
   expect([first.cellIndex, second.cellIndex]).toEqual([0, 1]);
   expect(second).toBeInstanceOf(HTMLTableCellElement);
   expect([document.createElement("tr").rowIndex, document.createElement("td").cellIndex]).toEqual([-1, -1]);
+});
+
+test("answers geometry with zeros instead of throwing", () => {
+  const document = new Document();
+  const element = document.createElement("div");
+  document.appendChild(element);
+  const rect = element.getBoundingClientRect();
+
+  expect(rect).toBeInstanceOf(DOMRect);
+  expect([rect.x, rect.y, rect.width, rect.height, rect.top, rect.right, rect.bottom, rect.left]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  expect(rect.toJSON().width).toBe(0);
+  expect([element.offsetWidth, element.offsetHeight, element.clientWidth, element.scrollHeight]).toEqual([0, 0, 0, 0]);
+  expect(element.getClientRects().length).toBe(0);
+  // Assignable and still zero, as for any element a browser cannot scroll.
+  element.scrollTop = 40;
+  expect([element.scrollTop, element.scrollLeft]).toEqual([0, 0]);
+  expect(element.scrollIntoView()).toBeUndefined();
+  expect(new DOMRect(1, 2, 3, 4).right).toBe(4);
 });
