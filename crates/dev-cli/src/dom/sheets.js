@@ -477,7 +477,9 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
         if (!matchesRule(element, rule, scope)) continue;
         const specificity = specificityOf(rule);
         for (const [name, value, important] of rule[RULES]) {
-          entries.push({ name: property(name), value, important, origin, specificity, order });
+          for (const [longhand, part, shorthand] of declarations(property(name), value)) {
+            entries.push({ name: longhand, value: part, shorthand, important, origin, specificity, order });
+          }
         }
       }
     };
@@ -500,9 +502,29 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
       for (const sheet of documentSheets(slotRoot)) collect(sheetRules(sheet), ORIGIN.author, slotRoot);
     }
     for (const [name, entry] of element.style ? inlineEntries(element) : []) {
-      entries.push({ name, value: entry.value, important: entry.priority === "important", origin: ORIGIN.inline, specificity: [0, 0, 0], order: 0 });
+      for (const [longhand, value, shorthand] of declarations(name, entry.value)) {
+        entries.push({ name: longhand, value, shorthand, important: entry.priority === "important", origin: ORIGIN.inline, specificity: [0, 0, 0], order: 0 });
+      }
     }
     return entries;
+  }
+
+  // What one declaration contributes to the cascade. A shorthand contributes
+  // its longhands *and* itself: nothing computes from the shorthand, but
+  // `getComputedStyle(el).border` should still answer what was written rather
+  // than nothing at all.
+  function declarations(name, value) {
+    const expanded = css.expandShorthand(name, value);
+    if (expanded.length > 0) return [[name, value], ...expanded];
+    // A shorthand written with `var()` cannot be split until the custom
+    // property is substituted, which happens when the value is computed. Its
+    // longhands take the whole text now and are expanded then — the
+    // specification's "pending substitution value", under a plainer name.
+    if (String(value).includes("var(")) {
+      const longhands = css.shorthandLonghands(name);
+      if (longhands.length > 0) return [[name, value], ...longhands.map((longhand) => [longhand, value, name])];
+    }
+    return [[name, value]];
   }
 
   function inlineEntries(element) {
@@ -587,16 +609,34 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     return fallback === null ? null : substitute(fallback, values, seen);
   }
 
+  // Inheritance follows the flat tree, not the node tree: a shadow root's child
+  // inherits from the host — which is how a custom property declared on `:host`
+  // reaches the markup inside — and a slotted element from the slot it was
+  // assigned to rather than from where it was written.
+  function flatParent(element) {
+    const slot = element.assignedSlot;
+    if (slot) return slot;
+    const parent = element.parentElement;
+    if (parent) return parent;
+    const root = element.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  }
+
   function computedValues(element) {
     const values = new Map();
     const entries = declared(element);
     const names = new Set(entries.map((entry) => entry.name));
+    // Which winning values are a shorthand awaiting substitution, so the part
+    // for this longhand can be taken once the custom property resolves.
+    const pending = new Map();
     for (const name of names) {
       const won = winner(entries.filter((entry) => entry.name === name));
-      if (won) values.set(name, won.value);
+      if (!won) continue;
+      values.set(name, won.value);
+      if (won.shorthand) pending.set(name, won.shorthand);
     }
     // Inheritance, then the explicit keywords that ask for it.
-    const parent = element.parentElement;
+    const parent = flatParent(element);
     const inherited = parent ? computedValues(parent) : new Map();
     for (const name of INHERITED) {
       const own = values.get(name);
@@ -622,13 +662,30 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
       if (!value.includes("var(")) continue;
       const resolved = substitute(value, values, new Set());
       if (resolved !== null && resolved.trim() !== "") {
-        values.set(name, resolved.trim());
-        continue;
+        const shorthand = pending.get(name);
+        if (shorthand === undefined) {
+          values.set(name, resolved.trim());
+          continue;
+        }
+        // The shorthand can be split now. If the substituted value does not
+        // parse into this longhand, the declaration is invalid, like any other.
+        const part = css.expandShorthand(shorthand, resolved).find(([longhand]) => longhand === name);
+        if (part) {
+          values.set(name, part[1]);
+          continue;
+        }
       }
       values.delete(name);
       const from = inherited.get(name);
       if (INHERITED.has(name) && from !== undefined) values.set(name, from);
     }
+    // The one keyword-to-number computation that needs no layout: a browser's
+    // computed `font-weight` is always a number, and a test that sets `bold`
+    // reads `700`. `bolder`/`lighter` are relative to the parent's and stay as
+    // written, like every other value this DOM does not resolve.
+    const weight = values.get("font-weight");
+    if (weight === "normal") values.set("font-weight", "400");
+    else if (weight === "bold") values.set("font-weight", "700");
     for (const [name, value] of INITIAL) {
       if (!values.has(name)) values.set(name, value);
     }

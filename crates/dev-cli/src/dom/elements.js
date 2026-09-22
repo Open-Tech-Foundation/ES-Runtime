@@ -31,7 +31,7 @@ export function createElements(tree) {
   // the is value it was created with, and only when that definition was
   // registered for this very element's local name — `{ extends: "button" }`
   // customizes a `button` and nothing else.
-  function definition(element) {
+  function defined(element) {
     if (!active) return undefined;
     const own = registryOf(active);
     const is = isValueOf(element);
@@ -42,14 +42,24 @@ export function createElements(tree) {
     return own.extending.has(element.localName) ? undefined : own.definitions.get(element.localName);
   }
 
+  function definition(element) {
+    return defined(element)?.constructor;
+  }
+
+  // What the *definition* observes, read once when it was defined. A class that
+  // changes its mind afterwards changes nothing, in a browser or here — and a
+  // list re-read on every attribute write would call a getter Lit uses to
+  // finalize a class, on every write.
   function observed(element) {
-    const attributes = element.constructor.observedAttributes;
-    return Array.isArray(attributes) ? attributes.map(String) : [];
+    return defined(element)?.observed ?? [];
   }
 
   function react(element, method, ...args) {
-    const callback = element[method];
-    if (!definition(element) || typeof callback !== "function") return;
+    // The definition's callback, not the element's: what a class was defined
+    // with is what runs, so replacing a prototype method afterwards does not
+    // change an element already defined.
+    const callback = defined(element)?.callbacks[method];
+    if (typeof callback !== "function") return;
     try {
       callback.apply(element, args);
     } catch (error) {
@@ -202,6 +212,35 @@ export function createElements(tree) {
     if (oldValue !== null && observed(this).includes(name)) react(this, "attributeChangedCallback", name, oldValue, null, null);
   };
 
+  // The lifecycle callbacks a definition carries, in the order a browser reads
+  // them.
+  const CALLBACKS = [
+    "connectedCallback", "disconnectedCallback", "adoptedCallback", "attributeChangedCallback",
+    "connectedMoveCallback", "formAssociatedCallback", "formDisabledCallback", "formResetCallback",
+    "formStateRestoreCallback",
+  ];
+
+  // Everything about a class that the definition freezes at `define()` time:
+  // its callbacks and, when it has an `attributeChangedCallback`, the
+  // attributes it observes. A getter that throws here throws out of `define`,
+  // which is what a browser does with it.
+  function describe(constructor) {
+    const callbacks = {};
+    for (const name of CALLBACKS) {
+      const callback = constructor.prototype?.[name];
+      if (typeof callback === "function") callbacks[name] = callback;
+    }
+    // Only when there is something to call: a class with no
+    // `attributeChangedCallback` never has its `observedAttributes` read, which
+    // is observable — it is a getter, and a framework does work in it.
+    let observed = [];
+    if (callbacks.attributeChangedCallback) {
+      const list = constructor.observedAttributes;
+      if (list !== undefined && list !== null) observed = Array.from(list, String);
+    }
+    return { constructor, callbacks, observed };
+  }
+
   class CustomElementRegistry {
     define(name, constructor, options = undefined) {
       const own = registryOf(this);
@@ -222,7 +261,6 @@ export function createElements(tree) {
         if (!tree.isKnownHtmlElement(local)) {
           throw new DOMException(`"${local}" is not an HTML element, so it cannot be extended.`, "NotSupportedError");
         }
-        own.extending.set(name, local);
       }
       // One constructor, one name *in this registry*: a class registered twice
       // would make `getName` and a direct `new Constructor()` ambiguous.
@@ -230,7 +268,11 @@ export function createElements(tree) {
       if (taken !== undefined) {
         throw new DOMException(`This constructor is already defined as ${taken}.`, "NotSupportedError");
       }
-      own.definitions.set(name, constructor);
+      // Read the class before anything is recorded: a getter that throws must
+      // leave the registry as it was, with the name still free.
+      const record = describe(constructor);
+      if (extending !== undefined) own.extending.set(name, String(extending));
+      own.definitions.set(name, record);
       own.names.set(constructor, name);
       if (this === active) {
         const extended = own.extending.get(name);
@@ -246,14 +288,14 @@ export function createElements(tree) {
       for (const resolve of own.waiting.get(name) ?? []) resolve(constructor);
       own.waiting.delete(name);
     }
-    get(name) { return registryOf(this).definitions.get(String(name)); }
+    get(name) { return registryOf(this).definitions.get(String(name))?.constructor; }
     getName(constructor) { return registryOf(this).names.get(constructor) ?? null; }
     whenDefined(name) {
       const own = registryOf(this);
       name = String(name);
       if (!validName(name)) return Promise.reject(new DOMException("Custom element names must contain a hyphen.", "SyntaxError"));
       const existing = own.definitions.get(name);
-      if (existing) return Promise.resolve(existing);
+      if (existing) return Promise.resolve(existing.constructor);
       return new Promise((resolve) => {
         const resolvers = own.waiting.get(name) ?? [];
         resolvers.push(resolve);

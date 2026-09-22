@@ -119,7 +119,7 @@ const DIMENSION = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?([A-Za-z%]+)$/i;
 // The value's top-level components: whitespace-separated, with a function's
 // arguments and a quoted string left whole. A number inside `calc()` or `rgb()`
 // is that function's business, not this check's.
-function components(value) {
+function components(value, separators = /[\s,]/) {
   const found = [];
   let depth = 0;
   let quote = null;
@@ -131,7 +131,7 @@ function components(value) {
     if (char === "'" || char === '"') quote = char;
     else if (char === "(") depth += 1;
     else if (char === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && /[\s,]/.test(char)) { push(at); start = at + 1; }
+    else if (depth === 0 && separators.test(char)) { push(at); start = at + 1; }
   }
   push(value.length);
   return found;
@@ -382,6 +382,301 @@ export function createCss({ Element }) {
     readOnlyDeclaration: (entries) => new ReadOnlyStyleDeclaration(entries),
     supportsDeclaration,
     keepsDeclaration,
+    expandShorthand,
+    shorthandLonghands,
     install,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shorthands
+//
+// A browser's computed style has no shorthands in it: `border: 2px solid blue`
+// is twelve longhands by the time anything reads `border-top-width`, and a
+// component test that sets a shorthand and asserts a longhand — which is most
+// of them — depends on that. The table below expands the families whose
+// grammar is decidable from the tokens themselves. `transition`, `animation`,
+// `mask`, `offset` and `grid-template` are deliberately absent: their values
+// are comma-separated lists whose parts need each property's own grammar, and a
+// wrong expansion is worse than none.
+// ---------------------------------------------------------------------------
+
+const SIDES = ["top", "right", "bottom", "left"];
+const CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
+const BORDER_STYLES = new Set([
+  "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
+]);
+const BORDER_WIDTHS = new Set(["thin", "medium", "thick"]);
+const GLOBALS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
+const FONT_STYLES = new Set(["normal", "italic", "oblique"]);
+const FONT_VARIANTS = new Set(["normal", "small-caps"]);
+const FONT_WEIGHTS = new Set(["normal", "bold", "bolder", "lighter"]);
+const FONT_STRETCHES = new Set([
+  "normal", "ultra-condensed", "extra-condensed", "condensed", "semi-condensed",
+  "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
+]);
+const BACKGROUND_REPEATS = new Set(["repeat", "repeat-x", "repeat-y", "no-repeat", "space", "round"]);
+const BACKGROUND_ATTACHMENTS = new Set(["scroll", "fixed", "local"]);
+const BOXES = new Set(["border-box", "padding-box", "content-box", "text"]);
+const POSITIONS = new Set(["left", "right", "top", "bottom", "center"]);
+const LIST_POSITIONS = new Set(["inside", "outside"]);
+
+const isLength = (token) => DIMENSION.test(token) || NUMBER.test(token) || token.startsWith("calc(");
+const isImage = (token) => /^(url|linear-gradient|radial-gradient|conic-gradient|repeating-|image-set|-webkit-)/.test(token);
+
+// One value for each of several longhands.
+const each = (names, value) => names.map((name) => [name, value]);
+
+// The 1-to-4 value pattern: one value for all, two for the axes, three with the
+// sides' middle repeated, four in order.
+function edges(values) {
+  const [first, second = first, third = first, fourth = second] = values;
+  return [first, second, third, fourth];
+}
+
+// `border`, `border-top`, `outline`: width, style and colour in any order, told
+// apart by what each token is. Anything that is neither a style nor a width is
+// the colour, which is how a browser can accept `currentcolor`, a hex, a
+// function or a name here without a table of names.
+function lineParts(values) {
+  const parts = { width: null, style: null, color: null };
+  for (const token of values) {
+    const lower = token.toLowerCase();
+    if (parts.style === null && BORDER_STYLES.has(lower)) parts.style = token;
+    else if (parts.width === null && (BORDER_WIDTHS.has(lower) || isLength(token))) parts.width = token;
+    else if (parts.color === null) parts.color = token;
+  }
+  return parts;
+}
+
+function line(prefix, values) {
+  const { width, style, color } = lineParts(values);
+  return [
+    [`${prefix}-width`, width ?? "medium"],
+    [`${prefix}-style`, style ?? "none"],
+    [`${prefix}-color`, color ?? "currentcolor"],
+  ];
+}
+
+// `border-radius`, whose two groups are the horizontal and vertical radii:
+// `10px 20px / 5px` is a corner of `10px 5px`.
+function radii(values) {
+  const slash = values.indexOf("/");
+  const horizontal = edges(slash === -1 ? values : values.slice(0, slash));
+  const vertical = slash === -1 ? null : edges(values.slice(slash + 1));
+  return CORNERS.map((corner, index) => [
+    `border-${corner}-radius`,
+    vertical === null ? horizontal[index] : `${horizontal[index]} ${vertical[index]}`,
+  ]);
+}
+
+// `font: italic small-caps bold 12px/1.5 serif`. The size is the first token
+// that is a length or a font-size keyword; everything before it is one of the
+// four optional keywords, everything after it is the family.
+const FONT_SIZES = new Set([
+  "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large", "larger", "smaller",
+]);
+function font(values) {
+  const at = values.findIndex((token) => {
+    const [size] = token.split("/");
+    return FONT_SIZES.has(size.toLowerCase()) || isLength(size);
+  });
+  if (at === -1) return [];
+  const [size, height] = values[at].split("/");
+  const out = [["font-size", size], ["font-line-height-placeholder", null]];
+  out.pop();
+  out.push(["line-height", height ?? "normal"]);
+  const found = { "font-style": "normal", "font-variant": "normal", "font-weight": "normal", "font-stretch": "normal" };
+  for (const token of values.slice(0, at)) {
+    const lower = token.toLowerCase();
+    if (FONT_STYLES.has(lower) && lower !== "normal") found["font-style"] = token;
+    else if (FONT_VARIANTS.has(lower) && lower !== "normal") found["font-variant"] = token;
+    else if (FONT_WEIGHTS.has(lower) || NUMBER.test(token)) found["font-weight"] = token;
+    else if (FONT_STRETCHES.has(lower) && lower !== "normal") found["font-stretch"] = token;
+  }
+  const family = values.slice(at + 1).join(" ");
+  if (family) out.push(["font-family", family]);
+  return [...out, ...Object.entries(found)];
+}
+
+// `background`, by the same "what is this token" reading. The part after a
+// slash is the size, because that is the only place one can appear.
+function background(values) {
+  const found = {
+    "background-image": "none", "background-repeat": "repeat", "background-attachment": "scroll",
+    "background-position": "0% 0%", "background-size": "auto", "background-color": "rgba(0, 0, 0, 0)",
+    "background-origin": "padding-box", "background-clip": "border-box",
+  };
+  const position = [];
+  const size = [];
+  const boxes = [];
+  let afterSlash = false;
+  for (const token of values) {
+    if (token === "/") { afterSlash = true; continue; }
+    const lower = token.toLowerCase();
+    if (afterSlash) { size.push(token); continue; }
+    if (isImage(lower)) found["background-image"] = token;
+    else if (BACKGROUND_REPEATS.has(lower)) found["background-repeat"] = token;
+    else if (BACKGROUND_ATTACHMENTS.has(lower)) found["background-attachment"] = token;
+    else if (BOXES.has(lower)) boxes.push(token);
+    else if (POSITIONS.has(lower) || isLength(token)) position.push(token);
+    else found["background-color"] = token;
+  }
+  if (position.length) found["background-position"] = position.join(" ");
+  if (size.length) found["background-size"] = size.join(" ");
+  if (boxes.length) {
+    found["background-origin"] = boxes[0];
+    found["background-clip"] = boxes[1] ?? boxes[0];
+  }
+  return Object.entries(found);
+}
+
+// `flex: 1` is `1 1 0%`, `flex: auto` is `1 1 auto`, `flex: none` is `0 0 auto`
+// — the three the specification spells out, because they are not what reading
+// the tokens in order would give.
+function flex(values) {
+  const joined = values.join(" ").toLowerCase();
+  if (joined === "none") return [["flex-grow", "0"], ["flex-shrink", "0"], ["flex-basis", "auto"]];
+  if (joined === "auto") return [["flex-grow", "1"], ["flex-shrink", "1"], ["flex-basis", "auto"]];
+  const numbers = values.filter((token) => NUMBER.test(token));
+  const rest = values.filter((token) => !NUMBER.test(token));
+  return [
+    ["flex-grow", numbers[0] ?? "1"],
+    ["flex-shrink", numbers[1] ?? "1"],
+    ["flex-basis", rest[0] ?? (numbers.length ? "0%" : "auto")],
+  ];
+}
+
+// Split on the slash a two-ended shorthand uses: `grid-row: 1 / 3`.
+function ends(names, values, initial) {
+  const slash = values.indexOf("/");
+  const parts = slash === -1
+    ? [values.join(" ")]
+    : [values.slice(0, slash).join(" "), values.slice(slash + 1).join(" ")];
+  return names.map((name, index) => [name, parts[index] ?? parts[0] ?? initial]);
+}
+
+const SHORTHANDS = new Map(Object.entries({
+  margin: (v) => SIDES.map((side, i) => [`margin-${side}`, edges(v)[i]]),
+  padding: (v) => SIDES.map((side, i) => [`padding-${side}`, edges(v)[i]]),
+  inset: (v) => SIDES.map((side, i) => [side, edges(v)[i]]),
+  "scroll-margin": (v) => SIDES.map((side, i) => [`scroll-margin-${side}`, edges(v)[i]]),
+  "scroll-padding": (v) => SIDES.map((side, i) => [`scroll-padding-${side}`, edges(v)[i]]),
+  "border-width": (v) => SIDES.map((side, i) => [`border-${side}-width`, edges(v)[i]]),
+  "border-style": (v) => SIDES.map((side, i) => [`border-${side}-style`, edges(v)[i]]),
+  "border-color": (v) => SIDES.map((side, i) => [`border-${side}-color`, edges(v)[i]]),
+  "border-radius": radii,
+  border: (v) => SIDES.flatMap((side) => line(`border-${side}`, v)),
+  "border-top": (v) => line("border-top", v),
+  "border-right": (v) => line("border-right", v),
+  "border-bottom": (v) => line("border-bottom", v),
+  "border-left": (v) => line("border-left", v),
+  outline: (v) => line("outline", v),
+  "margin-block": (v) => [["margin-block-start", v[0]], ["margin-block-end", v[1] ?? v[0]]],
+  "margin-inline": (v) => [["margin-inline-start", v[0]], ["margin-inline-end", v[1] ?? v[0]]],
+  "padding-block": (v) => [["padding-block-start", v[0]], ["padding-block-end", v[1] ?? v[0]]],
+  "padding-inline": (v) => [["padding-inline-start", v[0]], ["padding-inline-end", v[1] ?? v[0]]],
+  "inset-block": (v) => [["inset-block-start", v[0]], ["inset-block-end", v[1] ?? v[0]]],
+  "inset-inline": (v) => [["inset-inline-start", v[0]], ["inset-inline-end", v[1] ?? v[0]]],
+  gap: (v) => [["row-gap", v[0]], ["column-gap", v[1] ?? v[0]]],
+  overflow: (v) => [["overflow-x", v[0]], ["overflow-y", v[1] ?? v[0]]],
+  "overscroll-behavior": (v) => [["overscroll-behavior-x", v[0]], ["overscroll-behavior-y", v[1] ?? v[0]]],
+  "place-content": (v) => [["align-content", v[0]], ["justify-content", v[1] ?? v[0]]],
+  "place-items": (v) => [["align-items", v[0]], ["justify-items", v[1] ?? v[0]]],
+  "place-self": (v) => [["align-self", v[0]], ["justify-self", v[1] ?? v[0]]],
+  "flex-flow": (v) => {
+    const wraps = new Set(["wrap", "nowrap", "wrap-reverse"]);
+    const wrap = v.find((token) => wraps.has(token.toLowerCase()));
+    const direction = v.find((token) => !wraps.has(token.toLowerCase()));
+    return [["flex-direction", direction ?? "row"], ["flex-wrap", wrap ?? "nowrap"]];
+  },
+  flex,
+  font,
+  background,
+  columns: (v) => {
+    const count = v.find((token) => NUMBER.test(token));
+    const width = v.find((token) => token !== count);
+    return [["column-width", width ?? "auto"], ["column-count", count ?? "auto"]];
+  },
+  "list-style": (v) => {
+    const found = { "list-style-position": "outside", "list-style-image": "none", "list-style-type": "disc" };
+    for (const token of v) {
+      const lower = token.toLowerCase();
+      if (LIST_POSITIONS.has(lower)) found["list-style-position"] = token;
+      else if (isImage(lower)) found["list-style-image"] = token;
+      else found["list-style-type"] = token;
+    }
+    return Object.entries(found);
+  },
+  "text-decoration": (v) => {
+    const lines = new Set(["none", "underline", "overline", "line-through", "blink"]);
+    const styles = new Set(["solid", "double", "dotted", "dashed", "wavy"]);
+    const found = { "text-decoration-line": "none", "text-decoration-style": "solid", "text-decoration-color": "currentcolor", "text-decoration-thickness": "auto" };
+    const written = [];
+    for (const token of v) {
+      const lower = token.toLowerCase();
+      if (lines.has(lower)) written.push(token);
+      else if (styles.has(lower)) found["text-decoration-style"] = token;
+      else if (lower === "auto" || lower === "from-font" || isLength(token)) found["text-decoration-thickness"] = token;
+      else found["text-decoration-color"] = token;
+    }
+    if (written.length) found["text-decoration-line"] = written.join(" ");
+    return Object.entries(found);
+  },
+  "grid-row": (v) => ends(["grid-row-start", "grid-row-end"], v, "auto"),
+  "grid-column": (v) => ends(["grid-column-start", "grid-column-end"], v, "auto"),
+  "grid-area": (v) => {
+    const parts = v.join(" ").split("/").map((part) => part.trim());
+    const [rowStart = "auto", columnStart = "auto", rowEnd = rowStart, columnEnd = columnStart] = parts;
+    return [
+      ["grid-row-start", rowStart], ["grid-column-start", columnStart],
+      ["grid-row-end", rowEnd], ["grid-column-end", columnEnd],
+    ];
+  },
+}));
+
+export const isShorthand = (name) => SHORTHANDS.has(name);
+
+// A value the family's own grammar would accept, so the longhand *names* can be
+// had without a value to expand — which is what a shorthand written with
+// `var()` needs, since its parts are not known until the custom property is
+// substituted at computed-value time.
+const SAMPLES = {
+  font: "italic small-caps bold 10px/1 serif",
+  background: "url(x) no-repeat red",
+  flex: "1 1 auto",
+  "flex-flow": "row wrap",
+  columns: "10px 2",
+  "list-style": "disc outside none",
+  "text-decoration": "underline solid red",
+  "grid-row": "1 / 2",
+  "grid-column": "1 / 2",
+  "grid-area": "1 / 2 / 3 / 4",
+};
+
+export function shorthandLonghands(name) {
+  const property = String(name).toLowerCase();
+  if (!SHORTHANDS.has(property)) return [];
+  return expandShorthand(property, SAMPLES[property] ?? "1px 1px 1px 1px").map(([longhand]) => longhand);
+}
+
+/// The longhands a shorthand declaration sets, or an empty list for a property
+/// that is not one of the families above.
+export function expandShorthand(name, value) {
+  const expand = SHORTHANDS.get(String(name).toLowerCase());
+  if (!expand) return [];
+  const text = String(value).trim();
+  // Whitespace only: a comma belongs to the value it follows, so a font family
+  // list or a layered background keeps its shape.
+  const parts = components(text, /\s/);
+  if (parts.length === 0) return [];
+  // A global keyword sets every longhand of the shorthand to itself, whatever
+  // the family's own grammar is.
+  if (parts.length === 1 && GLOBALS.has(parts[0].toLowerCase())) {
+    return expand(["0"]).map(([longhand]) => [longhand, parts[0]]);
+  }
+  // A value with `var()` in it cannot be split before substitution, and this
+  // runs before that: the shorthand stays whole rather than being guessed at.
+  if (text.includes("var(")) return [];
+  return expand(parts).filter(([, longhand]) => longhand !== undefined && longhand !== null);
 }

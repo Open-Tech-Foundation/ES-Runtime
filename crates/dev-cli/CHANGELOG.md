@@ -310,6 +310,39 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A definition is read once, at `define()`.** `observedAttributes` was read
+  lazily on every attribute write and never at definition time, so a class that
+  finalizes itself in that getter — which is how Lit installs its accessors and
+  its styles — was never asked. After `define()`, a Lit element had no
+  properties and no styles: `elementProperties` and `elementStyles` were both
+  empty, which is most of Lit's reactivity. The definition now freezes what a
+  browser freezes: the lifecycle callbacks and, only when there is an
+  `attributeChangedCallback` to call, the observed-attribute list. Replacing a
+  prototype method or the getter afterwards changes nothing, and a getter that
+  throws throws out of `define` leaving the name free — each verified against
+  Chrome.
+- **Shorthands become longhands in the cascade.** `border: 2px solid blue` left
+  `border-top-width` at `0px`, because nothing expanded it: a computed style has
+  no shorthands in it, and a component test that sets one and reads a longhand
+  is asking for the expansion. The families whose grammar is decidable from the
+  tokens are expanded — the box edges, the border and outline families,
+  `border-radius`, `flex`, `flex-flow`, `gap`, `overflow`, `place-*`, `font`,
+  `background`, `columns`, `list-style`, `text-decoration`, the logical edge
+  pairs and the grid line pairs — with a longhand written after a shorthand
+  still winning, since both are in the cascade at longhand granularity. A
+  shorthand written with `var()` is split after substitution, the way a pending
+  substitution value is. `transition`, `animation`, `mask`, `offset` and
+  `grid-template` are deliberately left whole: their values are comma-separated
+  lists that need each property's own grammar, and a wrong expansion is worse
+  than none.
+- **Inheritance follows the flat tree.** A shadow root's child inherited from
+  nothing, so a custom property declared on `:host` never reached the markup
+  inside it and every themed component computed the initial value. A child now
+  inherits from the host, and a slotted element from the slot it was assigned
+  to rather than from where it was written.
+- **A computed `font-weight` is a number.** `bold` reads `700` and `normal`
+  reads `400`, as in a browser. `bolder` and `lighter` are relative to the
+  parent's and stay as written.
 - **A case's trailing promises settle before its cleanup runs.** The runner
   reached `afterEach` after a single microtask turn, so a suite that leaves
   `resolve().then(assert)` un-awaited — the shape browser-era tests are written

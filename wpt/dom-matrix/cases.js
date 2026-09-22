@@ -1854,6 +1854,58 @@ export const cases = [
       });
     },
   },
+  {
+    group: "cascade",
+    name: "shorthands-expand-into-longhands",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const style = document.createElement("style");
+      style.textContent = `
+        .box {
+          margin: 1px 2px 3px 4px;
+          padding: 5px;
+          border: 2px solid blue;
+          border-left-width: 9px;
+          border-radius: 10px;
+          outline: 3px dashed;
+          flex: 2 3 40px;
+          gap: 6px 7px;
+          overflow: hidden auto;
+          font: italic bold 12px/1.5 serif;
+          grid-row: 1 / 3;
+          list-style: square inside;
+          text-decoration: underline wavy;
+        }
+      `;
+      document.head.appendChild(style);
+      const box = document.createElement("div");
+      box.className = "box";
+      document.body.appendChild(box);
+      const computed = window.getComputedStyle(box);
+      const read = (name) => computed.getPropertyValue(name);
+      const result = [
+        [read("margin-top"), read("margin-right"), read("margin-bottom"), read("margin-left")],
+        [read("padding-top"), read("padding-left")],
+        // A longhand written after the shorthand wins, which is the whole
+        // reason a shorthand has to become longhands in the cascade.
+        [read("border-top-width"), read("border-left-width"), read("border-top-style")],
+        [read("border-top-left-radius"), read("border-bottom-right-radius")],
+        [read("outline-width"), read("outline-style")],
+        [read("flex-grow"), read("flex-shrink"), read("flex-basis")],
+        [read("row-gap"), read("column-gap")],
+        [read("overflow-x"), read("overflow-y")],
+        // No `line-height`: a number there computes against the font size, and
+        // that is a resolved value this DOM does not pretend to have.
+        [read("font-size"), read("font-style"), read("font-weight"), read("font-family")],
+        [read("grid-row-start"), read("grid-row-end")],
+        [read("list-style-type"), read("list-style-position")],
+        [read("text-decoration-line"), read("text-decoration-style")],
+      ];
+      style.remove();
+      return result;
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at
