@@ -1030,6 +1030,9 @@ export function createTree(events = {}) {
 
   function isDisabled(control) {
     if (control.disabled) return true;
+    // A custom element has no `disabled` property unless it wrote one, and its
+    // disabled state comes from the attribute, as the specification says.
+    if (control instanceof Element && control.hasAttribute("disabled") && isFormAssociated(control)) return true;
     for (let parent = control.parentElement; parent; parent = parent.parentElement) {
       if (parent instanceof HTMLFieldSetElement || parent instanceof HTMLOptGroupElement) {
         if (parent.disabled) return true;
@@ -1046,7 +1049,13 @@ export function createTree(events = {}) {
       const event = new Event("reset", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event)) return;
       for (const control of this.elements) {
-        if (isFormAssociated(control)) control.formResetCallback?.();
+        if (isFormAssociated(control)) {
+          // Back to no value before the callback, so an element that sets one in
+          // `formResetCallback` wins and one that does nothing submits nothing.
+          control[FORM_VALUE] = null;
+          control[FORM_STATE] = undefined;
+          control.formResetCallback?.();
+        }
         if (control instanceof HTMLSelectElement) for (const option of control.options) option[SELECTED] = null;
         if (control instanceof HTMLTextAreaElement) control[TEXTAREA_VALUE] = null;
         if (control instanceof HTMLInputElement) { control[INPUT_VALUE] = null; control[INPUT_CHECKED] = null; }
@@ -1647,7 +1656,9 @@ export function createTree(events = {}) {
       // Only a custom element has internals, and only one set of them: a
       // built-in has nothing to attach, and a second call would hand a second
       // party the same element's private surface.
-      if (!isDefined(this) || !CUSTOM_NAME.test(this.localName)) {
+      const state = slots(this);
+      const custom = state.customDefined === true || state.customPrecustomized === true;
+      if (!custom || !CUSTOM_NAME.test(this.localName)) {
         throw domError("NotSupportedError", "Only a defined custom element has internals.");
       }
       if (this[INTERNALS]) throw domError("NotSupportedError", "This element already has internals attached.");
@@ -2176,6 +2187,10 @@ export function createTree(events = {}) {
   // undefined: everything else is defined by being built in.
   const CUSTOM_NAME = /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/;
 
+  function hasFailedUpgrade(element) {
+    return slots(element).customFailed === true;
+  }
+
   function setCustomLookup(lookup) {
     customLookup = lookup;
   }
@@ -2183,6 +2198,7 @@ export function createTree(events = {}) {
   function isDefined(element) {
     if (element.namespaceURI !== HTML_NAMESPACE || !CUSTOM_NAME.test(element.localName)) return true;
     if (element.getRootNode()?.[INERT]) return false;
+    if (slots(element).customFailed) return false;
     return slots(element).customDefined === true;
   }
 
@@ -2190,14 +2206,22 @@ export function createTree(events = {}) {
     if (Object.getPrototypeOf(element) === constructor.prototype) return element;
     if (!(constructor.prototype instanceof HTMLElement)) throw new TypeError("Custom element constructors must extend HTMLElement");
     Object.setPrototypeOf(element, constructor.prototype);
-    slots(element).customDefined = true;
+    // "Precustomized" while the constructor runs: it is not `:defined` yet, but
+    // it may attach internals — that is what a constructor does first.
+    slots(element).customPrecustomized = true;
     customConstruction.push({ element, name: element.localName, document: element.ownerDocument });
     try {
       const constructed = new constructor();
       if (constructed !== element) throw new TypeError("Custom element constructor returned a different object");
+    } catch (error) {
+      // "Failed", which is neither custom nor uncustomized: the element is not
+      // `:defined`, and nothing tries to upgrade it again.
+      slots(element).customFailed = true;
+      throw error;
     } finally {
       customConstruction.pop();
     }
+    slots(element).customDefined = true;
     return element;
   }
 
@@ -2212,5 +2236,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, setCustomLookup, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

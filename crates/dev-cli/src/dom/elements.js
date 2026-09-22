@@ -38,23 +38,51 @@ export function createElements(tree) {
 
   function react(element, method, ...args) {
     const callback = element[method];
-    if (definition(element) && typeof callback === "function") callback.apply(element, args);
+    if (!definition(element) || typeof callback !== "function") return;
+    try {
+      callback.apply(element, args);
+    } catch (error) {
+      // A reaction runs inside a tree mutation. An exception there must not
+      // unwind the mutation, so it is reported the way the constructor's is.
+      report(error);
+    }
   }
 
+  // Shadow-including: a custom element inside a shadow root is as much in the
+  // tree as one beside it, and `define` has to find it.
   function walk(root, visitor) {
-    if (root instanceof Element) visitor(root);
+    if (root instanceof Element) {
+      visitor(root);
+      const shadow = root._esdevShadowRoot?.();
+      if (shadow) walk(shadow, visitor);
+    }
     for (let child = root.firstChild; child; child = child.nextSibling) walk(child, visitor);
   }
 
   function upgrade(element) {
     const constructor = definition(element);
     if (!constructor || element instanceof constructor) return element;
-    upgradeCustom(element, constructor);
+    if (tree.hasFailedUpgrade(element)) return element;
+    try {
+      upgradeCustom(element, constructor);
+    } catch (error) {
+      // Reported, not rethrown: "create an element" and "upgrade an element"
+      // both report a constructor's exception and carry on with an element that
+      // failed to upgrade, rather than making the caller's `createElement`
+      // throw something it cannot handle.
+      report(error);
+      return element;
+    }
     for (const name of observed(element)) {
       const value = element.getAttribute(name);
       if (value !== null) react(element, "attributeChangedCallback", name, null, value);
     }
     return element;
+  }
+
+  function report(error) {
+    if (typeof globalThis.reportError === "function") globalThis.reportError(error);
+    else console.error(error);
   }
 
   function upgradeTree(root) {
@@ -92,7 +120,12 @@ export function createElements(tree) {
   Document.prototype.adoptNode = function (node) {
     const oldDocument = node.ownerDocument;
     const adopted = originalAdoptNode.call(this, node);
-    walk(adopted, (element) => react(element, "adoptedCallback", oldDocument, this));
+    // Only when the document actually changed: adopting a node into the
+    // document it already belongs to moves nothing, and the specification's
+    // "adopt" steps run the callback for a *change* of node document.
+    if (oldDocument !== this) {
+      walk(adopted, (element) => react(element, "adoptedCallback", oldDocument, this));
+    }
     return adopted;
   };
 

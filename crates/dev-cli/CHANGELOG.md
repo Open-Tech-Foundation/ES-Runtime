@@ -513,6 +513,21 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **Seven web-component answers that were wrong.** `adoptedCallback` fired even
+  when `adoptNode` changed nothing, so a same-document adopt reported an adoption
+  and a cross-document one reported two. `define()` swept document trees only, so
+  a custom element inside a shadow root was never upgraded. `getHTML` looked at
+  `element.shadowRoot`, which is null for a closed root, so
+  `serializableShadowRoots` and a root named in `shadowRoots` — the two ways a
+  *closed* root is meant to be serialized — dropped it. `form.reset()` left a
+  form-associated custom element's submission value in place, so a reset form
+  still submitted the old one. A custom element's own `disabled` attribute did
+  not count toward its disabled state, so `formDisabledCallback` reported the
+  wrong transition. And a constructor that threw propagated out of
+  `document.createElement`, where the specification reports the exception and
+  hands back an element that failed to upgrade — which is not `:defined`, and is
+  not tried again.
+
 - Restore structural esdev DOM selectors after the internal child iterator was
   renamed, and expose specialized HTML, SVG, and MathML element interfaces from
   `document.createElementNS()`.

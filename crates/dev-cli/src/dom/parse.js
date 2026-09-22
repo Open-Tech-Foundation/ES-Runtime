@@ -72,9 +72,12 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
   // `options` is `getHTML`'s dictionary and is empty for `innerHTML`, which is
   // specified never to serialize a shadow root.
   function shadowFor(element, options) {
-    const shadow = element.shadowRoot;
+    // The element's own root, open or closed: `serializableShadowRoots` and a
+    // root named in `shadowRoots` are exactly how a closed one is serialized,
+    // and `element.shadowRoot` cannot see it.
+    const shadow = element._esdevShadowRoot?.() ?? element.shadowRoot;
     if (!shadow) return null;
-    if (options.shadowRoots?.includes?.(shadow)) return shadow;
+    if (Array.from(options.shadowRoots ?? []).includes(shadow)) return shadow;
     return options.serializableShadowRoots && shadow.serializable ? shadow : null;
   }
 
