@@ -14,6 +14,8 @@ const TEMPLATE_CONTENT = Symbol("esdev DOM template content");
 const VALIDITY = Symbol("esdev DOM validity state");
 const VALIDITY_CONTROL = Symbol("esdev DOM validity control");
 const IMPLEMENTATION = Symbol("esdev DOM implementation");
+const SHADOW_OPTIONS = Symbol("esdev DOM shadow root options");
+const MANUAL_ASSIGNED = Symbol("esdev DOM manually assigned nodes");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
@@ -1325,21 +1327,42 @@ export function createTree(events = {}) {
   }
 
   class ShadowRoot extends DocumentFragment {
-    constructor(host, mode) {
+    constructor(host, options) {
       super(host.ownerDocument);
-      this.host = host;
-      this.mode = mode;
-      this.delegatesFocus = false;
+      Object.defineProperty(this, SHADOW_OPTIONS, {
+        value: {
+          host,
+          mode: options.mode,
+          delegatesFocus: Boolean(options.delegatesFocus),
+          clonable: Boolean(options.clonable),
+          serializable: Boolean(options.serializable),
+          slotAssignment: options.slotAssignment === "manual" ? "manual" : "named",
+        },
+      });
     }
+    get host() { return this[SHADOW_OPTIONS].host; }
+    get mode() { return this[SHADOW_OPTIONS].mode; }
+    get delegatesFocus() { return this[SHADOW_OPTIONS].delegatesFocus; }
+    get clonable() { return this[SHADOW_OPTIONS].clonable; }
+    get serializable() { return this[SHADOW_OPTIONS].serializable; }
+    get slotAssignment() { return this[SHADOW_OPTIONS].slotAssignment; }
     _eventParent(event) { return event.composed ? this.host : null; }
   }
 
   class HTMLSlotElement extends HTMLElement {
     get name() { return this.getAttribute("name") ?? ""; }
     set name(value) { this.setAttribute("name", String(value)); }
+    // In a manual-assignment root the `slot` attribute means nothing: a slot
+    // holds what `assign()` gave it, and only those of its host's children.
+    assign(...nodes) {
+      this[MANUAL_ASSIGNED] = nodes.filter((node) => node instanceof Node);
+    }
     _assignedNodes() {
       const root = this.getRootNode();
       if (!(root instanceof ShadowRoot)) return [];
+      if (root.slotAssignment === "manual") {
+        return (this[MANUAL_ASSIGNED] ?? []).filter((node) => node.parentNode === root.host);
+      }
       const name = this.name;
       return Array.from(root.host._esdevChildren()).filter((node) => {
         const slot = node instanceof Element ? node.getAttribute("slot") ?? "" : "";
@@ -1373,12 +1396,47 @@ export function createTree(events = {}) {
     get content() { return this[TEMPLATE_CONTENT]; }
   }
 
+  // The four insertion positions, resolved once: `insertAdjacentHTML` in
+  // parse.js needs exactly the same validation and reference child, and the
+  // errors are observable — an unknown position is a SyntaxError, and a
+  // sibling insertion with no element parent is NoModificationAllowedError.
+  Object.defineProperties(Element.prototype, {
+    _adjacentPosition: { value(where) {
+      switch (String(where).toLowerCase()) {
+        case "beforebegin":
+        case "afterend": {
+          const parent = this.parentNode;
+          if (!parent || parent instanceof Document) {
+            throw domError("NoModificationAllowedError", "There is no parent to insert a sibling into.");
+          }
+          return { parent, reference: where.toLowerCase() === "beforebegin" ? this : this.nextSibling, context: parent };
+        }
+        case "afterbegin":
+          return { parent: this, reference: this.firstChild, context: this };
+        case "beforeend":
+          return { parent: this, reference: null, context: this };
+        default:
+          throw domError("SyntaxError", `'${where}' is not a valid insertion position.`);
+      }
+    } },
+    insertAdjacentElement: { value(where, element) {
+      if (!(element instanceof Element)) throw new TypeError("insertAdjacentElement expects an Element");
+      const { parent, reference } = this._adjacentPosition(where);
+      parent.insertBefore(element, reference);
+      return element;
+    } },
+    insertAdjacentText: { value(where, data) {
+      const { parent, reference } = this._adjacentPosition(where);
+      parent.insertBefore((this.ownerDocument ?? this).createTextNode(String(data)), reference);
+    } },
+  });
+
   Object.defineProperties(Element.prototype, {
     attachShadow: { value(options = {}) {
       if (this[SHADOW_ROOT]) throw domError("NotSupportedError", "This element already hosts a shadow root.");
       const mode = options.mode;
       if (mode !== "open" && mode !== "closed") throw new TypeError("attachShadow requires mode 'open' or 'closed'.");
-      const root = new ShadowRoot(this, mode);
+      const root = new ShadowRoot(this, options);
       this[SHADOW_ROOT] = root;
       return root;
     } },

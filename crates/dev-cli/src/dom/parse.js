@@ -61,17 +61,77 @@ export function createParsing(tree, parseRecords) {
 
   function escapeText(value) { return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
   function escapeAttribute(value) { return String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("\u00a0", "&nbsp;"); }
-  function serialize(node) {
+  // `options` is `getHTML`'s dictionary and is empty for `innerHTML`, which is
+  // specified never to serialize a shadow root.
+  function shadowFor(element, options) {
+    const shadow = element.shadowRoot;
+    if (!shadow) return null;
+    if (options.shadowRoots?.includes?.(shadow)) return shadow;
+    return options.serializableShadowRoots && shadow.serializable ? shadow : null;
+  }
+
+  function serializeShadow(shadow, options) {
+    const flags = [
+      ` shadowrootmode="${shadow.mode}"`,
+      shadow.delegatesFocus ? " shadowrootdelegatesfocus=\"\"" : "",
+      shadow.clonable ? " shadowrootclonable=\"\"" : "",
+      shadow.serializable ? " shadowrootserializable=\"\"" : "",
+      shadow.slotAssignment === "manual" ? ' shadowrootslotassignment="manual"' : "",
+    ].join("");
+    return `<template${flags}>${Array.from(shadow.childNodes, (child) => serialize(child, options)).join("")}</template>`;
+  }
+
+  function serialize(node, options = {}) {
     if (node instanceof Text) return escapeText(node.data);
     if (node instanceof Comment) return `<!--${node.data}-->`;
-    if (node instanceof DocumentFragment || node instanceof ShadowRoot || node.nodeType === Node.DOCUMENT_NODE) return Array.from(node.childNodes, serialize).join("");
+    if (node instanceof DocumentFragment || node instanceof ShadowRoot || node.nodeType === Node.DOCUMENT_NODE) return Array.from(node.childNodes, (child) => serialize(child, options)).join("");
     if (!(node instanceof Element)) throw new TypeError("Cannot serialize this node type");
     const attributes = Array.from(node.attributes, (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
     if (VOID.has(node.localName)) return `<${node.localName}${attributes}>`;
     const raw = node.localName === "script" || node.localName === "style";
     const contents = node instanceof HTMLTemplateElement ? node.content.childNodes : node.childNodes;
-    const children = Array.from(contents, (child) => raw && child instanceof Text ? child.data : serialize(child)).join("");
+    const shadow = node instanceof Element ? shadowFor(node, options) : null;
+    const children = (shadow ? serializeShadow(shadow, options) : "")
+      + Array.from(contents, (child) => raw && child instanceof Text ? child.data : serialize(child, options)).join("");
     return `<${node.localName}${attributes}>${children}</${node.localName}>`;
+  }
+
+  // `<template shadowrootmode>` is inert markup everywhere except the two entry
+  // points that are specified to process it: document parsing and
+  // `setHTMLUnsafe`. `innerHTML` deliberately leaves the template alone, which
+  // is why this is a separate pass over an already-parsed fragment rather than
+  // part of the decoder.
+  function attachDeclarativeShadowRoots(root) {
+    for (const template of Array.from(root.childNodes)) {
+      if (!(template instanceof HTMLTemplateElement)) {
+        if (template instanceof Element) attachDeclarativeShadowRoots(template);
+        continue;
+      }
+      const mode = (template.getAttribute("shadowrootmode") ?? "").toLowerCase();
+      const host = template.parentNode;
+      if (mode !== "open" && mode !== "closed" || !(host instanceof Element)) {
+        attachDeclarativeShadowRoots(template.content);
+        continue;
+      }
+      // A second declarative root for the same host is dropped, template and
+      // all: there is nowhere to put it and nothing to report it to.
+      let shadow = null;
+      try {
+        shadow = host.attachShadow({
+          mode,
+          delegatesFocus: template.hasAttribute("shadowrootdelegatesfocus"),
+          clonable: template.hasAttribute("shadowrootclonable"),
+          serializable: template.hasAttribute("shadowrootserializable"),
+          slotAssignment: template.getAttribute("shadowrootslotassignment") ?? "named",
+        });
+      } catch {
+        template.remove();
+        continue;
+      }
+      attachDeclarativeShadowRoots(template.content);
+      shadow.append(...Array.from(template.content.childNodes));
+      template.remove();
+    }
   }
 
   function parseFragment(source, context) {
@@ -93,6 +153,34 @@ export function createParsing(tree, parseRecords) {
           this.parentNode.replaceChild(parseFragment(source, this), this);
         },
       },
+    });
+    for (const Class of [Element, ShadowRoot]) Object.defineProperties(Class.prototype, {
+      setHTMLUnsafe: { value(source) {
+        const fragment = parseFragment(source, this);
+        attachDeclarativeShadowRoots(fragment);
+        this.replaceChildren(fragment);
+      }, writable: true, configurable: true },
+      getHTML: { value(options = {}) {
+        return Array.from(this.childNodes, (child) => serialize(child, options)).join("");
+      }, writable: true, configurable: true },
+    });
+    Object.defineProperties(HTMLTemplateElement.prototype, {
+      setHTMLUnsafe: { value(source) {
+        const fragment = parseFragment(source, this);
+        attachDeclarativeShadowRoots(fragment);
+        this.content.replaceChildren(fragment);
+      }, writable: true, configurable: true },
+      getHTML: { value(options = {}) {
+        return Array.from(this.content.childNodes, (child) => serialize(child, options)).join("");
+      }, writable: true, configurable: true },
+    });
+    Object.defineProperties(Element.prototype, {
+      insertAdjacentHTML: { value(where, source) {
+        // The parse context is where the markup lands, not the element the call
+        // was made on: `beforebegin` markup is parsed as a child of the parent.
+        const { parent, reference, context } = this._adjacentPosition(where);
+        parent.insertBefore(parseFragment(source, context), reference);
+      }, writable: true, configurable: true },
     });
     Object.defineProperties(HTMLTemplateElement.prototype, {
       innerHTML: {

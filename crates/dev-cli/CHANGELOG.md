@@ -54,6 +54,21 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **Adjacent insertion, `setHTMLUnsafe` and `getHTML` in `esdev test --dom`.**
+  `insertAdjacentHTML`, `insertAdjacentElement` and `insertAdjacentText` insert
+  at all four positions, parsing `beforebegin`/`afterend` markup in the parent's
+  context and refusing a sibling insertion with no element parent
+  (`NoModificationAllowedError`) or an unknown position (`SyntaxError`).
+  `setHTMLUnsafe` attaches declarative shadow roots — `<template
+  shadowrootmode>`, nested, with `shadowrootdelegatesfocus`,
+  `shadowrootclonable`, `shadowrootserializable` and
+  `shadowrootslotassignment` — while `innerHTML` still leaves the template
+  inert, as the specification requires of each. `getHTML` serializes a shadow
+  root back to a template when `serializableShadowRoots` is set and the root is
+  serializable, or when the root is named in `shadowRoots`. A shadow root now
+  reports `clonable`, `serializable` and `slotAssignment`, and a
+  manual-assignment root holds only the host children given to `slot.assign()`.
+
 - **The node interfaces and comparison algorithms `esdev test --dom` was
   missing.** `isEqualNode` compares two trees by kind, name, attributes and
   children rather than by identity; `compareDocumentPosition` reports tree order

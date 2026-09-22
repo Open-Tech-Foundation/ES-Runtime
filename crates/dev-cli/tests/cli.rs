@@ -3022,6 +3022,121 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_inserts_adjacent_markup_nodes_and_text() {
+    let dir = build_dir("t_test_dom_insert_adjacent");
+    write_in(
+        &dir,
+        "adjacent.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('the four insertion positions land where they say', () => {\n\
+           const root = document.createElement('main');\n\
+           const target = document.createElement('p');\n\
+           root.append(target);\n\
+           document.body.append(root);\n\
+           target.insertAdjacentHTML('beforebegin', '<i>bb</i>');\n\
+           target.insertAdjacentHTML('afterbegin', '<b>ab</b>');\n\
+           target.insertAdjacentHTML('beforeend', '<u>be</u>');\n\
+           target.insertAdjacentHTML('afterend', '<s>ae</s>');\n\
+           assertEquals(root.innerHTML, '<i>bb</i><p><b>ab</b><u>be</u></p><s>ae</s>');\n\
+           const returned = target.insertAdjacentElement('AfterBegin', document.createElement('em'));\n\
+           target.insertAdjacentText('beforeend', 'text&');\n\
+           assertEquals([returned.localName, target.innerHTML], ['em', '<em></em><b>ab</b><u>be</u>text&amp;']);\n\
+         });\n\
+         test('a position with no parent or no name is refused', () => {\n\
+           const orphan = document.createElement('div');\n\
+           const errors = [];\n\
+           const name = callback => { try { callback(); return 'inserted'; } catch (error) { return error.name; } };\n\
+           errors.push(name(() => orphan.insertAdjacentHTML('beforebegin', 'x')));\n\
+           errors.push(name(() => document.documentElement.insertAdjacentHTML('afterend', 'x')));\n\
+           errors.push(name(() => orphan.insertAdjacentHTML('nowhere', 'x')));\n\
+           errors.push(name(() => orphan.insertAdjacentElement('beforeend', 'nope')));\n\
+           assertEquals(errors, ['NoModificationAllowedError', 'NoModificationAllowedError', 'SyntaxError', 'TypeError']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom insertAdjacent");
+    assert!(
+        ran.status.success(),
+        "DOM adjacent-insertion test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dom_declarative_shadow_roots_attach_only_through_set_html_unsafe() {
+    let dir = build_dir("t_test_dom_declarative_shadow");
+    write_in(
+        &dir,
+        "declarative.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('innerHTML keeps the template, setHTMLUnsafe attaches it', () => {\n\
+           const kept = document.createElement('div');\n\
+           kept.innerHTML = '<span><template shadowrootmode=\"open\"><i>inner</i></template></span>';\n\
+           assertEquals([kept.firstElementChild.shadowRoot, kept.firstElementChild.firstElementChild.localName], [null, 'template']);\n\
+           const attached = document.createElement('div');\n\
+           attached.setHTMLUnsafe('<span><template shadowrootmode=\"open\" shadowrootserializable=\"\"><i>inner</i></template>light</span>');\n\
+           const host = attached.firstElementChild;\n\
+           assertEquals([host.shadowRoot.mode, host.shadowRoot.serializable, host.shadowRoot.innerHTML, host.textContent], ['open', true, '<i>inner</i>', 'light']);\n\
+         });\n\
+         test('getHTML serializes a shadow root only when asked', () => {\n\
+           const root = document.createElement('div');\n\
+           root.setHTMLUnsafe('<span><template shadowrootmode=\"open\" shadowrootserializable=\"\"><i>inner</i></template>light</span>');\n\
+           const shadow = root.firstElementChild.shadowRoot;\n\
+           const serialized = '<span><template shadowrootmode=\"open\" shadowrootserializable=\"\"><i>inner</i></template>light</span>';\n\
+           assertEquals(root.getHTML(), '<span>light</span>');\n\
+           assertEquals(root.innerHTML, '<span>light</span>');\n\
+           assertEquals(root.getHTML({ serializableShadowRoots: true }), serialized);\n\
+           assertEquals(root.getHTML({ shadowRoots: [shadow] }), serialized);\n\
+           const closed = document.createElement('div');\n\
+           closed.setHTMLUnsafe('<p><template shadowrootmode=\"closed\"><b>x</b></template></p>');\n\
+           assertEquals([closed.firstElementChild.shadowRoot, closed.getHTML({ serializableShadowRoots: true })], [null, '<p></p>']);\n\
+         });\n\
+         test('nested declarative roots attach, a repeated one is dropped', () => {\n\
+           const nested = document.createElement('div');\n\
+           nested.setHTMLUnsafe('<a><template shadowrootmode=\"open\"><b><template shadowrootmode=\"open\"><u>deep</u></template></b></template></a>');\n\
+           const inner = nested.firstElementChild.shadowRoot.firstElementChild;\n\
+           assertEquals([inner.localName, inner.shadowRoot.innerHTML], ['b', '<u>deep</u>']);\n\
+           const twice = document.createElement('div');\n\
+           twice.setHTMLUnsafe('<s><template shadowrootmode=\"open\"><i>1</i></template><template shadowrootmode=\"open\"><i>2</i></template></s>');\n\
+           assertEquals([twice.firstElementChild.shadowRoot.innerHTML, twice.firstElementChild.childNodes.length], ['<i>1</i>', 0]);\n\
+         });\n\
+         test('a manual-assignment root holds only what it was assigned', () => {\n\
+           const host = document.createElement('div');\n\
+           const first = document.createElement('i');\n\
+           const second = document.createElement('b');\n\
+           host.append(first, second);\n\
+           document.body.append(host);\n\
+           const root = host.attachShadow({ mode: 'open', slotAssignment: 'manual' });\n\
+           root.innerHTML = '<slot></slot>';\n\
+           const slot = root.firstElementChild;\n\
+           assertEquals([root.slotAssignment, slot.assignedNodes().length], ['manual', 0]);\n\
+           slot.assign(second, document.createElement('u'));\n\
+           assertEquals(slot.assignedNodes().map(node => node.localName), ['b']);\n\
+           const named = document.createElement('div');\n\
+           named.append(document.createElement('i'));\n\
+           const namedRoot = named.attachShadow({ mode: 'open' });\n\
+           namedRoot.innerHTML = '<slot></slot>';\n\
+           assertEquals([namedRoot.slotAssignment, namedRoot.firstElementChild.assignedNodes().length, namedRoot.clonable], ['named', 1, false]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom declarative shadow roots");
+    assert!(
+        ran.status.success(),
+        "DOM declarative shadow-root test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_events_propagate_through_the_window() {
     let dir = build_dir("t_test_dom_window_propagation");
     write_in(
