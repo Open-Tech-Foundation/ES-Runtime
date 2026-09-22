@@ -1,7 +1,7 @@
 import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 
-const { Document, Element, HTMLDialogElement, HTMLInputElement, SVGElement, Text } = createTree();
+const { Document, Element, HTMLDialogElement, HTMLInputElement, SVGElement, Text, ValidityState } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -361,4 +361,47 @@ test("node lists iterate snapshots with forEach", () => {
 
   expect(seen).toEqual([["node", "a", 0, true], ["node", "b", 1, true]]);
   expect(() => root.childNodes.forEach(null)).toThrow("function");
+});
+
+test("exposes template content as a same-object prototype accessor", () => {
+  const document = new Document();
+  const template = document.createElement("template");
+  const fragment = template.content;
+
+  expect(Object.hasOwn(template, "content")).toBe(false);
+  expect("content" in Object.getPrototypeOf(template)).toBe(true);
+  expect(fragment.constructor.name).toBe("DocumentFragment");
+  expect(template.content).toBe(fragment);
+  expect(() => { template.content = null; }).toThrow();
+});
+
+test("reads validity flags live from one ValidityState per control", () => {
+  const document = new Document();
+  const input = document.createElement("input");
+  input.required = true;
+  const validity = input.validity;
+
+  expect(validity).toBeInstanceOf(ValidityState);
+  expect(input.validity).toBe(validity);
+  expect([validity.valueMissing, validity.valid]).toEqual([true, false]);
+  input.value = "filled";
+  expect([validity.valueMissing, validity.valid]).toEqual([false, true]);
+  input.setCustomValidity("nope");
+  expect([validity.customError, validity.valid]).toEqual([true, false]);
+  expect(() => new ValidityState()).toThrow("Illegal constructor");
+});
+
+test("collects the controls a fieldset contains, live", () => {
+  const document = new Document();
+  const fieldset = document.createElement("fieldset");
+  const root = document.createElement("main");
+  document.appendChild(root);
+  root.appendChild(fieldset);
+  fieldset.append(document.createElement("input"), document.createElement("p"), document.createElement("select"));
+
+  expect(Array.from(fieldset.elements, (control) => control.localName)).toEqual(["input", "select"]);
+  fieldset.appendChild(document.createElement("textarea"));
+  expect(fieldset.elements.length).toBe(3);
+  fieldset.firstElementChild.remove();
+  expect(Array.from(fieldset.elements, (control) => control.localName)).toEqual(["select", "textarea"]);
 });

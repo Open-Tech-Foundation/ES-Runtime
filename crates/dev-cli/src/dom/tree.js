@@ -10,6 +10,9 @@ const CLASS_LIST = Symbol("esdev DOM class list");
 const DATASET = Symbol("esdev DOM dataset");
 const DATA = Symbol("esdev DOM character data");
 const SELECTED = Symbol("esdev DOM option selected state");
+const TEMPLATE_CONTENT = Symbol("esdev DOM template content");
+const VALIDITY = Symbol("esdev DOM validity state");
+const VALIDITY_CONTROL = Symbol("esdev DOM validity control");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
@@ -870,8 +873,41 @@ export function createTree(events = {}) {
     set value(value) { this[TEXTAREA_VALUE] = String(value); }
   }
 
-  class HTMLFieldSetElement extends HTMLElement {}
+  class HTMLFieldSetElement extends HTMLElement {
+    // A fieldset's controls are the listed elements it contains, which is not
+    // the same question a form asks: a form follows the form owner, so a
+    // control can belong to a form it is nowhere near.
+    get elements() {
+      return new HTMLCollection(this, () => Array.from(this.getElementsByTagName("*")).filter((element) => ["button", "fieldset", "input", "object", "output", "select", "textarea"].includes(element.localName)));
+    }
+  }
   class HTMLOptGroupElement extends HTMLElement {}
+
+  // `[SameObject] readonly attribute ValidityState validity`: the object is the
+  // same on every read and its flags are computed when they are asked for. A
+  // fresh frozen record each time is neither, and `instanceof ValidityState`
+  // fails on it.
+  const VALIDITY_BRAND = Symbol("esdev DOM validity brand");
+  const VALIDITY_FLAGS = [
+    "badInput", "customError", "patternMismatch", "rangeOverflow", "rangeUnderflow",
+    "stepMismatch", "tooLong", "tooShort", "typeMismatch", "valueMissing", "valid",
+  ];
+
+  class ValidityState {
+    constructor(control, brand) {
+      // The interface has no constructor in Web IDL, so script cannot make one.
+      if (brand !== VALIDITY_BRAND) throw new TypeError("Illegal constructor");
+      Object.defineProperty(this, VALIDITY_CONTROL, { value: control });
+    }
+  }
+
+  for (const flag of VALIDITY_FLAGS) {
+    Object.defineProperty(ValidityState.prototype, flag, {
+      get() { return validityFor(this[VALIDITY_CONTROL])[flag]; },
+      enumerable: true,
+      configurable: true,
+    });
+  }
 
   function validityFor(control) {
     const value = control.value ?? "";
@@ -900,7 +936,10 @@ export function createTree(events = {}) {
   function installValidation(Class) {
     Object.defineProperties(Class.prototype, {
       willValidate: { get() { return !isDisabled(this); } },
-      validity: { get() { return validityFor(this); } },
+      validity: { get() {
+        this[VALIDITY] ??= new ValidityState(this, VALIDITY_BRAND);
+        return this[VALIDITY];
+      } },
       validationMessage: { get() { return this.validity.valid ? "" : this[CUSTOM_VALIDITY] || "Constraints not satisfied"; } },
       setCustomValidity: { value(message) { this[CUSTOM_VALIDITY] = String(message); } },
       checkValidity: { value() { if (!this.willValidate || this.validity.valid) return true; this.dispatchEvent(new Event("invalid", { cancelable: true })); return false; } },
@@ -1206,8 +1245,13 @@ export function createTree(events = {}) {
   class HTMLTemplateElement extends HTMLElement {
     constructor(name, ownerDocument) {
       super(name, ownerDocument);
-      this.content = new DocumentFragment(ownerDocument);
+      this[TEMPLATE_CONTENT] = new DocumentFragment(ownerDocument);
     }
+
+    // `[SameObject] readonly attribute DocumentFragment content`: an own data
+    // property would be writable, enumerable and invisible to anything that
+    // looks the interface up on the prototype.
+    get content() { return this[TEMPLATE_CONTENT]; }
   }
 
   Object.defineProperties(Element.prototype, {
@@ -1361,5 +1405,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

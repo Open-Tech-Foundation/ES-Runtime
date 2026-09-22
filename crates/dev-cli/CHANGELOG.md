@@ -87,6 +87,16 @@ is the point, since none of the three has any business in a deployment.
   safe hexadecimal colours and zero dimensions, collapses shorthand sides, and
   removes safely overridden adjacent declarations. `esdev build --help` now
   names the supported module and stylesheet entry types.
+- **`template.content`, `input.validity` and `fieldset.elements` are the
+  interfaces they claim to be.** `content` was an own data property of each
+  template rather than a prototype accessor, so it was writable and invisible
+  to anything reading the interface off the prototype. `validity` returned a
+  fresh frozen record on every read, so `input.validity === input.validity` was
+  false and `instanceof ValidityState` had nothing to be true of; it is now one
+  `ValidityState` per control whose flags are computed when read, and
+  `ValidityState` is exposed with no constructor, as Web IDL says. A fieldset
+  had no `elements` at all — it now collects the listed controls it contains,
+  live, which is a different question from the one a form's `elements` asks.
 - **Events reach `window` in `esdev test --dom`.** The propagation path stopped
   at the document, so a `window.addEventListener` listener never ran and
   `composedPath()` was one entry short — outside-click handlers, global key
