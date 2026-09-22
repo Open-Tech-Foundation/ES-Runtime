@@ -11,7 +11,7 @@
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
-members = ["packages/postgres", "packages/redis", "packages/types", "crates/runtime/js", "website", "bench"]
+members = ["packages/postgres", "packages/redis", "packages/types", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
 
 # --- the runtime (Rust) ------------------------------------------------------
 
@@ -79,7 +79,7 @@ run = "pnpm install --frozen-lockfile"
 # script, so the alternative is a no-op script that exists to be skipped, which
 # is a worse thing to leave in a published manifest.
 [tasks.build]
-run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-redis --filter esrun-serialization --parallel run build"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-redis --filter esrun-serialization --filter esdev-dom-color --parallel run build"
 
 # Not "*": `crates/runtime/js` has 25 standing type errors and has never been
 # typechecked standalone (its tsconfig sets `types: []` and drives the editor).

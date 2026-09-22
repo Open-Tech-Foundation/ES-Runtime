@@ -160,7 +160,7 @@ const INITIAL = new Map(Object.entries({
 // is not `!important`.
 const ORIGIN = { ua: 0, author: 1, inline: 2 };
 
-export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
+export function createSheets({ tree, parse, selectors, css, mediaMatches, colors = null }) {
   const { Document, Element, ShadowRoot, HTML_NAMESPACE } = tree;
 
   class CSSRuleList {
@@ -679,6 +679,27 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
       const from = inherited.get(name);
       if (INHERITED.has(name) && from !== undefined) values.set(name, from);
     }
+    // Colours resolve last, and `color` before the rest: `currentcolor`
+    // anywhere else means whatever `color` ended up being, and `color:
+    // currentcolor` means the inherited one.
+    const declaredColor = colors === null ? undefined : values.get("color");
+    if (declaredColor !== undefined) {
+      values.set(
+        "color",
+        String(declaredColor).toLowerCase() === "currentcolor"
+          ? inherited.get("color") ?? INITIAL.get("color")
+          : colors.computedColor(declaredColor, inherited.get("color") ?? INITIAL.get("color")),
+      );
+    }
+    if (colors !== null) {
+      const currentColor = values.get("color") ?? INITIAL.get("color");
+      for (const name of colors.COLOR_PROPERTIES) {
+        if (name === "color") continue;
+        const value = values.get(name);
+        if (value !== undefined) values.set(name, colors.computedColor(value, currentColor));
+      }
+    }
+
     // The one keyword-to-number computation that needs no layout: a browser's
     // computed `font-weight` is always a number, and a test that sets `bold`
     // reads `700`. `bolder`/`lighter` are relative to the parent's and stay as

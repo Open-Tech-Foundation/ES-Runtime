@@ -122,9 +122,14 @@ function defineIdl(target, properties) {
   const described = {};
   for (const name of Reflect.ownKeys(properties)) {
     const descriptor = properties[name];
-    described[name] = typeof name === "symbol"
-      ? descriptor
-      : { configurable: true, enumerable: true, ...descriptor };
+    if (typeof name === "symbol") {
+      described[name] = descriptor;
+      continue;
+    }
+    // An operation is writable as well as configurable — Web IDL says so, and a
+    // test that replaces a method (`el.focus = spy`) needs it.
+    const writable = typeof descriptor.value === "function" ? { writable: true } : {};
+    described[name] = { configurable: true, enumerable: true, ...writable, ...descriptor };
   }
   Object.defineProperties(target, described);
   return target;

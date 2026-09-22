@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - crates/runtime/js
+  - crates/dev-cli/js
   - website
   - bench
 

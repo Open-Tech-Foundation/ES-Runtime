@@ -176,6 +176,15 @@ export function validDeclaration(name, value) {
 // browser stores it. Everything else is left exactly as written: this DOM
 // serializes specified values, and rewriting one that needs no unit would be
 // inventing a computation.
+// What a declaration stores: a zero length with its unit, and a colour in the
+// canonical form a browser keeps it in. The colour table is the realm's, passed
+// in, so this file stays testable on its own.
+function canonical(colors, name, value) {
+  const property = String(name).toLowerCase();
+  if (colors?.COLOR_PROPERTIES.has(property)) return colors.specifiedColor(value);
+  return normalizeZeros(property, value);
+}
+
 function normalizeZeros(name, value) {
   const property = String(name).toLowerCase();
   if (property.startsWith("--") || ZERO_STAYS_A_NUMBER.has(property)) return value;
@@ -221,7 +230,7 @@ function splitDeclarations(text) {
   return declarations;
 }
 
-function parse(text) {
+function parse(text, colors = null) {
   const values = new Map();
   for (const declaration of splitDeclarations(String(text))) {
     const colon = declaration.indexOf(":");
@@ -252,7 +261,7 @@ function kebab(name) {
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-export function createCss({ Element }) {
+export function createCss({ Element, colors = null }) {
   function state(element) {
     const raw = element.getAttribute("style") ?? "";
     let state = element[STYLE];
@@ -261,7 +270,7 @@ export function createCss({ Element }) {
       Object.defineProperty(element, STYLE, { value: state });
     }
     if (state.raw !== raw) {
-      state.values = parse(raw);
+      state.values = parse(raw, colors);
       state.raw = raw;
     }
     return state;
@@ -362,7 +371,7 @@ export function createCss({ Element }) {
       // was there stays: `el.style.width = "23"` changes nothing, as in a
       // browser in standards mode.
       if (!knownProperty(name) || !validDeclaration(name, value)) return;
-      value = normalizeZeros(name, value);
+      value = canonical(colors, name, value);
       const current = this._state();
       current.values.set(name, { value, priority });
       write(this.element, current);
@@ -422,7 +431,7 @@ export function createCss({ Element }) {
   function supportsDeclaration(name, value) {
     if (!knownProperty(name)) return false;
     try {
-      return parse(`${name}: ${value}`).size === 1;
+      return parse(`${name}: ${value}`, colors).size === 1;
     } catch {
       return false;
     }

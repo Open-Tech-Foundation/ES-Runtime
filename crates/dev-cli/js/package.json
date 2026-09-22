@@ -1,0 +1,12 @@
+{
+  "name": "esdev-dom-color",
+  "private": true,
+  "type": "module",
+  "description": "Source for the CSS colour table runtime:dom/colors uses. Bundled into the esdev binary, and reachable only from `esdev test --dom` — esrun never sees it.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@opentf/std": "^0.19.0"
+  }
+}

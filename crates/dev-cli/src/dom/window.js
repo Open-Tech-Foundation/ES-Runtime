@@ -8,6 +8,8 @@ import { createCss } from "runtime:dom/css";
 import { createElements } from "runtime:dom/elements";
 import { createRanges } from "runtime:dom/range";
 import { createSheets } from "runtime:dom/sheets";
+import { createColors } from "runtime:dom/colors";
+import { color } from "runtime:dom/std-color";
 
 // Web IDL puts an interface's members on the prototype as **configurable**, and
 // a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
@@ -18,9 +20,14 @@ function defineIdl(target, properties) {
   const described = {};
   for (const name of Reflect.ownKeys(properties)) {
     const descriptor = properties[name];
-    described[name] = typeof name === "symbol"
-      ? descriptor
-      : { configurable: true, enumerable: true, ...descriptor };
+    if (typeof name === "symbol") {
+      described[name] = descriptor;
+      continue;
+    }
+    // An operation is writable as well as configurable — Web IDL says so, and a
+    // test that replaces a method (`el.focus = spy`) needs it.
+    const writable = typeof descriptor.value === "function" ? { writable: true } : {};
+    described[name] = { configurable: true, enumerable: true, ...writable, ...descriptor };
   }
   Object.defineProperties(target, described);
   return target;
@@ -34,7 +41,8 @@ const parse = createParsing(
   (source) => globalThis.__ops.dom_parse_document(source),
 );
 const selectors = createSelectors(tree);
-const css = createCss(tree);
+const colors = createColors(color);
+const css = createCss({ ...tree, colors });
 const elements = createElements(tree);
 
 // The document `new Text()` and friends belong to, before anything can use one.
@@ -63,6 +71,7 @@ const customElements = elements.install(document);
 const ranges = createRanges(tree, parse);
 ranges.install();
 const sheets = createSheets({
+  colors,
   tree,
   parse: (text) => globalThis.__ops.dom_parse_stylesheet(text),
   selectors,
@@ -108,7 +117,13 @@ function focusedIn(scope) {
   return null;
 }
 
-Object.defineProperty(document, "activeElement", { get: () => focusedIn(document), configurable: true, enumerable: true });
+// On the prototype, not the instance: Web IDL puts it there, and a test that
+// stubs `activeElement` for a whole realm has to reach it through the class.
+Object.defineProperty(tree.Document.prototype, "activeElement", {
+  get() { return focusedIn(this); },
+  configurable: true,
+  enumerable: true,
+});
 Object.defineProperty(tree.ShadowRoot.prototype, "activeElement", {
   get() { return focusedIn(this); },
   configurable: true,
@@ -529,7 +544,12 @@ const history = new History();
 const localStorage = new Storage();
 const sessionStorage = new Storage();
 const selection = new Selection();
-Object.defineProperty(document, "getSelection", { value: () => selection, configurable: true, enumerable: true, writable: true });
+Object.defineProperty(tree.Document.prototype, "getSelection", {
+  value() { return selection; },
+  configurable: true,
+  enumerable: true,
+  writable: true,
+});
 const hostConsole = globalThis.console;
 const browserConsole = Object.create(null);
 for (const method of Object.getOwnPropertyNames(hostConsole)) {

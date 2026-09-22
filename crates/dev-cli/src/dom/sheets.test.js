@@ -3,6 +3,8 @@ import { createCss } from "./css.js";
 import { createSelectors } from "./select.js";
 import { createSheets } from "./sheets.js";
 import { createTree } from "./tree.js";
+import { createColors } from "./colors.js";
+import { color } from "./std-color.js";
 
 // The records the stylesheet op produces, by hand: these cases are about the
 // cascade, not about parsing CSS text.
@@ -11,7 +13,8 @@ const group = (name, condition, rules) => [1, name, condition, rules];
 
 function fixture({ sheets = {}, media = () => true } = {}) {
   const tree = createTree();
-  const css = createCss(tree);
+  const colors = createColors(color);
+  const css = createCss({ ...tree, colors });
   const selectors = createSelectors(tree);
   css.install();
   selectors.install();
@@ -19,7 +22,7 @@ function fixture({ sheets = {}, media = () => true } = {}) {
     if (!Object.hasOwn(sheets, text)) throw new SyntaxError(`Unexpected sheet: ${text}`);
     return sheets[text];
   };
-  const module = createSheets({ tree, parse, selectors, css, mediaMatches: media });
+  const module = createSheets({ tree, parse, selectors, css, mediaMatches: media, colors });
   const document = new tree.Document();
   const html = document.createElement("html");
   const head = document.createElement("head");
@@ -79,12 +82,12 @@ test("inherits what is inherited and nothing else", () => {
   parent.appendChild(child);
   body.appendChild(parent);
 
-  expect(module.getComputedStyle(child).color).toBe("purple");
-  expect(module.getComputedStyle(grandchild).color).toBe("purple");
+  expect(module.getComputedStyle(child).color).toBe("rgb(128, 0, 128)");
+  expect(module.getComputedStyle(grandchild).color).toBe("rgb(128, 0, 128)");
   expect(module.getComputedStyle(child).getPropertyValue("border-color")).toBe("");
   expect(module.getComputedStyle(child).getPropertyValue("--brand")).toBe("cyan");
   child.style.color = "orange";
-  expect([module.getComputedStyle(child).color, module.getComputedStyle(grandchild).color]).toEqual(["orange", "orange"]);
+  expect([module.getComputedStyle(child).color, module.getComputedStyle(grandchild).color]).toEqual(["rgb(255, 165, 0)", "rgb(255, 165, 0)"]);
 });
 
 test("falls back to the user-agent sheet and then the initial value", () => {

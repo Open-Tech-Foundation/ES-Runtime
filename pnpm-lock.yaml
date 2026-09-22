@@ -218,6 +218,12 @@ importers:
         specifier: ^6.2.0
         version: 6.2.1
 
+  crates/dev-cli/js:
+    devDependencies:
+      '@opentf/std':
+        specifier: ^0.19.0
+        version: 0.19.0
+
   crates/runtime/js:
     devDependencies:
       '@bufbuild/protobuf':
@@ -845,6 +851,10 @@ packages:
 
   '@nodable/entities@3.0.0':
     resolution: {integrity: sha512-8L9xFeTYKhm49xfIypoe2W5wV1m/3Z58kT+7kR9A8OyFxcPduI4VmxaUMQyKYrRjUoLLSXv6EKKID5Tvj9cUVw==}
+
+  '@opentf/std@0.19.0':
+    resolution: {integrity: sha512-tnBP9Fv3T7Sfd1VWJQKfq6BubBH/qvVEC80zzMeeLW7epACt0jtpZ7ivB9A5HLSzb8Lxs9Mc0V/jvD6jStq+bA==}
+    engines: {node: '>=20.0.0'}
 
   '@opentf/web-cli@1.26.0':
     resolution: {integrity: sha512-TXqc+GZm8ah4NjKrA8SRRKPHys5220b1Ma69VXNxL/2Yr0apvLVZnPPm8cB/AYcyTUR+NSxCeoRxZbh5jN6+PQ==}
@@ -2159,6 +2169,8 @@ snapshots:
     optional: true
 
   '@nodable/entities@3.0.0': {}
+
+  '@opentf/std@0.19.0': {}
 
   '@opentf/web-cli@1.26.0(@opentf/web@0.28.0)':
     dependencies:

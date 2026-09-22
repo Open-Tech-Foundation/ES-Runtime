@@ -2105,6 +2105,48 @@ export const cases = [
       return [compiled, kept, retaken, [hadOne, other.onclick], hits, [propagated, returned]];
     },
   },
+  {
+    group: "cascade",
+    name: "a-colour-resolves-when-it-is-computed",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      document.body.appendChild(element);
+      const both = (property, value) => {
+        element.style.setProperty(property, value);
+        const specified = element.style.getPropertyValue(property);
+        const computed = window.getComputedStyle(element).getPropertyValue(property);
+        element.style.removeProperty(property);
+        return [specified, computed];
+      };
+      const values = [
+        // A name survives the declaration and resolves in the computed value.
+        both("color", "red"), both("color", "RED"), both("color", "rebeccapurple"),
+        // A hex or a legacy function is canonical in both.
+        both("color", "#fff"), both("color", "rgb(1, 2, 3)"), both("color", "rgb(1 2 3)"),
+        both("color", "rgba(1, 2, 3, 0.5)"), both("color", "rgb(1 2 3 / 50%)"),
+        both("color", "hsl(0, 100%, 50%)"),
+        // The two keywords only a computed value can answer.
+        both("color", "transparent"), both("color", "currentcolor"),
+        // A modern colour keeps the space it was written in.
+        both("color", "oklch(0.5 0.1 200)"),
+        // And the same rules on the other colour properties.
+        both("background-color", "red"), both("border-top-color", "red"),
+        both("outline-color", "red"), both("fill", "red"), both("caret-color", "red"),
+      ];
+      // `currentcolor` elsewhere is whatever `color` computed to, inherited
+      // through the tree like any other colour.
+      const parent = document.createElement("div");
+      const child = document.createElement("span");
+      parent.appendChild(child);
+      document.body.appendChild(parent);
+      parent.style.color = "rgb(10, 20, 30)";
+      child.style.borderTopColor = "currentcolor";
+      const computed = window.getComputedStyle(child);
+      return [values, [computed.color, computed.borderTopColor]];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

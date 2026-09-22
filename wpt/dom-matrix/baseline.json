@@ -5168,10 +5168,329 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "a-colour-resolves-when-it-is-computed",
+      "chrome": {
+        "result": [
+          [
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "rebeccapurple",
+              "rgb(102, 51, 153)"
+            ],
+            [
+              "rgb(255, 255, 255)",
+              "rgb(255, 255, 255)"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgb(255, 0, 0)",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "transparent",
+              "rgba(0, 0, 0, 0)"
+            ],
+            [
+              "currentcolor",
+              "rgb(0, 0, 0)"
+            ],
+            [
+              "oklch(0.5 0.1 200)",
+              "oklch(0.5 0.1 200)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ]
+          ],
+          [
+            "rgb(10, 20, 30)",
+            "rgb(10, 20, 30)"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "rebeccapurple",
+              "rgb(102, 51, 153)"
+            ],
+            [
+              "rgb(255, 255, 255)",
+              "rgb(255, 255, 255)"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgb(255, 0, 0)",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "transparent",
+              "rgba(0, 0, 0, 0)"
+            ],
+            [
+              "currentcolor",
+              "rgb(0, 0, 0)"
+            ],
+            [
+              "oklch(0.5 0.1 200)",
+              "oklch(0.5 0.1 200)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ]
+          ],
+          [
+            "rgb(10, 20, 30)",
+            "rgb(10, 20, 30)"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            [
+              "red",
+              "red"
+            ],
+            [
+              "red",
+              "red"
+            ],
+            [
+              "rebeccapurple",
+              "rebeccapurple"
+            ],
+            [
+              "#fff",
+              "#fff"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgb(1 2 3)",
+              "rgb(1 2 3)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgb(1 2 3 / 50%)",
+              "rgb(1 2 3 / 50%)"
+            ],
+            [
+              "hsl(0, 100%, 50%)",
+              "hsl(0, 100%, 50%)"
+            ],
+            [
+              "transparent",
+              "transparent"
+            ],
+            [
+              "currentcolor",
+              "currentcolor"
+            ],
+            [
+              "",
+              ""
+            ],
+            [
+              "red",
+              "red"
+            ],
+            [
+              "red",
+              "red"
+            ],
+            [
+              "red",
+              "red"
+            ],
+            [
+              "red",
+              "red"
+            ],
+            [
+              "red",
+              "red"
+            ]
+          ],
+          [
+            "rgb(10, 20, 30)",
+            "currentcolor"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "rebeccapurple",
+              "rgb(102, 51, 153)"
+            ],
+            [
+              "rgb(255, 255, 255)",
+              "rgb(255, 255, 255)"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgb(1, 2, 3)",
+              "rgb(1, 2, 3)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgba(1, 2, 3, 0.5)",
+              "rgba(1, 2, 3, 0.5)"
+            ],
+            [
+              "rgb(255, 0, 0)",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "transparent",
+              "rgba(0, 0, 0, 0)"
+            ],
+            [
+              "currentcolor",
+              "rgb(0, 0, 0)"
+            ],
+            [
+              "oklch(0.5 0.1 200)",
+              "oklch(0.5 0.1 200)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ],
+            [
+              "red",
+              "red"
+            ],
+            [
+              "red",
+              "rgb(255, 0, 0)"
+            ]
+          ],
+          [
+            "rgb(10, 20, 30)",
+            "rgb(10, 20, 30)"
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 94,
+    "match": 95,
     "intentional-limit": 2,
     "drift": 0
   }

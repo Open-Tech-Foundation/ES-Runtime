@@ -3264,7 +3264,7 @@ fn test_dom_cascades_stylesheets_into_computed_styles() {
            parent.append(child);\n\
            document.body.append(parent);\n\
            const computed = getComputedStyle(child);\n\
-           assertEquals([computed.color, computed.getPropertyValue('border-color'), computed.getPropertyValue('--brand')], ['purple', '', 'cyan']);\n\
+           assertEquals([computed.color, computed.getPropertyValue('border-color'), computed.getPropertyValue('--brand')], ['rgb(128, 0, 128)', '', 'cyan']);\n\
            assertEquals([computed.display, computed.fontWeight, computed.visibility, computed.textAlign], ['inline', '400', 'visible', 'start']);\n\
            assertEquals(getComputedStyle(parent).display, 'block');\n\
            const strong = document.createElement('strong');\n\
@@ -3311,7 +3311,7 @@ fn test_dom_cascades_stylesheets_into_computed_styles() {
            const outside = document.createElement('p');\n\
            outside.className = 'in';\n\
            document.body.append(outside);\n\
-           assertEquals([getComputedStyle(inside).color, getComputedStyle(outside).color], ['maroon', 'rgb(0, 0, 0)']);\n\
+           assertEquals([getComputedStyle(inside).color, getComputedStyle(outside).color], ['rgb(128, 0, 0)', 'rgb(0, 0, 0)']);\n\
            const scoped = new CSSStyleSheet();\n\
            scoped.replaceSync('.in { font-weight: 700 }');\n\
            root.adoptedStyleSheets = [scoped];\n\
@@ -3324,9 +3324,9 @@ fn test_dom_cascades_stylesheets_into_computed_styles() {
            card.className = 'card';\n\
            card.innerHTML = '<a>l</a><b>bold</b>';\n\
            document.body.append(card);\n\
-           assertEquals(getComputedStyle(card).color, 'olive');\n\
-           assertEquals(getComputedStyle(card.firstElementChild).color, 'coral');\n\
-           assertEquals(getComputedStyle(card.lastElementChild).color, 'lime');\n\
+           assertEquals(getComputedStyle(card).color, 'rgb(128, 128, 0)');\n\
+           assertEquals(getComputedStyle(card.firstElementChild).color, 'rgb(255, 127, 80)');\n\
+           assertEquals(getComputedStyle(card.lastElementChild).color, 'rgb(0, 255, 0)');\n\
            assertEquals(Array.from(element.sheet.cssRules, rule => rule.selectorText), ['.card', ':is(.card) a', ':is(.card) b']);\n\
          });\n",
     );

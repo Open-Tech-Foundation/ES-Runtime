@@ -51,6 +51,18 @@ const MODULES: &[HostModule] = &[
         specifier: "runtime:dom/sheets",
         source: include_str!("sheets.js"),
     },
+    HostModule {
+        specifier: "runtime:dom/colors",
+        source: include_str!("colors.js"),
+    },
+    // Generated (`tsr build` in `crates/dev-cli/js`): `color()` from
+    // `@opentf/std`, which is where the 148 CSS colour names and the hex/rgb/hsl
+    // arithmetic live. It is reachable only from `runtime:dom/colors`, which is
+    // reachable only from `esdev test --dom`.
+    HostModule {
+        specifier: "runtime:dom/std-color",
+        source: include_str!("std-color.js"),
+    },
 ];
 
 impl HostExtension for DomExtension {

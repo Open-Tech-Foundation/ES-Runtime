@@ -107,7 +107,7 @@ jobs:
       # can drift from the source it was built from and nothing would notice
       # until a behaviour bug. Rebuild and require the tree to be unchanged.
       - run: tsr build
-      - run: git diff --exit-code -- crates/runtime/src/runtime_modules/serialization.js
+      - run: git diff --exit-code -- crates/runtime/src/runtime_modules/serialization.js crates/dev-cli/src/dom/std-color.js
 
   # Biome over the JS packages (config: biome.json). Formatting and lint in one
   # pass — `biome check` is what `tsr lint` runs locally.
