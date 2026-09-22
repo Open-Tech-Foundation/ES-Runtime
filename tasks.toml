@@ -150,11 +150,13 @@ run = "esdev test"
 dir = "crates/dev-cli/src/dom"
 env = { PATH = "../../../../target/release:${PATH}" }
 
-# A portable baseline for the test-only DOM. The report is diagnostic while it
-# maps compatibility gaps; each case still has a Deno harness test, and the
-# command runs the actual esdev binary alongside jsdom and happy-dom.
+# A portable baseline for the test-only DOM: the same cases under headless
+# Chrome, esdev, jsdom and happy-dom. `--strict` because the recorded run has no
+# gaps left — a new difference from Chrome, or drift in any column, should fail
+# rather than be printed. Needs Chrome and the npm emulators, so it is not a
+# `ci` dependency.
 [tasks."test:dom-matrix"]
-run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net=127.0.0.1 --allow-read --allow-run --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js"
+run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js --strict"
 
 [tasks."test:unit"]
 deps = ["test:protocol", "test:serialization", "test:dom-unit"]

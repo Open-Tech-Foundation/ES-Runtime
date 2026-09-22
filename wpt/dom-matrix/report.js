@@ -14,3 +14,11 @@ export function classify(test, values) {
   }
   return equivalent(values.esdev, values.chrome) ? "match" : "gap";
 }
+
+// A case drifts when its recorded columns no longer describe the run. Only the
+// four outcomes are compared: `status` is derived from them, and the case's own
+// metadata lives in cases.js rather than in the record.
+export function drifted(recorded, values) {
+  if (!recorded) return true;
+  return Object.keys(values).some((runtime) => !equivalent(recorded[runtime], values[runtime]));
+}

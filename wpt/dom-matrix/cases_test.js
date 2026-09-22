@@ -1,20 +1,18 @@
 import { assertEquals } from "jsr:@std/assert@1.0.16";
 import { cases } from "./cases.js";
-import { classify } from "./report.js";
+import { classify, drifted } from "./report.js";
 
-Deno.test("the baseline has 30 uniquely named cases", () => {
-  assertEquals(cases.length, 30);
-  assertEquals(new Set(cases.map((test) => test.name)).size, 30);
+Deno.test("every case is uniquely named", () => {
+  assertEquals(new Set(cases.map((test) => test.name)).size, cases.length);
 });
 
 Deno.test("the baseline covers the prioritized layout-free groups", () => {
-  assertEquals([...new Set(cases.map((test) => test.group))], [
-    "tree",
-    "events",
-    "parsing",
-    "selectors",
-    "forms",
-  ]);
+  // A set, not a list: which group happens to be declared first is not a fact
+  // about the coverage.
+  assertEquals(
+    new Set(cases.map((test) => test.group)),
+    new Set(["tree", "events", "parsing", "selectors", "forms"]),
+  );
 });
 
 Deno.test("strict parsing is declared as an intentional esdev limit", () => {
@@ -45,4 +43,12 @@ Deno.test("documented esdev limits override a Chrome difference", () => {
     ),
     "intentional-limit",
   );
+});
+
+Deno.test("a case drifts when any recorded column changes", () => {
+  const recorded = { chrome: { result: 1 }, esdev: { result: 1 } };
+  assertEquals(drifted(recorded, { chrome: { result: 1 }, esdev: { result: 1 } }), false);
+  assertEquals(drifted(recorded, { chrome: { result: 1 }, esdev: { result: 2 } }), true);
+  assertEquals(drifted(recorded, { chrome: { result: 1 }, esdev: { error: "TypeError" } }), true);
+  assertEquals(drifted(undefined, { chrome: { result: 1 } }), true);
 });
