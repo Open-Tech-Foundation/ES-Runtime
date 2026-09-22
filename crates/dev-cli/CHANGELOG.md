@@ -541,6 +541,22 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **An attribute name is ASCII-lowercased for an HTML element**, as the DOM
+  specification requires: `setAttribute("tabIndex", 0)` sets `tabindex`, so
+  `getAttribute("tabindex")` and the `tabIndex` property both see it, and
+  `removeAttribute("contentEditable")` removes the attribute rather than leaving
+  it behind. `getAttribute`, `hasAttribute`, `getAttributeNode` and
+  `toggleAttribute` fold the name too. A namespaced element does not fold
+  anything, because in SVG the case is the name — `viewBox` stays `viewBox`.
+- **`document.textContent` is `null`, and assigning to it does nothing.**
+  It was inherited from `Node`, so `document.textContent = ""` emptied the
+  document — `documentElement` and all. A doctype answers `null` the same way.
+- **Internal work no longer reads the public `attributes` accessor.** Setting,
+  getting, removing, serializing, cloning and comparing all went through the IDL
+  getter, so a test that spies on `Element.prototype.attributes` to assert that
+  rendering does not read the DOM saw every internal operation. They read the
+  element's own map now, as a browser's internals do: the spy counts zero.
+
 - **Seven web-component answers that were wrong.** `adoptedCallback` fired even
   when `adoptNode` changed nothing, so a same-document adopt reported an adoption
   and a cross-document one reported two. `define()` swept document trees only, so

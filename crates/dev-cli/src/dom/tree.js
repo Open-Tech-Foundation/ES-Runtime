@@ -52,6 +52,22 @@ function domError(name, message) {
   return new DOMException(message, name);
 }
 
+// An attribute name as this element stores it. HTML elements in an HTML
+// document lowercase it — `setAttribute("tabIndex", 0)` sets `tabindex` — and a
+// namespaced element does not, because in SVG the case is the name.
+function qualified(element, name) {
+  name = String(name);
+  return element.namespaceURI === HTML_NAMESPACE ? name.toLowerCase() : name;
+}
+
+// The element's own attribute map, read from its slot rather than through the
+// public `attributes` getter. A test that spies on `Element.prototype.attributes`
+// — to assert that rendering does not read the DOM — must not see every internal
+// attribute operation go through it; a browser's internals do not either.
+function ownAttributes(element) {
+  return element[NAMED_ATTRIBUTES];
+}
+
 function slots(node) {
   return node[SLOT];
 }
@@ -271,7 +287,7 @@ export function createTree(events = {}) {
         ownKeys(target) {
           return [...new Set([
             ...Reflect.ownKeys(target),
-            ...Array.from(target[ATTRS].attributes, (attribute) => datasetProperty(attribute.name)).filter((property) => property !== null),
+            ...Array.from(ownAttributes(target[ATTRS]), (attribute) => datasetProperty(attribute.name)).filter((property) => property !== null),
           ])];
         },
         getOwnPropertyDescriptor(target, property) {
@@ -346,7 +362,7 @@ export function createTree(events = {}) {
 
     hasChildNodes() { return this.firstChild !== null; }
     contains(other) { return other instanceof Node && isInclusiveAncestor(this, other); }
-    hasAttributes() { return this instanceof Element && this.attributes.length !== 0; }
+    hasAttributes() { return this instanceof Element && ownAttributes(this).length !== 0; }
 
     appendChild(node) { return this.insertBefore(node, null); }
 
@@ -542,6 +558,10 @@ export function createTree(events = {}) {
     get textContent() {
       if (this instanceof Text || this instanceof Comment) return this.data;
       if (this instanceof Attr) return this.value;
+      // A document and a doctype have no text content — not an empty string,
+      // `null` — and assigning to one does nothing. Anything else would let
+      // `document.textContent = ""` empty the document.
+      if (this instanceof Document || this instanceof DocumentType) return null;
       let text = "";
       for (const child of this._esdevChildren()) {
         if (!(child instanceof Comment)) text += child.textContent;
@@ -552,6 +572,7 @@ export function createTree(events = {}) {
     set textContent(value) {
       if (this instanceof Text || this instanceof Comment) { this.data = value ?? ""; return; }
       if (this instanceof Attr) { this.value = value ?? ""; return; }
+      if (this instanceof Document || this instanceof DocumentType) return;
       while (this.firstChild) this._remove(this.firstChild);
       if (value !== null && value !== "") this.appendChild((this.ownerDocument ?? this).createTextNode(String(value)));
     }
@@ -565,8 +586,8 @@ export function createTree(events = {}) {
       if (this instanceof DocumentType && (other.name !== this.name || other.publicId !== this.publicId || other.systemId !== this.systemId)) return false;
       if (this instanceof Element) {
         if (other.namespaceURI !== this.namespaceURI || other.prefix !== this.prefix || other.localName !== this.localName) return false;
-        if (other.attributes.length !== this.attributes.length) return false;
-        for (const attribute of this.attributes) {
+        if (ownAttributes(other).length !== ownAttributes(this).length) return false;
+        for (const attribute of ownAttributes(this)) {
           const match = other.getAttributeNS(attribute.namespaceURI, attribute.localName);
           if (match === null || match !== attribute.value) return false;
         }
@@ -628,7 +649,7 @@ export function createTree(events = {}) {
       else if (this instanceof Element) {
         const qualifiedName = this.prefix ? `${this.prefix}:${this.localName}` : this.localName;
         clone = document.createElementNS(this.namespaceURI, qualifiedName);
-        for (const attribute of this.attributes) {
+        for (const attribute of ownAttributes(this)) {
           clone.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
         }
       } else if (this instanceof CDATASection) clone = new CDATASection(this.data, document);
@@ -811,12 +832,12 @@ export function createTree(events = {}) {
       Object.defineProperty(this, DATASET, { value: new DOMStringMap(this) });
     }
     get attributes() { return this[NAMED_ATTRIBUTES]; }
-    getAttribute(name) { return this.attributes.getNamedItem(String(name))?.value ?? null; }
-    getAttributeNames() { return Array.from(this.attributes, (attribute) => attribute.name); }
-    getAttributeNode(name) { return this.attributes.getNamedItem(String(name)); }
+    getAttribute(name) { return ownAttributes(this).getNamedItem(qualified(this, name))?.value ?? null; }
+    getAttributeNames() { return Array.from(ownAttributes(this), (attribute) => attribute.name); }
+    getAttributeNode(name) { return ownAttributes(this).getNamedItem(qualified(this, name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
     toggleAttribute(name, force) {
-      name = String(name);
+      name = qualified(this, name);
       const present = this.hasAttribute(name);
       if (force === undefined ? !present : Boolean(force)) {
         if (!present) this.setAttribute(name, "");
@@ -826,15 +847,15 @@ export function createTree(events = {}) {
       return false;
     }
     getAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName)?.value ?? null; }
-    getAttributeNodeNS(namespaceURI, localName) { return this.attributes.getNamedItemNS(namespaceURI, localName); }
+    getAttributeNodeNS(namespaceURI, localName) { return ownAttributes(this).getNamedItemNS(namespaceURI, localName); }
     hasAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName) !== null; }
     setAttribute(name, value) {
-      name = String(name);
+      name = qualified(this, name);
       const oldValue = this.getAttribute(name);
       // Captured before the change: a node that moves between slots signals the
       // one it left and then the one it joined, in that order.
       const before = name === "slot" || name === "name" ? assignedSlotFor(this) : null;
-      this.attributes.setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
+      ownAttributes(this).setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
       if (name === "disabled") notifyDisabled(this);
       if (name === "slot" || name === "name") signalReassignment(this, before);
@@ -843,34 +864,35 @@ export function createTree(events = {}) {
       qualifiedName = String(qualifiedName);
       const attribute = new Attr(qualifiedName, value, this.ownerDocument, namespaceURI);
       const oldValue = this.getAttributeNS(attribute.namespaceURI, attribute.localName);
-      this.attributes.setNamedItemNS(attribute); this._touch();
+      ownAttributes(this).setNamedItemNS(attribute); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: qualifiedName, oldValue });
     }
     setAttributeNode(attribute) {
-      const previous = this.attributes.setNamedItem(attribute); this._touch();
+      const previous = ownAttributes(this).setNamedItem(attribute); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: previous?.value ?? null });
       return previous;
     }
     removeAttribute(name) {
+      name = qualified(this, name);
       const attribute = this.getAttributeNode(name);
-      const before = String(name) === "slot" || String(name) === "name" ? assignedSlotFor(this) : null;
+      const before = name === "slot" || name === "name" ? assignedSlotFor(this) : null;
       if (attribute) {
-        this.attributes.removeNamedItem(name); this._touch();
+        ownAttributes(this).removeNamedItem(name); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
-        if (String(name) === "disabled") notifyDisabled(this);
-        if (String(name) === "slot" || String(name) === "name") signalReassignment(this, before);
+        if (name === "disabled") notifyDisabled(this);
+        if (name === "slot" || name === "name") signalReassignment(this, before);
       }
     }
     removeAttributeNS(namespaceURI, localName) {
       const attribute = this.getAttributeNodeNS(namespaceURI, localName);
       if (attribute) {
-        this.attributes.removeNamedItemNS(namespaceURI, localName); this._touch();
+        ownAttributes(this).removeNamedItemNS(namespaceURI, localName); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
       }
     }
     removeAttributeNode(attribute) {
       if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element.");
-      const removed = this.attributes.removeNamedItem(attribute.name); this._touch();
+      const removed = ownAttributes(this).removeNamedItem(attribute.name); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: removed.name, oldValue: removed.value });
       return removed;
     }
@@ -2422,5 +2444,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

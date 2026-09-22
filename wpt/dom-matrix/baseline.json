@@ -3307,6 +3307,199 @@
       "drift": false
     },
     {
+      "group": "tree",
+      "name": "an-attribute-name-is-lowercased-for-html-only",
+      "chrome": {
+        "result": [
+          [
+            "0",
+            0,
+            true,
+            [
+              "tabindex",
+              "contenteditable"
+            ]
+          ],
+          [
+            null,
+            "<div tabindex=\"0\"></div>"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "0 0 1 1",
+            null,
+            [
+              "viewBox"
+            ]
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "0",
+            0,
+            true,
+            [
+              "tabindex",
+              "contenteditable"
+            ]
+          ],
+          [
+            null,
+            "<div tabindex=\"0\"></div>"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "0 0 1 1",
+            null,
+            [
+              "viewBox"
+            ]
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "0",
+            0,
+            true,
+            [
+              "tabindex",
+              "contenteditable"
+            ]
+          ],
+          [
+            null,
+            "<div tabindex=\"0\"></div>"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "0 0 1 1",
+            null,
+            [
+              "viewBox"
+            ]
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "0",
+            0,
+            true,
+            [
+              "tabindex",
+              "contenteditable"
+            ]
+          ],
+          [
+            null,
+            "<div tabindex=\"0\"></div>"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "0 0 1 1",
+            null,
+            [
+              "viewBox"
+            ]
+          ]
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "a-document-has-no-text-content",
+      "chrome": {
+        "result": [
+          null,
+          "HTML",
+          true,
+          "html"
+        ]
+      },
+      "esdev": {
+        "result": [
+          null,
+          "HTML",
+          true,
+          "html"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "",
+          "HTML",
+          true,
+          null
+        ]
+      },
+      "jsdom": {
+        "result": [
+          null,
+          "HTML",
+          true,
+          "html"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "internal-work-does-not-read-the-attributes-accessor",
+      "chrome": {
+        "result": [
+          0,
+          "<span b=\"2\"></span>",
+          "2"
+        ]
+      },
+      "esdev": {
+        "result": [
+          0,
+          "<span b=\"2\"></span>",
+          "2"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          0,
+          "<span b=\"2\"></span>",
+          "2"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          0,
+          "<span b=\"2\"></span>",
+          "2"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -3611,7 +3804,7 @@
     }
   ],
   "summary": {
-    "match": 79,
+    "match": 82,
     "intentional-limit": 2,
     "drift": 0
   }

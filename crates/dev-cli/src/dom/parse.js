@@ -3,7 +3,7 @@
 // pure JS and directly testable before the --dom runner integration lands.
 
 export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
-  const { Node, Document, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE } = tree;
+  const { Node, Document, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes } = tree;
 
   // The elements the HTML parser puts in the head when no explicit `head` was
   // written. Everything else a bare document names belongs to the body.
@@ -97,7 +97,9 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
     if (node instanceof Comment) return `<!--${node.data}-->`;
     if (node instanceof DocumentFragment || node instanceof ShadowRoot || node.nodeType === Node.DOCUMENT_NODE) return Array.from(node.childNodes, (child) => serialize(child, options)).join("");
     if (!(node instanceof Element)) throw new TypeError("Cannot serialize this node type");
-    const attributes = Array.from(node.attributes, (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
+    // The element's own map, not the public accessor: serializing is an
+    // internal read, and a test spying on `attributes` should not see it.
+    const attributes = Array.from(ownAttributes(node), (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
     if (VOID.has(node.localName)) return `<${node.localName}${attributes}>`;
     const raw = node.localName === "script" || node.localName === "style";
     const contents = node instanceof HTMLTemplateElement ? node.content.childNodes : node.childNodes;

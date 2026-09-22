@@ -1,20 +1,20 @@
 {
   "summary": {
-    "features": 224,
+    "features": 226,
     "agreesWithChrome": {
-      "esdev": 203,
-      "jsdom": 175,
-      "happy-dom": 176
+      "esdev": 205,
+      "jsdom": 177,
+      "happy-dom": 177
     },
     "drift": 0
   },
   "groups": [
     {
       "group": "tree",
-      "features": 53,
-      "esdev": 52,
-      "jsdom": 47,
-      "happy-dom": 43
+      "features": 55,
+      "esdev": 54,
+      "jsdom": 49,
+      "happy-dom": 44
     },
     {
       "group": "traversal",
@@ -1197,6 +1197,24 @@
       "esdev": false,
       "jsdom": "throws:TypeError",
       "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "attribute names lowercase for HTML",
+      "chrome": "0/null/0 0 1 1",
+      "esdev": "0/null/0 0 1 1",
+      "jsdom": "0/null/0 0 1 1",
+      "happy-dom": "0/null/0 0 1 1",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.textContent",
+      "chrome": "null/HTML",
+      "esdev": "null/HTML",
+      "jsdom": "null/HTML",
+      "happy-dom": "/HTML",
       "drift": false
     },
     {

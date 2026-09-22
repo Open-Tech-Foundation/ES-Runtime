@@ -1467,6 +1467,65 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "an-attribute-name-is-lowercased-for-html-only",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      document.body.append(element);
+      element.setAttribute("tabIndex", 0);
+      element.setAttribute("contentEditable", "true");
+      const set = [element.getAttribute("tabindex"), element.tabIndex, element.hasAttribute("tabIndex"), element.getAttributeNames()];
+      element.removeAttribute("contentEditable");
+      const removed = [element.getAttribute("contenteditable"), element.outerHTML];
+      const toggled = [element.toggleAttribute("HIDDEN"), element.hasAttribute("hidden")];
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 1 1");
+      return [set, removed, toggled, [svg.getAttribute("viewBox"), svg.getAttribute("viewbox"), svg.getAttributeNames()]];
+    },
+  },
+  {
+    group: "tree",
+    name: "a-document-has-no-text-content",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const before = document.textContent;
+      document.textContent = "";
+      return [before, document.documentElement?.tagName ?? null, document.body !== null, document.doctype?.name ?? null];
+    },
+  },
+  {
+    group: "tree",
+    name: "internal-work-does-not-read-the-attributes-accessor",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const original = Object.getOwnPropertyDescriptor(window.Element.prototype, "attributes");
+      let reads = 0;
+      Object.defineProperty(window.Element.prototype, "attributes", {
+        get() { reads += 1; return original.get.call(this); },
+        configurable: true,
+      });
+      let html = "";
+      let cloned = null;
+      try {
+        const element = document.createElement("span");
+        document.body.append(element);
+        element.setAttribute("a", "1");
+        element.getAttribute("a");
+        element.removeAttribute("a");
+        element.setAttribute("b", "2");
+        html = element.outerHTML;
+        cloned = element.cloneNode(true).getAttribute("b");
+      } finally {
+        Object.defineProperty(window.Element.prototype, "attributes", original);
+      }
+      return [reads, html, cloned];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

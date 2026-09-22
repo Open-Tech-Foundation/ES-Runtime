@@ -9,17 +9,17 @@ keep current.
 
 ## Surface
 
-224 features — interfaces, members and behaviours — put to all four runtimes.
+226 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 203 / 224 | 91% |
-| jsdom | 175 / 224 | 78% |
-| happy-dom | 176 / 224 | 79% |
+| esdev | 205 / 226 | 91% |
+| jsdom | 177 / 226 | 78% |
+| happy-dom | 177 / 226 | 78% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 53 | 52 | 47 | 43 |
+| tree | 55 | 54 | 49 | 44 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-79 of 81 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+82 of 84 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -107,6 +107,9 @@ compares the result.
 | a-dialog-opens-closes-and-returns | components | yes | no | no |
 | a-popover-toggles-and-reports-its-state | components | yes | no | no |
 | a-command-button-acts-on-the-element-it-names | components | yes | no | no |
+| an-attribute-name-is-lowercased-for-html-only | tree | yes | yes | yes |
+| a-document-has-no-text-content | tree | yes | yes | no |
+| internal-work-does-not-read-the-attributes-accessor | tree | yes | yes | yes |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -120,7 +123,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-59 of the 224 features.
+60 of the 226 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -160,6 +163,7 @@ compares the result.
 | formDisabledCallback | `true` | `none` | `none` |
 | a clonable root is cloned | `<i>x</i>` | `no root` | `<i>x</i>` |
 | template content is inert | no | `throws:TypeError` | no |
+| document.textContent | `null/HTML` | `null/HTML` | `/HTML` |
 | Element.moveBefore | `1/0/kept` | `missing` | `missing` |
 | Document.parseHTMLUnsafe | `<i>in</i>` | `missing` | `missing` |
 | dialog.show and close | `true/false/ok` | `missing` | `true/false/ok` |
@@ -186,7 +190,7 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-21 of 224. Every one of them is here:
+21 of 226. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -379,6 +383,8 @@ a difference with no entry fails `tsr docs:parity`.
 | components | formDisabledCallback | `true` | `true` | `none` | `none` |
 | components | a clonable root is cloned | `<i>x</i>` | `<i>x</i>` | `no root` | `<i>x</i>` |
 | components | template content is inert | no | no | `throws:TypeError` | no |
+| tree | attribute names lowercase for HTML | `0/null/0 0 1 1` | `0/null/0 0 1 1` | `0/null/0 0 1 1` | `0/null/0 0 1 1` |
+| tree | document.textContent | `null/HTML` | `null/HTML` | `null/HTML` | `/HTML` |
 | tree | Element.moveBefore | `1/0/kept` | `1/0/kept` | `missing` | `missing` |
 | parsing | Document.parseHTMLUnsafe | `<i>in</i>` | `<i>in</i>` | `missing` | `missing` |
 | components | dialog.show and close | `true/false/ok` | `true/false/ok` | `missing` | `true/false/ok` |

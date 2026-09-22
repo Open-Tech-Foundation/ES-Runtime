@@ -7,20 +7,20 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 
 # DOM parity
 
-Chrome is the oracle. 224 features — interfaces, members and behaviours — are
-put to all four runtimes, and 81 behaviour cases run the same code in each.
+Chrome is the oracle. 226 features — interfaces, members and behaviours — are
+put to all four runtimes, and 84 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 203 / 224 | 91% |
-| jsdom | 175 / 224 | 78% |
-| happy-dom | 176 / 224 | 79% |
+| esdev | 205 / 226 | 91% |
+| jsdom | 177 / 226 | 78% |
+| happy-dom | 177 / 226 | 78% |
 
 ## By area
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 53 | 52 | 47 | 43 |
+| tree | 55 | 54 | 49 | 44 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
@@ -32,7 +32,7 @@ put to all four runtimes, and 81 behaviour cases run the same code in each.
 
 ## Behaviour cases
 
-79 of 81 cases match Chrome exactly, and 2 is a documented limit.
+82 of 84 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -107,6 +107,9 @@ put to all four runtimes, and 81 behaviour cases run the same code in each.
 | a-dialog-opens-closes-and-returns | components | yes | no | no |
 | a-popover-toggles-and-reports-its-state | components | yes | no | no |
 | a-command-button-acts-on-the-element-it-names | components | yes | no | no |
+| an-attribute-name-is-lowercased-for-html-only | tree | yes | yes | yes |
+| a-document-has-no-text-content | tree | yes | yes | no |
+| internal-work-does-not-read-the-attributes-accessor | tree | yes | yes | yes |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -120,7 +123,7 @@ put to all four runtimes, and 81 behaviour cases run the same code in each.
 
 ## Closer to Chrome than an emulator
 
-59 features where esdev matches Chrome and jsdom or happy-dom does not.
+60 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -160,6 +163,7 @@ put to all four runtimes, and 81 behaviour cases run the same code in each.
 | formDisabledCallback | `true` | `none` | `none` |
 | a clonable root is cloned | `<i>x</i>` | `no root` | `<i>x</i>` |
 | template content is inert | no | `throws:TypeError` | no |
+| document.textContent | `null/HTML` | `null/HTML` | `/HTML` |
 | Element.moveBefore | `1/0/kept` | `missing` | `missing` |
 | Document.parseHTMLUnsafe | `<i>in</i>` | `missing` | `missing` |
 | dialog.show and close | `true/false/ok` | `missing` | `true/false/ok` |

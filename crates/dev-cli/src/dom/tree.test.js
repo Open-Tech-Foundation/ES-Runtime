@@ -750,3 +750,61 @@ test("toggles a popover and refuses one that is not", () => {
   popover.hidePopover();
   expect(() => document.createElement("div").showPopover()).toThrow("not a popover");
 });
+
+test("lowercases an attribute name for an HTML element only", () => {
+  const document = setCurrentDocument(new Document());
+  const element = document.createElement("div");
+
+  element.setAttribute("tabIndex", "0");
+  expect([element.getAttribute("tabindex"), element.getAttribute("tabIndex")]).toEqual(["0", "0"]);
+  expect(element.getAttributeNames()).toEqual(["tabindex"]);
+  expect(element.hasAttribute("TABINDEX")).toBe(true);
+  element.setAttribute("contentEditable", "true");
+  element.removeAttribute("contentEditable");
+  expect(element.getAttribute("contenteditable")).toBeNull();
+  expect(element.toggleAttribute("HIDDEN")).toBe(true);
+  expect(element.hasAttribute("hidden")).toBe(true);
+  // In SVG the case is the name, so nothing is folded.
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 1 1");
+  expect([svg.getAttribute("viewBox"), svg.getAttribute("viewbox")]).toEqual(["0 0 1 1", null]);
+});
+
+test("a document has no text content to read or write", () => {
+  const document = setCurrentDocument(new Document());
+  document.appendChild(document.implementation.createDocumentType("html"));
+  const root = document.createElement("html");
+  document.appendChild(root);
+  root.appendChild(document.createTextNode("text"));
+
+  expect(document.textContent).toBeNull();
+  document.textContent = "";
+  expect(document.documentElement).toBe(root);
+  expect(document.doctype?.name).toBe("html");
+  expect(document.doctype.textContent).toBeNull();
+});
+
+test("attribute work does not go through the public accessor", () => {
+  const document = setCurrentDocument(new Document());
+  const original = Object.getOwnPropertyDescriptor(Element.prototype, "attributes");
+  let reads = 0;
+  Object.defineProperty(Element.prototype, "attributes", {
+    get() { reads += 1; return original.get.call(this); },
+    configurable: true,
+  });
+  try {
+    const element = document.createElement("span");
+    element.setAttribute("a", "1");
+    element.getAttribute("a");
+    element.hasAttribute("a");
+    element.removeAttribute("a");
+    element.setAttribute("b", "2");
+    element.cloneNode(true);
+    element.isEqualNode(element.cloneNode(true));
+    element.hasAttributes();
+  } finally {
+    Object.defineProperty(Element.prototype, "attributes", original);
+  }
+
+  expect(reads).toBe(0);
+});

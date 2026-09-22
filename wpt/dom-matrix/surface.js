@@ -455,6 +455,20 @@ export const features = [
     template.innerHTML = `<${name}></${name}>`;
     return template.content.firstElementChild.matches(":defined");
   })],
+  ["tree", "attribute names lowercase for HTML", (w) => value(() => {
+    const element = make(w, "div");
+    element.setAttribute("tabIndex", "0");
+    element.setAttribute("contentEditable", "true");
+    element.removeAttribute("contentEditable");
+    const svg = w.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 1 1");
+    return `${element.getAttribute("tabindex")}/${element.getAttribute("contenteditable")}/${svg.getAttribute("viewBox")}`;
+  })],
+  ["tree", "document.textContent", (w) => value(() => {
+    const before = w.document.textContent;
+    w.document.textContent = "";
+    return `${before}/${w.document.documentElement?.tagName ?? "gone"}`;
+  })],
   ["tree", "Element.moveBefore", (w) => value(() => {
     if (typeof w.document.body.moveBefore !== "function") return "missing";
     const from = connected(w, "div");
