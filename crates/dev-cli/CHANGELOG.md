@@ -513,6 +513,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **The parity documents cover it all.** 224 surface features and 81 behaviour
+  cases: esdev agrees with Chrome on 203 and matches on 79, against jsdom's 175
+  and happy-dom's 176. `showPopover` and `dialog.showModal` have left the
+  declined list.
 - **`Element.moveBefore()`**, the state-preserving move: the node keeps what it
   was holding — a control's value, a `<details>` being open — because it is moved
   rather than removed and re-inserted. Its `disconnectedCallback` and

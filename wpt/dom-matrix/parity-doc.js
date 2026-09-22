@@ -32,8 +32,6 @@ const REASONS = new Map(Object.entries({
   "getBoundingClientRect measures": LAYOUT,
   "offsetWidth measures": LAYOUT,
   "Element.animate (WAAPI)": RENDERING,
-  "showPopover": RENDERING,
-  "dialog.showModal": RENDERING,
   "document.startViewTransition": RENDERING,
   "resolved font size": SPECIFIED,
   "XPathEvaluator (document.evaluate)": LEGACY,

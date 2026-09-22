@@ -1,18 +1,18 @@
 {
   "summary": {
-    "features": 219,
+    "features": 224,
     "agreesWithChrome": {
-      "esdev": 196,
+      "esdev": 203,
       "jsdom": 175,
-      "happy-dom": 175
+      "happy-dom": 176
     },
     "drift": 0
   },
   "groups": [
     {
       "group": "tree",
-      "features": 52,
-      "esdev": 51,
+      "features": 53,
+      "esdev": 52,
       "jsdom": 47,
       "happy-dom": 43
     },
@@ -40,7 +40,7 @@
     {
       "group": "window",
       "features": 32,
-      "esdev": 21,
+      "esdev": 23,
       "jsdom": 21,
       "happy-dom": 22
     },
@@ -53,15 +53,15 @@
     },
     {
       "group": "components",
-      "features": 29,
-      "esdev": 29,
+      "features": 32,
+      "esdev": 32,
       "jsdom": 20,
-      "happy-dom": 19
+      "happy-dom": 20
     },
     {
       "group": "parsing",
-      "features": 12,
-      "esdev": 8,
+      "features": 13,
+      "esdev": 9,
       "jsdom": 12,
       "happy-dom": 11
     },
@@ -1200,6 +1200,51 @@
       "drift": false
     },
     {
+      "group": "tree",
+      "name": "Element.moveBefore",
+      "chrome": "1/0/kept",
+      "esdev": "1/0/kept",
+      "jsdom": "missing",
+      "happy-dom": "missing",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "Document.parseHTMLUnsafe",
+      "chrome": "<i>in</i>",
+      "esdev": "<i>in</i>",
+      "jsdom": "missing",
+      "happy-dom": "missing",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "dialog.show and close",
+      "chrome": "true/false/ok",
+      "esdev": "true/false/ok",
+      "jsdom": "missing",
+      "happy-dom": "true/false/ok",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "popover methods",
+      "chrome": "auto/true/false",
+      "esdev": "auto/true/false",
+      "jsdom": "missing",
+      "happy-dom": "missing",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "CommandEvent",
+      "chrome": "show-popover/true",
+      "esdev": "show-popover/true",
+      "jsdom": "missing",
+      "happy-dom": "missing",
+      "drift": false
+    },
+    {
       "group": "components",
       "name": "template.content",
       "chrome": "DocumentFragment/1",
@@ -2022,7 +2067,7 @@
       "group": "window",
       "name": "showPopover",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
       "jsdom": false,
       "happy-dom": false,
       "drift": false
@@ -2031,7 +2076,7 @@
       "group": "window",
       "name": "dialog.showModal",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
       "jsdom": false,
       "happy-dom": true,
       "drift": false

@@ -9,29 +9,29 @@ keep current.
 
 ## Surface
 
-219 features — interfaces, members and behaviours — put to all four runtimes.
+224 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 196 / 219 | 89% |
-| jsdom | 175 / 219 | 80% |
-| happy-dom | 175 / 219 | 80% |
+| esdev | 203 / 224 | 91% |
+| jsdom | 175 / 224 | 78% |
+| happy-dom | 176 / 224 | 79% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 52 | 51 | 47 | 43 |
+| tree | 53 | 52 | 47 | 43 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
-| window | 32 | 21 | 21 | 22 |
+| window | 32 | 23 | 21 | 22 |
 | events | 26 | 24 | 22 | 25 |
-| components | 29 | 29 | 20 | 19 |
-| parsing | 12 | 8 | 12 | 11 |
+| components | 32 | 32 | 20 | 20 |
+| parsing | 13 | 9 | 12 | 11 |
 | forms | 14 | 14 | 14 | 14 |
 
 ## Behaviour
 
-70 of 72 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+79 of 81 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -98,6 +98,15 @@ compares the result.
 | aria-reflects-through-attributes-and-internals | components | yes | yes | no |
 | a-slot-change-follows-the-slot-attribute | components | yes | yes | yes |
 | a-template-holds-a-component-and-clones-it | components | yes | no | no |
+| adoption-and-a-shadow-sweep-report-once | components | yes | yes | no |
+| a-closed-root-serializes-when-it-is-asked-for | components | yes | no | no |
+| a-reset-clears-a-custom-elements-value | components | yes | no | no |
+| a-disabled-attribute-and-a-throwing-constructor | components | yes | no | no |
+| moveBefore-keeps-state-and-connection | tree | yes | no | no |
+| a-document-is-parsed-from-markup | parsing | yes | no | no |
+| a-dialog-opens-closes-and-returns | components | yes | no | no |
+| a-popover-toggles-and-reports-its-state | components | yes | no | no |
+| a-command-button-acts-on-the-element-it-names | components | yes | no | no |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -111,7 +120,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-52 of the 219 features.
+59 of the 224 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -151,6 +160,11 @@ compares the result.
 | formDisabledCallback | `true` | `none` | `none` |
 | a clonable root is cloned | `<i>x</i>` | `no root` | `<i>x</i>` |
 | template content is inert | no | `throws:TypeError` | no |
+| Element.moveBefore | `1/0/kept` | `missing` | `missing` |
+| Document.parseHTMLUnsafe | `<i>in</i>` | `missing` | `missing` |
+| dialog.show and close | `true/false/ok` | `missing` | `true/false/ok` |
+| popover methods | `auto/true/false` | `missing` | `missing` |
+| CommandEvent | `show-popover/true` | `missing` | `missing` |
 | omitted paragraph end tag | `<p>one</p><p>two</p>` | `<p>one</p><p>two</p>` | `<p>one<p>two</p></p>` |
 | invalid selector throws | `SyntaxError` | `SyntaxError` | `no throw` |
 | adoptedStyleSheets applies | `rgb(1, 2, 3)` | `throws:TypeError` | `rgb(1, 2, 3)` |
@@ -167,10 +181,12 @@ compares the result.
 | Worker | yes | no | no |
 | URL.createObjectURL | yes | no | yes |
 | MathMLElement | yes | no | no |
+| showPopover | yes | no | no |
+| dialog.showModal | yes | no | yes |
 
 ## Where esdev differs from Chrome, and why
 
-23 of 219. Every one of them is here:
+21 of 224. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -208,8 +224,6 @@ a difference with no entry fails `tsr docs:parity`.
 | Feature | Chrome | esdev |
 | --- | --- | --- |
 | Element.animate (WAAPI) | yes | no |
-| showPopover | yes | no |
-| dialog.showModal | yes | no |
 | document.startViewTransition | yes | no |
 
 **Specified values only: resolving one needs layout and a font.**
@@ -365,6 +379,11 @@ a difference with no entry fails `tsr docs:parity`.
 | components | formDisabledCallback | `true` | `true` | `none` | `none` |
 | components | a clonable root is cloned | `<i>x</i>` | `<i>x</i>` | `no root` | `<i>x</i>` |
 | components | template content is inert | no | no | `throws:TypeError` | no |
+| tree | Element.moveBefore | `1/0/kept` | `1/0/kept` | `missing` | `missing` |
+| parsing | Document.parseHTMLUnsafe | `<i>in</i>` | `<i>in</i>` | `missing` | `missing` |
+| components | dialog.show and close | `true/false/ok` | `true/false/ok` | `missing` | `true/false/ok` |
+| components | popover methods | `auto/true/false` | `auto/true/false` | `missing` | `missing` |
+| components | CommandEvent | `show-popover/true` | `show-popover/true` | `missing` | `missing` |
 | components | template.content | `DocumentFragment/1` | `DocumentFragment/1` | `DocumentFragment/1` | `DocumentFragment/1` |
 | parsing | DOMParser | yes | yes | yes | yes |
 | parsing | DOMParser parses text/html | `HTML/<p>one</p>` | `HTML/<p>one</p>` | `HTML/<p>one</p>` | `HTML/<p>one</p>` |
@@ -456,6 +475,6 @@ a difference with no entry fails `tsr docs:parity`.
 | window | SVGElement | yes | yes | yes | yes |
 | window | SVGSVGElement | yes | yes | yes | yes |
 | window | focus() sets activeElement | yes | yes | yes | yes |
-| window | showPopover | yes | no | no | no |
-| window | dialog.showModal | yes | no | no | yes |
+| window | showPopover | yes | yes | no | no |
+| window | dialog.showModal | yes | yes | no | yes |
 | window | document.startViewTransition | yes | no | no | no |

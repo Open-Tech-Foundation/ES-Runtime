@@ -69,7 +69,9 @@ against Chrome:
 | Shadow DOM | open and closed roots, `delegatesFocus`, `clonable`, `serializable`, named and manual slot assignment, `assignedSlot`, `slotchange`, retargeted events and paths |
 | Styling | `:host`, `:host(…)`, `:host-context(…)`, `::slotted(…)`, `adoptedStyleSheets` per root |
 | Forms | `ElementInternals`, form association, `setFormValue`, `setValidity`, `formDisabledCallback`, `formResetCallback`, `CustomStateSet` and `:state()` |
-| Templates | inert content, declarative shadow roots through `setHTMLUnsafe`, `getHTML` serialization |
+| Templates | inert content, declarative shadow roots through `setHTMLUnsafe` and `Document.parseHTMLUnsafe`, `getHTML` serialization |
+| Dialogs & popovers | `show`, `showModal`, `close`, `requestClose`, `returnValue`, `:modal`; `showPopover`, `hidePopover`, `togglePopover`, `:popover-open`, `beforetoggle`/`toggle`, `CommandEvent` |
+| Moving | `moveBefore()`, which keeps a node's state instead of removing and re-inserting it |
 
 Scoped custom element registries — `new CustomElementRegistry()` used with
 `attachShadow({ customElements })` — are a proposal and are not implemented. A
@@ -85,7 +87,9 @@ script execution, or page navigation.
 `location`, `history`, and web storage are in-memory test state. Form submit
 events are dispatched, but no navigation occurs. Animation frames use the test
 clock. Media, resize, and intersection observers are safe never-firing stubs.
-Geometry answers zero rather than throwing, so feature detection runs.
+Geometry answers zero rather than throwing, so feature detection runs. A dialog
+and a popover have no top layer and no backdrop: what they have is their state,
+their selectors and their events.
 
 ## Styles and the cascade
 

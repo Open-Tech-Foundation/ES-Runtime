@@ -7,32 +7,32 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 
 # DOM parity
 
-Chrome is the oracle. 219 features — interfaces, members and behaviours — are
-put to all four runtimes, and 72 behaviour cases run the same code in each.
+Chrome is the oracle. 224 features — interfaces, members and behaviours — are
+put to all four runtimes, and 81 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 196 / 219 | 89% |
-| jsdom | 175 / 219 | 80% |
-| happy-dom | 175 / 219 | 80% |
+| esdev | 203 / 224 | 91% |
+| jsdom | 175 / 224 | 78% |
+| happy-dom | 176 / 224 | 79% |
 
 ## By area
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 52 | 51 | 47 | 43 |
+| tree | 53 | 52 | 47 | 43 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
-| window | 32 | 21 | 21 | 22 |
+| window | 32 | 23 | 21 | 22 |
 | events | 26 | 24 | 22 | 25 |
-| components | 29 | 29 | 20 | 19 |
-| parsing | 12 | 8 | 12 | 11 |
+| components | 32 | 32 | 20 | 20 |
+| parsing | 13 | 9 | 12 | 11 |
 | forms | 14 | 14 | 14 | 14 |
 
 ## Behaviour cases
 
-70 of 72 cases match Chrome exactly, and 2 is a documented limit.
+79 of 81 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -98,6 +98,15 @@ put to all four runtimes, and 72 behaviour cases run the same code in each.
 | aria-reflects-through-attributes-and-internals | components | yes | yes | no |
 | a-slot-change-follows-the-slot-attribute | components | yes | yes | yes |
 | a-template-holds-a-component-and-clones-it | components | yes | no | no |
+| adoption-and-a-shadow-sweep-report-once | components | yes | yes | no |
+| a-closed-root-serializes-when-it-is-asked-for | components | yes | no | no |
+| a-reset-clears-a-custom-elements-value | components | yes | no | no |
+| a-disabled-attribute-and-a-throwing-constructor | components | yes | no | no |
+| moveBefore-keeps-state-and-connection | tree | yes | no | no |
+| a-document-is-parsed-from-markup | parsing | yes | no | no |
+| a-dialog-opens-closes-and-returns | components | yes | no | no |
+| a-popover-toggles-and-reports-its-state | components | yes | no | no |
+| a-command-button-acts-on-the-element-it-names | components | yes | no | no |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -111,7 +120,7 @@ put to all four runtimes, and 72 behaviour cases run the same code in each.
 
 ## Closer to Chrome than an emulator
 
-52 features where esdev matches Chrome and jsdom or happy-dom does not.
+59 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -151,6 +160,11 @@ put to all four runtimes, and 72 behaviour cases run the same code in each.
 | formDisabledCallback | `true` | `none` | `none` |
 | a clonable root is cloned | `<i>x</i>` | `no root` | `<i>x</i>` |
 | template content is inert | no | `throws:TypeError` | no |
+| Element.moveBefore | `1/0/kept` | `missing` | `missing` |
+| Document.parseHTMLUnsafe | `<i>in</i>` | `missing` | `missing` |
+| dialog.show and close | `true/false/ok` | `missing` | `true/false/ok` |
+| popover methods | `auto/true/false` | `missing` | `missing` |
+| CommandEvent | `show-popover/true` | `missing` | `missing` |
 | omitted paragraph end tag | `<p>one</p><p>two</p>` | `<p>one</p><p>two</p>` | `<p>one<p>two</p></p>` |
 | invalid selector throws | `SyntaxError` | `SyntaxError` | `no throw` |
 | adoptedStyleSheets applies | `rgb(1, 2, 3)` | `throws:TypeError` | `rgb(1, 2, 3)` |
@@ -167,10 +181,12 @@ put to all four runtimes, and 72 behaviour cases run the same code in each.
 | Worker | yes | no | no |
 | URL.createObjectURL | yes | no | yes |
 | MathMLElement | yes | no | no |
+| showPopover | yes | no | no |
+| dialog.showModal | yes | no | yes |
 
 ## Differences from Chrome
 
-23 features, each with its reason. There are no others.
+21 features, each with its reason. There are no others.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
 
@@ -207,8 +223,6 @@ put to all four runtimes, and 72 behaviour cases run the same code in each.
 | Feature | Chrome | esdev |
 | --- | --- | --- |
 | Element.animate (WAAPI) | yes | no |
-| showPopover | yes | no |
-| dialog.showModal | yes | no |
 | document.startViewTransition | yes | no |
 
 **Specified values only: resolving one needs layout and a font.**

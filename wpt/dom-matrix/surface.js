@@ -455,6 +455,61 @@ export const features = [
     template.innerHTML = `<${name}></${name}>`;
     return template.content.firstElementChild.matches(":defined");
   })],
+  ["tree", "Element.moveBefore", (w) => value(() => {
+    if (typeof w.document.body.moveBefore !== "function") return "missing";
+    const from = connected(w, "div");
+    const to = connected(w, "div");
+    const input = make(w, "input");
+    from.append(input);
+    input.value = "kept";
+    to.moveBefore(input, null);
+    const answer = `${to.children.length}/${from.children.length}/${input.value}`;
+    from.remove();
+    to.remove();
+    return answer;
+  })],
+  ["parsing", "Document.parseHTMLUnsafe", (w) => value(() => {
+    if (typeof w.Document?.parseHTMLUnsafe !== "function") return "missing";
+    const parsed = w.Document.parseHTMLUnsafe('<div><template shadowrootmode="open"><i>in</i></template></div>');
+    return parsed.body.firstElementChild.shadowRoot?.innerHTML ?? "no root";
+  })],
+  ["components", "dialog.show and close", (w) => value(() => {
+    const dialog = connected(w, "dialog");
+    if (typeof dialog.show !== "function") return "missing";
+    dialog.show();
+    const open = dialog.open;
+    dialog.close("ok");
+    const answer = `${open}/${dialog.open}/${dialog.returnValue}`;
+    dialog.remove();
+    return answer;
+  })],
+  ["components", "popover methods", (w) => value(() => {
+    const popover = connected(w, "div");
+    popover.setAttribute("popover", "");
+    if (typeof popover.showPopover !== "function") return "missing";
+    popover.showPopover();
+    const open = popover.matches(":popover-open");
+    popover.hidePopover();
+    const answer = `${popover.popover}/${open}/${popover.matches(":popover-open")}`;
+    popover.remove();
+    return answer;
+  })],
+  ["components", "CommandEvent", (w) => value(() => {
+    if (typeof w.CommandEvent !== "function") return "missing";
+    const popover = connected(w, "div");
+    popover.setAttribute("popover", "");
+    popover.id = "probe-commanded";
+    const button = connected(w, "button");
+    button.setAttribute("command", "show-popover");
+    button.setAttribute("commandfor", "probe-commanded");
+    let seen = "none";
+    popover.addEventListener("command", (event) => { seen = event.command; });
+    button.click();
+    const answer = `${seen}/${popover.matches(":popover-open")}`;
+    popover.remove();
+    button.remove();
+    return answer;
+  })],
   ["components", "template.content", (w) => value(() => {
     const template = make(w, "template");
     template.innerHTML = "<i>x</i>";

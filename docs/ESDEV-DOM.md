@@ -32,6 +32,9 @@ The target is spec fidelity without layout. Algorithms that do not need a box mo
   roots, scoped selectors, composed events with host retargeting, and basic
   named/default slot assignment), but does not implement style scoping.
 - `contenteditable`, drag and drop, pointer capture, focus rings.
+- The top layer. A dialog and a popover keep their state, fire their events and
+  answer `:modal` and `:popover-open`; nothing is painted, stacked or dismissed
+  by a click outside.
 - The HTML4 event-interface aliases. `document.createEvent` exists and takes a
   modern interface name — `"Event"`, `"MouseEvent"`, `"KeyboardEvent"` — while
   `"HTMLEvents"`, `"UIEvents"` and `"MouseEvents"` are refused by name with the
