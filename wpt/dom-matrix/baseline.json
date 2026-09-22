@@ -826,6 +826,84 @@
       "drift": false
     },
     {
+      "group": "components",
+      "name": "form-associated-custom-element-joins-its-form",
+      "chrome": {
+        "result": [
+          true,
+          1,
+          [
+            [
+              "chosen",
+              "picked"
+            ]
+          ],
+          [
+            false,
+            "pick something",
+            false
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          true,
+          1,
+          [
+            [
+              "chosen",
+              "picked"
+            ]
+          ],
+          [
+            false,
+            "pick something",
+            false
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "custom-state-matches-the-state-pseudo-class",
+      "chrome": {
+        "result": [
+          0,
+          1,
+          0,
+          0
+        ]
+      },
+      "esdev": {
+        "result": [
+          0,
+          1,
+          0,
+          0
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -1130,7 +1208,7 @@
     }
   ],
   "summary": {
-    "match": 33,
+    "match": 35,
     "intentional-limit": 1,
     "drift": 0
   }

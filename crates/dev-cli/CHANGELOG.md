@@ -54,6 +54,18 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`ElementInternals`, form-associated custom elements and `CustomStateSet` in
+  `esdev test --dom`.** `attachInternals()` hands a defined custom element its
+  own private surface — and only once, and only to a custom element. A class
+  with `static formAssociated = true` is a control: it appears in
+  `form.elements`, contributes whatever `setFormValue` last gave it to
+  `FormData` under its own name, is found by a wrapping `<label>`, takes a
+  `formResetCallback` when the form resets, and decides its own validity
+  through `setValidity`, which the form's `checkValidity` honours.
+  `internals.shadowRoot` reaches a closed root, where `element.shadowRoot`
+  correctly does not. States added to `internals.states` are matched by
+  `:state()`.
+
 - **`:defined` and `:nth-child(An+B of S)` in `esdev test --dom`,** both of
   which used to be a `SyntaxError`. `:defined` answers for the element in front
   of it: a built-in is defined, a custom element is not until its definition

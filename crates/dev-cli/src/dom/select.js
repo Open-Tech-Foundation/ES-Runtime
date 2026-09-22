@@ -110,7 +110,7 @@ function parseCompound(source, offset, text) {
     }
     if (kind === ":") {
       const match = /^[A-Za-z-]+/.exec(text.slice(at + 1));
-      const functional = new Set(["is", "where", "not", "has", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
+      const functional = new Set(["is", "where", "not", "has", "state", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
       const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus", "scope", "defined", "checked", "disabled", "enabled", "required", "optional", "link"]);
       if (!match || !functional.has(match[0]) && !bare.has(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
       const name = match[0];
@@ -148,6 +148,10 @@ function parseCompound(source, offset, text) {
           nth: parseNth(source, offset + at, nth),
           selectors: of === null ? null : splitList(of).map(parseOne),
         });
+      } else if (name === "state") {
+        // `:state(foo)` takes one identifier, not a selector list.
+        if (!/^[A-Za-z_-][\w-]*$/.test(argument)) syntax(source, offset + at, ":state() takes a custom state name");
+        simples.push({ type: "state", name: argument });
       } else {
         simples.push({ type: name, selectors: name === "has" ? parseRelativeList(argument) : splitList(argument).map(parseOne) });
       }
@@ -256,7 +260,7 @@ function nthMatches(position, { a, b }) {
   return Number.isInteger(quotient) && quotient >= 0;
 }
 
-export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true }) {
+export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true, customStates = () => null }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
@@ -277,6 +281,7 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
       if (simple.type === "optional") return ["input", "select", "textarea"].includes(element.localName) && !element.hasAttribute("required");
       if (simple.type === "link") return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
       if (simple.type === "defined") return isDefined(element);
+      if (simple.type === "state") return customStates(element)?.has(simple.name) === true;
       if (simple.type.endsWith("child")) {
         const all = elementSiblings(element);
         if (simple.type === "first-child") return all.indexOf(element) === 0;

@@ -3022,6 +3022,85 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_element_internals_associate_custom_elements_with_forms() {
+    let dir = build_dir("t_test_dom_element_internals");
+    write_in(
+        &dir,
+        "internals.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         class Field extends HTMLElement {\n\
+           static formAssociated = true;\n\
+           constructor() { super(); this.internals = this.attachInternals(); }\n\
+         }\n\
+         customElements.define('x-field', Field);\n\
+         customElements.define('x-plain', class extends HTMLElement {});\n\
+         function form() {\n\
+           const element = document.createElement('form');\n\
+           const field = document.createElement('x-field');\n\
+           field.setAttribute('name', 'chosen');\n\
+           element.append(field);\n\
+           document.body.append(element);\n\
+           return [element, field];\n\
+         }\n\
+         test('a form-associated custom element joins its form and its data', () => {\n\
+           const [owner, field] = form();\n\
+           assertEquals([field.internals.form === owner, owner.elements.length], [true, 1]);\n\
+           field.internals.setFormValue('picked');\n\
+           assertEquals(Array.from(new FormData(owner).entries()), [['chosen', 'picked']]);\n\
+           field.internals.setFormValue(null);\n\
+           assertEquals(Array.from(new FormData(owner).entries()), []);\n\
+         });\n\
+         test('the element decides its own validity', () => {\n\
+           const [owner, field] = form();\n\
+           let invalid = 0;\n\
+           field.addEventListener('invalid', () => invalid++);\n\
+           assertEquals([field.internals.validity.valid, owner.checkValidity()], [true, true]);\n\
+           field.internals.setValidity({ valueMissing: true }, 'pick something');\n\
+           assertEquals([field.internals.validity.valid, field.internals.validity.valueMissing, field.internals.validationMessage], [false, true, 'pick something']);\n\
+           assertEquals([field.internals.checkValidity(), invalid, owner.checkValidity()], [false, 1, false]);\n\
+           field.internals.setValidity({});\n\
+           assertEquals([field.internals.validity.valid, owner.checkValidity()], [true, true]);\n\
+           assertEquals(field.internals.validity === field.internals.validity, true);\n\
+         });\n\
+         test('custom states drive the :state() selector', () => {\n\
+           const [owner, field] = form();\n\
+           field.internals.states.add('loading');\n\
+           assertEquals([field.internals.states.size, owner.querySelectorAll('x-field:state(loading)').length], [1, 1]);\n\
+           field.internals.states.delete('loading');\n\
+           assertEquals([owner.querySelectorAll('x-field:state(loading)').length, owner.querySelectorAll('x-field:not(:state(loading))').length], [0, 1]);\n\
+         });\n\
+         test('internals reach a closed root and refuse the wrong element', () => {\n\
+           const host = document.createElement('x-field');\n\
+           const shadow = host.attachShadow({ mode: 'closed' });\n\
+           assertEquals([host.shadowRoot, host.internals.shadowRoot === shadow], [null, true]);\n\
+           const name = callback => { try { callback(); return 'ok'; } catch (error) { return error.name; } };\n\
+           assertEquals(name(() => document.createElement('x-plain').attachInternals().form), 'NotSupportedError');\n\
+           assertEquals(name(() => document.createElement('div').attachInternals()), 'NotSupportedError');\n\
+           assertEquals(name(() => host.attachInternals()), 'NotSupportedError');\n\
+           assertEquals(name(() => host.internals.setValidity({ valueMissing: true })), 'TypeError');\n\
+         });\n\
+         test('a form reset reaches the element', () => {\n\
+           const [owner, field] = form();\n\
+           let resets = 0;\n\
+           field.formResetCallback = () => resets++;\n\
+           owner.reset();\n\
+           assertEquals(resets, 1);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom element internals");
+    assert!(
+        ran.status.success(),
+        "DOM element-internals test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_selectors_count_an_of_list_and_follow_custom_definitions() {
     let dir = build_dir("t_test_dom_selector_of_and_defined");
     write_in(

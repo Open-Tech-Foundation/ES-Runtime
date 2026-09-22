@@ -15,6 +15,11 @@ const VALIDITY = Symbol("esdev DOM validity state");
 const VALIDITY_CONTROL = Symbol("esdev DOM validity control");
 const IMPLEMENTATION = Symbol("esdev DOM implementation");
 const SHADOW_OPTIONS = Symbol("esdev DOM shadow root options");
+const INTERNALS = Symbol("esdev DOM element internals");
+const FORM_VALUE = Symbol("esdev DOM submission value");
+const FORM_VALIDITY = Symbol("esdev DOM internals validity");
+const STATES = Symbol("esdev DOM custom state set");
+const FORM_STATE = Symbol("esdev DOM submission state");
 const MANUAL_ASSIGNED = Symbol("esdev DOM manually assigned nodes");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
@@ -875,6 +880,23 @@ export function createTree(events = {}) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
   }
 
+  // A form-associated custom element declares itself with a static field, so no
+  // registry lookup is needed: the constructor is on the element already.
+  function isFormAssociated(element) {
+    return element instanceof HTMLElement && element.constructor?.formAssociated === true && isDefined(element);
+  }
+
+  // What a control contributes to its form's entry list, or null for one that
+  // contributes nothing. Built-in controls are handled by FormData itself; this
+  // is the custom-element half.
+  function formSubmissionValue(element) {
+    if (!isFormAssociated(element) || isDisabled(element)) return null;
+    const name = element.getAttribute("name");
+    const value = element[FORM_VALUE];
+    if (!name || value === undefined || value === null) return null;
+    return { name, value };
+  }
+
   function formOwner(control) {
     const id = control.getAttribute("form");
     if (id !== null) return Array.from(control.ownerDocument.getElementsByTagName("form")).find((form) => form.id === id) ?? null;
@@ -894,18 +916,21 @@ export function createTree(events = {}) {
 
   class HTMLFormElement extends HTMLElement {
     get elements() {
-      return new HTMLCollection(this, () => Array.from(this.ownerDocument.getElementsByTagName("*")).filter((element) => ["button", "fieldset", "input", "select", "textarea"].includes(element.localName) && formOwner(element) === this));
+      return new HTMLCollection(this, () => Array.from(this.ownerDocument.getElementsByTagName("*")).filter((element) => (["button", "fieldset", "input", "select", "textarea"].includes(element.localName) || isFormAssociated(element)) && formOwner(element) === this));
     }
     reset() {
       const event = new Event("reset", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event)) return;
       for (const control of this.elements) {
+        if (isFormAssociated(control)) control.formResetCallback?.();
         if (control instanceof HTMLSelectElement) for (const option of control.options) option[SELECTED] = null;
         if (control instanceof HTMLTextAreaElement) control[TEXTAREA_VALUE] = null;
         if (control instanceof HTMLInputElement) { control[INPUT_VALUE] = null; control[INPUT_CHECKED] = null; }
       }
     }
-    checkValidity() { return Array.from(this.elements, (control) => control.checkValidity?.() ?? true).every(Boolean); }
+    checkValidity() {
+      return Array.from(this.elements, (control) => (control[INTERNALS] ?? control).checkValidity?.() ?? true).every(Boolean);
+    }
     reportValidity() { return this.checkValidity(); }
     requestSubmit(submitter = null) {
       if (submitter !== null && (!isSubmitter(submitter) || submitter.form !== this)) throw new TypeError("requestSubmit submitter must be a submit button belonging to this form");
@@ -1031,7 +1056,97 @@ export function createTree(events = {}) {
     });
   }
 
+  // Setlike, and the backing store `:state()` reads.
+  class CustomStateSet {
+    constructor(brand) {
+      if (brand !== VALIDITY_BRAND) throw new TypeError("Illegal constructor");
+      Object.defineProperty(this, STATES, { value: new Set() });
+    }
+    get size() { return this[STATES].size; }
+    add(state) { this[STATES].add(String(state)); return this; }
+    delete(state) { return this[STATES].delete(String(state)); }
+    has(state) { return this[STATES].has(String(state)); }
+    clear() { this[STATES].clear(); }
+    forEach(callback, thisArg) { for (const state of this[STATES]) callback.call(thisArg, state, state, this); }
+    keys() { return this[STATES].keys(); }
+    values() { return this[STATES].values(); }
+    entries() { return this[STATES].entries(); }
+    [Symbol.iterator]() { return this[STATES][Symbol.iterator](); }
+  }
+
+  const FORM_ONLY = "This element is not a form-associated custom element.";
+
+  // The states an element's internals declared, for `:state()` to match on.
+  function customStates(element) {
+    return element[INTERNALS]?.states?.[STATES] ?? null;
+  }
+
+  class ElementInternals {
+    constructor(element, brand) {
+      if (brand !== VALIDITY_BRAND) throw new TypeError("Illegal constructor");
+      Object.defineProperty(this, INTERNALS, { value: element });
+      Object.defineProperty(this, STATES, { value: new CustomStateSet(VALIDITY_BRAND) });
+    }
+    // Unlike `element.shadowRoot`, this reaches a closed root: the element's
+    // own implementation is the one party entitled to it.
+    get shadowRoot() { return this[INTERNALS][SHADOW_ROOT] ?? null; }
+    get states() { return this[STATES]; }
+    #element() {
+      const element = this[INTERNALS];
+      if (!isFormAssociated(element)) throw domError("NotSupportedError", FORM_ONLY);
+      return element;
+    }
+    get form() { return formOwner(this.#element()); }
+    get labels() {
+      const element = this.#element();
+      return new HTMLCollection(element.ownerDocument, (root) => collect(root, (node) => node instanceof HTMLLabelElement && node.control === element));
+    }
+    get willValidate() { return !isDisabled(this.#element()); }
+    get validity() {
+      const element = this.#element();
+      element[VALIDITY] ??= new ValidityState(element, VALIDITY_BRAND);
+      return element[VALIDITY];
+    }
+    get validationMessage() { return this.#element()[FORM_VALIDITY]?.message ?? ""; }
+    // `state` is kept for `formStateRestoreCallback`, which nothing in a test
+    // realm triggers: there is no session history to restore from.
+    setFormValue(value, state = undefined) {
+      const element = this.#element();
+      element[FORM_VALUE] = value ?? null;
+      element[FORM_STATE] = state;
+    }
+    // The flags are the element's validity wholesale: a custom element decides
+    // its own constraints, so nothing is computed from its attributes.
+    setValidity(flags = {}, message = "", anchor = null) {
+      const element = this.#element();
+      const failing = Object.entries(flags).filter(([name, set]) => name !== "valid" && set).map(([name]) => name);
+      if (failing.length > 0 && !String(message)) throw new TypeError("setValidity needs a message when a flag is set");
+      element[FORM_VALIDITY] = failing.length === 0 ? null : { flags: Object.fromEntries(failing.map((name) => [name, true])), message: String(message), anchor };
+    }
+    checkValidity() {
+      const element = this.#element();
+      if (!this.willValidate || this.validity.valid) return true;
+      element.dispatchEvent(new Event("invalid", { cancelable: true }));
+      return false;
+    }
+    reportValidity() { return this.checkValidity(); }
+  }
+
   function validityFor(control) {
+    // A form-associated custom element has exactly the flags it set on itself.
+    if (isFormAssociated(control)) {
+      const state = control[FORM_VALIDITY];
+      return Object.freeze({
+        badInput: false, customError: false, patternMismatch: false, rangeOverflow: false, rangeUnderflow: false,
+        stepMismatch: false, tooLong: false, tooShort: false, typeMismatch: false, valueMissing: false,
+        ...(state?.flags ?? {}),
+        valid: !state,
+      });
+    }
+    return builtInValidityFor(control);
+  }
+
+  function builtInValidityFor(control) {
     const value = control.value ?? "";
     const required = control.required && (control instanceof HTMLSelectElement ? control.selectedIndex < 0 || value === "" : value === "");
     const typeMismatch = control instanceof HTMLInputElement && value !== "" && (
@@ -1081,7 +1196,9 @@ export function createTree(events = {}) {
     }
   }
 
-  function isLabelable(element) { return ["button", "input", "select", "textarea"].includes(element.localName); }
+  function isLabelable(element) {
+    return ["button", "input", "select", "textarea"].includes(element.localName) || isFormAssociated(element);
+  }
 
   function validDate(value) {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -1315,6 +1432,23 @@ export function createTree(events = {}) {
       },
     });
   }
+
+  Object.defineProperty(HTMLElement.prototype, "attachInternals", {
+    value() {
+      // Only a custom element has internals, and only one set of them: a
+      // built-in has nothing to attach, and a second call would hand a second
+      // party the same element's private surface.
+      if (!isDefined(this) || !CUSTOM_NAME.test(this.localName)) {
+        throw domError("NotSupportedError", "Only a defined custom element has internals.");
+      }
+      if (this[INTERNALS]) throw domError("NotSupportedError", "This element already has internals attached.");
+      const internals = new ElementInternals(this, VALIDITY_BRAND);
+      Object.defineProperty(this, INTERNALS, { value: internals });
+      return internals;
+    },
+    writable: true,
+    configurable: true,
+  });
 
   class DocumentFragment extends Node {
     constructor(ownerDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }
@@ -1671,5 +1805,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, customStates, formSubmissionValue, upgradeCustom };
 }

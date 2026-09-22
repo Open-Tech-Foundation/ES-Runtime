@@ -392,6 +392,61 @@ export const cases = [
     },
   },
   {
+    group: "components",
+    name: "form-associated-custom-element-joins-its-form",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = "matrix-field";
+      if (!window.customElements.get(name)) {
+        window.customElements.define(name, class extends window.HTMLElement {
+          static formAssociated = true;
+          constructor() {
+            super();
+            this.internals = this.attachInternals();
+          }
+        });
+      }
+      const form = document.createElement("form");
+      const field = document.createElement(name);
+      field.setAttribute("name", "chosen");
+      form.append(field);
+      document.body.append(form);
+      field.internals.setFormValue("picked");
+      const entries = Array.from(new window.FormData(form).entries());
+      field.internals.setValidity({ valueMissing: true }, "pick something");
+      const invalid = [field.internals.validity.valid, field.internals.validationMessage, form.checkValidity()];
+      field.internals.setValidity({});
+      return [field.internals.form === form, form.elements.length, entries, invalid, form.checkValidity()];
+    },
+  },
+  {
+    group: "components",
+    name: "custom-state-matches-the-state-pseudo-class",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = "matrix-stateful";
+      if (!window.customElements.get(name)) {
+        window.customElements.define(name, class extends window.HTMLElement {
+          constructor() {
+            super();
+            this.internals = this.attachInternals();
+          }
+        });
+      }
+      const host = document.createElement("div");
+      document.body.append(host);
+      const element = document.createElement(name);
+      host.append(element);
+      const before = host.querySelectorAll(`${name}:state(loading)`).length;
+      element.internals.states.add("loading");
+      const after = host.querySelectorAll(`${name}:state(loading)`).length;
+      element.internals.states.delete("loading");
+      return [before, after, host.querySelectorAll(`${name}:state(loading)`).length, element.internals.states.size];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {
