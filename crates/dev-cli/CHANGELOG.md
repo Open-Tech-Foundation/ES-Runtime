@@ -398,6 +398,13 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **Selector escapes are resolved.** `#id\.with\.dots`, `.foo\:bar` and
+  `#\31 leading` were a `SyntaxError`, so an id or class containing a dot, colon
+  or leading digit — which is what `CSS.escape` exists to produce — could not be
+  queried at all. Identifiers resolve their escapes now, including hex escapes
+  and the space that terminates one, in `querySelector`, `matches`, `closest`,
+  selector lists, combinators and specificity. Non-ASCII name characters work
+  too, so `.café` is a class.
 - **A radio group holds one checked button however it was checked.** The
   exclusivity lived in `click()`, so `input.checked = true` on two radios in the
   same group left both checked and a form serialized `pick=yes&pick=no`. The

@@ -18,6 +18,10 @@ function splitList(source) {
       if (char === quote) quote = null;
       continue;
     }
+    if (char === "\\") {
+      at += escapeLength(source, at) - 1;
+      continue;
+    }
     if (char === "'" || char === '"') quote = char;
     else if (char === "[") brackets += 1;
     else if (char === "]") {
@@ -78,27 +82,72 @@ function parseNth(source, at, argument) {
   return { a: coefficient, b: Number(match[2] ?? 0) };
 }
 
+// A CSS identifier, with its escapes resolved: `#id\\.with\\.dots` is one id
+// containing dots, and `\\2c ` is a comma. Non-ASCII characters are name
+// characters too, so `.café` is a class.
+// How many characters the escape at `at` occupies: a hex escape is up to six
+// digits and an optional trailing space, anything else is the backslash and one
+// character. Every scanner below steps by this, or a `\\31 ` would be cut in two
+// at the space that terminates it.
+const HEX_ESCAPE = /^([0-9a-fA-F]{1,6})[ \t\n\f\r]?/;
+
+function escapeLength(text, at) {
+  const hex = HEX_ESCAPE.exec(text.slice(at + 1));
+  if (hex) return 1 + hex[0].length;
+  const next = text.codePointAt(at + 1);
+  return next === undefined ? 1 : 1 + String.fromCodePoint(next).length;
+}
+
+function readName(text, at) {
+  let value = "";
+  let index = at;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === "\\") {
+      const width = escapeLength(text, index);
+      const hex = HEX_ESCAPE.exec(text.slice(index + 1));
+      if (hex) {
+        const code = Number.parseInt(hex[1], 16);
+        // A null escape is a replacement character, as the tokenizer says.
+        value += code === 0 || code > 0x10ffff ? "\ufffd" : String.fromCodePoint(code);
+      } else {
+        const escaped = text.slice(index + 1, index + width);
+        if (escaped === "" || escaped === "\n") break;
+        value += escaped;
+      }
+      index += width;
+      continue;
+    }
+    const start = value === "";
+    const ordinary = character.codePointAt(0) > 0x7f
+      || (start ? /[A-Za-z_-]/.test(character) : /[A-Za-z0-9_-]/.test(character));
+    if (!ordinary) break;
+    value += character;
+    index += 1;
+  }
+  return value === "" ? null : { value, length: index - at };
+}
+
 function parseCompound(source, offset, text) {
   const simples = [];
   let at = 0;
-  const name = /^[A-Za-z_][A-Za-z0-9_-]*/;
   if (text[at] === "*") {
     simples.push({ type: "universal" });
     at += 1;
   } else {
-    const match = name.exec(text.slice(at));
+    const match = readName(text, at);
     if (match) {
-      simples.push({ type: "tag", name: match[0] });
-      at += match[0].length;
+      simples.push({ type: "tag", name: match.value });
+      at += match.length;
     }
   }
   while (at < text.length) {
     const kind = text[at];
     if (kind === "#" || kind === ".") {
-      const match = name.exec(text.slice(at + 1));
+      const match = readName(text, at + 1);
       if (!match) syntax(source, offset + at, `expected a name after ${kind}`);
-      simples.push({ type: kind === "#" ? "id" : "class", name: match[0] });
-      at += match[0].length + 1;
+      simples.push({ type: kind === "#" ? "id" : "class", name: match.value });
+      at += match.length + 1;
       continue;
     }
     if (kind === "[") {
@@ -203,6 +252,11 @@ function parseOne(source) {
       if (quote) {
         if (char === quote) quote = null;
         at += 1;
+      } else if (char === "\\") {
+        // An escape and what it escapes are one unit: `#a\\>b` is one id, and a
+        // hex escape's terminating space is part of the escape rather than a
+        // descendant combinator.
+        at += escapeLength(source, at);
       } else if (char === "'" || char === '"') {
         quote = char;
         at += 1;
