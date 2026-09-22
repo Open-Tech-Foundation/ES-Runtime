@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Fetches the pinned Web Platform Tests subset into wpt/upstream (gitignored).
 #
-# A blobless, sparse, shallow checkout: the four directories the worker subset
-# needs, not the 5 GB tree. Re-running is idempotent and moves an existing
-# checkout to REV.
+# A blobless, sparse, shallow checkout: the directories the two slices need --
+# workers, messaging and structured clone for wpt/run.js, the DOM trees for
+# wpt/dom-run.js -- not the 5 GB tree. Re-running is idempotent and moves an
+# existing checkout to REV.
 set -euo pipefail
 
 # Pinned so a run is reproducible. Bump deliberately, and re-record

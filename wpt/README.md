@@ -1,7 +1,15 @@
-# Web Platform Tests — the worker subset
+# Web Platform Tests
 
 Runs the upstream [Web Platform Tests](https://github.com/web-platform-tests/wpt)
-for workers, HTML messaging and structured clone, unmodified, under `esrun`.
+unmodified, in two slices that share one pinned checkout:
+
+| Slice | Runner | Under |
+| --- | --- | --- |
+| workers, HTML messaging, structured clone | `wpt/run.js` | `esrun` |
+| `dom`, `custom-elements`, `shadow-dom` | `wpt/dom-run.js` | `esdev test --dom` |
+
+The worker slice is the rest of this document; [the DOM
+slice](#the-dom-slice) is at the end.
 
 ```sh
 ./wpt/fetch.sh          # pinned sparse checkout → wpt/upstream
@@ -32,7 +40,7 @@ all, so the worker global scope had no executable coverage before this.
 A standard WPT subset is post-1.0 (SPEC §14); this is the beginning of it, scoped
 to what workers touch.
 
-## Scope
+## Scope of the worker slice
 
 | Included | Why |
 | --- | --- |
@@ -197,3 +205,57 @@ because each one shaped the runner, and because the shapes are worth knowing.
    not a defect either — a live worker is a reason for the process to stay up, as
    in Node and Deno. In a browser the page goes away; here the runner's final
    `exit()` does.
+
+## The DOM slice
+
+`wpt/dom-run.js` runs the layout-free JavaScript DOM tests — `dom`,
+`custom-elements`, `shadow-dom` — against `esdev test --dom`, one `esdev`
+process per file.
+
+```sh
+./wpt/fetch.sh                                    # the same pinned checkout
+tsr test:dom-wpt                                  # or, directly:
+deno run --allow-read --allow-run --allow-write wpt/dom-run.js
+
+# --filter=<substring>   only matching paths
+# --verbose              one line per file, to stderr, as it goes
+# --json=<path>          write the report as well as printing it
+# --timeout=<ms>         per file, default 10000
+# --esdev=<path>         default target/debug/esdev
+```
+
+Only `.any.js` and `.window.js` are collected: a `.html` test needs a document
+the runner would have to supply itself, which would make the result a test of
+the runner. `dom-scope.js` rules out the rest — server substitution, full Web
+IDL exposure, tentative APIs, nested browsing contexts, legacy APIs and script
+execution — and the report names the reason per file.
+
+Each file becomes one generated module beside the original, the same shape the
+worker slice uses and for the same reason:
+
+```
+  resources/testharness.js
+  + <collector: add_completion_callback → the runner>
+  + every `// META: script=` in order
+  + the test itself
+      └─ all of it inside (0, eval)(…), imported by `esdev test --dom --file=`
+```
+
+One patch is applied to `testharness.js`: its environment check, so it selects
+`ShellTestEnvironment` and reports completion rather than waiting for a page
+that does not exist. A patch that stops matching **throws** rather than running
+unpatched, since the alternative is reporting the harness's own confusion as DOM
+failures. (A second patch used to disable the harness's `AbortController`;
+`AbortSignal` now dispatches in its own realm, and removing it changes no
+result.)
+
+`--file=` is the per-file *child* of `esdev test`, so the timeout the parent
+would have applied is the runner's to apply. Without it a harness that never
+completes waits forever; with it the file is reported as `TIMEOUT`. A file that
+completes no harness at all exits `0` and prints nothing, so the report carries
+the exit code — `""` is not a diagnosis.
+
+There is no expectations file yet, so **this slice gates nothing**: it prints
+`passed`/`failed`/`errored`/`timeout` and exits `0`. It stays diagnostic until
+the failures are either fixed or recorded, the way `expectations.json` records
+the worker slice.

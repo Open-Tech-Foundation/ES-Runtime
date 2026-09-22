@@ -133,6 +133,13 @@ run = "esdev test"
 dir = "crates/runtime/js"
 env = { PATH = "../../../target/release:${PATH}" }
 
+# The upstream WPT slice for the test-only DOM: `dom`, `custom-elements` and
+# `shadow-dom`, run unmodified under `esdev test --dom`. Needs `wpt/fetch.sh`
+# first, so it is not a `ci` dependency — the checkout is gitignored and the
+# report is diagnostic while the slice still has failures.
+[tasks."test:dom-wpt"]
+run = "cargo build -p es-runtime-dev-cli && deno run --allow-read --allow-run --allow-write wpt/dom-run.js"
+
 # The test-only DOM's own unit tests, one file per module it has them for. They
 # import the module factories directly, so they check tree, event and parsing
 # behaviour without going through a whole `esdev test --dom` process the way
