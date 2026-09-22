@@ -5,6 +5,7 @@
 //! token spans and must preserve an author's bytes exactly.
 
 pub mod html;
+pub mod stylesheet;
 
 use es_runtime_cli_common::{ExtensionContext, HostExtension, HostModule, OpDecl, OpError, Value};
 
@@ -46,6 +47,10 @@ const MODULES: &[HostModule] = &[
         specifier: "runtime:dom/range",
         source: include_str!("range.js"),
     },
+    HostModule {
+        specifier: "runtime:dom/sheets",
+        source: include_str!("sheets.js"),
+    },
 ];
 
 impl HostExtension for DomExtension {
@@ -81,6 +86,15 @@ impl HostExtension for DomExtension {
             }),
             // A whole document rather than a fragment: `DOMParser` needs the
             // doctype, and a document parse is the only place a doctype is legal.
+            // A stylesheet, for the cascade. CSS has no parse errors — only
+            // rules a browser drops — so this op cannot fail.
+            OpDecl::sync("dom_parse_stylesheet", |args| {
+                let source = args
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| OpError::type_error("dom_parse_stylesheet expects CSS text"))?;
+                Ok(stylesheet::stylesheet_records(source))
+            }),
             OpDecl::sync("dom_parse_document", |args| {
                 let source = args
                     .first()

@@ -1086,6 +1086,288 @@
       "drift": false
     },
     {
+      "group": "cascade",
+      "name": "origin-importance-specificity-and-order-decide-the-winner",
+      "chrome": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(4, 4, 4)",
+          "rgb(3, 3, 3)",
+          "rgb(6, 6, 6)",
+          "rgb(5, 5, 5)",
+          "rgb(7, 7, 7)"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(4, 4, 4)",
+          "rgb(3, 3, 3)",
+          "rgb(6, 6, 6)",
+          "rgb(5, 5, 5)",
+          "rgb(7, 7, 7)"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(4, 4, 4)",
+          "rgb(3, 3, 3)",
+          "rgb(6, 6, 6)",
+          "rgb(5, 5, 5)",
+          "rgb(7, 7, 7)"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(4, 4, 4)",
+          "rgb(3, 3, 3)",
+          "rgb(6, 6, 6)",
+          "rgb(5, 5, 5)",
+          "rgb(7, 7, 7)"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "inheritance-and-user-agent-defaults",
+      "chrome": {
+        "result": [
+          "rgb(9, 9, 9)",
+          "cyan",
+          false,
+          [
+            "inline",
+            "400",
+            "visible",
+            "start"
+          ],
+          "block",
+          "700",
+          "none",
+          ""
+        ]
+      },
+      "esdev": {
+        "result": [
+          "rgb(9, 9, 9)",
+          "cyan",
+          false,
+          [
+            "inline",
+            "400",
+            "visible",
+            "start"
+          ],
+          "block",
+          "700",
+          "none",
+          ""
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "rgb(9, 9, 9)",
+          "",
+          false,
+          [
+            "",
+            "normal",
+            "",
+            ""
+          ],
+          "block",
+          "normal",
+          "block",
+          ""
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "rgb(9, 9, 9)",
+          "",
+          false,
+          [
+            "inline",
+            "",
+            "visible",
+            ""
+          ],
+          "block",
+          "bolder",
+          "none",
+          "list-item"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "media-and-supports-conditions-gate-their-rules",
+      "chrome": {
+        "result": [
+          "rgb(1, 2, 3)",
+          "400",
+          "italic",
+          true,
+          false,
+          false,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          "rgb(1, 2, 3)",
+          "400",
+          "italic",
+          true,
+          false,
+          false,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "rgb(1, 2, 3)",
+          "normal",
+          "oblique",
+          true,
+          false,
+          false,
+          true
+        ]
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "constructed-sheets-apply-while-adopted",
+      "chrome": {
+        "result": [
+          1,
+          ".c",
+          "rgb(7, 8, 9)",
+          "rgb(0, 0, 0)",
+          "rgb(7, 8, 9)",
+          "rgb(0, 0, 0)"
+        ]
+      },
+      "esdev": {
+        "result": [
+          1,
+          ".c",
+          "rgb(7, 8, 9)",
+          "rgb(0, 0, 0)",
+          "rgb(7, 8, 9)",
+          "rgb(0, 0, 0)"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          1,
+          ".c",
+          "rgb(7, 8, 9)",
+          "",
+          "",
+          ""
+        ]
+      },
+      "jsdom": {
+        "result": [
+          1,
+          ".c",
+          "rgb(7, 8, 9)",
+          "rgb(0, 0, 0)",
+          "rgb(0, 0, 0)",
+          "rgb(0, 0, 0)"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "a-shadow-root-is-styled-by-its-own-sheets",
+      "chrome": {
+        "result": [
+          "rgb(2, 4, 6)",
+          "rgb(0, 0, 0)",
+          "700"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "rgb(2, 4, 6)",
+          "rgb(0, 0, 0)",
+          "700"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "rgb(2, 4, 6)",
+          "",
+          "700"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "rgb(0, 0, 0)",
+          "rgb(0, 0, 0)",
+          ""
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "nesting-resolves-against-its-parent-rule",
+      "chrome": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(2, 2, 2)",
+          "rgb(3, 3, 3)"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(2, 2, 2)",
+          "rgb(3, 3, 3)"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "",
+          "",
+          ""
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "rgb(1, 1, 1)",
+          "rgb(1, 1, 1)"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -1390,7 +1672,7 @@
     }
   ],
   "summary": {
-    "match": 38,
+    "match": 44,
     "intentional-limit": 1,
     "drift": 0
   }

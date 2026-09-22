@@ -3022,6 +3022,131 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_cascades_stylesheets_into_computed_styles() {
+    let dir = build_dir("t_test_dom_cascade");
+    write_in(
+        &dir,
+        "cascade.test.mjs",
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
+         function sheet(text) {\n\
+           const element = document.createElement('style');\n\
+           element.textContent = text;\n\
+           document.head.append(element);\n\
+           return element;\n\
+         }\n\
+         // One realm per file, so each case starts from an empty document.\n\
+         function reset() {\n\
+           document.head.replaceChildren();\n\
+           document.body.replaceChildren();\n\
+           document.adoptedStyleSheets = [];\n\
+         }\n\
+         test('origin, importance, specificity and order decide the winner', () => {\n\
+           reset();\n\
+           sheet('div { color: one } .a { color: two } #b { color: three } .a { color: four } .imp { color: five !important }');\n\
+           const element = document.createElement('div');\n\
+           document.body.append(element);\n\
+           assertEquals(getComputedStyle(element).color, 'one');\n\
+           element.className = 'a';\n\
+           assertEquals(getComputedStyle(element).color, 'four');\n\
+           element.id = 'b';\n\
+           assertEquals(getComputedStyle(element).color, 'three');\n\
+           element.style.color = 'inline';\n\
+           assertEquals(getComputedStyle(element).color, 'inline');\n\
+           element.classList.add('imp');\n\
+           assertEquals(getComputedStyle(element).color, 'five');\n\
+           element.style.setProperty('color', 'inline', 'important');\n\
+           assertEquals(getComputedStyle(element).color, 'inline');\n\
+           assertThrows(() => { getComputedStyle(element).color = 'x'; }, TypeError);\n\
+         });\n\
+         test('inheritance and the user-agent defaults fill the rest in', () => {\n\
+           reset();\n\
+           sheet('.parent { color: purple; border-color: red; --brand: cyan }');\n\
+           const parent = document.createElement('div');\n\
+           parent.className = 'parent';\n\
+           const child = document.createElement('span');\n\
+           parent.append(child);\n\
+           document.body.append(parent);\n\
+           const computed = getComputedStyle(child);\n\
+           assertEquals([computed.color, computed.getPropertyValue('border-color'), computed.getPropertyValue('--brand')], ['purple', '', 'cyan']);\n\
+           assertEquals([computed.display, computed.fontWeight, computed.visibility, computed.textAlign], ['inline', '400', 'visible', 'start']);\n\
+           assertEquals(getComputedStyle(parent).display, 'block');\n\
+           const strong = document.createElement('strong');\n\
+           document.body.append(strong);\n\
+           assertEquals(getComputedStyle(strong).fontWeight, '700');\n\
+           const hidden = document.createElement('div');\n\
+           hidden.setAttribute('hidden', '');\n\
+           document.body.append(hidden);\n\
+           assertEquals(getComputedStyle(hidden).display, 'none');\n\
+         });\n\
+         test('a media query is answered from the declared viewport', () => {\n\
+           reset();\n\
+           sheet('@media (min-width: 100px) { .m { color: wide } } @media (min-width: 99999px) { .m { color: wider } } @media print { .m { color: printed } }');\n\
+           const element = document.createElement('p');\n\
+           element.className = 'm';\n\
+           document.body.append(element);\n\
+           assertEquals(getComputedStyle(element).color, 'wide');\n\
+           window.innerWidth = 50;\n\
+           assertEquals(getComputedStyle(element).color, 'rgb(0, 0, 0)');\n\
+           window.innerWidth = 1024;\n\
+           assertEquals(getComputedStyle(element).color, 'wide');\n\
+         });\n\
+         test('a constructed sheet applies while it is adopted', () => {\n\
+           reset();\n\
+           const constructed = new CSSStyleSheet();\n\
+           constructed.replaceSync('.c { color: adopted }');\n\
+           const element = document.createElement('div');\n\
+           element.className = 'c';\n\
+           document.body.append(element);\n\
+           assertEquals([constructed.cssRules.length, constructed.cssRules[0].selectorText], [1, '.c']);\n\
+           assertEquals(getComputedStyle(element).color, 'rgb(0, 0, 0)');\n\
+           document.adoptedStyleSheets = [constructed];\n\
+           assertEquals(getComputedStyle(element).color, 'adopted');\n\
+           document.adoptedStyleSheets = [];\n\
+           assertEquals(getComputedStyle(element).color, 'rgb(0, 0, 0)');\n\
+         });\n\
+         test('a shadow root is styled by its own sheets only', () => {\n\
+           reset();\n\
+           const host = document.createElement('div');\n\
+           document.body.append(host);\n\
+           const root = host.attachShadow({ mode: 'open' });\n\
+           root.innerHTML = '<style>.in { color: maroon }</style><p class=in>x</p>';\n\
+           const inside = root.lastElementChild;\n\
+           const outside = document.createElement('p');\n\
+           outside.className = 'in';\n\
+           document.body.append(outside);\n\
+           assertEquals([getComputedStyle(inside).color, getComputedStyle(outside).color], ['maroon', 'rgb(0, 0, 0)']);\n\
+           const scoped = new CSSStyleSheet();\n\
+           scoped.replaceSync('.in { font-weight: 700 }');\n\
+           root.adoptedStyleSheets = [scoped];\n\
+           assertEquals(getComputedStyle(inside).fontWeight, '700');\n\
+         });\n\
+         test('nesting resolves through :is() and reports its own rules', () => {\n\
+           reset();\n\
+           const element = sheet('.card { color: olive; & a { color: coral } b { color: lime } }');\n\
+           const card = document.createElement('div');\n\
+           card.className = 'card';\n\
+           card.innerHTML = '<a>l</a><b>bold</b>';\n\
+           document.body.append(card);\n\
+           assertEquals(getComputedStyle(card).color, 'olive');\n\
+           assertEquals(getComputedStyle(card.firstElementChild).color, 'coral');\n\
+           assertEquals(getComputedStyle(card.lastElementChild).color, 'lime');\n\
+           assertEquals(Array.from(element.sheet.cssRules, rule => rule.selectorText), ['.card', ':is(.card) a', ':is(.card) b']);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom cascade");
+    assert!(
+        ran.status.success(),
+        "DOM cascade test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_element_internals_associate_custom_elements_with_forms() {
     let dir = build_dir("t_test_dom_element_internals");
     write_in(
@@ -6387,7 +6512,7 @@ fn test_dom_storage_is_not_shared_by_isolated_test_files() {
 }
 
 #[test]
-fn test_dom_window_computed_styles_and_observers_are_strict_stubs() {
+fn test_dom_window_media_queries_read_the_viewport_and_observers_never_deliver() {
     let dir = build_dir("t_test_dom_window_stubs");
     write_in(
         &dir,
@@ -6395,10 +6520,19 @@ fn test_dom_window_computed_styles_and_observers_are_strict_stubs() {
         "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
          test('computed styles and stubs', () => {\n\
            const element = document.createElement('div'); element.style.width = '10px';\n\
+           // Outside the tree there is no computed style at all, as in a browser.\n\
+           assertEquals(getComputedStyle(element).length, 0);\n\
+           document.body.append(element);\n\
            const computed = getComputedStyle(element);\n\
            assertEquals(computed.width, '10px'); assertEquals(computed.getPropertyValue('width'), '10px');\n\
            assertThrows(() => { computed.width = '20px'; }, TypeError);\n\
-           const query = matchMedia('(min-width: 1px)'); assertEquals(query.matches, false); assertEquals(query.media, '(min-width: 1px)');\n\
+           const query = matchMedia('(min-width: 1px)');\n\
+           assertEquals([query.matches, query.media], [true, '(min-width: 1px)']);\n\
+           assertEquals([window.innerWidth, window.innerHeight], [1024, 768]);\n\
+           assertEquals(matchMedia('(min-width: 99999px)').matches, false);\n\
+           window.innerWidth = 320;\n\
+           assertEquals([query.matches, matchMedia('(min-width: 400px)').matches], [true, false]);\n\
+           window.innerWidth = 1024;\n\
            let delivered = 0; const resize = new ResizeObserver(() => { delivered += 1; }); resize.observe(element);\n\
            const intersection = new IntersectionObserver(() => { delivered += 1; }); intersection.observe(element);\n\
            assertEquals(resize.takeRecords(), []); assertEquals(intersection.takeRecords(), []); assertEquals(delivered, 0);\n\

@@ -933,6 +933,7 @@ export function createTree(events = {}) {
     }
   }
 
+  class HTMLStyleElement extends HTMLElement {}
   class HTMLTableCaptionElement extends HTMLElement {}
   class HTMLTableColElement extends HTMLElement {}
 
@@ -1833,6 +1834,7 @@ export function createTree(events = {}) {
     slot: HTMLSlotElement,
     textarea: HTMLTextAreaElement,
     template: HTMLTemplateElement,
+    style: HTMLStyleElement,
     table: HTMLTableElement,
     thead: HTMLTableSectionElement,
     tbody: HTMLTableSectionElement,
@@ -1881,5 +1883,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

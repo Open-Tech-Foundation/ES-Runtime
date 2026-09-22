@@ -25,7 +25,7 @@ The target is spec fidelity without layout. Algorithms that do not need a box mo
 **Out of scope, deliberately**
 
 - Layout. `getBoundingClientRect()`, `offsetWidth`, `scrollTop` return zeros rather than throwing, so feature-probing code runs instead of exploding.
-- CSS cascade. `getComputedStyle` returns specified values only.
+- Used values. The cascade is implemented (see [Styles](#styles)) and `getComputedStyle` answers with *specified* values: a percentage stays a percentage, `auto` stays `auto`, `2em` stays `2em`. Resolving those needs layout.
 - Navigation: no real `location` changes, no history side effects, no `document.write`.
 - `XMLHttpRequest`. `fetch` is the runtime's own.
 - Shadow DOM has tree and event-boundary support (`attachShadow`, open/closed
@@ -186,7 +186,8 @@ Invalid selectors throw `SyntaxError` with the offending position. Tests that as
 
 ## Styles
 
-Inline styles only. No stylesheets, no cascade, no resolved values.
+Inline styles, stylesheets and the cascade — but specified values only, because
+resolving a used value needs layout.
 
 `element.style` is a real `CSSStyleDeclaration`: `setProperty`, `removeProperty`, `getPropertyValue`, `getPropertyPriority`, indexed access, `length`, `cssText` both ways, and camelCase property accessors. It stays in sync with the `style` attribute in both directions — writing the attribute reparses the declaration, writing a property reserializes the attribute.
 
@@ -196,11 +197,58 @@ Shorthands expand: setting `margin` sets the four longhands and setting a longha
 
 Custom properties (`--x`) pass through untouched, since their value grammar is deliberately open.
 
-`getComputedStyle(el)` returns a read-only declaration containing the element's own inline declarations plus initial values for anything unset. It does not do inheritance, stylesheets, or used-value resolution. A percentage stays a percentage, `auto` stays `auto`, and `display` reflects what was set inline rather than the element's default.
+### The cascade
 
-That last point is the honest limitation to document loudly in the `esdev` docs: `getComputedStyle(document.createElement('div')).display` returns the empty string here, where a browser says `block`. Tests asserting on computed display are the most common thing that passes in jsdom and should not be encouraged here.
+A `<style>` element has a real `sheet`, `document.styleSheets` lists them,
+`CSSStyleSheet` is constructable with `replaceSync`, and `adoptedStyleSheets`
+works on a document and on a shadow root. Stylesheets are parsed by the build
+pipeline's own CSS parser (`crates/dev-cli/src/css`), so a stylesheet means the
+same thing to `esdev build` and to `esdev test --dom`.
 
-No `CSSStyleSheet`, no `document.styleSheets`, no `adoptedStyleSheets`. A `<style>` element is parsed as an element with a text child and nothing more. Tailwind and CSS Modules produce class names, and class-name assertions work without any of this.
+`getComputedStyle(el)` resolves a **specified** value, in the order the cascade
+specifies:
+
+| Step | What it does |
+| --- | --- |
+| Origin and importance | normal user-agent, normal author, the `style` attribute, important author, an important `style` attribute, important user-agent |
+| Specificity | `[ids, classes, types]`, with `:is()`/`:not()`/`:has()` taking their most specific argument and `:where()` taking none |
+| Order | the later declaration in the sheet wins a tie |
+| Inheritance | the inherited properties, and any explicit `inherit`, come from the parent; a custom property always does |
+| Initial values | the keyword initial values — `display: inline`, `font-weight: 400`, `visibility: visible`, `color: rgb(0, 0, 0)` — for anything still unset |
+
+`@media` is evaluated against a **declared viewport**: `window.innerWidth` and
+`innerHeight` start at 1024×768 and are assignable, since nothing here resizes
+on its own, and `matchMedia` answers from the same state rather than always
+saying `false`. `@supports` is answered by what this DOM can parse — a
+declaration it keeps is supported, a selector it can compile is supported.
+
+CSS nesting is flattened when a sheet is parsed: `& a` becomes `:is(parent) a`,
+which is the specificity the specification gives it. It is the resolved rules
+that appear in `cssRules`, where a browser would show the nested structure.
+
+A user-agent stylesheet supplies what a layout-free DOM can honestly report —
+which elements are blocks, list items, table parts or hidden, and the handful of
+text defaults — and nothing about how anything looks.
+
+### What the cascade does not do
+
+- **No used values.** A length is what was written. `getComputedStyle(h1).fontSize`
+  is `2em` here and `32px` in a browser, because resolving it needs a font and a
+  parent box. Assertions on resolved lengths, colours a browser normalises, or
+  anything geometric belong in the GUI driver harness.
+- **An element outside the tree has no computed style at all**, as in a browser.
+- **A pseudo-element has none either**: `getComputedStyle(el, '::before')` is
+  empty, and a rule whose selector names a pseudo-element is not applied to the
+  element.
+- **A rule this DOM cannot match contributes nothing** and is not an error —
+  it still appears in `cssRules`. That covers a pseudo-element selector and any
+  selector the engine cannot compile.
+- **`@supports (unknown-property: value)` answers yes**, because the test is
+  whether the declaration parses, not whether anything renders it. `@supports
+  (display: grid)` and `not (display: grid)` are right; a made-up property is
+  not.
+- **`@layer` does not order anything** and `@container` has no container: their
+  blocks contribute as if the condition held.
 
 ## Window surface
 

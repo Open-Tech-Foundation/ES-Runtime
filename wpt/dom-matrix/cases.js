@@ -500,6 +500,169 @@ export const cases = [
     },
   },
   {
+    group: "cascade",
+    name: "origin-importance-specificity-and-order-decide-the-winner",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = document.createElement("style");
+      sheet.textContent =
+        "div { color: rgb(1, 1, 1) } .a { color: rgb(2, 2, 2) } #b { color: rgb(3, 3, 3) } .a { color: rgb(4, 4, 4) } .imp { color: rgb(5, 5, 5) !important }";
+      document.head.append(sheet);
+      const element = document.createElement("div");
+      document.body.append(element);
+      const colour = () => window.getComputedStyle(element).color;
+      const seen = [colour()];
+      element.className = "a";
+      seen.push(colour());
+      element.id = "b";
+      seen.push(colour());
+      element.style.color = "rgb(6, 6, 6)";
+      seen.push(colour());
+      element.classList.add("imp");
+      seen.push(colour());
+      element.style.setProperty("color", "rgb(7, 7, 7)", "important");
+      seen.push(colour());
+      sheet.remove();
+      return seen;
+    },
+  },
+  {
+    group: "cascade",
+    name: "inheritance-and-user-agent-defaults",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = document.createElement("style");
+      sheet.textContent = ".parent { color: rgb(9, 9, 9); --brand: cyan; border-top-color: rgb(8, 8, 8) }";
+      document.head.append(sheet);
+      const parent = document.createElement("div");
+      parent.className = "parent";
+      const child = document.createElement("span");
+      const strong = document.createElement("strong");
+      const hidden = document.createElement("div");
+      hidden.setAttribute("hidden", "");
+      parent.append(child);
+      document.body.append(parent, strong, hidden);
+      const computed = window.getComputedStyle(child);
+      const answer = [
+        computed.color,
+        computed.getPropertyValue("--brand"),
+        computed.borderTopColor === window.getComputedStyle(parent).borderTopColor,
+        [computed.display, computed.fontWeight, computed.visibility, computed.textAlign],
+        window.getComputedStyle(parent).display,
+        window.getComputedStyle(strong).fontWeight,
+        window.getComputedStyle(hidden).display,
+        window.getComputedStyle(document.createElement("li")).display,
+      ];
+      sheet.remove();
+      return answer;
+    },
+  },
+  {
+    group: "cascade",
+    name: "media-and-supports-conditions-gate-their-rules",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = document.createElement("style");
+      sheet.textContent = [
+        "@media (min-width: 100px) { .m { color: rgb(1, 2, 3) } }",
+        "@media (min-width: 99999px) { .m { color: rgb(4, 5, 6) } }",
+        "@media print { .m { font-weight: 900 } }",
+        "@supports (display: grid) { .s { font-style: italic } }",
+        "@supports not (display: grid) { .s { font-style: oblique } }",
+      ].join("\n");
+      document.head.append(sheet);
+      const element = document.createElement("p");
+      element.className = "m s";
+      document.body.append(element);
+      const computed = window.getComputedStyle(element);
+      const answer = [
+        computed.color,
+        computed.fontWeight,
+        computed.fontStyle,
+        window.matchMedia("(min-width: 100px)").matches,
+        window.matchMedia("(min-width: 99999px)").matches,
+        window.matchMedia("print").matches,
+        window.CSS.supports("color", "red"),
+      ];
+      sheet.remove();
+      return answer;
+    },
+  },
+  {
+    group: "cascade",
+    name: "constructed-sheets-apply-while-adopted",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = new window.CSSStyleSheet();
+      sheet.replaceSync(".c { color: rgb(7, 8, 9) }");
+      const element = document.createElement("div");
+      element.className = "c";
+      document.body.append(element);
+      const before = window.getComputedStyle(element).color;
+      document.adoptedStyleSheets = [sheet];
+      const during = window.getComputedStyle(element).color;
+      document.adoptedStyleSheets = [];
+      return [
+        sheet.cssRules.length,
+        sheet.cssRules[0].selectorText,
+        sheet.cssRules[0].style.getPropertyValue("color"),
+        before,
+        during,
+        window.getComputedStyle(element).color,
+      ];
+    },
+  },
+  {
+    group: "cascade",
+    name: "a-shadow-root-is-styled-by-its-own-sheets",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<style>.in { color: rgb(2, 4, 6) }</style><p class='in'>x</p>";
+      const inside = root.lastElementChild;
+      const outside = document.createElement("p");
+      outside.className = "in";
+      document.body.append(outside);
+      const scoped = new window.CSSStyleSheet();
+      scoped.replaceSync(".in { font-weight: 700 }");
+      root.adoptedStyleSheets = [scoped];
+      return [
+        window.getComputedStyle(inside).color,
+        window.getComputedStyle(outside).color,
+        window.getComputedStyle(inside).fontWeight,
+      ];
+    },
+  },
+  {
+    group: "cascade",
+    name: "nesting-resolves-against-its-parent-rule",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = document.createElement("style");
+      sheet.textContent = ".card { color: rgb(1, 1, 1); & a { color: rgb(2, 2, 2) } b { color: rgb(3, 3, 3) } }";
+      document.head.append(sheet);
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = "<a>l</a><b>bold</b>";
+      document.body.append(card);
+      const answer = [
+        window.getComputedStyle(card).color,
+        window.getComputedStyle(card.firstElementChild).color,
+        window.getComputedStyle(card.lastElementChild).color,
+      ];
+      sheet.remove();
+      return answer;
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

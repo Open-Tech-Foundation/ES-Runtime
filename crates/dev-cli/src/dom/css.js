@@ -135,6 +135,47 @@ export function createCss({ Element }) {
     }
   }
 
+  // A declaration list nothing can write: a rule's `style` and a computed
+  // style. Same read surface as the live one, including camelCase access.
+  class ReadOnlyStyleDeclaration {
+    constructor(entries) {
+      const values = new Map();
+      for (const [name, value, important] of entries) {
+        values.set(String(name), { value: String(value), priority: important ? "important" : "" });
+      }
+      Object.defineProperty(this, STYLE, { value: values });
+      return new Proxy(this, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target.item(Number(property));
+          if (typeof property === "string" && !(property in target)) return target.getPropertyValue(kebab(property));
+          return Reflect.get(target, property, receiver);
+        },
+        has(target, property) {
+          if (typeof property === "string" && !(property in target)) return /^--[A-Za-z0-9_-]+$|^[A-Za-z][A-Za-z0-9]*$/.test(property);
+          return Reflect.has(target, property);
+        },
+        set() { throw new TypeError("This style declaration is read-only"); },
+      });
+    }
+    get length() { return this[STYLE].size; }
+    item(index) { return Array.from(this[STYLE].keys())[index] ?? ""; }
+    getPropertyValue(name) { return this[STYLE].get(String(name))?.value ?? ""; }
+    getPropertyPriority(name) { return this[STYLE].get(String(name))?.priority ?? ""; }
+    get cssText() { return serialize(this[STYLE]); }
+    setProperty() { throw new TypeError("This style declaration is read-only"); }
+    removeProperty() { throw new TypeError("This style declaration is read-only"); }
+  }
+
+  // Whether a declaration is one this DOM keeps, which is what `@supports` and
+  // `CSS.supports` are asking. It is about the grammar, not about rendering.
+  function supportsDeclaration(name, value) {
+    try {
+      return parse(`${name}: ${value}`).size === 1;
+    } catch {
+      return false;
+    }
+  }
+
   function install() {
     Object.defineProperty(Element.prototype, "style", {
       get() {
@@ -148,5 +189,10 @@ export function createCss({ Element }) {
     });
   }
 
-  return { CSSStyleDeclaration, install };
+  return {
+    CSSStyleDeclaration,
+    readOnlyDeclaration: (entries) => new ReadOnlyStyleDeclaration(entries),
+    supportsDeclaration,
+    install,
+  };
 }

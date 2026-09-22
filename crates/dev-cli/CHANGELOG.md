@@ -25,7 +25,6 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
-
 - `esdev init` starts a bare project or adopts an existing directory. An
   empty directory gets the bare minimal setup — a greeting server in JS or
   TS, built and run by esdev — asked by name, language and package manager.
@@ -51,6 +50,33 @@ is the point, since none of the three has any business in a deployment.
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
+- **Stylesheets and the CSS cascade in `esdev test --dom`.** A `<style>`
+  element has a real `sheet`, `document.styleSheets` lists them, `CSSStyleSheet`
+  is constructable with `replaceSync`/`insertRule`/`deleteRule`, and
+  `adoptedStyleSheets` works on a document and on a shadow root — whose sheets
+  style what is inside it and nothing outside. Stylesheets are parsed by the
+  build pipeline's own CSS parser, so a stylesheet means the same thing to
+  `esdev build` and to `esdev test --dom`.
+
+  `getComputedStyle` now resolves a **specified** value through the whole
+  cascade: origin and importance (including that an important `style` attribute
+  outranks an important author rule), specificity with the logical
+  pseudo-classes counted as the specification says, source order, inheritance,
+  custom properties, and the keyword initial values. A small user-agent sheet
+  supplies `display`, `font-weight` and the other defaults a test asks about, so
+  `getComputedStyle(div).display` is `block` and a `<span>`'s is `inline`. CSS
+  nesting is flattened to `:is(parent)` selectors when a sheet is parsed.
+
+  `@media` is evaluated against a declared viewport — `window.innerWidth` and
+  `innerHeight` start at 1024×768 and are assignable — and `matchMedia` answers
+  from the same state instead of always saying `false`. `@supports` is answered
+  by what this DOM can parse. `CSS.supports` and `CSS.escape` exist.
+
+  Still no used values: a length is what was written, so
+  `getComputedStyle(h1).fontSize` is `2em` where a browser says `32px`. An
+  element outside the tree has no computed style at all, as in a browser, and a
+  pseudo-element rule is not applied to the element. `docs/ESDEV-DOM.md` states
+  the boundary in full.
 - **The pseudo-classes a real stylesheet is full of, in `esdev test --dom`.**
   `:hover`, `:active`, `:visited`, `:focus-visible` and their kind parse and
   match nothing — the same answer a browser gives when nothing is being hovered
@@ -150,8 +176,11 @@ is the point, since none of the three has any business in a deployment.
   refuses, as it must in an HTML document. `document.title` reads and writes the
   first `title` element, creating one in the head when there is none.
 
-### Fixed
+### Changed
+- Document direct CSS-entry builds, import and asset handling, minification,
+  and stable library stylesheet exports in the build guides.
 
+### Fixed
 - Document `-V` in `esdev --help`, which printed the version all along like
   `-v` without ever being documented.
 - Say `esdev --watch` is still watching after the program exits instead of
@@ -172,12 +201,6 @@ is the point, since none of the three has any business in a deployment.
   still listed only `*.test.*` after `*.spec.*` discovery arrived. The message
   is derived from the suffix list now, so the two cannot drift apart again.
 
-### Changed
-
-- Document direct CSS-entry builds, import and asset handling, minification,
-  and stable library stylesheet exports in the build guides.
-
-### Fixed
 
 - Build a `.css` command-line entry as a bundled stylesheet instead of silently
   writing an empty JavaScript file; `--lib` now preserves source-relative CSS

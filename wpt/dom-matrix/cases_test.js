@@ -11,7 +11,7 @@ Deno.test("the baseline covers the prioritized layout-free groups", () => {
   // about the coverage.
   assertEquals(
     new Set(cases.map((test) => test.group)),
-    new Set(["tree", "events", "parsing", "selectors", "forms", "components"]),
+    new Set(["tree", "events", "parsing", "selectors", "forms", "components", "cascade"]),
   );
 });
 

@@ -7,6 +7,7 @@ import { createSelectors } from "runtime:dom/select";
 import { createCss } from "runtime:dom/css";
 import { createElements } from "runtime:dom/elements";
 import { createRanges } from "runtime:dom/range";
+import { createSheets } from "runtime:dom/sheets";
 
 const events = createEvents();
 const tree = createTree(events);
@@ -43,6 +44,14 @@ css.install();
 const customElements = elements.install(document);
 const ranges = createRanges(tree, parse);
 ranges.install(document);
+const sheets = createSheets({
+  tree,
+  parse: (text) => globalThis.__ops.dom_parse_stylesheet(text),
+  selectors,
+  css,
+  mediaMatches,
+});
+sheets.install(document);
 
 const NativeFormData = globalThis.FormData;
 class DomFormData extends NativeFormData {
@@ -212,8 +221,109 @@ class Selection {
   }
 }
 
+// A test DOM has no window to measure, so it declares one. The defaults are
+// jsdom's, so a suite moved from there sees the same answers, and a test that
+// cares assigns its own — nothing resizes on its own, so a media query is a
+// pure function of this state.
+const viewport = { width: 1024, height: 768, colorScheme: "light", reducedMotion: "no-preference", contrast: "no-preference", forcedColors: "none", pointer: "fine", hover: "hover", displayMode: "browser" };
+
+function lengthInPixels(text) {
+  const match = /^(-?\d*\.?\d+)(px|em|rem|pt|cm|mm|in|pc|q)?$/i.exec(String(text).trim());
+  if (!match) return null;
+  const value = Number(match[1]);
+  const unit = (match[2] ?? "px").toLowerCase();
+  const scale = { px: 1, em: 16, rem: 16, pt: 4 / 3, pc: 16, in: 96, cm: 96 / 2.54, mm: 96 / 25.4, q: 96 / 101.6 }[unit] ?? 1;
+  return value * scale;
+}
+
+// One `(feature: value)` or `(feature)`, answered from the declared viewport.
+function featureMatches(text) {
+  const condition = text.trim().replace(/^\(/, "").replace(/\)$/, "").trim();
+  if (condition === "") return false;
+  const colon = condition.indexOf(":");
+  const name = (colon === -1 ? condition : condition.slice(0, colon)).trim().toLowerCase();
+  const value = colon === -1 ? null : condition.slice(colon + 1).trim().toLowerCase();
+  const bare = value === null;
+  switch (name) {
+    case "width": case "min-width": case "max-width": case "height": case "min-height": case "max-height": {
+      const actual = name.endsWith("width") ? viewport.width : viewport.height;
+      if (bare) return actual > 0;
+      const wanted = lengthInPixels(value);
+      if (wanted === null) return false;
+      if (name.startsWith("min-")) return actual >= wanted;
+      if (name.startsWith("max-")) return actual <= wanted;
+      return actual === wanted;
+    }
+    case "orientation":
+      return value === (viewport.width >= viewport.height ? "landscape" : "portrait");
+    case "prefers-color-scheme":
+      return bare ? true : value === viewport.colorScheme;
+    case "prefers-reduced-motion":
+      return bare ? viewport.reducedMotion !== "no-preference" : value === viewport.reducedMotion;
+    case "prefers-contrast":
+      return bare ? viewport.contrast !== "no-preference" : value === viewport.contrast;
+    case "forced-colors":
+      return bare ? viewport.forcedColors !== "none" : value === viewport.forcedColors;
+    case "hover": case "any-hover":
+      return bare ? viewport.hover !== "none" : value === viewport.hover;
+    case "pointer": case "any-pointer":
+      return bare ? viewport.pointer !== "none" : value === viewport.pointer;
+    case "display-mode":
+      return value === viewport.displayMode;
+    case "scripting":
+      return bare ? true : value === "enabled";
+    default:
+      // An unknown feature matches nothing, which is what a browser does with
+      // one it does not implement.
+      return false;
+  }
+}
+
+function queryMatches(query) {
+  const text = String(query).trim().toLowerCase();
+  if (text === "" || text === "all") return true;
+  if (text.startsWith("not ")) return !queryMatches(text.slice(4));
+  if (text.startsWith("only ")) return queryMatches(text.slice(5));
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let at = 0; at <= text.length; at += 1) {
+    const char = text[at];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if ((at === text.length || /\s/.test(char)) && depth === 0) {
+      const word = text.slice(start, at).trim();
+      if (word) parts.push(word);
+      start = at + 1;
+    }
+  }
+  let matched = true;
+  for (const part of parts) {
+    if (part === "and") continue;
+    if (part === "screen" || part === "all") continue;
+    // Any other media type — print, speech — is not this one.
+    if (!part.startsWith("(")) {
+      if (/^[a-z-]+$/.test(part)) return false;
+      return false;
+    }
+    matched = matched && featureMatches(part);
+  }
+  return matched;
+}
+
+// A comma-separated list matches when any of its queries does.
+function mediaMatches(list) {
+  const text = String(list).trim();
+  if (text === "") return true;
+  return text.split(",").some((query) => queryMatches(query));
+}
+
 class MediaQueryList extends events.EventTarget {
-  constructor(media) { super(); this.media = String(media); this.matches = false; }
+  constructor(media) {
+    super();
+    this.media = String(media);
+    Object.defineProperty(this, "matches", { get: () => mediaMatches(this.media), enumerable: true });
+  }
   addListener(listener) { this.addEventListener("change", listener); }
   removeListener(listener) { this.removeEventListener("change", listener); }
 }
@@ -303,24 +413,6 @@ Object.defineProperty(document, "_queueMutation", {
   value(change) { for (const observer of mutationObservers) observer._enqueue(change); },
 });
 
-function getComputedStyle(element) {
-  const source = element.style;
-  const read = {
-    get length() { return source.length; },
-    item(index) { return source.item(index); },
-    getPropertyValue(name) { return source.getPropertyValue(name); },
-    getPropertyPriority(name) { return source.getPropertyPriority(name); },
-    get cssText() { return source.cssText; },
-  };
-  return new Proxy(read, {
-    get(target, property, receiver) {
-      if (typeof property === "string" && !(property in target)) return source[property];
-      return Reflect.get(target, property, receiver);
-    },
-    set() { throw new TypeError("Computed styles are read-only"); },
-  });
-}
-
 let nextAnimationFrame = 1;
 const animationFrames = new Map();
 function requestAnimationFrame(callback) {
@@ -373,13 +465,27 @@ Object.assign(globalThis, {
   MutationObserver,
   ResizeObserver: NeverObserver,
   AbstractRange: ranges.AbstractRange,
+  CSS: Object.freeze({
+    supports(property, value) {
+      // The one-argument form takes a whole condition, as in `@supports`.
+      if (value === undefined) return sheets.supportsCondition(String(property));
+      return css.supportsDeclaration(String(property), String(value));
+    },
+    escape(text) { return String(text).replace(/[^\w-]/g, (character) => `\\${character}`); },
+  }),
+  CSSRule: sheets.CSSRule,
+  CSSRuleList: sheets.CSSRuleList,
+  StyleSheetList: sheets.StyleSheetList,
+  CSSStyleRule: sheets.CSSStyleRule,
+  CSSStyleSheet: sheets.CSSStyleSheet,
+  CSSGroupingRule: sheets.CSSGroupingRule,
   Range: ranges.Range,
   StaticRange: ranges.StaticRange,
   Selection,
   Storage,
   cancelAnimationFrame,
   console: browserConsole,
-  getComputedStyle,
+  getComputedStyle: sheets.getComputedStyle,
   history,
   localStorage,
   location,
@@ -388,4 +494,25 @@ Object.assign(globalThis, {
   requestAnimationFrame,
   sessionStorage,
   getSelection: () => selection,
+});
+
+// Accessors rather than values in the assignment above: `Object.assign` would
+// have called the getter and left a plain number behind, so a test assigning to
+// `innerWidth` would change nothing a media query reads.
+Object.defineProperties(globalThis, {
+  innerWidth: {
+    get: () => viewport.width,
+    set(value) { viewport.width = Number(value); },
+    enumerable: true,
+    configurable: true,
+  },
+  innerHeight: {
+    get: () => viewport.height,
+    set(value) { viewport.height = Number(value); },
+    enumerable: true,
+    configurable: true,
+  },
+  outerWidth: { get: () => viewport.width, enumerable: true, configurable: true },
+  outerHeight: { get: () => viewport.height, enumerable: true, configurable: true },
+  devicePixelRatio: { get: () => 1, enumerable: true, configurable: true },
 });
