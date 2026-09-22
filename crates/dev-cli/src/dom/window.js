@@ -10,8 +10,11 @@ import { createRanges } from "runtime:dom/range";
 
 const events = createEvents();
 const tree = createTree(events);
-const parse = createParsing(tree, (source, context) =>
-  globalThis.__ops.dom_parse_fragment(source, context));
+const parse = createParsing(
+  tree,
+  (source, context) => globalThis.__ops.dom_parse_fragment(source, context),
+  (source) => globalThis.__ops.dom_parse_document(source),
+);
 const selectors = createSelectors(tree);
 const css = createCss(tree);
 const elements = createElements(tree);
@@ -339,6 +342,7 @@ for (const method of Object.getOwnPropertyNames(hostConsole)) {
 Object.assign(globalThis, events, tree, css, elements, { document, customElements });
 globalThis.window = globalThis;
 Object.assign(globalThis, {
+  DOMParser: parse.DOMParser,
   History,
   FormData: DomFormData,
   IntersectionObserver: NeverObserver,

@@ -54,6 +54,17 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`DOMParser` builds whole documents in `esdev test --dom`,** `text/html`
+  only: the strict parser's document path is wired through an op now, so a
+  doctype is accepted where it is legal and nowhere else. A source that supplies
+  its own `html`, `head` or `body` keeps them; a bare one gets them
+  synthesized, with the head-only elements going to the head. The result is an
+  isolated document with its own `head`, `body`, `title` and `getElementById`.
+  An XML type is refused by name — XML is outside this DOM's scope — and any
+  other type is a `TypeError`. A `Document` also has the ParentNode members it
+  was missing: `children`, `firstElementChild`, `lastElementChild` and
+  `childElementCount`.
+
 - **Adjacent insertion, `setHTMLUnsafe` and `getHTML` in `esdev test --dom`.**
   `insertAdjacentHTML`, `insertAdjacentElement` and `insertAdjacentText` insert
   at all four positions, parsing `beforebegin`/`afterend` markup in the parent's

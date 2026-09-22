@@ -3022,6 +3022,48 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_parser_builds_whole_documents_from_html_only() {
+    let dir = build_dir("t_test_dom_domparser");
+    write_in(
+        &dir,
+        "domparser.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('a bare document gets a synthesized html, head and body', () => {\n\
+           const parsed = new DOMParser().parseFromString('<p>one</p><style>a{}</style>', 'text/html');\n\
+           assertEquals(parsed.doctype, null);\n\
+           assertEquals(parsed.documentElement.tagName, 'HTML');\n\
+           assertEquals([parsed.head.innerHTML, parsed.body.innerHTML], ['<style>a{}</style>', '<p>one</p>']);\n\
+           assertEquals(parsed.firstElementChild === parsed.documentElement, true);\n\
+         });\n\
+         test('a document that supplies its own structure keeps it', () => {\n\
+           const source = '<!doctype html><html><head><title>T</title></head><body><main id=\"x\">y</main></body></html>';\n\
+           const parsed = new DOMParser().parseFromString(source, 'text/html');\n\
+           assertEquals([parsed.doctype.name, parsed.title, parsed.getElementById('x').textContent], ['html', 'T', 'y']);\n\
+           assertEquals([parsed !== document, parsed.body.ownerDocument === parsed], [true, true]);\n\
+         });\n\
+         test('XML is refused by name and malformed HTML by the parser', () => {\n\
+           const parser = new DOMParser();\n\
+           const name = callback => { try { callback(); return 'parsed'; } catch (error) { return error.name; } };\n\
+           assertEquals(name(() => parser.parseFromString('<p/>', 'text/xml')), 'NotSupportedError');\n\
+           assertEquals(name(() => parser.parseFromString('<p></p>', 'text/plain')), 'TypeError');\n\
+           assertEquals(name(() => parser.parseFromString('<p><i>unclosed', 'text/html')), 'SyntaxError');\n\
+           assertEquals(name(() => parser.parseFromString('<p>x</p><!doctype html>', 'text/html')), 'SyntaxError');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom DOMParser");
+    assert!(
+        ran.status.success(),
+        "DOM DOMParser test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_inserts_adjacent_markup_nodes_and_text() {
     let dir = build_dir("t_test_dom_insert_adjacent");
     write_in(

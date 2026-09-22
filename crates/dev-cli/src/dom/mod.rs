@@ -54,25 +54,41 @@ impl HostExtension for DomExtension {
     }
 
     fn ops(&self, _ctx: &ExtensionContext<'_>) -> Vec<OpDecl> {
-        vec![OpDecl::sync("dom_parse_fragment", |args| {
-            let source = args
-                .first()
-                .and_then(Value::as_str)
-                .ok_or_else(|| OpError::type_error("dom_parse_fragment expects HTML text"))?;
-            // Context-sensitive parsing is deliberately not widened until the
-            // element layer defines the supported content models.  Receiving
-            // it now keeps the JS/Rust bridge stable when that lands.
-            if args.len() > 1 && !matches!(args[1], Value::Null | Value::String(_)) {
-                return Err(OpError::type_error(
-                    "dom_parse_fragment context must be a string or null",
-                ));
-            }
-            html::fragment_records(source).map_err(|error| {
-                OpError::new(
-                    es_runtime_common::ExceptionClass::SyntaxError,
-                    error.to_string(),
-                )
-            })
-        })]
+        vec![
+            OpDecl::sync("dom_parse_fragment", |args| {
+                let source = args
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| OpError::type_error("dom_parse_fragment expects HTML text"))?;
+                // Context-sensitive parsing is deliberately not widened until the
+                // element layer defines the supported content models.  Receiving
+                // it now keeps the JS/Rust bridge stable when that lands.
+                if args.len() > 1 && !matches!(args[1], Value::Null | Value::String(_)) {
+                    return Err(OpError::type_error(
+                        "dom_parse_fragment context must be a string or null",
+                    ));
+                }
+                html::fragment_records(source).map_err(|error| {
+                    OpError::new(
+                        es_runtime_common::ExceptionClass::SyntaxError,
+                        error.to_string(),
+                    )
+                })
+            }),
+            // A whole document rather than a fragment: `DOMParser` needs the
+            // doctype, and a document parse is the only place a doctype is legal.
+            OpDecl::sync("dom_parse_document", |args| {
+                let source = args
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| OpError::type_error("dom_parse_document expects HTML text"))?;
+                html::document_records(source).map_err(|error| {
+                    OpError::new(
+                        es_runtime_common::ExceptionClass::SyntaxError,
+                        error.to_string(),
+                    )
+                })
+            }),
+        ]
     }
 }

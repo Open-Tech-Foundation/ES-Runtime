@@ -2,8 +2,16 @@
 // The parser callback is supplied by the esdev-only bridge, keeping this file
 // pure JS and directly testable before the --dom runner integration lands.
 
-export function createParsing(tree, parseRecords) {
-  const { Node, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE } = tree;
+export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
+  const { Node, Document, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE } = tree;
+
+  // The elements the HTML parser puts in the head when no explicit `head` was
+  // written. Everything else a bare document names belongs to the body.
+  const HEAD_ONLY = new Set(["base", "link", "meta", "noscript", "script", "style", "template", "title"]);
+
+  // XML is outside this DOM's scope, so the types are recognised and then
+  // refused by name rather than silently parsed as HTML.
+  const XML_TYPES = new Set(["text/xml", "application/xml", "application/xhtml+xml", "image/svg+xml"]);
 
   const SVG_ELEMENT_NAMES = new Map([
     ["clippath", "clipPath"],
@@ -134,6 +142,44 @@ export function createParsing(tree, parseRecords) {
     }
   }
 
+  // A document parse, not a fragment: the doctype is legal here and nowhere
+  // else. The strict parser does not synthesize a root, so a source that names
+  // `html` supplies its own and anything else is distributed into a synthesized
+  // `html`/`head`/`body` the way the HTML parser would have.
+  function parseDocument(source) {
+    if (!parseDocumentRecords) throw new DOMException("This DOM has no document parser attached.", "NotSupportedError");
+    const [hasDoctype, records] = parseDocumentRecords(String(source));
+    const document = new Document();
+    if (hasDoctype) document.appendChild(document.implementation.createDocumentType("html"));
+    const holder = document.createDocumentFragment();
+    decode(records, holder);
+    const roots = Array.from(holder.childNodes);
+    const supplied = roots.find((node) => node instanceof Element && node.localName === "html" && node.namespaceURI === HTML_NAMESPACE);
+    const html = supplied ?? document.createElement("html");
+    let head = Array.from(html._esdevChildren()).find((node) => node.localName === "head");
+    let body = Array.from(html._esdevChildren()).find((node) => node.localName === "body");
+    if (!head) html.insertBefore(head = document.createElement("head"), html.firstChild);
+    if (!body) html.appendChild(body = document.createElement("body"));
+    if (!supplied) {
+      for (const node of roots) {
+        const intoHead = node instanceof Element && HEAD_ONLY.has(node.localName) && node.namespaceURI === HTML_NAMESPACE;
+        (intoHead ? head : body).appendChild(node);
+      }
+    }
+    document.appendChild(html);
+    Object.defineProperties(document, { head: { get: () => head }, body: { get: () => body } });
+    return document;
+  }
+
+  class DOMParser {
+    parseFromString(source, type) {
+      type = String(type);
+      if (type === "text/html") return parseDocument(source);
+      if (XML_TYPES.has(type)) throw new DOMException(`${type} is outside this DOM's scope, which parses text/html only.`, "NotSupportedError");
+      throw new TypeError(`'${type}' is not a supported DOMParser type.`);
+    }
+  }
+
   function parseFragment(source, context) {
     const fragment = (context.ownerDocument ?? context).createDocumentFragment();
     decode(parseRecords(String(source), context.localName ?? null), fragment);
@@ -194,5 +240,5 @@ export function createParsing(tree, parseRecords) {
     };
   }
 
-  return { decode, serialize, parseFragment, install };
+  return { decode, serialize, parseFragment, parseDocument, DOMParser, install };
 }

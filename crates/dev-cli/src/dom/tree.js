@@ -1450,6 +1450,15 @@ export function createTree(events = {}) {
       slots(this).version = 0;
     }
     get documentElement() { return Array.from(this._esdevChildren()).find((node) => node instanceof Element) ?? null; }
+    // The ParentNode members, which a Document has as much as an element does:
+    // `document.firstElementChild` is the document element.
+    get children() {
+      const state = slots(this);
+      return state.children ??= new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((node) => node instanceof Element));
+    }
+    get firstElementChild() { return this.children.item(0); }
+    get lastElementChild() { return this.children.item(this.children.length - 1); }
+    get childElementCount() { return this.children.length; }
     createElement(name) {
       name = String(name);
       if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be lowercase modern HTML names.");
