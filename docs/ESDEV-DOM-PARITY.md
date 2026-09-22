@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-86 of 88 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+87 of 89 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -124,6 +124,7 @@ compares the result.
 | nodes-stringify-as-their-interface | tree | yes | no | no |
 | svg-elements-get-their-own-interface | parsing | yes | no | yes |
 | a-customized-built-in-upgrades-its-built-in | components | yes | no | no |
+| custom-properties-substitute-into-computed-values | cascade | yes | no | no |
 
 ## Where esdev is closer to Chrome than an emulator
 

@@ -310,6 +310,24 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **`var()` is substituted when a value is computed.** `getComputedStyle(el).color`
+  answered the literal `var(--brand)`; there was no `var()` handling in the
+  cascade at all. Custom properties now substitute from the ones in effect on
+  the same element, including a chain of them. A name with no value — missing,
+  or caught in a cycle — takes the fallback after the comma; with no fallback
+  the declaration is invalid at computed-value time, so the property falls to
+  its inherited or initial value, as in a browser. A cyclic custom property
+  computes to the empty string.
+- **A value a property cannot take is dropped.** `CSS.supports("mask-position",
+  "23")` said yes, and `el.style.width = "23"` kept it: any non-empty text was a
+  value. Values are now checked by type — a number only where a number is
+  allowed, and then only with a known unit, zero excepted — so a bare number is
+  refused for the 400-odd properties that want a length, and kept for the
+  forty-odd that take one. `CSS.supports`, the inline declaration and a
+  stylesheet rule's kept declarations all answer from that one check, which is
+  how a browser behaves in standards mode. It is a check of value types, not of
+  each property's full grammar: a browser also knows that `width` takes no
+  negative length, and this does not.
 - **Every interface says its own name.** `Object.prototype.toString.call(node)`
   answered `[object Object]` for everything, because no prototype carried the
   `Symbol.toStringTag` Web IDL gives it — so a logger or a type guard could not

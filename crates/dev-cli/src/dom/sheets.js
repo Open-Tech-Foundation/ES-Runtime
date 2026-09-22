@@ -230,7 +230,9 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
 
   function ruleFrom(record) {
     const [kind, first, second, children] = record;
-    if (kind === STYLE_RULE) return new CSSStyleRule(first, second);
+    // A declaration whose value the DOM cannot parse is dropped from the rule,
+    // the way a browser drops it: the rest of the block still applies.
+    if (kind === STYLE_RULE) return new CSSStyleRule(first, second.filter(([name, value]) => css.keepsDeclaration(name, value)));
     if (kind === GROUP_RULE) return new CSSGroupingRule(first, second, children.map(ruleFrom));
     if (kind === OTHER_RULE) return new CSSOtherRule(first, second);
     throw new TypeError(`Unsupported CSS rule kind: ${kind}`);
@@ -539,6 +541,52 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     }, null);
   }
 
+  // `var()` is substituted when a value is computed, from the custom properties
+  // in effect on the same element. A name with no value — missing, or caught in
+  // a cycle — falls back to the text after the comma; with no fallback the
+  // declaration is invalid at computed-value time, which is "unset": the
+  // inherited value for an inherited property, the initial value otherwise.
+  function substitute(value, values, seen) {
+    let out = "";
+    let at = 0;
+    while (at < value.length) {
+      const start = value.indexOf("var(", at);
+      if (start === -1) { out += value.slice(at); break; }
+      out += value.slice(at, start);
+      let depth = 0;
+      let end = start + 3;
+      for (; end < value.length; end += 1) {
+        if (value[end] === "(") depth += 1;
+        else if (value[end] === ")") { depth -= 1; if (depth === 0) break; }
+      }
+      if (depth !== 0) return null;
+      const resolved = reference(value.slice(start + 4, end), values, seen);
+      if (resolved === null) return null;
+      out += resolved;
+      at = end + 1;
+    }
+    return out;
+  }
+
+  // The inside of one `var(…)`: a custom property name, then an optional
+  // fallback after the first top-level comma.
+  function reference(inner, values, seen) {
+    let depth = 0;
+    let comma = -1;
+    for (let at = 0; at < inner.length && comma === -1; at += 1) {
+      if (inner[at] === "(") depth += 1;
+      else if (inner[at] === ")") depth -= 1;
+      else if (inner[at] === "," && depth === 0) comma = at;
+    }
+    const name = (comma === -1 ? inner : inner.slice(0, comma)).trim();
+    const fallback = comma === -1 ? null : inner.slice(comma + 1).trim();
+    if (!name.startsWith("--")) return null;
+    const declared = seen.has(name) ? undefined : values.get(name);
+    const resolved = declared === undefined ? null : substitute(declared, values, new Set(seen).add(name));
+    if (resolved !== null && resolved.trim() !== "") return resolved.trim();
+    return fallback === null ? null : substitute(fallback, values, seen);
+  }
+
   function computedValues(element) {
     const values = new Map();
     const entries = declared(element);
@@ -567,6 +615,19 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     // A custom property inherits whatever its name is.
     for (const [name, value] of inherited) {
       if (name.startsWith("--") && !values.has(name)) values.set(name, value);
+    }
+    // After inheritance, so a custom property an ancestor declared is in hand,
+    // and before the initial values, which are what an invalid one falls to.
+    for (const [name, value] of Array.from(values)) {
+      if (!value.includes("var(")) continue;
+      const resolved = substitute(value, values, new Set());
+      if (resolved !== null && resolved.trim() !== "") {
+        values.set(name, resolved.trim());
+        continue;
+      }
+      values.delete(name);
+      const from = inherited.get(name);
+      if (INHERITED.has(name) && from !== undefined) values.set(name, from);
     }
     for (const [name, value] of INITIAL) {
       if (!values.has(name)) values.set(name, value);

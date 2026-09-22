@@ -1790,6 +1790,46 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "cascade",
+    name: "custom-properties-substitute-into-computed-values",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const style = document.createElement("style");
+      style.textContent = `
+        .root { --space: 8px; --alias: var(--space); --loop: var(--other); --other: var(--loop); }
+        .child { padding-left: var(--space); margin-left: var(--alias);
+                 text-align: var(--nothing); word-spacing: var(--missing, 4px);
+                 letter-spacing: var(--loop, 3px); }
+      `;
+      document.head.appendChild(style);
+      const root = document.createElement("div");
+      root.className = "root";
+      const child = document.createElement("span");
+      child.className = "child";
+      root.appendChild(child);
+      document.body.appendChild(root);
+      const computed = window.getComputedStyle(child);
+      const read = (name) => computed.getPropertyValue(name);
+      const result = [
+        read("padding-left"),
+        // Through one custom property to another.
+        read("margin-left"),
+        // No value and no fallback: invalid at computed-value time, so the
+        // initial value stands.
+        read("text-align"),
+        read("word-spacing"),
+        // A cycle is no value either, so the fallback is used.
+        read("letter-spacing"),
+        read("--space"),
+        read("--alias"),
+        read("--loop"),
+      ];
+      style.remove();
+      return result;
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

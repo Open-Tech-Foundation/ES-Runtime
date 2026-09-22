@@ -78,6 +78,70 @@ user-select vector-effect vertical-align view-timeline view-transition-name visi
 white-space-collapse widows width will-change word-break word-spacing writing-mode x y z-index zoom
 `.trim().split(/\s+/));
 
+// The CSS units, for the value check below. A dimension with any other unit is
+// not a value a browser keeps.
+const UNITS = new Set(`
+% px em rem ex ch cap ic lh rlh vw vh vi vb vmin vmax svw svh svi svb svmin svmax
+lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax
+cm mm q in pt pc deg grad rad turn s ms hz khz dpi dpcm dppx x fr
+`.trim().split(/\s+/));
+
+// The properties whose value may be a bare number. Everywhere else a number
+// needs a unit — `mask-position: 23` is not a declaration a browser keeps —
+// except zero, which needs none anywhere.
+const NUMBER_VALUED = new Set(`
+animation-iteration-count aspect-ratio border-image-outset border-image-slice border-image-width
+column-count counter-increment counter-reset counter-set cx cy fill-opacity flex flex-grow flex-shrink
+flood-opacity font-size-adjust font-weight grid-area grid-column grid-column-end grid-column-start grid-row
+grid-row-end grid-row-start line-height math-depth opacity order orphans r rx ry scale shape-image-threshold
+stop-opacity stroke-dasharray stroke-dashoffset stroke-miterlimit stroke-opacity stroke-width tab-size widows
+x y z-index zoom
+`.trim().split(/\s+/));
+
+const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+const DIMENSION = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?([A-Za-z%]+)$/i;
+
+// The value's top-level components: whitespace-separated, with a function's
+// arguments and a quoted string left whole. A number inside `calc()` or `rgb()`
+// is that function's business, not this check's.
+function components(value) {
+  const found = [];
+  let depth = 0;
+  let quote = null;
+  let start = 0;
+  const push = (end) => { const text = value.slice(start, end).trim(); if (text) found.push(text); };
+  for (let at = 0; at < value.length; at += 1) {
+    const char = value[at];
+    if (quote) { if (char === quote) quote = null; continue; }
+    if (char === "'" || char === '"') quote = char;
+    else if (char === "(") depth += 1;
+    else if (char === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[\s,]/.test(char)) { push(at); start = at + 1; }
+  }
+  push(value.length);
+  return found;
+}
+
+// Whether a value is one this DOM keeps for that property. It is a check of
+// value *types* — a known unit, a number only where a number is allowed — not
+// of each property's full grammar: a browser also knows that `width` takes no
+// negative length, and this does not.
+export function validDeclaration(name, value) {
+  const property = String(name);
+  // A custom property's value is an arbitrary token sequence, by design.
+  if (property.startsWith("--")) return value.trim() !== "";
+  const numbers = NUMBER_VALUED.has(property === "cssFloat" ? "float" : property.toLowerCase());
+  for (const component of components(value)) {
+    if (NUMBER.test(component)) {
+      if (!numbers && Number(component) !== 0) return false;
+      continue;
+    }
+    const dimension = DIMENSION.exec(component);
+    if (dimension && !UNITS.has(dimension[1].toLowerCase())) return false;
+  }
+  return true;
+}
+
 // A name script can ask a declaration about: a known property, a custom
 // property, or the one legacy alias for `float`.
 export function knownProperty(name) {
@@ -125,6 +189,10 @@ function parse(text) {
     const important = /\s*!important\s*$/i.test(value);
     if (important) value = value.replace(/\s*!important\s*$/i, "").trim();
     if (!value) continue;
+    // Dropped, not refused: a browser ignores a declaration whose value it
+    // cannot parse and keeps the rest of the list, which is what makes one bad
+    // line in a style attribute harmless.
+    if (!validDeclaration(name, value)) continue;
     values.set(name, { value, priority: important ? "important" : "" });
   }
   return values;
@@ -200,6 +268,10 @@ export function createCss({ Element }) {
       if (!/^--[A-Za-z0-9_-]+$|^[A-Za-z-]+$/.test(name)) syntax(`invalid property ${name}`);
       if (priority !== "" && priority !== "important") syntax(`invalid priority ${priority}`);
       if (!value) return this.removeProperty(name);
+      // A value the property cannot take is ignored, and the declaration that
+      // was there stays: `el.style.width = "23"` changes nothing, as in a
+      // browser in standards mode.
+      if (!knownProperty(name) || !validDeclaration(name, value)) return;
       const current = this._state();
       current.values.set(name, { value, priority });
       write(this.element, current);
@@ -265,6 +337,12 @@ export function createCss({ Element }) {
     }
   }
 
+  // The same question the cascade asks of a stylesheet's declarations, which
+  // arrive already split into name and value.
+  function keepsDeclaration(name, value) {
+    return knownProperty(name) && String(value).trim() !== "" && validDeclaration(name, String(value));
+  }
+
   function install() {
     Object.defineProperty(Element.prototype, "style", {
       get() {
@@ -282,6 +360,7 @@ export function createCss({ Element }) {
     CSSStyleDeclaration,
     readOnlyDeclaration: (entries) => new ReadOnlyStyleDeclaration(entries),
     supportsDeclaration,
+    keepsDeclaration,
     install,
   };
 }
