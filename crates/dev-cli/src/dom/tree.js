@@ -1354,6 +1354,9 @@ export function createTree(events = {}) {
   }
 
   class HTMLSelectElement extends HTMLElement {
+    // Not a reflection of anything: `type` says which kind of select this is,
+    // and a framework reads it to decide whether one value or many are in play.
+    get type() { return this.multiple ? "select-multiple" : "select-one"; }
     get options() { return new HTMLCollection(this, (root) => collect(root, (element) => element instanceof HTMLOptionElement)); }
     get length() { return this.options.length; }
     set length(value) {
@@ -1608,15 +1611,54 @@ export function createTree(events = {}) {
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }
 
+  // A valid floating-point number, as HTML defines one: no leading or trailing
+  // space, no hex, no `Infinity`.
+  const FLOATING_POINT = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+  function floatingPoint(value) {
+    if (!FLOATING_POINT.test(value)) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // The value sanitization algorithm, which *filters* — it does not rewrite. A
+  // `number` input holding `1.00` reads back `1.00`, not `1`: the string form is
+  // the author's, and a control that canonicalized it would fight every
+  // framework that compares what it wrote with what it reads.
   function sanitizeInputValue(type, value) {
     value = String(value);
-    if (type === "number") {
-      if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) return "";
-      const number = Number(value);
-      return Number.isFinite(number) ? String(number) : "";
-    }
+    if (type === "number") return floatingPoint(value) === null ? "" : value;
     if (type === "date") return validDate(value) ? value : "";
     return value;
+  }
+
+  // `range` is the exception, and the specification says so: its value is
+  // *clamped* to the range and snapped to the nearest step, and a value that is
+  // no number at all becomes the range's default — the midpoint, which is why an
+  // empty range input reads `50`.
+  function sanitizeRangeValue(element, value) {
+    const minimum = floatingPoint(element.getAttribute("min") ?? "") ?? 0;
+    const maximum = Math.max(minimum, floatingPoint(element.getAttribute("max") ?? "") ?? 100);
+    const number = floatingPoint(String(value));
+    if (number === null) {
+      const middle = minimum + (maximum - minimum) / 2;
+      return String(snapToStep(element, middle, minimum));
+    }
+    return String(snapToStep(element, Math.min(maximum, Math.max(minimum, number)), minimum));
+  }
+
+  function snapToStep(element, number, base) {
+    const attribute = element.getAttribute("step") ?? "";
+    if (attribute.trim().toLowerCase() === "any") return number;
+    const step = floatingPoint(attribute) ?? 1;
+    if (!(step > 0)) return number;
+    // Halfway rounds up, as a browser does: step 2 from 0 makes 5 into 6.
+    const steps = Math.floor((number - base) / step + 0.5);
+    const snapped = base + steps * step;
+    // Float arithmetic leaves 0.30000000000000004 behind; the step's own decimal
+    // places are how many the result can have.
+    const places = (String(step).split(".")[1] ?? "").length;
+    return places === 0 ? snapped : Number(snapped.toFixed(places));
   }
 
   function reflectString(attribute) {
@@ -1640,13 +1682,24 @@ export function createTree(events = {}) {
     };
   }
 
-  function reflectInteger(attribute, fallback, minimum = Number.NEGATIVE_INFINITY) {
+  function reflectInteger(attribute, fallback, minimum = Number.NEGATIVE_INFINITY, refusesZero = false) {
     return {
       get() {
         const value = Number.parseInt(this.getAttribute(attribute) ?? "", 10);
         return Number.isFinite(value) && value >= minimum ? value : fallback;
       },
       set(value) {
+        // Web IDL converts to `unsigned long` first, and a property "limited to
+        // only positive numbers" then refuses zero rather than clamping it: a
+        // framework's warning path is written against that error, so silently
+        // accepting `size = 0` hides the mistake it exists to report.
+        if (refusesZero) {
+          const unsigned = Number(value);
+          const wrapped = Number.isFinite(unsigned) ? Math.trunc(unsigned) >>> 0 : 0;
+          if (wrapped === 0) throw domError("IndexSizeError", `${attribute} cannot be zero.`);
+          this.setAttribute(attribute, String(wrapped));
+          return;
+        }
         value = Number(value);
         value = Number.isFinite(value) ? Math.max(minimum, Math.trunc(value)) : fallback;
         this.setAttribute(attribute, String(value));
@@ -1658,7 +1711,9 @@ export function createTree(events = {}) {
     const properties = {};
     for (const [property, attribute] of Object.entries(strings)) properties[property] = reflectString(attribute);
     for (const [property, attribute] of Object.entries(booleans)) properties[property] = reflectBoolean(attribute);
-    for (const [property, [attribute, fallback, minimum]] of Object.entries(integers)) properties[property] = reflectInteger(attribute, fallback, minimum);
+    for (const [property, [attribute, fallback, minimum, refusesZero]] of Object.entries(integers)) {
+      properties[property] = reflectInteger(attribute, fallback, minimum, refusesZero);
+    }
     Object.defineProperties(Class.prototype, properties);
   }
 
@@ -1695,7 +1750,7 @@ export function createTree(events = {}) {
   installReflectors(HTMLInputElement,
     { accept: "accept", alt: "alt", autocomplete: "autocomplete", formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", placeholder: "placeholder" },
     { disabled: "disabled", formNoValidate: "formnovalidate", multiple: "multiple", readOnly: "readonly", required: "required" },
-    { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1] });
+    { maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1], size: ["size", 20, 1, true] });
   installReflectors(HTMLButtonElement,
     { formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
@@ -1771,9 +1826,14 @@ export function createTree(events = {}) {
   Object.defineProperties(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
     value: {
-      get() { return sanitizeInputValue(this.type, this[INPUT_VALUE] ?? this.defaultValue); },
+      get() {
+        const value = this[INPUT_VALUE] ?? this.defaultValue;
+        return this.type === "range" ? sanitizeRangeValue(this, value) : sanitizeInputValue(this.type, value);
+      },
       set(value) {
-        this[INPUT_VALUE] = sanitizeInputValue(this.type, value);
+        this[INPUT_VALUE] = this.type === "range"
+          ? sanitizeRangeValue(this, value)
+          : sanitizeInputValue(this.type, value);
         if (selectionCapable(this)) {
           const end = this[INPUT_VALUE].length;
           this[INPUT_SELECTION_START] = end; this[INPUT_SELECTION_END] = end; this[INPUT_SELECTION_DIRECTION] = "none";
@@ -1796,6 +1856,7 @@ export function createTree(events = {}) {
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
     pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
+    step: { get() { return this.getAttribute("step") ?? ""; }, set(value) { this.setAttribute("step", String(value)); } },
     selectionStart: {
       get() { return selectionCapable(this) ? selectionRange(this)[0] : null; },
       set(value) { this.setSelectionRange(value, this.selectionEnd ?? value, this.selectionDirection); },

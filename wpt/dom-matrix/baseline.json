@@ -4816,10 +4816,145 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "a-controls-value-is-filtered-not-rewritten",
+      "chrome": {
+        "result": [
+          [
+            "1.00",
+            "",
+            "",
+            "1e3",
+            "-0",
+            "007",
+            ""
+          ],
+          [
+            "100",
+            "10",
+            "43",
+            "50",
+            "100",
+            "6",
+            "4.7"
+          ],
+          [
+            "select-one",
+            "select-multiple"
+          ],
+          [
+            20,
+            "IndexSizeError",
+            20,
+            "IndexSizeError"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "1.00",
+            "",
+            "",
+            "1e3",
+            "-0",
+            "007",
+            ""
+          ],
+          [
+            "100",
+            "10",
+            "43",
+            "50",
+            "100",
+            "6",
+            "4.7"
+          ],
+          [
+            "select-one",
+            "select-multiple"
+          ],
+          [
+            20,
+            "IndexSizeError",
+            20,
+            "IndexSizeError"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "1.00",
+            " 1.5 ",
+            "",
+            "1e3",
+            "-0",
+            "007",
+            ""
+          ],
+          [
+            "100",
+            "10",
+            "42.5",
+            "50",
+            "100",
+            "5",
+            "4.7"
+          ],
+          [
+            "select-one",
+            "select-multiple"
+          ],
+          [
+            20,
+            null,
+            0,
+            null
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "1.00",
+            "",
+            "",
+            "1e3",
+            "-0",
+            "007",
+            ""
+          ],
+          [
+            "100",
+            "10",
+            "42.5",
+            "50",
+            "100",
+            "5",
+            "4.7"
+          ],
+          [
+            "select-one",
+            "select-multiple"
+          ],
+          [
+            20,
+            "IndexSizeError",
+            20,
+            "IndexSizeError"
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 91,
+    "match": 92,
     "intentional-limit": 2,
     "drift": 0
   }

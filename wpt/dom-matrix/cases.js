@@ -1980,6 +1980,48 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "forms",
+    name: "a-controls-value-is-filtered-not-rewritten",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const number = (value) => {
+        const input = document.createElement("input");
+        input.type = "number";
+        input.value = value;
+        return input.value;
+      };
+      const range = (attributes, value) => {
+        const input = document.createElement("input");
+        input.type = "range";
+        for (const [name, setting] of Object.entries(attributes)) input.setAttribute(name, setting);
+        input.value = value;
+        return input.value;
+      };
+      const select = document.createElement("select");
+      const single = select.type;
+      select.multiple = true;
+      const size = document.createElement("input");
+      return [
+        // A number keeps the string it was given, or loses it entirely.
+        [number("1.00"), number(" 1.5 "), number("abc"), number("1e3"), number("-0"), number("007"), number("")],
+        // A range is the exception: clamped, snapped, and defaulted to the middle.
+        [
+          range({ min: "0", max: "100" }, "200"),
+          range({ min: "10", max: "100" }, "5"),
+          range({ min: "0", max: "100" }, "42.5"),
+          range({ min: "0", max: "100" }, "abc"),
+          range({}, "200"),
+          range({ min: "0", max: "10", step: "2" }, "5"),
+          range({ min: "0", max: "10", step: "any" }, "4.7"),
+        ],
+        [single, select.type],
+        // `size` is limited to positive numbers, and says so rather than clamping.
+        [size.size, errorName(() => { size.size = 0; }), size.size, errorName(() => { size.size = 4294967296; })],
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

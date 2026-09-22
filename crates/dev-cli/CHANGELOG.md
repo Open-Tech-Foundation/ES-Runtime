@@ -337,6 +337,20 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A control's value is filtered, never rewritten.** A `number` input holding
+  `1.00` read back `1`, and `1e3` read back `1000`: the sanitizer was
+  canonicalizing valid input, so a framework comparing what it wrote with what
+  it read saw a change nobody made. It now only removes what is not a valid
+  floating-point number. `range` is the specified exception and behaves like
+  one — clamped to `min`/`max`, snapped to the nearest `step` (halfway rounds
+  up), and defaulted to the midpoint when the value is no number at all, which
+  is why an empty range reads `50`. `input.step` reflects, without which none of
+  the snapping could be asked for.
+- **`select.type`** answers `select-one` or `select-multiple`.
+- **`input.size = 0` throws `IndexSizeError`** rather than clamping. A property
+  "limited to only positive numbers" refuses zero after the `unsigned long`
+  conversion — so `size = 4294967296` refuses too, since it wraps to zero — and
+  a framework's warning path is written against that error.
 - **An inline declaration answers for the properties its shorthands cover.**
   `el.style.border = "1px solid red"` left `borderTopWidth` and `borderBottom`
   empty: the cascade learned to expand shorthands, the declaration did not. A
