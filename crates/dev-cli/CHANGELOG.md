@@ -87,6 +87,14 @@ is the point, since none of the three has any business in a deployment.
   safe hexadecimal colours and zero dimensions, collapses shorthand sides, and
   removes safely overridden adjacent declarations. `esdev build --help` now
   names the supported module and stylesheet entry types.
+- **Events reach `window` in `esdev test --dom`.** The propagation path stopped
+  at the document, so a `window.addEventListener` listener never ran and
+  `composedPath()` was one entry short — outside-click handlers, global key
+  handlers and delegated listeners silently did nothing. The window is now the
+  event target it is meant to be: the global object itself, so
+  `event.currentTarget === window` holds and the window is the last entry in
+  the path. A `load` event dispatched at the document still stops there, as the
+  HTML specification requires.
 - Keep `AbortSignal` event dispatch in its original realm when `esdev test
   --dom` installs DOM event globals, including ordered propagation through
   `AbortSignal.any()` dependencies.

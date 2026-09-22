@@ -178,5 +178,20 @@ export function createEvents() {
     }
   }
 
-  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent };
+  // The window is the realm's global object, not an instance of anything this
+  // module can construct, so it is made an event target in place: libraries
+  // compare `event.currentTarget === window` and read `window` out of
+  // `composedPath()`, and a separate instance standing in for it fails both.
+  function asEventTarget(target) {
+    Object.defineProperty(target, LISTENERS, { value: new Map() });
+    // Bound, because unqualified `addEventListener(…)` in sloppy guest code
+    // passes no receiver: a browser resolves that to the window, and an
+    // unbound strict method would see `undefined` and throw.
+    for (const name of ["addEventListener", "removeEventListener", "dispatchEvent", "_invoke"]) {
+      Object.defineProperty(target, name, { value: EventTarget.prototype[name].bind(target), writable: true, configurable: true });
+    }
+    return target;
+  }
+
+  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget };
 }

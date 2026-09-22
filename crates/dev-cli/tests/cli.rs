@@ -3022,6 +3022,70 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_events_propagate_through_the_window() {
+    let dir = build_dir("t_test_dom_window_propagation");
+    write_in(
+        &dir,
+        "window-path.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('the window is the last target in the path', () => {\n\
+           const target = document.createElement('i');\n\
+           document.body.append(target);\n\
+           const order = [];\n\
+           window.addEventListener('z', () => order.push('window-capture'), true);\n\
+           document.addEventListener('z', () => order.push('document-capture'), true);\n\
+           target.addEventListener('z', event => order.push(event.currentTarget === target ? 'target' : 'wrong'));\n\
+           window.addEventListener('z', event => order.push(event.currentTarget === window && event.target === target ? 'window-bubble' : 'wrong'));\n\
+           const event = new Event('z', { bubbles: true });\n\
+           target.dispatchEvent(event);\n\
+           assertEquals(order, ['window-capture', 'document-capture', 'target', 'window-bubble']);\n\
+         });\n\
+         test('composedPath crosses the shadow boundary and ends at the window', () => {\n\
+           const host = document.createElement('div');\n\
+           const root = host.attachShadow({ mode: 'open' });\n\
+           const inner = document.createElement('span');\n\
+           root.append(inner);\n\
+           document.body.append(host);\n\
+           let path = [];\n\
+           host.addEventListener('x', event => { path = event.composedPath(); });\n\
+           inner.dispatchEvent(new Event('x', { bubbles: true, composed: true }));\n\
+           assertEquals([path.length, path.at(-1) === window, path.at(-2) === document], [7, true, true]);\n\
+         });\n\
+         test('a load event at the document stops there', () => {\n\
+           const seen = [];\n\
+           window.addEventListener('load', () => seen.push('window'));\n\
+           document.addEventListener('load', () => seen.push('document'));\n\
+           document.dispatchEvent(new Event('load', { bubbles: true }));\n\
+           assertEquals(seen, ['document']);\n\
+         });\n\
+         test('an unqualified listener call reaches the window', () => {\n\
+           let hits = 0;\n\
+           globalThis.__probe = () => hits++;\n\
+           (0, eval)(\"addEventListener('bare', globalThis.__probe)\");\n\
+           window.dispatchEvent(new Event('bare'));\n\
+           assertEquals(hits, 1);\n\
+         });\n\
+         test('the window dispatches its own events', () => {\n\
+           let seen = null;\n\
+           window.addEventListener('own', event => { seen = [event.currentTarget === window, event.target === window, event.composedPath().length]; });\n\
+           assertEquals(window.dispatchEvent(new Event('own')), true);\n\
+           assertEquals(seen, [true, true, 1]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom window propagation");
+    assert!(
+        ran.status.success(),
+        "DOM window propagation test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_abort_signals_dispatch_in_their_own_event_realm() {
     let dir = build_dir("t_test_dom_abort_signal_events");
     write_in(

@@ -116,7 +116,15 @@ class Location {
   reload() {}
 }
 
-const windowEvents = new events.EventTarget();
+// `window` is the global object and the last entry in every propagation path.
+events.asEventTarget(globalThis);
+// A Document's event parent is its window, so an event dispatched in the tree
+// reaches a `window.addEventListener` listener and appears in `composedPath()`.
+// `load` is the documented exception: the window's own load event is not the
+// document's, so the document's does not propagate to it.
+Object.defineProperty(document, "_eventParent", {
+  value: (event) => (event.type === "load" ? null : globalThis),
+});
 const location = new Location();
 class History {
   #entries = [{ state: null, href: location.href }];
@@ -130,7 +138,7 @@ class History {
     location.assign(this.#entries[index].href);
     const event = new events.Event("popstate");
     event.state = this.state;
-    windowEvents.dispatchEvent(event);
+    globalThis.dispatchEvent(event);
   }
   pushState(state, _unused, url) {
     this.#entries.splice(this.#at + 1);
@@ -349,6 +357,3 @@ Object.assign(globalThis, {
   sessionStorage,
   getSelection: () => selection,
 });
-for (const method of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
-  globalThis[method] = windowEvents[method].bind(windowEvents);
-}
