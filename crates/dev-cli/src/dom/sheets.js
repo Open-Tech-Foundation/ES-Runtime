@@ -191,6 +191,9 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     constructor(selectorText, declarations) {
       super();
       this.selectorText = selectorText;
+      // Parsed once: what this selector means depends on the root the rule
+      // came from, and that question is asked for every element.
+      Object.defineProperty(this, "shadow", { value: shadowSelector(selectorText) });
       // Read-only: a rule's declarations are not a place this DOM lets a test
       // write, because nothing would reparse the sheet afterwards.
       this.style = css.readOnlyDeclaration(declarations);
@@ -363,25 +366,114 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     }
   }
 
-  function matchesRule(element, rule) {
-    // A pseudo-element rule styles something that is not this element, and a
-    // selector this engine cannot match contributes nothing.
-    if (rule.selectorText.includes("::")) return false;
+  // The selectors that cross a shadow boundary. They are read here rather than
+  // in the selector engine because what they mean depends on *where the rule
+  // came from*: `:host` is the root's host, and `::slotted()` is a light-DOM
+  // node this root's slots took in. A selector API has no such root, and
+  // `element.matches(":host")` is meaningless outside one.
+  const SHADOW_SELECTOR = /^\s*(:host-context\(|:host\(|:host\b|(.*?)::slotted\()/;
+
+  function shadowSelector(text) {
+    const source = String(text);
+    if (!SHADOW_SELECTOR.test(source)) return null;
+    if (source.includes("::slotted(")) {
+      const at = source.indexOf("::slotted(");
+      const inner = balanced(source, at + "::slotted(".length);
+      if (inner === null) return null;
+      return {
+        kind: "slotted",
+        slot: source.slice(0, at).trim(),
+        inner: inner.text,
+        rest: source.slice(inner.end + 1).trim(),
+      };
+    }
+    const context = source.trimStart().startsWith(":host-context(");
+    const opens = source.indexOf("(");
+    if (!context && !/^\s*:host(\s|$|\()/.test(source)) return null;
+    if (opens === -1 || !/^\s*:host(-context)?\(/.test(source)) {
+      return { kind: "host", inner: null, rest: source.trim().replace(/^:host/, "").trim() };
+    }
+    const inner = balanced(source, opens + 1);
+    if (inner === null) return null;
+    return {
+      kind: context ? "host-context" : "host",
+      inner: inner.text,
+      rest: source.slice(inner.end + 1).trim(),
+    };
+  }
+
+  // The text inside a parenthesis that opens at `from`, and the index of its
+  // closing one.
+  function balanced(source, from) {
+    let depth = 1;
+    for (let at = from; at < source.length; at += 1) {
+      if (source[at] === "(") depth += 1;
+      else if (source[at] === ")" && --depth === 0) return { text: source.slice(from, at).trim(), end: at };
+    }
+    return null;
+  }
+
+  function safeMatches(element, selector) {
+    if (!selector) return true;
     try {
-      return selectors.matches(element, rule.selectorText);
+      return selectors.matches(element, selector);
     } catch {
       return false;
     }
+  }
+
+  // `scope` is the shadow root the rule came from, or null for a document rule.
+  function matchesRule(element, rule, scope) {
+    const shadow = rule.shadow;
+    if (shadow) {
+      if (!scope) return false;
+      if (shadow.kind === "slotted") {
+        const slot = element.assignedSlot;
+        if (!slot || slot.getRootNode() !== scope) return false;
+        if (shadow.slot && !safeMatches(slot, shadow.slot)) return false;
+        return safeMatches(element, shadow.inner);
+      }
+      const host = scope.host;
+      if (!host) return false;
+      const hostMatches = shadow.kind === "host-context"
+        ? ancestorsOf(host).some((candidate) => safeMatches(candidate, shadow.inner))
+        : safeMatches(host, shadow.inner);
+      if (!hostMatches) return false;
+      // `:host(…) .inner` styles something inside the root; plain `:host`
+      // styles the host itself.
+      if (shadow.rest) return element.getRootNode() === scope && safeMatches(element, shadow.rest);
+      return element === host;
+    }
+    // A pseudo-element rule styles something that is not this element, and a
+    // selector this engine cannot match contributes nothing.
+    if (rule.selectorText.includes("::")) return false;
+    return safeMatches(element, rule.selectorText);
+  }
+
+  function ancestorsOf(element) {
+    const chain = [];
+    for (let current = element; current instanceof Element; current = current.parentElement) chain.push(current);
+    return chain;
+  }
+
+  // `:host(c)` is a pseudo-class plus what is inside it; `::slotted(c)` is a
+  // pseudo-element plus the same.
+  function specificityOf(rule) {
+    if (!rule.shadow) return selectors.specificity(rule.selectorText);
+    const base = rule.shadow.kind === "slotted" ? [0, 0, 1] : [0, 1, 0];
+    const inner = rule.shadow.inner ? selectors.specificity(rule.shadow.inner) : [0, 0, 0];
+    const rest = rule.shadow.rest ? selectors.specificity(rule.shadow.rest) : [0, 0, 0];
+    return [base[0] + inner[0] + rest[0], base[1] + inner[1] + rest[1], base[2] + inner[2] + rest[2]];
   }
 
   function declared(element) {
     const document = element.ownerDocument;
     const root = element.getRootNode();
     const entries = [];
-    const collect = (rules, origin) => {
+    const collect = (rules, origin, scope = null) => {
       for (const { rule, order } of applicable(rules, origin, 0)) {
-        if (!matchesRule(element, rule)) continue;
-        const specificity = selectors.specificity(rule.selectorText);
+        if (!matchesRule(element, rule, scope)) continue;
+        const specificity = specificityOf(rule);
         for (const [name, value, important] of rule[RULES]) {
           entries.push({ name: property(name), value, important, origin, specificity, order });
         }
@@ -389,8 +481,21 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     };
     collect(uaRules, ORIGIN.ua);
     // A shadow root's sheets apply inside it; the document's apply outside.
-    for (const sheet of root instanceof ShadowRoot ? documentSheets(root) : documentSheets(document)) {
-      collect(sheetRules(sheet), ORIGIN.author);
+    const scope = root instanceof ShadowRoot ? root : null;
+    for (const sheet of documentSheets(scope ?? document)) {
+      collect(sheetRules(sheet), ORIGIN.author, scope);
+    }
+    // Two sheets from across the boundary: the element's own root styles it
+    // through `:host`, and the root a slot took it into styles it through
+    // `::slotted()`.
+    const hosted = element._esdevShadowRoot?.();
+    if (hosted) {
+      for (const sheet of documentSheets(hosted)) collect(sheetRules(sheet), ORIGIN.author, hosted);
+    }
+    const slot = element.assignedSlot;
+    const slotRoot = slot?.getRootNode();
+    if (slotRoot instanceof ShadowRoot && slotRoot !== scope) {
+      for (const sheet of documentSheets(slotRoot)) collect(sheetRules(sheet), ORIGIN.author, slotRoot);
     }
     for (const [name, entry] of element.style ? inlineEntries(element) : []) {
       entries.push({ name, value: entry.value, important: entry.priority === "important", origin: ORIGIN.inline, specificity: [0, 0, 0], order: 0 });

@@ -22,6 +22,8 @@ const FORM_VALIDITY = Symbol("esdev DOM internals validity");
 const STATES = Symbol("esdev DOM custom state set");
 const FORM_STATE = Symbol("esdev DOM submission state");
 const MANUAL_ASSIGNED = Symbol("esdev DOM manually assigned nodes");
+const SLOT_PENDING = Symbol("esdev DOM pending slotchange");
+const FORM_DISABLED = Symbol("esdev DOM last reported disabled state");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
@@ -71,6 +73,9 @@ function asNodes(value, document, NodeClass) {
 export function createTree(events = {}) {
   const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
   const customConstruction = [];
+  // Set by the custom-element registry, which is the only thing that knows
+  // which class was defined under which name.
+  let customLookup = null;
   const NodeFilter = Object.freeze({
     FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3,
     SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_TEXT: 0x4, SHOW_COMMENT: 0x80,
@@ -450,6 +455,7 @@ export function createTree(events = {}) {
         document._adjustRanges?.insert(this, childIndex(candidate));
         this._touch();
         document._queueMutation?.({ type: "childList", target: this, addedNodes: [candidate], removedNodes: [], previousSibling: previous, nextSibling: next });
+        signalSlotChange(this instanceof Element ? this : null);
       }
     }
 
@@ -467,6 +473,7 @@ export function createTree(events = {}) {
       state.next = null;
       this._touch();
       (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes: [], removedNodes: [child], previousSibling, nextSibling });
+      signalSlotChange(this instanceof Element ? this : null);
     }
 
     _touch() { slots(this.ownerDocument ?? this).version += 1; }
@@ -573,6 +580,18 @@ export function createTree(events = {}) {
         const source = this instanceof HTMLTemplateElement ? this.content : this;
         const target = clone instanceof HTMLTemplateElement ? clone.content : clone;
         for (const child of source._esdevChildren()) target.appendChild(child.cloneNode(true));
+        // A shadow root comes along only when it said it could: `clonable`.
+        const shadow = this[SHADOW_ROOT];
+        if (shadow?.clonable) {
+          const copy = clone.attachShadow({
+            mode: shadow.mode,
+            delegatesFocus: shadow.delegatesFocus,
+            clonable: true,
+            serializable: shadow.serializable,
+            slotAssignment: shadow.slotAssignment,
+          });
+          for (const child of shadow._esdevChildren()) copy.appendChild(child.cloneNode(true));
+        }
       }
       return clone;
     }
@@ -753,6 +772,7 @@ export function createTree(events = {}) {
       const oldValue = this.getAttribute(name);
       this.attributes.setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
+      if (name === "disabled") notifyDisabled(this);
     }
     setAttributeNS(namespaceURI, qualifiedName, value) {
       qualifiedName = String(qualifiedName);
@@ -771,6 +791,7 @@ export function createTree(events = {}) {
       if (attribute) {
         this.attributes.removeNamedItem(name); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
+        if (String(name) === "disabled") notifyDisabled(this);
       }
     }
     removeAttributeNS(namespaceURI, localName) {
@@ -823,7 +844,14 @@ export function createTree(events = {}) {
         super(context.name, context.document);
         return context.element;
       }
-      if (name === undefined || ownerDocument === undefined) throw new TypeError("Illegal constructor");
+      if (name === undefined || ownerDocument === undefined) {
+        // `new SomeElement()` from script: the element takes the name its class
+        // was defined under, which is what the registry knows.
+        const defined = customLookup?.(new.target);
+        if (!defined) throw new TypeError("Illegal constructor");
+        super(defined.name, defined.document);
+        return;
+      }
       super(name, ownerDocument);
     }
     click() {
@@ -1632,6 +1660,33 @@ export function createTree(events = {}) {
     _eventParent(event) { return event.composed ? this.host : null; }
   }
 
+  // The slot a node is assigned to, from the node's side. It is the same
+  // question `slot.assignedNodes()` answers, asked the other way round, and a
+  // component reads it to know whether it was projected at all.
+  // `formDisabledCallback` is about the *computed* disabled state, so a
+  // fieldset turning itself off has to tell the form-associated custom elements
+  // inside it — and only the ones whose answer actually changed.
+  function notifyDisabled(root) {
+    const candidates = [root, ...collect(root, (element) => isFormAssociated(element))];
+    for (const control of candidates) {
+      if (!isFormAssociated(control)) continue;
+      const state = isDisabled(control);
+      if (control[FORM_DISABLED] === state) continue;
+      control[FORM_DISABLED] = state;
+      control.formDisabledCallback?.(state);
+    }
+  }
+
+  function assignedSlotFor(node) {
+    const host = node.parentElement;
+    const root = host?.[SHADOW_ROOT];
+    if (!root) return null;
+    for (const slot of collect(root, (element) => element instanceof HTMLSlotElement)) {
+      if (slot._assignedNodes().includes(node)) return slot;
+    }
+    return null;
+  }
+
   class HTMLSlotElement extends HTMLElement {
     get name() { return this.getAttribute("name") ?? ""; }
     set name(value) { this.setAttribute("name", String(value)); }
@@ -1665,6 +1720,23 @@ export function createTree(events = {}) {
     assignedElements(options = {}) {
       return this.assignedNodes(options).filter((node) => node instanceof Element);
     }
+    // Queued rather than fired: `slotchange` is delivered at the microtask
+    // checkpoint, once, however many children moved.
+    _signalChange() {
+      if (this[SLOT_PENDING]) return;
+      this[SLOT_PENDING] = true;
+      queueMicrotask(() => {
+        this[SLOT_PENDING] = false;
+        this.dispatchEvent(new Event("slotchange", { bubbles: true }));
+      });
+    }
+  }
+
+  // Every slot whose assignment a change to `host`'s children could alter.
+  function signalSlotChange(host) {
+    const root = host?.[SHADOW_ROOT];
+    if (!root) return;
+    for (const slot of collect(root, (element) => element instanceof HTMLSlotElement)) slot._signalChange();
   }
 
   class HTMLTemplateElement extends HTMLElement {
@@ -1683,6 +1755,11 @@ export function createTree(events = {}) {
   // parse.js needs exactly the same validation and reference child, and the
   // errors are observable — an unknown position is a SyntaxError, and a
   // sibling insertion with no element parent is NoModificationAllowedError.
+  Object.defineProperty(Node.prototype, "assignedSlot", {
+    get() { return assignedSlotFor(this); },
+    configurable: true,
+  });
+
   Object.defineProperties(Element.prototype, {
     _adjacentPosition: { value(where) {
       switch (String(where).toLowerCase()) {
@@ -1724,6 +1801,9 @@ export function createTree(events = {}) {
       return root;
     } },
     shadowRoot: { get() { const root = this[SHADOW_ROOT]; return root?.mode === "open" ? root : null; } },
+    // The cascade needs a closed root too — `:host` styles it either way — and
+    // a method rather than a property keeps it off the ordinary surface.
+    _esdevShadowRoot: { value() { return this[SHADOW_ROOT] ?? null; } },
   });
 
   class Document extends Node {
@@ -2034,6 +2114,10 @@ export function createTree(events = {}) {
   // undefined: everything else is defined by being built in.
   const CUSTOM_NAME = /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/;
 
+  function setCustomLookup(lookup) {
+    customLookup = lookup;
+  }
+
   function isDefined(element) {
     if (element.namespaceURI !== HTML_NAMESPACE || !CUSTOM_NAME.test(element.localName)) return true;
     return slots(element).customDefined === true;
@@ -2065,5 +2149,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, setCustomLookup, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

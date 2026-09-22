@@ -5,6 +5,14 @@ function reset(document) {
   document.body.replaceChildren();
 }
 
+// A name no other case has used, so a registry that cannot forget a definition
+// does not make the next case fail.
+let counter = 0;
+function unique(prefix) {
+  counter += 1;
+  return `matrix-${prefix}-${counter}`;
+}
+
 function errorName(callback) {
   try {
     callback();
@@ -842,6 +850,247 @@ export const cases = [
     },
   },
   {
+    group: "components",
+    name: "reaction-order-on-creation-and-connection",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const log = [];
+      const name = unique("order");
+      window.customElements.define(name, class extends window.HTMLElement {
+        static get observedAttributes() { return ["value"]; }
+        constructor() { super(); log.push("constructed"); }
+        connectedCallback() { log.push(`connected:${this.isConnected}`); }
+        disconnectedCallback() { log.push("disconnected"); }
+        attributeChangedCallback(attribute, before, after) { log.push(`attribute:${attribute}:${before}:${after}`); }
+      });
+      const element = document.createElement(name);
+      log.push("created");
+      element.setAttribute("value", "one");
+      element.setAttribute("other", "ignored");
+      document.body.append(element);
+      element.setAttribute("value", "two");
+      element.remove();
+      return log;
+    },
+  },
+  {
+    group: "components",
+    name: "an-existing-element-upgrades-when-it-is-defined",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("late");
+      const host = document.createElement("div");
+      document.body.append(host);
+      host.innerHTML = `<${name} value=a></${name}><div><${name} value=b></${name}></div>`;
+      const before = [host.firstElementChild.constructor.name, typeof host.firstElementChild.upgraded];
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        static get observedAttributes() { return ["value"]; }
+        constructor() { super(); this.upgraded = true; }
+        connectedCallback() { log.push(`connected:${this.getAttribute("value")}`); }
+        attributeChangedCallback(attribute, old, next) { log.push(`attribute:${next}`); }
+      });
+      return [before, log, host.firstElementChild.upgraded === true, host.querySelectorAll(`${name}:defined`).length];
+    },
+  },
+  {
+    group: "components",
+    name: "parsed-children-upgrade-in-tree-order",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("parsed");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        connectedCallback() { log.push(this.id); }
+      });
+      const host = document.createElement("div");
+      document.body.append(host);
+      host.innerHTML = `<${name} id=outer><${name} id=inner></${name}></${name}><${name} id=last></${name}>`;
+      return [log, host.querySelectorAll(name).length];
+    },
+  },
+  {
+    group: "components",
+    name: "the-registry-answers-about-a-definition",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("registry");
+      const pending = window.customElements.whenDefined(name);
+      const Defined = class extends window.HTMLElement {};
+      const before = [window.customElements.get(name), typeof window.customElements.whenDefined];
+      window.customElements.define(name, Defined);
+      const resolved = await pending;
+      return [
+        before,
+        window.customElements.get(name) === Defined,
+        resolved === Defined,
+        typeof window.customElements.getName === "function" ? window.customElements.getName(Defined) : "missing",
+        errorName(() => window.customElements.define(name, class extends window.HTMLElement {})),
+        errorName(() => window.customElements.define(unique("other"), Defined)),
+        errorName(() => window.customElements.define("nodash", class extends window.HTMLElement {})),
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "an-element-can-be-upgraded-on-demand",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("ondemand");
+      const detached = document.createElement("div");
+      detached.innerHTML = `<${name}></${name}>`;
+      const element = detached.firstElementChild;
+      window.customElements.define(name, class extends window.HTMLElement {
+        constructor() { super(); this.upgraded = true; }
+      });
+      const before = element.upgraded ?? null;
+      window.customElements.upgrade(detached);
+      return [before, element.upgraded === true, element.matches(":defined")];
+    },
+  },
+  {
+    group: "components",
+    name: "slots-assign-and-flatten",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      host.innerHTML = "<p slot=head>H</p><span>light</span><p slot=head>H2</p>";
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<slot name=head></slot><slot><i>fallback</i></slot>";
+      const [named, unnamed] = root.querySelectorAll("slot");
+      return [
+        Array.from(named.assignedNodes(), (node) => node.textContent),
+        Array.from(unnamed.assignedElements(), (node) => node.localName),
+        host.firstElementChild.assignedSlot === named,
+        Array.from(unnamed.assignedNodes({ flatten: true }), (node) => node.localName ?? node.nodeName),
+        Array.from(root.querySelector("slot[name=head]").assignedElements(), (node) => node.textContent),
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "a-slot-reports-a-change",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<slot></slot>";
+      const slot = root.firstElementChild;
+      const changes = [];
+      slot.addEventListener("slotchange", (event) => changes.push(`${event.type}:${event.bubbles}:${event.composed}`));
+      host.append(document.createElement("i"));
+      await settled();
+      const afterAdd = changes.length;
+      host.firstElementChild.remove();
+      await settled();
+      return [afterAdd, changes.length, changes[0] ?? null];
+    },
+  },
+  {
+    group: "components",
+    name: "internals-reflect-aria-and-form-state",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("aria");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        static formAssociated = true;
+        constructor() {
+          super();
+          this.internals = this.attachInternals();
+        }
+        formDisabledCallback(disabled) { log.push(`disabled:${disabled}`); }
+        formResetCallback() { log.push("reset"); }
+      });
+      const form = document.createElement("form");
+      const fieldset = document.createElement("fieldset");
+      const element = document.createElement(name);
+      fieldset.append(element);
+      form.append(fieldset);
+      document.body.append(form);
+      const internals = element.internals;
+      internals.role = "checkbox";
+      internals.ariaLabel = "Pick one";
+      fieldset.disabled = true;
+      form.reset();
+      return [
+        [internals.role ?? "missing", internals.ariaLabel ?? "missing"],
+        [element.getAttribute("role"), element.getAttribute("aria-label")],
+        log,
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "a-clonable-shadow-root-is-cloned",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const clonable = document.createElement("div");
+      clonable.attachShadow({ mode: "open", clonable: true }).innerHTML = "<i>inside</i>";
+      const plain = document.createElement("div");
+      plain.attachShadow({ mode: "open" }).innerHTML = "<i>inside</i>";
+      document.body.append(clonable, plain);
+      const clonedClonable = clonable.cloneNode(true);
+      const clonedPlain = plain.cloneNode(true);
+      return [
+        clonedClonable.shadowRoot === null ? "no root" : clonedClonable.shadowRoot.innerHTML,
+        clonedPlain.shadowRoot === null ? "no root" : clonedPlain.shadowRoot.innerHTML,
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "shadow-styles-reach-the-host-and-the-slotted",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      host.className = "card";
+      host.innerHTML = "<p>light</p>";
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML =
+        "<style>:host { color: rgb(1, 1, 1) } :host(.card) { font-weight: 700 } ::slotted(p) { font-style: italic } i { color: rgb(2, 2, 2) }</style><slot></slot><i>in</i>";
+      const inner = root.querySelector("i");
+      const slotted = host.firstElementChild;
+      return [
+        window.getComputedStyle(host).color,
+        window.getComputedStyle(host).fontWeight,
+        window.getComputedStyle(slotted).fontStyle,
+        window.getComputedStyle(inner).color,
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "a-constructor-is-refused-when-it-misbehaves",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("bad");
+      window.customElements.define(name, class extends window.HTMLElement {});
+      const Defined = window.customElements.get(name);
+      const direct = new Defined();
+      return [
+        direct.localName,
+        direct.isConnected,
+        errorName(() => window.customElements.define(unique("notaclass"), {})),
+        errorName(() => document.createElement(unique("undefinedname")).localName),
+      ];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {
@@ -1008,24 +1257,25 @@ export const cases = [
   },
 ];
 
-export function runCases(window) {
-  return cases.map(({ expectedEsdev, group, limit, name, run }) => {
+// Async, because several of these behaviours are: a `slotchange` is delivered at
+// the microtask checkpoint, `whenDefined` is a promise, and a mutation record
+// arrives after the mutation. A case that needs none of that just returns.
+export async function runCases(window) {
+  const results = [];
+  for (const { expectedEsdev, group, limit, name, run } of cases) {
+    const entry = { expectedEsdev: expectedEsdev ?? null, group, limit: limit ?? null, name };
     try {
-      return {
-        expectedEsdev: expectedEsdev ?? null,
-        group,
-        limit: limit ?? null,
-        name,
-        result: run(window),
-      };
+      entry.result = await run(window);
     } catch (error) {
-      return {
-        expectedEsdev: expectedEsdev ?? null,
-        group,
-        limit: limit ?? null,
-        name,
-        error: error?.name ?? "Error",
-      };
+      entry.error = error?.name ?? "Error";
     }
-  });
+    results.push(entry);
+  }
+  return results;
+}
+
+// One turn of the microtask queue, for a case waiting on a reaction that is
+// delivered there.
+export function settled() {
+  return new Promise((resolve) => queueMicrotask(resolve));
 }

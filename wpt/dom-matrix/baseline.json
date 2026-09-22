@@ -1939,6 +1939,549 @@
       "drift": false
     },
     {
+      "group": "components",
+      "name": "reaction-order-on-creation-and-connection",
+      "chrome": {
+        "result": [
+          "constructed",
+          "created",
+          "attribute:value:null:one",
+          "connected:true",
+          "attribute:value:one:two",
+          "disconnected"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "constructed",
+          "created",
+          "attribute:value:null:one",
+          "connected:true",
+          "attribute:value:one:two",
+          "disconnected"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "constructed",
+          "created",
+          "attribute:value:null:one",
+          "connected:true",
+          "attribute:value:one:two",
+          "disconnected"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "constructed",
+          "created",
+          "attribute:value:null:one",
+          "connected:true",
+          "attribute:value:one:two",
+          "disconnected"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "an-existing-element-upgrades-when-it-is-defined",
+      "chrome": {
+        "result": [
+          [
+            "HTMLElement",
+            "undefined"
+          ],
+          [
+            "attribute:a",
+            "connected:a",
+            "attribute:b",
+            "connected:b"
+          ],
+          true,
+          2
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "HTMLElement",
+            "undefined"
+          ],
+          [
+            "attribute:a",
+            "connected:a",
+            "attribute:b",
+            "connected:b"
+          ],
+          true,
+          2
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "HTMLElement",
+            "undefined"
+          ],
+          [
+            "connected:b",
+            "connected:a"
+          ],
+          true,
+          0
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "HTMLElement",
+            "undefined"
+          ],
+          [
+            "attribute:a",
+            "connected:a",
+            "attribute:b",
+            "connected:b"
+          ],
+          true,
+          2
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "parsed-children-upgrade-in-tree-order",
+      "chrome": {
+        "result": [
+          [
+            "outer",
+            "inner",
+            "last"
+          ],
+          3
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "outer",
+            "inner",
+            "last"
+          ],
+          3
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "outer",
+            "inner",
+            "last"
+          ],
+          3
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "outer",
+            "inner",
+            "last"
+          ],
+          3
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "the-registry-answers-about-a-definition",
+      "chrome": {
+        "result": [
+          [
+            null,
+            "function"
+          ],
+          true,
+          true,
+          "matrix-registry-4",
+          "NotSupportedError",
+          "NotSupportedError",
+          "SyntaxError"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            null,
+            "function"
+          ],
+          true,
+          true,
+          "matrix-registry-4",
+          "NotSupportedError",
+          "NotSupportedError",
+          "SyntaxError"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            null,
+            "function"
+          ],
+          true,
+          false,
+          "matrix-registry-9",
+          "DOMException",
+          "DOMException",
+          "DOMException"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            null,
+            "function"
+          ],
+          true,
+          true,
+          "matrix-registry-6",
+          "NotSupportedError",
+          "NotSupportedError",
+          "SyntaxError"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "an-element-can-be-upgraded-on-demand",
+      "chrome": {
+        "result": [
+          null,
+          true,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          null,
+          true,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          null,
+          false,
+          false
+        ]
+      },
+      "jsdom": {
+        "result": [
+          null,
+          true,
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "slots-assign-and-flatten",
+      "chrome": {
+        "result": [
+          [
+            "H",
+            "H2"
+          ],
+          [
+            "span"
+          ],
+          true,
+          [
+            "span"
+          ],
+          [
+            "H",
+            "H2"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "H",
+            "H2"
+          ],
+          [
+            "span"
+          ],
+          true,
+          [
+            "span"
+          ],
+          [
+            "H",
+            "H2"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "H",
+            "H2"
+          ],
+          [
+            "span"
+          ],
+          false,
+          [
+            "span"
+          ],
+          [
+            "H",
+            "H2"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "H",
+            "H2"
+          ],
+          [
+            "span"
+          ],
+          true,
+          [
+            "span"
+          ],
+          [
+            "H",
+            "H2"
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-slot-reports-a-change",
+      "chrome": {
+        "result": [
+          1,
+          2,
+          "slotchange:true:false"
+        ]
+      },
+      "esdev": {
+        "result": [
+          1,
+          2,
+          "slotchange:true:false"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          1,
+          2,
+          "slotchange:true:false"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          1,
+          2,
+          "slotchange:true:false"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "internals-reflect-aria-and-form-state",
+      "chrome": {
+        "result": [
+          [
+            "checkbox",
+            "Pick one"
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            "disabled:true",
+            "reset"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "checkbox",
+            "Pick one"
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            "disabled:true",
+            "reset"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          [
+            "checkbox",
+            "Pick one"
+          ],
+          [
+            null,
+            null
+          ],
+          []
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-clonable-shadow-root-is-cloned",
+      "chrome": {
+        "result": [
+          "<i>inside</i>",
+          "no root"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "<i>inside</i>",
+          "no root"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "<i>inside</i>",
+          "no root"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "no root",
+          "no root"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "shadow-styles-reach-the-host-and-the-slotted",
+      "chrome": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "700",
+          "italic",
+          "rgb(2, 2, 2)"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "700",
+          "italic",
+          "rgb(2, 2, 2)"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "rgb(1, 1, 1)",
+          "700",
+          "normal",
+          "rgb(2, 2, 2)"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "rgb(0, 0, 0)",
+          "",
+          "",
+          "rgb(0, 0, 0)"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-constructor-is-refused-when-it-misbehaves",
+      "chrome": {
+        "result": [
+          "matrix-bad-8",
+          false,
+          "TypeError",
+          null
+        ]
+      },
+      "esdev": {
+        "result": [
+          "matrix-bad-8",
+          false,
+          "TypeError",
+          null
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "matrix-bad-18",
+          false,
+          "TypeError",
+          null
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "matrix-bad-15",
+          false,
+          "TypeError",
+          null
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -2243,7 +2786,7 @@
     }
   ],
   "summary": {
-    "match": 51,
+    "match": 62,
     "intentional-limit": 2,
     "drift": 0
   }

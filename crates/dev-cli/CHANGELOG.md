@@ -25,6 +25,25 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **Web components: the reactions, slots, registry and shadow styling that were
+  missing.** `customElements.getName()`; a constructor can be defined under one
+  name only, and a second `define` with it is a `NotSupportedError`; `new
+  MyElement()` from script makes an element of the name the class was defined
+  under; `node.assignedSlot`; a `slotchange` event, delivered once at the
+  microtask checkpoint however many children moved; `formDisabledCallback`, from
+  the element's own `disabled` and from an ancestor fieldset's; and a
+  `clonable: true` shadow root is cloned with its host while one without it is
+  not.
+
+  Shadow styling works: `:host`, `:host(…)`, `:host-context(…)` and
+  `::slotted(…)`, including `:host(.card) .inner` for something inside the root
+  and `slot[name=x]::slotted(p)` for a node a named slot took in. `:host` styles
+  a closed root's host too, and none of it leaks to the document.
+
+  A `CustomElementRegistry` keeps its own definitions, so a second one no longer
+  writes into the document's — which is what a scoped registry, still a
+  proposal, would need to be separate from. Its definitions upgrade nothing.
+
 - **`document.createEvent()`, for the modern interface names.** `"Event"`,
   `"CustomEvent"`, `"MouseEvent"`, `"KeyboardEvent"`, `"UIEvent"`, `"FocusEvent"`
   and the rest of the interfaces this DOM has. The returned event is

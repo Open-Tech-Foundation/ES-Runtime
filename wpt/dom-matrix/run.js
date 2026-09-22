@@ -39,7 +39,7 @@ async function runEsdev() {
   );
   await Deno.writeTextFile(
     testFile,
-    'import { test } from "runtime:test";\nimport { runCases } from "./cases.js";\ntest("DOM matrix", () => console.log("DOM_MATRIX=" + JSON.stringify(runCases(globalThis))));\n',
+    'import { test } from "runtime:test";\nimport { runCases } from "./cases.js";\ntest("DOM matrix", async () => console.log("DOM_MATRIX=" + JSON.stringify(await runCases(globalThis))));\n',
   );
   try {
     const output = await new Deno.Command(flags.esdev, {
@@ -60,7 +60,7 @@ async function runEsdev() {
   }
 }
 
-function runJsdom() {
+async function runJsdom() {
   const dom = new JSDOM(
     '<!doctype html><html><head><base href="http://localhost/"></head><body></body></html>',
     {
@@ -68,17 +68,17 @@ function runJsdom() {
     },
   );
   try {
-    return runCases(dom.window);
+    return await runCases(dom.window);
   } finally {
     dom.window.close();
   }
 }
 
-function runHappyDom() {
+async function runHappyDom() {
   const window = new Window({ url: "http://localhost/" });
   window.document.head.innerHTML = '<base href="http://localhost/">';
   try {
-    return runCases(window);
+    return await runCases(window);
   } finally {
     window.close();
   }
@@ -103,7 +103,7 @@ async function runChrome() {
       );
       try {
         const { runCases } = await import(url);
-        return runCases(globalThis);
+        return await runCases(globalThis);
       } finally {
         URL.revokeObjectURL(url);
       }
