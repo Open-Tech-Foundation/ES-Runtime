@@ -327,6 +327,12 @@ is the point, since none of the three has any business in a deployment.
   first `title` element, creating one in the head when there is none.
 
 ### Changed
+- Bump `oxc` 0.144 → 0.146, the newest release the pinned toolchain builds:
+  0.147 and later require rustc 1.96. Nothing in the compiler's behaviour
+  changed, and neither auto-accessors nor standard decorators are lowered
+  upstream yet — checked through 0.151, where the `AccessorProperty` arm is
+  still `// TODO: Not sure what we should do here` and `DecoratorOptions` still
+  carries only `legacy`.
 - Document direct CSS-entry builds, import and asset handling, minification,
   and stable library stylesheet exports in the build guides.
 

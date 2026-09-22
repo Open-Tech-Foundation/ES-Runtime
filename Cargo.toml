@@ -287,7 +287,7 @@ es-runtime-cli-common = { path = "crates/cli-common", version = "0.30.0" }
 # linter has never been published), so either would mean a git dependency —
 # the first exception to D7's pinned-crates.io rule. `oxlint` and `oxfmt` are
 # npm binaries that already work.
-oxc = { version = "0.144.0", features = [
+oxc = { version = "0.146.0", features = [
     "transformer",
     "semantic",
     "codegen",
