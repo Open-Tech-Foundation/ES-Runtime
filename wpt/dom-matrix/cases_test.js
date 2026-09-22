@@ -15,12 +15,21 @@ Deno.test("the baseline covers the prioritized layout-free groups", () => {
   );
 });
 
-Deno.test("strict parsing is declared as an intentional esdev limit", () => {
+// Each documented limit is named here so adding one is a decision rather than a
+// way to make a failing case pass.
+Deno.test("every intentional esdev limit is declared and explained", () => {
+  const limits = cases.filter((test) => test.limit);
+  assertEquals(limits.map((test) => test.name), [
+    "malformed-markup-is-a-strict-esdev-limit",
+    "geometry-answers-zero-and-rendering-is-knowable",
+  ]);
+  for (const test of limits) {
+    assertEquals(typeof test.limit, "string");
+    assertEquals(typeof test.expectedEsdev, "object");
+  }
   assertEquals(
-    cases.filter((test) => test.limit).map((
-      test,
-    ) => [test.name, test.expectedEsdev]),
-    [["malformed-markup-is-a-strict-esdev-limit", { result: "SyntaxError" }]],
+    limits.find((test) => test.name === "malformed-markup-is-a-strict-esdev-limit").expectedEsdev,
+    { result: "SyntaxError" },
   );
 });
 
