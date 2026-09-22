@@ -808,3 +808,57 @@ test("attribute work does not go through the public accessor", () => {
 
   expect(reads).toBe(0);
 });
+
+// A mutation is one observable operation. Frameworks spy on `removeChild` and
+// `insertBefore` to assert what a render did, and patching libraries wrap them;
+// a convenience method implemented by calling another one shows up as a second
+// operation nobody performed. Preact's keyed-diff suite caught `remove()`
+// dispatching `removeChild`.
+test("a mutation method is not observable as another one", () => {
+  const document = new Document();
+  const root = document.createElement("ol");
+  document.appendChild(root);
+  const names = ["appendChild", "insertBefore", "removeChild", "replaceChild"];
+  const originals = new Map(names.map((name) => [name, Node.prototype[name]]));
+  const seen = [];
+  for (const name of names) {
+    Node.prototype[name] = function (...args) {
+      seen.push(name);
+      return originals.get(name).apply(this, args);
+    };
+  }
+  try {
+    const items = ["a", "b", "c", "d"].map((text) => {
+      const item = document.createElement("li");
+      item.textContent = text;
+      return item;
+    });
+    root.append(...items);
+    expect(seen).toEqual([]);
+
+    items[3].remove();
+    expect(seen).toEqual([]);
+
+    items[2].replaceWith(document.createElement("hr"));
+    expect(seen).toEqual([]);
+
+    items[0].before(document.createElement("hr"));
+    items[0].after(document.createElement("hr"));
+    root.prepend(document.createElement("hr"));
+    root.replaceChildren(items[0], items[1]);
+    root.insertAdjacentElement("beforeend", document.createElement("li"));
+    root.insertAdjacentText("beforeend", "text");
+    root.normalize();
+    root.cloneNode(true);
+    expect(seen).toEqual([]);
+
+    // The four themselves still report, because they are the operation.
+    root.appendChild(document.createElement("li"));
+    root.insertBefore(document.createElement("li"), root.firstChild);
+    root.removeChild(root.firstChild);
+    root.replaceChild(document.createElement("li"), root.firstChild);
+    expect(seen).toEqual(["appendChild", "insertBefore", "removeChild", "replaceChild"]);
+  } finally {
+    for (const [name, original] of originals) Node.prototype[name] = original;
+  }
+});

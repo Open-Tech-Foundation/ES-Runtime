@@ -364,7 +364,11 @@ export function createTree(events = {}) {
     contains(other) { return other instanceof Node && isInclusiveAncestor(this, other); }
     hasAttributes() { return this instanceof Element && ownAttributes(this).length !== 0; }
 
-    appendChild(node) { return this.insertBefore(node, null); }
+    appendChild(node) {
+      if (!(node instanceof Node)) throw new TypeError("appendChild expects a Node");
+      this._preInsert(node, null);
+      return node;
+    }
 
     // A move that keeps state: no removing and re-inserting, so nothing is
     // disconnected and reconnected, no custom element reaction runs, and
@@ -443,7 +447,10 @@ export function createTree(events = {}) {
     }
 
     remove() {
-      if (this.parentNode) this.parentNode.removeChild(this);
+      // Through the internal primitive, not `removeChild`: a browser's
+      // `remove()` is one observable operation, and anything watching
+      // `removeChild` — a spy, a patch, an override — must not see a second.
+      if (this.parentNode) this.parentNode._remove(this);
     }
 
     before(...items) {
@@ -460,7 +467,7 @@ export function createTree(events = {}) {
       if (!this.parentNode) return;
       const parent = this.parentNode;
       parent._insertMany(asNodes(items, this.ownerDocument, Node), this);
-      parent.removeChild(this);
+      parent._remove(this);
     }
 
     append(...items) { this._insertMany(asNodes(items, this.ownerDocument ?? this, Node), null); }
@@ -469,6 +476,14 @@ export function createTree(events = {}) {
       const nodes = asNodes(items, this.ownerDocument ?? this, Node);
       while (this.firstChild) this._remove(this.firstChild);
       this._insertMany(nodes, null);
+    }
+
+    // The spec's "replace all", as one operation rather than as a call to
+    // `replaceChildren`: `innerHTML` is defined in terms of this, and a browser
+    // makes no public call a patched prototype could see.
+    _replaceAll(node) {
+      while (this.firstChild) this._remove(this.firstChild);
+      if (node) this._insert(node, null);
     }
 
     _insertMany(nodes, before) {
@@ -574,7 +589,7 @@ export function createTree(events = {}) {
       if (this instanceof Attr) { this.value = value ?? ""; return; }
       if (this instanceof Document || this instanceof DocumentType) return;
       while (this.firstChild) this._remove(this.firstChild);
-      if (value !== null && value !== "") this.appendChild((this.ownerDocument ?? this).createTextNode(String(value)));
+      if (value !== null && value !== "") this._insert((this.ownerDocument ?? this).createTextNode(String(value)), null);
     }
 
     isSameNode(other) { return other === this; }
@@ -629,13 +644,16 @@ export function createTree(events = {}) {
     // framework's diffing assumptions and `wholeText` both rely on.
     normalize() {
       for (const child of Array.from(this._esdevChildren())) {
+        // The list was snapshotted, so a child merged into an earlier one is
+        // already gone by the time the loop reaches it.
+        if (child.parentNode !== this) continue;
         if (!(child instanceof Text)) { child.normalize(); continue; }
-        if (child.data.length === 0) { child.remove(); continue; }
+        if (child.data.length === 0) { this._remove(child); continue; }
         let next = child.nextSibling;
         while (next instanceof Text) {
           const following = next.nextSibling;
           child.data += next.data;
-          next.remove();
+          this._remove(next);
           next = following;
         }
       }
@@ -661,7 +679,7 @@ export function createTree(events = {}) {
       if (deep) {
         const source = this instanceof HTMLTemplateElement ? this.content : this;
         const target = clone instanceof HTMLTemplateElement ? clone.content : clone;
-        for (const child of source._esdevChildren()) target.appendChild(child.cloneNode(true));
+        for (const child of source._esdevChildren()) target._insert(child.cloneNode(true), null);
         // A shadow root comes along only when it said it could: `clonable`.
         const shadow = this[SHADOW_ROOT];
         if (shadow?.clonable) {
@@ -672,7 +690,7 @@ export function createTree(events = {}) {
             serializable: shadow.serializable,
             slotAssignment: shadow.slotAssignment,
           });
-          for (const child of shadow._esdevChildren()) copy.appendChild(child.cloneNode(true));
+          for (const child of shadow._esdevChildren()) copy._insert(child.cloneNode(true), null);
         }
       }
       return clone;
@@ -1242,8 +1260,11 @@ export function createTree(events = {}) {
     get length() { return this.options.length; }
     set length(value) {
       value = Math.max(0, Math.trunc(Number(value) || 0));
-      while (this.options.length > value) this.options.item(this.options.length - 1).remove();
-      while (this.options.length < value) this.appendChild(this.ownerDocument.createElement("option"));
+      while (this.options.length > value) {
+        const last = this.options.item(this.options.length - 1);
+        last.parentNode._remove(last);
+      }
+      while (this.options.length < value) this._insert(this.ownerDocument.createElement("option"), null);
     }
     get selectedIndex() {
       const options = Array.from(this.options);
@@ -1277,9 +1298,13 @@ export function createTree(events = {}) {
     add(item, before = null) {
       if (!(item instanceof HTMLOptionElement)) throw new TypeError("select.add expects an option");
       if (typeof before === "number") before = this.options.item(before);
-      this.insertBefore(item, before ?? null);
+      if (before !== null && before.parentNode !== this) throw domError("NotFoundError", "The reference option is not in this select.");
+      this._preInsert(item, before ?? null);
     }
-    remove(index) { this.options.item(Number(index))?.remove(); }
+    remove(index) {
+      const option = this.options.item(Number(index));
+      option?.parentNode?._remove(option);
+    }
   }
 
   class HTMLTextAreaElement extends HTMLElement {
@@ -2057,12 +2082,12 @@ export function createTree(events = {}) {
     insertAdjacentElement: { value(where, element) {
       if (!(element instanceof Element)) throw new TypeError("insertAdjacentElement expects an Element");
       const { parent, reference } = this._adjacentPosition(where);
-      parent.insertBefore(element, reference);
+      parent._preInsert(element, reference);
       return element;
     } },
     insertAdjacentText: { value(where, data) {
       const { parent, reference } = this._adjacentPosition(where);
-      parent.insertBefore((this.ownerDocument ?? this).createTextNode(String(data)), reference);
+      parent._preInsert((this.ownerDocument ?? this).createTextNode(String(data)), reference);
     } },
   });
 
@@ -2152,7 +2177,7 @@ export function createTree(events = {}) {
         const head = this.head ?? this.documentElement;
         if (!head) return;
         element = this.createElement("title");
-        head.appendChild(element);
+        head._insert(element, null);
       }
       element.textContent = String(value);
     }
@@ -2197,7 +2222,7 @@ export function createTree(events = {}) {
     }
     adoptNode(node) {
       if (!(node instanceof Node) || node instanceof Document) throw domError("NotSupportedError", "A document cannot be adopted.");
-      if (node.parentNode) node.parentNode.removeChild(node);
+      if (node.parentNode) node.parentNode._remove(node);
       descendants(node, (item) => { slots(item).ownerDocument = this; });
       return node;
     }
@@ -2230,24 +2255,24 @@ export function createTree(events = {}) {
       const document = new Document();
       if (doctype !== null && doctype !== undefined) {
         if (!(doctype instanceof DocumentType)) throw new TypeError("createDocument doctype must be a DocumentType");
-        document.appendChild(doctype);
+        document._preInsert(doctype, null);
       }
       const name = qualifiedName === null || qualifiedName === undefined ? "" : String(qualifiedName);
-      if (name !== "") document.appendChild(document.createElementNS(namespaceURI, name));
+      if (name !== "") document._preInsert(document.createElementNS(namespaceURI, name), null);
       return document;
     }
     createHTMLDocument(title = undefined) {
       const document = new Document();
-      document.appendChild(new DocumentType("html", "", "", document));
+      document._preInsert(new DocumentType("html", "", "", document), null);
       const html = document.createElement("html");
       const head = document.createElement("head");
       const body = document.createElement("body");
-      html.append(head, body);
-      document.appendChild(html);
+      html._insertMany([head, body], null);
+      document._preInsert(html, null);
       if (title !== undefined) {
         const element = document.createElement("title");
-        element.appendChild(document.createTextNode(String(title)));
-        head.appendChild(element);
+        element._insert(document.createTextNode(String(title)), null);
+        head._insert(element, null);
       }
       // `head` and `body` are per-document accessors on the instance, the same
       // shape the test realm's own document gets.

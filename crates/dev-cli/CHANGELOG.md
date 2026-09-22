@@ -290,6 +290,29 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **One mutation is one observable operation.** `node.remove()` was implemented
+  as `parentNode.removeChild(node)`, so a suite spying on `removeChild` — which
+  is how a renderer's tests assert what a diff did — saw an operation nobody
+  performed: Preact's keyed-diff suite logged `remove()` *and* `removeChild()`
+  for one call, and six of its cases failed on it. A patching library wrapping
+  `removeChild` saw the same phantom.
+
+  Browsers make no public DOM call from inside another one, so neither does this
+  DOM any more. Every convenience and markup mutation now goes through the
+  internal tree primitives instead of a prototype method a spy, an override or a
+  zone-style patch could see: `remove()`, `replaceWith()`, `appendChild()`,
+  `normalize()`, `cloneNode()`, `textContent`, `insertAdjacentElement/Text/HTML`,
+  `innerHTML`, `outerHTML`, `setHTMLUnsafe()`, `adoptNode()`, `select.add()`,
+  `select.remove()`, `select.length`, `document.title`,
+  `DOMImplementation.createDocument()`/`createHTMLDocument()`, the Range content
+  operations, declarative shadow-root attachment and parser tree construction.
+  The four primitives — `appendChild`, `insertBefore`, `removeChild`,
+  `replaceChild` — still report when they are the operation, and a unit test in
+  each half of the DOM patches all four and asserts the log.
+
+  A duplicate `Node.prototype.replaceChildren` that the parser installed over
+  the tree's own — via `textContent` and `append()`, two more visible calls — is
+  gone with it.
 - **A declaration list knows which properties exist.** `style.nonsenseProp` read
   `""` and `"nonsense" in getComputedStyle(el)` was true, so feature detection
   against a declaration — which is how a library asks whether a property exists —

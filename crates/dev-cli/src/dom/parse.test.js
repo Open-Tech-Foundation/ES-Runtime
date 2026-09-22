@@ -78,3 +78,33 @@ test("refuses XML by name and an unsupported type by type", () => {
   expect(() => createParsing(tree, records).DOMParser.prototype.parseFromString.call({}, "<p></p>", "text/html"))
     .toThrow("no document parser");
 });
+
+// The parser's own half of "one mutation, one observable operation": `innerHTML`
+// and friends are specified in terms of the tree primitives, not in terms of
+// `replaceChildren` or `replaceChild`, and a spy must not see those.
+test("markup setters are not observable as tree method calls", () => {
+  const tree = createTree();
+  const parsing = createParsing(tree, records);
+  parsing.install();
+  const document = new tree.Document();
+  const root = document.createElement("main");
+  document.appendChild(root);
+  const names = ["appendChild", "insertBefore", "removeChild", "replaceChild"];
+  const originals = new Map(names.map((name) => [name, tree.Node.prototype[name]]));
+  const seen = [];
+  for (const name of names) {
+    tree.Node.prototype[name] = function (...args) {
+      seen.push(name);
+      return originals.get(name).apply(this, args);
+    };
+  }
+  try {
+    root.innerHTML = "<em>new</em>";
+    root.firstChild.outerHTML = "<em>new</em>";
+    root.setHTMLUnsafe("<em>new</em>");
+    root.insertAdjacentHTML("beforeend", "<em>new</em>");
+    expect(seen).toEqual([]);
+  } finally {
+    for (const [name, original] of originals) tree.Node.prototype[name] = original;
+  }
+});

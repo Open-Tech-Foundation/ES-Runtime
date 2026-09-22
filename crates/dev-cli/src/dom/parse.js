@@ -58,10 +58,11 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
       let target = parentIndex === -1 ? parent : nodes[parentIndex];
       if (target instanceof HTMLTemplateElement) target = target.content;
       if (!target || parentIndex >= index) throw new TypeError("DOM parser parent index is invalid");
-      // HTML parser tree construction is not observable through an overridden
-      // Element.prototype.appendChild.  Use the base Node operation directly
-      // while retaining the normal internal insertion reactions.
-      Node.prototype.appendChild.call(target, node);
+      // HTML parser tree construction is not observable at all: it is not a
+      // sequence of `appendChild` calls, so it goes through the internal
+      // insertion — which still runs the normal reactions — rather than through
+      // any prototype method a patch or a spy could have replaced.
+      target._preInsert(node, null);
       nodes.push(node);
     }
     return nodes.filter((_, index) => records[index][1] === -1);
@@ -138,12 +139,12 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
           slotAssignment: template.getAttribute("shadowrootslotassignment") ?? "named",
         });
       } catch {
-        template.remove();
+        template.parentNode._remove(template);
         continue;
       }
       attachDeclarativeShadowRoots(template.content);
-      shadow.append(...Array.from(template.content.childNodes));
-      template.remove();
+      shadow._insertMany(Array.from(template.content.childNodes), null);
+      template.parentNode._remove(template);
     }
   }
 
@@ -155,7 +156,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
     if (!parseDocumentRecords) throw new DOMException("This DOM has no document parser attached.", "NotSupportedError");
     const [hasDoctype, records] = parseDocumentRecords(String(source));
     const document = new Document();
-    if (hasDoctype) document.appendChild(document.implementation.createDocumentType("html"));
+    if (hasDoctype) document._preInsert(document.implementation.createDocumentType("html"), null);
     const holder = document.createDocumentFragment();
     decode(records, holder);
     const roots = Array.from(holder.childNodes);
@@ -163,15 +164,15 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
     const html = supplied ?? document.createElement("html");
     let head = Array.from(html._esdevChildren()).find((node) => node.localName === "head");
     let body = Array.from(html._esdevChildren()).find((node) => node.localName === "body");
-    if (!head) html.insertBefore(head = document.createElement("head"), html.firstChild);
-    if (!body) html.appendChild(body = document.createElement("body"));
+    if (!head) html._preInsert(head = document.createElement("head"), html.firstChild);
+    if (!body) html._preInsert(body = document.createElement("body"), null);
     if (!supplied) {
       for (const node of roots) {
         const intoHead = node instanceof Element && HEAD_ONLY.has(node.localName) && node.namespaceURI === HTML_NAMESPACE;
-        (intoHead ? head : body).appendChild(node);
+        (intoHead ? head : body)._preInsert(node, null);
       }
     }
-    document.appendChild(html);
+    document._preInsert(html, null);
     Object.defineProperties(document, { head: { get: () => head }, body: { get: () => body } });
     return document;
   }
@@ -206,13 +207,16 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
     for (const Class of [Element, ShadowRoot]) Object.defineProperties(Class.prototype, {
       innerHTML: {
         get() { return Array.from(this.childNodes, serialize).join(""); },
-        set(source) { this.replaceChildren(parseFragment(source, this)); },
+        set(source) { this._replaceAll(parseFragment(source, this)); },
       },
       outerHTML: {
         get() { return serialize(this); },
         set(source) {
           if (!this.parentNode) return;
-          this.parentNode.replaceChild(parseFragment(source, this), this);
+          const parent = this.parentNode;
+          const reference = this.nextSibling;
+          parent._remove(this);
+          parent._insert(parseFragment(source, this), reference);
         },
       },
     });
@@ -220,7 +224,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
       setHTMLUnsafe: { value(source) {
         const fragment = parseFragment(source, this);
         attachDeclarativeShadowRoots(fragment);
-        this.replaceChildren(fragment);
+        this._replaceAll(fragment);
       }, writable: true, configurable: true },
       getHTML: { value(options = {}) {
         return Array.from(this.childNodes, (child) => serialize(child, options)).join("");
@@ -230,7 +234,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
       setHTMLUnsafe: { value(source) {
         const fragment = parseFragment(source, this);
         attachDeclarativeShadowRoots(fragment);
-        this.content.replaceChildren(fragment);
+        this.content._replaceAll(fragment);
       }, writable: true, configurable: true },
       getHTML: { value(options = {}) {
         return Array.from(this.content.childNodes, (child) => serialize(child, options)).join("");
@@ -241,19 +245,15 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
         // The parse context is where the markup lands, not the element the call
         // was made on: `beforebegin` markup is parsed as a child of the parent.
         const { parent, reference, context } = this._adjacentPosition(where);
-        parent.insertBefore(parseFragment(source, context), reference);
+        parent._preInsert(parseFragment(source, context), reference);
       }, writable: true, configurable: true },
     });
     Object.defineProperties(HTMLTemplateElement.prototype, {
       innerHTML: {
         get() { return Array.from(this.content.childNodes, serialize).join(""); },
-        set(source) { this.content.replaceChildren(parseFragment(source, this)); },
+        set(source) { this.content._replaceAll(parseFragment(source, this)); },
       },
     });
-    Node.prototype.replaceChildren = function (...nodes) {
-      this.textContent = "";
-      this.append(...nodes);
-    };
   }
 
   return { decode, serialize, parseFragment, parseDocument, DOMParser, install };

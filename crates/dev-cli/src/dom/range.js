@@ -174,11 +174,11 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
         const tail = container.data.slice(this.startOffset);
         container.data = container.data.slice(0, this.startOffset);
         const reference = tail === "" ? container.nextSibling : this.document.createTextNode(tail);
-        if (tail !== "") parent.insertBefore(reference, container.nextSibling);
-        parent.insertBefore(node, reference);
+        if (tail !== "") parent._preInsert(reference, container.nextSibling);
+        parent._preInsert(node, reference);
         return;
       }
-      container.insertBefore(node, container.childNodes.item(this.startOffset));
+      container._preInsert(node, container.childNodes.item(this.startOffset));
     }
     deleteContents() {
       if (this.collapsed) return;
@@ -203,7 +203,7 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
             return false;
           })) selected.push(node);
       }
-      for (const node of selected) node.remove();
+      for (const node of selected) node.parentNode._remove(node);
       this.setEnd(this.startContainer, this.startOffset);
     }
     cloneContents() {
@@ -231,18 +231,18 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
         const copy = node.cloneNode(false);
         for (let child = node.firstChild; child; child = child.nextSibling) {
           const selected = clone(child);
-          if (selected) copy.appendChild(selected);
+          if (selected) copy._insert(selected, null);
         }
         return copy.hasChildNodes() ? copy : null;
       };
       if (this.startContainer === this.endContainer && this.startContainer instanceof Text) {
-        fragment.appendChild(this.document.createTextNode(this.startContainer.data.slice(this.startOffset, this.endOffset)));
+        fragment._insert(this.document.createTextNode(this.startContainer.data.slice(this.startOffset, this.endOffset)), null);
         return fragment;
       }
       const common = this.commonAncestorContainer;
       for (let child = common.firstChild; child; child = child.nextSibling) {
         const selected = clone(child);
-        if (selected) fragment.appendChild(selected);
+        if (selected) fragment._insert(selected, null);
       }
       return fragment;
     }
@@ -265,7 +265,7 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
       }
       const fragment = this.extractContents();
       this.insertNode(node);
-      node.appendChild(fragment);
+      node._preInsert(fragment, null);
       this.selectNode(node);
     }
     createContextualFragment(source) {
