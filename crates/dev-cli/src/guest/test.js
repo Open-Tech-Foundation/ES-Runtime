@@ -114,6 +114,25 @@ let draining = false;
 // it, and un-deciding it later would run tests the file said not to.
 let exclusive = false;
 
+// An unhandled rejection is the running test's failure, not the file's death.
+// Without this the process is torn down where the rejection surfaced, and a
+// suite of a hundred passing tests reports nothing at all — the one thing this
+// runner is most careful never to do. One that surfaces between cases has no
+// test to belong to, so it is reported as a case of its own.
+let pendingRejection = null;
+const strayRejections = [];
+
+if (typeof globalThis.addEventListener === "function") {
+  globalThis.addEventListener("unhandledrejection", (event) => {
+    // Only while the run owns the process. After it, an unclaimed rejection is
+    // the runtime's to report, and swallowing it would hide a real error.
+    if (!draining) return;
+    event.preventDefault();
+    if (activeCase !== null) pendingRejection ??= event.reason;
+    else strayRejections.push(event.reason);
+  });
+}
+
 // The detail a failure is reported with: the stack when there is one, because a
 // failure is only actionable if it names the line that failed.
 const detail = (err) => (err?.stack ? String(err.stack) : String(err));
@@ -348,6 +367,9 @@ async function drain() {
     // `settled` below, so this is the file's own scope, and any group a case
     // registered into after its own drain.
     for (const scope of [...groups].reverse()) await close(scope);
+    for (const reason of strayRejections.splice(0)) {
+      ops.test_finished(ops.test_registered("unhandled rejection"), false, detail(reason));
+    }
   } finally {
     draining = false;
   }
@@ -406,6 +428,7 @@ async function runCase({ id, fn, scope }) {
   try {
     activeCase = id;
     snapshotNumber = 0;
+    pendingRejection = null;
     for (const before of around(scope, "beforeEach")) await before();
     await fn();
   } catch (err) {
@@ -421,6 +444,10 @@ async function runCase({ id, fn, scope }) {
     }
   }
   activeCase = null;
+  // A promise this case left rejected fails it, like a thrown error — unless
+  // something already did, since the first failure explains the rest.
+  if (failure === null && pendingRejection !== null) failure = pendingRejection;
+  pendingRejection = null;
   ops.test_finished(id, failure === null, failure === null ? "" : detail(failure));
   await settled(scope);
 }

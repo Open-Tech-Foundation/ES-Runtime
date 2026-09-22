@@ -9507,6 +9507,59 @@ fn tests_can_share_one_process_and_module_cache() {
     assert!(stdout(&out).contains("2 passed"), "{}", stdout(&out));
 }
 
+/// A stray promise costs one test, not the file's whole report. Before this,
+/// the process died where the rejection surfaced and a suite of a hundred
+/// passing tests printed nothing at all — the one thing a test runner must
+/// never do.
+#[test]
+fn test_an_unhandled_rejection_fails_its_case_and_the_rest_still_report() {
+    let dir = build_dir("b_test_unhandled_rejection");
+    write_in(
+        &dir,
+        "a.test.mjs",
+        "import { test } from 'runtime:test';\n\
+         test('one passes', () => {});\n\
+         test('two leaks a rejection', async () => {\n\
+           Promise.reject(new Error('boom'));\n\
+           await new Promise((resolve) => setTimeout(resolve, 1));\n\
+         });\n\
+         test('three passes', () => {});\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "a leaked rejection passed:\n{text}");
+    assert!(text.contains("2 passed, 1 failed"), "{text}");
+    assert!(text.contains("two leaks a rejection"), "{text}");
+    assert!(text.contains("boom"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// And when something kills the run outright — a rejection after the last case,
+/// with no test left to blame — what already ran is still printed.
+#[test]
+fn test_a_run_that_dies_still_reports_what_ran() {
+    let dir = build_dir("b_test_dies_after_running");
+    write_in(
+        &dir,
+        "a.test.mjs",
+        "import { test } from 'runtime:test';\n\
+         test('one passes', () => {});\n\
+         setTimeout(() => { Promise.reject(new Error('after the run')); }, 20);\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("after the run"), "{text}");
+    assert!(text.contains("1 passed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_isolation_can_come_from_project_config() {
     let dir = build_dir("b_test_no_isolation_config");

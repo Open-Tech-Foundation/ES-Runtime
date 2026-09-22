@@ -1688,6 +1688,14 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             },
             Err(err) => {
                 print_error(&err);
+                // The run died, but the cases that already finished are still
+                // results. Losing a hundred of them to one stray promise is
+                // precisely the report a suite most needs to see, so it is
+                // printed; the exit stays a failure either way.
+                match config.reporter.as_deref() {
+                    Some("json") => guest::test::finish_as_json(&file),
+                    _ => guest::test::finish(),
+                };
                 ExitCode::FAILURE
             }
         };
@@ -1831,6 +1839,8 @@ pub(crate) async fn run_tests_unisolated(
         Ok(()) => guest::test::finish(),
         Err(err) => {
             print_error(&err);
+            // As above: what ran is reported, and the run still fails.
+            guest::test::finish();
             ExitCode::FAILURE
         }
     }

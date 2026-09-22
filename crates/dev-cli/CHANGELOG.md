@@ -310,6 +310,15 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A stray promise costs one test, not the file's report.** An unhandled
+  rejection tore the process down where it surfaced, so a file of a hundred
+  passing tests printed nothing at all — a suite reported zero results because
+  one async case left a promise rejected. The rejection now fails the case that
+  was running, the way a thrown error does, and one that surfaces between cases
+  is reported as a case of its own. After the run it stays the runtime's to
+  report, because swallowing it there would hide a real error — but even then,
+  and for anything else that kills a run, the cases that already finished are
+  printed before the failure.
 - **`var()` is substituted when a value is computed.** `getComputedStyle(el).color`
   answered the literal `var(--brand)`; there was no `var()` handling in the
   cascade at all. Custom properties now substitute from the ones in effect on
