@@ -1,4 +1,7 @@
 {
+  "jsx": {
+    "importSource": "react"
+  },
   "targets": {
     "server": {
       "entry": "src/server.tsx",

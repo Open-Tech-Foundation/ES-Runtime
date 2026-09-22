@@ -331,13 +331,19 @@ fn jsx_transform(
         refresh: refresh.then_some(rolldown_common::Either::Left(true)),
         ..rolldown_common::JsxOptions::default()
     };
-    if settings.classic {
-        jsx.runtime = Some("classic".to_string());
-        jsx.pragma = settings.factory.clone();
-        jsx.pragma_frag = settings.fragment.clone();
-    } else {
-        jsx.runtime = Some("automatic".to_string());
-        jsx.import_source = settings.import_source.clone();
+    match settings.function.as_ref() {
+        Some(crate::transform::JsxFunction::Imported { source }) => {
+            jsx.runtime = Some("automatic".to_string());
+            jsx.import_source = Some(source.clone());
+        }
+        Some(crate::transform::JsxFunction::InScope { factory, fragment }) => {
+            jsx.runtime = Some("classic".to_string());
+            jsx.pragma = Some(factory.clone());
+            jsx.pragma_frag = fragment.clone();
+        }
+        // Nothing has said, so nothing is configured here either: a module that
+        // contains JSX is refused before the bundler compiles it.
+        None => {}
     }
     Some(rolldown_common::BundlerTransformOptions {
         jsx: Some(rolldown_common::Either::Right(jsx)),

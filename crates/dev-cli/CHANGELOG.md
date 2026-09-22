@@ -25,6 +25,32 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **JSX compiles the way the project says, and no other way.** An `esdev.json`
+  `jsx` section says where the element function comes from — `importSource` for
+  a package the compiler imports it from, or `factory` (with `fragment`) for one
+  the module already has — and every command that compiles JSX reads it:
+  `esdev test`, `esdev build`, `esdev start`. There is no mode to name: the key
+  that is there says which, so React's `"classic"`/`"automatic"` vocabulary is
+  not carried into a runtime that has no framework of its own. `"runtime"` is
+  refused by name, answered with the two keys that exist.
+
+  A file with JSX in it and nothing said about it anywhere is refused, naming
+  both keys and both pragmas. A default would be a framework chosen for the
+  project by its build tool, and a wrong one compiles silently: Preact elements
+  built by `React.createElement`.
+
+  A file overrides the project with the pragma comments it already carries:
+  `@jsx`, `@jsxFrag`, `@jsxRuntime` and `@jsxImportSource` — in the bundler as
+  well as the test runner. That is what makes a file borrowed from another
+  project work unchanged, which is how this was found, porting Preact's own
+  suite.
+
+  A config may also carry only `jsx`, or only `test`, with no `targets` at all: a
+  project that is tested and never bundled has something to configure too.
+  `esdev build` in such a project says it names no targets instead of exiting
+  successfully having built nothing. `start` still needs targets, because it
+  builds and serves them.
+
 - **The web-component surface is published.** Twenty-nine component probes and
   twenty-three behaviour cases run under Chrome, esdev, jsdom and happy-dom.
   esdev matches Chrome on every one; jsdom misses nine of the probes and
@@ -387,23 +413,6 @@ is the point, since none of the three has any business in a deployment.
   boundaries, and the WPT audit policy in the site test guide.
 
 ### Added
-
-- **JSX compiles the way the project says, for any framework.** An `esdev.json`
-  `jsx` section names the runtime — `"classic"` with a `factory` and `fragment`,
-  or the automatic one with an `importSource` — and every command that compiles
-  JSX reads it: `esdev test`, `esdev build`, `esdev start`. Naming a factory
-  means the classic runtime, so a project writes one line rather than two.
-
-  A file overrides the project with the pragma comments it already carries:
-  `@jsx`, `@jsxFrag`, `@jsxRuntime` and `@jsxImportSource`. That is what makes a
-  test borrowed from another project run here unchanged — which is how this was
-  found, porting Preact's own suite.
-
-  A config may also carry only `jsx`, or only `test`, with no `targets` at all: a
-  project that is tested and never bundled has something to configure too.
-  `esdev build` in such a project says it names no targets instead of exiting
-  successfully having built nothing. `start` still needs targets, because it
-  builds and serves them.
 
 - Add a JavaScript WPT DOM audit runner for the DOM, custom-elements, and
   Shadow DOM upstream suites.

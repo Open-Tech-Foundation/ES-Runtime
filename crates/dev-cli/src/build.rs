@@ -917,6 +917,10 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                         crate::cssmodules::Collected::new(),
                         config.minify,
                     )),
+                    // Before the bundler's own JSX pass can default to
+                    // somebody's framework: a module that is still JSX when
+                    // nothing has said how JSX compiles is refused by name.
+                    std::sync::Arc::new(crate::jsx::JsxPass::new(config.jsx.clone())),
                     if config.lib {
                         // A library does not decide where a file is served
                         // from — the build that consumes it does.

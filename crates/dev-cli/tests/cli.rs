@@ -3086,7 +3086,7 @@ fn test_jsx_compiles_the_way_the_project_configured_it() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" } }"#,
+        r#"{ "jsx": { "factory": "h", "fragment": "Fragment" } }"#,
     );
     write_in(
         &dir,
@@ -3121,10 +3121,42 @@ fn test_jsx_compiles_the_way_the_project_configured_it() {
 }
 
 #[test]
+fn test_jsx_with_nothing_configured_is_refused() {
+    // The alternative is a default, and a default is a framework chosen for the
+    // project by its build tool. The message has to be the whole answer,
+    // because there is nowhere else to look it up.
+    let dir = build_dir("t_jsx_unconfigured");
+    write_in(&dir, "esdev.json", r#"{ "test": { "jobs": 1 } }"#);
+    write_in(
+        &dir,
+        "view.test.jsx",
+        "import { test } from 'runtime:test';
+         test('never runs', () => (<div/>));
+",
+    );
+    let ran = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        !ran.status.success(),
+        "unconfigured JSX ran:\n{}",
+        stdout(&ran)
+    );
+    let said = format!("{}{}", stdout(&ran), stderr(&ran));
+    assert!(said.contains("nothing has said how JSX compiles"), "{said}");
+    assert!(said.contains("importSource"), "{said}");
+    assert!(said.contains("factory"), "{said}");
+    assert!(said.contains("@jsxImportSource"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_a_files_jsx_pragma_overrides_the_project() {
     let dir = build_dir("t_jsx_pragma");
     std::fs::create_dir_all(dir.join("src")).expect("create src");
-    // The project says the automatic runtime; the file says classic.
+    // The project imports the function from a package; the file names one it
+    // defines itself.
     write_in(
         &dir,
         "esdev.json",
@@ -11362,7 +11394,8 @@ fn refresh_project(dir: &Path, port: Option<u16>) {
         dir,
         "esdev.json",
         &format!(
-            r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
+            r#"{{ "jsx": {{ "factory": "h" }},
+                 "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
                                         "refresh": "otfw",
                                         "plugins": ["./plugins/refresh.mjs"] }} }}{start} }}"#
         ),

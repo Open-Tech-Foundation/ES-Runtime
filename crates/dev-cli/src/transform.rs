@@ -45,22 +45,34 @@ pub struct TypeStripper {
     jsx: JsxSettings,
 }
 
+/// Where the function a JSX element compiles into comes from.
+///
+/// There are two answers and no third, and neither of them is a framework:
+/// either the compiler writes the import, or it calls what the module already
+/// has. Any library works as either — a package that exports `jsx`/`jsxs` from
+/// a `jsx-runtime` subpath, or a function you import yourself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JsxFunction {
+    /// `<div/>` becomes `jsx("div", …)`, imported by the compiler from
+    /// `<source>/jsx-runtime`.
+    Imported { source: String },
+    /// `<div/>` becomes `factory("div", …)`, resolved in the module's own
+    /// scope: nothing is imported, so the module imports it itself.
+    InScope {
+        factory: String,
+        fragment: Option<String>,
+    },
+}
+
 /// How JSX compiles, for a project or for one file.
 ///
-/// The default is the automatic runtime with React's import source, because
-/// that is what an unannotated `.jsx` means today. Everything else — Preact,
-/// Solid, a classic `h`/`Fragment` pair — is a project saying so, and a
-/// runtime that is framework-agnostic has to let it.
+/// `function` is `None` until something says: a project has no default because
+/// choosing one would be choosing a framework. A file that contains JSX and has
+/// no answer is an error naming the file, not a guess.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct JsxSettings {
-    /// `React.createElement`-style calls rather than imports from a runtime.
-    pub classic: bool,
-    /// The package the automatic runtime imports `jsx`/`jsxs` from.
-    pub import_source: Option<String>,
-    /// The classic runtime's element factory.
-    pub factory: Option<String>,
-    /// The classic runtime's fragment.
-    pub fragment: Option<String>,
+    /// Where the element function comes from, or `None` if nothing has said.
+    pub function: Option<JsxFunction>,
     /// `__source` and `__self` on every element, which a dev-only renderer
     /// reads to say where a component came from.
     pub development: bool,
@@ -73,44 +85,140 @@ impl JsxSettings {
     /// says which JSX it is written in, and a file borrowed from another
     /// project carries them. oxc takes options rather than reading comments, so
     /// they are read here.
-    fn with_pragmas(&self, source: &str) -> Self {
+    pub fn with_pragmas(&self, source: &str) -> Self {
         let mut settings = self.clone();
+        // A file's pragmas are read in the order they are written, and each one
+        // answers the whole question: naming a factory means the compiler calls
+        // it, naming an import source means the compiler imports.
         for (tag, value) in pragmas(source) {
             match tag {
                 "jsx" => {
-                    settings.factory = Some(value);
-                    settings.classic = true;
+                    let fragment = match &settings.function {
+                        Some(JsxFunction::InScope { fragment, .. }) => fragment.clone(),
+                        _ => None,
+                    };
+                    settings.function = Some(JsxFunction::InScope {
+                        factory: value,
+                        fragment,
+                    });
                 }
                 "jsxFrag" => {
-                    settings.fragment = Some(value);
-                    settings.classic = true;
+                    let factory = match &settings.function {
+                        Some(JsxFunction::InScope { factory, .. }) => factory.clone(),
+                        // `@jsxFrag` without `@jsx` is the default factory with
+                        // a named fragment, which is what Babel does with it.
+                        _ => "React.createElement".to_string(),
+                    };
+                    settings.function = Some(JsxFunction::InScope {
+                        factory,
+                        fragment: Some(value),
+                    });
                 }
                 "jsxImportSource" => {
-                    settings.import_source = Some(value);
-                    settings.classic = false;
+                    settings.function = Some(JsxFunction::Imported { source: value });
                 }
-                "jsxRuntime" => settings.classic = value == "classic",
+                // Recognised because other toolchains write it, and it only
+                // says which *kind* — the name comes from the other pragmas or
+                // from the project.
+                "jsxRuntime" => match (value.as_str(), &settings.function) {
+                    ("classic", Some(JsxFunction::Imported { .. })) | ("classic", None) => {
+                        settings.function = Some(JsxFunction::InScope {
+                            factory: "React.createElement".to_string(),
+                            fragment: None,
+                        });
+                    }
+                    ("automatic", Some(JsxFunction::InScope { .. })) | ("automatic", None) => {
+                        settings.function = Some(JsxFunction::Imported {
+                            source: "react".to_string(),
+                        });
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
         settings
     }
 
-    fn options(&self) -> oxc::transformer::JsxOptions {
+    /// The compiler's options, or `None` when nothing has said how JSX
+    /// compiles — which is a refusal rather than a default.
+    fn options(&self) -> Option<oxc::transformer::JsxOptions> {
         let mut jsx = oxc::transformer::JsxOptions {
             development: self.development,
             ..oxc::transformer::JsxOptions::default()
         };
-        if self.classic {
-            jsx.runtime = oxc::transformer::JsxRuntime::Classic;
-            jsx.pragma = self.factory.clone();
-            jsx.pragma_frag = self.fragment.clone();
-        } else {
-            jsx.runtime = oxc::transformer::JsxRuntime::Automatic;
-            jsx.import_source = self.import_source.clone();
+        match self.function.as_ref()? {
+            JsxFunction::Imported { source } => {
+                jsx.runtime = oxc::transformer::JsxRuntime::Automatic;
+                jsx.import_source = Some(source.clone());
+            }
+            JsxFunction::InScope { factory, fragment } => {
+                jsx.runtime = oxc::transformer::JsxRuntime::Classic;
+                jsx.pragma = Some(factory.clone());
+                jsx.pragma_frag = fragment.clone();
+            }
         }
-        jsx
+        Some(jsx)
     }
+}
+
+/// What to say when a file contains JSX and nothing has said how it compiles.
+///
+/// Long, because it is the whole answer: there is no default to fall back on,
+/// and a message that only stated the problem would leave every reader to
+/// search for the two shapes.
+pub fn unconfigured_jsx() -> String {
+    "this file contains JSX, and nothing has said how JSX compiles here.\n\n\
+     There is no default, because a default would pick a framework. Name the \
+     package whose `jsx-runtime` the compiler should import from:\n\n  \
+     \"jsx\": { \"importSource\": \"preact\" }\n\n\
+     …or the function it should call, which the module imports itself:\n\n  \
+     \"jsx\": { \"factory\": \"h\", \"fragment\": \"Fragment\" }\n\n\
+     in `esdev.json`. One file can say it instead, with the pragma it \
+     probably already carries:\n\n  \
+     /** @jsxImportSource preact */\n  \
+     /** @jsx h */"
+        .to_string()
+}
+
+/// Whether a source contains JSX, parsed for the question.
+///
+/// For a caller holding text rather than a tree — the build's guard pass. A
+/// source that does not parse is not refused here: the bundler will report the
+/// syntax error itself, with its own position.
+pub fn source_contains_jsx(source: &str, id: &str) -> bool {
+    let path = Path::new(id);
+    let Ok(source_type) = SourceType::from_path(path) else {
+        return false;
+    };
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type.with_module(true)).parse();
+    contains_jsx(&parsed.program)
+}
+
+/// Whether a program contains any JSX at all.
+///
+/// Asked of the tree rather than of the extension: a `.jsx` holding no JSX is
+/// ordinary JavaScript and has nothing to configure, and a `.ts` cannot hold
+/// any. Nothing else in the file matters, so the walk stops at the first one.
+fn contains_jsx(program: &oxc::ast::ast::Program<'_>) -> bool {
+    use oxc::ast_visit::Visit;
+
+    #[derive(Default)]
+    struct Found(bool);
+
+    impl<'a> Visit<'a> for Found {
+        fn visit_jsx_element(&mut self, _it: &oxc::ast::ast::JSXElement<'a>) {
+            self.0 = true;
+        }
+        fn visit_jsx_fragment(&mut self, _it: &oxc::ast::ast::JSXFragment<'a>) {
+            self.0 = true;
+        }
+    }
+
+    let mut found = Found::default();
+    found.visit_program(program);
+    found.0
 }
 
 /// The `@jsx…` pragmas in a source's comments, in the order they appear.
@@ -300,8 +408,22 @@ impl SourceTransform for TypeStripper {
             .semantic
             .into_scoping();
 
+        let settings = self.jsx.with_pragmas(&source);
+        let Some(jsx) = settings.options() else {
+            // Only a file that actually contains JSX is refused; a `.jsx` that
+            // holds none is JavaScript with an unusual extension.
+            if contains_jsx(&program) {
+                return Err(unconfigured_jsx());
+            }
+            let result = Transformer::new(&allocator, path, &TransformOptions::default())
+                .build_with_scoping(scoping, &mut program);
+            if let Some(error) = first_error(&result.diagnostics) {
+                return Err(error);
+            }
+            return Ok(format!("{prelude}{}", Codegen::new().build(&program).code));
+        };
         let options = TransformOptions {
-            jsx: self.jsx.with_pragmas(&source).options(),
+            jsx,
             ..TransformOptions::default()
         };
         let result =
@@ -403,15 +525,14 @@ mod tests {
     }
 
     #[test]
-    fn jsx_compiles_to_calls() {
-        let out = strip("app.jsx", "export const el = <div id=\"a\">hi</div>;").unwrap();
-        assert!(!out.contains('<'), "{out}");
-        assert!(out.contains("jsx"), "{out}");
-    }
-
-    #[test]
     fn tsx_gets_both_treatments() {
-        let out = strip(
+        let out = strip_with(
+            JsxSettings {
+                function: Some(JsxFunction::Imported {
+                    source: "preact".to_string(),
+                }),
+                ..JsxSettings::default()
+            },
             "app.tsx",
             "const n: number = 1;\nexport const el = <p>{n}</p>;",
         )
@@ -486,14 +607,17 @@ mod tests {
 
     #[test]
     fn jsx_compiles_the_way_the_project_said() {
-        let classic = JsxSettings {
-            classic: true,
-            factory: Some("h".to_string()),
-            fragment: Some("Fragment".to_string()),
+        // A factory is a function the module already has, so the call is made
+        // and nothing is imported.
+        let called = JsxSettings {
+            function: Some(JsxFunction::InScope {
+                factory: "h".to_string(),
+                fragment: Some("Fragment".to_string()),
+            }),
             ..JsxSettings::default()
         };
         let out = strip_with(
-            classic,
+            called,
             "app.jsx",
             "export const el = <div id=\"a\"><>x</></div>;",
         )
@@ -502,20 +626,38 @@ mod tests {
         assert!(out.contains("h(Fragment"), "{out}");
         assert!(!out.contains("react"), "{out}");
 
-        let automatic = JsxSettings {
-            import_source: Some("preact".to_string()),
+        // An import source is a package the compiler imports the function from.
+        let imported = JsxSettings {
+            function: Some(JsxFunction::Imported {
+                source: "preact".to_string(),
+            }),
             ..JsxSettings::default()
         };
-        let out = strip_with(automatic, "app.jsx", "export const el = <div/>;").unwrap();
+        let out = strip_with(imported, "app.jsx", "export const el = <div/>;").unwrap();
         assert!(out.contains("preact/jsx-runtime"), "{out}");
         assert!(!out.contains("\"react"), "{out}");
     }
 
     #[test]
+    fn jsx_with_nothing_configured_is_refused() {
+        // Guessing here would compile a Preact project into React calls, so
+        // nothing is guessed.
+        let err = strip("app.jsx", "export const el = <div/>;").unwrap_err();
+        assert!(err.contains("nothing has said how JSX compiles"), "{err}");
+        assert!(err.contains("importSource"), "{err}");
+        assert!(err.contains("factory"), "{err}");
+
+        // A file with no JSX in it is not asked the question.
+        assert!(strip("app.jsx", "export const el = 1;").is_ok());
+    }
+
+    #[test]
     fn a_files_own_pragma_beats_the_project() {
-        // The project says automatic-with-preact; the file says classic-with-h.
+        // The project imports from preact; the file names a function to call.
         let project = JsxSettings {
-            import_source: Some("preact".to_string()),
+            function: Some(JsxFunction::Imported {
+                source: "preact".to_string(),
+            }),
             ..JsxSettings::default()
         };
         let out = strip_with(
@@ -528,21 +670,27 @@ mod tests {
         assert!(out.contains("h(Frag"), "{out}");
         assert!(!out.contains("jsx-runtime"), "{out}");
 
-        // And the other way round: a project on the classic runtime, a file that
+        // And the other way round: a project that names a factory, a file that
         // names an import source.
-        let classic = JsxSettings {
-            classic: true,
-            factory: Some("h".to_string()),
+        let called = JsxSettings {
+            function: Some(JsxFunction::InScope {
+                factory: "h".to_string(),
+                fragment: None,
+            }),
             ..JsxSettings::default()
         };
         let out = strip_with(
-            classic,
+            called,
             "app.jsx",
             "// @jsxImportSource solid-js\nexport const el = <div/>;",
         )
         .unwrap();
         assert!(out.contains("solid-js/jsx-runtime"), "{out}");
         assert!(!out.contains("h(\"div\""), "{out}");
+
+        // A pragma is also enough on its own, in a project that said nothing.
+        let out = strip("app.jsx", "/** @jsx h */\nexport const el = <div/>;").unwrap();
+        assert!(out.contains("h(\"div\""), "{out}");
     }
 
     #[test]

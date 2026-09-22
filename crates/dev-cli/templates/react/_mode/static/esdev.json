@@ -1,4 +1,7 @@
 {
+  "jsx": {
+    "importSource": "react"
+  },
   "targets": {
     "web": {
       "entry": "index.html",

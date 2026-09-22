@@ -57,6 +57,7 @@ mod html;
 mod init;
 mod inspect;
 mod install;
+mod jsx;
 mod plugins;
 mod preview;
 mod prompt;

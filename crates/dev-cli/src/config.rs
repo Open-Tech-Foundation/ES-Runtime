@@ -359,13 +359,7 @@ const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "devdir"];
 const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "isolation", "reporter"];
 
 /// The keys `jsx` may carry.
-const JSX_KEYS: &[&str] = &[
-    "runtime",
-    "importSource",
-    "factory",
-    "fragment",
-    "development",
-];
+const JSX_KEYS: &[&str] = &["importSource", "factory", "fragment", "development"];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
 ///
@@ -543,64 +537,89 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
 
 /// Parses the `jsx` section.
 ///
-/// The runtime is framework-agnostic, so which JSX a project writes is the
-/// project's to say: `"runtime": "classic"` with a `factory`, or the automatic
-/// runtime with the `importSource` of whichever library provides
-/// `jsx-runtime`. A file may still override all of it with the usual pragma
-/// comments, which is how a file borrowed from another project keeps working.
+/// There is no mode to name. `importSource` means the compiler writes the
+/// import; `factory` means it calls what the module imports itself. The shape of
+/// the section is the answer, so nothing here is spelled in another framework's
+/// vocabulary — and naming both is a question with two answers.
 fn read_jsx(value: Option<&Value>, file: &str) -> Result<crate::transform::JsxSettings, String> {
     let Some(value) = value else {
         return Ok(crate::transform::JsxSettings::default());
     };
     let map = object(value, file, "`jsx`")?;
+    // `runtime` is what every React-descended toolchain calls this, so it is
+    // worth a sentence rather than a list of the keys that do exist.
+    if map.contains_key("runtime") {
+        return Err(format!(
+            "{file}: `jsx.runtime` is not a key here.\n\n\
+             Name an `importSource` and the compiler writes the import, or a \
+             `factory` and it calls what the module imports itself:\n\n  \
+             \"jsx\": {{ \"importSource\": \"preact\" }}\n  \
+             \"jsx\": {{ \"factory\": \"h\", \"fragment\": \"Fragment\" }}"
+        ));
+    }
     known_keys(map, file, "`jsx`", JSX_KEYS)?;
 
-    let mut settings = crate::transform::JsxSettings::default();
-    if let Some(runtime) = map.get("runtime") {
-        let named = runtime.as_str().ok_or_else(|| {
-            format!("{file}: `jsx.runtime` must be \"automatic\" or \"classic\".")
-        })?;
-        settings.classic = match named {
-            "automatic" => false,
-            "classic" => true,
-            other => {
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match map.get(key) {
+            None => Ok(None),
+            Some(found) => {
+                let value = found
+                    .as_str()
+                    .ok_or_else(|| format!("{file}: `jsx.{key}` must be a string."))?;
+                if value.is_empty() {
+                    return Err(format!("{file}: `jsx.{key}` cannot be empty."));
+                }
+                Ok(Some(value.to_string()))
+            }
+        }
+    };
+    let import_source = text("importSource")?;
+    let factory = text("factory")?;
+    let fragment = text("fragment")?;
+    let development = match map.get("development") {
+        None => false,
+        Some(found) => found
+            .as_bool()
+            .ok_or_else(|| format!("{file}: `jsx.development` must be true or false."))?,
+    };
+
+    let function = match (import_source, factory) {
+        (Some(source), None) => {
+            if fragment.is_some() {
                 return Err(format!(
-                    "{file}: `jsx.runtime` is \"{other}\", and the runtimes are \"automatic\" and \"classic\"."
+                    "{file}: `jsx.fragment` goes with `jsx.factory`.\n\n\
+                     An imported runtime brings its own fragment, so naming one \
+                     here would name something the compiler never calls."
                 ));
             }
-        };
-    }
-    for (key, slot) in [
-        ("importSource", &mut settings.import_source),
-        ("factory", &mut settings.factory),
-        ("fragment", &mut settings.fragment),
-    ] {
-        if let Some(found) = map.get(key) {
-            let text = found
-                .as_str()
-                .ok_or_else(|| format!("{file}: `jsx.{key}` must be a string."))?;
-            if text.is_empty() {
-                return Err(format!("{file}: `jsx.{key}` cannot be empty."));
-            }
-            *slot = Some(text.to_string());
+            Some(crate::transform::JsxFunction::Imported { source })
         }
-    }
-    if let Some(development) = map.get("development") {
-        settings.development = development
-            .as_bool()
-            .ok_or_else(|| format!("{file}: `jsx.development` must be true or false."))?;
-    }
-    // Naming a factory is how you say "classic" in every other toolchain, so
-    // taking it as that spares a project from writing both.
-    if !settings.classic && (settings.factory.is_some() || settings.fragment.is_some()) {
-        if map.contains_key("runtime") {
+        (None, Some(factory)) => Some(crate::transform::JsxFunction::InScope { factory, fragment }),
+        (Some(_), Some(_)) => {
             return Err(format!(
-                "{file}: `jsx.factory` and `jsx.fragment` belong to the classic runtime; the automatic one imports from `jsx.importSource`."
+                "{file}: `jsx` names an `importSource` and a `factory`, and those are \
+                 two ways to reach the same function.\n\n\
+                 Keep one: an `importSource` has the compiler write the import, a \
+                 `factory` has it call what the module imports itself."
             ));
         }
-        settings.classic = true;
-    }
-    Ok(settings)
+        (None, None) => {
+            if fragment.is_some() {
+                return Err(format!("{file}: `jsx.fragment` goes with `jsx.factory`."));
+            }
+            return Err(format!(
+                "{file}: `jsx` says nothing.\n\n\
+                 Name an `importSource` and the compiler writes the import, or a \
+                 `factory` and it calls what the module imports itself:\n\n  \
+                 \"jsx\": {{ \"importSource\": \"preact\" }}\n  \
+                 \"jsx\": {{ \"factory\": \"h\", \"fragment\": \"Fragment\" }}"
+            ));
+        }
+    };
+    Ok(crate::transform::JsxSettings {
+        function,
+        development,
+    })
 }
 
 /// Parses the `test` section.
@@ -2191,30 +2210,52 @@ mod tests {
         assert!(tested.targets.is_empty());
         assert_eq!(tested.test.jobs, Some(2));
 
-        let jsx =
-            read(r#"{ "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" } }"#)
-                .expect("read");
-        assert!(jsx.jsx.classic);
-        assert_eq!(jsx.jsx.factory.as_deref(), Some("h"));
-        assert_eq!(jsx.jsx.fragment.as_deref(), Some("Fragment"));
+        // A factory is the function the module already has; an import source is
+        // the package the compiler imports one from. Which key is there says
+        // which, so there is no mode to name.
+        let called =
+            read(r#"{ "jsx": { "factory": "h", "fragment": "Fragment" } }"#).expect("read");
+        assert_eq!(
+            called.jsx.function,
+            Some(crate::transform::JsxFunction::InScope {
+                factory: "h".to_string(),
+                fragment: Some("Fragment".to_string()),
+            })
+        );
 
-        // Naming a factory says "classic" without writing it twice.
-        let implied = read(r#"{ "jsx": { "factory": "h" } }"#).expect("read");
-        assert!(implied.jsx.classic);
+        let imported = read(r#"{ "jsx": { "importSource": "preact" } }"#).expect("read");
+        assert_eq!(
+            imported.jsx.function,
+            Some(crate::transform::JsxFunction::Imported {
+                source: "preact".to_string(),
+            })
+        );
 
-        let source = read(r#"{ "jsx": { "importSource": "preact" } }"#).expect("read");
-        assert!(!source.jsx.classic);
-        assert_eq!(source.jsx.import_source.as_deref(), Some("preact"));
+        // Nothing said is nothing assumed.
+        assert_eq!(read(r#"{ "test": {} }"#).expect("read").jsx.function, None);
     }
 
     #[test]
     fn a_jsx_section_refuses_what_it_cannot_mean() {
-        let runtime = read(r#"{ "jsx": { "runtime": "preact" } }"#).expect_err("refused");
-        assert!(runtime.contains("automatic"), "{runtime}");
+        // The word every React-descended toolchain uses, answered with the two
+        // keys that exist here rather than with a list.
+        let runtime = read(r#"{ "jsx": { "runtime": "classic" } }"#).expect_err("refused");
+        assert!(runtime.contains("not a key here"), "{runtime}");
+        assert!(runtime.contains("importSource"), "{runtime}");
 
-        let mixed =
-            read(r#"{ "jsx": { "runtime": "automatic", "factory": "h" } }"#).expect_err("refused");
-        assert!(mixed.contains("classic runtime"), "{mixed}");
+        let both = read(r#"{ "jsx": { "importSource": "preact", "factory": "h" } }"#)
+            .expect_err("refused");
+        assert!(
+            both.contains("two ways to reach the same function"),
+            "{both}"
+        );
+
+        let orphan = read(r#"{ "jsx": { "importSource": "preact", "fragment": "F" } }"#)
+            .expect_err("refused");
+        assert!(orphan.contains("goes with `jsx.factory`"), "{orphan}");
+
+        let nothing = read(r#"{ "jsx": { } }"#).expect_err("refused");
+        assert!(nothing.contains("says nothing"), "{nothing}");
 
         let empty = read(r#"{ "jsx": { "factory": "" } }"#).expect_err("refused");
         assert!(empty.contains("cannot be empty"), "{empty}");

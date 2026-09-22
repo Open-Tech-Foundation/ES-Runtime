@@ -19,15 +19,17 @@ esdev test --file=x.test.ts   # exactly one file
 
 ## JSX in tests
 
-A test file may be `.jsx` or `.tsx`. Which JSX it is written in comes from the
-project's [`jsx` section](/esdev/build/project#jsx) — the automatic runtime with
-`react` unless the project says otherwise — or from the file's own
-`@jsx`/`@jsxImportSource` pragma. The same setting compiles the bundle, so a
-component means the same thing in a test and in a build.
+A test file may be `.jsx` or `.tsx`. Which JSX it is comes from the project's
+[`jsx` section](/esdev/build/project#jsx), or from the file's own
+`@jsxImportSource`/`@jsx` pragma. There is no default: JSX with nothing said
+about it is refused rather than compiled for a framework nobody named.
 
 ```json
-{ "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" } }
+{ "jsx": { "importSource": "preact" } }
 ```
+
+The same setting compiles the bundle, so a component means the same thing in a
+test and in a build.
 
 ## DOM tests
 

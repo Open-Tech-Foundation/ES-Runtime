@@ -54,37 +54,40 @@ takes a release build of a project whose day to day is unminified.
 
 ## JSX
 
-esdev is framework-agnostic, so which JSX a project writes is the project's to
-say. An unannotated `.jsx` compiles to the automatic runtime with `react` as its
-import source; a `jsx` section changes that for every command that compiles JSX
-— `esdev test`, `esdev build`, `esdev start`.
+esdev compiles JSX for whatever framework the project uses, and picks none of
+them for you. Nothing is assumed: a file with JSX in it and no answer anywhere
+is refused, by name, with the two keys that answer it. Say it once, in a `jsx`
+section, and every command that compiles — `esdev test`, `esdev build`,
+`esdev start` — uses it.
+
+Either the compiler imports the function, or the module already has one:
 
 ```json
-{
-  "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" },
-  "targets": { "app": { "entry": "src/app.jsx", "out": "dist/app.js" } }
-}
+{ "jsx": { "importSource": "preact" } }
+```
+
+```json
+{ "jsx": { "factory": "h", "fragment": "Fragment" } }
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `runtime` | `"automatic"` (default) or `"classic"` |
-| `importSource` | The package the automatic runtime imports `jsx`/`jsxs` from: `"preact"`, `"solid-js"` |
-| `factory` | The classic runtime's element factory: `"h"`, `"React.createElement"` |
-| `fragment` | The classic runtime's fragment |
+| `importSource` | The package to import `jsx`/`jsxs`/`Fragment` from — `"preact"`, `"solid-js"`, `"react"`. The compiler writes the import. |
+| `factory` | A function already in scope to call for each element — `"h"`, `"React.createElement"`. The module imports it itself. |
+| `fragment` | What `<>…</>` calls, alongside `factory` |
 | `development` | `true` — add `__source` and `__self` to every element |
 
-Naming a `factory` or a `fragment` means the classic runtime, so writing
-`"runtime"` as well is optional.
+The two are alternatives, so naming both is refused. So is `fragment` without
+`factory`, and so is an empty `jsx` section.
 
-A file overrides the project with the usual pragma comments, which is what makes
-a file borrowed from another project work unchanged:
+A file overrides the project with the pragma it probably already carries, which
+is what makes a file borrowed from another project work unchanged — and what
+lets one MDX or island file compile differently from the rest:
 
 ```jsx
+/** @jsxImportSource preact */
 /** @jsx h */
 /** @jsxFrag Fragment */
-// or, for the automatic runtime:
-/** @jsxImportSource preact */
 ```
 
 A config may carry only a `jsx` section — or only `test` — with no `targets` at
