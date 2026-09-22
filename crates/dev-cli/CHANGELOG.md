@@ -25,6 +25,19 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **`document.createNodeIterator()`**, a real NodeIterator rather than a
+  TreeWalker wearing its name: the position is between nodes, so going forward
+  and then back lands on the same node, `referenceNode` and
+  `pointerBeforeReferenceNode` say where it is, and `FILTER_REJECT` only skips —
+  a NodeIterator has no reject. A sanitiser that walks a tree is the common
+  consumer, and this is what it calls.
+- **`implementation.createDocument()`** for a namespaced document with an
+  optional root element and doctype. No XML parsing is involved; building a
+  document to compare namespaces in is what it is for.
+- **Every document is a whole document.** `createRange`, `styleSheets` and
+  `adoptedStyleSheets` were installed on the realm's own document, so one from
+  `DOMParser` or `createHTMLDocument` had no `createRange` at all. They are on
+  the prototype now.
 - `esdev init` starts a bare project or adopts an existing directory. An
   empty directory gets the bare minimal setup — a greeting server in JS or
   TS, built and run by esdev — asked by name, language and package manager.
@@ -203,6 +216,60 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A declaration list knows which properties exist.** `style.nonsenseProp` read
+  `""` and `"nonsense" in getComputedStyle(el)` was true, so feature detection
+  against a declaration — which is how a library asks whether a property exists —
+  always said yes. A declaration is the surface of the known properties, as in a
+  browser: an unknown name reads `undefined`, a known one that nothing set reads
+  `""`, and a custom property is always known. `@supports` and `CSS.supports`
+  answer from the same list, which closes the documented divergence where
+  `@supports (made-up-property: 1)` used to apply its rules.
+- **`document.cookie` is a document-level string store.** Setting and reading
+  back works, `Max-Age=0` and a past `Expires` delete, and `Path`/`Secure`/
+  `Domain` are accepted and ignored because there is no origin to scope them to.
+  No network is involved; a sanitiser testing `"cookie" in document` to catch DOM
+  clobbering now gets the answer a browser gives.
+- **Selector escapes are resolved.** `#id\.with\.dots`, `.foo\:bar` and
+  `#\31 leading` were a `SyntaxError`, so an id or class containing a dot, colon
+  or leading digit — which is what `CSS.escape` exists to produce — could not be
+  queried at all. Identifiers resolve their escapes now, including hex escapes
+  and the space that terminates one, in `querySelector`, `matches`, `closest`,
+  selector lists, combinators and specificity. Non-ASCII name characters work
+  too, so `.café` is a class.
+- **A radio group holds one checked button however it was checked.** The
+  exclusivity lived in `click()`, so `input.checked = true` on two radios in the
+  same group left both checked and a form serialized `pick=yes&pick=no`. The
+  invariant belongs to checkedness itself now. Unchecking is not exclusive, a
+  different `name` is a different group, and a radio with no name is in no group
+  — as in a browser.
+- **HTML element and attribute names are case-insensitive, as the specification
+  says.** `document.createElement("DIV")` made nothing — it threw — and
+  `<DIV CLASS=a>` was a parse error, where both are conforming HTML for a `div`
+  with a class. Both lowercase now; a namespaced name keeps its case, so
+  `createElementNS(svg, "linearGradient")` and `viewBox` are untouched.
+- **`new DocumentFragment()`, `new Text()` and `new Comment()` belong to a
+  document.** They took one as an argument and got `undefined` from script, so
+  the fragment had no `ownerDocument` and the first `appendChild` into a tree
+  failed on adoption. They belong to the realm's document now, the way Web IDL
+  says.
+- **`element.focus` and `element.blur` are writable and configurable.** They were
+  installed as bare values, so a test library replacing `focus` to record calls
+  got a TypeError. Every Web IDL operation is writable; these are too.
+- **A fragment and a shadow root answer `getElementById`.** NonElementParentNode
+  is not only a document's; inside a shadow root it is the idiomatic call, and it
+  threw.
+- **`document.hasFocus()` answers true**, with `visibilityState` and `hidden`
+  alongside it. A headless document is the focused one, and a suite that asks
+  before dispatching key events was ending at the question.
+
+- **A plugin that fails before it declares anything now says why.** The reason
+  was printed from the plugin host's own thread while the build was already
+  returning "the run that loads them ended before it declared any" and exiting,
+  so which of the two you saw was a race — under load, the useful one lost. The
+  thread hands the reason over instead, and the build reports it: `the project's
+  plugins could not be loaded: … ./plugin.mjs has no default export`. This was
+  a flaky test failing roughly one run in six, which is exactly what it looks
+  like when a diagnostic races the process that should print it.
 - Document `-V` in `esdev --help`, which printed the version all along like
   `-v` without ever being documented.
 - Say `esdev --watch` is still watching after the program exits instead of
@@ -397,61 +464,6 @@ is the point, since none of the three has any business in a deployment.
   instead of `bun test`.
 
 ### Fixed
-
-- **A declaration list knows which properties exist.** `style.nonsenseProp` read
-  `""` and `"nonsense" in getComputedStyle(el)` was true, so feature detection
-  against a declaration — which is how a library asks whether a property exists —
-  always said yes. A declaration is the surface of the known properties, as in a
-  browser: an unknown name reads `undefined`, a known one that nothing set reads
-  `""`, and a custom property is always known. `@supports` and `CSS.supports`
-  answer from the same list, which closes the documented divergence where
-  `@supports (made-up-property: 1)` used to apply its rules.
-- **`document.cookie` is a document-level string store.** Setting and reading
-  back works, `Max-Age=0` and a past `Expires` delete, and `Path`/`Secure`/
-  `Domain` are accepted and ignored because there is no origin to scope them to.
-  No network is involved; a sanitiser testing `"cookie" in document` to catch DOM
-  clobbering now gets the answer a browser gives.
-- **Selector escapes are resolved.** `#id\.with\.dots`, `.foo\:bar` and
-  `#\31 leading` were a `SyntaxError`, so an id or class containing a dot, colon
-  or leading digit — which is what `CSS.escape` exists to produce — could not be
-  queried at all. Identifiers resolve their escapes now, including hex escapes
-  and the space that terminates one, in `querySelector`, `matches`, `closest`,
-  selector lists, combinators and specificity. Non-ASCII name characters work
-  too, so `.café` is a class.
-- **A radio group holds one checked button however it was checked.** The
-  exclusivity lived in `click()`, so `input.checked = true` on two radios in the
-  same group left both checked and a form serialized `pick=yes&pick=no`. The
-  invariant belongs to checkedness itself now. Unchecking is not exclusive, a
-  different `name` is a different group, and a radio with no name is in no group
-  — as in a browser.
-- **HTML element and attribute names are case-insensitive, as the specification
-  says.** `document.createElement("DIV")` made nothing — it threw — and
-  `<DIV CLASS=a>` was a parse error, where both are conforming HTML for a `div`
-  with a class. Both lowercase now; a namespaced name keeps its case, so
-  `createElementNS(svg, "linearGradient")` and `viewBox` are untouched.
-- **`new DocumentFragment()`, `new Text()` and `new Comment()` belong to a
-  document.** They took one as an argument and got `undefined` from script, so
-  the fragment had no `ownerDocument` and the first `appendChild` into a tree
-  failed on adoption. They belong to the realm's document now, the way Web IDL
-  says.
-- **`element.focus` and `element.blur` are writable and configurable.** They were
-  installed as bare values, so a test library replacing `focus` to record calls
-  got a TypeError. Every Web IDL operation is writable; these are too.
-- **A fragment and a shadow root answer `getElementById`.** NonElementParentNode
-  is not only a document's; inside a shadow root it is the idiomatic call, and it
-  threw.
-- **`document.hasFocus()` answers true**, with `visibilityState` and `hidden`
-  alongside it. A headless document is the focused one, and a suite that asks
-  before dispatching key events was ending at the question.
-
-- **A plugin that fails before it declares anything now says why.** The reason
-  was printed from the plugin host's own thread while the build was already
-  returning "the run that loads them ended before it declared any" and exiting,
-  so which of the two you saw was a race — under load, the useful one lost. The
-  thread hands the reason over instead, and the build reports it: `the project's
-  plugins could not be loaded: … ./plugin.mjs has no default export`. This was
-  a flaky test failing roughly one run in six, which is exactly what it looks
-  like when a diagnostic races the process that should print it.
 
 - Restore structural esdev DOM selectors after the internal child iterator was
   renamed, and expose specialized HTML, SVG, and MathML element interfaces from

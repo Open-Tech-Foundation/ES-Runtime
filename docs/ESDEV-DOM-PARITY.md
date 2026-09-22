@@ -9,29 +9,29 @@ keep current.
 
 ## Surface
 
-192 features — interfaces, members and behaviours — put to all four runtimes.
+205 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 168 / 192 | 88% |
-| jsdom | 155 / 192 | 81% |
-| happy-dom | 158 / 192 | 82% |
+| esdev | 183 / 205 | 89% |
+| jsdom | 165 / 205 | 80% |
+| happy-dom | 168 / 205 | 82% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 44 | 43 | 40 | 36 |
-| traversal | 13 | 11 | 12 | 10 |
-| cascade | 24 | 20 | 12 | 17 |
+| tree | 52 | 51 | 47 | 43 |
+| traversal | 14 | 13 | 13 | 11 |
+| selectors | 14 | 14 | 14 | 13 |
+| cascade | 26 | 22 | 12 | 17 |
+| window | 32 | 21 | 21 | 22 |
 | events | 24 | 23 | 20 | 24 |
 | components | 17 | 17 | 12 | 13 |
 | parsing | 12 | 8 | 12 | 11 |
-| selectors | 13 | 13 | 13 | 12 |
 | forms | 14 | 14 | 14 | 14 |
-| window | 31 | 19 | 20 | 21 |
 
 ## Behaviour
 
-44 of 46 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+51 of 53 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -72,6 +72,13 @@ compares the result.
 | a-shadow-root-is-styled-by-its-own-sheets | cascade | yes | no | no |
 | nesting-resolves-against-its-parent-rule | cascade | yes | no | no |
 | geometry-answers-zero-and-rendering-is-knowable | cascade | no | no | no |
+| html-names-are-case-insensitive | tree | yes | yes | yes |
+| bare-constructors-and-fragment-lookups | tree | yes | no | yes |
+| a-radio-group-is-exclusive-on-the-checked-setter | forms | yes | yes | yes |
+| escapes-in-an-identifier | selectors | yes | yes | no |
+| an-unknown-property-is-not-a-declaration | cascade | yes | no | no |
+| a-node-iterator-walks-and-steps-back | traversal | yes | yes | no |
+| a-secondary-document-is-a-whole-document | tree | yes | yes | no |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -85,7 +92,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-39 of the 192 features.
+43 of the 205 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -98,6 +105,10 @@ compares the result.
 | Element.setHTMLUnsafe | yes | no | no |
 | Element.getHTML | yes | no | yes |
 | Element.checkVisibility | yes | no | no |
+| document.hasFocus() | yes | no | yes |
+| implementation.createDocument | `svg/http://www.w3.org/2000/svg` | `svg/http://www.w3.org/2000/svg` | `html/http://www.w3.org/1999/xhtml` |
+| unknown property is undefined | `undefined/false/false` | `undefined/false/undefined` | `undefined/false/true` |
+| keyword initial values | `none,1,visible,0px,auto` | `,,,,` | `,,,,` |
 | StaticRange | yes | yes | no |
 | AbstractRange | yes | yes | no |
 | Range.getBoundingClientRect | yes | no | yes |
@@ -114,7 +125,7 @@ compares the result.
 | CustomStateSet | yes | no | no |
 | omitted paragraph end tag | `<p>one</p><p>two</p>` | `<p>one</p><p>two</p>` | `<p>one<p>two</p></p>` |
 | invalid selector throws | `SyntaxError` | `SyntaxError` | `no throw` |
-| adoptedStyleSheets applies | `rgb(1, 2, 3)` | `rgb(0, 0, 0)` | `rgb(1, 2, 3)` |
+| adoptedStyleSheets applies | `rgb(1, 2, 3)` | `throws:TypeError` | `rgb(1, 2, 3)` |
 | user-agent display defaults | `block,inline` | `block,inline` | `block,` |
 | no computed style outside the tree | yes | no | yes |
 | @media follows the viewport | `rgb(7, 7, 7)` | `rgb(0, 0, 0)` | `rgb(7, 7, 7)` |
@@ -131,7 +142,7 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-24 of 192. Every one of them is here:
+22 of 205. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -146,7 +157,6 @@ a difference with no entry fails `tsr docs:parity`.
 
 | Feature | Chrome | esdev |
 | --- | --- | --- |
-| NodeIterator | yes | no |
 | XPathEvaluator (document.evaluate) | yes | no |
 | TouchEvent | yes | no |
 | XMLSerializer | yes | no |
@@ -185,7 +195,6 @@ a difference with no entry fails `tsr docs:parity`.
 
 | Feature | Chrome | esdev |
 | --- | --- | --- |
-| document.cookie | yes | no |
 | XMLHttpRequest | yes | no |
 | File / FileReader | yes | no |
 | alert | yes | no |
@@ -240,6 +249,19 @@ a difference with no entry fails `tsr docs:parity`.
 | tree | row.cells | yes | yes | yes | yes |
 | tree | row.rowIndex | yes | yes | yes | yes |
 | tree | HTMLTableSectionElement | yes | yes | yes | yes |
+| tree | createElement lowercases | `div/DIV` | `div/DIV` | `div/DIV` | `div/DIV` |
+| tree | uppercase markup | `<span class="a">x</span>` | `<span class="a">x</span>` | `<span class="a">x</span>` | `<span class="a">x</span>` |
+| tree | new DocumentFragment() | `x` | `x` | `x` | `x` |
+| tree | fragment.getElementById | yes | yes | yes | yes |
+| tree | document.hasFocus() | yes | yes | no | yes |
+| tree | element.focus is writable | yes | yes | yes | yes |
+| traversal | NodeIterator walks | `div,a,b,i` | `div,a,b,i` | `div,a,b,i` | `div,a,b,i` |
+| tree | implementation.createDocument | `svg/http://www.w3.org/2000/svg` | `svg/http://www.w3.org/2000/svg` | `svg/http://www.w3.org/2000/svg` | `html/http://www.w3.org/1999/xhtml` |
+| tree | a parsed document has ranges and sheets | `function/number` | `function/number` | `function/number` | `function/number` |
+| selectors | escaped identifier | `1` | `1` | `1` | `1` |
+| cascade | unknown property is undefined | `undefined/false/false` | `undefined/false/false` | `undefined/false/undefined` | `undefined/false/true` |
+| cascade | keyword initial values | `none,1,visible,0px,auto` | `none,1,visible,0px,auto` | `,,,,` | `,,,,` |
+| window | document.cookie is a store | yes | yes | yes | yes |
 | traversal | Range | yes | yes | yes | yes |
 | traversal | StaticRange | yes | yes | yes | no |
 | traversal | AbstractRange | yes | yes | yes | no |
@@ -249,7 +271,7 @@ a difference with no entry fails `tsr docs:parity`.
 | tree | DOMRect | yes | yes | yes | yes |
 | cascade | element scroll offsets | `0,0,false` | `0,0,false` | `40,0,true` | `40,0,false` |
 | traversal | readonly range boundary points | `TypeError` | `TypeError` | `TypeError` | `TypeError` |
-| traversal | NodeIterator | yes | no | yes | yes |
+| traversal | NodeIterator | yes | yes | yes | yes |
 | traversal | TreeWalker | yes | yes | yes | yes |
 | traversal | NodeFilter | yes | yes | yes | yes |
 | traversal | XPathEvaluator (document.evaluate) | yes | no | yes | no |
@@ -341,7 +363,7 @@ a difference with no entry fails `tsr docs:parity`.
 | cascade | constructable stylesheets | `1` | `1` | `1` | `1` |
 | cascade | document.styleSheets | yes | yes | yes | yes |
 | cascade | style element has a sheet | yes | yes | yes | yes |
-| cascade | adoptedStyleSheets applies | `rgb(1, 2, 3)` | `rgb(1, 2, 3)` | `rgb(0, 0, 0)` | `rgb(1, 2, 3)` |
+| cascade | adoptedStyleSheets applies | `rgb(1, 2, 3)` | `rgb(1, 2, 3)` | `throws:TypeError` | `rgb(1, 2, 3)` |
 | cascade | getComputedStyle | yes | yes | yes | yes |
 | cascade | cascade from a stylesheet | `rgb(1, 2, 3)` | `rgb(1, 2, 3)` | `rgb(1, 2, 3)` | `rgb(1, 2, 3)` |
 | cascade | specificity decides | `rgb(3, 3, 3)` | `rgb(3, 3, 3)` | `rgb(3, 3, 3)` | `rgb(3, 3, 3)` |
@@ -363,7 +385,7 @@ a difference with no entry fails `tsr docs:parity`.
 | window | location parts are assignable | yes | yes | yes | yes |
 | window | history.pushState | yes | yes | yes | yes |
 | window | localStorage | `throws:SecurityError` | yes | yes | yes |
-| window | document.cookie | yes | no | yes | yes |
+| window | document.cookie | yes | yes | yes | yes |
 | window | innerWidth | yes | yes | yes | yes |
 | window | requestAnimationFrame | yes | yes | yes | yes |
 | window | queueMicrotask | yes | yes | yes | yes |

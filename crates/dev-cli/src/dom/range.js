@@ -7,7 +7,7 @@ function rangeError(name, message) {
 
 const POINTS = Symbol("esdev DOM range boundary points");
 
-export function createRanges({ Node, Element, Text, DocumentType, Attr, DOMRect }, parse) {
+export function createRanges({ Document, Node, Element, Text, DocumentType, Attr, DOMRect }, parse) {
   const ranges = new Set();
   function childIndex(node) {
     let index = 0;
@@ -275,10 +275,19 @@ export function createRanges({ Node, Element, Text, DocumentType, Attr, DOMRect 
     detach() { ranges.delete(this); }
   }
 
-  function install(document) {
-    Object.defineProperty(document, "createRange", { value: () => new Range(document) });
-    Object.defineProperty(document, "_adjustRanges", {
-      value: {
+  // Installed on the prototype, not on one document: a document from
+  // `DOMParser` or `createHTMLDocument` is a document, and `createRange` on it
+  // used to be undefined.
+  function install() {
+    Object.defineProperty(Document.prototype, "createRange", {
+      value() { return new Range(this); },
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(Document.prototype, "_adjustRanges", {
+      get() {
+        const document = this;
+        return {
         insert(parent, index) {
           for (const range of ranges) {
             if (range.document !== document) continue;
@@ -307,7 +316,9 @@ export function createRanges({ Node, Element, Text, DocumentType, Attr, DOMRect 
             if (range.endContainer === node) range[POINTS].endOffset = Math.min(range.endOffset, newLength);
           }
         },
+        };
       },
+      configurable: true,
     });
   }
 

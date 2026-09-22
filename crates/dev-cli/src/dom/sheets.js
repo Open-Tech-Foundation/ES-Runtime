@@ -68,22 +68,93 @@ const UA_RULES = [
 // assert on. A length or a colour that a browser resolves against layout or a
 // colour scheme is deliberately absent: answering `""` is honest, answering a
 // number this DOM did not compute would not be.
-const INITIAL = new Map([
-  ["display", "inline"],
-  ["visibility", "visible"],
-  ["direction", "ltr"],
-  ["font-style", "normal"],
-  ["font-weight", "400"],
-  ["font-variant", "normal"],
-  ["text-align", "start"],
-  ["text-transform", "none"],
-  ["white-space", "normal"],
-  ["list-style-position", "outside"],
-  ["border-collapse", "separate"],
-  ["pointer-events", "auto"],
-  ["position", "static"],
-  ["color", "rgb(0, 0, 0)"],
-]);
+const INITIAL = new Map(Object.entries({
+  "display": "inline",
+  "visibility": "visible",
+  "direction": "ltr",
+  "font-style": "normal",
+  "font-weight": "400",
+  "font-variant": "normal",
+  "text-align": "start",
+  "text-transform": "none",
+  "white-space": "normal",
+  "list-style-position": "outside",
+  "list-style-type": "disc",
+  "border-collapse": "separate",
+  "pointer-events": "auto",
+  "position": "static",
+  "color": "rgb(0, 0, 0)",
+  // Keyword and zero initials, each one checked against Chrome: these do not
+  // depend on layout, so answering them is not a guess. The sizing family
+  // (`width`, `height`, `inline-size`, …) is deliberately absent, because a
+  // browser answers those with a used value in pixels.
+  "transform": "none",
+  "opacity": "1",
+  "overflow": "visible",
+  "overflow-x": "visible",
+  "overflow-y": "visible",
+  "float": "none",
+  "clear": "none",
+  "box-sizing": "content-box",
+  "flex-direction": "row",
+  "flex-wrap": "nowrap",
+  "flex-grow": "0",
+  "flex-shrink": "1",
+  "flex-basis": "auto",
+  "align-items": "normal",
+  "justify-content": "normal",
+  "order": "0",
+  "gap": "normal",
+  "row-gap": "normal",
+  "column-gap": "normal",
+  "grid-template-columns": "none",
+  "grid-template-rows": "none",
+  "background-color": "rgba(0, 0, 0, 0)",
+  "background-image": "none",
+  "border-top-style": "none",
+  "border-right-style": "none",
+  "border-bottom-style": "none",
+  "border-left-style": "none",
+  "border-top-width": "0px",
+  "border-right-width": "0px",
+  "border-bottom-width": "0px",
+  "border-left-width": "0px",
+  "border-radius": "0px",
+  "outline-style": "none",
+  "text-decoration-line": "none",
+  "text-overflow": "clip",
+  "word-break": "normal",
+  "line-height": "normal",
+  "cursor": "auto",
+  "z-index": "auto",
+  "vertical-align": "baseline",
+  "user-select": "auto",
+  "mix-blend-mode": "normal",
+  "isolation": "auto",
+  "object-fit": "fill",
+  "resize": "none",
+  "appearance": "none",
+  "table-layout": "auto",
+  "aspect-ratio": "auto",
+  "will-change": "auto",
+  "filter": "none",
+  "animation-name": "none",
+  "top": "auto",
+  "right": "auto",
+  "bottom": "auto",
+  "left": "auto",
+  "inset": "auto",
+  "margin": "0px",
+  "margin-top": "0px",
+  "margin-right": "0px",
+  "margin-bottom": "0px",
+  "margin-left": "0px",
+  "padding": "0px",
+  "padding-top": "0px",
+  "padding-right": "0px",
+  "padding-bottom": "0px",
+  "padding-left": "0px",
+}));
 
 // Where an element's own `style` attribute sits, above every author rule that
 // is not `!important`.
@@ -416,11 +487,14 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches }) {
     return css.readOnlyDeclaration(Array.from(values, ([name, value]) => [name, value, false]));
   }
 
-  function install(document) {
-    Object.defineProperty(document, "styleSheets", {
+  // On the prototypes: every document has stylesheets, including one built by
+  // `DOMParser` or `createHTMLDocument`.
+  function install() {
+    Object.defineProperty(Document.prototype, "styleSheets", {
       get() { return new StyleSheetList(documentSheets(this)); },
+      configurable: true,
     });
-    for (const target of [document, ShadowRoot.prototype]) {
+    for (const target of [Document.prototype, ShadowRoot.prototype]) {
       Object.defineProperty(target, "adoptedStyleSheets", {
         get() { return this[ADOPTED] ?? []; },
         set(sheets) {

@@ -1,34 +1,48 @@
 {
   "summary": {
-    "features": 192,
+    "features": 205,
     "agreesWithChrome": {
-      "esdev": 168,
-      "jsdom": 155,
-      "happy-dom": 158
+      "esdev": 183,
+      "jsdom": 165,
+      "happy-dom": 168
     },
     "drift": 0
   },
   "groups": [
     {
       "group": "tree",
-      "features": 44,
-      "esdev": 43,
-      "jsdom": 40,
-      "happy-dom": 36
+      "features": 52,
+      "esdev": 51,
+      "jsdom": 47,
+      "happy-dom": 43
     },
     {
       "group": "traversal",
-      "features": 13,
-      "esdev": 11,
-      "jsdom": 12,
-      "happy-dom": 10
+      "features": 14,
+      "esdev": 13,
+      "jsdom": 13,
+      "happy-dom": 11
+    },
+    {
+      "group": "selectors",
+      "features": 14,
+      "esdev": 14,
+      "jsdom": 14,
+      "happy-dom": 13
     },
     {
       "group": "cascade",
-      "features": 24,
-      "esdev": 20,
+      "features": 26,
+      "esdev": 22,
       "jsdom": 12,
       "happy-dom": 17
+    },
+    {
+      "group": "window",
+      "features": 32,
+      "esdev": 21,
+      "jsdom": 21,
+      "happy-dom": 22
     },
     {
       "group": "events",
@@ -52,25 +66,11 @@
       "happy-dom": 11
     },
     {
-      "group": "selectors",
-      "features": 13,
-      "esdev": 13,
-      "jsdom": 13,
-      "happy-dom": 12
-    },
-    {
       "group": "forms",
       "features": 14,
       "esdev": 14,
       "jsdom": 14,
       "happy-dom": 14
-    },
-    {
-      "group": "window",
-      "features": 31,
-      "esdev": 19,
-      "jsdom": 20,
-      "happy-dom": 21
     }
   ],
   "features": [
@@ -462,6 +462,123 @@
       "drift": false
     },
     {
+      "group": "tree",
+      "name": "createElement lowercases",
+      "chrome": "div/DIV",
+      "esdev": "div/DIV",
+      "jsdom": "div/DIV",
+      "happy-dom": "div/DIV",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "uppercase markup",
+      "chrome": "<span class=\"a\">x</span>",
+      "esdev": "<span class=\"a\">x</span>",
+      "jsdom": "<span class=\"a\">x</span>",
+      "happy-dom": "<span class=\"a\">x</span>",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "new DocumentFragment()",
+      "chrome": "x",
+      "esdev": "x",
+      "jsdom": "x",
+      "happy-dom": "x",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "fragment.getElementById",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.hasFocus()",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "element.focus is writable",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "NodeIterator walks",
+      "chrome": "div,a,b,i",
+      "esdev": "div,a,b,i",
+      "jsdom": "div,a,b,i",
+      "happy-dom": "div,a,b,i",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "implementation.createDocument",
+      "chrome": "svg/http://www.w3.org/2000/svg",
+      "esdev": "svg/http://www.w3.org/2000/svg",
+      "jsdom": "svg/http://www.w3.org/2000/svg",
+      "happy-dom": "html/http://www.w3.org/1999/xhtml",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "a parsed document has ranges and sheets",
+      "chrome": "function/number",
+      "esdev": "function/number",
+      "jsdom": "function/number",
+      "happy-dom": "function/number",
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": "escaped identifier",
+      "chrome": "1",
+      "esdev": "1",
+      "jsdom": "1",
+      "happy-dom": "1",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "unknown property is undefined",
+      "chrome": "undefined/false/false",
+      "esdev": "undefined/false/false",
+      "jsdom": "undefined/false/undefined",
+      "happy-dom": "undefined/false/true",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "keyword initial values",
+      "chrome": "none,1,visible,0px,auto",
+      "esdev": "none,1,visible,0px,auto",
+      "jsdom": ",,,,",
+      "happy-dom": ",,,,",
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "document.cookie is a store",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
       "group": "traversal",
       "name": "Range",
       "chrome": true,
@@ -546,7 +663,7 @@
       "group": "traversal",
       "name": "NodeIterator",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
       "jsdom": true,
       "happy-dom": true,
       "drift": false
@@ -1375,7 +1492,7 @@
       "name": "adoptedStyleSheets applies",
       "chrome": "rgb(1, 2, 3)",
       "esdev": "rgb(1, 2, 3)",
-      "jsdom": "rgb(0, 0, 0)",
+      "jsdom": "throws:TypeError",
       "happy-dom": "rgb(1, 2, 3)",
       "drift": false
     },
@@ -1572,7 +1689,7 @@
       "group": "window",
       "name": "document.cookie",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
       "jsdom": true,
       "happy-dom": true,
       "drift": false

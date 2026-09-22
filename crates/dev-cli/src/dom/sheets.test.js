@@ -27,7 +27,7 @@ function fixture({ sheets = {}, media = () => true } = {}) {
   html.append(head, body);
   document.appendChild(html);
   Object.defineProperties(document, { head: { get: () => head }, body: { get: () => body } });
-  module.install(document);
+  module.install();
   return { body, document, head, module, tree };
 }
 

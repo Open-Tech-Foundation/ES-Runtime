@@ -14,6 +14,7 @@ const TEMPLATE_CONTENT = Symbol("esdev DOM template content");
 const VALIDITY = Symbol("esdev DOM validity state");
 const VALIDITY_CONTROL = Symbol("esdev DOM validity control");
 const IMPLEMENTATION = Symbol("esdev DOM implementation");
+const ITERATOR = Symbol("esdev DOM node iterator position");
 const SHADOW_OPTIONS = Symbol("esdev DOM shadow root options");
 const INTERNALS = Symbol("esdev DOM element internals");
 const FORM_VALUE = Symbol("esdev DOM submission value");
@@ -1803,6 +1804,10 @@ export function createTree(events = {}) {
       if (!(root instanceof Node)) throw new TypeError("createTreeWalker root must be a Node");
       return new TreeWalker(root, whatToShow, filter);
     }
+    createNodeIterator(root, whatToShow = NodeFilter.SHOW_ALL, filter = null) {
+      if (!(root instanceof Node)) throw new TypeError("createNodeIterator root must be a Node");
+      return new NodeIterator(root, whatToShow, filter);
+    }
     createAttribute(name) { return new Attr(String(name), "", this); }
     createAttributeNS(namespaceURI, qualifiedName) { return new Attr(String(qualifiedName), "", this, namespaceURI); }
     getElementsByTagName(name) {
@@ -1848,6 +1853,19 @@ export function createTree(events = {}) {
     createDocumentType(name, publicId = "", systemId = "") {
       return new DocumentType(name, publicId, systemId, this[IMPLEMENTATION]);
     }
+    // An XML document with an optional root element: no XML *parsing* is
+    // involved, and this is what a sanitiser building a namespaced document for
+    // comparison needs.
+    createDocument(namespaceURI, qualifiedName = "", doctype = null) {
+      const document = new Document();
+      if (doctype !== null && doctype !== undefined) {
+        if (!(doctype instanceof DocumentType)) throw new TypeError("createDocument doctype must be a DocumentType");
+        document.appendChild(doctype);
+      }
+      const name = qualifiedName === null || qualifiedName === undefined ? "" : String(qualifiedName);
+      if (name !== "") document.appendChild(document.createElementNS(namespaceURI, name));
+      return document;
+    }
     createHTMLDocument(title = undefined) {
       const document = new Document();
       document.appendChild(new DocumentType("html", "", "", document));
@@ -1872,6 +1890,76 @@ export function createTree(events = {}) {
     return node.nodeType === Node.ELEMENT_NODE ? NodeFilter.SHOW_ELEMENT
       : node.nodeType === Node.TEXT_NODE ? NodeFilter.SHOW_TEXT
         : node.nodeType === Node.COMMENT_NODE ? NodeFilter.SHOW_COMMENT : 0;
+  }
+
+  // Pre-order, with the reference node and `pointerBeforeReferenceNode` the
+  // specification names. It is not a TreeWalker with a different surface: a
+  // NodeIterator's position is *between* nodes, which is what makes going
+  // forward and then back land on the same node rather than skipping one.
+  class NodeIterator {
+    constructor(root, whatToShow, filter) {
+      Object.defineProperties(this, {
+        root: { value: root, enumerable: true },
+        whatToShow: { value: Number(whatToShow) >>> 0, enumerable: true },
+        filter: { value: filter ?? null, enumerable: true },
+      });
+      this[ITERATOR] = { reference: root, before: true };
+    }
+    get referenceNode() { return this[ITERATOR].reference; }
+    get pointerBeforeReferenceNode() { return this[ITERATOR].before; }
+    _accepts(node) {
+      if (!(this.whatToShow & showMask(node))) return false;
+      if (this.filter === null) return true;
+      const decision = typeof this.filter === "function" ? this.filter(node) : this.filter.acceptNode(node);
+      // A NodeIterator has no REJECT: a rejected node is skipped, and its
+      // children are still visited.
+      return decision === NodeFilter.FILTER_ACCEPT;
+    }
+    _step(forward) {
+      const state = this[ITERATOR];
+      let node = state.reference;
+      let before = state.before;
+      for (;;) {
+        if (forward) {
+          if (before) before = false;
+          else {
+            const next = following(node, this.root);
+            if (!next) return null;
+            node = next;
+          }
+        } else if (!before) before = true;
+        else {
+          const previous = preceding(node, this.root);
+          if (!previous) return null;
+          node = previous;
+        }
+        if (this._accepts(node)) {
+          state.reference = node;
+          state.before = before;
+          return node;
+        }
+      }
+    }
+    nextNode() { return this._step(true); }
+    previousNode() { return this._step(false); }
+    // Long obsolete and specified to do nothing.
+    detach() {}
+  }
+
+  function following(node, root) {
+    if (node.firstChild) return node.firstChild;
+    for (let current = node; current && current !== root; current = current.parentNode) {
+      if (current.nextSibling) return current.nextSibling;
+    }
+    return null;
+  }
+
+  function preceding(node, root) {
+    if (node === root) return null;
+    let previous = node.previousSibling;
+    if (!previous) return node.parentNode === root ? null : node.parentNode;
+    while (previous.lastChild) previous = previous.lastChild;
+    return previous;
   }
 
   class TreeWalker {
@@ -1968,5 +2056,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

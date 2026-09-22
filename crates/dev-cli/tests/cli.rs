@@ -3034,7 +3034,8 @@ fn test_dom_declarations_know_which_properties_exist_and_cookies_round_trip() {
            element.style.color = 'red';\n\
            const computed = getComputedStyle(element);\n\
            assertEquals([element.style.color, element.style.transform, element.style.nonsenseProp], ['red', '', undefined]);\n\
-           assertEquals([computed.transform, computed.nonsenseProp], ['', undefined]);\n\
+           // `transform`'s initial value is a keyword, so it is answered.\n\
+           assertEquals([computed.transform, computed.nonsenseProp], ['none', undefined]);\n\
            assertEquals(['transform' in computed, 'nonsenseProp' in computed, 'gridTemplateAreas' in computed], [true, false, true]);\n\
            element.style.setProperty('--x', '1px');\n\
            assertEquals(getComputedStyle(element).getPropertyValue('--x'), '1px');\n\

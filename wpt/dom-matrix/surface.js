@@ -63,6 +63,16 @@ function value(callback) {
   }
 }
 
+// The name of the error a call throws, or null when it does not.
+function errorName(callback) {
+  try {
+    callback();
+    return null;
+  } catch (error) {
+    return error?.name ?? "Error";
+  }
+}
+
 // A connected element, because a computed style is only answered for one.
 function connected(window, tag = "div") {
   const element = make(window, tag);
@@ -120,6 +130,75 @@ export const features = [
   ["tree", "row.cells", (w) => accessor(w, "HTMLTableRowElement", "cells")],
   ["tree", "row.rowIndex", (w) => accessor(w, "HTMLTableRowElement", "rowIndex")],
   ["tree", "HTMLTableSectionElement", (w) => global(w, "HTMLTableSectionElement")],
+  ["tree", "createElement lowercases", (w) => value(() => `${make(w, "DIV").localName}/${make(w, "DIV").tagName}`)],
+  ["tree", "uppercase markup", (w) => value(() => {
+    const host = make(w, "div");
+    host.innerHTML = "<SPAN CLASS=a>x</SPAN>";
+    return host.innerHTML;
+  })],
+  ["tree", "new DocumentFragment()", (w) => value(() => {
+    const fragment = new w.DocumentFragment();
+    fragment.append(new w.Text("x"));
+    const host = connected(w, "div");
+    host.append(fragment);
+    const answer = host.innerHTML;
+    host.remove();
+    return answer;
+  })],
+  ["tree", "fragment.getElementById", (w) => value(() => {
+    const fragment = new w.DocumentFragment();
+    const inside = make(w, "b");
+    inside.id = "probe-in-fragment";
+    fragment.append(inside);
+    return typeof fragment.getElementById === "function" ? fragment.getElementById("probe-in-fragment") === inside : "missing";
+  })],
+  ["tree", "document.hasFocus()", (w) => value(() => w.document.hasFocus())],
+  ["tree", "element.focus is writable", (w) => value(() => {
+    const element = make(w, "button");
+    try {
+      element.focus = () => {};
+      return typeof element.focus === "function";
+    } catch (error) {
+      return error.name;
+    }
+  })],
+  ["traversal", "NodeIterator walks", (w) => value(() => {
+    if (typeof w.document.createNodeIterator !== "function") return "missing";
+    const host = make(w, "div");
+    host.innerHTML = "<a>1</a><b><i>2</i></b>";
+    const iterator = w.document.createNodeIterator(host, w.NodeFilter.SHOW_ELEMENT);
+    const seen = [];
+    for (let node = iterator.nextNode(); node; node = iterator.nextNode()) seen.push(node.localName);
+    return seen.join(",");
+  })],
+  ["tree", "implementation.createDocument", (w) => value(() => {
+    const made = w.document.implementation.createDocument("http://www.w3.org/2000/svg", "svg", null);
+    return `${made.documentElement.localName}/${made.documentElement.namespaceURI}`;
+  })],
+  ["tree", "a parsed document has ranges and sheets", (w) => value(() => {
+    const parsed = new w.DOMParser().parseFromString("<p>x</p>", "text/html");
+    return `${typeof parsed.createRange}/${typeof parsed.styleSheets?.length}`;
+  })],
+  ["selectors", "escaped identifier", (w) => value(() => {
+    const host = connected(w, "div");
+    host.innerHTML = '<a id="probe.dotted">1</a>';
+    const found = errorName(() => host.querySelector("#probe\\.dotted"));
+    const answer = found ?? (host.querySelector("#probe\\.dotted")?.textContent ?? "null");
+    host.remove();
+    return answer;
+  })],
+  ["cascade", "unknown property is undefined", (w) => value(() => {
+    const element = make(w, "div");
+    return `${element.style.nonsenseProp}/${"nonsenseProp" in element.style}/${w.CSS?.supports?.("nonsense-prop", "1")}`;
+  })],
+  ["cascade", "keyword initial values", (w) => value(() => {
+    const element = connected(w, "div");
+    const computed = w.getComputedStyle(element);
+    const answer = [computed.transform, computed.opacity, computed.overflow, computed.marginTop, computed.zIndex].join(",");
+    element.remove();
+    return answer;
+  })],
+  ["window", "document.cookie is a store", (w) => value(() => "cookie" in w.document)],
 
   // --- traversal and ranges ------------------------------------------------
   ["traversal", "Range", (w) => global(w, "Range")],

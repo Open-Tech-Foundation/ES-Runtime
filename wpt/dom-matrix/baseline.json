@@ -1430,6 +1430,515 @@
       "drift": false
     },
     {
+      "group": "tree",
+      "name": "html-names-are-case-insensitive",
+      "chrome": {
+        "result": [
+          [
+            "div",
+            "DIV"
+          ],
+          "<span class=\"a\" id=\"b\">x</span>",
+          [
+            "a",
+            "b"
+          ],
+          "0 0 1 1",
+          "linearGradient",
+          "linearGradient"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "div",
+            "DIV"
+          ],
+          "<span class=\"a\" id=\"b\">x</span>",
+          [
+            "a",
+            "b"
+          ],
+          "0 0 1 1",
+          "linearGradient",
+          "linearGradient"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "div",
+            "DIV"
+          ],
+          "<span class=\"a\" id=\"b\">x</span>",
+          [
+            "a",
+            "b"
+          ],
+          "0 0 1 1",
+          "linearGradient",
+          "linearGradient"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "div",
+            "DIV"
+          ],
+          "<span class=\"a\" id=\"b\">x</span>",
+          [
+            "a",
+            "b"
+          ],
+          "0 0 1 1",
+          "linearGradient",
+          "linearGradient"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "bare-constructors-and-fragment-lookups",
+      "chrome": {
+        "result": [
+          "one<!--two--><b id=\"in-fragment\"></b>",
+          false,
+          "p",
+          true,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          "one<!--two--><b id=\"in-fragment\"></b>",
+          false,
+          "p",
+          true,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "one<!--two--><b id=\"in-fragment\"></b>",
+          false,
+          "p",
+          true,
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "one<!--two--><b id=\"in-fragment\"></b>",
+          false,
+          "p",
+          true,
+          false
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "a-radio-group-is-exclusive-on-the-checked-setter",
+      "chrome": {
+        "result": [
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            [
+              "pick",
+              "no"
+            ]
+          ],
+          [
+            false,
+            false
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            [
+              "pick",
+              "no"
+            ]
+          ],
+          [
+            false,
+            false
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            [
+              "pick",
+              "no"
+            ]
+          ],
+          [
+            false,
+            false
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            [
+              "pick",
+              "no"
+            ]
+          ],
+          [
+            false,
+            false
+          ]
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": "escapes-in-an-identifier",
+      "chrome": {
+        "result": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "2",
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "2",
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "1",
+          "2",
+          null,
+          null,
+          "2",
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "2",
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "an-unknown-property-is-not-a-declaration",
+      "chrome": {
+        "result": [
+          [
+            "rgb(1, 2, 3)",
+            "",
+            null
+          ],
+          [
+            "none",
+            null
+          ],
+          [
+            true,
+            false
+          ],
+          [
+            true,
+            false
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "rgb(1, 2, 3)",
+            "",
+            null
+          ],
+          [
+            "none",
+            null
+          ],
+          [
+            true,
+            false
+          ],
+          [
+            true,
+            false
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "rgb(1, 2, 3)",
+            "",
+            null
+          ],
+          [
+            "",
+            null
+          ],
+          [
+            true,
+            false
+          ],
+          [
+            true,
+            true
+          ]
+        ]
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "a-node-iterator-walks-and-steps-back",
+      "chrome": {
+        "result": [
+          [
+            "div",
+            "a",
+            "b",
+            "i",
+            "u"
+          ],
+          [
+            "1",
+            "2",
+            "3"
+          ],
+          [
+            "i"
+          ],
+          [
+            "div",
+            "a",
+            "a",
+            true
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "div",
+            "a",
+            "b",
+            "i",
+            "u"
+          ],
+          [
+            "1",
+            "2",
+            "3"
+          ],
+          [
+            "i"
+          ],
+          [
+            "div",
+            "a",
+            "a",
+            true
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "div",
+            "a",
+            "b",
+            "i",
+            "u"
+          ],
+          [
+            "1",
+            "2",
+            "3"
+          ],
+          [],
+          [
+            "div",
+            "a",
+            "div",
+            null
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "div",
+            "a",
+            "b",
+            "i",
+            "u"
+          ],
+          [
+            "1",
+            "2",
+            "3"
+          ],
+          [
+            "i"
+          ],
+          [
+            "div",
+            "a",
+            "a",
+            true
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "a-secondary-document-is-a-whole-document",
+      "chrome": {
+        "result": [
+          [
+            "function",
+            true,
+            0
+          ],
+          [
+            "function",
+            "function",
+            0
+          ],
+          [
+            "svg",
+            "http://www.w3.org/2000/svg",
+            null
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "function",
+            true,
+            0
+          ],
+          [
+            "function",
+            "function",
+            0
+          ],
+          [
+            "svg",
+            "http://www.w3.org/2000/svg",
+            null
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "function",
+            true,
+            0
+          ],
+          [
+            "function",
+            "function",
+            0
+          ],
+          [
+            "html",
+            "http://www.w3.org/1999/xhtml",
+            null
+          ],
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "function",
+            true,
+            0
+          ],
+          [
+            "function",
+            "function",
+            0
+          ],
+          [
+            "svg",
+            "http://www.w3.org/2000/svg",
+            null
+          ],
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -1734,7 +2243,7 @@
     }
   ],
   "summary": {
-    "match": 44,
+    "match": 51,
     "intentional-limit": 2,
     "drift": 0
   }

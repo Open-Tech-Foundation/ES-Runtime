@@ -691,6 +691,157 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "html-names-are-case-insensitive",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const made = document.createElement("DIV");
+      const host = document.createElement("div");
+      host.innerHTML = "<SPAN CLASS=a ID=b>x</SPAN>";
+      const svg = document.createElement("div");
+      svg.innerHTML = "<svg viewBox='0 0 1 1'><linearGradient/></svg>";
+      return [
+        [made.localName, made.tagName],
+        host.innerHTML,
+        [host.firstElementChild.className, host.firstElementChild.id],
+        svg.firstElementChild.getAttribute("viewBox"),
+        svg.firstElementChild.firstElementChild.localName,
+        document.createElementNS("http://www.w3.org/2000/svg", "linearGradient").localName,
+      ];
+    },
+  },
+  {
+    group: "tree",
+    name: "bare-constructors-and-fragment-lookups",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const fragment = new window.DocumentFragment();
+      fragment.append(new window.Text("one"), new window.Comment("two"));
+      const inside = document.createElement("b");
+      inside.id = "in-fragment";
+      fragment.append(inside);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<p id='in-shadow'>x</p>";
+      const target = document.createElement("div");
+      document.body.append(target);
+      target.append(fragment);
+      return [
+        target.innerHTML,
+        fragment.getElementById === undefined ? "missing" : fragment.getElementById("in-fragment") === inside,
+        root.getElementById === undefined ? "missing" : root.getElementById("in-shadow").localName,
+        document.getElementById("in-shadow") === null,
+        document.hasFocus(),
+      ];
+    },
+  },
+  {
+    group: "forms",
+    name: "a-radio-group-is-exclusive-on-the-checked-setter",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const form = document.createElement("form");
+      form.innerHTML =
+        "<input type=radio name=pick value=yes><input type=radio name=pick value=no><input type=radio name=other value=x>";
+      document.body.append(form);
+      const [yes, no, other] = form.querySelectorAll("input");
+      yes.checked = true;
+      no.checked = true;
+      const afterBoth = [yes.checked, no.checked, other.checked];
+      const entries = Array.from(new window.FormData(form).entries());
+      no.checked = false;
+      return [afterBoth, entries, [yes.checked, no.checked]];
+    },
+  },
+  {
+    group: "selectors",
+    name: "escapes-in-an-identifier",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      document.body.innerHTML =
+        '<a id="id.with.dots">1</a><b class="foo:bar">2</b><u id="1leading">3</u><s class="caf\u00e9">4</s>';
+      const text = (selector) => errorName(() => document.querySelector(selector)) ?? document.querySelector(selector)?.textContent ?? null;
+      return [
+        text("#id\\.with\\.dots"),
+        text(".foo\\:bar"),
+        text("#\\31 leading"),
+        text(".caf\\e9"),
+        text("#id\\.with\\.dots + .foo\\:bar"),
+        document.querySelector("#id\\.with\\.dots").matches("#id\\.with\\.dots"),
+      ];
+    },
+  },
+  {
+    group: "cascade",
+    name: "an-unknown-property-is-not-a-declaration",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      document.body.append(element);
+      element.style.color = "rgb(1, 2, 3)";
+      const computed = window.getComputedStyle(element);
+      return [
+        [element.style.color, element.style.transform, element.style.nonsenseProp],
+        [computed.transform, computed.nonsenseProp],
+        ["transform" in computed, "nonsenseProp" in computed],
+        [window.CSS.supports("display", "grid"), window.CSS.supports("nonsense-prop", "1")],
+      ];
+    },
+  },
+  {
+    group: "traversal",
+    name: "a-node-iterator-walks-and-steps-back",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      host.innerHTML = "<a>1</a><b><i>2</i></b><u>3</u>";
+      document.body.append(host);
+      const walk = (whatToShow, filter) => {
+        const iterator = document.createNodeIterator(host, whatToShow, filter ?? null);
+        const seen = [];
+        for (let node = iterator.nextNode(); node; node = iterator.nextNode()) {
+          seen.push(node.localName ?? node.data);
+        }
+        return seen;
+      };
+      const stepping = document.createNodeIterator(host, window.NodeFilter.SHOW_ELEMENT);
+      const first = stepping.nextNode().localName;
+      const second = stepping.nextNode().localName;
+      const back = stepping.previousNode().localName;
+      return [
+        walk(window.NodeFilter.SHOW_ELEMENT),
+        walk(window.NodeFilter.SHOW_TEXT),
+        // A NodeIterator has no REJECT, so a rejected node is only skipped.
+        walk(window.NodeFilter.SHOW_ELEMENT, (node) => node.localName === "i" ? 1 : 2),
+        [first, second, back, stepping.pointerBeforeReferenceNode],
+      ];
+    },
+  },
+  {
+    group: "tree",
+    name: "a-secondary-document-is-a-whole-document",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const parsed = new window.DOMParser().parseFromString("<p>x</p>", "text/html");
+      const made = document.implementation.createHTMLDocument("t");
+      const xml = document.implementation.createDocument("http://www.w3.org/2000/svg", "svg", null);
+      return [
+        [typeof parsed.createRange, parsed.createRange().collapsed, parsed.styleSheets.length],
+        [typeof made.createRange, typeof made.createNodeIterator, made.styleSheets.length],
+        [xml.documentElement.localName, xml.documentElement.namespaceURI, xml.doctype],
+        "cookie" in document,
+      ];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

@@ -10,7 +10,7 @@ function fixture() {
   const tree = createTree();
   const ranges = createRanges(tree, parse);
   const document = new tree.Document();
-  ranges.install(document);
+  ranges.install();
   const root = document.createElement("main");
   document.appendChild(root);
   return { document, ranges, root, tree };

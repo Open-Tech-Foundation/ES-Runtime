@@ -35,7 +35,6 @@ const REASONS = new Map(Object.entries({
   "dialog.showModal": RENDERING,
   "document.startViewTransition": RENDERING,
   "resolved font size": SPECIFIED,
-  "NodeIterator": LEGACY,
   "XPathEvaluator (document.evaluate)": LEGACY,
   "XMLSerializer": LEGACY,
   "document.write": LEGACY,
@@ -48,7 +47,6 @@ const REASONS = new Map(Object.entries({
   "canvas.getContext": HOST,
   "iframe.contentWindow": HOST,
   "alert": HOST,
-  "document.cookie": HOST,
   "localStorage": ARTIFACT,
   "crypto.randomUUID": ARTIFACT,
 }));

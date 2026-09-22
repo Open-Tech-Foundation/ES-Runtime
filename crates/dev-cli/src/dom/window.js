@@ -44,7 +44,7 @@ selectors.install();
 css.install();
 const customElements = elements.install(document);
 const ranges = createRanges(tree, parse);
-ranges.install(document);
+ranges.install();
 const sheets = createSheets({
   tree,
   parse: (text) => globalThis.__ops.dom_parse_stylesheet(text),
@@ -52,7 +52,7 @@ const sheets = createSheets({
   css,
   mediaMatches,
 });
-sheets.install(document);
+sheets.install();
 
 const NativeFormData = globalThis.FormData;
 class DomFormData extends NativeFormData {
