@@ -1,7 +1,7 @@
 import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 
-const { CDATASection, CharacterData, DOMRect, Document, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState } = createTree();
+const { CDATASection, CharacterData, Comment, DOMRect, Document, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, setCurrentDocument } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -563,4 +563,50 @@ test("answers geometry with zeros instead of throwing", () => {
   expect([element.scrollTop, element.scrollLeft]).toEqual([0, 0]);
   expect(element.scrollIntoView()).toBeUndefined();
   expect(new DOMRect(1, 2, 3, 4).right).toBe(4);
+});
+
+test("lowercases an HTML element name and keeps a namespaced one", () => {
+  const document = new Document();
+
+  expect(document.createElement("DIV").localName).toBe("div");
+  expect(document.createElement("DIV").tagName).toBe("DIV");
+  expect(document.createElement("Input").localName).toBe("input");
+  expect(document.createElementNS("http://www.w3.org/2000/svg", "linearGradient").localName).toBe("linearGradient");
+  expect(() => document.createElement("1bad")).toThrow("valid HTML names");
+});
+
+test("a constructed node belongs to the current document", () => {
+  // The window names it; with no window the first document made is it, so this
+  // case says which one it means rather than depending on test order.
+  const document = setCurrentDocument(new Document());
+  const root = document.createElement("main");
+  document.appendChild(root);
+
+  const fragment = new DocumentFragment();
+  expect(fragment.ownerDocument).toBe(document);
+  fragment.append(new Text("one"), new Comment("two"));
+  root.appendChild(fragment);
+  expect(Array.from(root.childNodes, (node) => node.nodeName)).toEqual(["#text", "#comment"]);
+  expect(root.firstChild.ownerDocument).toBe(document);
+  expect(new Text().data).toBe("");
+});
+
+test("a fragment and a shadow root answer getElementById", () => {
+  const document = setCurrentDocument(new Document());
+  const fragment = new DocumentFragment();
+  const inside = document.createElement("b");
+  inside.id = "in-fragment";
+  fragment.appendChild(inside);
+
+  expect(fragment.getElementById("in-fragment")).toBe(inside);
+  expect(fragment.getElementById("absent")).toBeNull();
+  const host = document.createElement("div");
+  document.appendChild(host);
+  const root = host.attachShadow({ mode: "open" });
+  const scoped = document.createElement("p");
+  scoped.id = "in-shadow";
+  root.appendChild(scoped);
+  expect(root.getElementById("in-shadow")).toBe(scoped);
+  // The id is the shadow tree's own: the document does not see it.
+  expect(document.getElementById("in-shadow")).toBeNull();
 });

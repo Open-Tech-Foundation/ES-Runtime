@@ -398,6 +398,26 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **HTML element and attribute names are case-insensitive, as the specification
+  says.** `document.createElement("DIV")` made nothing — it threw — and
+  `<DIV CLASS=a>` was a parse error, where both are conforming HTML for a `div`
+  with a class. Both lowercase now; a namespaced name keeps its case, so
+  `createElementNS(svg, "linearGradient")` and `viewBox` are untouched.
+- **`new DocumentFragment()`, `new Text()` and `new Comment()` belong to a
+  document.** They took one as an argument and got `undefined` from script, so
+  the fragment had no `ownerDocument` and the first `appendChild` into a tree
+  failed on adoption. They belong to the realm's document now, the way Web IDL
+  says.
+- **`element.focus` and `element.blur` are writable and configurable.** They were
+  installed as bare values, so a test library replacing `focus` to record calls
+  got a TypeError. Every Web IDL operation is writable; these are too.
+- **A fragment and a shadow root answer `getElementById`.** NonElementParentNode
+  is not only a document's; inside a shadow root it is the idiomatic call, and it
+  threw.
+- **`document.hasFocus()` answers true**, with `visibilityState` and `hidden`
+  alongside it. A headless document is the focused one, and a suite that asks
+  before dispatching key events was ending at the question.
+
 - **A plugin that fails before it declares anything now says why.** The reason
   was printed from the plugin host's own thread while the build was already
   returning "the run that loads them ended before it declared any" and exiting,

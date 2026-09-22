@@ -20,7 +20,8 @@ const selectors = createSelectors(tree);
 const css = createCss(tree);
 const elements = createElements(tree);
 
-const document = new tree.Document();
+// The document `new Text()` and friends belong to, before anything can use one.
+const document = tree.setCurrentDocument(new tree.Document());
 // `<!doctype html>`, as a node: the starting document is the one the spec for
 // this DOM names, and `document.doctype` is how code asks whether it is in
 // standards mode.
@@ -99,9 +100,19 @@ function changeFocus(next) {
   }
 }
 
+// Writable and configurable, as every Web IDL operation is: a test library
+// replaces `element.focus` to record calls, and an accessor that refuses the
+// assignment breaks it.
 Object.defineProperties(tree.HTMLElement.prototype, {
-  focus: { value() { if (isFocusable(this)) changeFocus(this); } },
-  blur: { value() { if (activeElement === this) changeFocus(body); } },
+  focus: { value() { if (isFocusable(this)) changeFocus(this); }, writable: true, configurable: true },
+  blur: { value() { if (activeElement === this) changeFocus(body); }, writable: true, configurable: true },
+});
+Object.defineProperties(document, {
+  // A headless document is the focused one: there is no other, and a suite that
+  // asks before dispatching key events should get on with it.
+  hasFocus: { value: () => true, writable: true, configurable: true },
+  visibilityState: { get: () => "visible", configurable: true },
+  hidden: { get: () => false, configurable: true },
 });
 Object.defineProperty(document, "_activeElementRemoved", {
   value(node) {

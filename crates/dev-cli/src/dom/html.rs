@@ -523,18 +523,12 @@ impl<'a> Parser<'a> {
             return Err(self.error(format!("{kind} name is missing")));
         };
         let template_marker = kind == "attribute" && matches!(first, '@' | '?' | '.' | '$');
-        if !(first.is_ascii_lowercase()
-            || allow_svg_case && first.is_ascii_uppercase()
-            || template_marker)
-        {
-            return Err(self.error(format!(
-                "{kind} names must start with a lowercase ASCII letter"
-            )));
+        if !(first.is_ascii_alphabetic() || template_marker) {
+            return Err(self.error(format!("{kind} names must start with an ASCII letter")));
         }
         let mut end = first.len_utf8();
         for (index, character) in characters {
-            if character.is_ascii_lowercase()
-                || allow_svg_case && character.is_ascii_uppercase()
+            if character.is_ascii_alphabetic()
                 || character.is_ascii_digit()
                 // Template compilers use `$` in inert marker attributes. It
                 // is an ordinary HTML attribute-name character, not recovery
@@ -547,7 +541,15 @@ impl<'a> Parser<'a> {
             }
         }
         self.at = start + end;
-        Ok(self.source[start..self.at].to_string())
+        let written = &self.source[start..self.at];
+        // HTML tag and attribute names are case-insensitive and become
+        // lowercase in the tree, so `<DIV CLASS=a>` is conforming markup for a
+        // `div`. Inside SVG the case is the name — `viewBox` is not `viewbox` —
+        // so it is kept and mapped by `svg_attribute_name`.
+        if allow_svg_case {
+            return Ok(written.to_string());
+        }
+        Ok(written.to_ascii_lowercase())
     }
 
     fn whitespace(&mut self) {
@@ -860,6 +862,20 @@ mod tests {
     }
 
     #[test]
+    fn lowercases_html_names_and_keeps_svg_case() {
+        let nodes =
+            parse_fragment("<DIV CLASS=a ID=b><SPAN>x</SPAN></DIV>").expect("uppercase HTML");
+        assert_eq!(
+            render(&nodes),
+            "<div class=\"a\" id=\"b\"><span>x</span></div>"
+        );
+        let svg =
+            parse_fragment("<svg viewBox='0 0 1 1'><linearGradient/></svg>").expect("svg case");
+        assert!(render(&svg).contains("viewBox"), "{}", render(&svg));
+        assert!(render(&svg).contains("linearGradient"), "{}", render(&svg));
+    }
+
+    #[test]
     fn accepts_the_end_tags_html_allows_to_be_omitted() {
         for (source, expected) in [
             ("<p>one<p>two", "<p>one</p><p>two</p>"),
@@ -944,7 +960,6 @@ mod tests {
     #[test]
     fn rejects_unsafe_or_ambiguous_syntax() {
         for source in [
-            "<DIV></DIV>",
             "<input></input>",
             "<x a=1 a=2></x>",
             "text &copy",

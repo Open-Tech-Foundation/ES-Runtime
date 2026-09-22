@@ -593,12 +593,23 @@ export function createTree(events = {}) {
     set nodeValue(value) { this.data = String(value ?? ""); }
   }
 
+  // `new Text()`, `new Comment()` and `new DocumentFragment()` take no document
+  // in Web IDL: they belong to the current global's associated document, which
+  // the window installs here. Without it they had no `ownerDocument` at all,
+  // and the first `appendChild` into a tree failed on adoption.
+  let currentDocument = null;
+
+  function setCurrentDocument(document) {
+    currentDocument = document;
+    return document;
+  }
+
   class Text extends CharacterData {
-    constructor(data, ownerDocument) { super(Node.TEXT_NODE, "#text", data, ownerDocument); }
+    constructor(data = "", ownerDocument = currentDocument) { super(Node.TEXT_NODE, "#text", data, ownerDocument); }
   }
 
   class Comment extends CharacterData {
-    constructor(data, ownerDocument) { super(Node.COMMENT_NODE, "#comment", data, ownerDocument); }
+    constructor(data = "", ownerDocument = currentDocument) { super(Node.COMMENT_NODE, "#comment", data, ownerDocument); }
   }
 
   // HTML documents never contain CDATA sections, so `createCDATASection` refuses
@@ -1564,7 +1575,7 @@ export function createTree(events = {}) {
   });
 
   class DocumentFragment extends Node {
-    constructor(ownerDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }
+    constructor(ownerDocument = currentDocument) { super(Node.DOCUMENT_FRAGMENT_NODE, "#document-fragment", ownerDocument); }
     get children() {
       const state = slots(this);
       return state.children ??= new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((node) => node instanceof Element));
@@ -1572,6 +1583,12 @@ export function createTree(events = {}) {
     get firstElementChild() { return this.children.item(0); }
     get lastElementChild() { return this.children.item(this.children.length - 1); }
     get childElementCount() { return this.children.length; }
+    // NonElementParentNode: a fragment and a shadow root answer this as a
+    // document does, and it is the idiomatic call inside a shadow root.
+    getElementById(id) {
+      id = String(id);
+      return collect(this, (element) => element.id === id)[0] ?? null;
+    }
   }
 
   class ShadowRoot extends DocumentFragment {
@@ -1696,6 +1713,10 @@ export function createTree(events = {}) {
       super(Node.DOCUMENT_NODE, "#document", null);
       slots(this).ownerDocument = this;
       slots(this).version = 0;
+      // The first document made is the one bare constructors belong to, unless
+      // a window said otherwise. A later one — from `DOMParser` or
+      // `createHTMLDocument` — does not steal them.
+      currentDocument ??= this;
     }
     get documentElement() { return Array.from(this._esdevChildren()).find((node) => node instanceof Element) ?? null; }
     // The ParentNode members, which a Document has as much as an element does:
@@ -1708,8 +1729,10 @@ export function createTree(events = {}) {
     get lastElementChild() { return this.children.item(this.children.length - 1); }
     get childElementCount() { return this.children.length; }
     createElement(name) {
-      name = String(name);
-      if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be lowercase modern HTML names.");
+      // ASCII-lowercased, as the specification requires for an HTML document:
+      // `createElement("DIV")` makes a `div`, and so does the parser.
+      name = String(name).toLowerCase();
+      if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be valid HTML names.");
       return new (ELEMENT_CLASSES[name] ?? HTMLElement)(name, this);
     }
     createElementNS(namespaceURI, qualifiedName) {
@@ -1928,5 +1951,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, setCurrentDocument, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }
