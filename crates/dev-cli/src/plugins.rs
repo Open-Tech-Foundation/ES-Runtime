@@ -155,6 +155,13 @@ async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost
     let (declared, told) = tokio::sync::oneshot::channel();
     let (shutdown, ended) = tokio::sync::oneshot::channel();
     let source = driver(dir, specs)?;
+    // Where the host thread leaves the reason its run failed. A program that
+    // fails *before* declaring — a plugin module with no default export — closes
+    // the declaration channel by ending, and then the only thing the waiting
+    // side knows is that nothing arrived. Printing the cause from the thread
+    // races the process exiting, so it is handed over instead.
+    let failure: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let reported = Arc::clone(&failure);
 
     let hosted = crate::guest::build::Hosted {
         bridge: bridge.clone(),
@@ -194,19 +201,33 @@ async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost
                 inspector: None,
             };
             if let Err(err) = runtime.block_on(es_runtime_cli_common::run("esdev", config)) {
-                // The declaration channel is already closed by the time a
-                // program fails after declaring, so this is the only place a
-                // plugin's *runtime* failure can be reported at all.
-                eprintln!("esdev: the project's plugins stopped: {err}");
+                let message = err.to_string();
+                // Recorded for the waiting side, which reports it if the run
+                // failed before declaring anything. If it failed afterwards
+                // nobody is waiting any more, so say it here.
+                match reported.lock() {
+                    Ok(mut slot) if slot.is_none() => *slot = Some(message),
+                    _ => eprintln!("esdev: the project's plugins stopped: {message}"),
+                }
             }
         })
         .map_err(|e| format!("cannot start the plugin host: {e}"))?;
 
-    let plugins = told.await.map_err(|_| {
-        "the project's plugins could not be loaded — the run that loads them ended \
-         before it declared any"
-            .to_string()
-    })??;
+    let plugins = match told.await {
+        Ok(result) => result?,
+        Err(_) => {
+            // The thread is ending or has ended; wait for it so the reason it
+            // failed is there to report rather than racing this message.
+            let _ = thread.join();
+            let reason = failure.lock().ok().and_then(|mut slot| slot.take());
+            return Err(match reason {
+                Some(reason) => format!("the project's plugins could not be loaded: {reason}"),
+                None => "the project's plugins could not be loaded — the run that loads them \
+                         ended before it declared any"
+                    .to_string(),
+            });
+        }
+    };
     if plugins.len() != specs.len() {
         return Err(format!(
             "the project declares {} plugin{}, and the modules named produced {}.\n\n\
@@ -217,6 +238,8 @@ async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost
             plugins.len()
         ));
     }
+    // A run that failed after declaring reports itself from the thread, so the
+    // host keeps the handle for shutdown as before.
     Ok(PluginHost {
         bridge,
         plugins,

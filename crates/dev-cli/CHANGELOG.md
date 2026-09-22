@@ -398,6 +398,15 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **A plugin that fails before it declares anything now says why.** The reason
+  was printed from the plugin host's own thread while the build was already
+  returning "the run that loads them ended before it declared any" and exiting,
+  so which of the two you saw was a race — under load, the useful one lost. The
+  thread hands the reason over instead, and the build reports it: `the project's
+  plugins could not be loaded: … ./plugin.mjs has no default export`. This was
+  a flaky test failing roughly one run in six, which is exactly what it looks
+  like when a diagnostic races the process that should print it.
+
 - Restore structural esdev DOM selectors after the internal child iterator was
   renamed, and expose specialized HTML, SVG, and MathML element interfaces from
   `document.createElementNS()`.
