@@ -25,6 +25,13 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **The web-component surface is published.** Twenty-nine component probes and
+  twenty-three behaviour cases run under Chrome, esdev, jsdom and happy-dom.
+  esdev matches Chrome on every one; jsdom misses nine of the probes and
+  happy-dom ten. The site's DOM testing page lists what is covered, and
+  `docs/ESDEV-DOM.md` records scoped registries as the proposal-stage non-goal
+  they are.
+
 - **Web components, the second pass: namespaces, hosts, focus, paths and
   inertness.** `attributeChangedCallback` fires for a namespaced attribute and
   reports its local name and namespace. `attachShadow` refuses an element that

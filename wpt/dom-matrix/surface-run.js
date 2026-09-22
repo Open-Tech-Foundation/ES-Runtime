@@ -36,7 +36,7 @@ async function runEsdev() {
   await Deno.writeTextFile(`${directory}/surface.js`, await Deno.readTextFile(new URL("./surface.js", import.meta.url)));
   await Deno.writeTextFile(
     `${directory}/surface.test.mjs`,
-    'import { test } from "runtime:test";\nimport { probe } from "./surface.js";\ntest("DOM surface", () => console.log("DOM_SURFACE=" + JSON.stringify(probe(globalThis))));\n',
+    'import { test } from "runtime:test";\nimport { probe } from "./surface.js";\ntest("DOM surface", async () => console.log("DOM_SURFACE=" + JSON.stringify(await probe(globalThis))));\n',
   );
   try {
     const output = await new Deno.Command(flags.esdev, {
@@ -56,19 +56,19 @@ async function runEsdev() {
   }
 }
 
-function runJsdom() {
+async function runJsdom() {
   const dom = new JSDOM(page, { url: "http://localhost/", pretendToBeVisual: true });
   try {
-    return probe(dom.window);
+    return await probe(dom.window);
   } finally {
     dom.window.close();
   }
 }
 
-function runHappyDom() {
+async function runHappyDom() {
   const window = new Window({ url: "http://localhost/" });
   try {
-    return probe(window);
+    return await probe(window);
   } finally {
     window.close();
   }
@@ -84,7 +84,7 @@ async function runChrome() {
       const url = URL.createObjectURL(new Blob([moduleSource], { type: "text/javascript" }));
       try {
         const { probe } = await import(url);
-        return probe(globalThis);
+        return await probe(globalThis);
       } finally {
         URL.revokeObjectURL(url);
       }

@@ -57,6 +57,25 @@ Malformed input is refused with a diagnostic instead of being repaired:
 
 A test that depends on parser recovery does not state the DOM tree it expects.
 
+## Web components
+
+Custom elements, shadow DOM and templates are covered in full, and measured
+against Chrome:
+
+| Area | What works |
+| --- | --- |
+| Reactions | `connectedCallback`, `disconnectedCallback`, `adoptedCallback`, `attributeChangedCallback` with `observedAttributes`, namespaces and old values, in specification order |
+| Registry | `define`, `get`, `getName`, `whenDefined`, `upgrade`; one constructor per name; `new MyElement()` from script |
+| Shadow DOM | open and closed roots, `delegatesFocus`, `clonable`, `serializable`, named and manual slot assignment, `assignedSlot`, `slotchange`, retargeted events and paths |
+| Styling | `:host`, `:host(…)`, `:host-context(…)`, `::slotted(…)`, `adoptedStyleSheets` per root |
+| Forms | `ElementInternals`, form association, `setFormValue`, `setValidity`, `formDisabledCallback`, `formResetCallback`, `CustomStateSet` and `:state()` |
+| Templates | inert content, declarative shadow roots through `setHTMLUnsafe`, `getHTML` serialization |
+
+Scoped custom element registries — `new CustomElementRegistry()` used with
+`attachShadow({ customElements })` — are a proposal and are not implemented. A
+registry that is not the document's keeps its own definitions and upgrades
+nothing.
+
 ## Boundaries
 
 The realm has no rendering engine, network, browsing contexts, or navigation.

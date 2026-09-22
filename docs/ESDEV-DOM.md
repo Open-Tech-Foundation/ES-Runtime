@@ -282,6 +282,12 @@ say so rather than letting someone discover it in a failing test.
 
 OTF Web describes itself as built on standard Web Components, so `customElements` is in scope: `define`, `get`, `whenDefined`, `upgrade`, plus `connectedCallback`, `disconnectedCallback`, `adoptedCallback`, `attributeChangedCallback` with `observedAttributes`. This is the most invasive item in the spec — the custom element reaction stack threads through every mutation method and the parser has to upgrade elements as it constructs them — so it is built into the mutation algorithms from the start rather than retrofitted.
 
+**Scoped custom element registries: out.** `new CustomElementRegistry()` used
+with `attachShadow({ customElements })` or `createElement(name, {
+customElementRegistry })` is a proposal. A registry that is not the document's
+keeps its own definitions — so `define` on it is independent, as the
+specification's per-registry checks require — and upgrades nothing.
+
 **Shadow DOM: out, unless a check says otherwise.**
 
 Scoped CSS Modules and a context API that crosses Portal boundaries both suggest otfw scopes styles by class name rather than by shadow root. If that is right, shadow DOM stays out, and that is a large saving: retargeting rewrites event dispatch, slot assignment rewrites the flattened tree, and selector matching gains a second traversal mode. The check is a grep for `attachShadow` in the otfw runtime and its compiled output. If it appears, this section is wrong and the event and selector designs above need revisiting before implementation, not after.

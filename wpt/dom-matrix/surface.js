@@ -363,6 +363,98 @@ export const features = [
     return typeof internals.setFormValue === "function";
   })],
   ["components", "CustomStateSet", (w) => global(w, "CustomStateSet")],
+  ["components", "customElements.getName", (w) => value(() => {
+    const name = `probe-name-${Math.random().toString(36).slice(2)}`;
+    const Element = class extends w.HTMLElement {};
+    w.customElements.define(name, Element);
+    return typeof w.customElements.getName === "function" ? w.customElements.getName(Element) === name : "missing";
+  })],
+  ["components", "one constructor, one name", (w) => value(() => {
+    const Element = class extends w.HTMLElement {};
+    w.customElements.define(`probe-once-${Math.random().toString(36).slice(2)}`, Element);
+    return errorName(() => w.customElements.define(`probe-twice-${Math.random().toString(36).slice(2)}`, Element)) ?? "defined";
+  })],
+  ["components", "new MyElement() from script", (w) => value(() => {
+    const name = `probe-new-${Math.random().toString(36).slice(2)}`;
+    const Element = class extends w.HTMLElement {};
+    w.customElements.define(name, Element);
+    const made = new Element();
+    // Compared rather than reported: the name is random, so returning it would
+    // differ between runtimes for no reason and drift on every run.
+    return `${made.localName === name}/${made.isConnected}`;
+  })],
+  ["components", "node.assignedSlot", (w) => value(() => {
+    const host = connected(w, "div");
+    host.innerHTML = "<p>x</p>";
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = "<slot></slot>";
+    const answer = host.firstElementChild.assignedSlot === root.firstElementChild;
+    host.remove();
+    return answer;
+  })],
+  ["components", "slotchange", async (w) => {
+    const host = connected(w, "div");
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = "<slot></slot>";
+    let fired = 0;
+    root.firstElementChild.addEventListener("slotchange", () => fired++);
+    host.append(make(w, "i"));
+    await new Promise((resolve) => queueMicrotask(resolve));
+    host.remove();
+    return fired;
+  }],
+  ["components", "attachShadow refuses a non-host", (w) => value(() => errorName(() => make(w, "input").attachShadow({ mode: "open" })) ?? "attached")],
+  ["components", "shadowRoot.activeElement", (w) => value(() => {
+    const host = connected(w, "div");
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = "<input>";
+    root.firstElementChild.focus();
+    const answer = `${w.document.activeElement === host}/${root.activeElement === root.firstElementChild}`;
+    host.remove();
+    return answer;
+  })],
+  ["components", ":host and ::slotted", (w) => value(() => {
+    const host = connected(w, "div");
+    host.innerHTML = "<p>x</p>";
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = "<style>:host { color: rgb(9, 9, 9) } ::slotted(p) { font-style: italic }</style><slot></slot>";
+    const answer = `${w.getComputedStyle(host).color}/${w.getComputedStyle(host.firstElementChild).fontStyle}`;
+    host.remove();
+    return answer;
+  })],
+  ["components", "ARIA reflects", (w) => value(() => {
+    const element = make(w, "div");
+    element.role = "button";
+    element.ariaLabel = "Save";
+    return `${element.getAttribute("role")}/${element.getAttribute("aria-label")}/${make(w, "div").ariaLabel}`;
+  })],
+  ["components", "formDisabledCallback", (w) => value(() => {
+    const name = `probe-disabled-${Math.random().toString(36).slice(2)}`;
+    const log = [];
+    w.customElements.define(name, class extends w.HTMLElement {
+      static formAssociated = true;
+      formDisabledCallback(state) { log.push(state); }
+    });
+    const fieldset = make(w, "fieldset");
+    const element = make(w, name);
+    fieldset.append(element);
+    w.document.body.append(fieldset);
+    fieldset.disabled = true;
+    fieldset.remove();
+    return log.join(",") || "none";
+  })],
+  ["components", "a clonable root is cloned", (w) => value(() => {
+    const host = make(w, "div");
+    host.attachShadow({ mode: "open", clonable: true }).innerHTML = "<i>x</i>";
+    return host.cloneNode(true).shadowRoot?.innerHTML ?? "no root";
+  })],
+  ["components", "template content is inert", (w) => value(() => {
+    const name = `probe-inert-${Math.random().toString(36).slice(2)}`;
+    w.customElements.define(name, class extends w.HTMLElement {});
+    const template = make(w, "template");
+    template.innerHTML = `<${name}></${name}>`;
+    return template.content.firstElementChild.matches(":defined");
+  })],
   ["components", "template.content", (w) => value(() => {
     const template = make(w, "template");
     template.innerHTML = "<i>x</i>";
@@ -675,14 +767,16 @@ export const features = [
   ["window", "document.startViewTransition", (w) => typeof w.document.startViewTransition === "function"],
 ];
 
-export function probe(window) {
-  return features.map(([group, name, get]) => {
+export async function probe(window) {
+  const answers = [];
+  for (const [group, name, get] of features) {
     let answer;
     try {
-      answer = get(window);
+      answer = await get(window);
     } catch (error) {
       answer = `throws:${error?.name ?? "Error"}`;
     }
-    return { group, name, answer: answer === undefined ? "undefined" : answer };
-  });
+    answers.push({ group, name, answer: answer === undefined ? "undefined" : answer });
+  }
+  return answers;
 }

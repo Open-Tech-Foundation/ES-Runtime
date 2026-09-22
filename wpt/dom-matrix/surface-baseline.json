@@ -1,10 +1,10 @@
 {
   "summary": {
-    "features": 207,
+    "features": 219,
     "agreesWithChrome": {
-      "esdev": 184,
-      "jsdom": 167,
-      "happy-dom": 169
+      "esdev": 196,
+      "jsdom": 175,
+      "happy-dom": 175
     },
     "drift": 0
   },
@@ -53,10 +53,10 @@
     },
     {
       "group": "components",
-      "features": 17,
-      "esdev": 17,
-      "jsdom": 12,
-      "happy-dom": 13
+      "features": 29,
+      "esdev": 29,
+      "jsdom": 20,
+      "happy-dom": 19
     },
     {
       "group": "parsing",
@@ -1088,6 +1088,114 @@
       "chrome": true,
       "esdev": true,
       "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "customElements.getName",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "one constructor, one name",
+      "chrome": "NotSupportedError",
+      "esdev": "NotSupportedError",
+      "jsdom": "NotSupportedError",
+      "happy-dom": "DOMException",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "new MyElement() from script",
+      "chrome": "true/false",
+      "esdev": "true/false",
+      "jsdom": "true/false",
+      "happy-dom": "true/false",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "node.assignedSlot",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "slotchange",
+      "chrome": 1,
+      "esdev": 1,
+      "jsdom": 1,
+      "happy-dom": 1,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "attachShadow refuses a non-host",
+      "chrome": "NotSupportedError",
+      "esdev": "NotSupportedError",
+      "jsdom": "NotSupportedError",
+      "happy-dom": "attached",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "shadowRoot.activeElement",
+      "chrome": "true/true",
+      "esdev": "true/true",
+      "jsdom": "true/true",
+      "happy-dom": "true/true",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": ":host and ::slotted",
+      "chrome": "rgb(9, 9, 9)/italic",
+      "esdev": "rgb(9, 9, 9)/italic",
+      "jsdom": "rgb(0, 0, 0)/",
+      "happy-dom": "rgb(9, 9, 9)/normal",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "ARIA reflects",
+      "chrome": "button/Save/null",
+      "esdev": "button/Save/null",
+      "jsdom": "button/Save/null",
+      "happy-dom": "button/null/undefined",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "formDisabledCallback",
+      "chrome": "true",
+      "esdev": "true",
+      "jsdom": "none",
+      "happy-dom": "none",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a clonable root is cloned",
+      "chrome": "<i>x</i>",
+      "esdev": "<i>x</i>",
+      "jsdom": "no root",
+      "happy-dom": "<i>x</i>",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "template content is inert",
+      "chrome": false,
+      "esdev": false,
+      "jsdom": "throws:TypeError",
       "happy-dom": false,
       "drift": false
     },

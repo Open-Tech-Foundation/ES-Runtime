@@ -9,13 +9,13 @@ keep current.
 
 ## Surface
 
-207 features — interfaces, members and behaviours — put to all four runtimes.
+219 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 184 / 207 | 89% |
-| jsdom | 167 / 207 | 81% |
-| happy-dom | 169 / 207 | 82% |
+| esdev | 196 / 219 | 89% |
+| jsdom | 175 / 219 | 80% |
+| happy-dom | 175 / 219 | 80% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
@@ -25,13 +25,13 @@ keep current.
 | cascade | 26 | 22 | 12 | 17 |
 | window | 32 | 21 | 21 | 22 |
 | events | 26 | 24 | 22 | 25 |
-| components | 17 | 17 | 12 | 13 |
+| components | 29 | 29 | 20 | 19 |
 | parsing | 12 | 8 | 12 | 11 |
 | forms | 14 | 14 | 14 | 14 |
 
 ## Behaviour
 
-51 of 53 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+70 of 72 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -79,6 +79,25 @@ compares the result.
 | an-unknown-property-is-not-a-declaration | cascade | yes | no | no |
 | a-node-iterator-walks-and-steps-back | traversal | yes | yes | no |
 | a-secondary-document-is-a-whole-document | tree | yes | yes | no |
+| reaction-order-on-creation-and-connection | components | yes | yes | yes |
+| an-existing-element-upgrades-when-it-is-defined | components | yes | yes | no |
+| parsed-children-upgrade-in-tree-order | components | yes | yes | yes |
+| the-registry-answers-about-a-definition | components | yes | no | no |
+| an-element-can-be-upgraded-on-demand | components | yes | yes | no |
+| slots-assign-and-flatten | components | yes | yes | no |
+| a-slot-reports-a-change | components | yes | yes | yes |
+| internals-reflect-aria-and-form-state | components | yes | no | no |
+| a-clonable-shadow-root-is-cloned | components | yes | no | yes |
+| shadow-styles-reach-the-host-and-the-slotted | components | yes | no | no |
+| a-constructor-is-refused-when-it-misbehaves | components | yes | no | no |
+| an-element-moved-between-documents-is-adopted | components | yes | yes | no |
+| attributes-report-their-namespace-and-old-value | components | yes | yes | no |
+| a-shadow-host-refuses-a-second-root-and-the-wrong-element | components | yes | yes | no |
+| focus-inside-a-root-is-reported-from-both-sides | components | yes | yes | yes |
+| an-event-is-retargeted-and-a-closed-root-hides-its-path | components | yes | yes | no |
+| aria-reflects-through-attributes-and-internals | components | yes | yes | no |
+| a-slot-change-follows-the-slot-attribute | components | yes | yes | yes |
+| a-template-holds-a-component-and-clones-it | components | yes | no | no |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -92,7 +111,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-44 of the 207 features.
+52 of the 219 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -124,6 +143,14 @@ compares the result.
 | attachInternals | yes | yes | no |
 | form-associated custom element | yes | no | `throws:TypeError` |
 | CustomStateSet | yes | no | no |
+| one constructor, one name | `NotSupportedError` | `NotSupportedError` | `DOMException` |
+| node.assignedSlot | yes | yes | no |
+| attachShadow refuses a non-host | `NotSupportedError` | `NotSupportedError` | `attached` |
+| :host and ::slotted | `rgb(9, 9, 9)/italic` | `rgb(0, 0, 0)/` | `rgb(9, 9, 9)/normal` |
+| ARIA reflects | `button/Save/null` | `button/Save/null` | `button/null/undefined` |
+| formDisabledCallback | `true` | `none` | `none` |
+| a clonable root is cloned | `<i>x</i>` | `no root` | `<i>x</i>` |
+| template content is inert | no | `throws:TypeError` | no |
 | omitted paragraph end tag | `<p>one</p><p>two</p>` | `<p>one</p><p>two</p>` | `<p>one<p>two</p></p>` |
 | invalid selector throws | `SyntaxError` | `SyntaxError` | `no throw` |
 | adoptedStyleSheets applies | `rgb(1, 2, 3)` | `throws:TypeError` | `rgb(1, 2, 3)` |
@@ -143,7 +170,7 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-23 of 207. Every one of them is here:
+23 of 219. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -326,6 +353,18 @@ a difference with no entry fails `tsr docs:parity`.
 | components | attachInternals | yes | yes | yes | no |
 | components | form-associated custom element | yes | yes | no | `throws:TypeError` |
 | components | CustomStateSet | yes | yes | no | no |
+| components | customElements.getName | yes | yes | yes | yes |
+| components | one constructor, one name | `NotSupportedError` | `NotSupportedError` | `NotSupportedError` | `DOMException` |
+| components | new MyElement() from script | `true/false` | `true/false` | `true/false` | `true/false` |
+| components | node.assignedSlot | yes | yes | yes | no |
+| components | slotchange | `1` | `1` | `1` | `1` |
+| components | attachShadow refuses a non-host | `NotSupportedError` | `NotSupportedError` | `NotSupportedError` | `attached` |
+| components | shadowRoot.activeElement | `true/true` | `true/true` | `true/true` | `true/true` |
+| components | :host and ::slotted | `rgb(9, 9, 9)/italic` | `rgb(9, 9, 9)/italic` | `rgb(0, 0, 0)/` | `rgb(9, 9, 9)/normal` |
+| components | ARIA reflects | `button/Save/null` | `button/Save/null` | `button/Save/null` | `button/null/undefined` |
+| components | formDisabledCallback | `true` | `true` | `none` | `none` |
+| components | a clonable root is cloned | `<i>x</i>` | `<i>x</i>` | `no root` | `<i>x</i>` |
+| components | template content is inert | no | no | `throws:TypeError` | no |
 | components | template.content | `DocumentFragment/1` | `DocumentFragment/1` | `DocumentFragment/1` | `DocumentFragment/1` |
 | parsing | DOMParser | yes | yes | yes | yes |
 | parsing | DOMParser parses text/html | `HTML/<p>one</p>` | `HTML/<p>one</p>` | `HTML/<p>one</p>` | `HTML/<p>one</p>` |
