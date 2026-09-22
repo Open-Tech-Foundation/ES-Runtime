@@ -1368,6 +1368,68 @@
       "drift": false
     },
     {
+      "group": "cascade",
+      "name": "geometry-answers-zero-and-rendering-is-knowable",
+      "limit": "esdev has no layout, so every measurement is zero",
+      "expectedEsdev": {
+        "result": [
+          "DOMRect",
+          0,
+          0,
+          0,
+          0,
+          true,
+          [
+            true,
+            false,
+            false
+          ],
+          true
+        ]
+      },
+      "chrome": {
+        "result": [
+          "DOMRect",
+          784,
+          0,
+          784,
+          0,
+          true,
+          [
+            true,
+            false,
+            false
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          "DOMRect",
+          0,
+          0,
+          0,
+          0,
+          true,
+          [
+            true,
+            false,
+            false
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "intentional-limit",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -1673,7 +1735,7 @@
   ],
   "summary": {
     "match": 44,
-    "intentional-limit": 1,
+    "intentional-limit": 2,
     "drift": 0
   }
 }

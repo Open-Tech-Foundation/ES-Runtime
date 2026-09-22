@@ -50,6 +50,17 @@ is the point, since none of the three has any business in a deployment.
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
+- **The DOM's parity with Chrome is published and gated.**
+  `docs/ESDEV-DOM-PARITY.md` and the site's DOM parity page are generated from
+  two recorded baselines: a behaviour matrix of 46 cases and a surface probe of
+  192 features, both run under headless Chrome, esdev, jsdom and happy-dom with
+  Chrome as the oracle. `tsr test:dom-surface` gates the probe against drift the
+  way `tsr test:dom-matrix` already gates the matrix, `tsr docs:parity`
+  regenerates the documents, and `tsr ci` checks they are current — from the
+  baselines alone, so it needs no browser. A difference from Chrome with no
+  recorded reason fails generation, which is what keeps the boundary from
+  quietly moving.
+
 - **Geometry answers zero instead of throwing, and rendering is knowable.**
   `getBoundingClientRect`, `getClientRects`, `offsetWidth`/`offsetHeight`/
   `offsetTop`/`offsetLeft`, `clientWidth`/`clientHeight`/`clientTop`/

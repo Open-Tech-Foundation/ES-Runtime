@@ -41,26 +41,60 @@ does not add compatibility layers for other test frameworks.
 
 ## Strict modern HTML
 
-`innerHTML` and fragment parsing accept well-formed modern HTML. They preserve
-the explicit structure supplied by the test and reject malformed input with a
-diagnostic instead of applying legacy browser error recovery. Keep fixtures
-well formed: close non-void elements, quote attributes, and do not rely on
-implicit element insertion or misnested-tag repair.
+`innerHTML` and fragment parsing accept conforming modern HTML, including the
+tags HTML allows to be omitted — `</li>`, `</p>`, `</td>`, an implied `<tbody>`
+before a `<tr>` — so a fixture builds the same tree here as in a browser.
 
-This is intentional. A test that depends on parser recovery does not state the
-DOM tree it expects, and is outside this test DOM's contract.
+Malformed input is refused with a diagnostic instead of being repaired:
+
+| Markup | Result |
+| --- | --- |
+| `<table><tr><td>x</td></tr></table>` | `<table><tbody><tr><td>x</td></tr></tbody></table>` |
+| `<ul><li>a<li>b</ul>` | `<ul><li>a</li><li>b</li></ul>` |
+| `<p><i>unclosed` | `SyntaxError` |
+| `<b><i>x</b></i>` | `SyntaxError` |
+| `<table><td>x</td></table>` | `SyntaxError` — a cell needs a row |
+
+A test that depends on parser recovery does not state the DOM tree it expects.
 
 ## Boundaries
 
 The realm has no rendering engine, network, browsing contexts, or navigation.
-In particular, do not use it to test layout, stylesheet cascade, geometry,
-media loading, XHR, iframe behavior, script execution, or page navigation.
-`getComputedStyle()` reports inline style values only; it does not calculate a
-stylesheet cascade or browser defaults.
+Do not use it to test layout, geometry, media loading, XHR, iframe behavior,
+script execution, or page navigation.
 
 `location`, `history`, and web storage are in-memory test state. Form submit
 events are dispatched, but no navigation occurs. Animation frames use the test
 clock. Media, resize, and intersection observers are safe never-firing stubs.
+Geometry answers zero rather than throwing, so feature detection runs.
+
+## Styles and the cascade
+
+`getComputedStyle()` resolves the cascade — stylesheets, `<style>` elements,
+constructable sheets, `adoptedStyleSheets`, specificity, `!important`,
+inheritance, custom properties, user-agent defaults, `@media`, `@supports` and
+CSS nesting — and answers with **specified** values.
+
+```js
+import { test, assertEquals } from "runtime:test";
+
+test("a variant restyles the button", () => {
+  const style = document.createElement("style");
+  style.textContent = ".danger { color: rgb(220, 38, 38) }";
+  const button = document.createElement("button");
+  button.className = "danger";
+  document.body.append(style, button);
+
+  assertEquals(getComputedStyle(button).color, "rgb(220, 38, 38)");
+});
+```
+
+`@media` is evaluated against a declared viewport: `window.innerWidth` and
+`innerHeight` start at 1024×768 and are assignable.
+
+What it does not do: resolve a used value (`getComputedStyle(h1).fontSize` is
+`2em`, not `32px`), answer for an element outside the tree, or style a
+pseudo-element. See [DOM parity](/esdev/test/dom/parity).
 
 ## Conformance checks
 
@@ -76,3 +110,7 @@ The audit is an implementation check, not a browser-compatibility claim: WPT
 HTML/layout fixtures still require a real browser. Its commands and scoped
 inputs live in [`wpt/`](https://github.com/Open-Tech-Foundation/ES-Runtime/tree/main/wpt)
 in the repository.
+
+Alongside it, a behaviour matrix and a surface probe run the same cases under
+headless Chrome, esdev, jsdom and happy-dom, with Chrome as the oracle. The
+recorded results are published as [DOM parity](/esdev/test/dom/parity).

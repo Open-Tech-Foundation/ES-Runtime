@@ -158,6 +158,27 @@ env = { PATH = "../../../../target/release:${PATH}" }
 [tasks."test:dom-matrix"]
 run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js --strict"
 
+# The surface next to the behaviour: 192 interfaces, members and behaviours put
+# to all four runtimes. A difference from Chrome here is usually a stated
+# non-goal — a layout API has no answer without layout — so what it gates on is
+# drift from the recorded run, not agreement.
+[tasks."test:dom-surface"]
+run = "cargo build -p es-runtime-dev-cli && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/surface-run.js --strict"
+
+# The published parity documents, generated from the two recorded baselines and
+# nothing else: no Chrome, no network, so `ci` can check they are current.
+[tasks."docs:parity"]
+run = "deno run --allow-read --allow-write wpt/dom-matrix/parity-doc.js"
+
+[tasks."docs:parity-check"]
+run = "deno run --allow-read wpt/dom-matrix/parity-doc.js --check"
+
+# Everything that measures the test-only DOM. Needs Chrome, the npm emulators
+# and `wpt/fetch.sh`, so it is a task of its own rather than a `ci` dependency:
+# the workflow job that has them calls this one.
+[tasks."test:dom"]
+deps = ["test:dom-unit", "test:dom-wpt", "test:dom-matrix", "test:dom-surface"]
+
 [tasks."test:unit"]
 deps = ["test:protocol", "test:serialization", "test:dom-unit"]
 
@@ -206,4 +227,4 @@ run = "bun scripts/site-versions.mjs"
 
 # Sequential by design: test:unit reads what build wrote.
 [tasks.ci]
-deps = ["lint", "typecheck", "build", "test:unit"]
+deps = ["lint", "typecheck", "build", "test:unit", "docs:parity-check"]

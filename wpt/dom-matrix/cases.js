@@ -663,6 +663,34 @@ export const cases = [
     },
   },
   {
+    group: "cascade",
+    name: "geometry-answers-zero-and-rendering-is-knowable",
+    limit: "esdev has no layout, so every measurement is zero",
+    expectedEsdev: { result: ["DOMRect", 0, 0, 0, 0, true, [true, false, false], true] },
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      const hidden = document.createElement("div");
+      hidden.style.display = "none";
+      const inner = document.createElement("span");
+      hidden.append(inner);
+      document.body.append(element, hidden);
+      const rect = element.getBoundingClientRect();
+      element.scrollTop = 40;
+      return [
+        rect.constructor.name,
+        rect.width,
+        rect.height,
+        element.offsetWidth,
+        element.scrollTop,
+        element.offsetParent === document.body,
+        [element.checkVisibility(), hidden.checkVisibility(), inner.checkVisibility()],
+        hidden.offsetParent === null && inner.offsetParent === null,
+      ];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

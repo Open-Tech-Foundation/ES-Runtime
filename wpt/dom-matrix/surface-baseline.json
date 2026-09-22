@@ -1,0 +1,1806 @@
+{
+  "summary": {
+    "features": 192,
+    "agreesWithChrome": {
+      "esdev": 168,
+      "jsdom": 155,
+      "happy-dom": 158
+    },
+    "drift": 0
+  },
+  "groups": [
+    {
+      "group": "tree",
+      "features": 44,
+      "esdev": 43,
+      "jsdom": 40,
+      "happy-dom": 36
+    },
+    {
+      "group": "traversal",
+      "features": 13,
+      "esdev": 11,
+      "jsdom": 12,
+      "happy-dom": 10
+    },
+    {
+      "group": "cascade",
+      "features": 24,
+      "esdev": 20,
+      "jsdom": 12,
+      "happy-dom": 17
+    },
+    {
+      "group": "events",
+      "features": 24,
+      "esdev": 23,
+      "jsdom": 20,
+      "happy-dom": 24
+    },
+    {
+      "group": "components",
+      "features": 17,
+      "esdev": 17,
+      "jsdom": 12,
+      "happy-dom": 13
+    },
+    {
+      "group": "parsing",
+      "features": 12,
+      "esdev": 8,
+      "jsdom": 12,
+      "happy-dom": 11
+    },
+    {
+      "group": "selectors",
+      "features": 13,
+      "esdev": 13,
+      "jsdom": 13,
+      "happy-dom": 12
+    },
+    {
+      "group": "forms",
+      "features": 14,
+      "esdev": 14,
+      "jsdom": 14,
+      "happy-dom": 14
+    },
+    {
+      "group": "window",
+      "features": 31,
+      "esdev": 19,
+      "jsdom": 20,
+      "happy-dom": 21
+    }
+  ],
+  "features": [
+    {
+      "group": "tree",
+      "name": "Node",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "DocumentFragment",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Attr",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Comment",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "CDATASection",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "ProcessingInstruction",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "DocumentType",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "DOMImplementation",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "NamedNodeMap",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "HTMLCollection",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "NodeList",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "DOMTokenList",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "DOMStringMap",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "CharacterData in the prototype chain",
+      "chrome": "Text < CharacterData < Node < EventTarget < Object",
+      "esdev": "Text < CharacterData < Node < EventTarget < Object",
+      "jsdom": "Text < CharacterData < Node < EventTarget < Object",
+      "happy-dom": "Text < Text < CharacterData < Node < EventTarget < Object",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.implementation.createHTMLDocument",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.doctype",
+      "chrome": "html",
+      "esdev": "html",
+      "jsdom": "html",
+      "happy-dom": "none",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.title",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.defaultView",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Node.compareDocumentPosition",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Node.isEqualNode",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Node.normalize",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Node.getRootNode",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Node.contains",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.closest",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.matches",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.insertAdjacentHTML",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.insertAdjacentElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.toggleAttribute",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.getAttributeNames",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.setHTMLUnsafe",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.getHTML",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "Element.checkVisibility",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.adoptNode",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.importNode",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "document.firstElementChild",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "innerText",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "outerHTML",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "table.rows",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "table.tBodies",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "row.cells",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "row.rowIndex",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "HTMLTableSectionElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "Range",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "StaticRange",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "AbstractRange",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "document.createRange",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "Range.createContextualFragment",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "Range.getBoundingClientRect",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "DOMRect",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "element scroll offsets",
+      "chrome": "0,0,false",
+      "esdev": "0,0,false",
+      "jsdom": "40,0,true",
+      "happy-dom": "40,0,false",
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "readonly range boundary points",
+      "chrome": "TypeError",
+      "esdev": "TypeError",
+      "jsdom": "TypeError",
+      "happy-dom": "TypeError",
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "NodeIterator",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "TreeWalker",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "NodeFilter",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "XPathEvaluator (document.evaluate)",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "Selection",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "traversal",
+      "name": "getSelection()",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "EventTarget",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "Event",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "CustomEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "UIEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "MouseEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "PointerEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "KeyboardEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "InputEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "FocusEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "SubmitEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "WheelEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "DragEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "ClipboardEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "TouchEvent",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "ErrorEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "MessageEvent",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "AbortController",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "listener signal option",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "window is in the propagation path",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "composedPath() through a shadow root",
+      "chrome": "7",
+      "esdev": "7",
+      "jsdom": "7",
+      "happy-dom": "7",
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "MutationObserver",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "MutationObserver delivers records",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "IntersectionObserver",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "ResizeObserver",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "ShadowRoot",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "attachShadow",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "closed mode hides the root",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "HTMLSlotElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "slot.assignedNodes",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "manual slot assignment",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "shadow root reports clonable and serializable",
+      "chrome": "true,false",
+      "esdev": "true,false",
+      "jsdom": ",",
+      "happy-dom": "true,false",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "innerHTML leaves a declarative root inert",
+      "chrome": "template kept",
+      "esdev": "template kept",
+      "jsdom": "template kept",
+      "happy-dom": "template kept",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "setHTMLUnsafe attaches a declarative root",
+      "chrome": "attached",
+      "esdev": "attached",
+      "jsdom": "throws:TypeError",
+      "happy-dom": "throws:TypeError",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "customElements.define",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "upgrade on connect",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "attributeChangedCallback",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "customElements.whenDefined",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "attachInternals",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "form-associated custom element",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": "throws:TypeError",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "CustomStateSet",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "template.content",
+      "chrome": "DocumentFragment/1",
+      "esdev": "DocumentFragment/1",
+      "jsdom": "DocumentFragment/1",
+      "happy-dom": "DocumentFragment/1",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "DOMParser",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "DOMParser parses text/html",
+      "chrome": "HTML/<p>one</p>",
+      "esdev": "HTML/<p>one</p>",
+      "jsdom": "HTML/<p>one</p>",
+      "happy-dom": "HTML/<p>one</p>",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "XMLSerializer",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "document.write",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "malformed HTML",
+      "chrome": "<p><i>unclosed</i></p>",
+      "esdev": "throws:SyntaxError",
+      "jsdom": "<p><i>unclosed</i></p>",
+      "happy-dom": "<p><i>unclosed</i></p>",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "misnested tags",
+      "chrome": "<b><i>x</i></b>",
+      "esdev": "throws:SyntaxError",
+      "jsdom": "<b><i>x</i></b>",
+      "happy-dom": "<b><i>x</i></b>",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "implied tbody",
+      "chrome": "<table><tbody><tr><td>x</td></tr></tbody></table>",
+      "esdev": "<table><tbody><tr><td>x</td></tr></tbody></table>",
+      "jsdom": "<table><tbody><tr><td>x</td></tr></tbody></table>",
+      "happy-dom": "<table><tbody><tr><td>x</td></tr></tbody></table>",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "omitted list end tags",
+      "chrome": "<ul><li>a</li><li>b</li></ul>",
+      "esdev": "<ul><li>a</li><li>b</li></ul>",
+      "jsdom": "<ul><li>a</li><li>b</li></ul>",
+      "happy-dom": "<ul><li>a</li><li>b</li></ul>",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "omitted paragraph end tag",
+      "chrome": "<p>one</p><p>two</p>",
+      "esdev": "<p>one</p><p>two</p>",
+      "jsdom": "<p>one</p><p>two</p>",
+      "happy-dom": "<p>one<p>two</p></p>",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "fragment context element",
+      "chrome": "tbody",
+      "esdev": "tbody",
+      "jsdom": "tbody",
+      "happy-dom": "tbody",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "SVG namespace from markup",
+      "chrome": "http://www.w3.org/2000/svg",
+      "esdev": "http://www.w3.org/2000/svg",
+      "jsdom": "http://www.w3.org/2000/svg",
+      "happy-dom": "http://www.w3.org/2000/svg",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "entity decoding",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":is()",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":where()",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":has()",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":nth-child(An+B of S)",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":defined",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":state()",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":scope",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":hover parses",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":focus-within",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":placeholder-shown",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":read-write",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": ":checked / :disabled",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": "invalid selector throws",
+      "chrome": "SyntaxError",
+      "esdev": "SyntaxError",
+      "jsdom": "SyntaxError",
+      "happy-dom": "no throw",
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "FormData",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "new FormData(form)",
+      "chrome": "1",
+      "esdev": "1",
+      "jsdom": "1",
+      "happy-dom": "1",
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "form.requestSubmit",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "checkValidity",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "validity is a ValidityState",
+      "chrome": "ValidityState/true/true",
+      "esdev": "ValidityState/true/true",
+      "jsdom": "ValidityState/true/true",
+      "happy-dom": "ValidityState/true/true",
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "setCustomValidity",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "input.valueAsNumber",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "input.valueAsDate",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "setSelectionRange",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "labels collection",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "input.indeterminate",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "select.selectedOptions",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "fieldset.elements",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "submitting dispatches submit",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "element.style",
+      "chrome": "color: red;",
+      "esdev": "color: red;",
+      "jsdom": "color: red;",
+      "happy-dom": "color: red;",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "style.setProperty (custom property)",
+      "chrome": "1px",
+      "esdev": "1px",
+      "jsdom": "1px",
+      "happy-dom": "1px",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "CSSStyleSheet",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "constructable stylesheets",
+      "chrome": "1",
+      "esdev": "1",
+      "jsdom": "1",
+      "happy-dom": "1",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "document.styleSheets",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "style element has a sheet",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "adoptedStyleSheets applies",
+      "chrome": "rgb(1, 2, 3)",
+      "esdev": "rgb(1, 2, 3)",
+      "jsdom": "rgb(0, 0, 0)",
+      "happy-dom": "rgb(1, 2, 3)",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "getComputedStyle",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "cascade from a stylesheet",
+      "chrome": "rgb(1, 2, 3)",
+      "esdev": "rgb(1, 2, 3)",
+      "jsdom": "rgb(1, 2, 3)",
+      "happy-dom": "rgb(1, 2, 3)",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "specificity decides",
+      "chrome": "rgb(3, 3, 3)",
+      "esdev": "rgb(3, 3, 3)",
+      "jsdom": "rgb(3, 3, 3)",
+      "happy-dom": "rgb(3, 3, 3)",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "important beats inline",
+      "chrome": "rgb(1, 1, 1)",
+      "esdev": "rgb(1, 1, 1)",
+      "jsdom": "rgb(1, 1, 1)",
+      "happy-dom": "rgb(1, 1, 1)",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "inheritance",
+      "chrome": "rgb(4, 5, 6)",
+      "esdev": "rgb(4, 5, 6)",
+      "jsdom": "rgb(4, 5, 6)",
+      "happy-dom": "rgb(4, 5, 6)",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "user-agent display defaults",
+      "chrome": "block,inline",
+      "esdev": "block,inline",
+      "jsdom": "block,inline",
+      "happy-dom": "block,",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "no computed style outside the tree",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "@media follows the viewport",
+      "chrome": "rgb(7, 7, 7)",
+      "esdev": "rgb(7, 7, 7)",
+      "jsdom": "rgb(0, 0, 0)",
+      "happy-dom": "rgb(7, 7, 7)",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "matchMedia answers",
+      "chrome": "true,false",
+      "esdev": "true,false",
+      "jsdom": "throws:TypeError",
+      "happy-dom": "true,false",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "CSS.supports",
+      "chrome": "true,true",
+      "esdev": "true,true",
+      "jsdom": "undefined,undefined",
+      "happy-dom": "true,true",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "CSS nesting resolves",
+      "chrome": "rgb(2, 2, 2)",
+      "esdev": "rgb(2, 2, 2)",
+      "jsdom": "rgb(1, 1, 1)",
+      "happy-dom": "",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "getBoundingClientRect measures",
+      "chrome": "measured",
+      "esdev": "zero",
+      "jsdom": "zero",
+      "happy-dom": "zero",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "offsetWidth measures",
+      "chrome": "measured",
+      "esdev": "zero",
+      "jsdom": "zero",
+      "happy-dom": "zero",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "scrollIntoView",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "Element.animate (WAAPI)",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "resolved font size",
+      "chrome": "32px",
+      "esdev": "2em",
+      "jsdom": "2em",
+      "happy-dom": "16px",
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "window === globalThis",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "location",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "location parts are assignable",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "history.pushState",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "localStorage",
+      "chrome": "throws:SecurityError",
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "document.cookie",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "innerWidth",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "requestAnimationFrame",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "queueMicrotask",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "structuredClone",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "fetch",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "XMLHttpRequest",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "WebSocket",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "Worker",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "Blob",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "File / FileReader",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "URL.createObjectURL",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "crypto.randomUUID",
+      "chrome": false,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "performance.now",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "alert",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "scrollTo",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "Image",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "canvas.getContext",
+      "chrome": "context",
+      "esdev": "missing",
+      "jsdom": "null",
+      "happy-dom": "null",
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "iframe.contentWindow",
+      "chrome": "window",
+      "esdev": "null",
+      "jsdom": "window",
+      "happy-dom": "window",
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "MathMLElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "SVGElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "SVGSVGElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "focus() sets activeElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "showPopover",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "dialog.showModal",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": false,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "document.startViewTransition",
+      "chrome": true,
+      "esdev": false,
+      "jsdom": false,
+      "happy-dom": false,
+      "drift": false
+    }
+  ]
+}
