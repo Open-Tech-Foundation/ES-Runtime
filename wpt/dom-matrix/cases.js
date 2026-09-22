@@ -2054,6 +2054,57 @@ export const cases = [
       return [notConfigurable, seen, input.checked];
     },
   },
+  {
+    group: "events",
+    name: "an-attribute-handler-is-compiled-and-a-throw-is-reported",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      window.matrixHits = [];
+      const button = document.createElement("button");
+      document.body.appendChild(button);
+      button.setAttribute("onclick", "matrixHits.push(['attribute', this.tagName, event.type])");
+      const compiled = [typeof button.onclick, button.onclick === button.onclick];
+      button.click();
+      // Assigning the property does not write the attribute…
+      const own = function () { window.matrixHits.push(["property"]); };
+      button.onclick = own;
+      const kept = [button.getAttribute("onclick") === null, button.onclick === own];
+      button.click();
+      // …and changing the attribute takes the slot back.
+      button.setAttribute("onclick", "matrixHits.push(['again'])");
+      const retaken = [typeof button.onclick, button.onclick === own];
+      button.click();
+      // Removing it empties the slot.
+      const other = document.createElement("div");
+      other.setAttribute("onclick", "matrixHits.push(['never'])");
+      const hadOne = typeof other.onclick;
+      other.removeAttribute("onclick");
+      // Markup, not just setAttribute, and the element's own scope.
+      const host = document.createElement("div");
+      host.innerHTML = "<input oninput=\"matrixHits.push(['scope', value])\">";
+      document.body.appendChild(host);
+      host.firstElementChild.value = "typed";
+      host.firstElementChild.dispatchEvent(new window.Event("input"));
+      // A listener that throws does not reach the dispatcher.
+      const thrower = document.createElement("div");
+      thrower.addEventListener("boom", () => { window.matrixHits.push(["before"]); throw new Error("reported"); });
+      thrower.addEventListener("boom", () => window.matrixHits.push(["after"]));
+      let propagated = null;
+      let returned = null;
+      const quiet = (event) => event.preventDefault();
+      window.addEventListener("error", quiet);
+      try {
+        returned = thrower.dispatchEvent(new window.Event("boom", { cancelable: true }));
+      } catch (error) {
+        propagated = "threw";
+      }
+      window.removeEventListener("error", quiet);
+      const hits = window.matrixHits.slice();
+      delete window.matrixHits;
+      return [compiled, kept, retaken, [hadOne, other.onclick], hits, [propagated, returned]];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

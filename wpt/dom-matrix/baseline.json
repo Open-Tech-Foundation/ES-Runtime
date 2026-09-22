@@ -4994,10 +4994,184 @@
       "emulatorDisagreement": false,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "events",
+      "name": "an-attribute-handler-is-compiled-and-a-throw-is-reported",
+      "chrome": {
+        "result": [
+          [
+            "function",
+            true
+          ],
+          [
+            false,
+            true
+          ],
+          [
+            "function",
+            false
+          ],
+          [
+            "function",
+            null
+          ],
+          [
+            [
+              "attribute",
+              "BUTTON",
+              "click"
+            ],
+            [
+              "property"
+            ],
+            [
+              "again"
+            ],
+            [
+              "scope",
+              "typed"
+            ],
+            [
+              "before"
+            ],
+            [
+              "after"
+            ]
+          ],
+          [
+            null,
+            true
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "function",
+            true
+          ],
+          [
+            false,
+            true
+          ],
+          [
+            "function",
+            false
+          ],
+          [
+            "function",
+            null
+          ],
+          [
+            [
+              "attribute",
+              "BUTTON",
+              "click"
+            ],
+            [
+              "property"
+            ],
+            [
+              "again"
+            ],
+            [
+              "scope",
+              "typed"
+            ],
+            [
+              "before"
+            ],
+            [
+              "after"
+            ]
+          ],
+          [
+            null,
+            true
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "object",
+            true
+          ],
+          [
+            false,
+            true
+          ],
+          [
+            "object",
+            false
+          ],
+          [
+            "object",
+            null
+          ],
+          [
+            [
+              "property"
+            ],
+            [
+              "before"
+            ],
+            [
+              "after"
+            ]
+          ],
+          [
+            null,
+            true
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "object",
+            true
+          ],
+          [
+            false,
+            true
+          ],
+          [
+            "function",
+            true
+          ],
+          [
+            "object",
+            null
+          ],
+          [
+            [
+              "property"
+            ],
+            [
+              "property"
+            ],
+            [
+              "before"
+            ],
+            [
+              "after"
+            ]
+          ],
+          [
+            null,
+            true
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 93,
+    "match": 94,
     "intentional-limit": 2,
     "drift": 0
   }

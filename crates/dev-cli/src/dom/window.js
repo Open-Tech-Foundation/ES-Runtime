@@ -608,6 +608,91 @@ nameInterfaces(elements);
 nameInterfaces(globals);
 Object.defineProperty(globalThis, Symbol.toStringTag, { value: "Window", configurable: true });
 
+// Event handler content attributes: `<button onclick="this.reset()">`, and
+// `el.setAttribute("onclick", …)` after the fact. The attribute's value is a
+// function *body* by specification, compiled with the element and the document
+// in scope — so this is the one place in the DOM where markup becomes code, and
+// it is here rather than in the tree for that reason.
+//
+// The IDL attribute and the content attribute share one slot, the way a browser
+// shares it: setting `el.onclick` does not write the attribute, but writing the
+// attribute afterwards takes the slot back, and removing it empties the slot.
+const HANDLERS = Symbol("esdev DOM event handlers");
+const HANDLER_TYPES = `
+abort animationcancel animationend animationiteration animationstart auxclick beforeinput beforetoggle blur
+cancel canplay change click close contextmenu copy cut dblclick drag dragend dragenter dragleave dragover
+dragstart drop durationchange emptied ended error focus focusin focusout input invalid keydown keypress keyup
+load loadeddata loadedmetadata loadstart mousedown mouseenter mouseleave mousemove mouseout mouseover mouseup
+paste pause play playing pointercancel pointerdown pointerenter pointerleave pointermove pointerout pointerover
+pointerup progress ratechange reset resize scroll scrollend seeked seeking select selectionchange selectstart
+slotchange stalled submit suspend timeupdate toggle transitioncancel transitionend transitionrun transitionstart
+volumechange waiting wheel
+`.trim().split(/\s+/);
+
+function handlerSlots(target) {
+  if (!Object.hasOwn(target, HANDLERS)) {
+    Object.defineProperty(target, HANDLERS, { value: new Map() });
+  }
+  return target[HANDLERS];
+}
+
+// The function the attribute's text means: its body, with `this` the element and
+// the document in scope, which is what lets `onclick="this.value = name"` work.
+// Text that does not compile is reported and the handler is null, exactly as a
+// browser leaves it.
+function compileHandler(target, body) {
+  try {
+    // eslint-disable-next-line no-new-func
+    return new Function("event", `with (document) with (this) { ${body} }`);
+  } catch (error) {
+    if (typeof globalThis.reportError === "function") globalThis.reportError(error);
+    return null;
+  }
+}
+
+function eventHandlerAccessor(type) {
+  const attribute = `on${type}`;
+  return {
+    get() {
+      const slots = handlerSlots(this);
+      const slot = slots.get(type);
+      const text = this.getAttribute?.(attribute) ?? null;
+      if (text !== null) {
+        // The attribute is the handler unless it is the same text a value was
+        // already taken from — which is also true after an IDL set, so that
+        // value keeps the slot until the markup changes under it.
+        if (slot && slot.text === text) return slot.value;
+        const compiled = compileHandler(this, text);
+        slots.set(type, { value: compiled, text });
+        return compiled;
+      }
+      // No attribute: a value set through the IDL attribute stands, and one
+      // taken from an attribute that has since been removed does not.
+      if (slot && slot.text !== null) {
+        slots.set(type, { value: null, text: null });
+        return null;
+      }
+      return slot?.value ?? null;
+    },
+    set(value) {
+      handlerSlots(this).set(type, {
+        value: typeof value === "function" ? value : null,
+        // Remembered, not written: assigning the property leaves the attribute
+        // alone, and a later change to it is what takes the slot back.
+        text: this.getAttribute?.(attribute) ?? null,
+      });
+    },
+    configurable: true,
+    enumerable: true,
+  };
+}
+
+for (const target of [tree.HTMLElement.prototype, tree.SVGElement.prototype, tree.Document.prototype, globalThis]) {
+  const accessors = {};
+  for (const type of HANDLER_TYPES) accessors[`on${type}`] = eventHandlerAccessor(type);
+  Object.defineProperties(target, accessors);
+}
+
 // Named access on the window object: `window.someId` is the element with that
 // id. A browser keeps these on an object *behind* the window in the prototype
 // chain, so a real window property always wins — `window.location` is the

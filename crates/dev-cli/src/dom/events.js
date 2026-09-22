@@ -29,6 +29,15 @@ function reaches(node, root) {
   return false;
 }
 
+// An exception inside a listener is reported, not thrown at the dispatcher. The
+// runtime's `reportError` is the platform's own path: it dispatches an
+// `ErrorEvent` on the global and falls back to the console when nothing claims
+// it.
+function reportUncaught(error) {
+  if (typeof globalThis.reportError === "function") globalThis.reportError(error);
+  else globalThis.console?.error?.(error);
+}
+
 export function createEvents() {
   function retarget(original, current) {
     let target = original;
@@ -231,6 +240,12 @@ export function createEvents() {
         try {
           if (typeof listener.callback === "function") listener.callback.call(target, event);
           else listener.callback.handleEvent.call(listener.callback, event);
+        } catch (error) {
+          // "Report the exception", which a browser does by raising it as an
+          // uncaught error on the global — not by handing it to whoever called
+          // `dispatchEvent`. The rest of the listeners still run, and a test
+          // that asserts on `window.onerror` sees what it is written for.
+          reportUncaught(error);
         } finally {
           state.passive = false;
           if (hadEvent) globalThis.event = previousEvent;
@@ -239,7 +254,13 @@ export function createEvents() {
         if (state.immediateStopped) break;
       }
       const handler = !capture && target[`on${event.type}`];
-      if (!state.immediateStopped && typeof handler === "function") handler.call(target, event);
+      if (!state.immediateStopped && typeof handler === "function") {
+        try {
+          handler.call(target, event);
+        } catch (error) {
+          reportUncaught(error);
+        }
+      }
     }
   }
 

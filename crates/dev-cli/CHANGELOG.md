@@ -25,6 +25,19 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **Event handler content attributes.** `<button onclick="this.reset()">` and
+  `el.setAttribute("onclick", …)` now do what they say: the attribute's value is
+  a function *body* by specification, compiled with the element and the document
+  in scope, so an unqualified `value` inside an `oninput` resolves against the
+  input. Only the IDL half (`el.onclick = fn`) worked before, so a suite that
+  wrote handlers as markup — Vue's, among others — dispatched into silence. The
+  two halves share one slot the way a browser shares it: assigning the property
+  does not write the attribute, changing the attribute takes the slot back, and
+  removing it empties the slot. Text that does not compile is reported and
+  leaves the handler `null`, as in a browser. This is the one place in the DOM
+  where markup becomes code, and it lives in the window module for that reason.
+  jsdom and happy-dom both answer this case wrongly, so the behaviour matrix now
+  records a case where esdev is alone with Chrome.
 - **`accessor x = 1` compiles.** The class auto-accessor is a private field and
   a getter/setter pair by definition, and that is what it becomes — on the
   prototype for an instance accessor, on the constructor for a `static` one,
@@ -337,6 +350,13 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A listener that throws is reported, not rethrown at the dispatcher.** The
+  exception surfaced at whoever called `dispatchEvent` — or `click()` — and the
+  remaining listeners never ran. The specification says to *report* it: it
+  becomes an uncaught error on the global, through the runtime's own
+  `reportError`, so an `addEventListener("error", …)` or `window.onerror`
+  assertion sees it and the dispatch finishes. Inline handlers are covered the
+  same way.
 - **An interface member can be redefined.** Every property this DOM installed
   through a descriptor batch was non-configurable, so `vi.spyOn(input,
   "checked", "set")` — and any other stub — failed with `Cannot redefine
