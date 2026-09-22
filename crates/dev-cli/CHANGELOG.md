@@ -25,6 +25,17 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **Customized built-ins.** `customElements.define(name, Class, { extends:
+  "button" })` recorded nothing and `createElement("button", { is: name })`
+  dropped the option, so the constructor never ran — a silent no-upgrade, not an
+  error. Now: the is value is what an element was *created* as, carried by
+  `createElement`/`createElementNS`, by the parser from the `is` attribute, by
+  `cloneNode`, and printed by the serializer when no attribute carries it (a
+  browser round-trips one that way). `new MyButton()` constructs a `button`, not
+  a `my-button`. Setting `is` after creation customizes nothing, as in a
+  browser, and `:defined` waits for the upgrade. `extends` is refused for a
+  custom name or a name no HTML element has — including the legacy ones this DOM
+  deliberately does not know, such as `marquee`.
 - **Every SVG element has its own interface.** `<g>` was a bare `SVGElement`;
   Chrome says `SVGGElement`, and a renderer that branches on the interface reads
   the difference. 59 element names now map to their own class over the shared

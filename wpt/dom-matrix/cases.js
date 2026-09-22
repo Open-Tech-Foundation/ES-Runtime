@@ -1752,6 +1752,44 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "components",
+    name: "a-customized-built-in-upgrades-its-built-in",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("built-in");
+      const log = [];
+      class Customized extends window.HTMLButtonElement {
+        constructor() { super(); log.push("constructed"); }
+        connectedCallback() { log.push("connected"); }
+      }
+      window.customElements.define(name, Customized, { extends: "button" });
+      const created = document.createElement("button", { is: name });
+      document.body.appendChild(created);
+      const host = document.createElement("div");
+      host.innerHTML = `<button is="${name}"></button>`;
+      document.body.appendChild(host);
+      // The attribute set after creation customizes nothing.
+      const late = document.createElement("button");
+      late.setAttribute("is", name);
+      document.body.appendChild(late);
+      return [
+        created instanceof Customized,
+        // Created with the option, so there is no attribute — but the
+        // serializer writes the is value all the same.
+        created.getAttribute("is"),
+        created.outerHTML,
+        created.matches(":defined"),
+        host.firstElementChild instanceof Customized,
+        late instanceof Customized,
+        document.createElement("div", { is: name }) instanceof Customized,
+        new Customized().localName,
+        log,
+        errorName(() => window.customElements.define(unique("other"), class extends window.HTMLElement {}, { extends: "not-a-real-tag" })),
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

@@ -42,12 +42,16 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
         const context = target instanceof Element ? target : parent;
         const namespace = elementNamespace(name, context);
         const qualifiedName = namespace === SVG_NAMESPACE ? SVG_ELEMENT_NAMES.get(name.toLowerCase()) ?? name : name;
-        // HTML parser-created elements do not go through the public
-        // createElementNS hook; retain that observable construction path.
-        node = namespace === HTML_NAMESPACE
-          ? document.createElement(qualifiedName)
-          : document.createElementNS(namespace, qualifiedName);
         if (!Array.isArray(attributes)) throw new TypeError("Element attributes must be an array");
+        // The parser creates a customized built-in *as* one, from the `is`
+        // attribute in the markup. Setting that attribute afterwards customizes
+        // nothing, here as in a browser.
+        const is = namespace === HTML_NAMESPACE
+          ? attributes.find((attribute) => Array.isArray(attribute) && attribute[0] === "is")?.[1]
+          : undefined;
+        node = namespace === HTML_NAMESPACE
+          ? document.createElement(qualifiedName, is === undefined ? undefined : { is })
+          : document.createElementNS(namespace, qualifiedName);
         for (const attribute of attributes) {
           if (!Array.isArray(attribute) || attribute.length !== 2) throw new TypeError("Invalid DOM parser attribute");
           node.setAttribute(attribute[0], attribute[1]);
@@ -100,7 +104,12 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
     if (!(node instanceof Element)) throw new TypeError("Cannot serialize this node type");
     // The element's own map, not the public accessor: serializing is an
     // internal read, and a test spying on `attributes` should not see it.
-    const attributes = Array.from(ownAttributes(node), (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
+    let attributes = Array.from(ownAttributes(node), (attribute) => ` ${attribute.name}="${escapeAttribute(attribute.value)}"`).join("");
+    // An element created as a customized built-in carries its is value without
+    // an `is` attribute. The serializer writes it, which is how the markup
+    // round-trips into an element that upgrades again.
+    const isValue = tree.isValueOf(node);
+    if (isValue !== null && !node.hasAttribute("is")) attributes = ` is="${escapeAttribute(isValue)}"${attributes}`;
     if (VOID.has(node.localName)) return `<${node.localName}${attributes}>`;
     const raw = node.localName === "script" || node.localName === "style";
     const contents = node instanceof HTMLTemplateElement ? node.content.childNodes : node.childNodes;

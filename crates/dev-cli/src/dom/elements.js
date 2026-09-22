@@ -6,7 +6,7 @@ function validName(name) {
 }
 
 export function createElements(tree) {
-  const { Node, Document, Element, HTMLElement, upgradeCustom } = tree;
+  const { Node, Document, Element, HTMLElement, isValueOf, upgradeCustom } = tree;
   // Per registry, not per module: the specification's duplicate checks are
   // "does *this* registry already have it", and a second `new
   // CustomElementRegistry()` that wrote into the document's definitions would
@@ -21,14 +21,25 @@ export function createElements(tree) {
   function registryOf(registry) {
     let own = state.get(registry);
     if (!own) {
-      own = { definitions: new Map(), names: new Map(), waiting: new Map() };
+      own = { definitions: new Map(), names: new Map(), waiting: new Map(), extending: new Map() };
       state.set(registry, own);
     }
     return own;
   }
 
+  // Autonomous elements are found by their own name; a customized built-in by
+  // the is value it was created with, and only when that definition was
+  // registered for this very element's local name — `{ extends: "button" }`
+  // customizes a `button` and nothing else.
   function definition(element) {
-    return active ? registryOf(active).definitions.get(element.localName) : undefined;
+    if (!active) return undefined;
+    const own = registryOf(active);
+    const is = isValueOf(element);
+    if (is !== null) {
+      const found = own.definitions.get(is);
+      return found && own.extending.get(is) === element.localName ? found : undefined;
+    }
+    return own.extending.has(element.localName) ? undefined : own.definitions.get(element.localName);
   }
 
   function observed(element) {
@@ -90,8 +101,13 @@ export function createElements(tree) {
   }
 
   const originalCreateElement = Document.prototype.createElement;
-  Document.prototype.createElement = function (name) {
-    return upgrade(originalCreateElement.call(this, name));
+  Document.prototype.createElement = function (name, options) {
+    return upgrade(originalCreateElement.call(this, name, options));
+  };
+
+  const originalCreateElementNS = Document.prototype.createElementNS;
+  Document.prototype.createElementNS = function (namespaceURI, qualifiedName, options) {
+    return upgrade(originalCreateElementNS.call(this, namespaceURI, qualifiedName, options));
   };
 
   const originalInsert = Node.prototype._insert;
@@ -187,13 +203,27 @@ export function createElements(tree) {
   };
 
   class CustomElementRegistry {
-    define(name, constructor) {
+    define(name, constructor, options = undefined) {
       const own = registryOf(this);
       name = String(name);
       if (!validName(name)) throw new DOMException("Custom element names must contain a hyphen.", "SyntaxError");
       if (own.definitions.has(name)) throw new DOMException(`${name} is already defined.`, "NotSupportedError");
       if (typeof constructor !== "function") throw new TypeError("Custom element constructor must be a function");
       if (!(constructor.prototype instanceof HTMLElement)) throw new TypeError("Custom element constructors must extend HTMLElement");
+      // `{ extends: "button" }`: the definition customizes that built-in rather
+      // than naming a new element. It has to be a built-in that exists — a
+      // custom name, or a name no HTML element has, would customize nothing.
+      const extending = options === null || options === undefined ? undefined : options.extends;
+      if (extending !== undefined) {
+        const local = String(extending);
+        if (validName(local)) {
+          throw new DOMException(`"${local}" is a custom element name, so it cannot be extended.`, "NotSupportedError");
+        }
+        if (!tree.isKnownHtmlElement(local)) {
+          throw new DOMException(`"${local}" is not an HTML element, so it cannot be extended.`, "NotSupportedError");
+        }
+        own.extending.set(name, local);
+      }
       // One constructor, one name *in this registry*: a class registered twice
       // would make `getName` and a direct `new Constructor()` ambiguous.
       const taken = own.names.get(constructor);
@@ -203,9 +233,10 @@ export function createElements(tree) {
       own.definitions.set(name, constructor);
       own.names.set(constructor, name);
       if (this === active) {
+        const extended = own.extending.get(name);
         for (const document of documents) {
           walk(document, (element) => {
-            if (element.localName !== name) return;
+            if (extended === undefined ? element.localName !== name : isValueOf(element) !== name || element.localName !== extended) return;
             const wasUpgraded = element instanceof constructor;
             upgrade(element);
             if (!wasUpgraded && element.isConnected) react(element, "connectedCallback");
@@ -240,8 +271,13 @@ export function createElements(tree) {
     // class was defined under, in this document. The tree cannot know that on
     // its own, so it is told where to look.
     tree.setCustomLookup((constructor) => {
-      const name = registryOf(active).names.get(constructor);
-      return name === undefined ? null : { name, document };
+      const own = registryOf(active);
+      const name = own.names.get(constructor);
+      if (name === undefined) return null;
+      // A customized built-in constructs its built-in, carrying the is value:
+      // `new MyButton()` is a `button`, not a `my-button`.
+      const extended = own.extending.get(name);
+      return extended === undefined ? { name, document } : { name: extended, document, is: name };
     });
     return active;
   }

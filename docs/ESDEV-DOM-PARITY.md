@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-85 of 87 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+86 of 88 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -123,6 +123,7 @@ compares the result.
 | cancel-bubble-is-the-stop-propagation-flag | events | yes | yes | no |
 | nodes-stringify-as-their-interface | tree | yes | no | no |
 | svg-elements-get-their-own-interface | parsing | yes | no | yes |
+| a-customized-built-in-upgrades-its-built-in | components | yes | no | no |
 
 ## Where esdev is closer to Chrome than an emulator
 

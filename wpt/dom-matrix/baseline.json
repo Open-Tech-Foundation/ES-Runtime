@@ -3957,10 +3957,95 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-customized-built-in-upgrades-its-built-in",
+      "chrome": {
+        "result": [
+          true,
+          null,
+          "<button is=\"matrix-built-in-20\"></button>",
+          true,
+          true,
+          false,
+          false,
+          "button",
+          [
+            "constructed",
+            "connected",
+            "constructed",
+            "connected",
+            "constructed"
+          ],
+          "NotSupportedError"
+        ]
+      },
+      "esdev": {
+        "result": [
+          true,
+          null,
+          "<button is=\"matrix-built-in-20\"></button>",
+          true,
+          true,
+          false,
+          false,
+          "button",
+          [
+            "constructed",
+            "connected",
+            "constructed",
+            "connected",
+            "constructed"
+          ],
+          "NotSupportedError"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          true,
+          null,
+          "<button is=\"matrix-built-in-38\"></button>",
+          false,
+          false,
+          false,
+          true,
+          "matrix-built-in-38",
+          [
+            "constructed",
+            "constructed",
+            "constructed"
+          ],
+          null
+        ]
+      },
+      "jsdom": {
+        "result": [
+          true,
+          null,
+          "<button is=\"matrix-built-in-36\"></button>",
+          true,
+          true,
+          false,
+          false,
+          "button",
+          [
+            "constructed",
+            "connected",
+            "constructed",
+            "connected",
+            "constructed"
+          ],
+          "NotSupportedError"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 85,
+    "match": 86,
     "intentional-limit": 2,
     "drift": 0
   }

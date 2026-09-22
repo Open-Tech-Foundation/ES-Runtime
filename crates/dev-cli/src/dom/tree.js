@@ -46,6 +46,24 @@ const SHADOW_HOSTS = new Set([
   "article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
   "header", "main", "nav", "p", "section", "span",
 ]);
+// Every element the modern HTML standard names. Legacy ones a browser still
+// answers for — `marquee`, `frameset`, `xmp` — are deliberately absent: this
+// DOM is the modern language, and `{ extends: "marquee" }` is not something to
+// help a project do.
+const HTML_ELEMENT_NAMES = new Set([
+  "html", "head", "title", "base", "link", "meta", "style", "body", "article", "section",
+  "nav", "aside", "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header", "footer", "address",
+  "p", "hr", "pre", "blockquote", "ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
+  "figcaption", "main", "search", "div", "a", "em", "strong", "small", "s", "cite", "q", "dfn",
+  "abbr", "ruby", "rt", "rp", "data", "time", "code", "var", "samp", "kbd", "sub", "sup", "i",
+  "b", "u", "mark", "bdi", "bdo", "span", "br", "wbr", "ins", "del", "picture", "source",
+  "img", "iframe", "embed", "object", "video", "audio", "track", "map", "area", "table",
+  "caption", "colgroup", "col", "tbody", "thead", "tfoot", "tr", "td", "th", "form", "label",
+  "input", "button", "select", "datalist", "optgroup", "option", "textarea", "output",
+  "progress", "meter", "fieldset", "legend", "details", "summary", "dialog", "script",
+  "noscript", "template", "slot", "canvas"
+]);
+
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -666,7 +684,10 @@ export function createTree(events = {}) {
       else if (this instanceof DocumentFragment) clone = document.createDocumentFragment();
       else if (this instanceof Element) {
         const qualifiedName = this.prefix ? `${this.prefix}:${this.localName}` : this.localName;
-        clone = document.createElementNS(this.namespaceURI, qualifiedName);
+        // The is value is part of what the element *is*, so a clone of a
+        // customized built-in is one too, and upgrades like one.
+        const is = isValueOf(this);
+        clone = document.createElementNS(this.namespaceURI, qualifiedName, is === null ? undefined : { is });
         for (const attribute of ownAttributes(this)) {
           clone.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
         }
@@ -957,6 +978,9 @@ export function createTree(events = {}) {
         const defined = customLookup?.(new.target);
         if (!defined) throw new TypeError("Illegal constructor");
         super(defined.name, defined.document);
+        // A class defined with `{ extends: "button" }` constructs a `button`
+        // that *is* the definition, not an element named after it.
+        if (defined.is !== undefined) slots(this).isValue = defined.is;
         return;
       }
       super(name, ownerDocument);
@@ -2206,18 +2230,21 @@ export function createTree(events = {}) {
     get firstElementChild() { return this.children.item(0); }
     get lastElementChild() { return this.children.item(this.children.length - 1); }
     get childElementCount() { return this.children.length; }
-    createElement(name) {
+    createElement(name, options = undefined) {
       // ASCII-lowercased, as the specification requires for an HTML document:
       // `createElement("DIV")` makes a `div`, and so does the parser.
       name = String(name).toLowerCase();
       if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be valid HTML names.");
-      return new (ELEMENT_CLASSES[name] ?? HTMLElement)(name, this);
+      const element = new (ELEMENT_CLASSES[name] ?? HTMLElement)(name, this);
+      return withIsValue(element, options);
     }
-    createElementNS(namespaceURI, qualifiedName) {
+    createElementNS(namespaceURI, qualifiedName, options = undefined) {
       namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
       qualifiedName = String(qualifiedName);
       if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
-      if (namespaceURI === HTML_NAMESPACE) return new (ELEMENT_CLASSES[qualifiedName] ?? HTMLElement)(qualifiedName, this);
+      if (namespaceURI === HTML_NAMESPACE) {
+        return withIsValue(new (ELEMENT_CLASSES[qualifiedName] ?? HTMLElement)(qualifiedName, this), options);
+      }
       if (namespaceURI === SVG_NAMESPACE) {
         // By exact local name: SVG is case-sensitive, so `CIRCLE` is an unknown
         // element with the base interface, exactly as in a browser.
@@ -2508,11 +2535,35 @@ export function createTree(events = {}) {
     return slots(element).customFailed === true;
   }
 
+  // The "is" value: what a customized built-in was *created* as. It is not the
+  // `is` attribute — setting that attribute later customizes nothing, in a
+  // browser or here — but the serializer prints it when no attribute carries
+  // it, which is how a browser round-trips one.
+  function withIsValue(element, options) {
+    const value = options === null || options === undefined ? undefined : options.is;
+    if (value !== undefined) slots(element).isValue = String(value);
+    return element;
+  }
+
+  function isKnownHtmlElement(name) {
+    return HTML_ELEMENT_NAMES.has(String(name).toLowerCase());
+  }
+
+  function isValueOf(element) {
+    return slots(element).isValue ?? null;
+  }
+
   function setCustomLookup(lookup) {
     customLookup = lookup;
   }
 
   function isDefined(element) {
+    // A customized built-in is undefined until it upgrades, exactly like an
+    // autonomous one: `<button is="my-button">` is not `:defined` while
+    // `my-button` is not.
+    if (element.namespaceURI === HTML_NAMESPACE && isValueOf(element) !== null) {
+      return slots(element).customDefined === true;
+    }
     if (element.namespaceURI !== HTML_NAMESPACE || !CUSTOM_NAME.test(element.localName)) return true;
     if (element.getRootNode()?.[INERT]) return false;
     if (slots(element).customFailed) return false;
@@ -2553,5 +2604,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, HTMLDocument, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, HTMLDocument, isValueOf, isKnownHtmlElement, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }
