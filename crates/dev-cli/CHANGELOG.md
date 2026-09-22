@@ -337,6 +337,22 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **An inline declaration answers for the properties its shorthands cover.**
+  `el.style.border = "1px solid red"` left `borderTopWidth` and `borderBottom`
+  empty: the cascade learned to expand shorthands, the declaration did not. A
+  read now comes from the shorthand that covers it, in both directions —
+  `borderTopWidth` is `1px`, `borderBottom` is `1px solid red`, `borderWidth` is
+  `1px` — with the last declaration winning, as it does in the cascade. What was
+  written is still what is stored, so `cssText` stays the `border: 1px solid
+  red;` it was given. The one difference from a browser is enumeration:
+  `style.length` and `style.item(0)` report the shorthand, where Chrome reports
+  the seventeen longhands it expanded into.
+- **A zero length serializes with its unit.** `style.width = 0` read back `0`;
+  Chrome, and now this, say `0px` — component by component, so `margin: 0 1px`
+  is `0px 1px`. Only where zero really is a length: `line-height`, `z-index`,
+  `opacity`, `stroke-width`, `tab-size` and `scale` keep the bare `0`, and the
+  SVG geometry properties (`cx`, `r`, `x`, …) take the unit, each checked
+  against Chrome.
 - **The runner's rejection handler is the handler of last resort.** A suite that
   listens for `unhandledrejection` itself and claims the event — which is how a
   framework's own error-handling tests are written — had its rejection taken by

@@ -1943,6 +1943,43 @@ export const cases = [
       return result;
     },
   },
+  {
+    group: "cascade",
+    name: "an-inline-declaration-holds-its-longhands",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const style = document.createElement("div").style;
+      const once = (name, value) => {
+        style.setProperty(name, String(value));
+        const read = style.getPropertyValue(name);
+        style.removeProperty(name);
+        return read;
+      };
+      // A bare zero is a length almost everywhere, and serializes with its unit.
+      const zeros = [
+        once("width", 0), once("margin", 0), once("border-top-width", 0), once("top", 0),
+        once("letter-spacing", 0), once("font-size", 0), once("flex-basis", 0), once("cx", 0),
+        // …except where zero really is a number.
+        once("line-height", 0), once("z-index", 0), once("opacity", 0), once("stroke-width", 0),
+        once("tab-size", 0), once("scale", 0),
+        once("width", "0.0"), once("width", "0px"),
+      ];
+      // A shorthand answers for the properties it covers, in both directions.
+      const border = document.createElement("div").style;
+      border.border = "1px solid red";
+      const margin = document.createElement("div").style;
+      margin.margin = "1px 2px";
+      const font = document.createElement("div").style;
+      font.font = "italic 12px/1.5 serif";
+      return [
+        zeros,
+        [border.borderTopWidth, border.borderBottom, border.border, border.borderWidth, border.borderColor, border.cssText],
+        [margin.marginTop, margin.marginRight, margin.marginBottom, margin.margin, margin.cssText],
+        [font.fontSize, font.lineHeight, font.fontFamily, font.fontStyle],
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

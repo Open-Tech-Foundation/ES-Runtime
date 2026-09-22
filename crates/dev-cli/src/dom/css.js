@@ -113,6 +113,15 @@ border-image-slice border-image-width cx cy fill-opacity flex flood-opacity line
 shape-image-threshold stop-opacity stroke-dasharray stroke-dashoffset stroke-opacity stroke-width x y zoom
 `.trim().split(/\s+/));
 
+// A bare `0` is a length for almost every property that takes one, and a
+// browser serializes it with the unit: `style.width = 0` reads back `0px`. The
+// exceptions are the properties whose zero really is a number — and the SVG
+// geometry properties are *not* among them, which is why this is its own set
+// rather than `NUMBER_VALUED`.
+const ZERO_STAYS_A_NUMBER = new Set([...NUMBER_VALUED].filter(
+  (name) => !["cx", "cy", "r", "rx", "ry", "x", "y"].includes(name),
+));
+
 const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 const DIMENSION = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?([A-Za-z%]+)$/i;
 
@@ -161,6 +170,19 @@ export function validDeclaration(name, value) {
     if (numbers && !(unit === "%" ? NUMBER_WITH_PERCENT : NUMBER_WITH_LENGTH).has(lower)) return false;
   }
   return true;
+}
+
+// `0` written for a length becomes `0px`, component by component, the way a
+// browser stores it. Everything else is left exactly as written: this DOM
+// serializes specified values, and rewriting one that needs no unit would be
+// inventing a computation.
+function normalizeZeros(name, value) {
+  const property = String(name).toLowerCase();
+  if (property.startsWith("--") || ZERO_STAYS_A_NUMBER.has(property)) return value;
+  if (!/(^|[\s,(])[+-]?0(\.0+)?([\s,)]|$)/.test(value)) return value;
+  return components(value, /\s/)
+    .map((component) => (NUMBER.test(component) && Number(component) === 0 ? "0px" : component))
+    .join(" ");
 }
 
 // A name script can ask a declaration about: a known property, a custom
@@ -214,7 +236,7 @@ function parse(text) {
     // cannot parse and keeps the rest of the list, which is what makes one bad
     // line in a style attribute harmless.
     if (!validDeclaration(name, value)) continue;
-    values.set(name, { value, priority: important ? "important" : "" });
+    values.set(name, { value: normalizeZeros(name, value), priority: important ? "important" : "" });
   }
   return values;
 }
@@ -280,8 +302,55 @@ export function createCss({ Element }) {
     _state() { return state(this.element); }
     get length() { return this._state().values.size; }
     item(index) { return Array.from(this._state().values.keys())[index] ?? ""; }
-    getPropertyValue(name) { return this._state().values.get(String(name))?.value ?? ""; }
-    getPropertyPriority(name) { return this._state().values.get(String(name))?.priority ?? ""; }
+    getPropertyValue(name) {
+      const property = String(name);
+      const own = this._state().values.get(property);
+      if (own) return own.value;
+      return this._fromShorthand(property)?.value ?? "";
+    }
+    getPropertyPriority(name) {
+      const property = String(name);
+      const own = this._state().values.get(property);
+      if (own) return own.priority;
+      return this._fromShorthand(property)?.priority ?? "";
+    }
+    // What a shorthand in this declaration says about a property it covers.
+    // `style.border = "1px solid red"` answers `borderTopWidth` with `1px` and
+    // `borderBottom` with `1px solid red`, because in a browser the declaration
+    // holds the longhands and serializes the shorthands back out of them. This
+    // does the same reading, without rewriting what the author wrote — so
+    // `cssText` stays the `border: 1px solid red;` it was given.
+    _fromShorthand(property) {
+      const parts = this._longhands();
+      const direct = parts.get(property);
+      if (direct) return direct;
+      // A shorthand of a shorthand: `border-bottom` out of `border`. Its own
+      // longhands are joined, with a run of equal values collapsed the way the
+      // box-edge and line families serialize.
+      const names = shorthandLonghands(property);
+      if (names.length === 0) return undefined;
+      const values = [];
+      let priority = "important";
+      for (const name of names) {
+        const part = parts.get(name);
+        if (!part) return undefined;
+        values.push(part.value);
+        if (part.priority !== "important") priority = "";
+      }
+      const collapsed = values.filter((value, at) => value !== values[at - 1]);
+      return { value: collapsed.join(" "), priority };
+    }
+    // Every longhand this declaration's shorthands set, last declaration
+    // winning — which is the order they were written in.
+    _longhands() {
+      const parts = new Map();
+      for (const [name, entry] of this._state().values) {
+        for (const [longhand, value] of expandShorthand(name, entry.value)) {
+          parts.set(longhand, { value, priority: entry.priority });
+        }
+      }
+      return parts;
+    }
     setProperty(name, value, priority = "") {
       name = String(name).trim();
       value = value == null ? "" : String(value).trim();
@@ -293,6 +362,7 @@ export function createCss({ Element }) {
       // was there stays: `el.style.width = "23"` changes nothing, as in a
       // browser in standards mode.
       if (!knownProperty(name) || !validDeclaration(name, value)) return;
+      value = normalizeZeros(name, value);
       const current = this._state();
       current.values.set(name, { value, priority });
       write(this.element, current);
