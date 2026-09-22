@@ -382,6 +382,21 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A value is checked against the property, from a table read out of Chrome.**
+  The hand-written version of this knowledge was wrong twice — it thought `cx`
+  took only a number, then that a bare `0` was a valid `transition-duration` —
+  so it is no longer hand-written. `tsr gen:css-table` asks Chrome what each of
+  the 436 properties accepts (number, length, percentage, time, angle,
+  resolution, frequency, flex; and whether negatives are allowed) and what a
+  bare `0` serializes as, and writes `crates/dev-cli/src/dom/css-table.js`;
+  `tsr test:dom-matrix` re-asks and fails if the committed table has drifted.
+  With it: `width: -5px` and `padding: -5px` are refused while `margin: -5px`
+  and `letter-spacing: -5px` are kept, `transition-duration: 0` and `rotate: 0`
+  are dropped as a browser drops them while `box-shadow: 0 0 2px red` is kept
+  (a bare zero is a length, not a time or an angle), `aspect-ratio: 0`
+  serializes as `0 / 1` and `background-position: 0` as `0px center`. Twenty-one
+  of the twenty-two answers in the new matrix case are now identical to Chrome's,
+  where happy-dom accepts every one of them and jsdom cannot run the case.
 - Methods installed through a descriptor batch are **writable** as well as
   configurable, which Web IDL requires of an operation and a test needs to
   replace one (`el.focus = spy`). `document.activeElement` and

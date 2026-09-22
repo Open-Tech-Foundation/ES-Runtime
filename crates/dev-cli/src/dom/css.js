@@ -78,49 +78,48 @@ user-select vector-effect vertical-align view-timeline view-transition-name visi
 white-space-collapse widows width will-change word-break word-spacing writing-mode x y z-index zoom
 `.trim().split(/\s+/));
 
-// The CSS units, for the value check below. A dimension with any other unit is
-// not a value a browser keeps.
-const UNITS = new Set(`
-% px em rem ex ch cap ic lh rlh vw vh vi vb vmin vmax svw svh svi svb svmin svmax
+// Which values a property takes, and what a zero serializes as — read from the
+// table `tsr gen:css-table` generates out of Chrome (see
+// `wpt/dom-matrix/css-table.js`). Hand-written guesses at this were wrong about
+// `cx`, then about `transition-duration`; the table is not a guess.
+const UNIT_KINDS = new Map(Object.entries({
+  "%": "percentage",
+  s: "time", ms: "time",
+  deg: "angle", grad: "angle", rad: "angle", turn: "angle",
+  dpi: "resolution", dpcm: "resolution", dppx: "resolution", x: "resolution",
+  hz: "frequency", khz: "frequency",
+  fr: "flex",
+}));
+
+// Everything else with a unit is a length. Listing them is how an unknown unit —
+// `5foo` — stays invalid.
+const LENGTH_UNITS = new Set(`
+px em rem ex ch cap ic lh rlh vw vh vi vb vmin vmax svw svh svi svb svmin svmax
 lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax
-cm mm q in pt pc deg grad rad turn s ms hz khz dpi dpcm dppx x fr
+cm mm q in pt pc
 `.trim().split(/\s+/));
 
-// The properties whose value may be a bare number. Everywhere else a number
-// needs a unit — `mask-position: 23` is not a declaration a browser keeps —
-// except zero, which needs none anywhere.
-const NUMBER_VALUED = new Set(`
-animation-iteration-count aspect-ratio border-image-outset border-image-slice border-image-width
-column-count counter-increment counter-reset counter-set cx cy fill-opacity flex flex-grow flex-shrink
-flood-opacity font-size-adjust font-weight grid-area grid-column grid-column-end grid-column-start grid-row
-grid-row-end grid-row-start line-height math-depth opacity order orphans r rx ry scale shape-image-threshold
-stop-opacity stroke-dasharray stroke-dashoffset stroke-miterlimit stroke-opacity stroke-width tab-size widows
-x y z-index zoom
-`.trim().split(/\s+/));
+function unitKind(unit) {
+  const lower = unit.toLowerCase();
+  return UNIT_KINDS.get(lower) ?? (LENGTH_UNITS.has(lower) ? "length" : null);
+}
 
-// Of those, the ones that also take a length, and the ones that also take a
-// percentage — Chrome keeps neither `opacity: 2px` nor `border-image-slice:
-// 2px`, and a renderer that appends "px" to a unitless value is asking exactly
-// this question. Outside this family a dimension with a known unit is accepted,
-// because that would need each property's grammar.
-const NUMBER_WITH_LENGTH = new Set(`
-border-image-outset border-image-width cx cy flex line-height r rx ry stroke-dasharray stroke-dashoffset
-stroke-width tab-size x y
-`.trim().split(/\s+/));
-
-const NUMBER_WITH_PERCENT = new Set(`
-border-image-slice border-image-width cx cy fill-opacity flex flood-opacity line-height opacity r rx ry scale
-shape-image-threshold stop-opacity stroke-dasharray stroke-dashoffset stroke-opacity stroke-width x y zoom
-`.trim().split(/\s+/));
-
-// A bare `0` is a length for almost every property that takes one, and a
-// browser serializes it with the unit: `style.width = 0` reads back `0px`. The
-// exceptions are the properties whose zero really is a number — and the SVG
-// geometry properties are *not* among them, which is why this is its own set
-// rather than `NUMBER_VALUED`.
-const ZERO_STAYS_A_NUMBER = new Set([...NUMBER_VALUED].filter(
-  (name) => !["cx", "cy", "r", "rx", "ry", "x", "y"].includes(name),
-));
+// The table as a lookup: property → { kinds: Set, negative: Set, zero: string }.
+export function valueTypes(rows) {
+  const types = new Map();
+  for (const [property, accepts, zero] of rows) {
+    const kinds = new Set();
+    const negative = new Set();
+    for (const entry of accepts.split(" ").filter(Boolean)) {
+      const signed = entry.endsWith("±");
+      const kind = signed ? entry.slice(0, -1) : entry;
+      kinds.add(kind);
+      if (signed) negative.add(kind);
+    }
+    types.set(property, { kinds, negative, zero });
+  }
+  return types;
+}
 
 const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 const DIMENSION = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?([A-Za-z%]+)$/i;
@@ -146,52 +145,74 @@ function components(value, separators = /[\s,]/) {
   return found;
 }
 
-// Whether a value is one this DOM keeps for that property. It is a check of
-// value *types* — a known unit, a number only where a number is allowed — not
-// of each property's full grammar: a browser also knows that `width` takes no
-// negative length, and this does not.
-export function validDeclaration(name, value) {
+// What kind a single component is, or null when it is a keyword, a function or a
+// string — something this check has nothing to say about.
+function componentKind(component) {
+  if (NUMBER.test(component)) return { kind: "number", negative: component.startsWith("-"), zero: Number(component) === 0 };
+  const dimension = DIMENSION.exec(component);
+  if (!dimension) return null;
+  const kind = unitKind(dimension[1]);
+  // A unit no CSS property uses is not a value any property takes.
+  if (kind === null) return { kind: "unknown", negative: false, zero: false };
+  return { kind, negative: component.startsWith("-"), zero: Number.parseFloat(component) === 0 };
+}
+
+// Whether a value is one this DOM keeps for that property, by the kinds the
+// table says the property takes. It is a check of value *kinds*, not of each
+// property's whole grammar: how many components a property takes, and in what
+// order, is still beyond it.
+export function validDeclaration(types, name, value) {
   const property = String(name);
   // A custom property's value is an arbitrary token sequence, by design.
-  if (property.startsWith("--")) return value.trim() !== "";
+  if (property.startsWith("--")) return String(value).trim() !== "";
   const lower = property === "cssFloat" ? "float" : property.toLowerCase();
-  const numbers = NUMBER_VALUED.has(lower);
-  for (const component of components(value)) {
-    if (NUMBER.test(component)) {
-      if (!numbers && Number(component) !== 0) return false;
+  const declared = types?.get(lower);
+  for (const component of components(String(value), /\s/)) {
+    const found = componentKind(component);
+    if (found === null) continue;
+    if (found.kind === "unknown") return false;
+    // With no table — a unit test building the module on its own — only the
+    // unknown-unit check applies.
+    if (!declared) continue;
+    // A bare zero is a length that needs no unit — `box-shadow: 0 0 2px red` —
+    // but it is not a time or an angle, which is why `transition-duration: 0`
+    // and `rotate: 0` are values a browser drops.
+    if (found.kind === "number" && found.zero) {
+      if (!declared.kinds.has("number") && !declared.kinds.has("length")) return false;
       continue;
     }
-    const dimension = DIMENSION.exec(component);
-    if (!dimension) continue;
-    const unit = dimension[1].toLowerCase();
-    if (!UNITS.has(unit)) return false;
-    // A property that takes a number does not necessarily take a length or a
-    // percentage as well, and which it takes is recorded above.
-    if (numbers && !(unit === "%" ? NUMBER_WITH_PERCENT : NUMBER_WITH_LENGTH).has(lower)) return false;
+    if (!declared.kinds.has(found.kind)) return false;
+    if (found.negative && !declared.negative.has(found.kind)) return false;
   }
   return true;
 }
 
-// `0` written for a length becomes `0px`, component by component, the way a
-// browser stores it. Everything else is left exactly as written: this DOM
-// serializes specified values, and rewriting one that needs no unit would be
-// inventing a computation.
-// What a declaration stores: a zero length with its unit, and a colour in the
-// canonical form a browser keeps it in. The colour table is the realm's, passed
-// in, so this file stays testable on its own.
-function canonical(colors, name, value) {
+// What a declaration stores for a zero: the form Chrome keeps, which is the
+// table's own answer for a single `0`, and per component otherwise — `0px` where
+// the property takes a length, `0` where it takes a number.
+export function normalizeZeros(types, name, value) {
   const property = String(name).toLowerCase();
-  if (colors?.COLOR_PROPERTIES.has(property)) return colors.specifiedColor(value);
-  return normalizeZeros(property, value);
+  if (property.startsWith("--")) return value;
+  const declared = types?.get(property);
+  if (!declared) return value;
+  const text = String(value).trim();
+  if (NUMBER.test(text) && Number(text) === 0 && declared.zero !== "") return declared.zero;
+  if (!/(^|[\s,(])[+-]?0(\.0+)?([\s,)]|$)/.test(text)) return value;
+  const unit = declared.kinds.has("length") ? "0px" : declared.kinds.has("number") ? "0" : null;
+  if (unit === null) return value;
+  return components(text, /\s/)
+    .map((component) => (NUMBER.test(component) && Number(component) === 0 ? unit : component))
+    .join(" ");
 }
 
-function normalizeZeros(name, value) {
+// What a declaration stores: a colour in the canonical form a browser keeps it
+// in, and a zero in the form the table says. Both come from the realm, passed in,
+// so this file stays testable on its own.
+function canonical(realm, name, value) {
+  const { colors = null, types = null } = realm ?? {};
   const property = String(name).toLowerCase();
-  if (property.startsWith("--") || ZERO_STAYS_A_NUMBER.has(property)) return value;
-  if (!/(^|[\s,(])[+-]?0(\.0+)?([\s,)]|$)/.test(value)) return value;
-  return components(value, /\s/)
-    .map((component) => (NUMBER.test(component) && Number(component) === 0 ? "0px" : component))
-    .join(" ");
+  if (colors?.COLOR_PROPERTIES.has(property)) return colors.specifiedColor(value);
+  return normalizeZeros(types, property, value);
 }
 
 // A name script can ask a declaration about: a known property, a custom
@@ -230,7 +251,10 @@ function splitDeclarations(text) {
   return declarations;
 }
 
-function parse(text, colors = null) {
+// The realm's value table and colour helpers travel together: everything that
+// decides what a declaration keeps needs both.
+function parse(text, realm) {
+  const { colors = null, types = null } = realm ?? {};
   const values = new Map();
   for (const declaration of splitDeclarations(String(text))) {
     const colon = declaration.indexOf(":");
@@ -244,8 +268,8 @@ function parse(text, colors = null) {
     // Dropped, not refused: a browser ignores a declaration whose value it
     // cannot parse and keeps the rest of the list, which is what makes one bad
     // line in a style attribute harmless.
-    if (!validDeclaration(name, value)) continue;
-    values.set(name, { value: normalizeZeros(name, value), priority: important ? "important" : "" });
+    if (!validDeclaration(types, name, value)) continue;
+    values.set(name, { value: canonical(realm, name, value), priority: important ? "important" : "" });
   }
   return values;
 }
@@ -261,7 +285,9 @@ function kebab(name) {
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-export function createCss({ Element, colors = null }) {
+export function createCss({ Element, colors = null, valueTable = null }) {
+  const types = valueTable === null ? null : valueTypes(valueTable);
+  const realm = { colors, types };
   function state(element) {
     const raw = element.getAttribute("style") ?? "";
     let state = element[STYLE];
@@ -270,7 +296,7 @@ export function createCss({ Element, colors = null }) {
       Object.defineProperty(element, STYLE, { value: state });
     }
     if (state.raw !== raw) {
-      state.values = parse(raw, colors);
+      state.values = parse(raw, realm);
       state.raw = raw;
     }
     return state;
@@ -370,8 +396,8 @@ export function createCss({ Element, colors = null }) {
       // A value the property cannot take is ignored, and the declaration that
       // was there stays: `el.style.width = "23"` changes nothing, as in a
       // browser in standards mode.
-      if (!knownProperty(name) || !validDeclaration(name, value)) return;
-      value = canonical(colors, name, value);
+      if (!knownProperty(name) || !validDeclaration(types, name, value)) return;
+      value = canonical(realm, name, value);
       const current = this._state();
       current.values.set(name, { value, priority });
       write(this.element, current);
@@ -431,7 +457,7 @@ export function createCss({ Element, colors = null }) {
   function supportsDeclaration(name, value) {
     if (!knownProperty(name)) return false;
     try {
-      return parse(`${name}: ${value}`, colors).size === 1;
+      return parse(`${name}: ${value}`, realm).size === 1;
     } catch {
       return false;
     }
@@ -440,7 +466,7 @@ export function createCss({ Element, colors = null }) {
   // The same question the cascade asks of a stylesheet's declarations, which
   // arrive already split into name and value.
   function keepsDeclaration(name, value) {
-    return knownProperty(name) && String(value).trim() !== "" && validDeclaration(name, String(value));
+    return knownProperty(name) && String(value).trim() !== "" && validDeclaration(types, name, String(value));
   }
 
   function install() {

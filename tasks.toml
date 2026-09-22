@@ -156,7 +156,16 @@ env = { PATH = "../../../../target/release:${PATH}" }
 # rather than be printed. Needs Chrome and the npm emulators, so it is not a
 # `ci` dependency.
 [tasks."test:dom-matrix"]
-run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js --strict"
+run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/css-table.js --check && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js --strict"
+
+# The CSS value table the DOM validates against, read out of Chrome: which kinds
+# of value each of the 436 properties takes, and what a bare `0` serializes as.
+# Generated rather than hand-written, because every hand-written version of it
+# was wrong about something (`cx` took a number, `transition-duration` did not).
+# `--check` re-asks Chrome and fails if the committed table has drifted, which is
+# what `test:dom-matrix` runs.
+[tasks."gen:css-table"]
+run = "deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/css-table.js"
 
 # The surface next to the behaviour: 192 interfaces, members and behaviours put
 # to all four runtimes. A difference from Chrome here is usually a stated

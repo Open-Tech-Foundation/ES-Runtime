@@ -10,6 +10,7 @@ import { createRanges } from "runtime:dom/range";
 import { createSheets } from "runtime:dom/sheets";
 import { createColors } from "runtime:dom/colors";
 import { color } from "runtime:dom/std-color";
+import { CSS_VALUE_TABLE } from "runtime:dom/css-table";
 
 // Web IDL puts an interface's members on the prototype as **configurable**, and
 // a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
@@ -42,7 +43,7 @@ const parse = createParsing(
 );
 const selectors = createSelectors(tree);
 const colors = createColors(color);
-const css = createCss({ ...tree, colors });
+const css = createCss({ ...tree, colors, valueTable: CSS_VALUE_TABLE });
 const elements = createElements(tree);
 
 // The document `new Text()` and friends belong to, before anything can use one.

@@ -63,6 +63,12 @@ const MODULES: &[HostModule] = &[
         specifier: "runtime:dom/std-color",
         source: include_str!("std-color.js"),
     },
+    // Generated (`tsr gen:css-table`): which value kinds each CSS property
+    // takes, and what a zero serializes as, read out of Chrome.
+    HostModule {
+        specifier: "runtime:dom/css-table",
+        source: include_str!("css-table.js"),
+    },
 ];
 
 impl HostExtension for DomExtension {

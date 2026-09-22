@@ -5,6 +5,7 @@ import { createSheets } from "./sheets.js";
 import { createTree } from "./tree.js";
 import { createColors } from "./colors.js";
 import { color } from "./std-color.js";
+import { CSS_VALUE_TABLE } from "./css-table.js";
 
 // The records the stylesheet op produces, by hand: these cases are about the
 // cascade, not about parsing CSS text.
@@ -14,7 +15,7 @@ const group = (name, condition, rules) => [1, name, condition, rules];
 function fixture({ sheets = {}, media = () => true } = {}) {
   const tree = createTree();
   const colors = createColors(color);
-  const css = createCss({ ...tree, colors });
+  const css = createCss({ ...tree, colors, valueTable: CSS_VALUE_TABLE });
   const selectors = createSelectors(tree);
   css.install();
   selectors.install();

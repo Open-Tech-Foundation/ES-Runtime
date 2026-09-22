@@ -2147,6 +2147,38 @@ export const cases = [
       return [values, [computed.color, computed.borderTopColor]];
     },
   },
+  {
+    group: "cascade",
+    name: "a-value-is-checked-against-the-property",
+    run(window) {
+      const { document, CSS } = window;
+      reset(document);
+      const style = document.createElement("div").style;
+      const once = (property, value) => {
+        style.setProperty(property, value);
+        const kept = style.getPropertyValue(property);
+        style.removeProperty(property);
+        return [CSS.supports(property, value), kept];
+      };
+      return [
+        // A bare zero is a length that needs no unit — and not a time or an
+        // angle, which is why a browser drops these two. (`box-shadow` compares
+        // validity only: a browser also *reorders* the components, which this
+        // DOM does not.)
+        once("box-shadow", "0 0 2px red")[0], once("transition-duration", "0"), once("rotate", "0"),
+        once("transition-duration", "0s"), once("rotate", "0deg"),
+        // Negatives, per property rather than per value.
+        once("width", "-5px"), once("margin", "-5px"), once("letter-spacing", "-5px"),
+        once("padding", "-5px"), once("z-index", "-1"), once("flex-grow", "-1"),
+        // A unit from the wrong family, and one from no family at all.
+        once("width", "2s"), once("transition-duration", "2px"), once("width", "5foo"),
+        once("grid-template-columns", "1fr"), once("width", "1fr"),
+        // What a zero serializes as is the property's own answer.
+        once("aspect-ratio", "0"), once("background-position", "0"), once("line-height", "0"),
+        once("width", "0"), once("stroke-width", "0"), once("cx", "0"),
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at
