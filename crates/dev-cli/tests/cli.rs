@@ -9507,6 +9507,38 @@ fn tests_can_share_one_process_and_module_cache() {
     assert!(stdout(&out).contains("2 passed"), "{}", stdout(&out));
 }
 
+/// A case's own trailing promise chain finishes before its cleanup runs. A
+/// suite written against a browser runner leaves `resolve().then(assert)`
+/// un-awaited and expects `assert` to see the DOM the case rendered; tearing
+/// down after a single microtask turn hands it a dismantled one. Found porting
+/// Preact's suspense suite, where it read as a scheduler difference.
+#[test]
+fn test_a_cases_trailing_promises_settle_before_its_cleanup() {
+    let dir = build_dir("b_test_trailing_chain");
+    write_in(
+        &dir,
+        "a.test.mjs",
+        "import { test, afterEach, assertEquals } from 'runtime:test';\n\
+         const seq = [];\n\
+         afterEach(() => seq.push('afterEach'));\n\
+         test('leaves a chain', () => {\n\
+           Promise.resolve().then(() => seq.push('one')).then(() => seq.push('two'))\n\
+             .then(() => seq.push('three'));\n\
+         });\n\
+         test('the chain ran first', () => {\n\
+           assertEquals(seq, ['one', 'two', 'three', 'afterEach']);\n\
+         });\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("2 passed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A stray promise costs one test, not the file's whole report. Before this,
 /// the process died where the rejection surfaced and a suite of a hundred
 /// passing tests printed nothing at all — the one thing a test runner must

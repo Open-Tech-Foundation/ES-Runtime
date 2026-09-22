@@ -1712,7 +1712,7 @@ export function createTree(events = {}) {
   installReflectors(HTMLTextAreaElement,
     { name: "name", placeholder: "placeholder" },
     { disabled: "disabled", readOnly: "readonly", required: "required" },
-    { cols: ["cols", 20, 1], rows: ["rows", 2, 1] });
+    { cols: ["cols", 20, 1], rows: ["rows", 2, 1], maxLength: ["maxlength", -1, -1], minLength: ["minlength", -1, -1] });
   installReflectors(HTMLFieldSetElement, { name: "name" }, { disabled: "disabled" });
   installReflectors(HTMLOptGroupElement, { label: "label" }, { disabled: "disabled" });
   installValidation(HTMLInputElement);

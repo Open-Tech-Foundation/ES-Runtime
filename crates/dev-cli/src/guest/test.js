@@ -114,6 +114,11 @@ let draining = false;
 // it, and un-deciding it later would run tests the file said not to.
 let exclusive = false;
 
+// The runner's own task boundary, captured before any test can swap
+// `setTimeout` for a frozen clock: a file that stops time must not stop the
+// runner with it.
+const realSetTimeout = globalThis.setTimeout;
+
 // An unhandled rejection is the running test's failure, not the file's death.
 // Without this the process is torn down where the rejection surfaced, and a
 // suite of a hundred passing tests reports nothing at all — the one thing this
@@ -434,6 +439,12 @@ async function runCase({ id, fn, scope }) {
   } catch (err) {
     failure = err;
   }
+  // Whatever the case left queued runs before its cleanup does. Crossing a task
+  // boundary is the only way to know the microtask queue is empty, and a
+  // teardown that runs while the case's own promise chain is still settling is
+  // a race the case loses — a suite written against a browser runner expects
+  // its trailing `.then()` to see the DOM it rendered, not a torn-down one.
+  await new Promise((resolve) => Reflect.apply(realSetTimeout, globalThis, [resolve, 0]));
   for (const after of around(scope, "afterEach").reverse()) {
     try {
       await after();
@@ -1216,7 +1227,9 @@ expect.objectContaining = (wanted) =>
 // It is safe for one further reason: a test file is a process (see
 // [`crate::test`]), so the swap cannot reach the next file. The runner itself
 // never schedules on a timer — it drains on microtasks — so a file that freezes
-// the clock and forgets to release it cannot wedge the report.
+// the clock and forgets to release it cannot wedge the report: the one task
+// boundary the runner does cross between a case and its cleanup goes through
+// the `setTimeout` it captured at load, which no swap can reach.
 // ---------------------------------------------------------------------------
 
 const MOCK = Symbol.for("runtime:test.mock");

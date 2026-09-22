@@ -310,6 +310,22 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **A case's trailing promises settle before its cleanup runs.** The runner
+  reached `afterEach` after a single microtask turn, so a suite that leaves
+  `resolve().then(assert)` un-awaited — the shape browser-era tests are written
+  in — ran its assertion against a torn-down fixture. It now crosses one task
+  boundary between the case and its cleanup, which is the only way to know the
+  microtask queue is empty, and the boundary goes through the `setTimeout` the
+  runner captured at load, so a file that freezes the clock cannot freeze the
+  runner. Preact's suspense suite reported this as an engine scheduling
+  difference; it was the runner, and the suite now passes whole.
+- **`setTimeout(fn, 0)` no longer costs a millisecond.** The driver parked on a
+  zero-length sleep for a timer that was already due, and tokio's timer wheel
+  charges a tick for it: a thousand of them took 1.2 seconds, against 34ms now
+  that the driver yields and re-ticks instead. Every `await new Promise(r =>
+  setTimeout(r, 0))` in a suite, a server or a benchmark was paying it.
+- **`textarea.maxLength` and `textarea.minLength`** reflect, with `-1` for an
+  absent attribute. `input` had them; `textarea` answered `undefined`.
 - **A stray promise costs one test, not the file's report.** An unhandled
   rejection tore the process down where it surfaced, so a file of a hundred
   passing tests printed nothing at all — a suite reported zero results because

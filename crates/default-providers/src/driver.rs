@@ -238,6 +238,15 @@ impl Driver {
                     // the wait short (its future woke us) so I/O isn't blocked
                     // behind a pending timer.
                     let delay = deadline.saturating_sub(self.clock.monotonic_ms());
+                    // Already due: parking for zero still costs a timer-wheel
+                    // tick — a little over a millisecond on tokio — and that
+                    // tick *is* the latency of `setTimeout(fn, 0)`. A thousand
+                    // of them took 1.2 seconds. Yield and re-tick instead; the
+                    // next tick fires the timer.
+                    if delay == 0 {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
                     tokio::select! {
                         () = notify.notified() => {}
                         () = self.timers.sleep(delay) => {}
