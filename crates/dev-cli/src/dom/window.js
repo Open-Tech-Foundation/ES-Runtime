@@ -21,7 +21,7 @@ const css = createCss(tree);
 const elements = createElements(tree);
 
 // The document `new Text()` and friends belong to, before anything can use one.
-const document = tree.setCurrentDocument(new tree.Document());
+const document = tree.setCurrentDocument(new tree.HTMLDocument());
 // `<!doctype html>`, as a node: the starting document is the one the spec for
 // this DOM names, and `document.doctype` is how code asks whether it is in
 // standards mode.
@@ -402,6 +402,11 @@ class NeverObserver {
   takeRecords() { return []; }
 }
 
+// Two interfaces, not one class under two names: `new ResizeObserver()` is not
+// an `IntersectionObserver`, and each stringifies as itself.
+class IntersectionObserver extends NeverObserver {}
+class ResizeObserver extends NeverObserver {}
+
 class SnapshotNodeList {
   constructor(values) {
     this.values = [...values];
@@ -516,17 +521,32 @@ for (const method of Object.getOwnPropertyNames(hostConsole)) {
   });
 }
 
+// Web IDL puts the interface's own name on its prototype as
+// `Symbol.toStringTag`, which is what `Object.prototype.toString.call(node)`
+// reports. Without it every node is `[object Object]`, and a logger or a type
+// guard that leans on the tag cannot tell a comment from a plain object.
+// Capitalised keys only: a factory also exports helper functions, and those are
+// not interfaces.
+function nameInterfaces(source) {
+  for (const [name, value] of Object.entries(source)) {
+    if (typeof value !== "function" || !/^[A-Z]/.test(name)) continue;
+    const { prototype } = value;
+    if (!prototype || Object.hasOwn(prototype, Symbol.toStringTag)) continue;
+    Object.defineProperty(prototype, Symbol.toStringTag, { value: name, configurable: true });
+  }
+}
+
 Object.assign(globalThis, events, tree, css, elements, { document, customElements });
 globalThis.window = globalThis;
-Object.assign(globalThis, {
+const globals = {
   DOMParser: parse.DOMParser,
   History,
   FormData: DomFormData,
-  IntersectionObserver: NeverObserver,
+  IntersectionObserver,
   Location,
   MediaQueryList,
   MutationObserver,
-  ResizeObserver: NeverObserver,
+  ResizeObserver,
   AbstractRange: ranges.AbstractRange,
   CSS: Object.freeze({
     supports(property, value) {
@@ -557,7 +577,15 @@ Object.assign(globalThis, {
   requestAnimationFrame,
   sessionStorage,
   getSelection: () => selection,
-});
+};
+Object.assign(globalThis, globals);
+
+nameInterfaces(events);
+nameInterfaces(tree);
+nameInterfaces(css);
+nameInterfaces(elements);
+nameInterfaces(globals);
+Object.defineProperty(globalThis, Symbol.toStringTag, { value: "Window", configurable: true });
 
 // Accessors rather than values in the assignment above: `Object.assign` would
 // have called the getter and left a plain number behind, so a test assigning to

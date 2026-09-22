@@ -3,7 +3,7 @@
 // pure JS and directly testable before the --dom runner integration lands.
 
 export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
-  const { Node, Document, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes } = tree;
+  const { Node, Document, HTMLDocument, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes } = tree;
 
   // The elements the HTML parser puts in the head when no explicit `head` was
   // written. Everything else a bare document names belongs to the body.
@@ -155,7 +155,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
   function parseDocument(source) {
     if (!parseDocumentRecords) throw new DOMException("This DOM has no document parser attached.", "NotSupportedError");
     const [hasDoctype, records] = parseDocumentRecords(String(source));
-    const document = new Document();
+    const document = new HTMLDocument();
     if (hasDoctype) document._preInsert(document.implementation.createDocumentType("html"), null);
     const holder = document.createDocumentFragment();
     decode(records, holder);

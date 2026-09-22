@@ -88,6 +88,11 @@ export function createEvents() {
     preventDefault() { if (this.cancelable && !this[STATE].passive) this[STATE].defaultPrevented = true; }
     get returnValue() { return !this[STATE].defaultPrevented; }
     set returnValue(value) { if (!value) this.preventDefault(); }
+    // Legacy, and still specified: it is the stop-propagation flag under an
+    // older name, and a compatibility layer asking whether propagation was
+    // stopped reads it rather than calling the modern method.
+    get cancelBubble() { return this[STATE].propagationStopped; }
+    set cancelBubble(value) { if (value) this[STATE].propagationStopped = true; }
     initEvent(type, bubbles = false, cancelable = false) {
       const state = this[STATE];
       if (state.dispatching) return;

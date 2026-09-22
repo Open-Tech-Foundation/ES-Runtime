@@ -662,7 +662,7 @@ export function createTree(events = {}) {
     cloneNode(deep = false) {
       const document = this.ownerDocument ?? this;
       let clone;
-      if (this instanceof Document) clone = new Document();
+      if (this instanceof Document) clone = new (this.constructor === HTMLDocument ? HTMLDocument : Document)();
       else if (this instanceof DocumentFragment) clone = document.createDocumentFragment();
       else if (this instanceof Element) {
         const qualifiedName = this.prefix ? `${this.prefix}:${this.localName}` : this.localName;
@@ -2238,6 +2238,14 @@ export function createTree(events = {}) {
   // ValidityState it has no constructor of its own in Web IDL.
   const IMPLEMENTATION_BRAND = Symbol("esdev DOM implementation brand");
 
+
+  // An HTML document is its own interface: a browser's `document`, a
+  // `DOMParser` text/html parse and `createHTMLDocument()` are all
+  // `HTMLDocument`, and code reads that through `Object.prototype.toString`
+  // and `instanceof`. `new Document()` and an XML `createDocument()` stay
+  // plain, as they do in a browser.
+  class HTMLDocument extends Document {}
+
   class DOMImplementation {
     constructor(document, brand) {
       if (brand !== IMPLEMENTATION_BRAND) throw new TypeError("Illegal constructor");
@@ -2262,7 +2270,7 @@ export function createTree(events = {}) {
       return document;
     }
     createHTMLDocument(title = undefined) {
-      const document = new Document();
+      const document = new HTMLDocument();
       document._preInsert(new DocumentType("html", "", "", document), null);
       const html = document.createElement("html");
       const head = document.createElement("head");
@@ -2469,5 +2477,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, HTMLDocument, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

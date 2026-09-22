@@ -1690,6 +1690,47 @@ export const cases = [
       return [form.checkValidity(), Array.from(new FormData(form).entries())];
     },
   },
+  {
+    group: "events",
+    name: "cancel-bubble-is-the-stop-propagation-flag",
+    run(window) {
+      const { document, Event } = window;
+      reset(document);
+      const target = document.createElement("div");
+      const before = [];
+      target.addEventListener("ping", (event) => {
+        before.push(event.cancelBubble);
+        event.stopPropagation();
+        before.push(event.cancelBubble);
+      });
+      target.dispatchEvent(new Event("ping"));
+      // And the setter, which only ever sets the flag.
+      const written = new Event("pong");
+      written.cancelBubble = false;
+      const unchanged = written.cancelBubble;
+      written.cancelBubble = true;
+      return [...before, unchanged, written.cancelBubble];
+    },
+  },
+  {
+    group: "tree",
+    name: "nodes-stringify-as-their-interface",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const tag = (value) => Object.prototype.toString.call(value);
+      return [
+        tag(document),
+        tag(document.createElement("div")),
+        tag(document.createElement("unknown-tag")),
+        tag(document.createTextNode("t")),
+        tag(document.createComment("c")),
+        tag(document.createDocumentFragment()),
+        tag(document.createElement("div").style),
+        tag(document.createElement("div").classList),
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

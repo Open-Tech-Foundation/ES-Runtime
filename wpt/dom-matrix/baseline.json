@@ -3801,10 +3801,99 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "events",
+      "name": "cancel-bubble-is-the-stop-propagation-flag",
+      "chrome": {
+        "result": [
+          false,
+          true,
+          false,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          false,
+          true,
+          false,
+          true
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          false,
+          true,
+          false,
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "nodes-stringify-as-their-interface",
+      "chrome": {
+        "result": [
+          "[object HTMLDocument]",
+          "[object HTMLDivElement]",
+          "[object HTMLElement]",
+          "[object Text]",
+          "[object Comment]",
+          "[object DocumentFragment]",
+          "[object CSSStyleDeclaration]",
+          "[object DOMTokenList]"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "[object HTMLDocument]",
+          "[object HTMLDivElement]",
+          "[object HTMLElement]",
+          "[object Text]",
+          "[object Comment]",
+          "[object DocumentFragment]",
+          "[object CSSStyleDeclaration]",
+          "[object DOMTokenList]"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "[object HTMLDocument]",
+          "[object HTMLDivElement]",
+          "[object HTMLElement]",
+          "[object Text]",
+          "[object Comment]",
+          "[object DocumentFragment]",
+          "[object Object]",
+          "[object Object]"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "[object Document]",
+          "[object HTMLDivElement]",
+          "[object HTMLElement]",
+          "[object Text]",
+          "[object Comment]",
+          "[object DocumentFragment]",
+          "[object Object]",
+          "[object DOMTokenList]"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 82,
+    "match": 84,
     "intentional-limit": 2,
     "drift": 0
   }

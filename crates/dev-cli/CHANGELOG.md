@@ -290,6 +290,20 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **Every interface says its own name.** `Object.prototype.toString.call(node)`
+  answered `[object Object]` for everything, because no prototype carried the
+  `Symbol.toStringTag` Web IDL gives it — so a logger or a type guard could not
+  tell a comment from a plain object. Every DOM interface now carries its name,
+  as does `window`. With it: the realm's document, a `DOMParser` text/html parse
+  and `createHTMLDocument()` are `HTMLDocument` rather than `Document`, matching
+  Chrome (`new Document()` and an XML `createDocument()` stay plain), and
+  `IntersectionObserver` and `ResizeObserver` are two interfaces rather than one
+  class under two names — `new ResizeObserver()` was an `IntersectionObserver`.
+- **`Event.cancelBubble`.** Legacy, and still specified: it is the
+  stop-propagation flag under an older name, returning `false` until
+  `stopPropagation()` and settable to set it. A compatibility layer asking
+  whether propagation was stopped — Preact's `isPropagationStopped()` — read
+  `undefined`, which is not `false`.
 - **One mutation is one observable operation.** `node.remove()` was implemented
   as `parentNode.removeChild(node)`, so a suite spying on `removeChild` — which
   is how a renderer's tests assert what a diff did — saw an operation nobody
