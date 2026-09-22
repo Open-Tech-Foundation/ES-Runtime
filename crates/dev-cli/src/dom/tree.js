@@ -847,15 +847,26 @@ export function createTree(events = {}) {
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event)) return;
       if (this.type === "checkbox") this.checked = !this.checked;
-      if (this.type === "radio" && !this.checked) {
-        const name = this.name;
-        for (const input of this.ownerDocument.getElementsByTagName("input")) {
-          if (input !== this && input.type === "radio" && input.name === name && formOwner(input) === formOwner(this)) input.checked = false;
-        }
-        this.checked = true;
-      }
+      if (this.type === "radio" && !this.checked) this.checked = true;
       if (this.type === "submit") this.form?.requestSubmit(this);
       if (this.type === "reset") this.form?.reset();
+    }
+  }
+
+  // A radio button group holds at most one checked button, and the invariant
+  // belongs to checkedness itself rather than to `click()`: setting `checked`
+  // directly has to uncheck the others, which is what a form serializer sees.
+  function unsetOtherRadios(input) {
+    if (input.type !== "radio") return;
+    const name = input.name;
+    if (!name) return;
+    const owner = formOwner(input);
+    const root = input.getRootNode();
+    const scope = root instanceof Document || root instanceof ShadowRoot ? root : input.ownerDocument;
+    for (const other of collect(scope, (element) => element instanceof HTMLInputElement)) {
+      if (other === input || other.type !== "radio" || other.name !== name) continue;
+      if (formOwner(other) !== owner) continue;
+      other[INPUT_CHECKED] = false;
     }
   }
 
@@ -1436,7 +1447,13 @@ export function createTree(events = {}) {
       get() { return this.getAttribute("value") ?? (["checkbox", "radio"].includes(this.type) ? "on" : ""); },
       set(value) { this.setAttribute("value", String(value)); },
     },
-    checked: { get() { return this[INPUT_CHECKED] ?? this.defaultChecked; }, set(value) { this[INPUT_CHECKED] = Boolean(value); } },
+    checked: {
+      get() { return this[INPUT_CHECKED] ?? this.defaultChecked; },
+      set(value) {
+        this[INPUT_CHECKED] = Boolean(value);
+        if (this[INPUT_CHECKED]) unsetOtherRadios(this);
+      },
+    },
     indeterminate: { get() { return this[INPUT_INDETERMINATE]; }, set(value) { this[INPUT_INDETERMINATE] = Boolean(value); } },
     defaultChecked: { get() { return this.hasAttribute("checked"); }, set(value) { if (value) this.setAttribute("checked", ""); else this.removeAttribute("checked"); } },
     min: { get() { return this.getAttribute("min") ?? ""; }, set(value) { this.setAttribute("min", String(value)); } },

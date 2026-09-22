@@ -398,6 +398,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **A radio group holds one checked button however it was checked.** The
+  exclusivity lived in `click()`, so `input.checked = true` on two radios in the
+  same group left both checked and a form serialized `pick=yes&pick=no`. The
+  invariant belongs to checkedness itself now. Unchecking is not exclusive, a
+  different `name` is a different group, and a radio with no name is in no group
+  — as in a browser.
 - **HTML element and attribute names are case-insensitive, as the specification
   says.** `document.createElement("DIV")` made nothing — it threw — and
   `<DIV CLASS=a>` was a parse error, where both are conforming HTML for a `div`

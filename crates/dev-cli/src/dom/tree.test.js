@@ -610,3 +610,35 @@ test("a fragment and a shadow root answer getElementById", () => {
   // The id is the shadow tree's own: the document does not see it.
   expect(document.getElementById("in-shadow")).toBeNull();
 });
+
+test("a radio group holds one checked button, however it was checked", () => {
+  const document = setCurrentDocument(new Document());
+  const form = document.createElement("form");
+  document.appendChild(form);
+  const radio = (name) => {
+    const input = document.createElement("input");
+    input.type = "radio";
+    if (name) input.name = name;
+    form.appendChild(input);
+    return input;
+  };
+  const first = radio("pick");
+  const second = radio("pick");
+  const elsewhere = radio("other");
+
+  first.checked = true;
+  second.checked = true;
+  expect([first.checked, second.checked, elsewhere.checked]).toEqual([false, true, false]);
+  first.checked = true;
+  expect([first.checked, second.checked]).toEqual([true, false]);
+  // Unchecking is not exclusive, and another name is another group.
+  elsewhere.checked = true;
+  first.checked = false;
+  expect([first.checked, second.checked, elsewhere.checked]).toEqual([false, false, true]);
+  // A radio with no name is in no group.
+  const nameless = radio("");
+  const another = radio("");
+  nameless.checked = true;
+  another.checked = true;
+  expect([nameless.checked, another.checked]).toEqual([true, true]);
+});
