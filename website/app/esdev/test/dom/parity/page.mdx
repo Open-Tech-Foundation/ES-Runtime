@@ -7,32 +7,32 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 
 # DOM parity
 
-Chrome is the oracle. 192 features — interfaces, members and behaviours — are
-put to all four runtimes, and 46 behaviour cases run the same code in each.
+Chrome is the oracle. 205 features — interfaces, members and behaviours — are
+put to all four runtimes, and 53 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 168 / 192 | 88% |
-| jsdom | 155 / 192 | 81% |
-| happy-dom | 158 / 192 | 82% |
+| esdev | 183 / 205 | 89% |
+| jsdom | 165 / 205 | 80% |
+| happy-dom | 168 / 205 | 82% |
 
 ## By area
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 44 | 43 | 40 | 36 |
-| traversal | 13 | 11 | 12 | 10 |
-| cascade | 24 | 20 | 12 | 17 |
+| tree | 52 | 51 | 47 | 43 |
+| traversal | 14 | 13 | 13 | 11 |
+| selectors | 14 | 14 | 14 | 13 |
+| cascade | 26 | 22 | 12 | 17 |
+| window | 32 | 21 | 21 | 22 |
 | events | 24 | 23 | 20 | 24 |
 | components | 17 | 17 | 12 | 13 |
 | parsing | 12 | 8 | 12 | 11 |
-| selectors | 13 | 13 | 13 | 12 |
 | forms | 14 | 14 | 14 | 14 |
-| window | 31 | 19 | 20 | 21 |
 
 ## Behaviour cases
 
-44 of 46 cases match Chrome exactly, and 2 is a documented limit.
+51 of 53 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -72,6 +72,13 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 | a-shadow-root-is-styled-by-its-own-sheets | cascade | yes | no | no |
 | nesting-resolves-against-its-parent-rule | cascade | yes | no | no |
 | geometry-answers-zero-and-rendering-is-knowable | cascade | no | no | no |
+| html-names-are-case-insensitive | tree | yes | yes | yes |
+| bare-constructors-and-fragment-lookups | tree | yes | no | yes |
+| a-radio-group-is-exclusive-on-the-checked-setter | forms | yes | yes | yes |
+| escapes-in-an-identifier | selectors | yes | yes | no |
+| an-unknown-property-is-not-a-declaration | cascade | yes | no | no |
+| a-node-iterator-walks-and-steps-back | traversal | yes | yes | no |
+| a-secondary-document-is-a-whole-document | tree | yes | yes | no |
 | input-indeterminate-is-non-reflecting-state | forms | yes | yes | yes |
 | form-owner-follows-form-attribute | forms | yes | yes | yes |
 | form-and-submitter-settings-reflect | forms | yes | no | yes |
@@ -85,7 +92,7 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 
 ## Closer to Chrome than an emulator
 
-39 features where esdev matches Chrome and jsdom or happy-dom does not.
+43 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -98,6 +105,10 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 | Element.setHTMLUnsafe | yes | no | no |
 | Element.getHTML | yes | no | yes |
 | Element.checkVisibility | yes | no | no |
+| document.hasFocus() | yes | no | yes |
+| implementation.createDocument | `svg/http://www.w3.org/2000/svg` | `svg/http://www.w3.org/2000/svg` | `html/http://www.w3.org/1999/xhtml` |
+| unknown property is undefined | `undefined/false/false` | `undefined/false/undefined` | `undefined/false/true` |
+| keyword initial values | `none,1,visible,0px,auto` | `,,,,` | `,,,,` |
 | StaticRange | yes | yes | no |
 | AbstractRange | yes | yes | no |
 | Range.getBoundingClientRect | yes | no | yes |
@@ -114,7 +125,7 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 | CustomStateSet | yes | no | no |
 | omitted paragraph end tag | `<p>one</p><p>two</p>` | `<p>one</p><p>two</p>` | `<p>one<p>two</p></p>` |
 | invalid selector throws | `SyntaxError` | `SyntaxError` | `no throw` |
-| adoptedStyleSheets applies | `rgb(1, 2, 3)` | `rgb(0, 0, 0)` | `rgb(1, 2, 3)` |
+| adoptedStyleSheets applies | `rgb(1, 2, 3)` | `throws:TypeError` | `rgb(1, 2, 3)` |
 | user-agent display defaults | `block,inline` | `block,inline` | `block,` |
 | no computed style outside the tree | yes | no | yes |
 | @media follows the viewport | `rgb(7, 7, 7)` | `rgb(0, 0, 0)` | `rgb(7, 7, 7)` |
@@ -131,7 +142,7 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 
 ## Differences from Chrome
 
-24 features, each with its reason. There are no others.
+22 features, each with its reason. There are no others.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
 
@@ -145,7 +156,6 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 
 | Feature | Chrome | esdev |
 | --- | --- | --- |
-| NodeIterator | yes | no |
 | XPathEvaluator (document.evaluate) | yes | no |
 | TouchEvent | yes | no |
 | XMLSerializer | yes | no |
@@ -184,7 +194,6 @@ put to all four runtimes, and 46 behaviour cases run the same code in each.
 
 | Feature | Chrome | esdev |
 | --- | --- | --- |
-| document.cookie | yes | no |
 | XMLHttpRequest | yes | no |
 | File / FileReader | yes | no |
 | alert | yes | no |
