@@ -1,0 +1,348 @@
+{
+  "custom-elements/createElement-reentrant-construction.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Re-entrant createElement() of the same element before super()": "PASS",
+      "Re-entrant createElement() of the same element after super()": "PASS"
+    }
+  },
+  "custom-elements/registries/adoption.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Adoption with global registry": "FAIL",
+      "Adoption with explicit global registry": "NOTRUN",
+      "Adoption with scoped registry": "NOTRUN",
+      "Adoption with global registry into a scoped registry": "NOTRUN",
+      "Adoption with explicit global registry into a scoped registry": "NOTRUN",
+      "Adoption with scoped registry into a scoped registry": "NOTRUN",
+      "Adoption including shadow root with global registry": "NOTRUN",
+      "Adoption including shadow root with explicit global registry": "NOTRUN",
+      "Adoption including shadow root with scoped registry": "NOTRUN",
+      "Adoption including shadow root with global registry into a scoped registry": "NOTRUN",
+      "Adoption including shadow root with explicit global registry into a scoped registry": "NOTRUN",
+      "Adoption including shadow root with scoped registry into a scoped registry": "NOTRUN",
+      "Adoption with global registry (null registry target)": "NOTRUN",
+      "Adoption with explicit global registry (null registry target)": "NOTRUN",
+      "Adoption with scoped registry (null registry target)": "NOTRUN",
+      "Adoption with global registry into a scoped registry (null registry target)": "NOTRUN",
+      "Adoption with explicit global registry into a scoped registry (null registry target)": "NOTRUN",
+      "Adoption with scoped registry into a scoped registry (null registry target)": "NOTRUN",
+      "Adoption including shadow root with global registry (null registry target)": "NOTRUN",
+      "Adoption including shadow root with explicit global registry (null registry target)": "NOTRUN",
+      "Adoption including shadow root with scoped registry (null registry target)": "NOTRUN",
+      "Adoption including shadow root with global registry into a scoped registry (null registry target)": "NOTRUN",
+      "Adoption including shadow root with explicit global registry into a scoped registry (null registry target)": "NOTRUN",
+      "Adoption including shadow root with scoped registry into a scoped registry (null registry target)": "NOTRUN",
+      "Adoption with global registry (scoped registry target)": "NOTRUN",
+      "Adoption with explicit global registry (scoped registry target)": "NOTRUN",
+      "Adoption with scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption with global registry into a scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption with explicit global registry into a scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption with scoped registry into a scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption including shadow root with global registry (scoped registry target)": "NOTRUN",
+      "Adoption including shadow root with explicit global registry (scoped registry target)": "NOTRUN",
+      "Adoption including shadow root with scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption including shadow root with global registry into a scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption including shadow root with explicit global registry into a scoped registry (scoped registry target)": "NOTRUN",
+      "Adoption including shadow root with scoped registry into a scoped registry (scoped registry target)": "NOTRUN"
+    }
+  },
+  "custom-elements/registries/constructor-direct-call-fallback-registry.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Direct construction of a global-only element after super() during a scoped upgrade": "FAIL",
+      "Direct construction of a global-only element before super() during a scoped upgrade": "FAIL"
+    }
+  },
+  "custom-elements/registries/constructor-reentry-createElement.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Re-entry via createElement with a different registry after super()": "PASS",
+      "Re-entry via createElement with a different registry before super()": "PASS",
+      "Direct construction of a global-only element after super() during a scoped createElement construction": "FAIL",
+      "Direct construction of a global-only element before super() during a scoped createElement construction": "FAIL"
+    }
+  },
+  "custom-elements/registries/global.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "initialize() of global registry should throw for nodes from another document": "FAIL",
+      "createElement() should throw with global registry from another document": "FAIL",
+      "createElementNS() should throw with global registry from another document": "FAIL",
+      "attachShadow() should throw with global registry from another document": "FAIL",
+      "importNode() should throw with global registry from another document": "FAIL"
+    }
+  },
+  "custom-elements/registries/initial-about-blank.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Each navigable document has its own registry": "FAIL"
+    }
+  },
+  "custom-elements/registries/pseudo-class-defined.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "\"uncustomized\" :defined doesn't care about your registry'": "FAIL",
+      "\"custom\" :defined doesn't care about your registry": "FAIL",
+      "\"custom\" :defined should apply after initialize": "FAIL"
+    }
+  },
+  "custom-elements/registries/template.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "shadowRootCustomElementRegistry reflects as string": "FAIL",
+      "Serializing a null registry ShadowRoot with a global registry host (document)": "FAIL",
+      "Serializing a global registry ShadowRoot with a global registry host (document)": "FAIL",
+      "Serializing a scoped registry ShadowRoot with a global registry host (document)": "FAIL",
+      "Serializing a null registry ShadowRoot with a null registry host (document)": "FAIL",
+      "Serializing a scoped registry ShadowRoot with a null registry host (document)": "FAIL",
+      "Serializing a null registry ShadowRoot with a scoped registry host (document)": "FAIL",
+      "Serializing a scoped registry ShadowRoot with a scoped registry host (document)": "FAIL",
+      "A declarative shadow root gets its default registry from its node document": "FAIL",
+      "Custom element upgrades inside a declarative shadow root parsed via template.setHTMLUnsafe()": "FAIL"
+    }
+  },
+  "dom/abort/AbortSignal.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "the AbortSignal.abort() static returns an already aborted signal": "PASS",
+      "signal returned by AbortSignal.abort() should not fire abort event": "PASS"
+    }
+  },
+  "dom/abort/abort-signal-any.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "AbortSignal.any() works with an empty array of signals": "PASS",
+      "AbortSignal.any() follows a single signal (using AbortController)": "PASS",
+      "AbortSignal.any() follows multiple signals (using AbortController)": "PASS",
+      "AbortSignal.any() returns an aborted signal if passed an aborted signal (using AbortController)": "PASS",
+      "AbortSignal.any() can be passed the same signal more than once (using AbortController)": "PASS",
+      "AbortSignal.any() uses the first instance of a duplicate signal (using AbortController)": "PASS",
+      "AbortSignal.any() signals are composable (using AbortController)": "PASS",
+      "AbortSignal.any() works with signals returned by AbortSignal.timeout() (using AbortController)": "PASS",
+      "AbortSignal.any() works with intermediate signals (using AbortController)": "PASS",
+      "Abort events for AbortSignal.any() signals fire in the right order (using AbortController)": "PASS",
+      "Dependent signals for AbortSignal.any() are marked aborted before abort events fire (using AbortController)": "PASS",
+      "Dependent signals for AbortSignal.any() are aborted correctly for reentrant aborts (using AbortController)": "PASS",
+      "Dependent signals for AbortSignal.any() should use the same DOMException instance from the already aborted source signal (using AbortController)": "PASS",
+      "Dependent signals for AbortSignal.any() should use the same DOMException instance from the source signal being aborted later (using AbortController)": "PASS"
+    }
+  },
+  "dom/abort/event.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "AbortController abort() should fire event synchronously": "PASS",
+      "controller.signal should always return the same object": "PASS",
+      "controller.abort() should do nothing the second time it is called": "PASS",
+      "event handler should not be called if added after controller.abort()": "PASS",
+      "the abort event should have the right properties": "PASS",
+      "AbortController abort(reason) should set signal.reason": "PASS",
+      "aborting AbortController without reason creates an \"AbortError\" DOMException": "PASS",
+      "AbortController abort(undefined) creates an \"AbortError\" DOMException": "PASS",
+      "AbortController abort(null) should set signal.reason": "PASS",
+      "static aborting signal should have right properties": "PASS",
+      "static aborting signal with reason should set signal.reason": "PASS",
+      "throwIfAborted() should throw abort.reason if signal aborted": "PASS",
+      "throwIfAborted() should throw primitive abort.reason if signal aborted": "PASS",
+      "throwIfAborted() should not throw if signal not aborted": "PASS",
+      "AbortSignal.reason returns the same DOMException": "PASS",
+      "AbortController.signal.reason returns the same DOMException": "PASS"
+    }
+  },
+  "dom/abort/timeout.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "AbortSignal.timeout() returns a non-aborted signal": "PASS",
+      "Signal returned by AbortSignal.timeout() times out": "PASS",
+      "AbortSignal timeouts fire in order": "PASS"
+    }
+  },
+  "dom/collections/HTMLCollection-live-mutations.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "HTMLCollection live mutations: HTMLCollection.length": "PASS",
+      "HTMLCollection live mutations: HTMLCollection.item(index)": "PASS",
+      "HTMLCollection live mutations: HTMLCollection[index]": "PASS",
+      "HTMLCollection live mutations: HTMLCollection.namedItem(index)": "PASS",
+      "HTMLCollection live mutations: HTMLCollection ownPropertyNames": "PASS"
+    }
+  },
+  "dom/events/AddEventListenerOptions-once.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "Once listener should be invoked only once": "PASS",
+      "Once listener should be invoked only once even if the event is nested": "PASS",
+      "Once listener should be added / removed like normal listeners": "PASS",
+      "Multiple once listeners should be invoked even if the stopImmediatePropagation is set": "PASS"
+    }
+  },
+  "dom/events/AddEventListenerOptions-passive.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "Supports passive option on addEventListener only": "PASS",
+      "preventDefault should be ignored if-and-only-if the passive option is true": "PASS",
+      "returnValue should be ignored if-and-only-if the passive option is true": "PASS",
+      "passive behavior of one listener should be unaffected by the presence of other listeners": "PASS",
+      "Equivalence of option values": "PASS"
+    }
+  },
+  "dom/events/AddEventListenerOptions-signal.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "Passing an AbortSignal to addEventListener options should allow removing a listener": "PASS",
+      "Passing an AbortSignal to addEventListener does not prevent removeEventListener": "PASS",
+      "Passing an AbortSignal to addEventListener works with the once flag": "PASS",
+      "Removing a once listener works with a passed signal": "PASS",
+      "Passing an AbortSignal to multiple listeners": "PASS",
+      "Passing an AbortSignal to addEventListener works with the capture flag": "PASS",
+      "Aborting from a listener does not call future listeners": "PASS",
+      "Adding then aborting a listener in another listener does not call it": "PASS",
+      "Aborting from a nested listener should remove it": "PASS",
+      "Passing null as the signal should throw": "PASS",
+      "Passing null as the signal should throw (listener is also null)": "PASS"
+    }
+  },
+  "dom/events/Event-constructors.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "": "PASS",
+      " 1": "PASS",
+      " 2": "PASS",
+      " 3": "PASS",
+      " 4": "PASS",
+      " 5": "PASS",
+      " 6": "PASS",
+      " 7": "PASS",
+      " 8": "PASS",
+      " 9": "PASS",
+      " 10": "PASS",
+      " 11": "PASS",
+      " 12": "PASS",
+      " 13": "PASS"
+    }
+  },
+  "dom/events/Event-dispatch-listener-order.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "": "PASS"
+    }
+  },
+  "dom/events/Event-isTrusted.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "": "PASS"
+    }
+  },
+  "dom/events/EventTarget-add-remove-listener.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "Removing an event listener without explicit capture arg should succeed": "PASS"
+    }
+  },
+  "dom/events/EventTarget-addEventListener.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "Adding a null event listener should succeed": "PASS"
+    }
+  },
+  "dom/events/EventTarget-constructible.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "A constructed EventTarget can be used as expected": "PASS",
+      "A constructed EventTarget implements dispatch correctly": "PASS",
+      "EventTarget can be subclassed": "PASS"
+    }
+  },
+  "dom/events/EventTarget-removeEventListener.any.js": {
+    "harness": "OK",
+    "subtests": {
+      "removing a null event listener should succeed": "PASS"
+    }
+  },
+  "dom/events/event-global-extra.window.js": {
+    "harness": "ERROR",
+    "subtests": {}
+  },
+  "dom/events/event-global-set-before-handleEvent-lookup.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "window.event is set before 'handleEvent' lookup": "PASS"
+    }
+  },
+  "dom/events/relatedTarget.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Reset if target pointed to a shadow tree": "FAIL",
+      "Retarget a shadow-tree relatedTarget": "FAIL",
+      "Reset if target pointed to a shadow tree pre-dispatch": "FAIL",
+      "Retarget a shadow-tree relatedTarget, part 2": "FAIL",
+      "Reset targets on early return": "FAIL",
+      "Reset targets before activation behavior": "FAIL"
+    }
+  },
+  "dom/nodes/Document-adoptNode-DocumentFragment-with-host.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "adoptNode() plain DocumentFragment (no host): adopts and returns it": "FAIL",
+      "adoptNode() template.content: adopts fragment + children, returns it": "FAIL",
+      "adoptNode() template.content into browsing-context document": "FAIL",
+      "adoptNode() shadow root: throws HierarchyRequestError": "FAIL",
+      "adoptNode() <template> element: content follows via template adopting steps": "FAIL",
+      "adoptNode() nested <template> elements: all owner documents update": "FAIL",
+      "appendChild() template.content: moves children, fragment ownerDocument stays": "FAIL"
+    }
+  },
+  "dom/nodes/Node-appendChild-cereactions-vs-script.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Custom element reactions follow script execution": "FAIL"
+    }
+  },
+  "dom/nodes/Node-cloneNode-document-allow-declarative-shadow-roots.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "cloneNode() and document's allow declarative shadow roots": "FAIL"
+    }
+  },
+  "dom/nodes/NodeList-live-mutations.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "NodeList live mutations: NodeList.length": "PASS",
+      "NodeList live mutations: NodeList.item(index)": "PASS",
+      "NodeList live mutations: NodeList[index]": "PASS",
+      "NodeList live mutations: NodeList ownPropertyNames": "PASS"
+    }
+  },
+  "dom/nodes/adoption.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "appendChild() and DocumentFragment with host": "FAIL",
+      "adoptNode() and DocumentFragment with host": "FAIL",
+      "appendChild() and DocumentFragment": "PASS",
+      "adoptNode() and DocumentFragment": "PASS",
+      "appendChild() and ShadowRoot": "PASS",
+      "adoptNode() and ShadowRoot": "FAIL"
+    }
+  },
+  "dom/nodes/insertion-removing-steps/blur-event.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "<input> element does not fire blur event upon DOM removal": "FAIL",
+      "<button> element does not fire blur/focusout events upon DOM removal": "FAIL"
+    }
+  },
+  "dom/nodes/insertion-removing-steps/insertion-removing-steps-script.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "Script execution happens after all batched DOM insertions complete through post-connection steps": "FAIL"
+    }
+  },
+  "dom/traversal/TreeWalker-nextNode-detached-currentNode.window.js": {
+    "harness": "OK",
+    "subtests": {
+      "nextNode() returns null when currentNode is a detached element with no descendants and whatToShow does not match it": "PASS",
+      "nextNode() returns null after exhausting a detached subtree": "PASS",
+      "nextNode() terminates when iterating over template.content not under the walker's root": "PASS"
+    }
+  }
+}

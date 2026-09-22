@@ -218,6 +218,7 @@ tsr test:dom-wpt                                  # or, directly:
 deno run --allow-read --allow-run --allow-write wpt/dom-run.js
 
 # --filter=<substring>   only matching paths
+# --update-expectations  re-record dom-expectations.json
 # --verbose              one line per file, to stderr, as it goes
 # --json=<path>          write the report as well as printing it
 # --timeout=<ms>         per file, default 10000
@@ -255,7 +256,10 @@ completes waits forever; with it the file is reported as `TIMEOUT`. A file that
 completes no harness at all exits `0` and prints nothing, so the report carries
 the exit code — `""` is not a diagnosis.
 
-There is no expectations file yet, so **this slice gates nothing**: it prints
-`passed`/`failed`/`errored`/`timeout` and exits `0`. It stays diagnostic until
-the failures are either fixed or recorded, the way `expectations.json` records
-the worker slice.
+`dom-expectations.json` records every subtest's status per file, the same
+contract the worker slice works to: a recorded `PASS` that stops passing fails
+the run, a subtest that starts passing is reported so the record can be updated
+in the commit that fixed it, and `--update-expectations` re-records. The
+recorded floor is **97 passing, 45 failing, 35 not run, one harness `ERROR`** —
+the failures are real deviations and each one is work, but none of them can get
+quietly worse.

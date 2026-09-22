@@ -134,9 +134,9 @@ dir = "crates/runtime/js"
 env = { PATH = "../../../target/release:${PATH}" }
 
 # The upstream WPT slice for the test-only DOM: `dom`, `custom-elements` and
-# `shadow-dom`, run unmodified under `esdev test --dom`. Needs `wpt/fetch.sh`
-# first, so it is not a `ci` dependency — the checkout is gitignored and the
-# report is diagnostic while the slice still has failures.
+# `shadow-dom`, run unmodified under `esdev test --dom`. Fails on any subtest
+# that regresses against `wpt/dom-expectations.json`. Needs `wpt/fetch.sh`
+# first, so it is not yet a `ci` dependency: the checkout is gitignored.
 [tasks."test:dom-wpt"]
 run = "cargo build -p es-runtime-dev-cli && deno run --allow-read --allow-run --allow-write wpt/dom-run.js"
 

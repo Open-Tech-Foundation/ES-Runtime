@@ -5,10 +5,14 @@ const root = new URL("./upstream/", import.meta.url);
 const defaultEsdev = new URL("../target/debug/esdev", import.meta.url).pathname;
 const roots = ["dom", "custom-elements", "shadow-dom"];
 const marker = "__ESDEV_WPT_DOM__=";
+const expectationsPath = new URL("./dom-expectations.json", import.meta.url);
+// testharness.js subtest statuses, by their numeric value.
+const statusNames = ["PASS", "FAIL", "TIMEOUT", "NOTRUN", "PRECONDITION_FAILED"];
 
-const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, verbose: false };
+const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, update: false, verbose: false };
 for (const argument of Deno.args) {
   if (argument === "--verbose") flags.verbose = true;
+  else if (argument === "--update-expectations") flags.update = true;
   else if (argument.startsWith("--esdev=")) flags.esdev = argument.slice("--esdev=".length);
   else if (argument.startsWith("--filter=")) flags.filter = argument.slice("--filter=".length);
   else if (argument.startsWith("--json=")) flags.json = argument.slice("--json=".length);
@@ -96,9 +100,12 @@ const skipped = selected.flatMap((path) => {
 const runnable = selected.filter((path) => !excluded(path));
 const totals = { files: selected.length, runnable: runnable.length, skipped: skipped.length, passed: 0, failed: 0, errored: 0, timeout: 0 };
 const failures = [];
+const results = {};
 for (const path of runnable) {
   const result = await run(path);
   if (flags.verbose) console.error(`${result.harness.padEnd(7)} ${path}`);
+  const subtests = {};
+  results[path] = { harness: result.harness, subtests };
   if (result.harness !== "OK") {
     if (result.harness === "TIMEOUT") totals.timeout++;
     else totals.errored++;
@@ -106,10 +113,47 @@ for (const path of runnable) {
     continue;
   }
   for (const test of result.tests) {
+    subtests[test.name] = statusNames[test.status] ?? `STATUS_${test.status}`;
     if (test.status === 0) totals.passed++;
     else { totals.failed++; failures.push({ path, ...test }); }
   }
 }
+
+// A recorded expectation is a floor, the same contract wpt/run.js works to: a
+// subtest that used to pass and now does not fails the run, and one that starts
+// passing is reported, because the record is stale and the fix should land with
+// it updated.
+const regressions = [];
+const progressions = [];
+if (flags.update) {
+  await Deno.writeTextFile(expectationsPath, `${JSON.stringify(results, null, 2)}\n`);
+  console.error(`recorded ${Object.keys(results).length} files to wpt/dom-expectations.json`);
+} else {
+  const expected = await Deno.readTextFile(expectationsPath).then(JSON.parse).catch(() => null);
+  if (!expected) console.error("no wpt/dom-expectations.json yet — run with --update-expectations to record one");
+  else {
+    for (const [path, run] of Object.entries(results)) {
+      const before = expected[path];
+      if (!before) continue;
+      for (const [name, status] of Object.entries(run.subtests)) {
+        const was = before.subtests[name];
+        if (was === "PASS" && status !== "PASS") regressions.push(`${path} › ${name} (${status})`);
+        if (was && was !== "PASS" && status === "PASS") progressions.push(`${path} › ${name}`);
+      }
+      if (before.harness === "OK" && run.harness !== "OK") regressions.push(`${path} — harness ${run.harness}`);
+    }
+  }
+}
+
 const report = { totals, skipped, failures };
 if (flags.json) await Deno.writeTextFile(flags.json, `${JSON.stringify(report, null, 2)}\n`);
 console.log(JSON.stringify(report, null, 2));
+if (progressions.length > 0) {
+  console.error(`\n${progressions.length} newly passing — update wpt/dom-expectations.json:`);
+  for (const line of progressions) console.error(`  ${line}`);
+}
+if (regressions.length > 0) {
+  console.error(`\n${regressions.length} regression(s):`);
+  for (const line of regressions) console.error(`  ${line}`);
+  Deno.exit(1);
+}
