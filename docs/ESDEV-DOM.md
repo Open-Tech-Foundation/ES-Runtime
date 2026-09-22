@@ -216,6 +216,10 @@ specifies:
 | Inheritance | the inherited properties, and any explicit `inherit`, come from the parent; a custom property always does |
 | Initial values | the keyword initial values — `display: inline`, `font-weight: 400`, `visibility: visible`, `color: rgb(0, 0, 0)` — for anything still unset |
 
+A declaration list is the surface of the known properties, as in a browser: an
+unknown name reads `undefined` and `"nonsense" in style` is false, while a known
+property that nothing set reads `""`. Custom properties are always known.
+
 `@media` is evaluated against a **declared viewport**: `window.innerWidth` and
 `innerHeight` start at 1024×768 and are assignable, since nothing here resizes
 on its own, and `matchMedia` answers from the same state rather than always
@@ -243,10 +247,10 @@ text defaults — and nothing about how anything looks.
 - **A rule this DOM cannot match contributes nothing** and is not an error —
   it still appears in `cssRules`. That covers a pseudo-element selector and any
   selector the engine cannot compile.
-- **`@supports (unknown-property: value)` answers yes**, because the test is
-  whether the declaration parses, not whether anything renders it. `@supports
-  (display: grid)` and `not (display: grid)` are right; a made-up property is
-  not.
+- **`@supports` answers from a list of known properties** (`css.js`), not from
+  what anything renders. A property the list is missing answers "not supported",
+  so a genuinely new one has to be added there — a one-line change — rather than
+  being guessed at.
 - **`@layer` does not order anything** and `@container` has no container: their
   blocks contribute as if the condition held.
 

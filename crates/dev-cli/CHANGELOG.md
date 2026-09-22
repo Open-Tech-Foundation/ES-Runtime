@@ -398,6 +398,19 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **A declaration list knows which properties exist.** `style.nonsenseProp` read
+  `""` and `"nonsense" in getComputedStyle(el)` was true, so feature detection
+  against a declaration — which is how a library asks whether a property exists —
+  always said yes. A declaration is the surface of the known properties, as in a
+  browser: an unknown name reads `undefined`, a known one that nothing set reads
+  `""`, and a custom property is always known. `@supports` and `CSS.supports`
+  answer from the same list, which closes the documented divergence where
+  `@supports (made-up-property: 1)` used to apply its rules.
+- **`document.cookie` is a document-level string store.** Setting and reading
+  back works, `Max-Age=0` and a past `Expires` delete, and `Path`/`Secure`/
+  `Domain` are accepted and ignored because there is no origin to scope them to.
+  No network is involved; a sanitiser testing `"cookie" in document` to catch DOM
+  clobbering now gets the answer a browser gives.
 - **Selector escapes are resolved.** `#id\.with\.dots`, `.foo\:bar` and
   `#\31 leading` were a `SyntaxError`, so an id or class containing a dot, colon
   or leading digit — which is what `CSS.escape` exists to produce — could not be

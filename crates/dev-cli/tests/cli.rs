@@ -3022,6 +3022,63 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_declarations_know_which_properties_exist_and_cookies_round_trip() {
+    let dir = build_dir("t_test_dom_properties_cookies");
+    write_in(
+        &dir,
+        "properties.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('an unknown property reads undefined, a known one reads empty', () => {\n\
+           const element = document.createElement('div');\n\
+           document.body.append(element);\n\
+           element.style.color = 'red';\n\
+           const computed = getComputedStyle(element);\n\
+           assertEquals([element.style.color, element.style.transform, element.style.nonsenseProp], ['red', '', undefined]);\n\
+           assertEquals([computed.transform, computed.nonsenseProp], ['', undefined]);\n\
+           assertEquals(['transform' in computed, 'nonsenseProp' in computed, 'gridTemplateAreas' in computed], [true, false, true]);\n\
+           element.style.setProperty('--x', '1px');\n\
+           assertEquals(getComputedStyle(element).getPropertyValue('--x'), '1px');\n\
+         });\n\
+         test('supports answers from the known properties', () => {\n\
+           assertEquals([CSS.supports('color', 'red'), CSS.supports('display', 'grid')], [true, true]);\n\
+           assertEquals([CSS.supports('nonsense-prop', '1'), CSS.supports('(nonsense-prop: 1)')], [false, false]);\n\
+           assertEquals(CSS.supports('not (nonsense-prop: 1)'), true);\n\
+           const style = document.createElement('style');\n\
+           style.textContent = '@supports (display: grid) { .s { font-style: italic } } @supports (nonsense: 1) { .s { font-style: oblique } }';\n\
+           document.head.append(style);\n\
+           const element = document.createElement('p');\n\
+           element.className = 's';\n\
+           document.body.append(element);\n\
+           assertEquals(getComputedStyle(element).fontStyle, 'italic');\n\
+           style.remove();\n\
+         });\n\
+         test('cookies are a document-level string store', () => {\n\
+           assertEquals([document.cookie, 'cookie' in document], ['', true]);\n\
+           document.cookie = 'a=1';\n\
+           document.cookie = 'b=2; Path=/; Secure';\n\
+           assertEquals(document.cookie, 'a=1; b=2');\n\
+           document.cookie = 'a=updated';\n\
+           assertEquals(document.cookie, 'a=updated; b=2');\n\
+           document.cookie = 'a=; Max-Age=0';\n\
+           assertEquals(document.cookie, 'b=2');\n\
+           document.cookie = 'c=3; Expires=Thu, 01 Jan 1970 00:00:00 GMT';\n\
+           assertEquals(document.cookie, 'b=2');\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom properties and cookies");
+    assert!(
+        ran.status.success(),
+        "DOM property and cookie test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_cascades_stylesheets_into_computed_styles() {
     let dir = build_dir("t_test_dom_cascade");
     write_in(

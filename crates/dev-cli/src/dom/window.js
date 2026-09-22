@@ -107,7 +107,41 @@ Object.defineProperties(tree.HTMLElement.prototype, {
   focus: { value() { if (isFocusable(this)) changeFocus(this); }, writable: true, configurable: true },
   blur: { value() { if (activeElement === this) changeFocus(body); }, writable: true, configurable: true },
 });
+// The document's cookies, as a document-level string store. No network is
+// involved and none is needed: a cookie is a name and a value with a lifetime,
+// and code that sets one and reads it back — or, like a sanitiser, tests whether
+// `"cookie" in document` to catch DOM clobbering — is asking this and nothing
+// more. `Secure`, `Domain` and `Path` are accepted and ignored, because there is
+// no origin to scope them to.
+const cookies = new Map();
+
+function writeCookie(text) {
+  const [pair, ...attributes] = String(text).split(";");
+  const equals = pair.indexOf("=");
+  const name = (equals === -1 ? "" : pair.slice(0, equals)).trim();
+  const value = (equals === -1 ? pair : pair.slice(equals + 1)).trim();
+  if (name === "" && value === "") return;
+  const expired = attributes.some((attribute) => {
+    const [key, setting = ""] = attribute.split("=");
+    const named = key.trim().toLowerCase();
+    if (named === "max-age") return Number(setting.trim()) <= 0;
+    if (named === "expires") {
+      const when = Date.parse(setting.trim());
+      return Number.isFinite(when) && when <= Date.now();
+    }
+    return false;
+  });
+  if (expired) cookies.delete(name);
+  else cookies.set(name, value);
+}
+
 Object.defineProperties(document, {
+  cookie: {
+    get() { return Array.from(cookies, ([name, value]) => `${name}=${value}`).join("; "); },
+    set(value) { writeCookie(value); },
+    enumerable: true,
+    configurable: true,
+  },
   // A headless document is the focused one: there is no other, and a suite that
   // asks before dispatching key events should get on with it.
   hasFocus: { value: () => true, writable: true, configurable: true },
