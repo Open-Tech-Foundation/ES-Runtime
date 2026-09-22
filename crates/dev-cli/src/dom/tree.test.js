@@ -1,7 +1,7 @@
 import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 
-const { CDATASection, CharacterData, Comment, DOMRect, Document, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, setCurrentDocument } = createTree();
+const { CDATASection, CharacterData, Comment, DOMRect, Document, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, isDefined, setCurrentDocument } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -641,4 +641,45 @@ test("a radio group holds one checked button, however it was checked", () => {
   nameless.checked = true;
   another.checked = true;
   expect([nameless.checked, another.checked]).toEqual([true, true]);
+});
+
+test("reflects the ARIA mixin to its attributes", () => {
+  const document = setCurrentDocument(new Document());
+  const element = document.createElement("div");
+
+  expect(element.ariaLabel).toBeNull();
+  element.role = "button";
+  element.ariaLabel = "Save";
+  element.ariaValueMax = "9";
+  expect([element.getAttribute("role"), element.getAttribute("aria-label"), element.getAttribute("aria-valuemax")])
+    .toEqual(["button", "Save", "9"]);
+  element.setAttribute("aria-label", "Changed");
+  expect(element.ariaLabel).toBe("Changed");
+  element.ariaLabel = null;
+  expect(element.hasAttribute("aria-label")).toBe(false);
+});
+
+test("refuses a shadow root on an element that cannot host one", () => {
+  const document = setCurrentDocument(new Document());
+  const hosts = ["div", "span", "section", "p"].map((name) => document.createElement(name).attachShadow({ mode: "open" }));
+
+  expect(hosts.every((root) => root.mode === "open")).toBe(true);
+  expect(() => document.createElement("input").attachShadow({ mode: "open" })).toThrow("cannot host");
+  expect(() => document.createElement("li").attachShadow({ mode: "open" })).toThrow("cannot host");
+  // A custom element name always may.
+  expect(document.createElement("x-thing").attachShadow({ mode: "open" }).mode).toBe("open");
+});
+
+test("a template's content is inert until it is cloned into a tree", () => {
+  const document = setCurrentDocument(new Document());
+  const template = document.createElement("template");
+  const inside = document.createElement("x-inert");
+  template.content.appendChild(inside);
+
+  expect(inside.getRootNode()).toBe(template.content);
+  expect(isDefined(inside)).toBe(false);
+  const loose = document.createElement("x-inert");
+  expect(isDefined(loose)).toBe(false);
+  // A plain element is defined by being built in, wherever it sits.
+  expect(isDefined(document.createElement("div"))).toBe(true);
 });

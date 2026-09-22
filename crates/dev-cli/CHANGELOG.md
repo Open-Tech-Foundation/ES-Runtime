@@ -25,6 +25,20 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **Web components, the second pass: namespaces, hosts, focus, paths and
+  inertness.** `attributeChangedCallback` fires for a namespaced attribute and
+  reports its local name and namespace. `attachShadow` refuses an element that
+  cannot host a root — an `<input>` or an `<li>` — and accepts any custom
+  element name. Focus inside a root is reported from both sides:
+  `document.activeElement` is the host and `shadowRoot.activeElement` is the
+  element. `composedPath()` is computed for the listener, so a closed root is
+  not in the path something outside it sees. The ARIA mixin reflects:
+  `element.role`, `element.ariaLabel` and the rest read and write their
+  attributes and answer `null` when unset. A `slotchange` follows the `slot`
+  attribute as well as the child list, and the slot a node left hears before the
+  one it joined. A `<template>`'s content is inert, so a custom element written
+  inside one is not `:defined` until the content is cloned into a tree.
+
 - **Web components: the reactions, slots, registry and shadow styling that were
   missing.** `customElements.getName()`; a constructor can be defined under one
   name only, and a second `define` with it is a `NotSupportedError`; `new

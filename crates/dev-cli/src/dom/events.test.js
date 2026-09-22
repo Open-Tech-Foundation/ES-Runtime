@@ -103,3 +103,35 @@ test("creates an event by modern interface name and refuses the HTML4 aliases", 
   expect(() => events.createLegacy("UIEvents")).toThrow("new UIEvent");
   expect(() => events.createLegacy("Nonsense")).toThrow("not an event interface");
 });
+
+test("a closed root is not in the path a listener outside it sees", () => {
+  const document = new Document();
+  const body = document.createElement("body");
+  document.appendChild(body);
+  const host = document.createElement("div");
+  body.appendChild(host);
+  const root = host.attachShadow({ mode: "closed" });
+  const inner = document.createElement("button");
+  root.appendChild(inner);
+
+  const outside = [];
+  const inside = [];
+  body.addEventListener("probe", (event) => outside.push(event.composedPath().length));
+  inner.addEventListener("probe", (event) => inside.push(event.composedPath().length));
+  inner.dispatchEvent(new events.Event("probe", { bubbles: true, composed: true }));
+
+  // From inside: button, root, host, body, document. From outside the closed
+  // root: host, body, document — the two inside it are not there.
+  expect(inside).toEqual([5]);
+  expect(outside).toEqual([3]);
+
+  const openHost = document.createElement("div");
+  body.appendChild(openHost);
+  const openRoot = openHost.attachShadow({ mode: "open" });
+  const openInner = document.createElement("button");
+  openRoot.appendChild(openInner);
+  const open = [];
+  body.addEventListener("open-probe", (event) => open.push(event.composedPath().length));
+  openInner.dispatchEvent(new events.Event("open-probe", { bubbles: true, composed: true }));
+  expect(open).toEqual([5]);
+});

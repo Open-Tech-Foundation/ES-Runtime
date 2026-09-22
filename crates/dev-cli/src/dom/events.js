@@ -6,6 +6,29 @@ const STATE = Symbol("esdev event state");
 const LISTENERS = Symbol("esdev event listeners");
 const isTrusted = () => false;
 
+// Whether `node` is inside a closed root that `from` is not also inside.
+function visibleFrom(node, from) {
+  for (let root = rootOf(node); root?.host; root = rootOf(root.host)) {
+    if (root.mode === "closed" && !reaches(from, root)) return false;
+  }
+  return true;
+}
+
+// A ShadowRoot is its own root; anything else asks the tree.
+function rootOf(node) {
+  if (node?.host) return node;
+  return node?.getRootNode?.() ?? null;
+}
+
+// Whether walking `node` up through hosts arrives at `root`.
+function reaches(node, root) {
+  for (let current = rootOf(node); current; current = rootOf(current.host)) {
+    if (current === root) return true;
+    if (!current.host) return false;
+  }
+  return false;
+}
+
 export function createEvents() {
   function retarget(original, current) {
     let target = original;
@@ -52,7 +75,14 @@ export function createEvents() {
     get eventPhase() { return this[STATE].phase; }
     get defaultPrevented() { return this[STATE].defaultPrevented; }
     get timeStamp() { return this[STATE].timeStamp; }
-    composedPath() { return [...this[STATE].path]; }
+    // Relative to the listener: a closed root is invisible from outside it, so
+    // the path a listener on the document sees stops at the host.
+    composedPath() {
+      const state = this[STATE];
+      const current = state.currentTarget;
+      if (!current) return [...state.path];
+      return state.path.filter((node) => visibleFrom(node, current));
+    }
     stopPropagation() { this[STATE].propagationStopped = true; }
     stopImmediatePropagation() { this[STATE].propagationStopped = true; this[STATE].immediateStopped = true; }
     preventDefault() { if (this.cancelable && !this[STATE].passive) this[STATE].defaultPrevented = true; }

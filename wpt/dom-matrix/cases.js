@@ -1091,6 +1091,161 @@ export const cases = [
     },
   },
   {
+    group: "components",
+    name: "an-element-moved-between-documents-is-adopted",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("adopted");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        adoptedCallback(from, to) { log.push(`adopted:${from === to}`); }
+        connectedCallback() { log.push("connected"); }
+        disconnectedCallback() { log.push("disconnected"); }
+      });
+      const element = document.createElement(name);
+      document.body.append(element);
+      const other = document.implementation.createHTMLDocument("other");
+      other.body.append(other.adoptNode(element));
+      return [log, element.ownerDocument === other, element.isConnected];
+    },
+  },
+  {
+    group: "components",
+    name: "attributes-report-their-namespace-and-old-value",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("attrs");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        static get observedAttributes() { return ["value", "href"]; }
+        attributeChangedCallback(attribute, before, after, namespace) {
+          log.push([attribute, before, after, namespace ?? null].join("|"));
+        }
+      });
+      const element = document.createElement(name);
+      element.setAttribute("value", "one");
+      element.setAttribute("value", "two");
+      element.removeAttribute("value");
+      element.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#a");
+      element.toggleAttribute("value");
+      return log;
+    },
+  },
+  {
+    group: "components",
+    name: "a-shadow-host-refuses-a-second-root-and-the-wrong-element",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      host.attachShadow({ mode: "open" });
+      return [
+        errorName(() => host.attachShadow({ mode: "open" })),
+        errorName(() => document.createElement("input").attachShadow({ mode: "open" })),
+        errorName(() => document.createElement("div").attachShadow({ mode: "sideways" })),
+        errorName(() => document.createElement("span").attachShadow({ mode: "open" })),
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "focus-inside-a-root-is-reported-from-both-sides",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<input>";
+      const inner = root.firstElementChild;
+      inner.focus();
+      return [
+        document.activeElement === host,
+        root.activeElement === inner,
+        document.activeElement?.localName ?? null,
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "an-event-is-retargeted-and-a-closed-root-hides-its-path",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "closed" });
+      root.innerHTML = "<button></button>";
+      const inner = root.firstElementChild;
+      const seen = [];
+      document.body.addEventListener("composed-probe", (event) => {
+        seen.push([event.target.localName, event.composedPath().length]);
+      });
+      inner.dispatchEvent(new window.Event("composed-probe", { bubbles: true, composed: true }));
+      const uncomposed = [];
+      document.body.addEventListener("scoped-probe", () => uncomposed.push("escaped"));
+      inner.dispatchEvent(new window.Event("scoped-probe", { bubbles: true }));
+      return [seen, uncomposed.length];
+    },
+  },
+  {
+    group: "components",
+    name: "aria-reflects-through-attributes-and-internals",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      document.body.append(element);
+      element.role = "button";
+      element.ariaLabel = "Save";
+      element.ariaHidden = "true";
+      const reflected = [element.getAttribute("role"), element.getAttribute("aria-label"), element.getAttribute("aria-hidden")];
+      element.setAttribute("aria-label", "Changed");
+      return [reflected, element.ariaLabel, element.role];
+    },
+  },
+  {
+    group: "components",
+    name: "a-slot-change-follows-the-slot-attribute",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      host.innerHTML = "<p>one</p>";
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<slot name=a></slot><slot></slot>";
+      const [named, unnamed] = root.querySelectorAll("slot");
+      await settled();
+      const changes = [];
+      named.addEventListener("slotchange", () => changes.push("named"));
+      unnamed.addEventListener("slotchange", () => changes.push("unnamed"));
+      host.firstElementChild.slot = "a";
+      await settled();
+      return [changes, named.assignedNodes().length, unnamed.assignedNodes().length];
+    },
+  },
+  {
+    group: "components",
+    name: "a-template-holds-a-component-and-clones-it",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("templated");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        connectedCallback() { log.push("connected"); }
+      });
+      const template = document.createElement("template");
+      template.innerHTML = `<${name}></${name}>`;
+      const inert = [log.length, template.content.firstElementChild.matches(":defined")];
+      document.body.append(template.content.cloneNode(true));
+      return [inert, log, document.body.firstElementChild.matches(":defined")];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

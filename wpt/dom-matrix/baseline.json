@@ -2482,6 +2482,370 @@
       "drift": false
     },
     {
+      "group": "components",
+      "name": "an-element-moved-between-documents-is-adopted",
+      "chrome": {
+        "result": [
+          [
+            "connected",
+            "disconnected",
+            "adopted:false",
+            "connected"
+          ],
+          true,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "connected",
+            "disconnected",
+            "adopted:false",
+            "connected"
+          ],
+          true,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "connected",
+            "disconnected"
+          ],
+          true,
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "connected",
+            "disconnected",
+            "adopted:false",
+            "connected"
+          ],
+          true,
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "attributes-report-their-namespace-and-old-value",
+      "chrome": {
+        "result": [
+          "value||one|",
+          "value|one|two|",
+          "value|two||",
+          "href||#a|http://www.w3.org/1999/xlink",
+          "value|||"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "value||one|",
+          "value|one|two|",
+          "value|two||",
+          "href||#a|http://www.w3.org/1999/xlink",
+          "value|||"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "value||one|",
+          "value|one|two|",
+          "value|two||",
+          "value|||"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "value||one|",
+          "value|one|two|",
+          "value|two||",
+          "href||#a|http://www.w3.org/1999/xlink",
+          "value|||"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-shadow-host-refuses-a-second-root-and-the-wrong-element",
+      "chrome": {
+        "result": [
+          "NotSupportedError",
+          "NotSupportedError",
+          "TypeError",
+          null
+        ]
+      },
+      "esdev": {
+        "result": [
+          "NotSupportedError",
+          "NotSupportedError",
+          "TypeError",
+          null
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "DOMException",
+          null,
+          "TypeError",
+          null
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "NotSupportedError",
+          "NotSupportedError",
+          "TypeError",
+          null
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "focus-inside-a-root-is-reported-from-both-sides",
+      "chrome": {
+        "result": [
+          true,
+          true,
+          "div"
+        ]
+      },
+      "esdev": {
+        "result": [
+          true,
+          true,
+          "div"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          true,
+          true,
+          "div"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          true,
+          true,
+          "div"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "an-event-is-retargeted-and-a-closed-root-hides-its-path",
+      "chrome": {
+        "result": [
+          [
+            [
+              "div",
+              5
+            ]
+          ],
+          0
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              "div",
+              5
+            ]
+          ],
+          0
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            [
+              "button",
+              7
+            ]
+          ],
+          0
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            [
+              "div",
+              5
+            ]
+          ],
+          0
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "aria-reflects-through-attributes-and-internals",
+      "chrome": {
+        "result": [
+          [
+            "button",
+            "Save",
+            "true"
+          ],
+          "Changed",
+          "button"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "button",
+            "Save",
+            "true"
+          ],
+          "Changed",
+          "button"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "button",
+            null,
+            null
+          ],
+          "Save",
+          "button"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "button",
+            "Save",
+            "true"
+          ],
+          "Changed",
+          "button"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-slot-change-follows-the-slot-attribute",
+      "chrome": {
+        "result": [
+          [
+            "unnamed",
+            "named"
+          ],
+          1,
+          0
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "unnamed",
+            "named"
+          ],
+          1,
+          0
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "unnamed",
+            "named"
+          ],
+          1,
+          0
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "unnamed",
+            "named"
+          ],
+          1,
+          0
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-template-holds-a-component-and-clones-it",
+      "chrome": {
+        "result": [
+          [
+            0,
+            false
+          ],
+          [
+            "connected"
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            0,
+            false
+          ],
+          [
+            "connected"
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            0,
+            false
+          ],
+          [
+            "connected"
+          ],
+          false
+        ]
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -2786,7 +3150,7 @@
     }
   ],
   "summary": {
-    "match": 62,
+    "match": 70,
     "intentional-limit": 2,
     "drift": 0
   }

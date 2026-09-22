@@ -24,6 +24,7 @@ const FORM_STATE = Symbol("esdev DOM submission state");
 const MANUAL_ASSIGNED = Symbol("esdev DOM manually assigned nodes");
 const SLOT_PENDING = Symbol("esdev DOM pending slotchange");
 const FORM_DISABLED = Symbol("esdev DOM last reported disabled state");
+const INERT = Symbol("esdev DOM inert subtree");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
@@ -37,6 +38,11 @@ const COLLECTION = Symbol("esdev DOM live collection state");
 const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
+// The elements a shadow root may be attached to (HTML, "valid shadow host name").
+const SHADOW_HOSTS = new Set([
+  "article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+  "header", "main", "nav", "p", "section", "span",
+]);
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function domError(name, message) {
@@ -770,9 +776,13 @@ export function createTree(events = {}) {
     setAttribute(name, value) {
       name = String(name);
       const oldValue = this.getAttribute(name);
+      // Captured before the change: a node that moves between slots signals the
+      // one it left and then the one it joined, in that order.
+      const before = name === "slot" || name === "name" ? assignedSlotFor(this) : null;
       this.attributes.setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
       if (name === "disabled") notifyDisabled(this);
+      if (name === "slot" || name === "name") signalReassignment(this, before);
     }
     setAttributeNS(namespaceURI, qualifiedName, value) {
       qualifiedName = String(qualifiedName);
@@ -788,10 +798,12 @@ export function createTree(events = {}) {
     }
     removeAttribute(name) {
       const attribute = this.getAttributeNode(name);
+      const before = String(name) === "slot" || String(name) === "name" ? assignedSlotFor(this) : null;
       if (attribute) {
         this.attributes.removeNamedItem(name); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
         if (String(name) === "disabled") notifyDisabled(this);
+        if (String(name) === "slot" || String(name) === "name") signalReassignment(this, before);
       }
     }
     removeAttributeNS(namespaceURI, localName) {
@@ -1381,6 +1393,33 @@ export function createTree(events = {}) {
     Object.defineProperties(Class.prototype, properties);
   }
 
+  // ARIAMixin: every one of these reflects to its attribute, and reads back
+  // `null` rather than `""` when the attribute is absent. `internals`' copies
+  // are deliberately *not* these — those are defaults the element carries
+  // without writing anything into the markup.
+  const ARIA_PROPERTIES = [
+    "role", "ariaAtomic", "ariaAutoComplete", "ariaBrailleLabel", "ariaBrailleRoleDescription", "ariaBusy",
+    "ariaChecked", "ariaColCount", "ariaColIndex", "ariaColSpan", "ariaCurrent", "ariaDescription",
+    "ariaDisabled", "ariaExpanded", "ariaHasPopup", "ariaHidden", "ariaInvalid", "ariaKeyShortcuts",
+    "ariaLabel", "ariaLevel", "ariaLive", "ariaModal", "ariaMultiLine", "ariaMultiSelectable",
+    "ariaOrientation", "ariaPlaceholder", "ariaPosInSet", "ariaPressed", "ariaReadOnly", "ariaRelevant",
+    "ariaRequired", "ariaRoleDescription", "ariaRowCount", "ariaRowIndex", "ariaRowSpan", "ariaSelected",
+    "ariaSetSize", "ariaSort", "ariaValueMax", "ariaValueMin", "ariaValueNow", "ariaValueText",
+  ];
+
+  for (const property of ARIA_PROPERTIES) {
+    const attribute = property === "role" ? "role" : `aria-${property.slice(4).toLowerCase()}`;
+    Object.defineProperty(Element.prototype, property, {
+      get() { return this.getAttribute(attribute); },
+      set(value) {
+        if (value === null || value === undefined) this.removeAttribute(attribute);
+        else this.setAttribute(attribute, String(value));
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  }
+
   installReflectors(HTMLElement,
     { id: "id", className: "class", title: "title", lang: "lang", dir: "dir", slot: "slot" },
     { hidden: "hidden", inert: "inert" });
@@ -1732,6 +1771,19 @@ export function createTree(events = {}) {
     }
   }
 
+  // A node whose `slot` changed, or a slot whose `name` did: the slot that lost
+  // it hears first, then the one that took it.
+  function signalReassignment(element, before) {
+    if (element instanceof HTMLSlotElement) {
+      signalSlotChange(element.parentElement);
+      return;
+    }
+    const after = assignedSlotFor(element);
+    if (before === after) return;
+    before?._signalChange();
+    after?._signalChange();
+  }
+
   // Every slot whose assignment a change to `host`'s children could alter.
   function signalSlotChange(host) {
     const root = host?.[SHADOW_ROOT];
@@ -1743,6 +1795,10 @@ export function createTree(events = {}) {
     constructor(name, ownerDocument) {
       super(name, ownerDocument);
       this[TEMPLATE_CONTENT] = new DocumentFragment(ownerDocument);
+      // Inert: a template's content belongs to no browsing context, so a custom
+      // element written inside one is not upgraded and is not `:defined` until
+      // the content is cloned into a tree that is.
+      this[TEMPLATE_CONTENT][INERT] = true;
     }
 
     // `[SameObject] readonly attribute DocumentFragment content`: an own data
@@ -1793,6 +1849,12 @@ export function createTree(events = {}) {
 
   Object.defineProperties(Element.prototype, {
     attachShadow: { value(options = {}) {
+      // The specification's list, plus any valid custom element name. An
+      // `<input>` cannot host a root, and a component that tries deserves to
+      // hear so rather than to end up with a root nothing renders.
+      if (!SHADOW_HOSTS.has(this.localName) && !(this.namespaceURI === HTML_NAMESPACE && CUSTOM_NAME.test(this.localName))) {
+        throw domError("NotSupportedError", `<${this.localName}> cannot host a shadow root.`);
+      }
       if (this[SHADOW_ROOT]) throw domError("NotSupportedError", "This element already hosts a shadow root.");
       const mode = options.mode;
       if (mode !== "open" && mode !== "closed") throw new TypeError("attachShadow requires mode 'open' or 'closed'.");
@@ -2120,6 +2182,7 @@ export function createTree(events = {}) {
 
   function isDefined(element) {
     if (element.namespaceURI !== HTML_NAMESPACE || !CUSTOM_NAME.test(element.localName)) return true;
+    if (element.getRootNode()?.[INERT]) return false;
     return slots(element).customDefined === true;
   }
 

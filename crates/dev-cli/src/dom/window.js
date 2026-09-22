@@ -77,7 +77,25 @@ class DomFormData extends NativeFormData {
 }
 
 let activeElement = body;
-Object.defineProperty(document, "activeElement", { get: () => activeElement });
+
+// The focused element as *this* tree sees it. Focus inside a shadow root is
+// reported to the document as the host; the root reports the element itself.
+function focusedIn(scope) {
+  let node = activeElement;
+  while (node) {
+    const root = node.getRootNode();
+    if (root === scope) return node;
+    if (!(root instanceof tree.ShadowRoot)) return scope === document ? node : null;
+    node = root.host;
+  }
+  return null;
+}
+
+Object.defineProperty(document, "activeElement", { get: () => focusedIn(document) });
+Object.defineProperty(tree.ShadowRoot.prototype, "activeElement", {
+  get() { return focusedIn(this); },
+  configurable: true,
+});
 
 function isFocusable(element) {
   if (!element.isConnected || element.disabled || element.localName === "input" && element.type === "hidden") return false;

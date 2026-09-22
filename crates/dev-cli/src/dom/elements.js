@@ -102,7 +102,32 @@ export function createElements(tree) {
     const oldValue = this.getAttribute(name);
     originalSetAttribute.call(this, name, value);
     const newValue = this.getAttribute(name);
-    if (oldValue !== newValue && observed(this).includes(name)) react(this, "attributeChangedCallback", name, oldValue, newValue);
+    if (oldValue !== newValue && observed(this).includes(name)) react(this, "attributeChangedCallback", name, oldValue, newValue, null);
+  };
+
+  // The namespaced pair, which reports the *local* name and the namespace: an
+  // `observedAttributes` entry names an attribute, not a qualified name.
+  const originalSetAttributeNS = Element.prototype.setAttributeNS;
+  Element.prototype.setAttributeNS = function (namespaceURI, qualifiedName, value) {
+    const namespace = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+    const localName = String(qualifiedName).split(":").pop();
+    const oldValue = this.getAttributeNS(namespace, localName);
+    originalSetAttributeNS.call(this, namespaceURI, qualifiedName, value);
+    const newValue = this.getAttributeNS(namespace, localName);
+    if (oldValue !== newValue && observed(this).includes(localName)) {
+      react(this, "attributeChangedCallback", localName, oldValue, newValue, namespace);
+    }
+  };
+
+  const originalRemoveAttributeNS = Element.prototype.removeAttributeNS;
+  Element.prototype.removeAttributeNS = function (namespaceURI, localName) {
+    const namespace = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+    const name = String(localName);
+    const oldValue = this.getAttributeNS(namespace, name);
+    originalRemoveAttributeNS.call(this, namespaceURI, localName);
+    if (oldValue !== null && observed(this).includes(name)) {
+      react(this, "attributeChangedCallback", name, oldValue, null, namespace);
+    }
   };
 
   const originalRemoveAttribute = Element.prototype.removeAttribute;
@@ -110,7 +135,7 @@ export function createElements(tree) {
     name = String(name);
     const oldValue = this.getAttribute(name);
     originalRemoveAttribute.call(this, name);
-    if (oldValue !== null && observed(this).includes(name)) react(this, "attributeChangedCallback", name, oldValue, null);
+    if (oldValue !== null && observed(this).includes(name)) react(this, "attributeChangedCallback", name, oldValue, null, null);
   };
 
   class CustomElementRegistry {

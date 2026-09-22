@@ -3449,11 +3449,13 @@ fn test_dom_declarative_shadow_roots_attach_only_through_set_html_unsafe() {
          });\n\
          test('nested declarative roots attach, a repeated one is dropped', () => {\n\
            const nested = document.createElement('div');\n\
-           nested.setHTMLUnsafe('<a><template shadowrootmode=\"open\"><b><template shadowrootmode=\"open\"><u>deep</u></template></b></template></a>');\n\
+           // Only an element that may host a root is used: `<a>` and `<b>` may\n\
+           // not, here or in a browser.\n\
+           nested.setHTMLUnsafe('<section><template shadowrootmode=\"open\"><div><template shadowrootmode=\"open\"><u>deep</u></template></div></template></section>');\n\
            const inner = nested.firstElementChild.shadowRoot.firstElementChild;\n\
-           assertEquals([inner.localName, inner.shadowRoot.innerHTML], ['b', '<u>deep</u>']);\n\
+           assertEquals([inner.localName, inner.shadowRoot.innerHTML], ['div', '<u>deep</u>']);\n\
            const twice = document.createElement('div');\n\
-           twice.setHTMLUnsafe('<s><template shadowrootmode=\"open\"><i>1</i></template><template shadowrootmode=\"open\"><i>2</i></template></s>');\n\
+           twice.setHTMLUnsafe('<span><template shadowrootmode=\"open\"><i>1</i></template><template shadowrootmode=\"open\"><i>2</i></template></span>');\n\
            assertEquals([twice.firstElementChild.shadowRoot.innerHTML, twice.firstElementChild.childNodes.length], ['<i>1</i>', 0]);\n\
          });\n\
          test('a manual-assignment root holds only what it was assigned', () => {\n\
