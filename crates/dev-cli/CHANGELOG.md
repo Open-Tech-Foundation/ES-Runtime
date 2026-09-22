@@ -340,6 +340,12 @@ is the point, since none of the three has any business in a deployment.
   first `title` element, creating one in the head when there is none.
 
 ### Changed
+- Record the strict parser's treatment of unclosed custom elements as the
+  decision it is (`docs/DECISIONS.md` D93). `<my-widget><my-widget>` is refused,
+  where a browser nests and auto-closes — the most common way a ported fixture
+  meets the strictness. Auto-closing hyphenated names only, and browser-style
+  recovery generally, were both weighed and rejected; the DOM docs and the site
+  now say so, so a port that hits it knows it is a fixture to fix.
 - Bump `oxc` 0.144 → 0.146, the newest release the pinned toolchain builds:
   0.147 and later require rustc 1.96. Nothing in the compiler's behaviour
   changed, and neither auto-accessors nor standard decorators are lowered

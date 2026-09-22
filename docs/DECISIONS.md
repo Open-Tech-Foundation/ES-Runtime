@@ -661,6 +661,20 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D93 — The test DOM's parser stays strict, including for custom elements · *Proposed (2026-09-23)*
+
+**Context:** `esdev test --dom` parses HTML strictly: an unclosed element is a byte-offset error rather than something to repair, which is the property the whole DOM is built on (D-numbered nowhere until now, but stated in `docs/ESDEV-DOM.md` and on the site since the parser landed). Framework fixtures do not always oblige. Vue's `provide/inject` tests write `<my-provider><my-provider>` — a custom element opened twice and never closed — and a browser nests the second inside the first and auto-closes both at the end of the parse. Eight filings from one port traced back to this single mechanism, and custom-element-heavy SSR output will hit it more often than that: an unclosed hyphenated tag is a typo a browser forgives silently.
+
+**Decision (maintainer sign-off pending):** **no change to the parser.** An unclosed element is refused whether its name has a hyphen in it or not. The alternatives were weighed and rejected:
+- *Auto-close hyphenated (custom) element names only.* It buys the fixtures that hurt most and keeps built-ins strict — but it makes strictness depend on whether a name contains a hyphen, which is not a distinction anyone can hold in their head, and it would mean this DOM repairs exactly the markup a component author is most likely to have got wrong.
+- *Auto-close like a browser, generally.* This is the HTML parser's own error recovery, and implementing it means implementing the recovery algorithm — the thing the strict parser exists not to be. It also gives up what the strictness buys: a fixture that a browser silently reinterprets is a fixture whose author does not know what tree they wrote.
+
+What ships instead is the refusal's own message, which already names the byte offset, and this record plus a stated limit in the DOM docs so a port that hits it knows it is a fixture to fix rather than a bug to file.
+
+**Consequences:** markup that a browser repairs is refused here, and a suite ported from a browser runner may need its fixtures closed before it will parse. That cost is real and is paid deliberately: the same strictness is what makes a malformed-markup test in the behaviour matrix a *documented limit* rather than a silent difference, and it is one of the two cases where this DOM knowingly answers differently from Chrome (the other being layout geometry). **Not solved here:** nothing about the *parse* changes, so a fixture with unclosed custom tags still needs editing; if that proves common enough to reconsider, the narrow hyphenated-name form is the option to revisit first, and it should arrive with a count of how often it was hit rather than an intuition. Documented per D27 (`docs/ESDEV-DOM.md`, site `esdev/test/dom`, `CHANGELOG`).
+
+---
+
 ### D92 — OTF Web starters ship in `esdev create`, and `create` learns axes · *Proposed (2026-09-19)* · *extends D64, D70, D72, D76*
 
 **Context:** `esdev create` scaffolds this repository's own stack, while OTF Web — the framework built on this runtime, whose `otfw` CLI already runs on `esdev` in its own checkout (`#!/usr/bin/env esdev`, `runtime:` modules only) — scaffolds from a separate `create-web` package with its own prompt system (`prompts` + `kolorist`). Two scaffolders for one runtime: a user choosing between them has to know which binary owns their workflow, and the OTF one cannot run where only `esdev` is installed. The OTF templates come with three axes `create` does not have — language (js|ts), styling (plain|tailwind, apps only) and a demo blog (docs only) — and a library test that needs a DOM, the OTF compiler, and the Bun runner.

@@ -148,6 +148,16 @@ active-formatting-element repair, adoption agency algorithm or quirks mode.
 That makes a bad test fixture fail at the source rather than become a different
 tree behind the test's back.
 
+**A custom element is not an exception.** `<my-provider><my-provider>` — a
+hyphenated tag opened twice and never closed — is refused, where a browser nests
+the second inside the first and closes both at the end of the parse. This is the
+most common way a ported fixture hits the strictness, and it stays refused on
+purpose: strictness that depended on whether a name contains a hyphen would be a
+rule nobody can hold in their head, and the markup a component author is most
+likely to have got wrong is the last markup to repair silently. A suite ported
+from a browser runner may need its fixtures closed before it will parse. See
+[D93](DECISIONS.md) for what was weighed.
+
 Two entry points:
 
 1. **Document parse** — a full string to a document, used by `esdev test` when a test declares starting HTML, and by hydration tests that feed in SSG output.

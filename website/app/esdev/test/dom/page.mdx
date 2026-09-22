@@ -54,8 +54,12 @@ Malformed input is refused with a diagnostic instead of being repaired:
 | `<p><i>unclosed` | `SyntaxError` |
 | `<b><i>x</b></i>` | `SyntaxError` |
 | `<table><td>x</td></table>` | `SyntaxError` — a cell needs a row |
+| `<my-widget><my-widget>` | `SyntaxError` — a custom element closes like any other |
 
 A test that depends on parser recovery does not state the DOM tree it expects.
+That includes custom elements: an unclosed `<my-widget>` is refused rather than
+nested and auto-closed, so a fixture ported from a browser runner may need its
+tags closed first.
 
 ## Web components
 
