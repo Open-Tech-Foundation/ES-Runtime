@@ -2846,6 +2846,467 @@
       "drift": false
     },
     {
+      "group": "components",
+      "name": "adoption-and-a-shadow-sweep-report-once",
+      "chrome": {
+        "result": [
+          [
+            "disconnected"
+          ],
+          [
+            "adopted",
+            "connected"
+          ],
+          [
+            true,
+            true
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "disconnected"
+          ],
+          [
+            "adopted",
+            "connected"
+          ],
+          [
+            true,
+            true
+          ]
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          [
+            "disconnected"
+          ],
+          [
+            "adopted",
+            "connected"
+          ],
+          [
+            true,
+            true
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-closed-root-serializes-when-it-is-asked-for",
+      "chrome": {
+        "result": [
+          "<div></div><div></div>",
+          true,
+          true,
+          false
+        ]
+      },
+      "esdev": {
+        "result": [
+          "<div></div><div></div>",
+          true,
+          true,
+          false
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "<div></div><div></div>",
+          false,
+          false,
+          false
+        ]
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-reset-clears-a-custom-elements-value",
+      "chrome": {
+        "result": [
+          [
+            [
+              "f",
+              "changed"
+            ]
+          ],
+          [
+            [
+              "f",
+              "changed"
+            ]
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              "f",
+              "changed"
+            ]
+          ],
+          [
+            [
+              "f",
+              "changed"
+            ]
+          ]
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-disabled-attribute-and-a-throwing-constructor",
+      "chrome": {
+        "result": [
+          [
+            true,
+            false
+          ],
+          null,
+          [
+            true,
+            false
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            true,
+            false
+          ],
+          null,
+          [
+            true,
+            false
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [],
+          "Error",
+          "threw"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [],
+          null,
+          [
+            true,
+            true
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "moveBefore-keeps-state-and-connection",
+      "chrome": {
+        "result": [
+          [
+            1,
+            1,
+            [
+              "disconnected",
+              "connected"
+            ]
+          ],
+          [
+            [
+              "input",
+              "matrix-moved-19"
+            ],
+            "kept",
+            [
+              "disconnected",
+              "connected"
+            ]
+          ],
+          [
+            "HierarchyRequestError",
+            "NotFoundError"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            1,
+            1,
+            [
+              "disconnected",
+              "connected"
+            ]
+          ],
+          [
+            [
+              "input",
+              "matrix-moved-19"
+            ],
+            "kept",
+            [
+              "disconnected",
+              "connected"
+            ]
+          ],
+          [
+            "HierarchyRequestError",
+            "NotFoundError"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": "missing"
+      },
+      "jsdom": {
+        "result": "missing"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "a-document-is-parsed-from-markup",
+      "chrome": {
+        "result": [
+          "p",
+          2,
+          "<i>in</i>",
+          null,
+          "undefined"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "p",
+          2,
+          "<i>in</i>",
+          null,
+          "undefined"
+        ]
+      },
+      "happy-dom": {
+        "result": "missing"
+      },
+      "jsdom": {
+        "result": "missing"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-dialog-opens-closes-and-returns",
+      "chrome": {
+        "result": [
+          [
+            false,
+            "",
+            false
+          ],
+          [
+            true,
+            true,
+            false
+          ],
+          [
+            false,
+            "ok"
+          ],
+          [
+            true,
+            true
+          ],
+          [],
+          "InvalidStateError"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            false,
+            "",
+            false
+          ],
+          [
+            true,
+            true,
+            false
+          ],
+          [
+            false,
+            "ok"
+          ],
+          [
+            true,
+            true
+          ],
+          [],
+          "InvalidStateError"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            false,
+            "",
+            false
+          ],
+          [
+            true,
+            true,
+            false
+          ],
+          [
+            false,
+            "ok"
+          ],
+          [
+            true,
+            false
+          ],
+          [
+            "close:ok",
+            "close:"
+          ],
+          null
+        ]
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-popover-toggles-and-reports-its-state",
+      "chrome": {
+        "result": [
+          [
+            "auto",
+            null
+          ],
+          true,
+          false,
+          [
+            true,
+            true
+          ],
+          [
+            "before:closed->open",
+            "before:open->closed",
+            "before:closed->open",
+            "before:open->closed"
+          ],
+          "NotSupportedError"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "auto",
+            null
+          ],
+          true,
+          false,
+          [
+            true,
+            true
+          ],
+          [
+            "before:closed->open",
+            "before:open->closed",
+            "before:closed->open",
+            "before:open->closed"
+          ],
+          "NotSupportedError"
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "a-command-button-acts-on-the-element-it-names",
+      "chrome": {
+        "result": [
+          [
+            [
+              "command",
+              "show-popover",
+              true,
+              true
+            ]
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              "command",
+              "show-popover",
+              true,
+              true
+            ]
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "forms",
       "name": "input-indeterminate-is-non-reflecting-state",
       "chrome": {
@@ -3150,7 +3611,7 @@
     }
   ],
   "summary": {
-    "match": 70,
+    "match": 79,
     "intentional-limit": 2,
     "drift": 0
   }

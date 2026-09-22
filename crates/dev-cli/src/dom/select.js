@@ -68,7 +68,7 @@ function splitNth(source, at, argument) {
 // rendered page. They are parsed and never match.
 const NEVER_MATCH = new Set([
   "hover", "active", "visited", "focus-visible", "autofill", "user-valid", "user-invalid",
-  "modal", "fullscreen", "popover-open", "picture-in-picture",
+  "fullscreen", "picture-in-picture",
 ]);
 
 function parseNth(source, at, argument) {
@@ -172,7 +172,7 @@ function parseCompound(source, offset, text) {
         "focus", "scope", "defined", "checked", "disabled", "enabled", "required", "optional", "link",
         // Computed from the tree or from control state.
         "any-link", "target", "focus-within", "valid", "invalid", "indeterminate", "placeholder-shown",
-        "read-only", "read-write", "default", "open",
+        "read-only", "read-write", "default", "open", "modal", "popover-open",
         // Real selectors with no answer in a DOM with no pointer, no history
         // and no rendering. They parse — a stylesheet is full of them — and
         // they match nothing, which is the same answer a browser gives when
@@ -382,6 +382,10 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
         return false;
       }
       if (simple.type === "open") return element.hasAttribute("open");
+      // State rather than rendering: a modal dialog and an open popover are
+      // knowable without a top layer to put them in.
+      if (simple.type === "modal") return element._esdevIsModal?.() === true;
+      if (simple.type === "popover-open") return element._esdevPopoverOpen?.() === true;
       if (simple.type === "state") return customStates(element)?.has(simple.name) === true;
       if (simple.type.endsWith("child")) {
         const all = elementSiblings(element);

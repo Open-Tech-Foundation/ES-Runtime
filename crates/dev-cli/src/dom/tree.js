@@ -25,6 +25,9 @@ const MANUAL_ASSIGNED = Symbol("esdev DOM manually assigned nodes");
 const SLOT_PENDING = Symbol("esdev DOM pending slotchange");
 const FORM_DISABLED = Symbol("esdev DOM last reported disabled state");
 const INERT = Symbol("esdev DOM inert subtree");
+const DIALOG_MODAL = Symbol("esdev DOM dialog modality");
+const DIALOG_RETURN = Symbol("esdev DOM dialog return value");
+const POPOVER_OPEN = Symbol("esdev DOM popover state");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
@@ -77,7 +80,7 @@ function asNodes(value, document, NodeClass) {
 }
 
 export function createTree(events = {}) {
-  const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {} } = events;
+  const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {}, CommandEvent = class {} } = events;
   const customConstruction = [];
   // Set by the custom-element registry, which is the only thing that knows
   // which class was defined under which name.
@@ -346,6 +349,58 @@ export function createTree(events = {}) {
     hasAttributes() { return this instanceof Element && this.attributes.length !== 0; }
 
     appendChild(node) { return this.insertBefore(node, null); }
+
+    // A move that keeps state: no removing and re-inserting, so nothing is
+    // disconnected and reconnected, no custom element reaction runs, and
+    // whatever an element was holding — a control's value, a `<details>` being
+    // open — it still holds. Both nodes must already be in this tree.
+    moveBefore(node, child) {
+      if (!(node instanceof Node)) throw new TypeError("moveBefore expects a Node");
+      if (child !== null && child !== undefined && !(child instanceof Node)) {
+        throw new TypeError("moveBefore expects a Node or null as the reference child");
+      }
+      const reference = child ?? null;
+      if (isInclusiveAncestor(node, this)) {
+        throw domError("HierarchyRequestError", "A node cannot be moved into one of its descendants.");
+      }
+      if (reference !== null && reference.parentNode !== this) {
+        throw domError("NotFoundError", "The reference child is not a child of this node.");
+      }
+      // "Already in this tree" is the whole point: a move that would connect or
+      // disconnect the node is an insertion, and `insertBefore` is that.
+      if (node.parentNode === null || node.getRootNode() !== this.getRootNode()) {
+        throw domError("HierarchyRequestError", "moveBefore only moves a node that is already in this tree.");
+      }
+      this._validateInsertion(node, reference, null);
+      if (node === reference) return node;
+      const from = node.parentNode;
+      const state = slots(node);
+      const previous = state.previous;
+      const next = state.next;
+      const index = childIndex(node);
+      // The pointers are moved here rather than through insert and remove,
+      // because those are where the reactions live and a move runs none.
+      const leaving = slots(from);
+      if (previous) slots(previous).next = next; else leaving.first = next;
+      if (next) slots(next).previous = previous; else leaving.last = previous;
+      (from.ownerDocument ?? from)._adjustRanges?.remove(from, node, index);
+      (from.ownerDocument ?? from)._queueMutation?.({ type: "childList", target: from, addedNodes: [], removedNodes: [node], previousSibling: previous, nextSibling: next });
+      const arriving = slots(this);
+      const before = reference;
+      const after = before ? slots(before).previous : arriving.last;
+      state.parent = this;
+      state.previous = after;
+      state.next = before;
+      if (after) slots(after).next = node; else arriving.first = node;
+      if (before) slots(before).previous = node; else arriving.last = node;
+      (this.ownerDocument ?? this)._adjustRanges?.insert(this, childIndex(node));
+      (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes: [node], removedNodes: [], previousSibling: after, nextSibling: before });
+      this._touch();
+      from._touch();
+      signalSlotChange(from instanceof Element ? from : null);
+      signalSlotChange(this instanceof Element ? this : null);
+      return node;
+    }
 
     insertBefore(node, child) {
       if (!(node instanceof Node)) throw new TypeError("insertBefore expects a Node");
@@ -911,17 +966,80 @@ export function createTree(events = {}) {
     }
   }
 
+  // `command` and `commandfor`: the button's activation behaviour dispatches a
+  // CommandEvent at the element it names and performs the built-in command.
+  function runCommand(button) {
+    const id = button.getAttribute("commandfor");
+    if (id === null) return;
+    const root = button.getRootNode();
+    const target = root?.getElementById?.(id) ?? button.ownerDocument.getElementById(id);
+    if (!target) return;
+    const command = (button.getAttribute("command") ?? "").trim();
+    const event = new CommandEvent("command", { bubbles: false, cancelable: true, source: button, command });
+    if (!target.dispatchEvent(event)) return;
+    const named = command.toLowerCase();
+    if (named === "show-modal") target.showModal?.();
+    else if (named === "close") target.close?.();
+    else if (named === "request-close") target.requestClose?.();
+    else if (named === "show-popover") target.showPopover?.();
+    else if (named === "hide-popover") target.hidePopover?.();
+    else if (named === "toggle-popover") target.togglePopover?.();
+  }
+
   class HTMLButtonElement extends HTMLElement {
     click() {
       if (this.disabled) return;
       const event = new MouseEvent("click", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event)) return;
+      runCommand(this);
       if (this.type === "submit") this.form?.requestSubmit(this);
       if (this.type === "reset") this.form?.reset();
     }
   }
 
-  class HTMLDialogElement extends HTMLElement {}
+  // `close` and `toggle` are fired from a queued task, not from the call that
+  // caused them — which is observable: neither has happened yet when the
+  // function that opened or closed the thing returns.
+  function queueElementTask(callback) {
+    setTimeout(callback, 0);
+  }
+
+  // A dialog's *state* needs no rendering: what is open, what it returned, and
+  // which events that produced. There is no top layer and no backdrop here, so
+  // `showModal` differs from `show` in the modal flag and in nothing visual.
+  class HTMLDialogElement extends HTMLElement {
+    show() {
+      if (this.open) return;
+      this.setAttribute("open", "");
+      this[DIALOG_MODAL] = false;
+    }
+    showModal() {
+      if (this.open) {
+        throw domError("InvalidStateError", "This dialog is already open.");
+      }
+      if (!this.isConnected) {
+        throw domError("InvalidStateError", "A dialog must be in the document to be shown modally.");
+      }
+      this.setAttribute("open", "");
+      this[DIALOG_MODAL] = true;
+    }
+    close(returnValue) {
+      if (!this.open) return;
+      if (returnValue !== undefined) this.returnValue = String(returnValue);
+      this.removeAttribute("open");
+      this[DIALOG_MODAL] = false;
+      queueElementTask(() => this.dispatchEvent(new Event("close")));
+    }
+    requestClose(returnValue) {
+      if (!this.open) return;
+      const event = new Event("cancel", { cancelable: true });
+      if (!this.dispatchEvent(event)) return;
+      this.close(returnValue);
+    }
+    get returnValue() { return this[DIALOG_RETURN] ?? ""; }
+    set returnValue(value) { this[DIALOG_RETURN] = String(value); }
+    _esdevIsModal() { return this[DIALOG_MODAL] === true && this.open; }
+  }
   class HTMLDivElement extends HTMLElement {}
   class HTMLCanvasElement extends HTMLElement {}
   class HTMLAnchorElement extends HTMLElement {}
@@ -1049,13 +1167,10 @@ export function createTree(events = {}) {
       const event = new Event("reset", { bubbles: true, cancelable: true });
       if (!this.dispatchEvent(event)) return;
       for (const control of this.elements) {
-        if (isFormAssociated(control)) {
-          // Back to no value before the callback, so an element that sets one in
-          // `formResetCallback` wins and one that does nothing submits nothing.
-          control[FORM_VALUE] = null;
-          control[FORM_STATE] = undefined;
-          control.formResetCallback?.();
-        }
+        // Only the callback: the submission value is the element's own state,
+        // and clearing it is what its `formResetCallback` is for. Verified
+        // against Chrome, which keeps the value across a reset.
+        if (isFormAssociated(control)) control.formResetCallback?.();
         if (control instanceof HTMLSelectElement) for (const option of control.options) option[SELECTED] = null;
         if (control instanceof HTMLTextAreaElement) control[TEXTAREA_VALUE] = null;
         if (control instanceof HTMLInputElement) { control[INPUT_VALUE] = null; control[INPUT_CHECKED] = null; }
@@ -1649,6 +1764,77 @@ export function createTree(events = {}) {
     scroll: { value() {}, writable: true, configurable: true },
     scrollTo: { value() {}, writable: true, configurable: true },
     scrollBy: { value() {}, writable: true, configurable: true },
+  });
+
+  // The popover API, as state and events. There is no top layer to put anything
+  // in, so what is observable is what is implemented: which popover is open,
+  // `:popover-open`, and the `beforetoggle`/`toggle` events either side of the
+  // change.
+  const POPOVER_VALUES = new Set(["auto", "manual", "hint"]);
+
+  function popoverKind(element) {
+    const written = element.getAttribute("popover");
+    if (written === null) return null;
+    const value = written.toLowerCase();
+    if (value === "") return "auto";
+    return POPOVER_VALUES.has(value) ? value : "manual";
+  }
+
+  function toggleEvents(element, from, to) {
+    const before = new Event("beforetoggle", { cancelable: true });
+    before.oldState = from;
+    before.newState = to;
+    if (!element.dispatchEvent(before)) return false;
+    queueElementTask(() => {
+      const after = new Event("toggle");
+      after.oldState = from;
+      after.newState = to;
+      element.dispatchEvent(after);
+    });
+    return true;
+  }
+
+  Object.defineProperties(HTMLElement.prototype, {
+    popover: {
+      get() {
+        const value = popoverKind(this);
+        return value === null ? null : value;
+      },
+      set(value) {
+        if (value === null || value === undefined) this.removeAttribute("popover");
+        else this.setAttribute("popover", String(value));
+      },
+      enumerable: true,
+      configurable: true,
+    },
+    showPopover: { value() {
+      if (popoverKind(this) === null) throw domError("NotSupportedError", "This element is not a popover.");
+      if (!this.isConnected) throw domError("InvalidStateError", "A popover must be in the document to be shown.");
+      if (this[POPOVER_OPEN]) return;
+      // An auto popover closes the other auto popovers, as only one light
+      // dismiss stack exists.
+      if (popoverKind(this) === "auto") {
+        const document = this.ownerDocument;
+        for (const other of collect(document, (element) => element[POPOVER_OPEN] === true)) {
+          if (other !== this && popoverKind(other) === "auto") other.hidePopover();
+        }
+      }
+      if (!toggleEvents(this, "closed", "open")) return;
+      this[POPOVER_OPEN] = true;
+    }, writable: true, configurable: true },
+    hidePopover: { value() {
+      if (popoverKind(this) === null) throw domError("NotSupportedError", "This element is not a popover.");
+      if (!this[POPOVER_OPEN]) return;
+      if (!toggleEvents(this, "open", "closed")) return;
+      this[POPOVER_OPEN] = false;
+    }, writable: true, configurable: true },
+    togglePopover: { value(force) {
+      const wanted = force === undefined ? !this[POPOVER_OPEN] : Boolean(force);
+      if (wanted) this.showPopover();
+      else this.hidePopover();
+      return this[POPOVER_OPEN] === true;
+    }, writable: true, configurable: true },
+    _esdevPopoverOpen: { value() { return this[POPOVER_OPEN] === true; } },
   });
 
   Object.defineProperty(HTMLElement.prototype, "attachInternals", {

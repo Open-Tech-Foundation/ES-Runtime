@@ -140,6 +140,17 @@ export function createEvents() {
   class ClipboardEvent extends Event {
     constructor(type, options = {}) { super(type, options); this.clipboardData = options.clipboardData ?? null; }
   }
+  // `CommandEvent` is what a `<button command=… commandfor=…>` dispatches at the
+  // element it names, and what a component listens for instead of wiring a
+  // click handler to an id.
+  class CommandEvent extends Event {
+    constructor(type, options = {}) {
+      super(type, options);
+      this.source = options.source ?? null;
+      this.command = String(options.command ?? "");
+    }
+  }
+
   class SubmitEvent extends Event {
     constructor(type, options = {}) { super(type, options); this.submitter = options.submitter ?? null; }
   }
@@ -244,7 +255,7 @@ export function createEvents() {
   }));
 
   const INTERFACES = new Map(
-    Object.entries({ Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, SubmitEvent, ErrorEvent })
+    Object.entries({ Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, SubmitEvent, ErrorEvent })
       .map(([name, constructor]) => [name.toLowerCase(), constructor]),
   );
 
@@ -284,5 +295,5 @@ export function createEvents() {
     return target;
   }
 
-  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
+  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
 }

@@ -116,6 +116,21 @@ export function createElements(tree) {
     return result;
   };
 
+  // A move keeps the node's state and its connection, and still reports the
+  // reactions: Chrome fires `disconnectedCallback` and then `connectedCallback`
+  // around a `moveBefore`, and a component that counts them would otherwise be
+  // wrong about how many times it was connected.
+  const originalMoveBefore = Node.prototype.moveBefore;
+  Node.prototype.moveBefore = function (node, child) {
+    const connected = node?.isConnected === true;
+    const result = originalMoveBefore.call(this, node, child);
+    if (connected) {
+      walk(node, (element) => react(element, "disconnectedCallback"));
+      walk(node, (element) => react(element, "connectedCallback"));
+    }
+    return result;
+  };
+
   const originalAdoptNode = Document.prototype.adoptNode;
   Document.prototype.adoptNode = function (node) {
     const oldDocument = node.ownerDocument;

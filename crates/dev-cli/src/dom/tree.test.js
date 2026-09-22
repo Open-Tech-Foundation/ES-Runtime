@@ -1,7 +1,11 @@
 import { expect, test } from "runtime:test";
+import { createEvents } from "./events.js";
 import { createTree } from "./tree.js";
 
-const { CDATASection, CharacterData, Comment, DOMRect, Document, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, isDefined, setCurrentDocument } = createTree();
+// With the event classes, because a dialog closing and a popover toggling
+// dispatch events — and a tree built without them would fail asynchronously.
+
+const { CDATASection, CharacterData, Comment, DOMRect, Document, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, isDefined, setCurrentDocument } = createTree(createEvents());
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -682,4 +686,67 @@ test("a template's content is inert until it is cloned into a tree", () => {
   expect(isDefined(loose)).toBe(false);
   // A plain element is defined by being built in, wherever it sits.
   expect(isDefined(document.createElement("div"))).toBe(true);
+});
+
+test("moves a node without disconnecting it", () => {
+  const document = setCurrentDocument(new Document());
+  const from = document.createElement("div");
+  const to = document.createElement("div");
+  const root = document.createElement("main");
+  document.appendChild(root);
+  root.append(from, to);
+  const moved = document.createElement("i");
+  const second = document.createElement("b");
+  from.append(moved, second);
+
+  to.moveBefore(moved, null);
+  expect([from.children.length, to.children.length]).toEqual([1, 1]);
+  expect(moved.parentElement).toBe(to);
+  expect(moved.isConnected).toBe(true);
+  to.moveBefore(second, moved);
+  expect(Array.from(to.children, (child) => child.localName)).toEqual(["b", "i"]);
+  // Moving a node before itself is a move to where it already is.
+  expect(to.moveBefore(second, second)).toBe(second);
+  expect(Array.from(to.children, (child) => child.localName)).toEqual(["b", "i"]);
+  const detached = document.createElement("span");
+  expect(() => to.moveBefore(detached, null)).toThrow("already in this tree");
+  expect(() => to.moveBefore(moved, detached)).toThrow("not a child");
+  expect(() => moved.moveBefore(to, null)).toThrow("descendants");
+  expect(() => to.moveBefore("nope", null)).toThrow("Node");
+});
+
+test("opens and closes a dialog", () => {
+  const document = setCurrentDocument(new Document());
+  const dialog = document.createElement("dialog");
+  document.appendChild(dialog);
+
+  expect([dialog.open, dialog.returnValue]).toEqual([false, ""]);
+  dialog.show();
+  expect([dialog.open, dialog.hasAttribute("open")]).toEqual([true, true]);
+  dialog.close("ok");
+  expect([dialog.open, dialog.returnValue]).toEqual([false, "ok"]);
+  dialog.showModal();
+  expect(dialog.open).toBe(true);
+  expect(() => dialog.showModal()).toThrow("already open");
+  dialog.close();
+  expect(() => document.createElement("dialog").showModal()).toThrow("in the document");
+});
+
+test("toggles a popover and refuses one that is not", () => {
+  const document = setCurrentDocument(new Document());
+  const popover = document.createElement("div");
+  popover.setAttribute("popover", "");
+  document.appendChild(popover);
+  const states = [];
+  popover.addEventListener("beforetoggle", (event) => states.push(`${event.oldState}->${event.newState}`));
+
+  expect([popover.popover, document.createElement("div").popover]).toEqual(["auto", null]);
+  popover.showPopover();
+  expect(popover._esdevPopoverOpen()).toBe(true);
+  popover.hidePopover();
+  expect(popover._esdevPopoverOpen()).toBe(false);
+  expect(states).toEqual(["closed->open", "open->closed"]);
+  expect([popover.togglePopover(), popover._esdevPopoverOpen()]).toEqual([true, true]);
+  popover.hidePopover();
+  expect(() => document.createElement("div").showPopover()).toThrow("not a popover");
 });

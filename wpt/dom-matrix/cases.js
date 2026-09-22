@@ -1246,6 +1246,227 @@ export const cases = [
     },
   },
   {
+    group: "components",
+    name: "adoption-and-a-shadow-sweep-report-once",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("adopt");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        connectedCallback() { log.push("connected"); }
+        disconnectedCallback() { log.push("disconnected"); }
+        adoptedCallback() { log.push("adopted"); }
+      });
+      const element = document.createElement(name);
+      document.body.append(element);
+      log.length = 0;
+      document.adoptNode(element);
+      const same = log.slice();
+      log.length = 0;
+      const other = document.implementation.createHTMLDocument("other");
+      other.body.append(other.adoptNode(element));
+      const across = log.slice();
+      // A definition arriving late reaches inside a shadow root too.
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      const late = unique("shadow");
+      root.innerHTML = `<${late}></${late}>`;
+      const inside = root.firstElementChild;
+      window.customElements.define(late, class extends window.HTMLElement {
+        constructor() { super(); this.upgraded = true; }
+      });
+      return [same, across, [inside.upgraded === true, inside.matches(":defined")]];
+    },
+  },
+  {
+    group: "components",
+    name: "a-closed-root-serializes-when-it-is-asked-for",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const serializable = document.createElement("div");
+      serializable.attachShadow({ mode: "closed", serializable: true }).innerHTML = "<i>s</i>";
+      const named = document.createElement("div");
+      const namedRoot = named.attachShadow({ mode: "closed" });
+      namedRoot.innerHTML = "<b>n</b>";
+      document.body.append(serializable, named);
+      return [
+        document.body.getHTML(),
+        document.body.getHTML({ serializableShadowRoots: true }).includes("<i>s</i>"),
+        document.body.getHTML({ shadowRoots: [namedRoot] }).includes("<b>n</b>"),
+        document.body.getHTML({ serializableShadowRoots: true }).includes("<b>n</b>"),
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "a-reset-clears-a-custom-elements-value",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("resettable");
+      window.customElements.define(name, class extends window.HTMLElement {
+        static formAssociated = true;
+        constructor() { super(); this.internals = this.attachInternals(); }
+      });
+      const form = document.createElement("form");
+      const field = document.createElement(name);
+      field.setAttribute("name", "f");
+      form.append(field);
+      document.body.append(form);
+      field.internals.setFormValue("changed");
+      const before = Array.from(new window.FormData(form).entries());
+      form.reset();
+      return [before, Array.from(new window.FormData(form).entries())];
+    },
+  },
+  {
+    group: "components",
+    name: "a-disabled-attribute-and-a-throwing-constructor",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = unique("ownstate");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        static formAssociated = true;
+        formDisabledCallback(state) { log.push(state); }
+      });
+      const element = document.createElement(name);
+      document.body.append(element);
+      element.setAttribute("disabled", "");
+      element.removeAttribute("disabled");
+      const thrower = unique("thrower");
+      window.customElements.define(thrower, class extends window.HTMLElement {
+        constructor() { super(); throw new Error("boom"); }
+      });
+      const made = errorName(() => document.createElement(thrower));
+      const element2 = made === null ? document.createElement(thrower) : null;
+      return [log, made, element2 === null ? "threw" : [element2.localName === thrower, element2.matches(":defined")]];
+    },
+  },
+  {
+    group: "tree",
+    name: "moveBefore-keeps-state-and-connection",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      if (typeof document.body.moveBefore !== "function") return "missing";
+      const name = unique("moved");
+      const log = [];
+      window.customElements.define(name, class extends window.HTMLElement {
+        connectedCallback() { log.push("connected"); }
+        disconnectedCallback() { log.push("disconnected"); }
+      });
+      const from = document.createElement("div");
+      const to = document.createElement("div");
+      document.body.append(from, to);
+      const element = document.createElement(name);
+      const input = document.createElement("input");
+      from.append(element, input);
+      input.value = "kept";
+      log.length = 0;
+      to.moveBefore(element, null);
+      const moved = [from.children.length, to.children.length, log.slice()];
+      to.moveBefore(input, element);
+      const detached = document.createElement("span");
+      return [
+        moved,
+        [Array.from(to.children, (child) => child.localName), input.value, log.slice()],
+        [errorName(() => to.moveBefore(detached, null)), errorName(() => to.moveBefore(element, detached))],
+      ];
+    },
+  },
+  {
+    group: "parsing",
+    name: "a-document-is-parsed-from-markup",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      if (typeof window.Document.parseHTMLUnsafe !== "function") return "missing";
+      const parsed = window.Document.parseHTMLUnsafe(
+        '<p>one</p><div><template shadowrootmode="open"><i>in</i></template></div>',
+      );
+      return [
+        parsed.body.firstElementChild.localName,
+        parsed.body.children.length,
+        parsed.body.lastElementChild.shadowRoot?.innerHTML ?? "no root",
+        parsed.defaultView,
+        typeof window.ShadowRoot.parseHTMLUnsafe,
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "a-dialog-opens-closes-and-returns",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const dialog = document.createElement("dialog");
+      document.body.append(dialog);
+      const log = [];
+      dialog.addEventListener("close", () => log.push(`close:${dialog.returnValue}`));
+      dialog.addEventListener("cancel", () => log.push("cancel"));
+      const closed = [dialog.open, dialog.returnValue, dialog.matches(":modal")];
+      dialog.show();
+      const shown = [dialog.open, dialog.hasAttribute("open"), dialog.matches(":modal")];
+      dialog.close("ok");
+      const after = [dialog.open, dialog.returnValue];
+      dialog.showModal();
+      const modal = [dialog.open, dialog.matches(":modal")];
+      dialog.close();
+      return [closed, shown, after, modal, log, errorName(() => document.createElement("dialog").showModal())];
+    },
+  },
+  {
+    group: "components",
+    name: "a-popover-toggles-and-reports-its-state",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const popover = document.createElement("div");
+      popover.setAttribute("popover", "");
+      popover.id = "matrix-popover";
+      document.body.append(popover);
+      const log = [];
+      popover.addEventListener("beforetoggle", (event) => log.push(`before:${event.oldState}->${event.newState}`));
+      popover.addEventListener("toggle", (event) => log.push(`toggle:${event.oldState}->${event.newState}`));
+      const kinds = [popover.popover, document.createElement("div").popover];
+      popover.showPopover();
+      const open = popover.matches(":popover-open");
+      popover.hidePopover();
+      const closed = popover.matches(":popover-open");
+      const toggled = [popover.togglePopover(), popover.matches(":popover-open")];
+      popover.hidePopover();
+      return [kinds, open, closed, toggled, log, errorName(() => document.createElement("div").showPopover())];
+    },
+  },
+  {
+    group: "components",
+    name: "a-command-button-acts-on-the-element-it-names",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const popover = document.createElement("div");
+      popover.setAttribute("popover", "");
+      popover.id = "matrix-commanded";
+      const button = document.createElement("button");
+      button.setAttribute("command", "show-popover");
+      button.setAttribute("commandfor", "matrix-commanded");
+      document.body.append(popover, button);
+      const seen = [];
+      popover.addEventListener("command", (event) => {
+        seen.push([event.type, event.command, event.source === button, typeof window.CommandEvent === "function" && event instanceof window.CommandEvent]);
+      });
+      button.click();
+      const opened = popover.matches(":popover-open");
+      popover.hidePopover();
+      return [seen, opened];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

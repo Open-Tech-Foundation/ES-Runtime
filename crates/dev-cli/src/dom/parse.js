@@ -190,6 +190,17 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
   }
 
   function install() {
+    // A whole document from markup, declarative shadow roots included — the
+    // "unsafe" in the name is about trusting the markup, not about the parser.
+    Object.defineProperty(Document, "parseHTMLUnsafe", {
+      value(html) {
+        const document = parseDocument(html);
+        attachDeclarativeShadowRoots(document);
+        return document;
+      },
+      writable: true,
+      configurable: true,
+    });
     for (const Class of [Element, ShadowRoot]) Object.defineProperties(Class.prototype, {
       innerHTML: {
         get() { return Array.from(this.childNodes, serialize).join(""); },

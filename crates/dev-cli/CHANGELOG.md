@@ -511,6 +511,30 @@ is the point, since none of the three has any business in a deployment.
   a terminal. The library template's suite runs under `esdev test`
   instead of `bun test`.
 
+### Added
+
+- **`Element.moveBefore()`**, the state-preserving move: the node keeps what it
+  was holding — a control's value, a `<details>` being open — because it is moved
+  rather than removed and re-inserted. Its `disconnectedCallback` and
+  `connectedCallback` still run, which is what Chrome does. It refuses a node
+  that is not already in the tree, since that is an insertion and `insertBefore`
+  is how you write one.
+- **`Document.parseHTMLUnsafe()`**, which builds a whole document from markup and
+  processes the declarative shadow roots in it. `ShadowRoot.parseHTMLUnsafe` is
+  deliberately absent, as it is in a browser.
+- **A dialog opens, closes and returns.** `show()`, `showModal()`, `close()`,
+  `requestClose()`, `returnValue`, the `close` and `cancel` events, and `:modal`.
+  The `close` event is fired from a queued task, so it has not happened yet when
+  `close()` returns — which is observable, and is what a browser does. There is
+  no top layer and no backdrop; what is implemented is the state.
+- **The popover API**: `popover` reflection, `showPopover()`, `hidePopover()`,
+  `togglePopover()`, `:popover-open`, and the `beforetoggle`/`toggle` events —
+  the first synchronous and cancelable, the second queued, as in a browser.
+  Showing an auto popover closes the other auto popovers. `CommandEvent` comes
+  with it: a `<button command="show-popover" commandfor="id">` dispatches one at
+  the element it names and then performs the command, including `show-modal`,
+  `close` and `request-close` for a dialog.
+
 ### Fixed
 
 - **Seven web-component answers that were wrong.** `adoptedCallback` fired even
