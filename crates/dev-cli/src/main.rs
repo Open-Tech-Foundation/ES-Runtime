@@ -1083,6 +1083,9 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         ));
     }
     Ok(BuildRequest::Single(Box::new(BuildConfig {
+        // A one-off `esdev build <entry>` has no project to read, so the file's
+        // own pragmas are what say how its JSX compiles.
+        jsx: crate::transform::JsxSettings::default(),
         source,
         out,
         out_dir: None,
@@ -1519,6 +1522,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     test_capabilities(&permission_args)?;
     Ok(TestConfig {
         dom,
+        // Filled in by `test_settings`, which is where the project is read.
+        jsx: crate::transform::JsxSettings::default(),
         file,
         filters,
         jobs,
@@ -1572,6 +1577,7 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
     let Some(project) = crate::config::load(None)? else {
         return Ok(());
     };
+    config.jsx = project.jsx.clone();
     if config.setup.is_empty() {
         config.setup = project
             .test
@@ -1641,7 +1647,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         // run is what `finish()` finds afterwards, not anything done to the
         // source.
         let stripper = if config.setup.is_empty() && !config.dom {
-            TypeStripper::new()
+            TypeStripper::with_jsx(config.jsx.clone())
         } else {
             let entry = std::fs::canonicalize(&file)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
@@ -1650,6 +1656,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
                 config.dom.then(|| "runtime:dom".to_string()),
                 config.setup.clone(),
             )
+            .compiling_jsx(config.jsx.clone())
         };
         // A rehearsal still applies here: this is also how every child of a
         // restricted parent executes, and the flags arrived on its command

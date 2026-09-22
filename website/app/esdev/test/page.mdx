@@ -17,6 +17,18 @@ esdev test math               # ...whose path contains "math"
 esdev test --file=x.test.ts   # exactly one file
 ```
 
+## JSX in tests
+
+A test file may be `.jsx` or `.tsx`. Which JSX it is written in comes from the
+project's [`jsx` section](/esdev/build/project#jsx) — the automatic runtime with
+`react` unless the project says otherwise — or from the file's own
+`@jsx`/`@jsxImportSource` pragma. The same setting compiles the bundle, so a
+component means the same thing in a test and in a build.
+
+```json
+{ "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" } }
+```
+
 ## DOM tests
 
 Pass `--dom` when a test needs the browser-like DOM surface currently provided

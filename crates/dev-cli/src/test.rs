@@ -45,6 +45,10 @@ use crate::config::TestIsolation;
 pub struct TestConfig {
     /// Install the esdev-only DOM realm before the test module evaluates.
     pub dom: bool,
+    /// How JSX in a test file compiles, from the project's `jsx` section. Read
+    /// by the parent and by every `--file` child, so a test means the same
+    /// thing however it was started.
+    pub jsx: crate::transform::JsxSettings,
     /// Run exactly this file, harness installed. This is what the parent
     /// invokes for each child, and it is a supported way to run one file
     /// directly.

@@ -500,6 +500,7 @@ pub async fn build(
     sourcemap: Option<String>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
     jsx: crate::contract::Jsx,
+    jsx_settings: crate::transform::JsxSettings,
 ) -> Result<String, String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
@@ -623,6 +624,7 @@ pub async fn build(
             } else {
                 crate::contract::Jsx::default()
             },
+            jsx_settings.clone(),
             plugins,
         )
         .await?

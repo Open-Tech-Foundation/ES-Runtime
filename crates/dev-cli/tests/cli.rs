@@ -3080,6 +3080,113 @@ fn test_dom_declarations_know_which_properties_exist_and_cookies_round_trip() {
 }
 
 #[test]
+fn test_jsx_compiles_the_way_the_project_configured_it() {
+    let dir = build_dir("t_jsx_classic");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" } }"#,
+    );
+    write_in(
+        &dir,
+        "src/runtime.js",
+        "export function h(type, props, ...children) { return { type, props: props ?? {}, children: children.flat() }; }
+         export const Fragment = 'fragment';
+",
+    );
+    write_in(
+        &dir,
+        "src/view.test.jsx",
+        "import { test, assertEquals } from 'runtime:test';
+         import { h, Fragment } from './runtime.js';
+         test('the project names the factory', () => {
+           const el = <ul class=\'list\'><li>one</li><>two</></ul>;
+           assertEquals([el.type, el.props.class], ['ul', 'list']);
+           assertEquals([el.children[0].type, el.children[1].type], ['li', Fragment]);
+         });
+",
+    );
+    let ran = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test with classic jsx");
+    assert!(
+        ran.status.success(),
+        "classic JSX did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_a_files_jsx_pragma_overrides_the_project() {
+    let dir = build_dir("t_jsx_pragma");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    // The project says the automatic runtime; the file says classic.
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "jsx": { "importSource": "nothing" } }"#,
+    );
+    write_in(
+        &dir,
+        "src/pragma.test.jsx",
+        "/** @jsx h */
+         import { test, assertEquals } from 'runtime:test';
+         function h(type) { return { type, made: 'by the pragma' }; }
+         test('the file decides', () => {
+           assertEquals((<span/>).made, 'by the pragma');
+         });
+",
+    );
+    let ran = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test with a jsx pragma");
+    assert!(
+        ran.status.success(),
+        "a pragma did not override the project:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_a_config_with_no_targets_tests_but_does_not_build() {
+    let dir = build_dir("t_jsx_no_targets");
+    write_in(&dir, "esdev.json", r#"{ "test": { "jobs": 1 } }"#);
+    write_in(
+        &dir,
+        "one.test.mjs",
+        "import { test } from 'runtime:test';
+test('runs', () => {});
+",
+    );
+    let tested = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test without targets");
+    assert!(
+        tested.status.success(),
+        "a config with no targets could not test:\n{}{}",
+        stdout(&tested),
+        stderr(&tested)
+    );
+
+    let built = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(!built.status.success());
+    let text = format!("{}{}", stdout(&built), stderr(&built));
+    assert!(text.contains("names no targets"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_cascades_stylesheets_into_computed_styles() {
     let dir = build_dir("t_test_dom_cascade");
     write_in(

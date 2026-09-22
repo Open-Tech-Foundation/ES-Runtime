@@ -538,6 +538,9 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             // compiler has to do for its plugins comes from *their* own
             // declarations rather than from an option here.
             jsx,
+            // A program calling `build()` states its own JSX in the source it
+            // hands over, or in the pragmas the files carry.
+            jsx_settings: crate::transform::JsxSettings::default(),
             // `neutral` is this runtime, and the default for the same reason it
             // is the subcommand's: a program bundling here is bundling for here
             // unless it says otherwise.

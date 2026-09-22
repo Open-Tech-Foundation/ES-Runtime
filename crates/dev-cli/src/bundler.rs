@@ -244,6 +244,9 @@ pub struct Options {
     /// *mean* is the plugin's own business — the per-module wrapper it writes,
     /// and the runtime the app boots.
     pub jsx: crate::contract::Jsx,
+    /// How the project's JSX compiles, so a bundle and a test agree about what
+    /// `<div/>` means.
+    pub jsx_settings: crate::transform::JsxSettings,
     /// One file out per module in, rather than one chunk per entry — what a
     /// published library needs, so that a subpath in an `exports` map names a
     /// real file.
@@ -313,6 +316,35 @@ impl OutputOptions {
 /// wants to read in a stack trace. Nothing is canonicalized — a symlinked source
 /// directory should keep the name the developer knows it by, and the file may
 /// not even be there any more when the map is read.
+/// The bundler's JSX options: the project's settings, plus the registrations a
+/// refresh scheme asked for. `None` when neither has anything to say, which
+/// leaves the default path exactly as it was.
+fn jsx_transform(
+    settings: &crate::transform::JsxSettings,
+    refresh: bool,
+) -> Option<rolldown_common::BundlerTransformOptions> {
+    if settings == &crate::transform::JsxSettings::default() && !refresh {
+        return None;
+    }
+    let mut jsx = rolldown_common::JsxOptions {
+        development: settings.development.then_some(true),
+        refresh: refresh.then_some(rolldown_common::Either::Left(true)),
+        ..rolldown_common::JsxOptions::default()
+    };
+    if settings.classic {
+        jsx.runtime = Some("classic".to_string());
+        jsx.pragma = settings.factory.clone();
+        jsx.pragma_frag = settings.fragment.clone();
+    } else {
+        jsx.runtime = Some("automatic".to_string());
+        jsx.import_source = settings.import_source.clone();
+    }
+    Some(rolldown_common::BundlerTransformOptions {
+        jsx: Some(rolldown_common::Either::Right(jsx)),
+        ..rolldown_common::BundlerTransformOptions::default()
+    })
+}
+
 fn absolute_source(source: &str, map: &str) -> String {
     let source = PathBuf::from(source);
     if source.is_absolute() {
@@ -460,18 +492,7 @@ pub fn translate(
             Some(false) => TreeshakeOptions::Boolean(false),
             _ => TreeshakeOptions::default(),
         },
-        transform: options
-            .jsx
-            .refresh
-            .then(|| rolldown_common::BundlerTransformOptions {
-                jsx: Some(rolldown_common::Either::Right(
-                    rolldown_common::JsxOptions {
-                        refresh: Some(rolldown_common::Either::Left(true)),
-                        ..rolldown_common::JsxOptions::default()
-                    },
-                )),
-                ..rolldown_common::BundlerTransformOptions::default()
-            }),
+        transform: jsx_transform(&options.jsx_settings, options.jsx.refresh),
         experimental: options.hmr_runtime.as_ref().map(|implement| {
             rolldown_common::ExperimentalOptions {
                 dev_mode: Some(rolldown_common::DevModeOptions {

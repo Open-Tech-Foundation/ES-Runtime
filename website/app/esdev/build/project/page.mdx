@@ -52,6 +52,44 @@ esdev build src/app.ts           # ignores the project file entirely
 string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
 takes a release build of a project whose day to day is unminified.
 
+## JSX
+
+esdev is framework-agnostic, so which JSX a project writes is the project's to
+say. An unannotated `.jsx` compiles to the automatic runtime with `react` as its
+import source; a `jsx` section changes that for every command that compiles JSX
+— `esdev test`, `esdev build`, `esdev start`.
+
+```json
+{
+  "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" },
+  "targets": { "app": { "entry": "src/app.jsx", "out": "dist/app.js" } }
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `runtime` | `"automatic"` (default) or `"classic"` |
+| `importSource` | The package the automatic runtime imports `jsx`/`jsxs` from: `"preact"`, `"solid-js"` |
+| `factory` | The classic runtime's element factory: `"h"`, `"React.createElement"` |
+| `fragment` | The classic runtime's fragment |
+| `development` | `true` — add `__source` and `__self` to every element |
+
+Naming a `factory` or a `fragment` means the classic runtime, so writing
+`"runtime"` as well is optional.
+
+A file overrides the project with the usual pragma comments, which is what makes
+a file borrowed from another project work unchanged:
+
+```jsx
+/** @jsx h */
+/** @jsxFrag Fragment */
+// or, for the automatic runtime:
+/** @jsxImportSource preact */
+```
+
+A config may carry only a `jsx` section — or only `test` — with no `targets` at
+all: a project that is tested and never bundled still has something to say.
+
 ## Aliases
 
 Top level, because a rewrite is a property of the source tree rather than of

@@ -40,12 +40,130 @@ pub struct TypeStripper {
     /// The module the prelude belongs to, as a `file:` URL, and the specifiers
     /// to import ahead of it.
     prelude: Option<(String, Vec<String>)>,
+    /// How JSX compiles. The project's `jsx` section, which a file's own pragma
+    /// comments may still override.
+    jsx: JsxSettings,
+}
+
+/// How JSX compiles, for a project or for one file.
+///
+/// The default is the automatic runtime with React's import source, because
+/// that is what an unannotated `.jsx` means today. Everything else — Preact,
+/// Solid, a classic `h`/`Fragment` pair — is a project saying so, and a
+/// runtime that is framework-agnostic has to let it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JsxSettings {
+    /// `React.createElement`-style calls rather than imports from a runtime.
+    pub classic: bool,
+    /// The package the automatic runtime imports `jsx`/`jsxs` from.
+    pub import_source: Option<String>,
+    /// The classic runtime's element factory.
+    pub factory: Option<String>,
+    /// The classic runtime's fragment.
+    pub fragment: Option<String>,
+    /// `__source` and `__self` on every element, which a dev-only renderer
+    /// reads to say where a component came from.
+    pub development: bool,
+}
+
+impl JsxSettings {
+    /// The settings with this file's pragma comments applied.
+    ///
+    /// `@jsx`, `@jsxFrag`, `@jsxRuntime` and `@jsxImportSource` are how a file
+    /// says which JSX it is written in, and a file borrowed from another
+    /// project carries them. oxc takes options rather than reading comments, so
+    /// they are read here.
+    fn with_pragmas(&self, source: &str) -> Self {
+        let mut settings = self.clone();
+        for (tag, value) in pragmas(source) {
+            match tag {
+                "jsx" => {
+                    settings.factory = Some(value);
+                    settings.classic = true;
+                }
+                "jsxFrag" => {
+                    settings.fragment = Some(value);
+                    settings.classic = true;
+                }
+                "jsxImportSource" => {
+                    settings.import_source = Some(value);
+                    settings.classic = false;
+                }
+                "jsxRuntime" => settings.classic = value == "classic",
+                _ => {}
+            }
+        }
+        settings
+    }
+
+    fn options(&self) -> oxc::transformer::JsxOptions {
+        let mut jsx = oxc::transformer::JsxOptions {
+            development: self.development,
+            ..oxc::transformer::JsxOptions::default()
+        };
+        if self.classic {
+            jsx.runtime = oxc::transformer::JsxRuntime::Classic;
+            jsx.pragma = self.factory.clone();
+            jsx.pragma_frag = self.fragment.clone();
+        } else {
+            jsx.runtime = oxc::transformer::JsxRuntime::Automatic;
+            jsx.import_source = self.import_source.clone();
+        }
+        jsx
+    }
+}
+
+/// The `@jsx…` pragmas in a source's comments, in the order they appear.
+///
+/// Scanned rather than parsed: a pragma is only ever read out of a comment, and
+/// the shapes that matter — `/** @jsx h */`, `// @jsxImportSource preact` — are
+/// a tag and the word after it. A match inside a string is possible in
+/// principle and has never been seen in practice; the cost of being wrong is
+/// that a file compiles the way it asked to.
+fn pragmas(source: &str) -> Vec<(&'static str, String)> {
+    const TAGS: [&str; 4] = ["jsxImportSource", "jsxRuntime", "jsxFrag", "jsx"];
+    let mut found = Vec::new();
+    // Only the head of the file: a pragma is a file-level declaration, and
+    // scanning a megabyte of bundled output for one is wasted work.
+    let head = &source[..source.len().min(4096)];
+    let mut at = 0;
+    while let Some(index) = head[at..].find('@') {
+        let start = at + index + 1;
+        at = start;
+        let Some(tag) = TAGS.iter().find(|tag| head[start..].starts_with(**tag)) else {
+            continue;
+        };
+        let rest = head[start + tag.len()..].trim_start_matches([' ', '\t']);
+        let value: String = rest
+            .chars()
+            .take_while(|character| !character.is_whitespace() && *character != '*')
+            .collect();
+        if !value.is_empty() {
+            found.push((*tag, value));
+        }
+    }
+    found
 }
 
 impl TypeStripper {
     /// The stripper everything but a `--setup` test run uses.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The same, compiling JSX the way the project said to.
+    pub fn with_jsx(jsx: JsxSettings) -> Self {
+        Self {
+            jsx,
+            ..Self::default()
+        }
+    }
+
+    /// Names how JSX compiles on a stripper that already exists.
+    #[must_use]
+    pub fn compiling_jsx(mut self, jsx: JsxSettings) -> Self {
+        self.jsx = jsx;
+        self
     }
 
     /// A stripper that imports `modules` before `entry` runs.
@@ -72,6 +190,7 @@ impl TypeStripper {
                     .unwrap_or_else(|()| format!("file://{}", entry.display())),
                 modules,
             )),
+            jsx: JsxSettings::default(),
         }
     }
 
@@ -181,8 +300,12 @@ impl SourceTransform for TypeStripper {
             .semantic
             .into_scoping();
 
-        let result = Transformer::new(&allocator, path, &TransformOptions::default())
-            .build_with_scoping(scoping, &mut program);
+        let options = TransformOptions {
+            jsx: self.jsx.with_pragmas(&source).options(),
+            ..TransformOptions::default()
+        };
+        let result =
+            Transformer::new(&allocator, path, &options).build_with_scoping(scoping, &mut program);
         if let Some(error) = first_error(&result.diagnostics) {
             return Err(error);
         }
@@ -199,6 +322,10 @@ mod tests {
 
     fn strip(name: &str, source: &str) -> Result<String, String> {
         TypeStripper::new().transform(&format!("file:///{name}"), source.to_string())
+    }
+
+    fn strip_with(jsx: JsxSettings, name: &str, source: &str) -> Result<String, String> {
+        TypeStripper::with_jsx(jsx).transform(&format!("file:///{name}"), source.to_string())
     }
 
     #[test]
@@ -355,5 +482,77 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("await"), "{out}");
+    }
+
+    #[test]
+    fn jsx_compiles_the_way_the_project_said() {
+        let classic = JsxSettings {
+            classic: true,
+            factory: Some("h".to_string()),
+            fragment: Some("Fragment".to_string()),
+            ..JsxSettings::default()
+        };
+        let out = strip_with(
+            classic,
+            "app.jsx",
+            "export const el = <div id=\"a\"><>x</></div>;",
+        )
+        .unwrap();
+        assert!(out.contains("h(\"div\""), "{out}");
+        assert!(out.contains("h(Fragment"), "{out}");
+        assert!(!out.contains("react"), "{out}");
+
+        let automatic = JsxSettings {
+            import_source: Some("preact".to_string()),
+            ..JsxSettings::default()
+        };
+        let out = strip_with(automatic, "app.jsx", "export const el = <div/>;").unwrap();
+        assert!(out.contains("preact/jsx-runtime"), "{out}");
+        assert!(!out.contains("\"react"), "{out}");
+    }
+
+    #[test]
+    fn a_files_own_pragma_beats_the_project() {
+        // The project says automatic-with-preact; the file says classic-with-h.
+        let project = JsxSettings {
+            import_source: Some("preact".to_string()),
+            ..JsxSettings::default()
+        };
+        let out = strip_with(
+            project.clone(),
+            "app.jsx",
+            "/** @jsx h */\n/** @jsxFrag Frag */\nexport const el = <div><>x</></div>;",
+        )
+        .unwrap();
+        assert!(out.contains("h(\"div\""), "{out}");
+        assert!(out.contains("h(Frag"), "{out}");
+        assert!(!out.contains("jsx-runtime"), "{out}");
+
+        // And the other way round: a project on the classic runtime, a file that
+        // names an import source.
+        let classic = JsxSettings {
+            classic: true,
+            factory: Some("h".to_string()),
+            ..JsxSettings::default()
+        };
+        let out = strip_with(
+            classic,
+            "app.jsx",
+            "// @jsxImportSource solid-js\nexport const el = <div/>;",
+        )
+        .unwrap();
+        assert!(out.contains("solid-js/jsx-runtime"), "{out}");
+        assert!(!out.contains("h(\"div\""), "{out}");
+    }
+
+    #[test]
+    fn a_pragma_is_read_from_the_head_of_the_file() {
+        let found = pragmas("/** @jsxImportSource preact */\nconst a = 1;");
+        assert_eq!(found, vec![("jsxImportSource", "preact".to_string())]);
+        // The longest tag wins, so `@jsxImportSource` is not read as `@jsx`.
+        assert_eq!(pragmas("// @jsx h").first().unwrap().0, "jsx");
+        assert!(pragmas("const a = 1;").is_empty());
+        // A tag with nothing after it says nothing.
+        assert!(pragmas("/** @jsx */").is_empty());
     }
 }

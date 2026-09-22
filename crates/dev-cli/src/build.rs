@@ -219,6 +219,9 @@ pub struct BuildConfig {
     /// claiming a file type ahead of a built-in pass is most of what a
     /// framework's plugin is for.
     pub plugins: Vec<std::sync::Arc<dyn crate::contract::Pass>>,
+    /// How the project's JSX compiles, so a bundle means what a test of the
+    /// same source meant.
+    pub jsx: crate::transform::JsxSettings,
 }
 
 /// A bundler failure, in the shape a person reads.
@@ -837,6 +840,7 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             filenames.clone()
         };
         let options = crate::bundler::Options {
+            jsx_settings: config.jsx.clone(),
             input: inputs
                 .iter()
                 .map(|i| (i.name.clone(), i.import.clone()))
@@ -1115,6 +1119,7 @@ pub async fn bundle_browser_entries(
     sourcemap: Option<String>,
     hmr: Option<String>,
     jsx: crate::contract::Jsx,
+    jsx_settings: crate::transform::JsxSettings,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>, usize), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
@@ -1144,6 +1149,7 @@ pub async fn bundle_browser_entries(
             .join(","),
     );
     let options = crate::bundler::Options {
+        jsx_settings,
         input: entries
             .into_iter()
             .map(|(name, import)| (Some(name), import))
@@ -1714,6 +1720,18 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             .collect::<Result<Vec<_>, _>>()?,
     };
 
+    // A config that configures only tests or JSX is a valid config and builds
+    // nothing, so say that rather than exiting successfully having done nothing.
+    if selected.is_empty() {
+        return Err(format!(
+            "{} names no targets, so there is nothing to build.\n\n\
+             A config may carry only `test` or `jsx` — which `esdev test` reads — and \
+             a project that is bundled says so with a target:\n\n  \
+             \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }}",
+            project.project.dir.join("esdev.json").display()
+        ));
+    }
+
     // Nothing is written where it is deployed until every target — and every
     // step that runs after them — has succeeded. See [`crate::staging`].
     let mut staging = crate::staging::Staging::new(&project.project.dir, project.dev.is_none())?;
@@ -1807,6 +1825,7 @@ async fn build_targets(
                 host.as_ref()
                     .map(|host| host.jsx(&target.plugins))
                     .unwrap_or_default(),
+                project.project.jsx.clone(),
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
@@ -1833,6 +1852,7 @@ async fn build_targets(
             }
         };
         let written = build(BuildConfig {
+            jsx: project.project.jsx.clone(),
             source: target.entry.clone(),
             out,
             out_dir,
@@ -2129,6 +2149,7 @@ mod tests {
         std::fs::write(dir.join("index.html"), "<!DOCTYPE html>").expect("write");
 
         let config = BuildConfig {
+            jsx: crate::transform::JsxSettings::default(),
             source: "index.html".to_string(),
             out: None,
             out_dir: None,

@@ -388,6 +388,23 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **JSX compiles the way the project says, for any framework.** An `esdev.json`
+  `jsx` section names the runtime — `"classic"` with a `factory` and `fragment`,
+  or the automatic one with an `importSource` — and every command that compiles
+  JSX reads it: `esdev test`, `esdev build`, `esdev start`. Naming a factory
+  means the classic runtime, so a project writes one line rather than two.
+
+  A file overrides the project with the pragma comments it already carries:
+  `@jsx`, `@jsxFrag`, `@jsxRuntime` and `@jsxImportSource`. That is what makes a
+  test borrowed from another project run here unchanged — which is how this was
+  found, porting Preact's own suite.
+
+  A config may also carry only `jsx`, or only `test`, with no `targets` at all: a
+  project that is tested and never bundled has something to configure too.
+  `esdev build` in such a project says it names no targets instead of exiting
+  successfully having built nothing. `start` still needs targets, because it
+  builds and serves them.
+
 - Add a JavaScript WPT DOM audit runner for the DOM, custom-elements, and
   Shadow DOM upstream suites.
 - Add a 24-case esdev DOM behavior matrix that uses headless Chrome as the

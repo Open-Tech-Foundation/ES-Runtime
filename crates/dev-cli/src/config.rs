@@ -62,6 +62,8 @@ pub struct Project {
     /// directory — so a config describes its own project the same way whether
     /// esdev was run from the project root or pointed at it from elsewhere.
     pub dir: PathBuf,
+    /// How JSX compiles, for every command that compiles any.
+    pub jsx: crate::transform::JsxSettings,
     /// The build targets, in name order.
     ///
     /// Sorted rather than left in the order they were written, because a JSON
@@ -342,6 +344,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "plugins",
     "alias",
     "test",
+    "jsx",
 ];
 
 /// The keys `start` may carry.
@@ -354,6 +357,15 @@ const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "devdir"];
 
 /// The keys `test` may carry.
 const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "isolation", "reporter"];
+
+/// The keys `jsx` may carry.
+const JSX_KEYS: &[&str] = &[
+    "runtime",
+    "importSource",
+    "factory",
+    "fragment",
+    "development",
+];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
 ///
@@ -451,21 +463,43 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     let root = object(&root, name, "the file")?;
     known_keys(root, name, "", TOP_LEVEL_KEYS)?;
 
-    let targets = root.get("targets").ok_or_else(|| {
-        format!(
-            "{name} has no `targets`.\n\n\
-             A target is one thing the project builds — an entry, and where its \
-             output goes:\n\n  \
-             \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }}"
-        )
-    })?;
-    let targets = object(targets, name, "`targets`")?;
-    if targets.is_empty() {
+    // `targets` is optional, because a config is no longer only about building:
+    // a project that is tested and never bundled still has a `test` section and
+    // a `jsx` one, and making it invent a target to say so would be a worse file
+    // than no file. What is refused is a config that says *nothing*.
+    // The sections that mean something without a build: how the project is
+    // tested, how its JSX compiles, what its specifiers resolve to.
+    const BUILDLESS_KEYS: &[&str] = &["test", "jsx", "alias", "plugins", "permissions"];
+    let targets = match root.get("targets") {
+        Some(targets) => object(targets, name, "`targets`")?.clone(),
+        None => {
+            // `start` builds and serves the targets, so a file that names one
+            // without them is still incomplete.
+            if !root.contains_key("start")
+                && root
+                    .keys()
+                    .any(|key| BUILDLESS_KEYS.contains(&key.as_str()))
+            {
+                serde_json::Map::new()
+            } else {
+                return Err(format!(
+                    "{name} has no `targets`.\n\n\
+                     A target is one thing the project builds — an entry, and where its \
+                     output goes:\n\n  \
+                     \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }}\n\n\
+                     A config that only says how the project is tested or how its JSX \
+                     compiles — `test`, `jsx`, `alias`, `plugins` — needs no targets."
+                ));
+            }
+        }
+    };
+    if root.contains_key("targets") && targets.is_empty() {
         return Err(format!(
             "{name} has no targets in `targets`.\n\n\
-             An empty object builds nothing; remove the file or name what it builds."
+             An empty object builds nothing; remove the key, or name what it builds."
         ));
     }
+    let targets = &targets;
     // The project's own plugins load first, and every target gets them. A
     // target's list adds to that rather than replacing it: a project that
     // compiles `.mdx` compiles it for the server bundle and the browser one,
@@ -494,6 +528,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     };
     let alias = aliases(root.get("alias"), name, &dir)?;
     let test = read_test(root.get("test"), name)?;
+    let jsx = read_jsx(root.get("jsx"), name)?;
     Ok(Some(Project {
         dir,
         targets,
@@ -502,7 +537,70 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         plugins,
         alias,
         test,
+        jsx,
     }))
+}
+
+/// Parses the `jsx` section.
+///
+/// The runtime is framework-agnostic, so which JSX a project writes is the
+/// project's to say: `"runtime": "classic"` with a `factory`, or the automatic
+/// runtime with the `importSource` of whichever library provides
+/// `jsx-runtime`. A file may still override all of it with the usual pragma
+/// comments, which is how a file borrowed from another project keeps working.
+fn read_jsx(value: Option<&Value>, file: &str) -> Result<crate::transform::JsxSettings, String> {
+    let Some(value) = value else {
+        return Ok(crate::transform::JsxSettings::default());
+    };
+    let map = object(value, file, "`jsx`")?;
+    known_keys(map, file, "`jsx`", JSX_KEYS)?;
+
+    let mut settings = crate::transform::JsxSettings::default();
+    if let Some(runtime) = map.get("runtime") {
+        let named = runtime.as_str().ok_or_else(|| {
+            format!("{file}: `jsx.runtime` must be \"automatic\" or \"classic\".")
+        })?;
+        settings.classic = match named {
+            "automatic" => false,
+            "classic" => true,
+            other => {
+                return Err(format!(
+                    "{file}: `jsx.runtime` is \"{other}\", and the runtimes are \"automatic\" and \"classic\"."
+                ));
+            }
+        };
+    }
+    for (key, slot) in [
+        ("importSource", &mut settings.import_source),
+        ("factory", &mut settings.factory),
+        ("fragment", &mut settings.fragment),
+    ] {
+        if let Some(found) = map.get(key) {
+            let text = found
+                .as_str()
+                .ok_or_else(|| format!("{file}: `jsx.{key}` must be a string."))?;
+            if text.is_empty() {
+                return Err(format!("{file}: `jsx.{key}` cannot be empty."));
+            }
+            *slot = Some(text.to_string());
+        }
+    }
+    if let Some(development) = map.get("development") {
+        settings.development = development
+            .as_bool()
+            .ok_or_else(|| format!("{file}: `jsx.development` must be true or false."))?;
+    }
+    // Naming a factory is how you say "classic" in every other toolchain, so
+    // taking it as that spares a project from writing both.
+    if !settings.classic && (settings.factory.is_some() || settings.fragment.is_some()) {
+        if map.contains_key("runtime") {
+            return Err(format!(
+                "{file}: `jsx.factory` and `jsx.fragment` belong to the classic runtime; the automatic one imports from `jsx.importSource`."
+            ));
+        }
+        settings.classic = true;
+    }
+    Ok(settings)
 }
 
 /// Parses the `test` section.
@@ -2077,11 +2175,52 @@ mod tests {
 
     #[test]
     fn a_file_with_no_targets_says_so() {
+        // `start` builds and serves targets, so a file naming one without them
+        // is incomplete — and so is a file that says nothing at all.
         let missing = read(r#"{ "start": { "run": "a" } }"#).expect_err("refused");
         assert!(missing.contains("no `targets`"), "{missing}");
+        assert!(read(r#"{ }"#).is_err());
 
         let empty = read(r#"{ "targets": {} }"#).expect_err("refused");
         assert!(empty.contains("no targets"), "{empty}");
+    }
+
+    #[test]
+    fn a_config_that_only_configures_tests_or_jsx_needs_no_targets() {
+        let tested = read(r#"{ "test": { "jobs": 2 } }"#).expect("read");
+        assert!(tested.targets.is_empty());
+        assert_eq!(tested.test.jobs, Some(2));
+
+        let jsx =
+            read(r#"{ "jsx": { "runtime": "classic", "factory": "h", "fragment": "Fragment" } }"#)
+                .expect("read");
+        assert!(jsx.jsx.classic);
+        assert_eq!(jsx.jsx.factory.as_deref(), Some("h"));
+        assert_eq!(jsx.jsx.fragment.as_deref(), Some("Fragment"));
+
+        // Naming a factory says "classic" without writing it twice.
+        let implied = read(r#"{ "jsx": { "factory": "h" } }"#).expect("read");
+        assert!(implied.jsx.classic);
+
+        let source = read(r#"{ "jsx": { "importSource": "preact" } }"#).expect("read");
+        assert!(!source.jsx.classic);
+        assert_eq!(source.jsx.import_source.as_deref(), Some("preact"));
+    }
+
+    #[test]
+    fn a_jsx_section_refuses_what_it_cannot_mean() {
+        let runtime = read(r#"{ "jsx": { "runtime": "preact" } }"#).expect_err("refused");
+        assert!(runtime.contains("automatic"), "{runtime}");
+
+        let mixed =
+            read(r#"{ "jsx": { "runtime": "automatic", "factory": "h" } }"#).expect_err("refused");
+        assert!(mixed.contains("classic runtime"), "{mixed}");
+
+        let empty = read(r#"{ "jsx": { "factory": "" } }"#).expect_err("refused");
+        assert!(empty.contains("cannot be empty"), "{empty}");
+
+        let unknown = read(r#"{ "jsx": { "pragma": "h" } }"#).expect_err("refused");
+        assert!(unknown.contains("pragma"), "{unknown}");
     }
 
     #[test]
