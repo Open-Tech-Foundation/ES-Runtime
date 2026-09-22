@@ -113,6 +113,23 @@ function asNodes(value, document, NodeClass) {
   return value.map((item) => (item instanceof NodeClass ? item : document.createTextNode(String(item))));
 }
 
+// Web IDL puts an interface's members on the prototype as **configurable**, and
+// a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
+// redefines the property it is replacing, and a descriptor that forgot the flag
+// answers `Cannot redefine property`. Enumerable too, as a browser has them.
+// A symbol-keyed slot is this DOM's own bookkeeping and stays hidden and fixed.
+function defineIdl(target, properties) {
+  const described = {};
+  for (const name of Reflect.ownKeys(properties)) {
+    const descriptor = properties[name];
+    described[name] = typeof name === "symbol"
+      ? descriptor
+      : { configurable: true, enumerable: true, ...descriptor };
+  }
+  Object.defineProperties(target, described);
+  return target;
+}
+
 export function createTree(events = {}) {
   const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {}, CommandEvent = class {} } = events;
   const customConstruction = [];
@@ -774,7 +791,7 @@ export function createTree(events = {}) {
   class DocumentType extends Node {
     constructor(name, publicId, systemId, ownerDocument) {
       super(Node.DOCUMENT_TYPE_NODE, String(name), ownerDocument);
-      Object.defineProperties(this, {
+      defineIdl(this, {
         name: { value: String(name), enumerable: true },
         publicId: { value: String(publicId ?? ""), enumerable: true },
         systemId: { value: String(systemId ?? ""), enumerable: true },
@@ -1574,7 +1591,7 @@ export function createTree(events = {}) {
   }
 
   function installValidation(Class) {
-    Object.defineProperties(Class.prototype, {
+    defineIdl(Class.prototype, {
       willValidate: { get() { return !isDisabled(this); } },
       validity: { get() {
         this[VALIDITY] ??= new ValidityState(this, VALIDITY_BRAND);
@@ -1714,7 +1731,7 @@ export function createTree(events = {}) {
     for (const [property, [attribute, fallback, minimum, refusesZero]] of Object.entries(integers)) {
       properties[property] = reflectInteger(attribute, fallback, minimum, refusesZero);
     }
-    Object.defineProperties(Class.prototype, properties);
+    defineIdl(Class.prototype, properties);
   }
 
   // ARIAMixin: every one of these reflects to its attribute, and reads back
@@ -1756,7 +1773,7 @@ export function createTree(events = {}) {
     { disabled: "disabled", formNoValidate: "formnovalidate" });
   installReflectors(HTMLDialogElement, {}, { open: "open" });
   installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
-  Object.defineProperties(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
+  defineIdl(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
   installReflectors(HTMLTableElement, { border: "border" });
   installReflectors(HTMLFormElement, { name: "name", target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
@@ -1773,7 +1790,7 @@ export function createTree(events = {}) {
   installValidation(HTMLInputElement);
   installValidation(HTMLSelectElement);
   installValidation(HTMLTextAreaElement);
-  Object.defineProperties(HTMLElement.prototype, {
+  defineIdl(HTMLElement.prototype, {
     contentEditable: {
       get() {
         const value = this.getAttribute("contenteditable");
@@ -1823,7 +1840,7 @@ export function createTree(events = {}) {
       },
     },
   });
-  Object.defineProperties(HTMLInputElement.prototype, {
+  defineIdl(HTMLInputElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "text"; }, set(value) { this.setAttribute("type", String(value)); } },
     value: {
       get() {
@@ -1908,19 +1925,19 @@ export function createTree(events = {}) {
     if (end < start) start = end;
     this[INPUT_SELECTION_START] = start; this[INPUT_SELECTION_END] = end; this[INPUT_SELECTION_DIRECTION] = direction;
   };
-  Object.defineProperties(HTMLButtonElement.prototype, {
+  defineIdl(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
   });
-  Object.defineProperties(HTMLFormElement.prototype, {
+  defineIdl(HTMLFormElement.prototype, {
     action: reflectUrl("action"),
     method: { get() { return (this.getAttribute("method") ?? "get").toLowerCase(); }, set(value) { this.setAttribute("method", String(value).toLowerCase()); } },
     enctype: { get() { return this.getAttribute("enctype") ?? "application/x-www-form-urlencoded"; }, set(value) { this.setAttribute("enctype", String(value)); } },
   });
-  Object.defineProperties(HTMLButtonElement.prototype, { formAction: reflectUrl("formaction") });
-  Object.defineProperties(HTMLInputElement.prototype, { formAction: reflectUrl("formaction") });
+  defineIdl(HTMLButtonElement.prototype, { formAction: reflectUrl("formaction") });
+  defineIdl(HTMLInputElement.prototype, { formAction: reflectUrl("formaction") });
   for (const Class of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement]) {
-    Object.defineProperty(Class.prototype, "form", { get() { return formOwner(this); } });
-    Object.defineProperty(Class.prototype, "labels", {
+    Object.defineProperty(Class.prototype, "form", { configurable: true, enumerable: true, get() { return formOwner(this); } });
+    Object.defineProperty(Class.prototype, "labels", { configurable: true, enumerable: true,
       get() {
         return new HTMLCollection(this.ownerDocument, (root) => collect(root, (element) => element instanceof HTMLLabelElement && element.control === this));
       },
@@ -1933,7 +1950,7 @@ export function createTree(events = {}) {
   // `docs/ESDEV-DOM.md` records this as the layout non-goal.
   class DOMRectReadOnly {
     constructor(x = 0, y = 0, width = 0, height = 0) {
-      Object.defineProperties(this, {
+      defineIdl(this, {
         x: { value: Number(x), enumerable: true },
         y: { value: Number(y), enumerable: true },
         width: { value: Number(width), enumerable: true },
@@ -1959,7 +1976,7 @@ export function createTree(events = {}) {
   for (const name of ZERO_METRICS) {
     Object.defineProperty(Element.prototype, name, { get() { return 0; }, configurable: true });
   }
-  Object.defineProperties(Element.prototype, {
+  defineIdl(Element.prototype, {
     // Assignable and still zero, which is what a browser answers for an element
     // that cannot scroll — and without layout, none of them can.
     scrollTop: { get() { return 0; }, set(_value) {}, configurable: true },
@@ -2000,7 +2017,7 @@ export function createTree(events = {}) {
     return true;
   }
 
-  Object.defineProperties(HTMLElement.prototype, {
+  defineIdl(HTMLElement.prototype, {
     popover: {
       get() {
         const value = popoverKind(this);
@@ -2043,7 +2060,7 @@ export function createTree(events = {}) {
     _esdevPopoverOpen: { value() { return this[POPOVER_OPEN] === true; } },
   });
 
-  Object.defineProperty(HTMLElement.prototype, "attachInternals", {
+  Object.defineProperty(HTMLElement.prototype, "attachInternals", { configurable: true, enumerable: true,
     value() {
       // Only a custom element has internals, and only one set of them: a
       // built-in has nothing to attach, and a second call would hand a second
@@ -2219,7 +2236,7 @@ export function createTree(events = {}) {
     configurable: true,
   });
 
-  Object.defineProperties(Element.prototype, {
+  defineIdl(Element.prototype, {
     _adjacentPosition: { value(where) {
       switch (String(where).toLowerCase()) {
         case "beforebegin":
@@ -2250,7 +2267,7 @@ export function createTree(events = {}) {
     } },
   });
 
-  Object.defineProperties(Element.prototype, {
+  defineIdl(Element.prototype, {
     attachShadow: { value(options = {}) {
       // The specification's list, plus any valid custom element name. An
       // `<input>` cannot host a root, and a component that tries deserves to
@@ -2448,7 +2465,7 @@ export function createTree(events = {}) {
       }
       // `head` and `body` are per-document accessors on the instance, the same
       // shape the test realm's own document gets.
-      Object.defineProperties(document, { head: { get: () => head }, body: { get: () => body } });
+      defineIdl(document, { head: { get: () => head }, body: { get: () => body } });
       return document;
     }
   }
@@ -2465,7 +2482,7 @@ export function createTree(events = {}) {
   // forward and then back land on the same node rather than skipping one.
   class NodeIterator {
     constructor(root, whatToShow, filter) {
-      Object.defineProperties(this, {
+      defineIdl(this, {
         root: { value: root, enumerable: true },
         whatToShow: { value: Number(whatToShow) >>> 0, enumerable: true },
         filter: { value: filter ?? null, enumerable: true },

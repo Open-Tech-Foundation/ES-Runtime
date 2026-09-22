@@ -435,7 +435,7 @@ export function createCss({ Element }) {
   }
 
   function install() {
-    Object.defineProperty(Element.prototype, "style", {
+    Object.defineProperty(Element.prototype, "style", { configurable: true, enumerable: true,
       get() {
         let style = this[STYLE]?.declaration;
         if (!style) {

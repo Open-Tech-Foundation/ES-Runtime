@@ -2,6 +2,23 @@
 // The parser callback is supplied by the esdev-only bridge, keeping this file
 // pure JS and directly testable before the --dom runner integration lands.
 
+// Web IDL puts an interface's members on the prototype as **configurable**, and
+// a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
+// redefines the property it is replacing, and a descriptor that forgot the flag
+// answers `Cannot redefine property`. Enumerable too, as a browser has them.
+// A symbol-keyed slot is this DOM's own bookkeeping and stays hidden and fixed.
+function defineIdl(target, properties) {
+  const described = {};
+  for (const name of Reflect.ownKeys(properties)) {
+    const descriptor = properties[name];
+    described[name] = typeof name === "symbol"
+      ? descriptor
+      : { configurable: true, enumerable: true, ...descriptor };
+  }
+  Object.defineProperties(target, described);
+  return target;
+}
+
 export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
   const { Node, Document, HTMLDocument, DocumentFragment, ShadowRoot, Element, HTMLTemplateElement, Text, Comment, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes } = tree;
 
@@ -182,7 +199,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
       }
     }
     document._preInsert(html, null);
-    Object.defineProperties(document, { head: { get: () => head }, body: { get: () => body } });
+    defineIdl(document, { head: { get: () => head }, body: { get: () => body } });
     return document;
   }
 
@@ -213,7 +230,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
       writable: true,
       configurable: true,
     });
-    for (const Class of [Element, ShadowRoot]) Object.defineProperties(Class.prototype, {
+    for (const Class of [Element, ShadowRoot]) defineIdl(Class.prototype, {
       innerHTML: {
         get() { return Array.from(this.childNodes, serialize).join(""); },
         set(source) { this._replaceAll(parseFragment(source, this)); },
@@ -229,7 +246,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
         },
       },
     });
-    for (const Class of [Element, ShadowRoot]) Object.defineProperties(Class.prototype, {
+    for (const Class of [Element, ShadowRoot]) defineIdl(Class.prototype, {
       setHTMLUnsafe: { value(source) {
         const fragment = parseFragment(source, this);
         attachDeclarativeShadowRoots(fragment);
@@ -239,7 +256,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
         return Array.from(this.childNodes, (child) => serialize(child, options)).join("");
       }, writable: true, configurable: true },
     });
-    Object.defineProperties(HTMLTemplateElement.prototype, {
+    defineIdl(HTMLTemplateElement.prototype, {
       setHTMLUnsafe: { value(source) {
         const fragment = parseFragment(source, this);
         attachDeclarativeShadowRoots(fragment);
@@ -249,7 +266,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
         return Array.from(this.content.childNodes, (child) => serialize(child, options)).join("");
       }, writable: true, configurable: true },
     });
-    Object.defineProperties(Element.prototype, {
+    defineIdl(Element.prototype, {
       insertAdjacentHTML: { value(where, source) {
         // The parse context is where the markup lands, not the element the call
         // was made on: `beforebegin` markup is parsed as a child of the parent.
@@ -257,7 +274,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
         parent._preInsert(parseFragment(source, context), reference);
       }, writable: true, configurable: true },
     });
-    Object.defineProperties(HTMLTemplateElement.prototype, {
+    defineIdl(HTMLTemplateElement.prototype, {
       innerHTML: {
         get() { return Array.from(this.content.childNodes, serialize).join(""); },
         set(source) { this.content._replaceAll(parseFragment(source, this)); },

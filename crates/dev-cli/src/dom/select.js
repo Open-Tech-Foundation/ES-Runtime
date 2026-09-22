@@ -332,6 +332,23 @@ function nthMatches(position, { a, b }) {
   return Number.isInteger(quotient) && quotient >= 0;
 }
 
+// Web IDL puts an interface's members on the prototype as **configurable**, and
+// a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
+// redefines the property it is replacing, and a descriptor that forgot the flag
+// answers `Cannot redefine property`. Enumerable too, as a browser has them.
+// A symbol-keyed slot is this DOM's own bookkeeping and stays hidden and fixed.
+function defineIdl(target, properties) {
+  const described = {};
+  for (const name of Reflect.ownKeys(properties)) {
+    const descriptor = properties[name];
+    described[name] = typeof name === "symbol"
+      ? descriptor
+      : { configurable: true, enumerable: true, ...descriptor };
+  }
+  Object.defineProperties(target, described);
+  return target;
+}
+
 export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true, customStates = () => null, controlValidity = (element) => element.validity ?? null }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
@@ -556,12 +573,12 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
 
   function install() {
     for (const Class of [Element, Document, DocumentFragment, ShadowRoot]) {
-      Object.defineProperties(Class.prototype, {
+      defineIdl(Class.prototype, {
         querySelector: { value(source) { return queryAll(this, source).item(0); } },
         querySelectorAll: { value(source) { return queryAll(this, source); } },
       });
     }
-    Object.defineProperties(Element.prototype, {
+    defineIdl(Element.prototype, {
       matches: { value(source) { return matches(this, source); } },
       closest: { value(source) { for (let node = this; node; node = node.parentElement) if (matches(node, source)) return node; return null; } },
     });

@@ -9,6 +9,23 @@ import { createElements } from "runtime:dom/elements";
 import { createRanges } from "runtime:dom/range";
 import { createSheets } from "runtime:dom/sheets";
 
+// Web IDL puts an interface's members on the prototype as **configurable**, and
+// a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
+// redefines the property it is replacing, and a descriptor that forgot the flag
+// answers `Cannot redefine property`. Enumerable too, as a browser has them.
+// A symbol-keyed slot is this DOM's own bookkeeping and stays hidden and fixed.
+function defineIdl(target, properties) {
+  const described = {};
+  for (const name of Reflect.ownKeys(properties)) {
+    const descriptor = properties[name];
+    described[name] = typeof name === "symbol"
+      ? descriptor
+      : { configurable: true, enumerable: true, ...descriptor };
+  }
+  Object.defineProperties(target, described);
+  return target;
+}
+
 const events = createEvents();
 const tree = createTree(events);
 const parse = createParsing(
@@ -32,7 +49,7 @@ const body = document.createElement("body");
 html.append(head, body);
 document.appendChild(html);
 
-Object.defineProperties(document, {
+defineIdl(document, {
   head: { get: () => head },
   body: { get: () => body },
   // Only this document has a window. One built by `DOMParser` or
@@ -91,7 +108,7 @@ function focusedIn(scope) {
   return null;
 }
 
-Object.defineProperty(document, "activeElement", { get: () => focusedIn(document) });
+Object.defineProperty(document, "activeElement", { get: () => focusedIn(document), configurable: true, enumerable: true });
 Object.defineProperty(tree.ShadowRoot.prototype, "activeElement", {
   get() { return focusedIn(this); },
   configurable: true,
@@ -121,7 +138,7 @@ function changeFocus(next) {
 // Writable and configurable, as every Web IDL operation is: a test library
 // replaces `element.focus` to record calls, and an accessor that refuses the
 // assignment breaks it.
-Object.defineProperties(tree.HTMLElement.prototype, {
+defineIdl(tree.HTMLElement.prototype, {
   focus: { value() { if (isFocusable(this)) changeFocus(this); }, writable: true, configurable: true },
   blur: { value() { if (activeElement === this) changeFocus(body); }, writable: true, configurable: true },
 });
@@ -153,7 +170,7 @@ function writeCookie(text) {
   else cookies.set(name, value);
 }
 
-Object.defineProperties(document, {
+defineIdl(document, {
   cookie: {
     get() { return Array.from(cookies, ([name, value]) => `${name}=${value}`).join("; "); },
     set(value) { writeCookie(value); },
@@ -512,7 +529,7 @@ const history = new History();
 const localStorage = new Storage();
 const sessionStorage = new Storage();
 const selection = new Selection();
-Object.defineProperty(document, "getSelection", { value: () => selection });
+Object.defineProperty(document, "getSelection", { value: () => selection, configurable: true, enumerable: true, writable: true });
 const hostConsole = globalThis.console;
 const browserConsole = Object.create(null);
 for (const method of Object.getOwnPropertyNames(hostConsole)) {
@@ -647,7 +664,7 @@ Object.setPrototypeOf(globalThis, namedProperties);
 // Accessors rather than values in the assignment above: `Object.assign` would
 // have called the getter and left a plain number behind, so a test assigning to
 // `innerWidth` would change nothing a media query reads.
-Object.defineProperties(globalThis, {
+defineIdl(globalThis, {
   innerWidth: {
     get: () => viewport.width,
     set(value) { viewport.width = Number(value); },

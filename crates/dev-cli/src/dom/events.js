@@ -63,7 +63,7 @@ export function createEvents() {
       });
       // Web IDL exposes this as a same-realm own accessor. Keeping one shared
       // getter also makes the descriptor stable across Event instances.
-      Object.defineProperty(this, "isTrusted", { get: isTrusted });
+      Object.defineProperty(this, "isTrusted", { get: isTrusted, configurable: true, enumerable: true });
     }
     get type() { return this[STATE].type; }
     get bubbles() { return this[STATE].bubbles; }

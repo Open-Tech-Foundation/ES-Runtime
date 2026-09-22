@@ -4250,14 +4250,15 @@ fn test_dom_reflects_common_attributes_and_form_defaults() {
         "import { test, assertEquals } from 'runtime:test';\n\
          test('reflection', () => {\n\
            const input = document.createElement('input');\n\
-           input.id = 'email'; input.className = 'field'; input.disabled = true; input.size = 0; input.value = 42;\n\
+           input.id = 'email'; input.className = 'field'; input.disabled = true; input.value = 42;\n\
+           let refused = null; try { input.size = 0; } catch (error) { refused = error.name; }\n\
            assertEquals(input instanceof HTMLElement, true);\n\
            assertEquals(input instanceof HTMLInputElement, true);\n\
            assertEquals(input.getAttribute('id'), 'email');\n\
            assertEquals(input.getAttribute('class'), 'field');\n\
            assertEquals(input.disabled, true);\n\
            assertEquals(input.hasAttribute('disabled'), true);\n\
-           assertEquals(input.size, 1);\n\
+           assertEquals([refused, input.size], ['IndexSizeError', 20]);\n\
            assertEquals(input.value, '42');\n\
            input.disabled = false;\n\
            assertEquals(input.hasAttribute('disabled'), false);\n\
@@ -4814,7 +4815,7 @@ fn test_dom_number_inputs_normalize_values_and_expose_numeric_state() {
         "import { test, assertEquals } from 'runtime:test';\n\
          test('number inputs sanitize and convert values', () => {\n\
            const input = document.createElement('input'); input.type = 'number';\n\
-           input.value = '004.50'; assertEquals([input.value, input.valueAsNumber], ['4.5', 4.5]);\n\
+           input.value = '004.50'; assertEquals([input.value, input.valueAsNumber], ['004.50', 4.5]);\n\
            input.value = 'not-a-number'; assertEquals([input.value, Number.isNaN(input.valueAsNumber)], ['', true]);\n\
            input.valueAsNumber = 12.25; assertEquals([input.value, input.valueAsNumber], ['12.25', 12.25]);\n\
            input.valueAsNumber = NaN; assertEquals(input.value, '');\n\

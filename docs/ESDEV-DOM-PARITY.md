@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-92 of 94 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+93 of 95 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -130,6 +130,7 @@ compares the result.
 | named-access-on-the-window | tree | yes | yes | no |
 | an-inline-declaration-holds-its-longhands | cascade | yes | no | no |
 | a-controls-value-is-filtered-not-rewritten | forms | yes | no | no |
+| interface-members-can-be-redefined | tree | yes | yes | yes |
 
 ## Where esdev is closer to Chrome than an emulator
 

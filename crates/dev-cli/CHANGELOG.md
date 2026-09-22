@@ -337,6 +337,14 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **An interface member can be redefined.** Every property this DOM installed
+  through a descriptor batch was non-configurable, so `vi.spyOn(input,
+  "checked", "set")` — and any other stub — failed with `Cannot redefine
+  property`. Web IDL makes interface members configurable and enumerable, and
+  now so does this, across all twenty-nine batches in the tree, parser, window
+  and select modules plus the handful defined one at a time. A symbol-keyed
+  internal slot stays hidden and fixed, because it is this DOM's own bookkeeping
+  rather than anything a browser exposes.
 - **A control's value is filtered, never rewritten.** A `number` input holding
   `1.00` read back `1`, and `1e3` read back `1000`: the sanitizer was
   canonicalizing valid input, so a framework comparing what it wrote with what

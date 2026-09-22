@@ -2022,6 +2022,38 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "tree",
+    name: "interface-members-can-be-redefined",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      // What a test framework does to observe a property: redefine it. A
+      // descriptor that forgot `configurable` answers "Cannot redefine".
+      const members = [
+        [window.HTMLInputElement, "checked"], [window.HTMLInputElement, "value"],
+        [window.Element, "id"], [window.Node, "textContent"], [window.Element, "innerHTML"],
+        [window.Element, "classList"], [window.HTMLSelectElement, "options"],
+        [window.Element, "attributes"], [window.HTMLElement, "attachInternals"],
+      ];
+      const notConfigurable = members
+        .filter(([Class, name]) => {
+          const found = Object.getOwnPropertyDescriptor(Class.prototype, name);
+          return found !== undefined && !found.configurable;
+        })
+        .map(([Class, name]) => `${Class.name}.${name}`);
+      const input = document.createElement("input");
+      const original = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "checked");
+      const seen = [];
+      Object.defineProperty(input, "checked", {
+        configurable: true,
+        get: original.get,
+        set(value) { seen.push(value); original.set.call(this, value); },
+      });
+      input.checked = true;
+      return [notConfigurable, seen, input.checked];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

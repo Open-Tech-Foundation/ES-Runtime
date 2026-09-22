@@ -4951,10 +4951,53 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "interface-members-can-be-redefined",
+      "chrome": {
+        "result": [
+          [],
+          [
+            true
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [],
+          [
+            true
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [],
+          [
+            true
+          ],
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [],
+          [
+            true
+          ],
+          true
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 92,
+    "match": 93,
     "intentional-limit": 2,
     "drift": 0
   }
