@@ -170,7 +170,13 @@ if (flags.json) {
   await Deno.writeTextFile(flags.json, `${JSON.stringify(output, null, 2)}\n`);
 }
 if (flags.updateBaseline) {
-  await Deno.writeTextFile(baselinePath, `${JSON.stringify(output, null, 2)}\n`);
+  // The record describes a run, not a comparison: a freshly recorded baseline
+  // has drifted from nothing.
+  const recorded = {
+    cases: report.map((entry) => ({ ...entry, drift: false })),
+    summary: { ...summary, drift: 0 },
+  };
+  await Deno.writeTextFile(baselinePath, `${JSON.stringify(recorded, null, 2)}\n`);
 }
 console.log(JSON.stringify(output, null, 2));
 // A recorded run that nothing compares against rots in place. `drift` is any

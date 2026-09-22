@@ -312,6 +312,86 @@ export const cases = [
     },
   },
   {
+    group: "selectors",
+    name: "nth-child-counts-only-the-of-list",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      document.body.innerHTML =
+        "<ul><li class='x'>1</li><li>2</li><li class='x'>3</li><li class='x'>4</li><li>5</li><li class='x'>6</li></ul>";
+      const list = document.body.firstElementChild;
+      return [
+        Array.from(list.querySelectorAll("li:nth-child(2n + 1 of .x)"), (item) => item.textContent),
+        Array.from(list.querySelectorAll("li:nth-last-child(1 of .x)"), (item) => item.textContent),
+        Array.from(list.querySelectorAll("li:nth-child(2n + 1)"), (item) => item.textContent),
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "defined-pseudo-class-follows-the-definition",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      document.body.append(host);
+      host.innerHTML = "<matrix-widget></matrix-widget><p></p><matrix-absent></matrix-absent>";
+      const before = Array.from(host.querySelectorAll(":defined"), (element) => element.localName);
+      window.customElements.define("matrix-widget", class extends window.HTMLElement {});
+      return [
+        before,
+        Array.from(host.querySelectorAll(":defined"), (element) => element.localName),
+        Array.from(host.querySelectorAll(":not(:defined)"), (element) => element.localName),
+        document.createElement("matrix-widget").matches(":defined"),
+      ];
+    },
+  },
+  {
+    group: "tree",
+    name: "adjacent-insertion-lands-at-four-positions",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const root = document.createElement("main");
+      const target = document.createElement("p");
+      root.append(target);
+      document.body.append(root);
+      target.insertAdjacentHTML("beforebegin", "<i>bb</i>");
+      target.insertAdjacentHTML("afterbegin", "<b>ab</b>");
+      target.insertAdjacentHTML("beforeend", "<u>be</u>");
+      target.insertAdjacentHTML("afterend", "<s>ae</s>");
+      const returned = target.insertAdjacentElement("afterbegin", document.createElement("em"));
+      target.insertAdjacentText("beforeend", "text&");
+      // An invalid position is deliberately not asserted here: happy-dom 20.0.11
+      // hangs on one rather than throwing, and a case that never returns takes
+      // the whole matrix with it. `crates/dev-cli/tests/cli.rs` covers it.
+      return [root.innerHTML, returned.localName];
+    },
+  },
+  {
+    group: "components",
+    name: "declarative-shadow-root-attaches-only-through-set-html-unsafe",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const markup = '<span><template shadowrootmode="open" shadowrootserializable=""><i>inner</i></template>light</span>';
+      const inert = document.createElement("div");
+      inert.innerHTML = markup;
+      const attached = document.createElement("div");
+      attached.setHTMLUnsafe(markup);
+      const host = attached.firstElementChild;
+      return [
+        inert.firstElementChild.shadowRoot === null,
+        inert.firstElementChild.firstElementChild.localName,
+        host.shadowRoot.mode,
+        host.shadowRoot.serializable,
+        host.shadowRoot.innerHTML,
+        attached.getHTML(),
+        attached.getHTML({ serializableShadowRoots: true }),
+      ];
+    },
+  },
+  {
     group: "forms",
     name: "input-indeterminate-is-non-reflecting-state",
     run(window) {

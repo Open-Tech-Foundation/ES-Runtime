@@ -3022,6 +3022,54 @@ fn watch_needs_a_file_to_watch() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_dom_selectors_count_an_of_list_and_follow_custom_definitions() {
+    let dir = build_dir("t_test_dom_selector_of_and_defined");
+    write_in(
+        &dir,
+        "selectors.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('nth-child counts only the siblings in its of list', () => {\n\
+           document.body.innerHTML = \"<ul><li class='x'>1</li><li>2</li><li class='x'>3</li><li class='x'>4</li><li>5</li><li class='x'>6</li></ul>\";\n\
+           const list = document.body.firstElementChild;\n\
+           const texts = selector => Array.from(list.querySelectorAll(selector), item => item.textContent);\n\
+           assertEquals(texts('li:nth-child(2n + 1 of .x)'), ['1', '4']);\n\
+           assertEquals(texts('li:nth-child(odd of .x)'), ['1', '4']);\n\
+           assertEquals(texts('li:nth-last-child(1 of .x)'), ['6']);\n\
+           assertEquals(texts('li:nth-child(2n + 1)'), ['1', '3', '5']);\n\
+           assertEquals(texts('li:nth-child(1 of .x, :not(.x))'), ['1']);\n\
+         });\n\
+         test('an of list is refused where it does not belong', () => {\n\
+           const name = callback => { try { callback(); return 'ok'; } catch (error) { return error.name; } };\n\
+           assertEquals(name(() => document.querySelectorAll('li:nth-child(of .x)')), 'SyntaxError');\n\
+           assertEquals(name(() => document.querySelectorAll('li:nth-of-type(2n of .x)')), 'SyntaxError');\n\
+           assertEquals(name(() => document.querySelectorAll(':defined(x)')), 'SyntaxError');\n\
+         });\n\
+         test(':defined answers before and after the definition', () => {\n\
+           const host = document.createElement('div');\n\
+           document.body.append(host);\n\
+           host.innerHTML = '<my-widget></my-widget><p></p><other-thing></other-thing>';\n\
+           const names = selector => Array.from(host.querySelectorAll(selector), element => element.localName);\n\
+           assertEquals([names(':defined'), host.firstElementChild.matches(':defined')], [['p'], false]);\n\
+           customElements.define('my-widget', class extends HTMLElement {});\n\
+           assertEquals([names(':defined'), host.firstElementChild.matches(':defined')], [['my-widget', 'p'], true]);\n\
+           assertEquals(names(':not(:defined)'), ['other-thing']);\n\
+           assertEquals([document.createElement('my-widget').matches(':defined'), document.createElement('late-one').matches(':defined')], [true, false]);\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom of-list and defined selectors");
+    assert!(
+        ran.status.success(),
+        "DOM selector test did not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dom_parser_builds_whole_documents_from_html_only() {
     let dir = build_dir("t_test_dom_domparser");
     write_in(

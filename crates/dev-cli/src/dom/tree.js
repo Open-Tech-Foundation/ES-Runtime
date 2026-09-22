@@ -1636,10 +1636,20 @@ export function createTree(events = {}) {
     fieldset: HTMLFieldSetElement,
   };
 
+  // A valid custom element name, which is the only kind of element that can be
+  // undefined: everything else is defined by being built in.
+  const CUSTOM_NAME = /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/;
+
+  function isDefined(element) {
+    if (element.namespaceURI !== HTML_NAMESPACE || !CUSTOM_NAME.test(element.localName)) return true;
+    return slots(element).customDefined === true;
+  }
+
   function upgradeCustom(element, constructor) {
     if (Object.getPrototypeOf(element) === constructor.prototype) return element;
     if (!(constructor.prototype instanceof HTMLElement)) throw new TypeError("Custom element constructors must extend HTMLElement");
     Object.setPrototypeOf(element, constructor.prototype);
+    slots(element).customDefined = true;
     customConstruction.push({ element, name: element.localName, document: element.ownerDocument });
     try {
       const constructed = new constructor();
@@ -1661,5 +1671,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, upgradeCustom };
 }

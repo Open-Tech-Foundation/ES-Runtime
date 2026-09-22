@@ -32,7 +32,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "tree",
@@ -66,7 +67,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "tree",
@@ -100,7 +102,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "tree",
@@ -130,7 +133,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "events",
@@ -164,7 +168,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "events",
@@ -182,7 +187,8 @@
         "result": false
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "events",
@@ -220,7 +226,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "events",
@@ -238,7 +245,8 @@
         "result": 1
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "events",
@@ -264,7 +272,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "parsing",
@@ -282,7 +291,8 @@
         "result": "<p title=\"a&amp;b\">one &lt; two</p>"
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "parsing",
@@ -316,7 +326,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "parsing",
@@ -354,7 +365,8 @@
         ]
       },
       "emulatorDisagreement": true,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "tree",
@@ -392,7 +404,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "tree",
@@ -441,7 +454,8 @@
         ]
       },
       "emulatorDisagreement": true,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "tree",
@@ -487,7 +501,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "parsing",
@@ -509,7 +524,8 @@
         "result": null
       },
       "emulatorDisagreement": false,
-      "status": "intentional-limit"
+      "status": "intentional-limit",
+      "drift": false
     },
     {
       "group": "selectors",
@@ -527,7 +543,8 @@
         "result": "x"
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "selectors",
@@ -557,7 +574,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "selectors",
@@ -587,7 +605,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "selectors",
@@ -605,7 +624,206 @@
         "result": "SyntaxError"
       },
       "emulatorDisagreement": true,
-      "status": "match"
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "selectors",
+      "name": "nth-child-counts-only-the-of-list",
+      "chrome": {
+        "result": [
+          [
+            "1",
+            "4"
+          ],
+          [
+            "6"
+          ],
+          [
+            "1",
+            "3",
+            "5"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "1",
+            "4"
+          ],
+          [
+            "6"
+          ],
+          [
+            "1",
+            "3",
+            "5"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "1",
+            "4"
+          ],
+          [
+            "6"
+          ],
+          [
+            "1",
+            "3",
+            "5"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [],
+          [
+            "6"
+          ],
+          [
+            "1",
+            "3",
+            "5"
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "defined-pseudo-class-follows-the-definition",
+      "chrome": {
+        "result": [
+          [
+            "p"
+          ],
+          [
+            "matrix-widget",
+            "p"
+          ],
+          [
+            "matrix-absent"
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "p"
+          ],
+          [
+            "matrix-widget",
+            "p"
+          ],
+          [
+            "matrix-absent"
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [],
+          [],
+          [
+            "matrix-widget",
+            "p",
+            "matrix-absent"
+          ],
+          false
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "p"
+          ],
+          [
+            "matrix-widget",
+            "p"
+          ],
+          [
+            "matrix-absent"
+          ],
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "adjacent-insertion-lands-at-four-positions",
+      "chrome": {
+        "result": [
+          "<i>bb</i><p><em></em><b>ab</b><u>be</u>text&amp;</p><s>ae</s>",
+          "em"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "<i>bb</i><p><em></em><b>ab</b><u>be</u>text&amp;</p><s>ae</s>",
+          "em"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "<i>bb</i><p><em></em><b>ab</b><u>be</u>text&amp;</p><s>ae</s>",
+          "em"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "<i>bb</i><p><em></em><b>ab</b><u>be</u>text&amp;</p><s>ae</s>",
+          "em"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "declarative-shadow-root-attaches-only-through-set-html-unsafe",
+      "chrome": {
+        "result": [
+          true,
+          "template",
+          "open",
+          true,
+          "<i>inner</i>",
+          "<span>light</span>",
+          "<span><template shadowrootmode=\"open\" shadowrootserializable=\"\"><i>inner</i></template>light</span>"
+        ]
+      },
+      "esdev": {
+        "result": [
+          true,
+          "template",
+          "open",
+          true,
+          "<i>inner</i>",
+          "<span>light</span>",
+          "<span><template shadowrootmode=\"open\" shadowrootserializable=\"\"><i>inner</i></template>light</span>"
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -639,7 +857,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -669,7 +888,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -707,7 +927,8 @@
         ]
       },
       "emulatorDisagreement": true,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -761,7 +982,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -779,7 +1001,8 @@
         "result": 0
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -797,7 +1020,8 @@
         "result": false
       },
       "emulatorDisagreement": true,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -815,7 +1039,8 @@
         "result": "markup"
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -845,7 +1070,8 @@
         ]
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -863,7 +1089,8 @@
         "result": true
       },
       "emulatorDisagreement": false,
-      "status": "match"
+      "status": "match",
+      "drift": false
     },
     {
       "group": "forms",
@@ -898,11 +1125,13 @@
         ]
       },
       "emulatorDisagreement": true,
-      "status": "match"
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 29,
-    "intentional-limit": 1
+    "match": 33,
+    "intentional-limit": 1,
+    "drift": 0
   }
 }

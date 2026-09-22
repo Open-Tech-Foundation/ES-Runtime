@@ -54,6 +54,14 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`:defined` and `:nth-child(An+B of S)` in `esdev test --dom`,** both of
+  which used to be a `SyntaxError`. `:defined` answers for the element in front
+  of it: a built-in is defined, a custom element is not until its definition
+  lands, and `:not(:defined)` finds what is still waiting — which is how a test
+  asserts on upgrade order at all. The `of` form counts only the siblings
+  matching its selector list, and requires the element to be one of them;
+  `nth-of-type` still refuses an `of` list, as the specification says.
+
 - **The remaining exposed interfaces: `AbstractRange`, `StaticRange`,
   `SVGSVGElement`, `WheelEvent`, `DragEvent`, `ClipboardEvent`, and
   `document.defaultView`.** A range's boundary points are readonly now, as Web

@@ -50,6 +50,16 @@ function parseAttribute(source, at, body) {
   return { type: "attribute", name, operator, value: quoted ?? bare, insensitive: flag?.toLowerCase() === "i" };
 }
 
+// `An+B` optionally followed by `of <selector-list>`. The nth expression is
+// matched first so a selector containing the word `of` cannot be split wrongly.
+const NTH_WITH_OF = /^\s*(odd|even|[+-]?\d+|[+-]?\d*n(?:\s*[+-]\s*\d+)?)\s*(?:of\s+([\s\S]+))?$/i;
+
+function splitNth(source, at, argument) {
+  const match = NTH_WITH_OF.exec(argument);
+  if (!match) syntax(source, at, "malformed nth expression");
+  return { nth: match[1], of: match[2] ?? null };
+}
+
 function parseNth(source, at, argument) {
   const text = argument.replace(/\s+/g, "").toLowerCase();
   if (text === "odd") return { a: 2, b: 1 };
@@ -101,7 +111,7 @@ function parseCompound(source, offset, text) {
     if (kind === ":") {
       const match = /^[A-Za-z-]+/.exec(text.slice(at + 1));
       const functional = new Set(["is", "where", "not", "has", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
-      const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus", "scope", "checked", "disabled", "enabled", "required", "optional", "link"]);
+      const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus", "scope", "defined", "checked", "disabled", "enabled", "required", "optional", "link"]);
       if (!match || !functional.has(match[0]) && !bare.has(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
       const name = match[0];
       const open = at + match[0].length + 1;
@@ -129,9 +139,18 @@ function parseCompound(source, offset, text) {
       if (end === text.length || depth !== 0) syntax(source, offset + at, "unterminated pseudo-class");
       const argument = text.slice(open + 1, end).trim();
       if (!argument) syntax(source, offset + at, `:${name} requires a non-empty argument list`);
-      simples.push(name.startsWith("nth-")
-        ? { type: name, nth: parseNth(source, offset + at, argument) }
-        : { type: name, selectors: name === "has" ? parseRelativeList(argument) : splitList(argument).map(parseOne) });
+      if (name.startsWith("nth-")) {
+        // Only the child forms take `of S`; `nth-of-type` already selects by type.
+        const takesOf = name === "nth-child" || name === "nth-last-child";
+        const { nth, of } = takesOf ? splitNth(source, offset + at, argument) : { nth: argument, of: null };
+        simples.push({
+          type: name,
+          nth: parseNth(source, offset + at, nth),
+          selectors: of === null ? null : splitList(of).map(parseOne),
+        });
+      } else {
+        simples.push({ type: name, selectors: name === "has" ? parseRelativeList(argument) : splitList(argument).map(parseOne) });
+      }
       at = end + 1;
       continue;
     }
@@ -237,7 +256,7 @@ function nthMatches(position, { a, b }) {
   return Number.isInteger(quotient) && quotient >= 0;
 }
 
-export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE }) {
+export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
@@ -257,12 +276,19 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
       if (simple.type === "required") return element.hasAttribute("required");
       if (simple.type === "optional") return ["input", "select", "textarea"].includes(element.localName) && !element.hasAttribute("required");
       if (simple.type === "link") return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
+      if (simple.type === "defined") return isDefined(element);
       if (simple.type.endsWith("child")) {
-        const siblings = elementSiblings(element);
+        const all = elementSiblings(element);
+        if (simple.type === "first-child") return all.indexOf(element) === 0;
+        if (simple.type === "last-child") return all.indexOf(element) === all.length - 1;
+        if (simple.type === "only-child") return all.length === 1;
+        // With `of S` only the matching siblings are counted, and the element
+        // itself has to be one of them.
+        const siblings = simple.selectors === null
+          ? all
+          : all.filter((sibling) => simple.selectors.some((parts) => matchesParts(sibling, parts, parts.length - 1, scope)));
         const index = siblings.indexOf(element);
-        if (simple.type === "first-child") return index === 0;
-        if (simple.type === "last-child") return index === siblings.length - 1;
-        if (simple.type === "only-child") return siblings.length === 1;
+        if (index < 0) return false;
         const position = simple.type === "nth-last-child" ? siblings.length - index : index + 1;
         return nthMatches(position, simple.nth);
       }
