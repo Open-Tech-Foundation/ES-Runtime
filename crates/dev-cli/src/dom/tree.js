@@ -817,6 +817,7 @@ export function createTree(events = {}) {
   // Namespace-specific base classes are observable browser API, even when this
   // layout-free DOM has no SVG or MathML rendering behaviour of its own.
   class SVGElement extends Element {}
+  class SVGSVGElement extends SVGElement {}
   class MathMLElement extends Element {}
 
   class HTMLInputElement extends HTMLElement {
@@ -1469,7 +1470,10 @@ export function createTree(events = {}) {
       qualifiedName = String(qualifiedName);
       if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
       if (namespaceURI === HTML_NAMESPACE) return new (ELEMENT_CLASSES[qualifiedName] ?? HTMLElement)(qualifiedName, this);
-      if (namespaceURI === SVG_NAMESPACE) return new SVGElement(qualifiedName, this, namespaceURI);
+      if (namespaceURI === SVG_NAMESPACE) {
+        const Class = qualifiedName.toLowerCase() === "svg" || qualifiedName === "svg:svg" ? SVGSVGElement : SVGElement;
+        return new Class(qualifiedName, this, namespaceURI);
+      }
       if (namespaceURI === MATHML_NAMESPACE) return new MathMLElement(qualifiedName, this, namespaceURI);
       return new Element(qualifiedName, this, namespaceURI);
     }
@@ -1485,6 +1489,8 @@ export function createTree(events = {}) {
       return new ProcessingInstruction(target, data, this);
     }
     get doctype() { return Array.from(this._esdevChildren()).find((node) => node instanceof DocumentType) ?? null; }
+    // A document has a window only when one installed itself over this getter.
+    get defaultView() { return null; }
     // The first `title` element in tree order, created in the head on demand,
     // because head management libraries write it before reading it back.
     get title() {
@@ -1655,5 +1661,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

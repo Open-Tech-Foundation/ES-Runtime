@@ -54,6 +54,17 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **The remaining exposed interfaces: `AbstractRange`, `StaticRange`,
+  `SVGSVGElement`, `WheelEvent`, `DragEvent`, `ClipboardEvent`, and
+  `document.defaultView`.** A range's boundary points are readonly now, as Web
+  IDL says, and moved only by the tree adjustments that are meant to move them;
+  a `StaticRange` records four values and never follows the tree afterwards,
+  which is the whole difference between the two. `<svg>` is an `SVGSVGElement`,
+  by `createElementNS` and by the parser. `document.defaultView` is the window
+  for the test realm's document and `null` for one built by `DOMParser` or
+  `createHTMLDocument`, as in a browser. `TouchEvent` stays out: `PointerEvent`
+  is the modern path and is already here.
+
 - **`DOMParser` builds whole documents in `esdev test --dom`,** `text/html`
   only: the strict parser's document path is wired through an op now, so a
   doctype is accepted where it is legal and nowhere else. A source that supplies

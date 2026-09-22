@@ -92,6 +92,20 @@ export function createEvents() {
   class PointerEvent extends MouseEvent {
     constructor(type, options = {}) { super(type, options); this.pointerId = Number(options.pointerId ?? 0); this.width = Number(options.width ?? 1); this.height = Number(options.height ?? 1); this.pressure = Number(options.pressure ?? 0); this.pointerType = String(options.pointerType ?? ""); this.isPrimary = Boolean(options.isPrimary); }
   }
+  class WheelEvent extends MouseEvent {
+    static DOM_DELTA_PIXEL = 0;
+    static DOM_DELTA_LINE = 1;
+    static DOM_DELTA_PAGE = 2;
+    constructor(type, options = {}) { super(type, options); this.deltaX = Number(options.deltaX ?? 0); this.deltaY = Number(options.deltaY ?? 0); this.deltaZ = Number(options.deltaZ ?? 0); this.deltaMode = Number(options.deltaMode ?? 0); }
+  }
+  // There is no DataTransfer or Clipboard in a layout-free DOM, so the payload
+  // is whatever the constructor was handed, and null by default.
+  class DragEvent extends MouseEvent {
+    constructor(type, options = {}) { super(type, options); this.dataTransfer = options.dataTransfer ?? null; }
+  }
+  class ClipboardEvent extends Event {
+    constructor(type, options = {}) { super(type, options); this.clipboardData = options.clipboardData ?? null; }
+  }
   class SubmitEvent extends Event {
     constructor(type, options = {}) { super(type, options); this.submitter = options.submitter ?? null; }
   }
@@ -193,5 +207,5 @@ export function createEvents() {
     return target;
   }
 
-  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget };
+  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget };
 }

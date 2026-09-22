@@ -5,7 +5,9 @@ function rangeError(name, message) {
   throw new DOMException(message, name);
 }
 
-export function createRanges({ Node, Element, Text }, parse) {
+const POINTS = Symbol("esdev DOM range boundary points");
+
+export function createRanges({ Node, Element, Text, DocumentType, Attr }, parse) {
   const ranges = new Set();
   function childIndex(node) {
     let index = 0;
@@ -70,20 +72,52 @@ export function createRanges({ Node, Element, Text }, parse) {
     return false;
   }
 
-  class Range {
+  // The boundary points are readonly in Web IDL, so they live in a slot: the
+  // tree adjustments below move them, and a test assigning to `startOffset`
+  // should fail the way it would in a browser rather than quietly succeed.
+  class AbstractRange {
+    constructor(points) {
+      if (points?.[POINTS] !== POINTS) throw new TypeError("Illegal constructor");
+      Object.defineProperty(this, POINTS, { value: points });
+    }
+    get startContainer() { return this[POINTS].startContainer; }
+    get startOffset() { return this[POINTS].startOffset; }
+    get endContainer() { return this[POINTS].endContainer; }
+    get endOffset() { return this[POINTS].endOffset; }
+    get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
+  }
+
+  // A snapshot: it records four values and never follows the tree afterwards,
+  // which is the whole difference from a Range.
+  class StaticRange extends AbstractRange {
+    constructor(init = {}) {
+      const { startContainer, startOffset, endContainer, endOffset } = init;
+      for (const node of [startContainer, endContainer]) {
+        if (!(node instanceof Node)) throw new TypeError("StaticRange boundary container must be a Node");
+        if (DocumentType && node instanceof DocumentType || Attr && node instanceof Attr) {
+          rangeError("InvalidNodeTypeError", "A StaticRange cannot start or end in a doctype or attribute node.");
+        }
+      }
+      super({
+        [POINTS]: POINTS,
+        startContainer,
+        startOffset: Number(startOffset ?? 0),
+        endContainer,
+        endOffset: Number(endOffset ?? 0),
+      });
+    }
+  }
+
+  class Range extends AbstractRange {
     static START_TO_START = 0;
     static START_TO_END = 1;
     static END_TO_END = 2;
     static END_TO_START = 3;
     constructor(document) {
+      super({ [POINTS]: POINTS, startContainer: document, startOffset: 0, endContainer: document, endOffset: 0 });
       this.document = document;
-      this.startContainer = document;
-      this.startOffset = 0;
-      this.endContainer = document;
-      this.endOffset = 0;
       ranges.add(this);
     }
-    get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
     get commonAncestorContainer() {
       const ancestors = new Set();
       for (let node = this.startContainer; node; node = node.parentNode) ancestors.add(node);
@@ -92,13 +126,15 @@ export function createRanges({ Node, Element, Text }, parse) {
     }
     setStart(node, offset) {
       offset = validate(this.document, node, offset);
-      this.startContainer = node; this.startOffset = offset;
-      if (comparePoints(node, offset, this.endContainer, this.endOffset) > 0) { this.endContainer = node; this.endOffset = offset; }
+      const points = this[POINTS];
+      points.startContainer = node; points.startOffset = offset;
+      if (comparePoints(node, offset, this.endContainer, this.endOffset) > 0) { points.endContainer = node; points.endOffset = offset; }
     }
     setEnd(node, offset) {
       offset = validate(this.document, node, offset);
-      this.endContainer = node; this.endOffset = offset;
-      if (comparePoints(this.startContainer, this.startOffset, node, offset) > 0) { this.startContainer = node; this.startOffset = offset; }
+      const points = this[POINTS];
+      points.endContainer = node; points.endOffset = offset;
+      if (comparePoints(this.startContainer, this.startOffset, node, offset) > 0) { points.startContainer = node; points.startOffset = offset; }
     }
     setStartBefore(node) { if (!node.parentNode) rangeError("InvalidNodeTypeError", "Cannot set a boundary before a root node."); this.setStart(node.parentNode, childIndex(node)); }
     setStartAfter(node) { if (!node.parentNode) rangeError("InvalidNodeTypeError", "Cannot set a boundary after a root node."); this.setStart(node.parentNode, childIndex(node) + 1); }
@@ -242,8 +278,8 @@ export function createRanges({ Node, Element, Text }, parse) {
         insert(parent, index) {
           for (const range of ranges) {
             if (range.document !== document) continue;
-            if (range.startContainer === parent && range.startOffset > index) range.startOffset += 1;
-            if (range.endContainer === parent && range.endOffset > index) range.endOffset += 1;
+            if (range.startContainer === parent && range.startOffset > index) range[POINTS].startOffset += 1;
+            if (range.endContainer === parent && range.endOffset > index) range[POINTS].endOffset += 1;
           }
         },
         remove(parent, node, index) {
@@ -252,10 +288,10 @@ export function createRanges({ Node, Element, Text }, parse) {
             for (const boundary of ["start", "end"]) {
               const container = range[`${boundary}Container`];
               if (contains(node, container)) {
-                range[`${boundary}Container`] = parent;
-                range[`${boundary}Offset`] = index;
+                range[POINTS][`${boundary}Container`] = parent;
+                range[POINTS][`${boundary}Offset`] = index;
               } else if (container === parent && range[`${boundary}Offset`] > index) {
-                range[`${boundary}Offset`] -= 1;
+                range[POINTS][`${boundary}Offset`] -= 1;
               }
             }
           }
@@ -263,13 +299,13 @@ export function createRanges({ Node, Element, Text }, parse) {
         characterData(node, _oldLength, newLength) {
           for (const range of ranges) {
             if (range.document !== document) continue;
-            if (range.startContainer === node) range.startOffset = Math.min(range.startOffset, newLength);
-            if (range.endContainer === node) range.endOffset = Math.min(range.endOffset, newLength);
+            if (range.startContainer === node) range[POINTS].startOffset = Math.min(range.startOffset, newLength);
+            if (range.endContainer === node) range[POINTS].endOffset = Math.min(range.endOffset, newLength);
           }
         },
       },
     });
   }
 
-  return { Range, install };
+  return { AbstractRange, Range, StaticRange, install };
 }

@@ -33,6 +33,9 @@ document.appendChild(html);
 Object.defineProperties(document, {
   head: { get: () => head },
   body: { get: () => body },
+  // Only this document has a window. One built by `DOMParser` or
+  // `createHTMLDocument` keeps the prototype's `null`, as in a browser.
+  defaultView: { get: () => globalThis },
 });
 parse.install();
 selectors.install();
@@ -350,7 +353,9 @@ Object.assign(globalThis, {
   MediaQueryList,
   MutationObserver,
   ResizeObserver: NeverObserver,
+  AbstractRange: ranges.AbstractRange,
   Range: ranges.Range,
+  StaticRange: ranges.StaticRange,
   Selection,
   Storage,
   cancelAnimationFrame,
