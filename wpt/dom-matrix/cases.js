@@ -1731,6 +1731,27 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "parsing",
+    name: "svg-elements-get-their-own-interface",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      document.body.innerHTML = "<svg><g><circle/></g><text><tspan/></text><linearGradient><stop/></linearGradient></svg>";
+      const name = (selector) => document.querySelector(selector).constructor.name;
+      const svg = document.body.firstElementChild;
+      const g = document.querySelector("g");
+      return [
+        name("svg"), name("g"), name("circle"), name("text"), name("tspan"),
+        name("linearGradient"), name("stop"),
+        g instanceof window.SVGGraphicsElement,
+        g instanceof window.SVGElement,
+        // Case-sensitive, and an unknown name keeps the base interface.
+        document.createElementNS("http://www.w3.org/2000/svg", "CIRCLE").constructor.name,
+        svg.namespaceURI,
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

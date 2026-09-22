@@ -824,6 +824,8 @@ export const features = [
   ["window", "MathMLElement", (w) => global(w, "MathMLElement")],
   ["window", "SVGElement", (w) => global(w, "SVGElement")],
   ["window", "SVGSVGElement", (w) => global(w, "SVGSVGElement")],
+  ["window", "SVGGElement", (w) => global(w, "SVGGElement")],
+  ["window", "SVGGeometryElement", (w) => global(w, "SVGGeometryElement")],
   ["window", "focus() sets activeElement", (w) => value(() => {
     const input = connected(w, "input");
     input.focus();

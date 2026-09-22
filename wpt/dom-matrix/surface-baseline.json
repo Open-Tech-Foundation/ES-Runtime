@@ -1,10 +1,10 @@
 {
   "summary": {
-    "features": 226,
+    "features": 228,
     "agreesWithChrome": {
-      "esdev": 205,
-      "jsdom": 177,
-      "happy-dom": 177
+      "esdev": 207,
+      "jsdom": 178,
+      "happy-dom": 179
     },
     "drift": 0
   },
@@ -39,10 +39,10 @@
     },
     {
       "group": "window",
-      "features": 32,
-      "esdev": 23,
-      "jsdom": 21,
-      "happy-dom": 22
+      "features": 34,
+      "esdev": 25,
+      "jsdom": 22,
+      "happy-dom": 24
     },
     {
       "group": "events",
@@ -2069,6 +2069,24 @@
       "chrome": true,
       "esdev": true,
       "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "SVGGElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "SVGGeometryElement",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": false,
       "happy-dom": true,
       "drift": false
     },

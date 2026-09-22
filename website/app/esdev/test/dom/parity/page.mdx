@@ -7,14 +7,14 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 
 # DOM parity
 
-Chrome is the oracle. 226 features — interfaces, members and behaviours — are
-put to all four runtimes, and 84 behaviour cases run the same code in each.
+Chrome is the oracle. 228 features — interfaces, members and behaviours — are
+put to all four runtimes, and 87 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 205 / 226 | 91% |
-| jsdom | 177 / 226 | 78% |
-| happy-dom | 177 / 226 | 78% |
+| esdev | 207 / 228 | 91% |
+| jsdom | 178 / 228 | 78% |
+| happy-dom | 179 / 228 | 79% |
 
 ## By area
 
@@ -24,7 +24,7 @@ put to all four runtimes, and 84 behaviour cases run the same code in each.
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
-| window | 32 | 23 | 21 | 22 |
+| window | 34 | 25 | 22 | 24 |
 | events | 26 | 24 | 22 | 25 |
 | components | 32 | 32 | 20 | 20 |
 | parsing | 13 | 9 | 12 | 11 |
@@ -32,7 +32,7 @@ put to all four runtimes, and 84 behaviour cases run the same code in each.
 
 ## Behaviour cases
 
-82 of 84 cases match Chrome exactly, and 2 is a documented limit.
+85 of 87 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -120,10 +120,13 @@ put to all four runtimes, and 84 behaviour cases run the same code in each.
 | radio-click-is-exclusive-by-form-owner | forms | yes | yes | yes |
 | label-click-activates-nested-checkbox | forms | yes | yes | yes |
 | disabled-fieldset-excludes-validation-and-data | forms | yes | yes | no |
+| cancel-bubble-is-the-stop-propagation-flag | events | yes | yes | no |
+| nodes-stringify-as-their-interface | tree | yes | no | no |
+| svg-elements-get-their-own-interface | parsing | yes | no | yes |
 
 ## Closer to Chrome than an emulator
 
-60 features where esdev matches Chrome and jsdom or happy-dom does not.
+61 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -185,6 +188,7 @@ put to all four runtimes, and 84 behaviour cases run the same code in each.
 | Worker | yes | no | no |
 | URL.createObjectURL | yes | no | yes |
 | MathMLElement | yes | no | no |
+| SVGGeometryElement | yes | no | yes |
 | showPopover | yes | no | no |
 | dialog.showModal | yes | no | yes |
 

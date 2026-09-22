@@ -3890,10 +3890,77 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "parsing",
+      "name": "svg-elements-get-their-own-interface",
+      "chrome": {
+        "result": [
+          "SVGSVGElement",
+          "SVGGElement",
+          "SVGCircleElement",
+          "SVGTextElement",
+          "SVGTSpanElement",
+          "SVGLinearGradientElement",
+          "SVGStopElement",
+          true,
+          true,
+          "SVGElement",
+          "http://www.w3.org/2000/svg"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "SVGSVGElement",
+          "SVGGElement",
+          "SVGCircleElement",
+          "SVGTextElement",
+          "SVGTSpanElement",
+          "SVGLinearGradientElement",
+          "SVGStopElement",
+          true,
+          true,
+          "SVGElement",
+          "http://www.w3.org/2000/svg"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "SVGSVGElement",
+          "SVGGElement",
+          "SVGCircleElement",
+          "SVGTextElement",
+          "SVGTSpanElement",
+          "SVGLinearGradientElement",
+          "SVGStopElement",
+          true,
+          true,
+          "SVGElement",
+          "http://www.w3.org/2000/svg"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "SVGSVGElement",
+          "SVGGElement",
+          "SVGElement",
+          "SVGElement",
+          "SVGElement",
+          "SVGElement",
+          "SVGElement",
+          true,
+          true,
+          "SVGElement",
+          "http://www.w3.org/2000/svg"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 84,
+    "match": 85,
     "intentional-limit": 2,
     "drift": 0
   }

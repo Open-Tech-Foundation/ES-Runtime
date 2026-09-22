@@ -966,11 +966,85 @@ export function createTree(events = {}) {
     }
   }
 
-  // Namespace-specific base classes are observable browser API, even when this
-  // layout-free DOM has no SVG or MathML rendering behaviour of its own.
+  // Namespace-specific classes are observable browser API, even when this
+  // layout-free DOM has no SVG or MathML rendering behaviour of its own. SVG
+  // gives every element name its own interface over a handful of shared bases,
+  // and a renderer reads that: `<g>` is an `SVGGElement`, not a bare
+  // `SVGElement`. The table below is Chrome's, element for element.
   class SVGElement extends Element {}
-  class SVGSVGElement extends SVGElement {}
+  class SVGGraphicsElement extends SVGElement {}
+  class SVGGeometryElement extends SVGGraphicsElement {}
+  class SVGTextContentElement extends SVGGraphicsElement {}
+  class SVGTextPositioningElement extends SVGTextContentElement {}
+  class SVGGradientElement extends SVGElement {}
+  class SVGComponentTransferFunctionElement extends SVGElement {}
+  class SVGAnimationElement extends SVGElement {}
   class MathMLElement extends Element {}
+
+  const SVG_INTERFACES = {
+    SVGElement,
+    SVGGraphicsElement,
+    SVGGeometryElement,
+    SVGTextContentElement,
+    SVGTextPositioningElement,
+    SVGGradientElement,
+    SVGComponentTransferFunctionElement,
+    SVGAnimationElement,
+  };
+  // Local name to interface, grouped by the base the interface extends. The
+  // leaf classes are generated rather than declared one by one, because nothing
+  // about them differs but their name and their base.
+  const SVG_ELEMENT_CLASSES = { __proto__: null };
+  for (const [base, table] of [
+    [SVGGraphicsElement, {
+      a: "SVGAElement", defs: "SVGDefsElement", foreignObject: "SVGForeignObjectElement",
+      g: "SVGGElement", image: "SVGImageElement", svg: "SVGSVGElement",
+      switch: "SVGSwitchElement", symbol: "SVGSymbolElement", use: "SVGUseElement",
+    }],
+    [SVGGeometryElement, {
+      circle: "SVGCircleElement", ellipse: "SVGEllipseElement", line: "SVGLineElement",
+      path: "SVGPathElement", polygon: "SVGPolygonElement", polyline: "SVGPolylineElement",
+      rect: "SVGRectElement",
+    }],
+    [SVGTextPositioningElement, { text: "SVGTextElement", tspan: "SVGTSpanElement" }],
+    [SVGTextContentElement, { textPath: "SVGTextPathElement" }],
+    [SVGGradientElement, {
+      linearGradient: "SVGLinearGradientElement", radialGradient: "SVGRadialGradientElement",
+    }],
+    [SVGComponentTransferFunctionElement, {
+      feFuncA: "SVGFEFuncAElement", feFuncB: "SVGFEFuncBElement",
+      feFuncG: "SVGFEFuncGElement", feFuncR: "SVGFEFuncRElement",
+    }],
+    [SVGAnimationElement, {
+      animate: "SVGAnimateElement", animateMotion: "SVGAnimateMotionElement",
+      animateTransform: "SVGAnimateTransformElement", mpath: "SVGMPathElement",
+      set: "SVGSetElement",
+    }],
+    [SVGElement, {
+      clipPath: "SVGClipPathElement", desc: "SVGDescElement", feBlend: "SVGFEBlendElement",
+      feColorMatrix: "SVGFEColorMatrixElement", feComponentTransfer: "SVGFEComponentTransferElement",
+      feComposite: "SVGFECompositeElement", feConvolveMatrix: "SVGFEConvolveMatrixElement",
+      feDiffuseLighting: "SVGFEDiffuseLightingElement", feDisplacementMap: "SVGFEDisplacementMapElement",
+      feDistantLight: "SVGFEDistantLightElement", feDropShadow: "SVGFEDropShadowElement",
+      feFlood: "SVGFEFloodElement", feGaussianBlur: "SVGFEGaussianBlurElement",
+      feImage: "SVGFEImageElement", feMerge: "SVGFEMergeElement", feMergeNode: "SVGFEMergeNodeElement",
+      feMorphology: "SVGFEMorphologyElement", feOffset: "SVGFEOffsetElement",
+      fePointLight: "SVGFEPointLightElement", feSpecularLighting: "SVGFESpecularLightingElement",
+      feSpotLight: "SVGFESpotLightElement", feTile: "SVGFETileElement",
+      feTurbulence: "SVGFETurbulenceElement", filter: "SVGFilterElement",
+      marker: "SVGMarkerElement", mask: "SVGMaskElement", metadata: "SVGMetadataElement",
+      pattern: "SVGPatternElement", script: "SVGScriptElement", stop: "SVGStopElement",
+      style: "SVGStyleElement", title: "SVGTitleElement", view: "SVGViewElement",
+    }],
+  ]) {
+    for (const [element, name] of Object.entries(table)) {
+      // The computed key names the class, so `constructor.name` and the
+      // `Symbol.toStringTag` taken from it read as the interface, not as "".
+      SVG_INTERFACES[name] ??= { [name]: class extends base {} }[name];
+      SVG_ELEMENT_CLASSES[element] = SVG_INTERFACES[name];
+    }
+  }
+  const { SVGSVGElement } = SVG_INTERFACES;
 
   class HTMLInputElement extends HTMLElement {
     constructor(name, ownerDocument) {
@@ -2145,8 +2219,10 @@ export function createTree(events = {}) {
       if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
       if (namespaceURI === HTML_NAMESPACE) return new (ELEMENT_CLASSES[qualifiedName] ?? HTMLElement)(qualifiedName, this);
       if (namespaceURI === SVG_NAMESPACE) {
-        const Class = qualifiedName.toLowerCase() === "svg" || qualifiedName === "svg:svg" ? SVGSVGElement : SVGElement;
-        return new Class(qualifiedName, this, namespaceURI);
+        // By exact local name: SVG is case-sensitive, so `CIRCLE` is an unknown
+        // element with the base interface, exactly as in a browser.
+        const local = qualifiedName.includes(":") ? qualifiedName.slice(qualifiedName.indexOf(":") + 1) : qualifiedName;
+        return new (SVG_ELEMENT_CLASSES[local] ?? SVGElement)(qualifiedName, this, namespaceURI);
       }
       if (namespaceURI === MATHML_NAMESPACE) return new MathMLElement(qualifiedName, this, namespaceURI);
       return new Element(qualifiedName, this, namespaceURI);
@@ -2477,5 +2553,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, HTMLDocument, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, HTMLDocument, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

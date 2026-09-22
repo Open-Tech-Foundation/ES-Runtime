@@ -25,6 +25,15 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **Every SVG element has its own interface.** `<g>` was a bare `SVGElement`;
+  Chrome says `SVGGElement`, and a renderer that branches on the interface reads
+  the difference. 59 element names now map to their own class over the shared
+  bases — `SVGGraphicsElement`, `SVGGeometryElement`, `SVGTextContentElement`,
+  `SVGTextPositioningElement`, `SVGGradientElement`,
+  `SVGComponentTransferFunctionElement`, `SVGAnimationElement` — each exposed as
+  a global, with the table taken element by element from a headless Chrome run.
+  Lookup is by exact local name, so `createElementNS(svg, "CIRCLE")` keeps the
+  base interface, as in a browser.
 - **JSX compiles the way the project says, and no other way.** An `esdev.json`
   `jsx` section says where the element function comes from — `importSource` for
   a package the compiler imports it from, or `factory` (with `fragment`) for one

@@ -9,13 +9,13 @@ keep current.
 
 ## Surface
 
-226 features — interfaces, members and behaviours — put to all four runtimes.
+228 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 205 / 226 | 91% |
-| jsdom | 177 / 226 | 78% |
-| happy-dom | 177 / 226 | 78% |
+| esdev | 207 / 228 | 91% |
+| jsdom | 178 / 228 | 78% |
+| happy-dom | 179 / 228 | 79% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
@@ -23,7 +23,7 @@ keep current.
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
-| window | 32 | 23 | 21 | 22 |
+| window | 34 | 25 | 22 | 24 |
 | events | 26 | 24 | 22 | 25 |
 | components | 32 | 32 | 20 | 20 |
 | parsing | 13 | 9 | 12 | 11 |
@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-82 of 84 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+85 of 87 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -120,10 +120,13 @@ compares the result.
 | radio-click-is-exclusive-by-form-owner | forms | yes | yes | yes |
 | label-click-activates-nested-checkbox | forms | yes | yes | yes |
 | disabled-fieldset-excludes-validation-and-data | forms | yes | yes | no |
+| cancel-bubble-is-the-stop-propagation-flag | events | yes | yes | no |
+| nodes-stringify-as-their-interface | tree | yes | no | no |
+| svg-elements-get-their-own-interface | parsing | yes | no | yes |
 
 ## Where esdev is closer to Chrome than an emulator
 
-60 of the 226 features.
+61 of the 228 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -185,12 +188,13 @@ compares the result.
 | Worker | yes | no | no |
 | URL.createObjectURL | yes | no | yes |
 | MathMLElement | yes | no | no |
+| SVGGeometryElement | yes | no | yes |
 | showPopover | yes | no | no |
 | dialog.showModal | yes | no | yes |
 
 ## Where esdev differs from Chrome, and why
 
-21 of 226. Every one of them is here:
+21 of 228. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -480,6 +484,8 @@ a difference with no entry fails `tsr docs:parity`.
 | window | MathMLElement | yes | yes | no | no |
 | window | SVGElement | yes | yes | yes | yes |
 | window | SVGSVGElement | yes | yes | yes | yes |
+| window | SVGGElement | yes | yes | yes | yes |
+| window | SVGGeometryElement | yes | yes | no | yes |
 | window | focus() sets activeElement | yes | yes | yes | yes |
 | window | showPopover | yes | yes | no | no |
 | window | dialog.showModal | yes | yes | no | yes |
