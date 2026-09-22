@@ -125,6 +125,21 @@ class Location {
   get pathname() { return this.#url.pathname; }
   get search() { return this.#url.search; }
   get hash() { return this.#url.hash; }
+  // The parts are assignable, as in a browser: each one rewrites the URL in
+  // place. Nothing navigates, so what changes is what `location` reports — and
+  // for `hash`, which element `:target` matches.
+  set protocol(value) { this.#part("protocol", value); }
+  set host(value) { this.#part("host", value); }
+  set hostname(value) { this.#part("hostname", value); }
+  set port(value) { this.#part("port", value); }
+  set pathname(value) { this.#part("pathname", value); }
+  set search(value) { this.#part("search", value); }
+  set hash(value) { this.#part("hash", value); }
+  #part(name, value) {
+    const next = new URL(this.#url.href);
+    next[name] = String(value);
+    this.#set(next.href);
+  }
   assign(value) { this.#set(value); }
   replace(value) { this.#set(value); }
   reload() {}

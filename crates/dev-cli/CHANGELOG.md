@@ -51,6 +51,16 @@ is the point, since none of the three has any business in a deployment.
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
+- **The pseudo-classes a real stylesheet is full of, in `esdev test --dom`.**
+  `:hover`, `:active`, `:visited`, `:focus-visible` and their kind parse and
+  match nothing — the same answer a browser gives when nothing is being hovered
+  — instead of being a `SyntaxError` that no stylesheet could survive.
+  `:any-link`, `:target`, `:focus-within`, `:valid`, `:invalid` (including a
+  form-associated custom element's), `:indeterminate`, `:placeholder-shown`,
+  `:read-only`, `:read-write`, `:default` and `:open` are computed from the tree
+  and from control state. `location`'s parts (`hash`, `search`, `pathname`,
+  `host`, …) are assignable, which is what `:target` needs and what a router
+  does anyway.
 - **The table element family in `esdev test --dom`:**
   `HTMLTableSectionElement`, `HTMLTableRowElement`, `HTMLTableCellElement`,
   `HTMLTableCaptionElement` and `HTMLTableColElement`, with `table.rows`,

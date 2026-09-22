@@ -60,6 +60,13 @@ function splitNth(source, at, argument) {
   return { nth: match[1], of: match[2] ?? null };
 }
 
+// Pseudo-classes that need a pointer, a session history, an input modality or a
+// rendered page. They are parsed and never match.
+const NEVER_MATCH = new Set([
+  "hover", "active", "visited", "focus-visible", "autofill", "user-valid", "user-invalid",
+  "modal", "fullscreen", "popover-open", "picture-in-picture",
+]);
+
 function parseNth(source, at, argument) {
   const text = argument.replace(/\s+/g, "").toLowerCase();
   if (text === "odd") return { a: 2, b: 1 };
@@ -111,7 +118,18 @@ function parseCompound(source, offset, text) {
     if (kind === ":") {
       const match = /^[A-Za-z-]+/.exec(text.slice(at + 1));
       const functional = new Set(["is", "where", "not", "has", "state", "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type"]);
-      const bare = new Set(["root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type", "focus", "scope", "defined", "checked", "disabled", "enabled", "required", "optional", "link"]);
+      const bare = new Set([
+        "root", "empty", "first-child", "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type",
+        "focus", "scope", "defined", "checked", "disabled", "enabled", "required", "optional", "link",
+        // Computed from the tree or from control state.
+        "any-link", "target", "focus-within", "valid", "invalid", "indeterminate", "placeholder-shown",
+        "read-only", "read-write", "default", "open",
+        // Real selectors with no answer in a DOM with no pointer, no history
+        // and no rendering. They parse — a stylesheet is full of them — and
+        // they match nothing, which is the same answer a browser gives when
+        // nothing is being hovered.
+        ...NEVER_MATCH,
+      ]);
       if (!match || !functional.has(match[0]) && !bare.has(match[0])) syntax(source, offset + at, "unsupported pseudo-class");
       const name = match[0];
       const open = at + match[0].length + 1;
@@ -260,7 +278,7 @@ function nthMatches(position, { a, b }) {
   return Number.isInteger(quotient) && quotient >= 0;
 }
 
-export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true, customStates = () => null }) {
+export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true, customStates = () => null, controlValidity = (element) => element.validity ?? null }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
@@ -280,7 +298,36 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
       if (simple.type === "required") return element.hasAttribute("required");
       if (simple.type === "optional") return ["input", "select", "textarea"].includes(element.localName) && !element.hasAttribute("required");
       if (simple.type === "link") return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
+      if (NEVER_MATCH.has(simple.type)) return false;
       if (simple.type === "defined") return isDefined(element);
+      if (simple.type === "any-link") return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
+      if (simple.type === "target") {
+        const hash = element.ownerDocument?.defaultView?.location?.hash ?? "";
+        return hash.length > 1 && element.id === hash.slice(1);
+      }
+      if (simple.type === "focus-within") {
+        const active = element.ownerDocument.activeElement;
+        return active === element || (active !== null && element.contains(active));
+      }
+      if (simple.type === "valid" || simple.type === "invalid") {
+        const validity = controlValidity(element);
+        if (!validity) return false;
+        return simple.type === "valid" ? validity.valid : !validity.valid;
+      }
+      if (simple.type === "indeterminate") return element.indeterminate === true;
+      if (simple.type === "placeholder-shown") {
+        return element.hasAttribute?.("placeholder") && (element.value ?? "") === "";
+      }
+      if (simple.type === "read-only") return !isEditable(element);
+      if (simple.type === "read-write") return isEditable(element);
+      if (simple.type === "default") {
+        if (element.localName === "option") return element.defaultSelected === true;
+        if (["input", "button"].includes(element.localName)) {
+          return ["submit", "image"].includes(element.type) || element.defaultChecked === true;
+        }
+        return false;
+      }
+      if (simple.type === "open") return element.hasAttribute("open");
       if (simple.type === "state") return customStates(element)?.has(simple.name) === true;
       if (simple.type.endsWith("child")) {
         const all = elementSiblings(element);
@@ -308,6 +355,14 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
       }
       return matchesAttribute(element, simple);
     });
+  }
+
+  // Editable means a control the user could type into, or explicit
+  // contenteditable. Everything else is read-only, as in a browser.
+  function isEditable(element) {
+    if (element.isContentEditable === true) return true;
+    if (!["input", "textarea"].includes(element.localName)) return false;
+    return !element.hasAttribute("readonly") && !element.disabled;
   }
 
   function nextElement(element) {
@@ -351,6 +406,51 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
   function compile(source) {
     source = String(source);
     return splitList(source).map(parseOne);
+  }
+
+  // Specificity as `[ids, classes, types]`, for the cascade to sort by. The
+  // logical pseudo-classes take the specificity of their most specific
+  // argument and add nothing of their own, except `:where()`, which is zero,
+  // and `:nth-child(… of S)`, which is a pseudo-class plus the list's.
+  function specificityOfSimple(simple) {
+    if (simple.type === "id") return [1, 0, 0];
+    if (simple.type === "class" || simple.type === "attribute") return [0, 1, 0];
+    if (simple.type === "tag") return [0, 0, 1];
+    if (simple.type === "universal") return [0, 0, 0];
+    if (simple.type === "where") return [0, 0, 0];
+    if (simple.type === "is" || simple.type === "not") return mostSpecific(simple.selectors);
+    if (simple.type === "has") return mostSpecific(simple.selectors.map((relative) => relative.parts));
+    if (simple.selectors) return add([0, 1, 0], mostSpecific(simple.selectors));
+    // Every other pseudo-class counts as one class.
+    return [0, 1, 0];
+  }
+
+  function add(left, right) {
+    return [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
+  }
+
+  function compare(left, right) {
+    for (let index = 0; index < 3; index += 1) {
+      if (left[index] !== right[index]) return left[index] - right[index];
+    }
+    return 0;
+  }
+
+  function specificityOfParts(parts) {
+    return parts.reduce(
+      (total, part) => part.simples.reduce((sum, simple) => add(sum, specificityOfSimple(simple)), total),
+      [0, 0, 0],
+    );
+  }
+
+  function mostSpecific(list) {
+    return (list ?? []).reduce((best, parts) => (compare(specificityOfParts(parts), best) > 0 ? specificityOfParts(parts) : best), [0, 0, 0]);
+  }
+
+  // The specificity of a whole selector list is its most specific selector,
+  // which is what a rule with a comma-separated selector cascades at.
+  function specificity(source) {
+    return mostSpecific(compile(source));
   }
 
   function matches(element, source) {
@@ -409,5 +509,5 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
     });
   }
 
-  return { install, compile, matches, queryAll };
+  return { install, compile, matches, queryAll, specificity, compareSpecificity: compare };
 }

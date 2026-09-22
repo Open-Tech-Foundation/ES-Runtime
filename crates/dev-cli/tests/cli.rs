@@ -3525,7 +3525,7 @@ fn test_dom_selectors_match_strict_compounds_and_combinators() {
            assertEquals(document.querySelector('.missing, .label'), label);\n\
            assertEquals(label.matches('span.label[data-state=Ready-item]'), true);\n\
            assertEquals(label.closest('section#panel'), panel);\n\
-           assertThrows(() => document.querySelector(':hover'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':nonsense'), SyntaxError);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
@@ -3886,13 +3886,22 @@ fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     write_in(
         &dir,
         "pseudo-errors.test.mjs",
-        "import { test, assertThrows } from 'runtime:test';\n\
+        "import { test, assertEquals, assertThrows } from 'runtime:test';\n\
          test('pseudo parsing stays strict', () => {\n\
            assertThrows(() => document.querySelector(':is()'), SyntaxError);\n\
            assertThrows(() => document.querySelector(':has(>)'), SyntaxError);\n\
            assertThrows(() => document.querySelector(':not(.one'), SyntaxError);\n\
-           assertThrows(() => document.querySelector(':hover'), SyntaxError);\n\
-           assertThrows(() => document.querySelector(':placeholder-shown'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':nonsense'), SyntaxError);\n\
+           assertThrows(() => document.querySelector('::before'), SyntaxError);\n\
+           assertThrows(() => document.querySelector(':dir(ltr)'), SyntaxError);\n\
+         });\n\
+         test('a pseudo-class with no answer here parses and matches nothing', () => {\n\
+           document.body.innerHTML = '<a href=\"#x\">link</a><input placeholder=p><input value=v>';\n\
+           const names = selector => Array.from(document.body.querySelectorAll(selector), element => element.localName);\n\
+           assertEquals([names(':hover'), names(':active'), names(':visited'), names(':focus-visible')], [[], [], [], []]);\n\
+           assertEquals(names(':any-link'), ['a']);\n\
+           assertEquals(names('[placeholder]:placeholder-shown'), ['input']);\n\
+           assertEquals(names('input:read-write').length, 2);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
