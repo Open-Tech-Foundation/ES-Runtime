@@ -17,6 +17,10 @@ const css = createCss(tree);
 const elements = createElements(tree);
 
 const document = new tree.Document();
+// `<!doctype html>`, as a node: the starting document is the one the spec for
+// this DOM names, and `document.doctype` is how code asks whether it is in
+// standards mode.
+document.appendChild(document.implementation.createDocumentType("html"));
 const html = document.createElement("html");
 const head = document.createElement("head");
 const body = document.createElement("body");

@@ -283,13 +283,13 @@
   "dom/nodes/Document-adoptNode-DocumentFragment-with-host.window.js": {
     "harness": "OK",
     "subtests": {
-      "adoptNode() plain DocumentFragment (no host): adopts and returns it": "FAIL",
-      "adoptNode() template.content: adopts fragment + children, returns it": "FAIL",
-      "adoptNode() template.content into browsing-context document": "FAIL",
+      "adoptNode() plain DocumentFragment (no host): adopts and returns it": "PASS",
+      "adoptNode() template.content: adopts fragment + children, returns it": "PASS",
+      "adoptNode() template.content into browsing-context document": "PASS",
       "adoptNode() shadow root: throws HierarchyRequestError": "FAIL",
       "adoptNode() <template> element: content follows via template adopting steps": "FAIL",
-      "adoptNode() nested <template> elements: all owner documents update": "FAIL",
-      "appendChild() template.content: moves children, fragment ownerDocument stays": "FAIL"
+      "adoptNode() nested <template> elements: all owner documents update": "PASS",
+      "appendChild() template.content: moves children, fragment ownerDocument stays": "PASS"
     }
   },
   "dom/nodes/Node-appendChild-cereactions-vs-script.window.js": {

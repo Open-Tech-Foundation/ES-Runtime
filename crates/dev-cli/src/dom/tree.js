@@ -13,6 +13,7 @@ const SELECTED = Symbol("esdev DOM option selected state");
 const TEMPLATE_CONTENT = Symbol("esdev DOM template content");
 const VALIDITY = Symbol("esdev DOM validity state");
 const VALIDITY_CONTROL = Symbol("esdev DOM validity control");
+const IMPLEMENTATION = Symbol("esdev DOM implementation");
 const TEXTAREA_VALUE = Symbol("esdev DOM textarea value state");
 const CUSTOM_VALIDITY = Symbol("esdev DOM custom validity");
 const INPUT_VALUE = Symbol("esdev DOM input value state");
@@ -268,6 +269,16 @@ export function createTree(events = {}) {
     static COMMENT_NODE = 8;
     static DOCUMENT_NODE = 9;
     static DOCUMENT_FRAGMENT_NODE = 11;
+    static CDATA_SECTION_NODE = 4;
+    static PROCESSING_INSTRUCTION_NODE = 7;
+    static DOCUMENT_TYPE_NODE = 10;
+
+    static DOCUMENT_POSITION_DISCONNECTED = 1;
+    static DOCUMENT_POSITION_PRECEDING = 2;
+    static DOCUMENT_POSITION_FOLLOWING = 4;
+    static DOCUMENT_POSITION_CONTAINS = 8;
+    static DOCUMENT_POSITION_CONTAINED_BY = 16;
+    static DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = 32;
 
     constructor(type, name, ownerDocument) {
       super();
@@ -401,6 +412,14 @@ export function createTree(events = {}) {
         if (elements.length + incoming.length > 1) {
           throw domError("HierarchyRequestError", "A document can have only one document element.");
         }
+        const doctypes = Array.from(this._esdevChildren()).filter((node) => node instanceof DocumentType && node !== replacing);
+        const incomingDoctypes = candidates.filter((node) => node instanceof DocumentType);
+        if (doctypes.length + incomingDoctypes.length > 1) {
+          throw domError("HierarchyRequestError", "A document can have only one doctype.");
+        }
+        if (incomingDoctypes.length > 0 && elements.length > 0 && (before === null || childIndex(before) > childIndex(elements[0]))) {
+          throw domError("HierarchyRequestError", "A doctype must precede the document element.");
+        }
       }
       if (before !== null && before.parentNode !== this) throw domError("NotFoundError", "The reference child is not a child of this node.");
     }
@@ -461,6 +480,70 @@ export function createTree(events = {}) {
       if (value !== null && value !== "") this.appendChild((this.ownerDocument ?? this).createTextNode(String(value)));
     }
 
+    isSameNode(other) { return other === this; }
+
+    // Equality is by kind, name and children, never by identity: two separately
+    // created trees with the same shape are equal nodes.
+    isEqualNode(other) {
+      if (!(other instanceof Node) || other.nodeType !== this.nodeType || other.nodeName !== this.nodeName) return false;
+      if (this instanceof DocumentType && (other.name !== this.name || other.publicId !== this.publicId || other.systemId !== this.systemId)) return false;
+      if (this instanceof Element) {
+        if (other.namespaceURI !== this.namespaceURI || other.prefix !== this.prefix || other.localName !== this.localName) return false;
+        if (other.attributes.length !== this.attributes.length) return false;
+        for (const attribute of this.attributes) {
+          const match = other.getAttributeNS(attribute.namespaceURI, attribute.localName);
+          if (match === null || match !== attribute.value) return false;
+        }
+      }
+      if (this instanceof Attr && (other.namespaceURI !== this.namespaceURI || other.localName !== this.localName || other.value !== this.value)) return false;
+      if (this instanceof CharacterData && other.data !== this.data) return false;
+      if (this instanceof ProcessingInstruction && other.target !== this.target) return false;
+      const ours = Array.from(this._esdevChildren());
+      const theirs = Array.from(other._esdevChildren?.() ?? []);
+      return ours.length === theirs.length && ours.every((child, index) => child.isEqualNode(theirs[index]));
+    }
+
+    // Tree order, as the specification defines it: the comparison is made
+    // against the common inclusive ancestor, so a node reports its own
+    // descendants as CONTAINED_BY and FOLLOWING, not merely as later.
+    compareDocumentPosition(other) {
+      if (!(other instanceof Node)) throw new TypeError("compareDocumentPosition expects a Node");
+      if (other === this) return 0;
+      const ancestry = (node) => { const chain = []; for (let step = node; step; step = step.parentNode ?? step.host ?? null) chain.unshift(step); return chain; };
+      const ours = ancestry(this);
+      const theirs = ancestry(other);
+      if (ours[0] !== theirs[0]) {
+        // Disconnected trees still order consistently for a given pair, which
+        // is all the specification asks of an implementation-specific answer.
+        return Node.DOCUMENT_POSITION_DISCONNECTED | Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
+          | Node.DOCUMENT_POSITION_PRECEDING;
+      }
+      let depth = 0;
+      while (ours[depth] === theirs[depth] && depth < ours.length && depth < theirs.length) depth += 1;
+      if (depth === ours.length) return Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING;
+      if (depth === theirs.length) return Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING;
+      const siblings = Array.from(ours[depth - 1]._esdevChildren());
+      return siblings.indexOf(ours[depth]) < siblings.indexOf(theirs[depth])
+        ? Node.DOCUMENT_POSITION_FOLLOWING
+        : Node.DOCUMENT_POSITION_PRECEDING;
+    }
+
+    // Contiguous text nodes become one and empty ones go, which is what a
+    // framework's diffing assumptions and `wholeText` both rely on.
+    normalize() {
+      for (const child of Array.from(this._esdevChildren())) {
+        if (!(child instanceof Text)) { child.normalize(); continue; }
+        if (child.data.length === 0) { child.remove(); continue; }
+        let next = child.nextSibling;
+        while (next instanceof Text) {
+          const following = next.nextSibling;
+          child.data += next.data;
+          next.remove();
+          next = following;
+        }
+      }
+    }
+
     cloneNode(deep = false) {
       const document = this.ownerDocument ?? this;
       let clone;
@@ -472,8 +555,11 @@ export function createTree(events = {}) {
         for (const attribute of this.attributes) {
           clone.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
         }
-      } else if (this instanceof Text) clone = document.createTextNode(this.data);
+      } else if (this instanceof CDATASection) clone = new CDATASection(this.data, document);
+      else if (this instanceof Text) clone = document.createTextNode(this.data);
       else if (this instanceof Comment) clone = document.createComment(this.data);
+      else if (this instanceof ProcessingInstruction) clone = document.createProcessingInstruction(this.target, this.data);
+      else if (this instanceof DocumentType) clone = new DocumentType(this.name, this.publicId, this.systemId, document);
       else throw domError("NotSupportedError", "This node cannot be cloned.");
       if (deep) {
         const source = this instanceof HTMLTemplateElement ? this.content : this;
@@ -506,6 +592,39 @@ export function createTree(events = {}) {
 
   class Comment extends CharacterData {
     constructor(data, ownerDocument) { super(Node.COMMENT_NODE, "#comment", data, ownerDocument); }
+  }
+
+  // HTML documents never contain CDATA sections, so `createCDATASection` refuses
+  // in one. The interface is still exposed: code that branches on
+  // `node instanceof CDATASection` should find a class, not a ReferenceError.
+  class CDATASection extends Text {
+    constructor(data, ownerDocument) {
+      super(data, ownerDocument);
+      slots(this).type = Node.CDATA_SECTION_NODE;
+      slots(this).name = "#cdata-section";
+    }
+  }
+
+  class ProcessingInstruction extends CharacterData {
+    constructor(target, data, ownerDocument) {
+      super(Node.PROCESSING_INSTRUCTION_NODE, String(target), data, ownerDocument);
+    }
+    get target() { return slots(this).name; }
+  }
+
+  class DocumentType extends Node {
+    constructor(name, publicId, systemId, ownerDocument) {
+      super(Node.DOCUMENT_TYPE_NODE, String(name), ownerDocument);
+      Object.defineProperties(this, {
+        name: { value: String(name), enumerable: true },
+        publicId: { value: String(publicId ?? ""), enumerable: true },
+        systemId: { value: String(systemId ?? ""), enumerable: true },
+      });
+    }
+    get nodeValue() { return null; }
+    set nodeValue(_value) {}
+    get textContent() { return null; }
+    set textContent(_value) {}
   }
 
   class Attr extends Node {
@@ -1289,6 +1408,36 @@ export function createTree(events = {}) {
     }
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
+    createCDATASection(_data) {
+      throw domError("NotSupportedError", "An HTML document cannot contain a CDATA section.");
+    }
+    createProcessingInstruction(target, data) {
+      target = String(target);
+      if (!/^[A-Za-z_][\w.-]*$/.test(target)) throw domError("InvalidCharacterError", "A processing instruction target must be a valid XML name.");
+      if (String(data).includes("?>")) throw domError("InvalidCharacterError", "A processing instruction cannot contain '?>'.");
+      return new ProcessingInstruction(target, data, this);
+    }
+    get doctype() { return Array.from(this._esdevChildren()).find((node) => node instanceof DocumentType) ?? null; }
+    // The first `title` element in tree order, created in the head on demand,
+    // because head management libraries write it before reading it back.
+    get title() {
+      const element = collect(this, (node) => node.localName === "title" && node.namespaceURI === HTML_NAMESPACE)[0];
+      return (element?.textContent ?? "").replace(/[\t\n\f\r ]+/g, " ").trim();
+    }
+    set title(value) {
+      let element = collect(this, (node) => node.localName === "title" && node.namespaceURI === HTML_NAMESPACE)[0];
+      if (!element) {
+        const head = this.head ?? this.documentElement;
+        if (!head) return;
+        element = this.createElement("title");
+        head.appendChild(element);
+      }
+      element.textContent = String(value);
+    }
+    get implementation() {
+      this[IMPLEMENTATION] ??= new DOMImplementation(this, IMPLEMENTATION_BRAND);
+      return this[IMPLEMENTATION];
+    }
     createDocumentFragment() { return new DocumentFragment(this); }
     createTreeWalker(root, whatToShow = NodeFilter.SHOW_ALL, filter = null) {
       if (!(root instanceof Node)) throw new TypeError("createTreeWalker root must be a Node");
@@ -1322,6 +1471,40 @@ export function createTree(events = {}) {
       const copy = node.cloneNode(deep);
       descendants(copy, (item) => { slots(item).ownerDocument = this; });
       return copy;
+    }
+  }
+
+  // `[SameObject] readonly attribute DOMImplementation implementation`, and like
+  // ValidityState it has no constructor of its own in Web IDL.
+  const IMPLEMENTATION_BRAND = Symbol("esdev DOM implementation brand");
+
+  class DOMImplementation {
+    constructor(document, brand) {
+      if (brand !== IMPLEMENTATION_BRAND) throw new TypeError("Illegal constructor");
+      Object.defineProperty(this, IMPLEMENTATION, { value: document });
+    }
+    // Long obsolete, and specified to answer true to everything.
+    hasFeature() { return true; }
+    createDocumentType(name, publicId = "", systemId = "") {
+      return new DocumentType(name, publicId, systemId, this[IMPLEMENTATION]);
+    }
+    createHTMLDocument(title = undefined) {
+      const document = new Document();
+      document.appendChild(new DocumentType("html", "", "", document));
+      const html = document.createElement("html");
+      const head = document.createElement("head");
+      const body = document.createElement("body");
+      html.append(head, body);
+      document.appendChild(html);
+      if (title !== undefined) {
+        const element = document.createElement("title");
+        element.appendChild(document.createTextNode(String(title)));
+        head.appendChild(element);
+      }
+      // `head` and `body` are per-document accessors on the instance, the same
+      // shape the test realm's own document gets.
+      Object.defineProperties(document, { head: { get: () => head }, body: { get: () => body } });
+      return document;
     }
   }
 
@@ -1405,5 +1588,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, Text, Comment, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDisabled, upgradeCustom };
 }

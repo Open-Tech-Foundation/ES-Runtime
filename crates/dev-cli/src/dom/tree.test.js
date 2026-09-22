@@ -1,7 +1,7 @@
 import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 
-const { Document, Element, HTMLDialogElement, HTMLInputElement, SVGElement, Text, ValidityState } = createTree();
+const { CDATASection, CharacterData, Document, DocumentType, Element, HTMLDialogElement, HTMLInputElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -404,4 +404,100 @@ test("collects the controls a fieldset contains, live", () => {
   expect(fieldset.elements.length).toBe(3);
   fieldset.firstElementChild.remove();
   expect(Array.from(fieldset.elements, (control) => control.localName)).toEqual(["select", "textarea"]);
+});
+
+test("compares two trees by shape rather than by identity", () => {
+  const document = new Document();
+  const build = (className) => {
+    const root = document.createElement("div");
+    const child = document.createElement("p");
+    child.setAttribute("class", className);
+    child.appendChild(document.createTextNode("one"));
+    root.appendChild(child);
+    return root;
+  };
+  const left = build("x");
+
+  expect(left.isEqualNode(build("x"))).toBe(true);
+  expect(left.isEqualNode(build("y"))).toBe(false);
+  expect(left.isEqualNode(left.cloneNode(true))).toBe(true);
+  expect(left.isEqualNode(left.cloneNode(false))).toBe(false);
+  expect(left.isSameNode(left)).toBe(true);
+  expect(left.isSameNode(build("x"))).toBe(false);
+  expect(document.createTextNode("t").isEqualNode(document.createTextNode("t"))).toBe(true);
+  expect(document.createTextNode("t").isEqualNode(document.createComment("t"))).toBe(false);
+});
+
+test("reports tree order against the common ancestor", () => {
+  const document = new Document();
+  const root = document.createElement("main");
+  const first = document.createElement("i");
+  const second = document.createElement("b");
+  root.append(first, second);
+  document.appendChild(root);
+
+  expect(root.compareDocumentPosition(root)).toBe(0);
+  expect(root.compareDocumentPosition(first)).toBe(Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(first.compareDocumentPosition(root)).toBe(Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING);
+  expect(first.compareDocumentPosition(second)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(second.compareDocumentPosition(first)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+  expect(document.createElement("i").compareDocumentPosition(first) & Node.DOCUMENT_POSITION_DISCONNECTED).toBe(Node.DOCUMENT_POSITION_DISCONNECTED);
+  expect(() => root.compareDocumentPosition("nope")).toThrow("Node");
+});
+
+test("merges adjacent text nodes and drops empty ones", () => {
+  const document = new Document();
+  const root = document.createElement("p");
+  const nested = document.createElement("i");
+  nested.append(document.createTextNode("x"), document.createTextNode("y"));
+  root.append(document.createTextNode("a"), document.createTextNode(""), document.createTextNode("b"), nested, document.createTextNode("c"));
+  root.normalize();
+
+  expect(Array.from(root.childNodes, (node) => node.nodeName)).toEqual(["#text", "I", "#text"]);
+  expect(root.firstChild.data).toBe("ab");
+  expect(nested.childNodes.length).toBe(1);
+  expect(root.textContent).toBe("abxyc");
+});
+
+test("holds one doctype, before the document element", () => {
+  const document = new Document();
+  const doctype = document.implementation.createDocumentType("html");
+  document.appendChild(doctype);
+  document.appendChild(document.createElement("html"));
+
+  expect([doctype.name, doctype.nodeType, doctype.nodeName, doctype.publicId, doctype.textContent]).toEqual(["html", 10, "html", "", null]);
+  expect(document.doctype).toBe(doctype);
+  expect(doctype).toBeInstanceOf(DocumentType);
+  expect(() => document.appendChild(document.implementation.createDocumentType("html"))).toThrow("doctype");
+  const fresh = new Document();
+  fresh.appendChild(fresh.createElement("html"));
+  expect(() => fresh.appendChild(fresh.implementation.createDocumentType("html"))).toThrow("precede");
+});
+
+test("creates whole HTML documents through the implementation", () => {
+  const document = new Document();
+  const made = document.implementation.createHTMLDocument("Made");
+
+  expect(document.implementation).toBe(document.implementation);
+  expect(made.doctype.name).toBe("html");
+  expect(made.documentElement.tagName).toBe("HTML");
+  expect(made.title).toBe("Made");
+  expect(made.body.tagName).toBe("BODY");
+  expect(made).not.toBe(document);
+  made.title = "  Renamed\n  twice  ";
+  expect([made.title, made.head.children.length]).toEqual(["Renamed twice", 1]);
+});
+
+test("makes processing instructions and refuses CDATA in HTML", () => {
+  const document = new Document();
+  const instruction = document.createProcessingInstruction("xml-stylesheet", 'href="x"');
+
+  expect([instruction.target, instruction.data, instruction.nodeType]).toEqual(["xml-stylesheet", 'href="x"', 7]);
+  expect(instruction).toBeInstanceOf(ProcessingInstruction);
+  expect(instruction).toBeInstanceOf(CharacterData);
+  expect(instruction.cloneNode().isEqualNode(instruction)).toBe(true);
+  expect(() => document.createProcessingInstruction("bad name", "")).toThrow("target");
+  expect(() => document.createProcessingInstruction("ok", "?>")).toThrow("?>");
+  expect(() => document.createCDATASection("x")).toThrow("CDATA");
+  expect(typeof CDATASection).toBe("function");
 });

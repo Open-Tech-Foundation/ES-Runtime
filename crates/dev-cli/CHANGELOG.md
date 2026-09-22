@@ -52,6 +52,23 @@ is the point, since none of the three has any business in a deployment.
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
 
+### Added
+
+- **The node interfaces and comparison algorithms `esdev test --dom` was
+  missing.** `isEqualNode` compares two trees by kind, name, attributes and
+  children rather than by identity; `compareDocumentPosition` reports tree order
+  against the common ancestor, with the `DOCUMENT_POSITION_*` constants;
+  `normalize` merges adjacent text nodes and drops empty ones; `isSameNode` is
+  there for completeness. `CharacterData`, `DocumentType`,
+  `ProcessingInstruction`, `CDATASection`, `DOMImplementation` and `DOMStringMap`
+  are exposed, so `instanceof` against them means something. The document now
+  has a `<!doctype html>` node and answers `document.doctype`, holds at most one
+  and only before the document element, and `document.implementation` provides
+  `createDocumentType`, `createHTMLDocument` and `hasFeature`.
+  `createProcessingInstruction` validates its target; `createCDATASection`
+  refuses, as it must in an HTML document. `document.title` reads and writes the
+  first `title` element, creating one in the head when there is none.
+
 ### Fixed
 
 - Document `-V` in `esdev --help`, which printed the version all along like
