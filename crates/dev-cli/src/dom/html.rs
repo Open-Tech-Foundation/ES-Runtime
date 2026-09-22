@@ -1,10 +1,19 @@
 //! A small, strict parser for the modern HTML accepted by the esdev test DOM.
 //!
-//! This is not an HTML5 error-recovery parser. Input is either well-nested,
-//! modern markup or an error with a byte offset. In particular, the parser
-//! does not invent omitted end tags, foster-parent table content, or repair
-//! misnested formatting elements. Those browser compatibility behaviours are
-//! valuable to a browser; silently changing a test fixture is not.
+//! This is not an HTML5 error-recovery parser. Input is either conforming,
+//! modern markup or an error with a byte offset.
+//!
+//! Conforming markup includes the omitted tags the HTML specification calls
+//! optional: `</li>`, `</p>`, `</td>`, an implied `<tbody>` before a `<tr>`,
+//! and the rest of the table, list, select and ruby rules. Those are not
+//! errors being repaired — they are the language, and a browser, jsdom and
+//! happy-dom all build the same tree from them, so a test fixture written that
+//! way must parse the same here.
+//!
+//! What stays refused is genuinely broken markup: an unclosed `<i>`, misnested
+//! formatting, a `<td>` outside a row, table content that would have to be
+//! foster-parented. Those browser recovery behaviours are valuable to a
+//! browser; silently changing a test fixture is not.
 
 use std::fmt;
 
@@ -67,7 +76,7 @@ impl std::error::Error for Error {}
 /// document construct it explicitly.
 pub fn parse_document(source: &str) -> Result<Document, Error> {
     let mut parser = Parser::new(source);
-    let document = parser.nodes(None, true, false)?;
+    let document = parser.nodes(None, None, true, false)?;
     if !parser.eof() {
         return Err(parser.error("unexpected content after the document"));
     }
@@ -78,9 +87,16 @@ pub fn parse_document(source: &str) -> Result<Document, Error> {
 ///
 /// Fragment parsing shares exactly the same strict grammar as documents but
 /// never accepts a doctype.
+#[cfg(test)]
 pub fn parse_fragment(source: &str) -> Result<Vec<Node>, Error> {
+    parse_fragment_in(source, None)
+}
+
+/// Fragment parsing with the context element the markup is being parsed into,
+/// which is what decides whether a `<tr>` opens an implied `<tbody>`.
+pub fn parse_fragment_in(source: &str, context: Option<&str>) -> Result<Vec<Node>, Error> {
     let mut parser = Parser::new(source);
-    let document = parser.nodes(None, false, false)?;
+    let document = parser.nodes(None, context, false, false)?;
     if !parser.eof() {
         return Err(parser.error("unexpected content after the fragment"));
     }
@@ -94,8 +110,8 @@ pub fn parse_fragment(source: &str) -> Result<Vec<Node>, Error> {
 /// fragment root. Keeping this structural boundary free of V8 handles makes
 /// the parser independently testable and the eventual synchronous op one
 /// crossing regardless of fragment size.
-pub fn fragment_records(source: &str) -> Result<Value, Error> {
-    let nodes = parse_fragment(source)?;
+pub fn fragment_records(source: &str, context: Option<&str>) -> Result<Value, Error> {
+    let nodes = parse_fragment_in(source, context)?;
     let mut records = Vec::new();
     for node in &nodes {
         encode_node(node, -1, &mut records);
@@ -186,9 +202,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `closing` is the end tag this level is waiting for, `parent` the element
+    /// whose content model it is parsing. They are the same for an element's
+    /// children and differ for a fragment, which has a context element but no
+    /// end tag of its own.
     fn nodes(
         &mut self,
         closing: Option<&str>,
+        parent: Option<&str>,
         document: bool,
         in_svg: bool,
     ) -> Result<Document, Error> {
@@ -196,6 +217,11 @@ impl<'a> Parser<'a> {
         loop {
             if self.eof() {
                 if let Some(name) = closing {
+                    // An optional end tag may be omitted at the end of its
+                    // parent's content, and a fragment ends the same way.
+                    if has_optional_end_tag(name) {
+                        return Ok(out);
+                    }
                     return Err(self.error(format!("unclosed <{name}> element")));
                 }
                 return Ok(out);
@@ -210,6 +236,12 @@ impl<'a> Parser<'a> {
                     });
                 };
                 if name != expected {
+                    // The parent's end tag ends this element too, so hand the
+                    // tag back and let the level above match it.
+                    if has_optional_end_tag(expected) {
+                        self.at = end_at;
+                        return Ok(out);
+                    }
                     return Err(Error {
                         offset: end_at,
                         message: format!("closing </{name}> tag does not match <{expected}>"),
@@ -228,6 +260,37 @@ impl<'a> Parser<'a> {
                 self.doctype()?;
                 out.doctype = true;
             } else if self.rest().starts_with('<') {
+                let next = self.peek_start_tag_name(in_svg);
+                if let (Some(open), Some(next)) = (closing, next.as_deref())
+                    && has_optional_end_tag(open)
+                    && implicitly_closed_by(open, next)
+                {
+                    // Unconsumed: the start tag belongs to the level above.
+                    return Ok(out);
+                }
+                // A cell needs a row. `<tr>`'s start tag is not optional, so
+                // this is not abbreviation — it is the foster-parenting case,
+                // and naming it beats quietly building a different tree than
+                // every browser builds.
+                if matches!(parent, Some("table" | "thead" | "tbody" | "tfoot"))
+                    && matches!(next.as_deref(), Some("td" | "th"))
+                {
+                    let cell = next.as_deref().unwrap_or("td");
+                    return Err(self.error(format!("<{cell}> must be inside a <tr>")));
+                }
+                // `<tbody>`'s start tag is optional, so a row directly in a
+                // table opens one, and it runs until something ends it.
+                if parent == Some("table") && next.as_deref() == Some("tr") {
+                    let children = self
+                        .nodes(Some("tbody"), Some("tbody"), false, in_svg)?
+                        .children;
+                    out.children.push(Node::Element(Element {
+                        name: "tbody".to_string(),
+                        attributes: Vec::new(),
+                        children,
+                    }));
+                    continue;
+                }
                 out.children.push(Node::Element(self.element(in_svg)?));
             } else {
                 out.children.push(Node::Text(self.text()?));
@@ -296,13 +359,27 @@ impl<'a> Parser<'a> {
         let children = if is_raw_text(&name) {
             vec![Node::Text(self.raw_text(&name)?)]
         } else {
-            self.nodes(Some(&name), false, in_svg)?.children
+            self.nodes(Some(&name), Some(&name), false, in_svg)?
+                .children
         };
         Ok(Element {
             name,
             attributes,
             children,
         })
+    }
+
+    /// The name of the start tag at the cursor, without consuming anything. A
+    /// comment, doctype or malformed tag answers `None` and is parsed as usual.
+    fn peek_start_tag_name(&mut self, in_svg: bool) -> Option<String> {
+        if self.rest().starts_with("<!") || self.rest().starts_with("<?") {
+            return None;
+        }
+        let at = self.at;
+        self.at += 1;
+        let name = self.name("element", in_svg).ok();
+        self.at = at;
+        name
     }
 
     fn end_tag(&mut self, in_svg: bool) -> Result<String, Error> {
@@ -498,6 +575,86 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Elements whose end tag the HTML specification allows to be omitted.
+fn has_optional_end_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "li" | "dt"
+            | "dd"
+            | "p"
+            | "option"
+            | "optgroup"
+            | "thead"
+            | "tbody"
+            | "tfoot"
+            | "tr"
+            | "td"
+            | "th"
+            | "caption"
+            | "colgroup"
+            | "rt"
+            | "rp"
+    )
+}
+
+/// The block-level start tags that end an open `<p>`.
+fn closes_paragraph(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "details"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hgroup"
+            | "hr"
+            | "main"
+            | "menu"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "search"
+            | "section"
+            | "table"
+            | "ul"
+    )
+}
+
+/// Whether an open element with an optional end tag is ended by the start tag
+/// that comes next. The other half of the rule — a parent's end tag ending it —
+/// is handled where end tags are read.
+fn implicitly_closed_by(open: &str, next: &str) -> bool {
+    match open {
+        "li" => next == "li",
+        "dt" | "dd" => matches!(next, "dt" | "dd"),
+        "p" => closes_paragraph(next),
+        "option" => matches!(next, "option" | "optgroup" | "hr"),
+        "optgroup" => matches!(next, "optgroup" | "hr"),
+        // A section cannot contain a section, so any of them ends an open one.
+        "thead" | "tbody" | "tfoot" => matches!(next, "thead" | "tbody" | "tfoot"),
+        "caption" | "colgroup" => matches!(next, "colgroup" | "thead" | "tbody" | "tfoot" | "tr"),
+        "tr" => next == "tr",
+        "td" | "th" => matches!(next, "td" | "th" | "tr"),
+        "rt" | "rp" => matches!(next, "rt" | "rp"),
+        _ => false,
+    }
+}
+
 fn is_void(name: &str) -> bool {
     matches!(
         name,
@@ -660,15 +817,128 @@ mod tests {
         );
     }
 
+    /// A compact rendering of a parsed tree, for cases that are about shape.
+    fn render(nodes: &[Node]) -> String {
+        nodes
+            .iter()
+            .map(|node| match node {
+                Node::Text(text) => text.clone(),
+                Node::Comment(text) => format!("<!--{text}-->"),
+                Node::Element(element) => {
+                    let attributes: String = element
+                        .attributes
+                        .iter()
+                        .map(|attribute| format!(" {}=\"{}\"", attribute.name, attribute.value))
+                        .collect();
+                    format!(
+                        "<{0}{1}>{2}</{0}>",
+                        element.name,
+                        attributes,
+                        render(&element.children)
+                    )
+                }
+            })
+            .collect()
+    }
+
     #[test]
     fn rejects_legacy_recovery_cases() {
         for source in [
+            // Misnested formatting, which the adoption agency algorithm exists
+            // to repair and this parser refuses to guess at.
             "<p><strong>x</p></strong>",
-            "<table><tr><td>x</table>",
-            "<p>one<p>two",
+            "<b><i>x</b></i>",
+            // Truncated rather than omitted: `<i>` has no optional end tag.
+            "<p><i>unclosed",
+            // A cell outside a row. `<tr>`'s start tag is not optional, so this
+            // is not abbreviation, it is foster parenting.
+            "<table><td>x</td></table>",
+            "<table><tr><td>x</td></tr>",
         ] {
             assert!(parse_fragment(source).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn accepts_the_end_tags_html_allows_to_be_omitted() {
+        for (source, expected) in [
+            ("<p>one<p>two", "<p>one</p><p>two</p>"),
+            ("<div><p>a</div>", "<div><p>a</p></div>"),
+            ("<ul><li>a<li>b</ul>", "<ul><li>a</li><li>b</li></ul>"),
+            (
+                "<ol><li>a<ul><li>b</ul><li>c</ol>",
+                "<ol><li>a<ul><li>b</li></ul></li><li>c</li></ol>",
+            ),
+            ("<dl><dt>t<dd>d</dl>", "<dl><dt>t</dt><dd>d</dd></dl>"),
+            (
+                "<select><option>a<option>b</select>",
+                "<select><option>a</option><option>b</option></select>",
+            ),
+            (
+                "<select><optgroup label=g><option>a<optgroup label=h><option>b</select>",
+                "<select><optgroup label=\"g\"><option>a</option></optgroup><optgroup label=\"h\"><option>b</option></optgroup></select>",
+            ),
+            (
+                "<ruby>a<rt>b<rp>)</ruby>",
+                "<ruby>a<rt>b</rt><rp>)</rp></ruby>",
+            ),
+        ] {
+            let nodes = parse_fragment(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(render(&nodes), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn opens_the_implied_table_section_a_row_belongs_to() {
+        for (source, expected) in [
+            (
+                "<table><tr><td>x</td></tr></table>",
+                "<table><tbody><tr><td>x</td></tr></tbody></table>",
+            ),
+            (
+                "<table><tr><td>a</td></tr><tr><td>b</td></tr></table>",
+                "<table><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>",
+            ),
+            (
+                "<table><tbody><tr><td>a</table>",
+                "<table><tbody><tr><td>a</td></tr></tbody></table>",
+            ),
+            (
+                "<table><tr><td>a<td>b</table>",
+                "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>",
+            ),
+            (
+                "<table><thead><tr><td>h</td></tr></thead><tr><td>x</td></tr></table>",
+                "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>x</td></tr></tbody></table>",
+            ),
+            (
+                "<table><caption>c</caption><tr><td>x</td></tr></table>",
+                "<table><caption>c</caption><tbody><tr><td>x</td></tr></tbody></table>",
+            ),
+            (
+                "<table><tfoot><tr><td>f</td></tr><tbody><tr><td>b</td></tr></table>",
+                "<table><tfoot><tr><td>f</td></tr></tfoot><tbody><tr><td>b</td></tr></tbody></table>",
+            ),
+            // Whitespace before the first row stays in the table, and what
+            // follows a row belongs to the section the row opened.
+            (
+                "<table>\n  <tr><td>x</td></tr>\n</table>",
+                "<table>\n  <tbody><tr><td>x</td></tr>\n</tbody></table>",
+            ),
+        ] {
+            let nodes = parse_fragment(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(render(&nodes), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_fragment_opens_an_implied_section_only_inside_a_table() {
+        let inside = parse_fragment_in("<tr><td>x</td></tr>", Some("table")).expect("in a table");
+        assert_eq!(render(&inside), "<tbody><tr><td>x</td></tr></tbody>");
+        let outside = parse_fragment_in("<tr><td>x</td></tr>", Some("tbody")).expect("in a body");
+        assert_eq!(render(&outside), "<tr><td>x</td></tr>");
+        let bare = parse_fragment_in("<tr><td>x</td></tr>", None).expect("with no context");
+        assert_eq!(render(&bare), "<tr><td>x</td></tr>");
     }
 
     #[test]
@@ -746,7 +1016,7 @@ mod tests {
 
     #[test]
     fn encodes_a_fragment_as_flat_preorder_records() {
-        let records = fragment_records("<p id=x>one<!--two--></p>").expect("parse");
+        let records = fragment_records("<p id=x>one<!--two--></p>", None).expect("parse");
         assert_eq!(
             records,
             Value::Array(vec![

@@ -250,6 +250,39 @@ export const cases = [
   },
   {
     group: "parsing",
+    name: "omitted-tags-html-allows-are-filled-in",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const host = document.createElement("div");
+      const round = (source) => { host.innerHTML = source; return host.innerHTML; };
+      return [
+        round("<table><tr><td>x</td></tr></table>"),
+        round("<table><thead><tr><td>h</td></tr></thead><tr><td>x</td></tr></table>"),
+        round("<table><tr><td>a<td>b</table>"),
+        round("<ul><li>a<li>b</ul>"),
+        round("<ol><li>a<ul><li>b</ul><li>c</ol>"),
+        round("<p>one<p>two"),
+        round("<select><option>a<option>b</select>"),
+        round("<dl><dt>t<dd>d</dl>"),
+      ];
+    },
+  },
+  {
+    group: "parsing",
+    name: "fragment-structure-follows-its-context-element",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const table = document.createElement("table");
+      table.innerHTML = "<tr><td>x</td></tr>";
+      const body = document.createElement("tbody");
+      body.innerHTML = "<tr><td>x</td></tr>";
+      return [table.innerHTML, table.firstElementChild.localName, body.innerHTML, body.firstElementChild.localName];
+    },
+  },
+  {
+    group: "parsing",
     name: "malformed-markup-is-a-strict-esdev-limit",
     limit: "esdev rejects malformed HTML instead of applying browser recovery",
     expectedEsdev: { result: "SyntaxError" },

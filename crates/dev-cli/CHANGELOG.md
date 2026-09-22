@@ -51,9 +51,16 @@ is the point, since none of the three has any business in a deployment.
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
-
-### Added
-
+- **The strict parser accepts the tags HTML allows to be omitted** in `esdev
+  test --dom`: `</li>`, `</p>`, `</td>`, `</option>`, `</tr>`, the table
+  section and ruby end tags, and an implied `<tbody>` before a `<tr>` that sits
+  directly in a `<table>` — which is what every browser builds, and what a
+  hydration fixture is compared against. Fragment parsing takes its context
+  element into account, so `table.innerHTML = '<tr>…'` produces the same
+  `<tbody>` while `tbody.innerHTML = '<tr>…'` does not. These are not repairs:
+  broken markup is refused exactly as before — an unclosed `<i>`, misnested
+  formatting, a truncated `<div>` — and a `<td>` outside a `<tr>` is now
+  refused by name rather than quietly kept where no browser would put it.
 - **`ElementInternals`, form-associated custom elements and `CustomStateSet` in
   `esdev test --dom`.** `attachInternals()` hands a defined custom element its
   own private surface — and only once, and only to a custom element. A class

@@ -3450,7 +3450,9 @@ fn test_dom_installs_a_fresh_document_and_uses_the_strict_parser() {
            document.body.innerHTML = '<p id=x>hello<!-- note --></p>';\n\
            assertEquals(document.body.firstChild.textContent, 'hello');\n\
            assertEquals(document.body.innerHTML, '<p id=\"x\">hello<!-- note --></p>');\n\
-           assertThrows(() => { document.body.innerHTML = '<p>'; }, SyntaxError);\n\
+           document.body.innerHTML = '<p>';\n\
+           assertEquals(document.body.innerHTML, '<p></p>');\n\
+           assertThrows(() => { document.body.innerHTML = '<div>'; }, SyntaxError);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
