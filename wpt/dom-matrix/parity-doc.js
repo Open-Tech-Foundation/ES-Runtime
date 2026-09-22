@@ -24,6 +24,7 @@ const SPECIFIED = "Specified values only: resolving one needs layout and a font.
 const LEGACY = "Legacy or superseded by a modern API that is implemented.";
 const STRICT = "Deliberately strict: malformed markup is refused rather than repaired.";
 const HOST = "No host resource: this DOM reaches no network, no file and no browsing context.";
+const ALIAS = "Refused by name: the modern interface name is accepted, and the HTML4 alias is answered with the constructor to use instead.";
 const ARTIFACT = "Harness artifact: Chrome ran the probe on about:blank, which is an opaque, insecure origin.";
 
 const REASONS = new Map(Object.entries({
@@ -39,6 +40,7 @@ const REASONS = new Map(Object.entries({
   "XMLSerializer": LEGACY,
   "document.write": LEGACY,
   "TouchEvent": LEGACY,
+  "createEvent refuses the HTML4 aliases": ALIAS,
   "malformed HTML": STRICT,
   "misnested tags": STRICT,
   "XMLHttpRequest": HOST,

@@ -1,10 +1,10 @@
 {
   "summary": {
-    "features": 205,
+    "features": 207,
     "agreesWithChrome": {
-      "esdev": 183,
-      "jsdom": 165,
-      "happy-dom": 168
+      "esdev": 184,
+      "jsdom": 167,
+      "happy-dom": 169
     },
     "drift": 0
   },
@@ -46,10 +46,10 @@
     },
     {
       "group": "events",
-      "features": 24,
-      "esdev": 23,
-      "jsdom": 20,
-      "happy-dom": 24
+      "features": 26,
+      "esdev": 24,
+      "jsdom": 22,
+      "happy-dom": 25
     },
     {
       "group": "components",
@@ -864,6 +864,24 @@
       "esdev": true,
       "jsdom": true,
       "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "createEvent by interface name",
+      "chrome": "Event/InvalidStateError/probe-created/true",
+      "esdev": "Event/InvalidStateError/probe-created/true",
+      "jsdom": "Event/InvalidStateError/probe-created/true",
+      "happy-dom": "Event/dispatched/probe-created/true",
+      "drift": false
+    },
+    {
+      "group": "events",
+      "name": "createEvent refuses the HTML4 aliases",
+      "chrome": "created",
+      "esdev": "NotSupportedError",
+      "jsdom": "created",
+      "happy-dom": "created",
       "drift": false
     },
     {

@@ -5,7 +5,9 @@ export function excluded(path) {
   if (path.includes("/observable/")) return "Observable remains a tentative API";
   if (path.includes("iframe") || path.includes("cross-document")) return "requires nested browsing contexts or multiple realms";
   if (path.includes("legacy-")) return "legacy behavior is outside the modern-only scope";
-  if (path.includes("Document-createEvent-")) return "legacy createEvent API is outside the modern-only scope";
+  // `createEvent` exists for the modern interface names; the HTML4 aliases are
+  // refused by name, and the upstream file tests all of them together.
+  if (path.includes("Document-createEvent-")) return "the HTML4 event-interface aliases are outside the modern-only scope";
   if (path.includes("insertion-removing-steps/script")) return "script execution is not part of the test DOM";
   return null;
 }

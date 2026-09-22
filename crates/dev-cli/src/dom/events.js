@@ -29,6 +29,9 @@ export function createEvents() {
         value: {
           type: String(type), bubbles: Boolean(options.bubbles), cancelable: Boolean(options.cancelable), composed: Boolean(options.composed),
           target: null, currentTarget: null, phase: Event.NONE, path: [], defaultPrevented: false,
+          // An event made by `createEvent` is uninitialized until `initEvent`;
+          // one made by a constructor is initialized by construction.
+          initialized: true,
           propagationStopped: false, immediateStopped: false, passive: false, dispatching: false,
           // The test clock (and its Date) starts at zero. Event timestamps are
           // positive on construction, so keep a nonzero value until it moves.
@@ -62,6 +65,7 @@ export function createEvents() {
       state.bubbles = Boolean(bubbles);
       state.cancelable = Boolean(cancelable);
       state.defaultPrevented = false;
+      state.initialized = true;
     }
   }
 
@@ -151,6 +155,7 @@ export function createEvents() {
       if (!(event instanceof Event)) throw new TypeError("dispatchEvent expects an Event from this DOM realm");
       const state = event[STATE];
       if (state.dispatching) throw new DOMException("The event is already being dispatched.", "InvalidStateError");
+      if (!state.initialized) throw new DOMException("The event has not been initialized. Call initEvent() first.", "InvalidStateError");
       const path = [this];
       for (let current = this._eventParent?.(event) ?? null; current; current = current._eventParent?.(event) ?? null) path.push(current);
       state.dispatching = true; state.target = this; state.path = path;
@@ -192,6 +197,48 @@ export function createEvents() {
     }
   }
 
+  // `document.createEvent` takes an interface *name*, and the interfaces this
+  // DOM has are the ones it creates. The HTML4-era aliases are refused by name
+  // with the constructor to use instead, because a test reaching for
+  // `"HTMLEvents"` is reaching for `new Event(…)` through a door that closed in
+  // 2016 — and a message that says so is worth more than a tree it cannot use.
+  const LEGACY_ALIASES = new Map(Object.entries({
+    events: "Event",
+    htmlevents: "Event",
+    svgevents: "Event",
+    uievents: "UIEvent",
+    mouseevents: "MouseEvent",
+    keyevents: "KeyboardEvent",
+    mutationevents: "MutationEvent",
+    customevents: "CustomEvent",
+  }));
+
+  const INTERFACES = new Map(
+    Object.entries({ Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, SubmitEvent, ErrorEvent })
+      .map(([name, constructor]) => [name.toLowerCase(), constructor]),
+  );
+
+  function createLegacy(interfaceName) {
+    const wanted = String(interfaceName);
+    const name = wanted.toLowerCase();
+    const alias = LEGACY_ALIASES.get(name);
+    if (alias) {
+      throw new DOMException(
+        `"${wanted}" is the HTML4 name for an event interface. Use new ${alias}(type, …), or createEvent("${alias}").`,
+        "NotSupportedError",
+      );
+    }
+    const Interface = INTERFACES.get(name);
+    if (!Interface) {
+      throw new DOMException(`"${wanted}" is not an event interface this DOM creates.`, "NotSupportedError");
+    }
+    const event = new Interface("");
+    // Uninitialized until `initEvent`, so dispatching it before that is the
+    // InvalidStateError the specification asks for rather than a "" event.
+    event[STATE].initialized = false;
+    return event;
+  }
+
   // The window is the realm's global object, not an instance of anything this
   // module can construct, so it is made an event target in place: libraries
   // compare `event.currentTarget === window` and read `window` out of
@@ -207,5 +254,5 @@ export function createEvents() {
     return target;
   }
 
-  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget };
+  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
 }

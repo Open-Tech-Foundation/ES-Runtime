@@ -32,6 +32,10 @@ The target is spec fidelity without layout. Algorithms that do not need a box mo
   roots, scoped selectors, composed events with host retargeting, and basic
   named/default slot assignment), but does not implement style scoping.
 - `contenteditable`, drag and drop, pointer capture, focus rings.
+- The HTML4 event-interface aliases. `document.createEvent` exists and takes a
+  modern interface name — `"Event"`, `"MouseEvent"`, `"KeyboardEvent"` — while
+  `"HTMLEvents"`, `"UIEvents"` and `"MouseEvents"` are refused by name with the
+  constructor to use instead.
 
 This is not a headless browser and will never pass a test that depends on how something looks. Pixel tests belong to the GUI driver harness.
 

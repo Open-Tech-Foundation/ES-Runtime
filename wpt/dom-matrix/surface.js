@@ -249,6 +249,17 @@ export const features = [
   ["events", "ErrorEvent", (w) => global(w, "ErrorEvent")],
   ["events", "MessageEvent", (w) => global(w, "MessageEvent")],
   ["events", "AbortController", (w) => global(w, "AbortController")],
+  ["events", "createEvent by interface name", (w) => value(() => {
+    if (typeof w.document.createEvent !== "function") return "missing";
+    const event = w.document.createEvent("Event");
+    const uninitialized = errorName(() => w.document.body.dispatchEvent(event)) ?? "dispatched";
+    event.initEvent("probe-created", true, false);
+    return `${event.constructor.name}/${uninitialized}/${event.type}/${event.bubbles}`;
+  })],
+  ["events", "createEvent refuses the HTML4 aliases", (w) => value(() => {
+    if (typeof w.document.createEvent !== "function") return "missing";
+    return errorName(() => w.document.createEvent("HTMLEvents")) ?? "created";
+  })],
   ["events", "listener signal option", (w) => value(() => {
     const target = new w.EventTarget();
     const controller = new w.AbortController();

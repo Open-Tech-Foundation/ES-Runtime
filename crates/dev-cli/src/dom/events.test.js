@@ -81,3 +81,25 @@ test("constructed targets expose standard event state and listener options", () 
   expect(target.dispatchEvent(passive)).toBe(true);
   expect(passive.defaultPrevented).toBe(false);
 });
+
+test("creates an event by modern interface name and refuses the HTML4 aliases", () => {
+  const document = new Document();
+  const target = document.createElement("div");
+  document.appendChild(target);
+  const event = events.createLegacy("Event");
+
+  // Uninitialized until `initEvent`, so dispatching it is an error.
+  expect(event.type).toBe("");
+  expect(() => target.dispatchEvent(event)).toThrow("not been initialized");
+  let seen = null;
+  target.addEventListener("change", (received) => { seen = [received.type, received.bubbles, received.cancelable]; });
+  event.initEvent("change", true, false);
+  expect(target.dispatchEvent(event)).toBe(true);
+  expect(seen).toEqual(["change", true, false]);
+
+  expect(events.createLegacy("MouseEvent")).toBeInstanceOf(events.MouseEvent);
+  expect(events.createLegacy("customevent")).toBeInstanceOf(events.CustomEvent);
+  expect(() => events.createLegacy("HTMLEvents")).toThrow("HTML4 name");
+  expect(() => events.createLegacy("UIEvents")).toThrow("new UIEvent");
+  expect(() => events.createLegacy("Nonsense")).toThrow("not an event interface");
+});

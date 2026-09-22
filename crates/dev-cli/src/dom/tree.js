@@ -1804,6 +1804,15 @@ export function createTree(events = {}) {
       if (!(root instanceof Node)) throw new TypeError("createTreeWalker root must be a Node");
       return new TreeWalker(root, whatToShow, filter);
     }
+    // Legacy, and still normative: a library that builds events this way is
+    // asking for an interface by name. The modern names are answered; the
+    // HTML4 aliases are refused with the constructor to use.
+    createEvent(interfaceName) {
+      if (typeof events.createLegacy !== "function") {
+        throw domError("NotSupportedError", "This DOM has no event interfaces to create.");
+      }
+      return events.createLegacy(interfaceName);
+    }
     createNodeIterator(root, whatToShow = NodeFilter.SHOW_ALL, filter = null) {
       if (!(root instanceof Node)) throw new TypeError("createNodeIterator root must be a Node");
       return new NodeIterator(root, whatToShow, filter);

@@ -9,13 +9,13 @@ keep current.
 
 ## Surface
 
-205 features — interfaces, members and behaviours — put to all four runtimes.
+207 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 183 / 205 | 89% |
-| jsdom | 165 / 205 | 80% |
-| happy-dom | 168 / 205 | 82% |
+| esdev | 184 / 207 | 89% |
+| jsdom | 167 / 207 | 81% |
+| happy-dom | 169 / 207 | 82% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
@@ -24,7 +24,7 @@ keep current.
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
 | window | 32 | 21 | 21 | 22 |
-| events | 24 | 23 | 20 | 24 |
+| events | 26 | 24 | 22 | 25 |
 | components | 17 | 17 | 12 | 13 |
 | parsing | 12 | 8 | 12 | 11 |
 | forms | 14 | 14 | 14 | 14 |
@@ -92,7 +92,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-43 of the 205 features.
+44 of the 207 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -115,6 +115,7 @@ compares the result.
 | element scroll offsets | `0,0,false` | `40,0,true` | `40,0,false` |
 | DragEvent | yes | no | yes |
 | ClipboardEvent | yes | no | yes |
+| createEvent by interface name | `Event/InvalidStateError/probe-created/true` | `Event/InvalidStateError/probe-created/true` | `Event/dispatched/probe-created/true` |
 | IntersectionObserver | yes | no | yes |
 | ResizeObserver | yes | no | yes |
 | manual slot assignment | yes | no | yes |
@@ -142,7 +143,7 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-22 of 205. Every one of them is here:
+23 of 207. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -161,6 +162,12 @@ a difference with no entry fails `tsr docs:parity`.
 | TouchEvent | yes | no |
 | XMLSerializer | yes | no |
 | document.write | yes | no |
+
+**Refused by name: the modern interface name is accepted, and the HTML4 alias is answered with the constructor to use instead.**
+
+| Feature | Chrome | esdev |
+| --- | --- | --- |
+| createEvent refuses the HTML4 aliases | `created` | `NotSupportedError` |
 
 **Deliberately strict: malformed markup is refused rather than repaired.**
 
@@ -294,6 +301,8 @@ a difference with no entry fails `tsr docs:parity`.
 | events | ErrorEvent | yes | yes | yes | yes |
 | events | MessageEvent | yes | yes | yes | yes |
 | events | AbortController | yes | yes | yes | yes |
+| events | createEvent by interface name | `Event/InvalidStateError/probe-created/true` | `Event/InvalidStateError/probe-created/true` | `Event/InvalidStateError/probe-created/true` | `Event/dispatched/probe-created/true` |
+| events | createEvent refuses the HTML4 aliases | `created` | `NotSupportedError` | `created` | `created` |
 | events | listener signal option | yes | yes | yes | yes |
 | events | window is in the propagation path | yes | yes | yes | yes |
 | events | composedPath() through a shadow root | `7` | `7` | `7` | `7` |

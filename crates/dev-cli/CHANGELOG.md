@@ -25,6 +25,14 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **`document.createEvent()`, for the modern interface names.** `"Event"`,
+  `"CustomEvent"`, `"MouseEvent"`, `"KeyboardEvent"`, `"UIEvent"`, `"FocusEvent"`
+  and the rest of the interfaces this DOM has. The returned event is
+  uninitialized until `initEvent`, so dispatching it before that is the
+  `InvalidStateError` the specification asks for. The HTML4 aliases —
+  `"HTMLEvents"`, `"UIEvents"`, `"MouseEvents"` — are refused by name with the
+  constructor to use instead, which is a deliberate difference from a browser
+  and is recorded as one in the parity document.
 - **`document.createNodeIterator()`**, a real NodeIterator rather than a
   TreeWalker wearing its name: the position is between nodes, so going forward
   and then back lands on the same node, `referenceNode` and

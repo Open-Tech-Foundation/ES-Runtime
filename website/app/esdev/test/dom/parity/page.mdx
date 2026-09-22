@@ -7,14 +7,14 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 
 # DOM parity
 
-Chrome is the oracle. 205 features — interfaces, members and behaviours — are
+Chrome is the oracle. 207 features — interfaces, members and behaviours — are
 put to all four runtimes, and 53 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 183 / 205 | 89% |
-| jsdom | 165 / 205 | 80% |
-| happy-dom | 168 / 205 | 82% |
+| esdev | 184 / 207 | 89% |
+| jsdom | 167 / 207 | 81% |
+| happy-dom | 169 / 207 | 82% |
 
 ## By area
 
@@ -25,7 +25,7 @@ put to all four runtimes, and 53 behaviour cases run the same code in each.
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 22 | 12 | 17 |
 | window | 32 | 21 | 21 | 22 |
-| events | 24 | 23 | 20 | 24 |
+| events | 26 | 24 | 22 | 25 |
 | components | 17 | 17 | 12 | 13 |
 | parsing | 12 | 8 | 12 | 11 |
 | forms | 14 | 14 | 14 | 14 |
@@ -92,7 +92,7 @@ put to all four runtimes, and 53 behaviour cases run the same code in each.
 
 ## Closer to Chrome than an emulator
 
-43 features where esdev matches Chrome and jsdom or happy-dom does not.
+44 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -115,6 +115,7 @@ put to all four runtimes, and 53 behaviour cases run the same code in each.
 | element scroll offsets | `0,0,false` | `40,0,true` | `40,0,false` |
 | DragEvent | yes | no | yes |
 | ClipboardEvent | yes | no | yes |
+| createEvent by interface name | `Event/InvalidStateError/probe-created/true` | `Event/InvalidStateError/probe-created/true` | `Event/dispatched/probe-created/true` |
 | IntersectionObserver | yes | no | yes |
 | ResizeObserver | yes | no | yes |
 | manual slot assignment | yes | no | yes |
@@ -142,7 +143,7 @@ put to all four runtimes, and 53 behaviour cases run the same code in each.
 
 ## Differences from Chrome
 
-22 features, each with its reason. There are no others.
+23 features, each with its reason. There are no others.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
 
@@ -160,6 +161,12 @@ put to all four runtimes, and 53 behaviour cases run the same code in each.
 | TouchEvent | yes | no |
 | XMLSerializer | yes | no |
 | document.write | yes | no |
+
+**Refused by name: the modern interface name is accepted, and the HTML4 alias is answered with the constructor to use instead.**
+
+| Feature | Chrome | esdev |
+| --- | --- | --- |
+| createEvent refuses the HTML4 aliases | `created` | `NotSupportedError` |
 
 **Deliberately strict: malformed markup is refused rather than repaired.**
 
