@@ -2179,6 +2179,39 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "cascade",
+    name: "colour-functions-are-canonical",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      document.body.appendChild(element);
+      const both = (value) => {
+        element.style.setProperty("color", value);
+        const specified = element.style.getPropertyValue("color");
+        const computed = window.getComputedStyle(element).color;
+        element.style.removeProperty("color");
+        return [specified, computed];
+      };
+      return [
+        // Hex and the legacy functions are `rgb()` in the declaration already,
+        // clamped, rounded, and with the shortest alpha that names the same byte.
+        both("#ff000080"), both("#f008"), both("rgb(300 0 0)"), both("rgb(-5 0 0)"),
+        both("rgb(50% 0% 0%)"), both("rgb(1.5 2.4 3.6)"), both("rgba(255 0 0 / 30%)"),
+        both("hsl(0 100% 50% / 30%)"), both("hsl(400 150% 50%)"),
+        // `hwb()` too, whitened and blackened.
+        both("hwb(0 0% 0%)"), both("hwb(120 10% 20%)"), both("hwb(120 10% 20% / 0.5)"),
+        both("hwb(0 0% 0% / 50%)"),
+        // These keep their space and lose their sugar.
+        both("lab(50% 40 30)"), both("lab(50% 40 30 / 0.5)"), both("lch(50 40 30deg)"),
+        both("oklch(50% 0.1 200)"), both("oklab(0.5 0.1 0.1)"), both("color(srgb 1 0 0)"),
+        // `color-mix` drops the space it can assume, and an sRGB mix resolves.
+        both("color-mix(in oklab, red, blue)")[0],
+        both("color-mix(in srgb, red, blue)"), both("color-mix(in srgb, red 30%, blue)"),
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

@@ -48,9 +48,21 @@ is the point, since none of the three has any business in a deployment.
   never compiles a byte of it. Measured before and after: peak RSS unchanged
   (63 → 64 MB under `--dom`, inside the noise), binary +20 KB.
 
-  Not converted, and recorded rather than hidden: `lab(50% 40 30)` keeps its
-  percentage where Chrome rewrites it as `lab(50 40 30)`, and `color-mix()`
-  stays unresolved where Chrome computes it to a `color()`.
+  The colour syntaxes are Chrome's too, all of them: hex — including the 4- and
+  8-digit forms, whose alpha is printed as short as it can be while still naming
+  the same byte (`#ff000080` is `0.5`, `#f008` needs `0.533`) — `rgb()` and
+  `hsl()` in both syntaxes with clamping, rounding and hue wrapping
+  (`hsl(400 150% 50%)` is `rgb(255, 170, 0)`), and `hwb()`. `lab()`, `lch()`,
+  `oklab()` and `oklch()` keep their space and lose their sugar: a percentage
+  lightness becomes a number, a hue angle loses its unit. `color-mix()` drops
+  `in oklab`, the space it can assume, and an sRGB mix resolves to the
+  `color(srgb …)` a browser reports.
+
+  One difference remains, recorded rather than approximated: a mix in a space
+  other than sRGB stays unresolved, because matching Chrome's
+  `oklab(0.539974 0.0962086 -0.0928316)` means reproducing its conversion to the
+  sixth decimal, and a number that is nearly right is worse than a value that
+  says it was not resolved.
 - **Event handler content attributes.** `<button onclick="this.reset()">` and
   `el.setAttribute("onclick", …)` now do what they say: the attribute's value is
   a function *body* by specification, compiled with the element and the document
