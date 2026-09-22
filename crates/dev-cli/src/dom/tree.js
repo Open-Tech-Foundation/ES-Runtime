@@ -874,7 +874,67 @@ export function createTree(events = {}) {
     }
     set max(value) { this.setAttribute("max", String(Number(value))); }
   }
-  class HTMLTableElement extends HTMLElement {}
+  // The table family. `rows` is in the specification's order rather than tree
+  // order: head first, then the bodies, then the foot, wherever the markup put
+  // them — a `<tfoot>` written before a `<tbody>` still comes last.
+  class HTMLTableElement extends HTMLElement {
+    #sections(name) {
+      return Array.from(this._esdevChildren()).filter((child) => child.localName === name);
+    }
+    get caption() { return this.#sections("caption")[0] ?? null; }
+    get tHead() { return this.#sections("thead")[0] ?? null; }
+    get tFoot() { return this.#sections("tfoot")[0] ?? null; }
+    get tBodies() {
+      return new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((child) => child.localName === "tbody"));
+    }
+    get rows() {
+      return new HTMLCollection(this, (root) => {
+        const rows = (parent) => Array.from(parent._esdevChildren()).filter((child) => child instanceof HTMLTableRowElement);
+        const sections = Array.from(root._esdevChildren());
+        return [
+          ...sections.filter((child) => child.localName === "thead").flatMap(rows),
+          ...rows(root),
+          ...sections.filter((child) => child.localName === "tbody").flatMap(rows),
+          ...sections.filter((child) => child.localName === "tfoot").flatMap(rows),
+        ];
+      });
+    }
+  }
+
+  class HTMLTableSectionElement extends HTMLElement {
+    get rows() {
+      return new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((child) => child instanceof HTMLTableRowElement));
+    }
+  }
+
+  class HTMLTableRowElement extends HTMLElement {
+    get cells() {
+      return new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((child) => child instanceof HTMLTableCellElement));
+    }
+    get rowIndex() {
+      // Walked rather than `closest("table")`: the tree must not depend on the
+      // selector engine having been installed over it.
+      let table = this.parentElement;
+      while (table && !(table instanceof HTMLTableElement)) table = table.parentElement;
+      return table ? Array.from(table.rows).indexOf(this) : -1;
+    }
+    get sectionRowIndex() {
+      const parent = this.parentElement;
+      return parent instanceof HTMLTableSectionElement || parent instanceof HTMLTableElement
+        ? Array.from(parent.rows).indexOf(this)
+        : -1;
+    }
+  }
+
+  class HTMLTableCellElement extends HTMLElement {
+    get cellIndex() {
+      const row = this.parentElement;
+      return row instanceof HTMLTableRowElement ? Array.from(row.cells).indexOf(this) : -1;
+    }
+  }
+
+  class HTMLTableCaptionElement extends HTMLElement {}
+  class HTMLTableColElement extends HTMLElement {}
 
   function isSubmitter(control) {
     return (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) && control.type === "submit";
@@ -1767,6 +1827,15 @@ export function createTree(events = {}) {
     textarea: HTMLTextAreaElement,
     template: HTMLTemplateElement,
     table: HTMLTableElement,
+    thead: HTMLTableSectionElement,
+    tbody: HTMLTableSectionElement,
+    tfoot: HTMLTableSectionElement,
+    tr: HTMLTableRowElement,
+    td: HTMLTableCellElement,
+    th: HTMLTableCellElement,
+    caption: HTMLTableCaptionElement,
+    col: HTMLTableColElement,
+    colgroup: HTMLTableColElement,
     fieldset: HTMLFieldSetElement,
   };
 
@@ -1805,5 +1874,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, customStates, formSubmissionValue, upgradeCustom };
+  return { Node, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, SVGElement, SVGSVGElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, isDefined, isDisabled, customStates, formSubmissionValue, upgradeCustom };
 }

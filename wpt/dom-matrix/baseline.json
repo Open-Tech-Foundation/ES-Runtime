@@ -560,6 +560,94 @@
       "drift": false
     },
     {
+      "group": "tree",
+      "name": "table-collections-follow-the-section-order",
+      "chrome": {
+        "result": [
+          [
+            "h",
+            "ab",
+            "c",
+            "f"
+          ],
+          1,
+          "c",
+          [
+            2,
+            1,
+            0,
+            1
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            -1,
+            -1
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "h",
+            "ab",
+            "c",
+            "f"
+          ],
+          1,
+          "c",
+          [
+            2,
+            1,
+            0,
+            1
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            -1,
+            -1
+          ]
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          [
+            "h",
+            "ab",
+            "c",
+            "f"
+          ],
+          1,
+          "c",
+          [
+            2,
+            1,
+            0,
+            1
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            -1,
+            -1
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
       "group": "parsing",
       "name": "fragment-structure-follows-its-context-element",
       "chrome": {
@@ -1302,7 +1390,7 @@
     }
   ],
   "summary": {
-    "match": 37,
+    "match": 38,
     "intentional-limit": 1,
     "drift": 0
   }

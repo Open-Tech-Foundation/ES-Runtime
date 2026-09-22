@@ -269,6 +269,26 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "table-collections-follow-the-section-order",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      document.body.innerHTML =
+        "<table><caption>c</caption><thead><tr><th>h</th></tr></thead><tfoot><tr><td>f</td></tr></tfoot><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>";
+      const table = document.body.firstElementChild;
+      const row = table.rows[1];
+      return [
+        Array.from(table.rows, (entry) => entry.textContent),
+        table.tBodies.length,
+        table.caption.textContent,
+        [row.cells.length, row.rowIndex, row.sectionRowIndex, row.cells[1].cellIndex],
+        [table.tBodies[0].rows.length, table.tHead.rows.length],
+        [document.createElement("tr").rowIndex, document.createElement("td").cellIndex],
+      ];
+    },
+  },
+  {
     group: "parsing",
     name: "fragment-structure-follows-its-context-element",
     run(window) {

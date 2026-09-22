@@ -1,7 +1,7 @@
 import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 
-const { CDATASection, CharacterData, Document, DocumentType, Element, HTMLDialogElement, HTMLInputElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState } = createTree();
+const { CDATASection, CharacterData, Document, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState } = createTree();
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
   const document = new Document();
@@ -500,4 +500,49 @@ test("makes processing instructions and refuses CDATA in HTML", () => {
   expect(() => document.createProcessingInstruction("ok", "?>")).toThrow("?>");
   expect(() => document.createCDATASection("x")).toThrow("CDATA");
   expect(typeof CDATASection).toBe("function");
+});
+
+test("orders table rows by section rather than by position", () => {
+  const document = new Document();
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const foot = document.createElement("tfoot");
+  const body = document.createElement("tbody");
+  const row = (text) => {
+    const element = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.appendChild(document.createTextNode(text));
+    element.appendChild(cell);
+    return element;
+  };
+  head.appendChild(row("h"));
+  foot.appendChild(row("f"));
+  body.append(row("a"), row("b"));
+  // The foot is written before the body, and still comes last.
+  table.append(head, foot, body);
+  document.appendChild(table);
+
+  expect(Array.from(table.rows, (entry) => entry.textContent)).toEqual(["h", "a", "b", "f"]);
+  expect([table.tBodies.length, table.tHead, table.tFoot]).toEqual([1, head, foot]);
+  expect(body.rows.length).toBe(2);
+  expect(table.rows[1]).toBeInstanceOf(HTMLTableRowElement);
+  expect(body).toBeInstanceOf(HTMLTableSectionElement);
+});
+
+test("indexes rows and cells against the tree they are in", () => {
+  const document = new Document();
+  const table = document.createElement("table");
+  const body = document.createElement("tbody");
+  const row = document.createElement("tr");
+  const first = document.createElement("td");
+  const second = document.createElement("th");
+  row.append(first, second);
+  body.appendChild(row);
+  table.appendChild(body);
+  document.appendChild(table);
+
+  expect([row.cells.length, row.rowIndex, row.sectionRowIndex]).toEqual([2, 0, 0]);
+  expect([first.cellIndex, second.cellIndex]).toEqual([0, 1]);
+  expect(second).toBeInstanceOf(HTMLTableCellElement);
+  expect([document.createElement("tr").rowIndex, document.createElement("td").cellIndex]).toEqual([-1, -1]);
 });

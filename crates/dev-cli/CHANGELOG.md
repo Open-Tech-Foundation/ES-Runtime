@@ -51,6 +51,13 @@ is the point, since none of the three has any business in a deployment.
   `.dev/dist/server.js`); the loop runs and serves those builds, and the
   watcher ignores the directory. The name refuses anything that would overlap
    a target's `out`/`outdir`, escape the project, or be the project root.
+- **The table element family in `esdev test --dom`:**
+  `HTMLTableSectionElement`, `HTMLTableRowElement`, `HTMLTableCellElement`,
+  `HTMLTableCaptionElement` and `HTMLTableColElement`, with `table.rows`,
+  `table.tBodies`, `caption`, `tHead`, `tFoot`, `section.rows`, `row.cells`,
+  `row.rowIndex`, `row.sectionRowIndex` and `cell.cellIndex`. `rows` is in the
+  specification's order rather than tree order, so a `<tfoot>` written before
+  the bodies still comes last.
 - **The strict parser accepts the tags HTML allows to be omitted** in `esdev
   test --dom`: `</li>`, `</p>`, `</td>`, `</option>`, `</tr>`, the table
   section and ruby end tags, and an implied `<tbody>` before a `<tr>` that sits
