@@ -133,6 +133,16 @@ run = "esdev test"
 dir = "crates/runtime/js"
 env = { PATH = "../../../target/release:${PATH}" }
 
+# The test-only DOM's own unit tests, one file per module it has them for. They
+# import the module factories directly, so they check tree, event and parsing
+# behaviour without going through a whole `esdev test --dom` process the way
+# `crates/dev-cli/tests/cli.rs` does. Run on our own binary, and on PATH the
+# same way `test:serialization` is, for the same reason.
+[tasks."test:dom-unit"]
+run = "esdev test"
+dir = "crates/dev-cli/src/dom"
+env = { PATH = "../../../../target/release:${PATH}" }
+
 # A portable baseline for the test-only DOM. The report is diagnostic while it
 # maps compatibility gaps; each case still has a Deno harness test, and the
 # command runs the actual esdev binary alongside jsdom and happy-dom.
@@ -140,7 +150,7 @@ env = { PATH = "../../../target/release:${PATH}" }
 run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net=127.0.0.1 --allow-read --allow-run --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js"
 
 [tasks."test:unit"]
-deps = ["test:protocol", "test:serialization"]
+deps = ["test:protocol", "test:serialization", "test:dom-unit"]
 
 # The full driver suites — these need a live server, and say so when they cannot
 # reach one. One task each rather than a fan-out, because CI gives each its own

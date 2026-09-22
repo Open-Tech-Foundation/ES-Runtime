@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "runtime:test";
 import { createTree } from "./tree.js";
 import { createParsing } from "./parse.js";
 

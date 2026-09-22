@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "runtime:test";
 import { createEvents } from "./events.js";
 import { createTree } from "./tree.js";
 
