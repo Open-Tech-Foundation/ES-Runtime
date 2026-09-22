@@ -1703,7 +1703,7 @@ export function createTree(events = {}) {
   installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
   Object.defineProperties(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
   installReflectors(HTMLTableElement, { border: "border" });
-  installReflectors(HTMLFormElement, { target: "target" }, { noValidate: "novalidate" });
+  installReflectors(HTMLFormElement, { name: "name", target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
   installReflectors(HTMLSelectElement,
     { name: "name" },

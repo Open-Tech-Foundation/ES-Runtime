@@ -4574,10 +4574,73 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "named-access-on-the-window",
+      "chrome": {
+        "result": [
+          true,
+          true,
+          false,
+          "object",
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          true,
+          true,
+          false,
+          "object",
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          true,
+          true,
+          true,
+          "object",
+          false,
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          true,
+          true,
+          false,
+          "object",
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 89,
+    "match": 90,
     "intentional-limit": 2,
     "drift": 0
   }

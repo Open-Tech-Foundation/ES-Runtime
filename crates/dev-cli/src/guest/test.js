@@ -127,16 +127,29 @@ const realSetTimeout = globalThis.setTimeout;
 let pendingRejection = null;
 const strayRejections = [];
 
-if (typeof globalThis.addEventListener === "function") {
-  globalThis.addEventListener("unhandledrejection", (event) => {
-    // Only while the run owns the process. After it, an unclaimed rejection is
-    // the runtime's to report, and swallowing it would hide a real error.
-    if (!draining) return;
-    event.preventDefault();
-    if (activeCase !== null) pendingRejection ??= event.reason;
-    else strayRejections.push(event.reason);
-  });
+function claimRejection(event) {
+  // A suite that listens for rejections itself and claims them — which is how
+  // a framework's own error-handling tests are written — has already said the
+  // rejection was expected. The runner is the handler of last resort.
+  if (event.defaultPrevented) return;
+  // Only while the run owns the process. After it, an unclaimed rejection is
+  // the runtime's to report, and swallowing it would hide a real error.
+  if (!draining) return;
+  event.preventDefault();
+  if (activeCase !== null) pendingRejection ??= event.reason;
+  else strayRejections.push(event.reason);
 }
+
+// Re-armed before each case so it stays *last*: listeners run in registration
+// order, and the runner's has to see what a suite's own listener did with the
+// event before deciding it went unhandled.
+function armRejectionListener() {
+  if (typeof globalThis.addEventListener !== "function") return;
+  globalThis.removeEventListener("unhandledrejection", claimRejection);
+  globalThis.addEventListener("unhandledrejection", claimRejection);
+}
+
+armRejectionListener();
 
 // The detail a failure is reported with: the stack when there is one, because a
 // failure is only actionable if it names the line that failed.
@@ -434,6 +447,7 @@ async function runCase({ id, fn, scope }) {
     activeCase = id;
     snapshotNumber = 0;
     pendingRejection = null;
+    armRejectionListener();
     for (const before of around(scope, "beforeEach")) await before();
     await fn();
   } catch (err) {

@@ -25,6 +25,27 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **`accessor x = 1` compiles.** The class auto-accessor is a private field and
+  a getter/setter pair by definition, and that is what it becomes — on the
+  prototype for an instance accessor, on the constructor for a `static` one,
+  with the backing field per instance. V8 has not shipped the keyword (it
+  belongs to the decorators proposal) and neither has the compiler this build
+  uses, so a file carrying one died in the engine on `Unexpected identifier`,
+  naming nothing: Lit's 4,000-line reactive-element suite could not be loaded
+  over one use of it. A plain `.js` file is still returned byte for byte unless
+  it really has one — the word in a comment triggers a parse and nothing else.
+- **Decorators are refused by name.** A stage-3 proposal the engine has not
+  shipped, and the compiler lowers only TypeScript's older, experimental form,
+  which is a different language feature. Rather than a syntax error from the
+  engine, the refusal says so and says what to write instead:
+  `customElements.define(name, Class)` for `@customElement`, a static
+  `properties` or `observedAttributes` for `@property`.
+- **Named access on the window.** `window.someId` is the element with that id,
+  and a `form` answers to its `name` too. It sits behind the window in the
+  prototype chain, as in a browser, so a real window property is never shadowed
+  by an id and `Object.hasOwn(window, "someId")` stays false — and it answers
+  from the document rather than from a map that would have to be kept in step
+  with it. Two elements sharing an id answer with a collection of them.
 - **Customized built-ins.** `customElements.define(name, Class, { extends:
   "button" })` recorded nothing and `createElement("button", { is: name })`
   dropped the option, so the constructor never ran — a silent no-upgrade, not an
@@ -310,6 +331,15 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **The runner's rejection handler is the handler of last resort.** A suite that
+  listens for `unhandledrejection` itself and claims the event — which is how a
+  framework's own error-handling tests are written — had its rejection taken by
+  the runner first and its tests failed with the error they expected. The
+  runner's listener is now re-armed before each case so it runs last, and it
+  leaves an event another listener already claimed alone. Lit's exception suite
+  went from 6 failures to none.
+- **`String(location)` is the URL.** `Location` had no stringifier, so it read
+  `[object Object]`, and `form.name` did not reflect its attribute.
 - **A definition is read once, at `define()`.** `observedAttributes` was read
   lazily on every attribute write and never at definition time, so a class that
   finalizes itself in that getter — which is how Lit installs its accessors and

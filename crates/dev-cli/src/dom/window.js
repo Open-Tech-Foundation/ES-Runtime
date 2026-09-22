@@ -215,6 +215,10 @@ class Location {
   assign(value) { this.#set(value); }
   replace(value) { this.#set(value); }
   reload() {}
+  // Web IDL gives `Location` a stringifier for `href`, which is why
+  // `String(location)` and `location + ""` are the URL and not `[object …]`.
+  toString() { return this.href; }
+  toJSON() { return this.href; }
 }
 
 // `window` is the global object and the last entry in every propagation path.
@@ -586,6 +590,59 @@ nameInterfaces(css);
 nameInterfaces(elements);
 nameInterfaces(globals);
 Object.defineProperty(globalThis, Symbol.toStringTag, { value: "Window", configurable: true });
+
+// Named access on the window object: `window.someId` is the element with that
+// id. A browser keeps these on an object *behind* the window in the prototype
+// chain, so a real window property always wins — `window.location` is the
+// location even with `<div id="location">` in the page — and
+// `Object.hasOwn(window, "someId")` is false. That is exactly what a prototype
+// can do, so this goes there too, as a proxy that answers from the document
+// rather than a map something would have to keep in step with it.
+const NAMED_BY_NAME = new Set(["form", "img", "object", "embed", "iframe"]);
+const namedCollections = new Map();
+
+function namedElement(name) {
+  let collection = namedCollections.get(name);
+  if (!collection) {
+    // A live collection, so repeated lookups of a name cost nothing until the
+    // document changes.
+    collection = new tree.HTMLCollection(document, (root) =>
+      collectElements(root).filter((element) =>
+        element.getAttribute("id") === name
+        || (NAMED_BY_NAME.has(element.localName) && element.getAttribute("name") === name)));
+    namedCollections.set(name, collection);
+  }
+  const found = Array.from(collection);
+  if (found.length === 0) return null;
+  // More than one is a collection of them, as in a browser.
+  return found.length === 1 ? found[0] : collection;
+}
+
+function collectElements(root) {
+  const found = [];
+  const walk = (node) => {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child instanceof tree.Element) { found.push(child); walk(child); }
+    }
+  };
+  walk(root);
+  return found;
+}
+
+const namedProperties = new Proxy(Object.create(Object.getPrototypeOf(globalThis)), {
+  get(target, property, receiver) {
+    if (typeof property === "string" && !Reflect.has(target, property)) {
+      const element = namedElement(property);
+      if (element !== null) return element;
+    }
+    return Reflect.get(target, property, receiver);
+  },
+  has(target, property) {
+    if (typeof property === "string" && namedElement(property) !== null) return true;
+    return Reflect.has(target, property);
+  },
+});
+Object.setPrototypeOf(globalThis, namedProperties);
 
 // Accessors rather than values in the assignment above: `Object.assign` would
 // have called the getter and left a plain number behind, so a test assigning to

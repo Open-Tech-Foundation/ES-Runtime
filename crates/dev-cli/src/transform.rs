@@ -221,6 +221,242 @@ fn contains_jsx(program: &oxc::ast::ast::Program<'_>) -> bool {
     found.0
 }
 
+/// The message for the first decorator in a program, if it has one.
+fn first_decorator(program: &oxc::ast::ast::Program<'_>) -> Option<String> {
+    use oxc::ast_visit::Visit;
+
+    #[derive(Default)]
+    struct Found(bool);
+
+    impl<'a> Visit<'a> for Found {
+        fn visit_decorator(&mut self, _it: &oxc::ast::ast::Decorator<'a>) {
+            self.0 = true;
+        }
+    }
+
+    let mut found = Found::default();
+    found.visit_program(program);
+    found.0.then(unsupported_decorators)
+}
+
+/// Lowers class auto-accessors — `accessor x = 1` — into what they are defined
+/// to be: a private field, and the getter and setter pair that reads it.
+///
+/// V8 has not shipped the keyword (it belongs to the decorators proposal), and
+/// neither has the transformer this build uses, so without this a file carrying
+/// one dies in the engine with `Unexpected identifier` and no idea which line
+/// meant what. The rewrite runs before semantic analysis, so scopes and symbols
+/// are built from the result.
+///
+/// A computed or private key is refused rather than guessed at: `accessor [k]`
+/// has to evaluate its key exactly once, which needs a temporary in the class's
+/// scope.
+struct LowerAccessors<'a> {
+    allocator: &'a oxc::allocator::Allocator,
+    /// Whether anything was actually rewritten.
+    lowered: bool,
+    /// What could not be lowered, reported instead of miscompiled.
+    refused: Option<String>,
+}
+
+impl<'a> oxc::ast_visit::VisitMut<'a> for LowerAccessors<'a> {
+    fn visit_class(&mut self, class: &mut oxc::ast::ast::Class<'a>) {
+        use oxc::allocator::Vec as ArenaVec;
+        use oxc::ast::ast::*;
+        use oxc::ast::builder::AstBuilder;
+        use oxc::span::SPAN;
+
+        oxc::ast_visit::walk_mut::walk_class(self, class);
+        if !class
+            .body
+            .body
+            .iter()
+            .any(|element| matches!(element, ClassElement::AccessorProperty(_)))
+        {
+            return;
+        }
+        let builder = AstBuilder::new(self.allocator);
+        let mut lowered: ArenaVec<'a, ClassElement<'a>> = ArenaVec::new_in(&builder);
+        let elements = std::mem::replace(&mut class.body.body, ArenaVec::new_in(&builder));
+        for element in elements {
+            let ClassElement::AccessorProperty(accessor) = element else {
+                lowered.push(element);
+                continue;
+            };
+            let accessor = accessor.unbox();
+            if !accessor.decorators.is_empty() {
+                self.refused = Some(unsupported_decorators());
+                return;
+            }
+            let name = match &accessor.key {
+                PropertyKey::StaticIdentifier(ident) if !accessor.computed => ident.name,
+                _ => {
+                    self.refused = Some(
+                        "this file has an `accessor` whose name is computed or private, which \
+                         esdev does not compile yet. A plain `accessor name = …` does."
+                            .to_string(),
+                    );
+                    return;
+                }
+            };
+            // The backing field's name cannot collide with a private name the
+            // class already has, and it is not observable: a private field is
+            // reachable only from inside the class body.
+            let backing = oxc::str::Ident::from_str_in(&format!("{name}_accessor"), &builder);
+            lowered.push(ClassElement::new_property_definition(
+                SPAN,
+                PropertyDefinitionType::PropertyDefinition,
+                ArenaVec::new_in(&builder),
+                PropertyKey::new_private_identifier(SPAN, backing, &builder),
+                None,
+                accessor.value,
+                false,
+                accessor.r#static,
+                false,
+                false,
+                false,
+                false,
+                false,
+                None,
+                &builder,
+            ));
+            let read = Expression::new_private_field_expression(
+                SPAN,
+                Expression::new_this_expression(SPAN, &builder),
+                PrivateIdentifier::new(SPAN, backing, &builder),
+                false,
+                &builder,
+            );
+            let getter = Function::boxed(
+                SPAN,
+                FunctionType::FunctionExpression,
+                None,
+                false,
+                false,
+                false,
+                None,
+                None,
+                FormalParameters::boxed(
+                    SPAN,
+                    FormalParameterKind::FormalParameter,
+                    ArenaVec::new_in(&builder),
+                    None,
+                    &builder,
+                ),
+                None,
+                Some(FunctionBody::boxed(
+                    SPAN,
+                    ArenaVec::new_in(&builder),
+                    oxc::allocator::Vec::from_array_in(
+                        [Statement::new_return_statement(SPAN, Some(read), &builder)],
+                        &builder,
+                    ),
+                    &builder,
+                )),
+                &builder,
+            );
+            lowered.push(ClassElement::new_method_definition(
+                SPAN,
+                MethodDefinitionType::MethodDefinition,
+                ArenaVec::new_in(&builder),
+                PropertyKey::new_static_identifier(SPAN, name, &builder),
+                getter,
+                MethodDefinitionKind::Get,
+                false,
+                accessor.r#static,
+                false,
+                false,
+                None,
+                &builder,
+            ));
+            let written = oxc::str::Ident::from_str_in("value", &builder);
+            let assign = Expression::new_assignment_expression(
+                SPAN,
+                AssignmentOperator::Assign,
+                AssignmentTarget::new_private_field_expression(
+                    SPAN,
+                    Expression::new_this_expression(SPAN, &builder),
+                    PrivateIdentifier::new(SPAN, backing, &builder),
+                    false,
+                    &builder,
+                ),
+                Expression::new_identifier(SPAN, written, &builder),
+                &builder,
+            );
+            let setter = Function::boxed(
+                SPAN,
+                FunctionType::FunctionExpression,
+                None,
+                false,
+                false,
+                false,
+                None,
+                None,
+                FormalParameters::boxed(
+                    SPAN,
+                    FormalParameterKind::FormalParameter,
+                    oxc::allocator::Vec::from_array_in(
+                        [FormalParameter::new(
+                            SPAN,
+                            ArenaVec::new_in(&builder),
+                            BindingPattern::new_binding_identifier(SPAN, written, &builder),
+                            None,
+                            None,
+                            false,
+                            None,
+                            false,
+                            false,
+                            &builder,
+                        )],
+                        &builder,
+                    ),
+                    None,
+                    &builder,
+                ),
+                None,
+                Some(FunctionBody::boxed(
+                    SPAN,
+                    ArenaVec::new_in(&builder),
+                    oxc::allocator::Vec::from_array_in(
+                        [Statement::new_expression_statement(SPAN, assign, &builder)],
+                        &builder,
+                    ),
+                    &builder,
+                )),
+                &builder,
+            );
+            lowered.push(ClassElement::new_method_definition(
+                SPAN,
+                MethodDefinitionType::MethodDefinition,
+                ArenaVec::new_in(&builder),
+                PropertyKey::new_static_identifier(SPAN, name, &builder),
+                setter,
+                MethodDefinitionKind::Set,
+                false,
+                accessor.r#static,
+                false,
+                false,
+                None,
+                &builder,
+            ));
+        }
+        class.body.body = lowered;
+        self.lowered = true;
+    }
+}
+
+/// What to say when a file uses decorators.
+pub fn unsupported_decorators() -> String {
+    "this file uses decorators, which esdev does not compile yet.\n\n\
+     They are a stage-3 proposal the engine has not shipped, and the compiler \
+     this build uses lowers only TypeScript's older, experimental form — which \
+     is not the one a modern library is written in. Until it lands, a class \
+     that needs one can say the same thing in plain JavaScript: a static \
+     `properties` or `observedAttributes` in place of `@property`, and \
+     `customElements.define(name, Class)` in place of `@customElement`."
+        .to_string()
+}
+
 /// The `@jsx…` pragmas in a source's comments, in the order they appear.
 ///
 /// Scanned rather than parsed: a pragma is only ever read out of a comment, and
@@ -368,7 +604,12 @@ impl SourceTransform for TypeStripper {
         // written, which is the property D71 is built on. A plain `.js` is not
         // reprinted at all, so it takes the prelude directly.
         let prelude = self.prelude_for(specifier, path);
-        if !needs_transform(path) {
+        // A plain `.js` is left alone unless it might hold an auto-accessor,
+        // which the engine cannot parse. The word is the trigger, not the
+        // answer: the parse below decides, and a file that turns out to have
+        // none is returned byte for byte as it always was.
+        let javascript = !needs_transform(path);
+        if javascript && !source.contains("accessor") {
             return Ok(if prelude.is_empty() {
                 source
             } else {
@@ -393,6 +634,35 @@ impl SourceTransform for TypeStripper {
             return Err(error);
         }
         let mut program = parsed.program;
+
+        // Decorators and auto-accessors, neither of which the engine has: one
+        // is refused with what to write instead, the other is lowered into the
+        // private field and accessor pair it is defined to be.
+        if let Some(decorator) = first_decorator(&program) {
+            return Err(decorator);
+        }
+        let lowered = {
+            use oxc::ast_visit::VisitMut;
+            let mut lowering = LowerAccessors {
+                allocator: &allocator,
+                lowered: false,
+                refused: None,
+            };
+            lowering.visit_program(&mut program);
+            if let Some(refused) = lowering.refused {
+                return Err(refused);
+            }
+            lowering.lowered
+        };
+        // The word was in a comment or a name, so this is the ordinary
+        // JavaScript file it was before: hand back the bytes, not a reprint.
+        if javascript && !lowered {
+            return Ok(if prelude.is_empty() {
+                source
+            } else {
+                format!("{prelude}{source}")
+            });
+        }
 
         // The transformer needs scoping information to rename and resolve as it
         // erases; `SemanticBuilder` is what produces it.
@@ -691,6 +961,47 @@ mod tests {
         // A pragma is also enough on its own, in a project that said nothing.
         let out = strip("app.jsx", "/** @jsx h */\nexport const el = <div/>;").unwrap();
         assert!(out.contains("h(\"div\""), "{out}");
+    }
+
+    /// The keyword belongs to the decorators proposal, which V8 has not shipped
+    /// — so a file carrying one used to die in the engine on `Unexpected
+    /// identifier`, naming nothing. TypeScript, Babel and SWC all lower it, and
+    /// a Lit suite of 4,000 lines could not be loaded without it.
+    #[test]
+    fn an_auto_accessor_becomes_a_field_and_a_pair() {
+        let out = strip(
+            "app.ts",
+            "export class Box {\n  accessor value: number = 1;\n  static accessor shared = 2;\n}",
+        )
+        .unwrap();
+        assert!(!out.contains("accessor value"), "{out}");
+        assert!(out.contains("get value()"), "{out}");
+        assert!(out.contains("set value("), "{out}");
+        assert!(out.contains("#value_accessor"), "{out}");
+        // The static one keeps its `static`, on all three members.
+        assert_eq!(out.matches("static").count(), 3, "{out}");
+    }
+
+    #[test]
+    fn a_javascript_file_with_an_accessor_is_compiled_after_all() {
+        // `.js` is normally returned byte for byte, and still is when the word
+        // turns out to be a comment or a name rather than the keyword.
+        let out = strip("app.js", "export class Box { accessor value = 1; }").unwrap();
+        assert!(out.contains("get value()"), "{out}");
+        let untouched = "// accessor is only a word here\nexport const accessor = 1;\n";
+        assert_eq!(strip("app.js", untouched).unwrap(), untouched);
+    }
+
+    #[test]
+    fn decorators_are_refused_by_name() {
+        // Guessing is not an option: the transformer this build uses lowers
+        // only TypeScript's older form, which is not what a modern library is
+        // written in, and compiling one as the other would change what runs.
+        let err = strip("app.ts", "@tag class Box {}").unwrap_err();
+        assert!(err.contains("decorators"), "{err}");
+        assert!(err.contains("customElements.define"), "{err}");
+        let member = strip("app.ts", "class Box { @logged run() {} }").unwrap_err();
+        assert!(member.contains("decorators"), "{member}");
     }
 
     #[test]

@@ -1906,6 +1906,43 @@ export const cases = [
       return result;
     },
   },
+  {
+    group: "tree",
+    name: "named-access-on-the-window",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      element.id = "matrixNamed";
+      document.body.appendChild(element);
+      const form = document.createElement("form");
+      form.name = "matrixNamedForm";
+      document.body.appendChild(form);
+      const plain = document.createElement("div");
+      plain.setAttribute("name", "matrixNamedPlain");
+      document.body.appendChild(plain);
+      const loose = document.createElement("div");
+      loose.id = "matrixNamedLoose";
+      const result = [
+        window.matrixNamed === element,
+        "matrixNamed" in window,
+        // Behind the window, not on it: a real window property is never
+        // shadowed by an id, and this is how that works.
+        Object.hasOwn(window, "matrixNamed"),
+        typeof window.location,
+        // `name` counts for a form, and not for a div.
+        window.matrixNamedForm === form,
+        window.matrixNamedPlain === undefined,
+        // Out of the document is out of the window.
+        window.matrixNamedLoose === undefined,
+      ];
+      element.id = "matrixRenamed";
+      result.push(window.matrixNamed === undefined, window.matrixRenamed === element);
+      element.remove();
+      result.push(window.matrixRenamed === undefined);
+      return result;
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

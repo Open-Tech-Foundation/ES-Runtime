@@ -82,3 +82,15 @@ import { file } from "runtime:fs";
 // Your IDE knows `text()` returns a Promise<string>
 const data = await file("./config.json").text();
 ```
+
+## Class syntax ahead of the engine
+
+| | |
+| --- | --- |
+| `accessor x = 1` | Compiled — into the private field and the getter/setter pair it is defined to be, on the prototype for an instance accessor and on the constructor for a `static` one. V8 has not shipped the keyword, so without this it would be a syntax error at load. |
+| `@decorator` | Refused, by name, with what to write instead. Standard decorators are a stage-3 proposal the engine has not shipped and the compiler does not yet lower; TypeScript's older `experimentalDecorators` form is a different language feature and compiling one as the other would change what runs. |
+
+A web component that would use `@customElement` and `@property` says the same
+thing in plain JavaScript today — `customElements.define(name, Class)` and a
+static `properties` or `observedAttributes` — and both are read at definition
+time, the way a browser reads them.
