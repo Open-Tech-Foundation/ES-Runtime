@@ -25,6 +25,12 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- `tsr test:dom-wpt-chrome -- <file>` runs one upstream WPT file in headless
+  Chrome and reports each subtest. Triage rather than a gate: a subtest Chrome
+  fails too is upstream running ahead of the browsers, and belongs in the
+  expectations file rather than in a commit — `dom/events/relatedTarget` has
+  three of them, which is how the remaining failures there were told apart from
+  the one that was really ours.
 - **Every HTML name has its interface.** `<script>` was an `HTMLElement`, and so
   were `<img>`, `<link>`, `<meta>`, `<iframe>`, `<video>`, the six headings and
   forty more; a test that branches on the interface, or logs one, read the wrong
@@ -462,6 +468,22 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **`relatedTarget` is retargeted, and the targets are wiped after a dispatch.**
+  A node inside a closed shadow tree was handed to listeners outside it, and an
+  event whose target and related target are the same node after retargeting was
+  dispatched at all — a browser returns early and runs nothing. Both now behave
+  as Chrome does, on all seven shapes probed: the related target climbs to the
+  host of any tree the listener cannot see, and when either target is in a shadow
+  tree both are set to null once the dispatch is over.
+- **Setting an attribute adopts it.** `element.attributes.setNamedItem(attr)`
+  left the attribute's `ownerDocument` pointing at the document it came from.
+- **`event-global-extra.window.js` is out of scope**, and was failing as a
+  harness error rather than saying so: its first line reaches for an iframe's
+  `contentWindow`, so every case in it is about `window.event` across two
+  globals. The scope filter also no longer skips a whole family for having
+  "cross-document" in its name — `attributes-namednodemap-cross-document`
+  needs no second realm, and its two subtests were the attribute-adoption bug
+  above.
 - **Removing the focused element fires nothing.** It fired `blur` and
   `focusout`, and a browser fires neither: the element that would receive the
   event has left the document. `document.activeElement` still returns to the

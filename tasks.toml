@@ -158,6 +158,12 @@ env = { PATH = "../../../../target/release:${PATH}" }
 [tasks."test:dom-matrix"]
 run = "cargo build -p es-runtime-dev-cli && deno test --config=wpt/dom-matrix/deno.json wpt/dom-matrix/cases_test.js && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/css-table.js --check && deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/dom-matrix/run.js --strict"
 
+# One upstream WPT file, in Chrome. Triage rather than a gate: a subtest Chrome
+# fails too is upstream ahead of the browsers, and is recorded as an expectation
+# instead of fixed. Takes the path under `wpt/upstream/`.
+[tasks."test:dom-wpt-chrome"]
+run = "deno run --allow-env --allow-net --allow-read --allow-run --allow-sys --allow-write --config=wpt/dom-matrix/deno.json wpt/chrome-run.js"
+
 # The CSS value table the DOM validates against, read out of Chrome: which kinds
 # of value each of the 436 properties takes, and what a bare `0` serializes as.
 # Generated rather than hand-written, because every hand-written version of it

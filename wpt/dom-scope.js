@@ -3,7 +3,13 @@ export function excluded(path) {
   if (path.includes(".sub.")) return "requires WPT server substitution";
   if (path.includes("idlharness")) return "requires complete Web IDL exposure";
   if (path.includes("/observable/")) return "Observable remains a tentative API";
-  if (path.includes("iframe") || path.includes("cross-document")) return "requires nested browsing contexts or multiple realms";
+  if (path.includes("iframe")) return "requires nested browsing contexts or multiple realms";
+  // Not named for it, but its first line is
+  // `createElement("iframe").contentWindow`: every case in the file is about
+  // `window.event` across two globals.
+  if (path.endsWith("dom/events/event-global-extra.window.js")) {
+    return "requires nested browsing contexts or multiple realms";
+  }
   if (path.includes("legacy-")) return "legacy behavior is outside the modern-only scope";
   // `createEvent` exists for the modern interface names; the HTML4 aliases are
   // refused by name, and the upstream file tests all of them together.

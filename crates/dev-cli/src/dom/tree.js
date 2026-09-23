@@ -847,6 +847,10 @@ export function createTree(events = {}) {
       const existing = this.getNamedItem(attribute.name);
       if (attribute.ownerElement && attribute.ownerElement !== this[ATTRS]) throw domError("InUseAttributeError", "The attribute is already in use.");
       if (existing) this._list()[this._list().indexOf(existing)] = attribute; else this._list().push(attribute);
+      // Setting an attribute adopts it: it belongs to the element's document
+      // afterwards, not to the one it came from.
+      const document = this[ATTRS]?.ownerDocument;
+      if (document) slots(attribute).ownerDocument = document;
       attribute.ownerElement = this[ATTRS];
       if (existing) existing.ownerElement = null;
       return existing;

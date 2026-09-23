@@ -14,6 +14,28 @@ function visibleFrom(node, from) {
   return true;
 }
 
+// "Retarget A against B": the nearest thing in A's line that B is allowed to
+// see. A node inside a shadow tree that B cannot reach is reported as that
+// tree's host, which is what keeps a closed tree's internals out of a listener
+// that sits outside it.
+function retarget(a, b) {
+  let current = a;
+  for (let guard = 0; guard < 64; guard += 1) {
+    const root = rootOf(current);
+    if (!root?.host) return current;
+    if (reaches(b, root)) return current;
+    current = root.host;
+  }
+  return current;
+}
+
+// Whether a node's own tree is a shadow tree, which is what decides whether the
+// targets are wiped after a dispatch.
+function inShadowTree(node) {
+  const root = rootOf(node);
+  return Boolean(root?.host);
+}
+
 // A ShadowRoot is its own root; anything else asks the tree.
 function rootOf(node) {
   if (node?.host) return node;
@@ -211,6 +233,22 @@ export function createEvents() {
       const state = event[STATE];
       if (state.dispatching) throw new DOMException("The event is already being dispatched.", "InvalidStateError");
       if (!state.initialized) throw new DOMException("The event has not been initialized. Call initEvent() first.", "InvalidStateError");
+      // The related target is retargeted against this target before anything is
+      // dispatched, and when the two turn out to be the same node the dispatch
+      // does not happen at all: an event between two nodes of one closed tree is
+      // not an event anybody outside it can see.
+      // `relatedTarget` is an own property of the events that have one, not part
+      // of the shared state, so it is read and written where it lives.
+      const declared = "relatedTarget" in event ? event.relatedTarget : null;
+      const related = declared === null || declared === undefined ? declared : retarget(declared, this);
+      if (related === this && this !== declared) {
+        state.dispatching = false;
+        return !state.defaultPrevented;
+      }
+      if (declared !== null && declared !== undefined) event.relatedTarget = related;
+      // Whether the targets are wiped afterwards, which they are when either of
+      // them lives in a shadow tree — the nodes are not the listener's to keep.
+      const clearTargets = inShadowTree(this) || inShadowTree(related);
       const path = [this];
       for (let current = this._eventParent?.(event) ?? null; current; current = current._eventParent?.(event) ?? null) path.push(current);
       state.dispatching = true; state.target = this; state.path = path;
@@ -222,7 +260,9 @@ export function createEvents() {
         }
         if (state.bubbles) for (let index = 1; index < path.length && !state.propagationStopped; index += 1) this._invoke(path[index], event, Event.BUBBLING_PHASE, false);
       } finally {
-        state.target = this; state.currentTarget = null; state.phase = Event.NONE; state.path = []; state.passive = false; state.dispatching = false;
+        state.target = clearTargets ? null : this;
+        if (clearTargets && "relatedTarget" in event) event.relatedTarget = null;
+        state.currentTarget = null; state.phase = Event.NONE; state.path = []; state.passive = false; state.dispatching = false;
       }
       return !state.defaultPrevented;
     }

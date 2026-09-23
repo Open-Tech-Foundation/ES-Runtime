@@ -275,7 +275,7 @@
       "Reset if target pointed to a shadow tree": "FAIL",
       "Retarget a shadow-tree relatedTarget": "FAIL",
       "Reset if target pointed to a shadow tree pre-dispatch": "FAIL",
-      "Retarget a shadow-tree relatedTarget, part 2": "FAIL",
+      "Retarget a shadow-tree relatedTarget, part 2": "PASS",
       "Reset targets on early return": "FAIL",
       "Reset targets before activation behavior": "FAIL"
     }
@@ -286,8 +286,8 @@
       "adoptNode() plain DocumentFragment (no host): adopts and returns it": "PASS",
       "adoptNode() template.content: adopts fragment + children, returns it": "PASS",
       "adoptNode() template.content into browsing-context document": "PASS",
-      "adoptNode() shadow root: throws HierarchyRequestError": "FAIL",
-      "adoptNode() <template> element: content follows via template adopting steps": "FAIL",
+      "adoptNode() shadow root: throws HierarchyRequestError": "PASS",
+      "adoptNode() <template> element: content follows via template adopting steps": "PASS",
       "adoptNode() nested <template> elements: all owner documents update": "PASS",
       "appendChild() template.content: moves children, fragment ownerDocument stays": "PASS"
     }
@@ -316,19 +316,19 @@
   "dom/nodes/adoption.window.js": {
     "harness": "OK",
     "subtests": {
-      "appendChild() and DocumentFragment with host": "FAIL",
-      "adoptNode() and DocumentFragment with host": "FAIL",
+      "appendChild() and DocumentFragment with host": "PASS",
+      "adoptNode() and DocumentFragment with host": "PASS",
       "appendChild() and DocumentFragment": "PASS",
       "adoptNode() and DocumentFragment": "PASS",
       "appendChild() and ShadowRoot": "PASS",
-      "adoptNode() and ShadowRoot": "FAIL"
+      "adoptNode() and ShadowRoot": "PASS"
     }
   },
   "dom/nodes/insertion-removing-steps/blur-event.window.js": {
     "harness": "OK",
     "subtests": {
-      "<input> element does not fire blur event upon DOM removal": "FAIL",
-      "<button> element does not fire blur/focusout events upon DOM removal": "FAIL"
+      "<input> element does not fire blur event upon DOM removal": "PASS",
+      "<button> element does not fire blur/focusout events upon DOM removal": "PASS"
     }
   },
   "dom/nodes/insertion-removing-steps/insertion-removing-steps-script.window.js": {
