@@ -13,6 +13,13 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:test`'s `toHaveBeenCalledOnce()` and accessor `spyOn`** —
+  `toHaveBeenCalledOnce()` asserts a mock was called exactly once, and
+  `spyOn(object, key, accessType)` with `"get"` or `"set"` watches one
+  accessor of a property while preserving the other.
+
 ## [0.6.0] - 2026-09-20
 
 ### Fixed
