@@ -141,17 +141,53 @@ export function createEvents() {
   class UIEvent extends Event {
     constructor(type, options = {}) { super(type, options); this.view = options.view ?? null; this.detail = Number(options.detail ?? 0); }
   }
+  // `EventModifierInit`, shared by mouse and keyboard events: the four modifier
+  // flags every filter checks — false, never undefined, when not given — and
+  // the rest, which only `getModifierState` reads.
+  const MODIFIER = Symbol("modifiers");
+  const MODIFIER_KEYS = ["AltGraph", "CapsLock", "Fn", "FnLock", "Hyper", "NumLock", "ScrollLock", "Super", "Symbol", "SymbolLock"];
+  function initModifiers(event, options) {
+    event.ctrlKey = Boolean(options.ctrlKey); event.shiftKey = Boolean(options.shiftKey);
+    event.altKey = Boolean(options.altKey); event.metaKey = Boolean(options.metaKey);
+    const held = new Set();
+    for (const key of MODIFIER_KEYS) if (options[`modifier${key}`]) held.add(key);
+    Object.defineProperty(event, MODIFIER, { value: held });
+  }
+  function getModifierState(key) {
+    switch (String(key)) {
+      case "Control": return this.ctrlKey;
+      case "Shift": return this.shiftKey;
+      case "Alt": return this.altKey;
+      case "Meta": return this.metaKey;
+      default: return this[MODIFIER].has(String(key));
+    }
+  }
+
   class MouseEvent extends UIEvent {
     constructor(type, options = {}) {
       super(type, options);
       this.screenX = Number(options.screenX ?? 0); this.screenY = Number(options.screenY ?? 0);
       this.clientX = Number(options.clientX ?? 0); this.clientY = Number(options.clientY ?? 0);
-      this.ctrlKey = Boolean(options.ctrlKey); this.shiftKey = Boolean(options.shiftKey); this.altKey = Boolean(options.altKey); this.metaKey = Boolean(options.metaKey);
+      initModifiers(this, options);
       this.button = Number(options.button ?? 0); this.buttons = Number(options.buttons ?? 0); this.relatedTarget = options.relatedTarget ?? null;
     }
+    getModifierState(key) { return getModifierState.call(this, key); }
   }
   class KeyboardEvent extends UIEvent {
-    constructor(type, options = {}) { super(type, options); this.key = String(options.key ?? ""); this.code = String(options.code ?? ""); this.repeat = Boolean(options.repeat); }
+    static DOM_KEY_LOCATION_STANDARD = 0;
+    static DOM_KEY_LOCATION_LEFT = 1;
+    static DOM_KEY_LOCATION_RIGHT = 2;
+    static DOM_KEY_LOCATION_NUMPAD = 3;
+    constructor(type, options = {}) {
+      super(type, options);
+      this.key = String(options.key ?? ""); this.code = String(options.code ?? "");
+      this.location = Number(options.location ?? 0) >>> 0;
+      initModifiers(this, options);
+      this.repeat = Boolean(options.repeat); this.isComposing = Boolean(options.isComposing);
+      // The legacy codes are still in Chrome's dictionary, and still read.
+      this.charCode = Number(options.charCode ?? 0) >>> 0; this.keyCode = Number(options.keyCode ?? 0) >>> 0;
+    }
+    getModifierState(key) { return getModifierState.call(this, key); }
   }
   class InputEvent extends UIEvent {
     constructor(type, options = {}) { super(type, options); this.data = options.data ?? null; this.inputType = String(options.inputType ?? ""); this.isComposing = Boolean(options.isComposing); }

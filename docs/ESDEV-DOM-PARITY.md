@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-109 of 111 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+111 of 113 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -40,6 +40,8 @@ compares the result.
 | fragment-contents-move-on-append | tree | yes | yes | yes |
 | deep-clone-is-independent | tree | yes | yes | yes |
 | collections-stay-live | tree | yes | yes | yes |
+| list-interfaces-iterate-as-web-idl-declares | tree | yes | no | no |
+| keyboard-and-mouse-events-carry-their-modifiers | events | yes | yes | no |
 | capturing-and-bubbling-order | events | yes | yes | yes |
 | cancelled-event-returns-false | events | yes | yes | yes |
 | inline-handlers-run-for-modern-events | events | yes | yes | yes |

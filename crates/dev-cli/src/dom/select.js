@@ -354,7 +354,7 @@ function defineIdl(target, properties) {
   return target;
 }
 
-export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, isDefined = () => true, customStates = () => null, controlValidity = (element) => element.validity ?? null }) {
+export function createSelectors({ Element, Document, DocumentFragment, ShadowRoot, HTML_NAMESPACE, staticNodeList, isDefined = () => true, customStates = () => null, controlValidity = (element) => element.validity ?? null }) {
   function matchesCompound(element, simples, scope) {
     return simples.every((simple) => {
       if (simple.type === "universal") return true;
@@ -548,22 +548,6 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
     return found;
   }
 
-  function staticList(values) {
-    return new Proxy({
-      length: values.length,
-      item(index) { return values[index] ?? null; },
-      forEach(callback, thisArg) {
-        if (typeof callback !== "function") throw new TypeError("NodeList.forEach expects a function");
-        values.forEach((value, index) => callback.call(thisArg, value, index, this));
-      },
-      [Symbol.iterator]() { return values[Symbol.iterator](); },
-    }, {
-      get(target, property, receiver) {
-        if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return values[Number(property)];
-        return Reflect.get(target, property, receiver);
-      },
-    });
-  }
 
   function usesScope(parts) {
     return parts.some(({ simples }) => simples.some((simple) => simple.type === "scope" || simple.selectors?.some((nested) => usesScope(nested))));
@@ -573,7 +557,7 @@ export function createSelectors({ Element, Document, DocumentFragment, ShadowRoo
     const compiled = compile(source);
     const candidates = root instanceof Element && compiled.some(usesScope) ? [root, ...descendants(root)] : descendants(root);
     const scope = root instanceof Element ? root : null;
-    return staticList(candidates.filter((element) => compiled.some((parts) => matchesParts(element, parts, parts.length - 1, scope))));
+    return staticNodeList(candidates.filter((element) => compiled.some((parts) => matchesParts(element, parts, parts.length - 1, scope))));
   }
 
   function install() {

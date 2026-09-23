@@ -180,6 +180,8 @@ export function createTree(events = {}) {
     }
     _values() {
       const state = this[COLLECTION];
+      // A static list — `querySelectorAll`, a mutation record — is a snapshot.
+      if (state.root === null) return state.values;
       const document = state.root.ownerDocument ?? state.root;
       const version = slots(document).version;
       if (state.version !== version) {
@@ -192,15 +194,26 @@ export function createTree(events = {}) {
     _namedProperty(name) { return undefined; }
     get length() { return this._values().length; }
     item(index) { return this._values()[index] ?? null; }
-    [Symbol.iterator]() { return this._values()[Symbol.iterator](); }
+  }
+  // Every list with an indexed getter iterates as an array does — Web IDL makes
+  // `@@iterator` Array's own `values`, not a copy of it.
+  LiveCollection.prototype[Symbol.iterator] = Array.prototype.values;
+
+  class NodeList extends LiveCollection {}
+  // `iterable<Node>`: the whole set, and each one Array's.
+  iterableLike(NodeList);
+
+  function iterableLike(List) {
+    for (const name of ["entries", "keys", "values", "forEach"]) {
+      Object.defineProperty(List.prototype, name, { value: Array.prototype[name], writable: true, enumerable: true, configurable: true });
+    }
+    Object.defineProperty(List.prototype, Symbol.iterator, { value: Array.prototype.values, writable: true, configurable: true });
   }
 
-  class NodeList extends LiveCollection {
-    forEach(callback, thisArg) {
-      if (typeof callback !== "function") throw new TypeError("NodeList.forEach expects a function");
-      const values = this._values();
-      values.forEach((value, index) => callback.call(thisArg, value, index, this));
-    }
+  function staticNodeList(values) {
+    const list = new NodeList(null, null);
+    list[COLLECTION].values = [...values];
+    return list;
   }
   class HTMLCollection extends LiveCollection {
     _namedProperties() {
@@ -277,8 +290,8 @@ export function createTree(events = {}) {
       this._set([...new Set(tokens)]);
       return true;
     }
-    [Symbol.iterator]() { return this._tokens()[Symbol.iterator](); }
   }
+  iterableLike(DOMTokenList);
 
   function datasetProperty(name) {
     if (!name.startsWith("data-")) return null;
@@ -933,8 +946,8 @@ export function createTree(events = {}) {
       attribute.ownerElement = null;
       return attribute;
     }
-    [Symbol.iterator]() { return this._list()[Symbol.iterator](); }
   }
+  NamedNodeMap.prototype[Symbol.iterator] = Array.prototype.values;
 
   class Element extends Node {
     constructor(name, ownerDocument, namespaceURI = HTML_NAMESPACE) {
@@ -2860,5 +2873,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, HTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, staticNodeList, HTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

@@ -744,6 +744,11 @@ export function createCss({ Element, colors = null, valueTable = null }) {
     });
   }
 
+  // A declaration iterates its property names, as any list with an indexed
+  // getter does: through Array's own `values`.
+  CSSStyleDeclaration.prototype[Symbol.iterator] = Array.prototype.values;
+  ReadOnlyStyleDeclaration.prototype[Symbol.iterator] = Array.prototype.values;
+
   return {
     CSSStyleDeclaration,
     readOnlyDeclaration: (entries) => new ReadOnlyStyleDeclaration(entries),

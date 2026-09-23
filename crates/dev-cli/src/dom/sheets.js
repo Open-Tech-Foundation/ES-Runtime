@@ -256,7 +256,6 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     }
     get length() { return this[RULES].length; }
     item(index) { return this[RULES][Number(index)] ?? null; }
-    [Symbol.iterator]() { return this[RULES][Symbol.iterator](); }
   }
 
   class StyleSheetList {
@@ -266,8 +265,10 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     }
     get length() { return this[RULES].length; }
     item(index) { return this[RULES][Number(index)] ?? null; }
-    [Symbol.iterator]() { return this[RULES][Symbol.iterator](); }
   }
+
+  CSSRuleList.prototype[Symbol.iterator] = Array.prototype.values;
+  StyleSheetList.prototype[Symbol.iterator] = Array.prototype.values;
 
   class CSSRule {
     get cssText() { return ""; }

@@ -449,16 +449,6 @@ class NeverObserver {
 class IntersectionObserver extends NeverObserver {}
 class ResizeObserver extends NeverObserver {}
 
-class SnapshotNodeList {
-  constructor(values) {
-    this.values = [...values];
-    for (const [index, value] of this.values.entries()) this[index] = value;
-  }
-  get length() { return this.values.length; }
-  item(index) { return this.values[Number(index)] ?? null; }
-  [Symbol.iterator]() { return this.values[Symbol.iterator](); }
-}
-
 const mutationObservers = new Set();
 let mutationDeliveryQueued = false;
 function scheduleMutationDelivery() {
@@ -507,8 +497,8 @@ class MutationObserver {
     this.records.push({
       type: change.type,
       target: change.target,
-      addedNodes: new SnapshotNodeList(change.addedNodes ?? []),
-      removedNodes: new SnapshotNodeList(change.removedNodes ?? []),
+      addedNodes: tree.staticNodeList(change.addedNodes ?? []),
+      removedNodes: tree.staticNodeList(change.removedNodes ?? []),
       previousSibling: change.previousSibling ?? null,
       nextSibling: change.nextSibling ?? null,
       attributeName: change.attributeName ?? null,

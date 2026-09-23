@@ -25,6 +25,20 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **Keyboard events carry their modifiers.** `KeyboardEvent` read `ctrlKey`,
+  `shiftKey`, `altKey` and `metaKey` as `undefined`, which a filter comparing
+  against `false` reads as held; they are now booleans, as on `MouseEvent`, with
+  `location`, `isComposing`, the legacy `keyCode`/`charCode` and the
+  `DOM_KEY_LOCATION_*` constants. Both events have `getModifierState`, answering
+  the four flags and the `modifier*` init keys.
+- **Lists iterate as Web IDL declares.** `NodeList` and `DOMTokenList` have
+  `keys`, `values`, `entries` and `forEach` — Array's own functions, as in
+  Chrome — and every list with an indexed getter iterates through
+  `Array.prototype.values`, `CSSStyleDeclaration` included, which had no
+  iterator. `HTMLCollection` keeps only `@@iterator`, which is all Chrome gives
+  it. `querySelectorAll` and a mutation record's `addedNodes`/`removedNodes`
+  were NodeList-shaped objects that failed `instanceof NodeList`; they are
+  static `NodeList`s now.
 - **`innerText` and `outerText` exist.** They were refused as layout-dependent,
   but the rendered text is defined over computed values the cascade already
   resolves, so they now read Chrome's answer: hidden text skipped, block

@@ -87,6 +87,68 @@ export const cases = [
     },
   },
   {
+    group: "tree",
+    name: "list-interfaces-iterate-as-web-idl-declares",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      // `iterable<>` lists get the whole set, and the functions *are* Array's;
+      // a list with only an indexed getter gets `@@iterator` and nothing else.
+      const names = ["NodeList", "HTMLCollection", "DOMTokenList", "NamedNodeMap", "CSSRuleList", "StyleSheetList",
+        "CSSStyleDeclaration", "DOMStringMap"];
+      const shape = names.map((name) => {
+        const prototype = window[name]?.prototype;
+        if (!prototype) return [name, "missing"];
+        return [name, ["forEach", "keys", "values", "entries"].filter((key) => key in prototype),
+          prototype[Symbol.iterator] === Array.prototype.values, prototype.forEach === Array.prototype.forEach,
+          prototype.entries === Array.prototype.entries];
+      });
+      const host = document.createElement("div");
+      host.className = "a b";
+      host.innerHTML = "<i></i><b></b>";
+      return [
+        shape,
+        Array.from(host.childNodes.entries(), ([index, node]) => [index, node.localName]),
+        Array.from(host.childNodes.keys()),
+        Array.from(host.classList.values()),
+        Array.from(host.classList.entries()),
+        Array.from(host.children, (element) => element.localName),
+        // A static list is still a NodeList, with the same iteration.
+        document.body.append(host),
+        host.querySelectorAll("*") instanceof window.NodeList,
+        Array.from(host.querySelectorAll("*").entries(), ([index, node]) => [index, node.localName]),
+        Array.from(window.getComputedStyle(host)).includes("display"),
+        (() => {
+          const observer = new window.MutationObserver(() => {});
+          observer.observe(host, { childList: true });
+          host.append(document.createElement("u"));
+          const [record] = observer.takeRecords();
+          return [record.addedNodes instanceof window.NodeList, record.removedNodes.length, Array.from(record.addedNodes.keys())];
+        })(),
+      ];
+    },
+  },
+  {
+    group: "events",
+    name: "keyboard-and-mouse-events-carry-their-modifiers",
+    run(window) {
+      const read = (event) => [
+        event.ctrlKey, event.shiftKey, event.altKey, event.metaKey,
+        ["Control", "Shift", "Alt", "Meta", "CapsLock", "NumLock", "AltGraph", "Nonsense"].map((key) => event.getModifierState(key)),
+      ];
+      const plain = new window.KeyboardEvent("keydown", { key: "a" });
+      const held = new window.KeyboardEvent("keydown", {
+        key: "A", code: "KeyA", ctrlKey: true, shiftKey: 1, metaKey: "yes", modifierCapsLock: true, location: 2, repeat: true, keyCode: 65,
+      });
+      const click = new window.MouseEvent("click", { altKey: true, modifierNumLock: true });
+      return [
+        read(plain), read(held), read(click), read(new window.MouseEvent("click")),
+        [plain.location, held.location, held.repeat, plain.isComposing, held.keyCode, plain.charCode],
+        [window.KeyboardEvent.DOM_KEY_LOCATION_RIGHT, window.KeyboardEvent.DOM_KEY_LOCATION_NUMPAD],
+      ];
+    },
+  },
+  {
     group: "events",
     name: "capturing-and-bubbling-order",
     run(window) {
