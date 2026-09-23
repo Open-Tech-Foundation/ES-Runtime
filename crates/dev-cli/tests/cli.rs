@@ -13537,3 +13537,88 @@ describe("billing", () => {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `--bail[=<n>]`: after `n` failed tests the rest are not run — the tests left
+/// in the file counted as skipped, and the files not started said out loud —
+/// with failures added up across files.
+#[test]
+fn bail_stops_after_the_failure_limit_across_files() {
+    let dir = build_dir("t_bail");
+    write_in(
+        &dir,
+        "a.test.js",
+        "import { test } from \"runtime:test\";\n\
+         test(\"a1\", () => { throw new Error(\"x\"); });\n\
+         test(\"a2\", () => { throw new Error(\"y\"); });\n\
+         test(\"a3\", () => {});\n",
+    );
+    write_in(
+        &dir,
+        "b.test.js",
+        "import { test } from \"runtime:test\";\n\
+         test(\"b1\", () => { throw new Error(\"z\"); });\n\
+         test(\"b2\", () => {});\n",
+    );
+    write_in(
+        &dir,
+        "c.test.js",
+        "import { test } from \"runtime:test\";\ntest(\"c1\", () => {});\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--bail", "--jobs=1"])
+        .output()
+        .expect("spawn esdev test --bail");
+    let text = stdout(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains(
+            "  bail: 2 tests did not run after the failure limit\n  0 passed, 1 failed, 2 skipped"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("bail: 2 files did not run after the failure limit"),
+        "{text}"
+    );
+    assert!(!text.contains("b.test.js"), "{text}");
+
+    // Failures add up across files: a's two, then b's one reaches three.
+    let out = esdev_in(&dir)
+        .args(["test", "--bail=3", "--jobs=1"])
+        .output()
+        .expect("spawn esdev test --bail=3");
+    let text = stdout(&out);
+    assert!(text.contains("  1 passed, 2 failed\n"), "{text}");
+    assert!(
+        text.contains(
+            "  bail: 1 test did not run after the failure limit\n  0 passed, 1 failed, 1 skipped"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("bail: 1 file did not run after the failure limit"),
+        "{text}"
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--bail=2", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test --bail=2 --isolation=none");
+    assert!(
+        stdout(&out).contains("bail: 4 tests did not run"),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--bail=0"])
+        .output()
+        .expect("spawn");
+    assert!(
+        stderr(&out).contains("--bail=0 is not a number of failed tests"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

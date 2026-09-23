@@ -41,6 +41,22 @@ A group with no selected tests does not run its `beforeAll`. Path filters
 (`esdev test auth`) choose files; `-t` chooses tests within them, and the two
 combine.
 
+## Stopping early
+
+`--bail` stops after the first failed test; `--bail=5` after five. Failures add
+up across files. The tests left in a file are counted as skipped, and files
+that were not started are named on a line of their own:
+
+```text
+  bail: 2 tests did not run after the failure limit
+  0 passed, 1 failed, 2 skipped
+
+bail: 3 files did not run after the failure limit
+```
+
+Files already running when the limit is reached finish on their own count,
+which is why `--jobs=1` stops the soonest.
+
 ## One process per file
 
 A test suite is where isolation matters most. A file that wedges, exhausts its

@@ -58,6 +58,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --bail[=<n>]`** stops after `n` failed tests (1 by default), as
+  in Vitest and Bun. Failures add up across files, the tests left in a file are
+  counted as skipped with a `bail:` line, and the files not started are named.
+  Works in normal, `--isolation=none` and browser runs.
 - **`esdev test -t=<regex>` (`--test-name-pattern`) and
   `--test-skip-pattern=<regex>`** select tests by their full name, groups
   included, in normal, `--isolation=none` and browser runs. Tests left out are

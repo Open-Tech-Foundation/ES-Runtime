@@ -91,6 +91,8 @@ enum Skip {
     /// Its name did not match `--test-name-pattern`, or matched
     /// `--test-skip-pattern`. Counted apart for the same reason as `Only`.
     Filtered,
+    /// `--bail`'s limit of failed tests was reached before it ran.
+    Bailed,
 }
 
 /// What the command line asked of the tests in one file, read by
@@ -102,6 +104,8 @@ pub struct RunOptions {
     pub name_pattern: Option<String>,
     /// Skip the tests whose full name matches this pattern.
     pub skip_pattern: Option<String>,
+    /// How many more tests may fail before the rest are not run.
+    pub bail: Option<usize>,
 }
 
 impl RunOptions {
@@ -110,6 +114,7 @@ impl RunOptions {
         serde_json::json!({
             "namePattern": self.name_pattern,
             "skipPattern": self.skip_pattern,
+            "bail": self.bail,
         })
     }
 }
@@ -1046,6 +1051,7 @@ impl HostExtension for TestExtension {
                 let because = match args.get(1).and_then(Value::as_str) {
                     Some("only") => Skip::Only,
                     Some("filter") => Skip::Filtered,
+                    Some("bail") => Skip::Bailed,
                     _ => Skip::Asked,
                 };
                 #[expect(
@@ -1237,11 +1243,12 @@ fn mark_finished(cases: &mut [Case], id: usize, passed: bool, detail: String) {
 fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
     use std::fmt::Write as _;
     let mut out = String::new();
-    let (passed, skipped, held, filtered, failures) = {
+    let (passed, skipped, held, filtered, bailed, failures) = {
         let mut passed = 0usize;
         let mut skipped = 0usize;
         let mut held = 0usize;
         let mut filtered = 0usize;
+        let mut bailed = 0usize;
         let mut failures: Vec<(String, String)> = Vec::new();
         for case in cases {
             match &case.outcome {
@@ -1249,6 +1256,7 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
                 Some(Outcome::Skipped(Skip::Asked)) => skipped += 1,
                 Some(Outcome::Skipped(Skip::Only)) => held += 1,
                 Some(Outcome::Skipped(Skip::Filtered)) => filtered += 1,
+                Some(Outcome::Skipped(Skip::Bailed)) => bailed += 1,
                 Some(Outcome::Failed(detail)) => {
                     failures.push((case.name.clone(), detail.clone()));
                 }
@@ -1271,7 +1279,7 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
                 )),
             }
         }
-        (passed, skipped, held, filtered, failures)
+        (passed, skipped + bailed, held, filtered, bailed, failures)
     };
 
     if passed == 0 && skipped == 0 && held == 0 && filtered == 0 && failures.is_empty() {
@@ -1304,6 +1312,13 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
             out,
             "  filter: {filtered} other test{} did not match",
             if filtered == 1 { "" } else { "s" }
+        );
+    }
+    if bailed > 0 {
+        let _ = writeln!(
+            out,
+            "  bail: {bailed} test{} did not run after the failure limit",
+            if bailed == 1 { "" } else { "s" }
         );
     }
     let mut tally = format!("  {passed} passed, {} failed", failures.len());
@@ -1344,6 +1359,39 @@ fn json(
         string(file),
         failures.len()
     );
+}
+
+/// How many cases passed and failed — a case that never settled counts as
+/// failed, as the report counts it.
+fn counts(cases: &[Case]) -> (usize, usize) {
+    cases
+        .iter()
+        .fold((0, 0), |(passed, failed), case| match &case.outcome {
+            Some(Outcome::Passed) => (passed + 1, failed),
+            Some(Outcome::Skipped(_)) => (passed, failed),
+            Some(Outcome::Failed(_)) | None => (passed, failed + 1),
+        })
+}
+
+/// Writes this process's pass and fail counts for the parent that ran it,
+/// which adds them up — what `--bail` counts across files.
+pub fn write_summary(path: &std::path::Path) {
+    let (passed, failed) = CASES.with_borrow(|cases| counts(cases));
+    let _ = std::fs::write(
+        path,
+        serde_json::json!({ "passed": passed, "failed": failed }).to_string(),
+    );
+}
+
+/// The failed count a child wrote with [`write_summary`], or `None` if it
+/// wrote none — it died before it could.
+pub fn read_summary(path: &std::path::Path) -> Option<usize> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("failed")?
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
 }
 
 /// A tally kept outside the host thread's own — for a run whose tests execute
@@ -1387,6 +1435,7 @@ impl Tally {
         let because = match because {
             "only" => Skip::Only,
             "filter" => Skip::Filtered,
+            "bail" => Skip::Bailed,
             _ => Skip::Asked,
         };
         mark_skipped(&mut self.cases, id, because);
@@ -1395,6 +1444,11 @@ impl Tally {
     /// `finished(id, ok, detail)`.
     pub fn finished(&mut self, id: usize, passed: bool, detail: String) {
         mark_finished(&mut self.cases, id, passed, detail);
+    }
+
+    /// How many cases failed, those that never settled included.
+    pub fn failed(&self) -> usize {
+        counts(&self.cases).1
     }
 
     /// Whether every case has an outcome.

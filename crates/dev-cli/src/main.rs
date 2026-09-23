@@ -206,6 +206,8 @@ OPTIONS:
                                 Run only the tests whose full name matches;
                                 the rest are counted as skipped
     --test-skip-pattern=<re>    Skip the tests whose full name matches
+    --bail[=<n>]                Stop after <n> failed tests (1 by default); the
+                                rest are counted as not run
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1420,6 +1422,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut headed = false;
     let mut name_pattern = None;
     let mut skip_pattern = None;
+    let mut bail = None;
+    let mut summary = None;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1494,6 +1498,18 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--test-skip-pattern" => {
                 skip_pattern = Some(require_value(flag, value)?.to_string());
             }
+            "--bail" => {
+                bail = Some(match value {
+                    None => 1,
+                    Some(text) => text.parse::<usize>().ok().filter(|n| *n > 0).ok_or_else(|| {
+                        format!(
+                            "{flag}={text} is not a number of failed tests.\n\n\
+                             One or more: --bail stops after the first failure, --bail=5 after five."
+                        )
+                    })?,
+                });
+            }
+            "--_summary" => summary = Some(std::path::PathBuf::from(require_value(flag, value)?)),
             "--timeout" => {
                 let text = require_value(flag, value)?;
                 timeout = Some(
@@ -1564,6 +1580,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         headed,
         name_pattern,
         skip_pattern,
+        bail,
+        summary,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1904,7 +1922,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             observer: None,
             inspector: None,
         };
-        return match es_runtime_cli_common::run("esdev", run).await {
+        let code = match es_runtime_cli_common::run("esdev", run).await {
             Ok(()) => match config.reporter.as_deref() {
                 Some("json") => guest::test::finish_as_json(&file),
                 _ => guest::test::finish(),
@@ -1922,6 +1940,11 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+        // What the parent adds up for `--bail`.
+        if let Some(summary) = &config.summary {
+            guest::test::write_summary(summary);
+        }
+        return code;
     }
 
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

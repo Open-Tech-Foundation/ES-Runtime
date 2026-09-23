@@ -82,6 +82,10 @@ const pattern = (flag, source) => {
 };
 const namePattern = pattern("--test-name-pattern", runOptions.namePattern);
 const skipPattern = pattern("--test-skip-pattern", runOptions.skipPattern);
+// `--bail`: how many tests may fail in this run before the rest are not run.
+const bailAt = Number.isInteger(runOptions.bail) ? runOptions.bail : null;
+let failedTests = 0;
+
 const selected = (title) =>
   (namePattern === null || namePattern.test(title)) && (skipPattern === null || !skipPattern.test(title));
 let activeCase = null;
@@ -471,6 +475,12 @@ async function drain() {
         await settled(next.scope);
         continue;
       }
+      // The failure limit was reached: what is left is counted, not run.
+      if (bailAt !== null && failedTests >= bailAt) {
+        ops.test_skipped(next.id, "bail");
+        await settled(next.scope);
+        continue;
+      }
       await runCase(next);
     }
     // Whatever is still open — a group whose last case has run leaves through
@@ -559,6 +569,7 @@ async function runCase({ id, fn, scope, options }) {
   const reported =
     failure === null ? "" : attempts > 1 ? `failed ${attempts} attempts; the last:\n${detail(failure)}` : detail(failure);
   ops.test_finished(id, failure === null, reported);
+  if (failure !== null) failedTests += 1;
   await settled(scope);
 }
 

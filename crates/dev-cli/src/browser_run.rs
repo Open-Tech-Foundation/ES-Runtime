@@ -40,7 +40,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use crate::bidi::{Client, Event, Session};
-use crate::guest::test::{FileSnapshots, Tally};
+use crate::guest::test::{FileSnapshots, RunOptions, Tally};
 use crate::test::TestConfig;
 
 /// Installs `__ops` in the page, then lets the page start. `send` is the
@@ -219,7 +219,14 @@ async fn run(
             .display()
             .to_string()
     };
+    // `--bail`: tests failed so far across files; a file is not started once
+    // the limit is reached, and each one started is told how many more may fail.
+    let failed_tests = std::sync::atomic::AtomicUsize::new(0);
+    let not_run = std::sync::atomic::AtomicUsize::new(0);
+    let failed_tests = &failed_tests;
+    let not_run = &not_run;
     let runs = files.iter().enumerate().map(|(index, file)| {
+        let mut options = config.run_options();
         let job = Job {
             client: Arc::clone(client),
             routes: Arc::clone(routes),
@@ -232,11 +239,26 @@ async fn run(
             file: file.clone(),
             name: named(file),
         };
-        job.run(config)
+        async move {
+            if let Some(limit) = config.bail {
+                let failed = failed_tests.load(std::sync::atomic::Ordering::SeqCst);
+                if failed >= limit {
+                    not_run.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return None;
+                }
+                options.bail = Some(limit - failed);
+            }
+            let ran = job.run(config, options).await;
+            failed_tests.fetch_add(ran.failed_tests, std::sync::atomic::Ordering::SeqCst);
+            Some(ran)
+        }
     });
     let mut failed = 0usize;
     let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
     while let Some(ran) = results.next().await {
+        let Some(ran) = ran else {
+            continue;
+        };
         if !quiet {
             println!("{}", ran.name);
         }
@@ -247,6 +269,7 @@ async fn run(
     }
 
     server.abort();
+    crate::test::report_not_run(not_run.load(std::sync::atomic::Ordering::SeqCst), quiet);
     Ok(failed)
 }
 
@@ -323,22 +346,29 @@ struct Ran {
     name: String,
     output: String,
     passed: bool,
+    /// How many of its tests failed, for `--bail`.
+    failed_tests: usize,
 }
 
 impl Job {
-    async fn run(self, config: &TestConfig) -> Ran {
-        let (output, passed) = match self.attempt(config).await {
+    async fn run(self, config: &TestConfig, options: RunOptions) -> Ran {
+        let (output, passed, failed_tests) = match self.attempt(config, &options).await {
             Ok(done) => done,
-            Err(err) => (format!("  FAIL {err}\n"), false),
+            Err(err) => (format!("  FAIL {err}\n"), false, 1),
         };
         Ran {
             name: self.name,
             output,
             passed,
+            failed_tests,
         }
     }
 
-    async fn attempt(&self, config: &TestConfig) -> Result<(String, bool), String> {
+    async fn attempt(
+        &self,
+        config: &TestConfig,
+        options: &RunOptions,
+    ) -> Result<(String, bool, usize), String> {
         let page = self.bundle(config).await?;
         let user_context = self
             .client
@@ -347,7 +377,7 @@ impl Job {
             .as_str()
             .ok_or("browser.createUserContext: no user context in the answer")?
             .to_string();
-        let ran = self.in_context(&user_context, &page, config).await;
+        let ran = self.in_context(&user_context, &page, config, options).await;
         // Closes the tab with it.
         let _ = self
             .client
@@ -432,7 +462,8 @@ impl Job {
         user_context: &str,
         page: &str,
         config: &TestConfig,
-    ) -> Result<(String, bool), String> {
+        options: &RunOptions,
+    ) -> Result<(String, bool, usize), String> {
         let context = self
             .client
             .command(
@@ -458,7 +489,7 @@ impl Job {
             config.filters.is_empty(),
         );
         let store = json!({
-            "options": config.run_options().to_json(),
+            "options": options.to_json(),
             "update": config.update_snapshots,
             "ci": config.ci,
             "snapshots": snapshots
@@ -553,7 +584,8 @@ impl Job {
             ),
         }
         let finished = ended == Ended::Finished && snapshots_written;
-        Ok((output, passed && finished))
+        let failed_tests = state.tally.failed();
+        Ok((output, passed && finished, failed_tests))
     }
 }
 

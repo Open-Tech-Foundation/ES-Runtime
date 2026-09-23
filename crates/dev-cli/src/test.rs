@@ -54,6 +54,11 @@ pub struct TestConfig {
     pub name_pattern: Option<String>,
     /// Skip the tests whose full name matches.
     pub skip_pattern: Option<String>,
+    /// Stop after this many tests have failed, from `--bail`.
+    pub bail: Option<usize>,
+    /// Internal parent-to-child: where a child writes its pass and fail
+    /// counts, for the parent to add up.
+    pub summary: Option<PathBuf>,
     /// How JSX in a test file compiles, from the project's `jsx` section. Read
     /// by the parent and by every `--file` child, so a test means the same
     /// thing however it was started.
@@ -104,6 +109,7 @@ impl TestConfig {
         crate::guest::test::RunOptions {
             name_pattern: self.name_pattern.clone(),
             skip_pattern: self.skip_pattern.clone(),
+            bail: self.bail,
         }
     }
 }
@@ -242,17 +248,58 @@ pub async fn run_all(
     // is chrome that would have to be skipped by whatever is parsing.
     let quiet = config.reporter.as_deref() == Some("json");
 
-    if jobs <= 1 {
-        let mut failed = 0usize;
-        for file in files {
-            if !quiet {
-                println!("{}", named(file));
-            }
+    // `--bail`: tests failed so far, added up from each child's summary. A file
+    // is not started once the limit is reached, and each one started is told
+    // how many more may fail.
+    let failed_tests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let not_run = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let bail = config.bail;
+    let command =
+        |file: &Path, index: usize| -> Option<(tokio::process::Command, Option<PathBuf>)> {
+            let failed = failed_tests.load(std::sync::atomic::Ordering::SeqCst);
+            let remaining = match bail {
+                Some(limit) if failed >= limit => {
+                    not_run.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return None;
+                }
+                Some(limit) => Some(limit - failed),
+                None => None,
+            };
             let mut child = tokio::process::Command::new(exe);
             child
                 .arg("test")
                 .arg(format!("--file={}", file.display()))
                 .args(&flags);
+            let summary = remaining.map(|remaining| {
+                let path = std::env::temp_dir().join(format!(
+                    "esdev-test-summary-{}-{index}.json",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_file(&path);
+                child.arg(format!("--bail={remaining}"));
+                child.arg(format!("--_summary={}", path.display()));
+                path
+            });
+            Some((child, summary))
+        };
+    let count_summary = |summary: Option<PathBuf>| {
+        if let Some(path) = summary {
+            // A child that died before writing one failed at least once.
+            let failed = crate::guest::test::read_summary(&path).unwrap_or(1);
+            let _ = std::fs::remove_file(&path);
+            failed_tests.fetch_add(failed, std::sync::atomic::Ordering::SeqCst);
+        }
+    };
+
+    let mut failed = 0usize;
+    if jobs <= 1 {
+        for (index, file) in files.iter().enumerate() {
+            let Some((child, summary)) = command(file, index) else {
+                continue;
+            };
+            if !quiet {
+                println!("{}", named(file));
+            }
             // Not captured: with one job the child writes straight through,
             // which is the run to reach for when a test is hanging.
             match supervise(child, config.timeout, false).await {
@@ -267,59 +314,66 @@ pub async fn run_all(
                     failed += 1;
                 }
             }
+            count_summary(summary);
         }
-        return failed;
-    }
-
-    let runs = files.iter().map(|file| {
-        let exe = exe.to_path_buf();
-        let name = named(file);
-        let file = file.clone();
-        let flags = flags.clone();
-        let timeout = config.timeout;
-        async move {
-            let mut child = tokio::process::Command::new(&exe);
-            child
-                .arg("test")
-                .arg(format!("--file={}", file.display()))
-                .args(&flags);
-            (name, supervise(child, timeout, true).await)
-        }
-    });
-
-    let mut failed = 0usize;
-    let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
-    while let Some((name, output)) = results.next().await {
-        if !quiet {
-            println!("{name}");
-        }
-        match output {
-            Ok(done) if done.expired => {
-                // What it managed to print before it was ended: a file that
-                // hangs on its ninth test has eight results worth reading.
-                print!("{}", String::from_utf8_lossy(&done.output.stdout));
-                eprint!("{}", String::from_utf8_lossy(&done.output.stderr));
-                eprintln!("{}", timed_out(config.timeout));
-                failed += 1;
+    } else {
+        let runs = files.iter().enumerate().map(|(index, file)| {
+            let name = named(file);
+            let timeout = config.timeout;
+            let command = &command;
+            async move {
+                let (child, summary) = command(file, index)?;
+                Some((name, supervise(child, timeout, true).await, summary))
             }
-            Ok(done) => {
-                let output = done.output;
-                // The child's two streams, in the order a reader expects them:
-                // what the test printed, then what went wrong. Written through
-                // rather than re-formatted — a harness's output is its own.
-                print!("{}", String::from_utf8_lossy(&output.stdout));
-                eprint!("{}", String::from_utf8_lossy(&output.stderr));
-                if !output.status.success() {
+        });
+        let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
+        while let Some(result) = results.next().await {
+            let Some((name, output, summary)) = result else {
+                continue;
+            };
+            count_summary(summary);
+            if !quiet {
+                println!("{name}");
+            }
+            match output {
+                Ok(done) if done.expired => {
+                    // What it managed to print before it was ended: a file that
+                    // hangs on its ninth test has eight results worth reading.
+                    print!("{}", String::from_utf8_lossy(&done.output.stdout));
+                    eprint!("{}", String::from_utf8_lossy(&done.output.stderr));
+                    eprintln!("{}", timed_out(config.timeout));
+                    failed += 1;
+                }
+                Ok(done) => {
+                    let output = done.output;
+                    // The child's two streams, in the order a reader expects them:
+                    // what the test printed, then what went wrong. Written through
+                    // rather than re-formatted — a harness's output is its own.
+                    print!("{}", String::from_utf8_lossy(&output.stdout));
+                    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                    if !output.status.success() {
+                        failed += 1;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  cannot run it: {e}");
                     failed += 1;
                 }
             }
-            Err(e) => {
-                eprintln!("  cannot run it: {e}");
-                failed += 1;
-            }
         }
     }
+    report_not_run(not_run.load(std::sync::atomic::Ordering::SeqCst), quiet);
     failed
+}
+
+/// Says how many files `--bail` kept from starting.
+pub fn report_not_run(not_run: usize, quiet: bool) {
+    if not_run > 0 && !quiet {
+        println!(
+            "\nbail: {not_run} file{} did not run after the failure limit",
+            if not_run == 1 { "" } else { "s" }
+        );
+    }
 }
 
 /// Runs the child to completion, or **kills it** after `timeout` milliseconds.
