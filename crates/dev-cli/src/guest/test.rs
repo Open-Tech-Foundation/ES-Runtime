@@ -109,14 +109,27 @@ struct SnapshotState {
     file_writes: BTreeMap<PathBuf, Vec<u8>>,
     file_used: BTreeSet<PathBuf>,
     file_removals: Vec<PathBuf>,
-    matched: usize,
-    failed: usize,
+    counts: Counts,
     written: usize,
     written_entries: Vec<String>,
     obsolete_entries: Vec<String>,
     obsolete_reason: Option<&'static str>,
     updated: usize,
     removed: usize,
+    /// Which case first took a snapshot under each test name, per file. Keys
+    /// are made from the test's name, so a second case with the same name
+    /// would read and write the first one's snapshots.
+    owners: BTreeMap<(PathBuf, String), usize>,
+}
+
+/// Snapshots matched and failed, in the run and per case.
+#[derive(Default)]
+struct Counts {
+    matched: usize,
+    failed: usize,
+    /// What each case's current attempt has matched and failed, so a retry
+    /// can take back what an earlier attempt counted.
+    by_case: BTreeMap<usize, (usize, usize)>,
 }
 
 #[derive(Default)]
@@ -259,16 +272,46 @@ pub fn configure_snapshots(
             file_writes: BTreeMap::new(),
             file_used: BTreeSet::new(),
             file_removals: Vec::new(),
-            matched: 0,
-            failed: 0,
+            counts: Counts::default(),
             written: 0,
             written_entries: Vec::new(),
             obsolete_entries: Vec::new(),
             obsolete_reason: None,
             updated: 0,
             removed: 0,
+            owners: BTreeMap::new(),
         };
     });
+}
+
+/// A test name as it appears in a snapshot key. The file format gives each
+/// entry a one-line heading, so line breaks are written as `\n` and `\r`.
+fn key_name(name: &str) -> String {
+    name.replace('\r', "\\r").replace('\n', "\\n")
+}
+
+/// A case is being attempted again: what its previous attempt counted no
+/// longer stands.
+fn restart_case_snapshots(case_id: usize) {
+    SNAPSHOTS.with_borrow_mut(|state| {
+        let counts = &mut state.counts;
+        if let Some((matched, failed)) = counts.by_case.remove(&case_id) {
+            counts.matched -= matched;
+            counts.failed -= failed;
+        }
+    });
+}
+
+/// Counts a snapshot result against the whole run and against its case.
+fn count(counts: &mut Counts, case_id: usize, passed: bool) {
+    let entry = counts.by_case.entry(case_id).or_default();
+    if passed {
+        counts.matched += 1;
+        entry.0 += 1;
+    } else {
+        counts.failed += 1;
+        entry.1 += 1;
+    }
 }
 
 fn set_snapshot_file(text: &str) {
@@ -375,16 +418,26 @@ fn visible_line(line: &str) -> String {
 }
 
 fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> Result<(), String> {
-    let (file, key) = CASES
+    let (file, name) = CASES
         .with_borrow(|cases| {
-            cases.get(case_id).and_then(|case| {
-                case.file
-                    .clone()
-                    .map(|file| (file, format!("{}: {key}", case.name)))
-            })
+            cases
+                .get(case_id)
+                .and_then(|case| case.file.clone().map(|file| (file, case.name.clone())))
         })
         .ok_or_else(|| "toMatchSnapshot is available when esdev runs a test file".to_string())?;
+    let key = key_name(&format!("{name}: {key}"));
     SNAPSHOTS.with_borrow_mut(|state| {
+        let owner = *state
+            .owners
+            .entry((file.clone(), name.clone()))
+            .or_insert(case_id);
+        if owner != case_id {
+            state.counts.failed += 1;
+            return Err(format!(
+                "another test in this file is also named {name:?}, and snapshots are \
+                 stored by test name — rename one of them"
+            ));
+        }
         if !state.files.contains_key(&file) {
             let loaded = load_snapshots(&file)?;
             state.files.insert(file.clone(), loaded);
@@ -393,11 +446,11 @@ fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> 
         snapshots.used.insert(key.clone());
         match snapshots.snapshots.get(&key) {
             Some(expected) if expected.kind == kind && expected.body == actual => {
-                state.matched += 1;
+                count(&mut state.counts, case_id, true);
                 Ok(())
             }
             Some(expected) if !state.update => {
-                state.failed += 1;
+                count(&mut state.counts, case_id, false);
                 let accept = snapshot_accept_hint(state.ci, &file);
                 Err(format!(
                     "snapshot changed — {key}\n{}\n\n{}{}",
@@ -407,7 +460,7 @@ fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> 
                 ))
             }
             None if state.ci => {
-                state.failed += 1;
+                count(&mut state.counts, case_id, false);
                 Err(format!(
                     "no stored snapshot: {key}; --ci does not write them"
                 ))
@@ -450,11 +503,11 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
             .or_else(|| std::fs::read(&path).ok());
         match expected {
             Some(expected) if expected == actual => {
-                state.matched += 1;
+                count(&mut state.counts, case_id, true);
                 Ok(())
             }
             Some(expected) if !state.update => {
-                state.failed += 1;
+                count(&mut state.counts, case_id, false);
                 let detail = match (text_snapshot(&expected), text_snapshot(&actual)) {
                     (Some(before), Some(after)) => snapshot_diff(before, after, state.full_diff),
                     _ => binary_diff(&expected, &actual),
@@ -466,7 +519,7 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
                 ))
             }
             None if state.ci => {
-                state.failed += 1;
+                count(&mut state.counts, case_id, false);
                 Err(format!(
                     "no stored file snapshot: {}; --ci does not write them",
                     path.display()
@@ -527,7 +580,7 @@ fn binary_diff(expected: &[u8], actual: &[u8]) -> String {
 }
 
 fn reconcile_snapshots() -> Result<(), String> {
-    let (complete, test_files) = CASES.with_borrow(|cases| {
+    let (complete, test_files, unjudged) = CASES.with_borrow(|cases| {
         (
             !cases.is_empty()
                 && cases
@@ -537,6 +590,18 @@ fn reconcile_snapshots() -> Result<(), String> {
                 .iter()
                 .filter_map(|case| case.file.clone())
                 .collect::<BTreeSet<_>>(),
+            // A test that was skipped, left out by `.only`, or did not pass
+            // may not have reached its snapshots, so they say nothing about
+            // being obsolete: `name: ` is the prefix of every key it owns.
+            cases
+                .iter()
+                .filter(|case| !matches!(case.outcome, Some(Outcome::Passed)))
+                .filter_map(|case| {
+                    case.file
+                        .clone()
+                        .map(|file| (file, format!("{}: ", key_name(&case.name))))
+                })
+                .collect::<Vec<_>>(),
         )
     });
     SNAPSHOTS.with_borrow_mut(|state| {
@@ -562,6 +627,11 @@ fn reconcile_snapshots() -> Result<(), String> {
                 .snapshots
                 .keys()
                 .filter(|key| !snapshots.used.contains(*key))
+                .filter(|key| {
+                    !unjudged
+                        .iter()
+                        .any(|(owner, prefix)| owner == file && key.starts_with(prefix.as_str()))
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             if prune {
@@ -613,17 +683,17 @@ type SnapshotTally = (String, Vec<String>, Vec<String>, Option<&'static str>);
 
 fn snapshot_tally() -> Option<SnapshotTally> {
     SNAPSHOTS.with_borrow(|state| {
-        let used = state.matched + state.failed + state.written + state.updated;
+        let used = state.counts.matched + state.counts.failed + state.written + state.updated;
         (used > 0 || state.removed > 0 || !state.obsolete_entries.is_empty()).then(|| {
             let mut tally = if state.update {
                 format!(
                     "snapshots: {} updated, {} written, {} removed, {} unchanged",
-                    state.updated, state.written, state.removed, state.matched
+                    state.updated, state.written, state.removed, state.counts.matched
                 )
             } else {
                 format!(
                     "snapshots: {} matched, {} failed, {} written",
-                    state.matched, state.failed, state.written
+                    state.counts.matched, state.counts.failed, state.written
                 )
             };
             if !state.obsolete_entries.is_empty() {
@@ -738,6 +808,11 @@ impl HostExtension for TestExtension {
                     reason = "the id came from `registered`, which handed out an index"
                 )]
                 let index = id as usize;
+                let again =
+                    CASES.with_borrow(|cases| cases.get(index).is_some_and(|case| case.started));
+                if again {
+                    restart_case_snapshots(index);
+                }
                 CASES.with_borrow_mut(|cases| mark_running(cases, index));
                 Ok(Value::Undefined)
             }),

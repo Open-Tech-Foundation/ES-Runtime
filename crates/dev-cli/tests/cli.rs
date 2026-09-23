@@ -13116,3 +13116,71 @@ test("MUSTFAIL checkbox value", () => { expect($("ok")).toHaveValue("on"); });
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Snapshot keys that stay put: a line break in a test's name, a named
+/// snapshot after another is added before it, two tests sharing a name, a
+/// skipped test's entries, and a retried attempt's result.
+#[test]
+fn snapshot_keys_survive_names_retries_and_skips() {
+    let dir = build_dir("t_snapshot_stable_keys");
+    let file = |body: &str| {
+        write_in(
+            &dir,
+            "keys.test.js",
+            &format!("import {{ test, expect }} from \"runtime:test\";\n{body}"),
+        );
+    };
+    file(
+        r#"test("named", () => { expect({ v: 1 }).toMatchSnapshot("body"); });
+test("multi\nline", () => { expect(1).toMatchSnapshot(); });
+test("later skipped", () => { expect(2).toMatchSnapshot(); });
+test("retried", () => { expect("stable").toMatchSnapshot(); });
+test("dup", () => { expect("first").toMatchSnapshot(); });
+test("dup", () => { expect("second").toMatchSnapshot(); });
+"#,
+    );
+    let first = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&first), stderr(&first));
+    // The second test with a taken name is refused rather than sharing.
+    assert!(
+        text.contains("another test in this file is also named \"dup\""),
+        "{text}"
+    );
+    assert!(text.contains("5 passed, 1 failed"), "{text}");
+    let stored = std::fs::read_to_string(dir.join("__snapshots__/keys.test.js.snap"))
+        .expect("snapshots written");
+    // A line break in a name is escaped, so the heading stays one line.
+    assert!(
+        stored.contains("=== multi\\nline: snapshot 1 [value]\n"),
+        "{stored}"
+    );
+
+    file(
+        r#"test("named", () => { expect(0).toMatchSnapshot(); expect({ v: 1 }).toMatchSnapshot("body"); });
+test("multi\nline", () => { expect(1).toMatchSnapshot(); });
+test.skip("later skipped", () => { expect(2).toMatchSnapshot(); });
+let n = 0;
+test("retried", () => { n++; expect(n === 1 ? "flaky" : "stable").toMatchSnapshot(); }, { retry: 1 });
+test("dup", () => { expect("first").toMatchSnapshot(); });
+"#,
+    );
+    let second = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&second), stderr(&second));
+    assert!(second.status.success(), "{text}");
+    // The named snapshot kept its key; the new unnamed one is written beside it.
+    // The escaped name was read back. The retried case's first attempt is not
+    // counted. The skipped test's entry is not called obsolete.
+    assert!(
+        text.contains("snapshots: 4 matched, 0 failed, 1 written"),
+        "{text}"
+    );
+    assert!(text.contains("named: snapshot 1"), "{text}");
+    assert!(!text.contains("obsolete"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

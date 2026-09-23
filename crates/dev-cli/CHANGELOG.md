@@ -24,6 +24,20 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+- **Snapshot keys stay stable.**
+  - A test name containing a line break no longer corrupts the `.snap` file:
+    it is stored as `\n` in the entry's heading.
+  - Named snapshots are numbered per name. Adding a snapshot before a named
+    one no longer renames it. A test that mixes named and unnamed snapshots
+    gets new keys for the named ones: run `esdev test --update-snapshots`
+    once to rewrite them.
+  - A second test with the same name as one that takes snapshots is refused,
+    instead of reading and overwriting the first test's snapshots.
+  - Snapshots of skipped tests, tests left out by `.only`, and tests that did
+    not pass are no longer listed as obsolete.
+  - With `retry`, only the last attempt's snapshot results are counted.
+
 ### Added
 - **More of the test vocabulary in `runtime:test`.**
   - **Test options:** `test(name, fn, { timeout, retry })`, or the options

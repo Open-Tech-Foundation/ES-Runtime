@@ -69,7 +69,9 @@
 
 const ops = globalThis.__ops;
 let activeCase = null;
-let snapshotNumber = 0;
+// How many snapshots of each name the running attempt has taken. Counted per
+// name, so a named snapshot keeps its key when another is added before it.
+let snapshotCounts = new Map();
 // What the running attempt of a case has asked for and done: its assertion
 // count, what `expect.assertions` wants of it, its soft failures, and the
 // callbacks it registered for when it ends. `null` between cases.
@@ -520,6 +522,9 @@ async function runCase({ id, fn, scope, options }) {
   const attempts = 1 + (options.retry ?? 0);
   let failure = null;
   for (let tried = 1; tried <= attempts; tried++) {
+    // Said again for each retry: the host counts an attempt's snapshot
+    // results, and only the last attempt's are the case's.
+    if (tried > 1) ops.test_running(id);
     failure = await runAttempt(id, fn, scope, options);
     if (options.fails) {
       failure =
@@ -542,7 +547,7 @@ async function runAttempt(id, fn, scope, options) {
   attempt = state;
   try {
     activeCase = id;
-    snapshotNumber = 0;
+    snapshotCounts = new Map();
     pendingRejection = null;
     armRejectionListener();
     for (const before of around(scope, "beforeEach")) await before();
@@ -883,7 +888,10 @@ function snapshot(actual, nameOrMatchers, kind = "value") {
     actual = maskSnapshot(actual, nameOrMatchers);
     name = undefined;
   }
-  const key = name === undefined ? `snapshot ${++snapshotNumber}` : `${name} ${++snapshotNumber}`;
+  const base = name === undefined ? "snapshot" : String(name);
+  const count = (snapshotCounts.get(base) ?? 0) + 1;
+  snapshotCounts.set(base, count);
+  const key = `${base} ${count}`;
   const message = ops.test_snapshot(activeCase, key, snapshotValue(actual), kind);
   if (message !== undefined) throw message;
 }

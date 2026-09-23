@@ -26,8 +26,15 @@ update changed snapshots with:
 esdev test --update-snapshots
 ```
 
-The file has a format version and sorted object keys. Rename a snapshot with
-`toMatchSnapshot("response body")`; unnamed calls use their order in the test.
+The file has a format version and sorted object keys. Each snapshot is stored
+under the test's name and its own name, numbered in order:
+`toMatchSnapshot("response body")` is `response body 1`, and unnamed calls are
+`snapshot 1`, `snapshot 2` and so on. Adding a snapshot of one name does not
+renumber the others.
+
+Two tests in one file that take snapshots need different names; the second is
+refused. Snapshots of a test that was skipped or did not pass are not reported
+as obsolete, and with `retry`, only the last attempt's results count.
 Value snapshots live at `__snapshots__/response.test.mjs.snap`; a file snapshot
 lives at `__snapshots__/response.test.mjs/home.html`. A file snapshot name is a
 single filename, never a path, so it cannot write outside that directory.
