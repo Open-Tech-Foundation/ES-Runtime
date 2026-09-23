@@ -533,7 +533,10 @@ class MutationObserver {
       for (const options of this._registrationsOn(node)) {
         if (node !== change.target && !options.subtree) continue;
         if (!options[change.type]) continue;
-        if (change.type === "attributes" && options.attributeFilter && !options.attributeFilter.includes(change.attributeName)) continue;
+        // A filter names attributes without a namespace, so a namespaced one
+        // never passes it.
+        if (change.type === "attributes" && options.attributeFilter
+          && (change.attributeNamespace != null || !options.attributeFilter.includes(change.attributeName))) continue;
         interested = true;
         if (change.type === "attributes" && options.attributeOldValue) wantsOldValue = true;
         if (change.type === "characterData" && options.characterDataOldValue) wantsOldValue = true;
@@ -548,7 +551,7 @@ class MutationObserver {
       previousSibling: change.previousSibling ?? null,
       nextSibling: change.nextSibling ?? null,
       attributeName: change.attributeName ?? null,
-      attributeNamespace: null,
+      attributeNamespace: change.attributeNamespace ?? null,
       oldValue: wantsOldValue ? change.oldValue ?? null : null,
     });
     scheduleMutationDelivery();

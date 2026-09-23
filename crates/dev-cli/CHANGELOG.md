@@ -25,6 +25,22 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **Every way an attribute changes is one change.** Setting `attr.value` on an
+  attached attribute changed it silently, with no mutation record, change steps
+  or `attributeChangedCallback`. `attributes.setNamedItem` did the same, because
+  the public map doubled as internal storage. `attributeChangedCallback` was
+  delivered by wrapping four `Element` methods, so `setAttributeNode` and
+  `removeAttributeNode` never reached it either. All of them now go through one
+  attribute core, as in the specification. That core also changes three
+  behaviours:
+  - Mutation records carry the local name and `attributeNamespace`, and an
+    `attributeFilter` never matches a namespaced attribute.
+  - `setAttributeNS` on an existing attribute keeps its prefix.
+  - `attributeChangedCallback` also fires when the value is unchanged, as in
+    Chrome.
+
+  `cloneNode` copies attributes as they are. Through `setAttributeNS` it would
+  have refused a null-namespace name with a colon, like `v-on:click`.
 - **Custom element names follow HTML's current rule.** A name only needs to be
   a valid element local name that starts with a lowercase ASCII letter, has no
   uppercase ASCII and has a hyphen, and isn't one of the eight names SVG and

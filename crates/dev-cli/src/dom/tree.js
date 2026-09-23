@@ -887,8 +887,11 @@ export function createTree(events = {}) {
         // customized built-in is one too, and upgrades like one.
         const is = isValueOf(this);
         clone = document.createElementNS(this.namespaceURI, qualifiedName, is === null ? undefined : { is });
+        // Copied as they are — namespace, prefix, local name and value — not
+        // re-validated through `setAttributeNS`, which would refuse a
+        // null-namespace name with a colon in it, like `v-on:click`.
         for (const attribute of ownAttributes(this)) {
-          clone.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+          appendAttribute(clone, new Attr(attribute.localName, attribute.value, document, attribute.namespaceURI, attribute.prefix));
         }
       } else if (this instanceof CDATASection) clone = new CDATASection(this.data, document);
       else if (this instanceof Text) clone = document.createTextNode(this.data);
@@ -1058,11 +1061,20 @@ export function createTree(events = {}) {
       const qualifiedName = prefix === null ? name : `${prefix}:${name}`;
       super(Node.ATTRIBUTE_NODE, qualifiedName, ownerDocument);
       this.name = qualifiedName;
-      this.value = String(value);
+      slots(this).value = String(value);
       this.ownerElement = null;
       this.namespaceURI = namespaceURI;
       this.prefix = prefix;
       this.localName = name;
+    }
+    // "Set an existing attribute value": on an attribute an element holds, a
+    // change like any other — a mutation record, the change steps and a custom
+    // element's `attributeChangedCallback`.
+    get value() { return slots(this).value; }
+    set value(value) {
+      value = String(value);
+      if (this.ownerElement) changeAttribute(this.ownerElement, this, value);
+      else slots(this).value = value;
     }
     get nodeValue() { return this.value; }
     set nodeValue(value) { this.value = String(value ?? ""); }
@@ -1081,50 +1093,103 @@ export function createTree(events = {}) {
     _list() { return slots(this[ATTRS]).attributes; }
     get length() { return this._list().length; }
     item(index) { return this._list()[index] ?? null; }
-    getNamedItem(name) { return this._list().find((attribute) => attribute.name === String(name)) ?? null; }
+    // "Get an attribute by name": lowercased for an HTML element in an HTML
+    // document, then matched against the qualified name.
+    getNamedItem(name) {
+      name = qualified(this[ATTRS], name);
+      return this._list().find((attribute) => attribute.name === name) ?? null;
+    }
     getNamedItemNS(namespaceURI, localName) {
       namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
       localName = String(localName);
       return this._list().find((attribute) => attribute.namespaceURI === namespaceURI && attribute.localName === localName) ?? null;
     }
-    setNamedItem(attribute) {
-      if (!(attribute instanceof Attr)) throw new TypeError("setNamedItem expects an Attr");
-      const existing = this.getNamedItem(attribute.name);
-      if (attribute.ownerElement && attribute.ownerElement !== this[ATTRS]) throw domError("InUseAttributeError", "The attribute is already in use.");
-      if (existing) this._list()[this._list().indexOf(existing)] = attribute; else this._list().push(attribute);
-      // Setting an attribute adopts it: it belongs to the element's document
-      // afterwards, not to the one it came from.
-      const document = this[ATTRS]?.ownerDocument;
-      if (document) slots(attribute).ownerDocument = document;
-      attribute.ownerElement = this[ATTRS];
-      if (existing) existing.ownerElement = null;
-      return existing;
-    }
-    setNamedItemNS(attribute) {
-      if (!(attribute instanceof Attr)) throw new TypeError("setNamedItemNS expects an Attr");
-      const existing = this.getNamedItemNS(attribute.namespaceURI, attribute.localName);
-      if (attribute.ownerElement && attribute.ownerElement !== this[ATTRS]) throw domError("InUseAttributeError", "The attribute is already in use.");
-      if (existing) this._list()[this._list().indexOf(existing)] = attribute; else this._list().push(attribute);
-      attribute.ownerElement = this[ATTRS];
-      if (existing) existing.ownerElement = null;
-      return existing;
-    }
+    setNamedItem(attribute) { return setAttributeNode(this[ATTRS], attribute); }
+    setNamedItemNS(attribute) { return setAttributeNode(this[ATTRS], attribute); }
     removeNamedItem(name) {
       const attribute = this.getNamedItem(name);
       if (!attribute) throw domError("NotFoundError", "No such attribute.");
-      this._list().splice(this._list().indexOf(attribute), 1);
-      attribute.ownerElement = null;
+      removeAttribute(this[ATTRS], attribute);
       return attribute;
     }
     removeNamedItemNS(namespaceURI, localName) {
       const attribute = this.getNamedItemNS(namespaceURI, localName);
       if (!attribute) throw domError("NotFoundError", "No such attribute.");
-      this._list().splice(this._list().indexOf(attribute), 1);
-      attribute.ownerElement = null;
+      removeAttribute(this[ATTRS], attribute);
       return attribute;
     }
   }
   NamedNodeMap.prototype[Symbol.iterator] = Array.prototype.values;
+
+  // The attribute core. Every way an attribute changes — `setAttribute`, the
+  // namespaced pair, the node methods, `attributes.setNamedItem`, `attr.value`
+  // — is one of four primitives, and each ends in "handle attribute changes".
+  let attributeReaction = null;
+  function setAttributeReaction(reaction) { attributeReaction = reaction; }
+
+  function handleAttributeChanges(element, attribute, oldValue, value, slotBefore) {
+    element._touch();
+    element.ownerDocument?._queueMutation?.({
+      type: "attributes", target: element,
+      attributeName: attribute.localName, attributeNamespace: attribute.namespaceURI, oldValue,
+    });
+    attributeChanged(element, attribute.localName, attribute.namespaceURI, oldValue, value);
+    if (attribute.namespaceURI === null) {
+      if (attribute.localName === "disabled") notifyDisabled(element);
+      if (attribute.localName === "slot" || attribute.localName === "name") signalReassignment(element, slotBefore);
+    }
+    // Last: a custom element's callback sees the change complete.
+    attributeReaction?.(element, attribute.localName, attribute.namespaceURI, oldValue, value);
+  }
+  // A node that moves between slots signals the one it left and then the one it
+  // joined, so which one it is in is captured before the change.
+  function slotBefore(element, attribute) {
+    return attribute.namespaceURI === null && (attribute.localName === "slot" || attribute.localName === "name")
+      ? assignedSlotFor(element) : null;
+  }
+  function changeAttribute(element, attribute, value) {
+    const before = slotBefore(element, attribute);
+    const oldValue = slots(attribute).value;
+    slots(attribute).value = value;
+    handleAttributeChanges(element, attribute, oldValue, value, before);
+  }
+  function appendAttribute(element, attribute) {
+    const before = slotBefore(element, attribute);
+    slots(element).attributes.push(attribute);
+    attribute.ownerElement = element;
+    // Setting an attribute adopts it into the element's document.
+    if (element.ownerDocument) slots(attribute).ownerDocument = element.ownerDocument;
+    handleAttributeChanges(element, attribute, null, attribute.value, before);
+  }
+  function removeAttribute(element, attribute) {
+    const before = slotBefore(element, attribute);
+    const list = slots(element).attributes;
+    list.splice(list.indexOf(attribute), 1);
+    attribute.ownerElement = null;
+    handleAttributeChanges(element, attribute, attribute.value, null, before);
+  }
+  function replaceAttribute(element, previous, attribute) {
+    const before = slotBefore(element, previous);
+    const list = slots(element).attributes;
+    list[list.indexOf(previous)] = attribute;
+    attribute.ownerElement = element;
+    previous.ownerElement = null;
+    if (element.ownerDocument) slots(attribute).ownerDocument = element.ownerDocument;
+    handleAttributeChanges(element, previous, previous.value, attribute.value, before);
+  }
+  // "Set an attribute", as `setAttributeNode` and `setNamedItem` do: matched by
+  // namespace and local name, and refused if another element holds it.
+  function setAttributeNode(element, attribute) {
+    if (!(attribute instanceof Attr)) throw new TypeError("setAttributeNode expects an Attr");
+    if (attribute.ownerElement !== null && attribute.ownerElement !== element) {
+      throw domError("InUseAttributeError", "The attribute is already in use.");
+    }
+    const previous = ownAttributes(element).getNamedItemNS(attribute.namespaceURI, attribute.localName);
+    if (previous === attribute) return attribute;
+    if (previous) replaceAttribute(element, previous, attribute);
+    else appendAttribute(element, attribute);
+    return previous;
+  }
 
   class Element extends Node {
     // `name` is the local name: a prefix is only ever given by
@@ -1169,57 +1234,34 @@ export function createTree(events = {}) {
     setAttribute(name, value) {
       if (!isValidAttributeLocalName(String(name))) throw domError("InvalidCharacterError", `"${name}" is not a valid attribute name.`);
       name = qualified(this, name);
-      const oldValue = this.getAttribute(name);
-      // Captured before the change: a node that moves between slots signals the
-      // one it left and then the one it joined, in that order.
-      const before = name === "slot" || name === "name" ? assignedSlotFor(this) : null;
-      ownAttributes(this).setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
-      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
-      attributeChanged(this, name, null, oldValue, this.getAttribute(name));
-      if (name === "disabled") notifyDisabled(this);
-      if (name === "slot" || name === "name") signalReassignment(this, before);
+      value = String(value);
+      const attribute = ownAttributes(this).getNamedItem(name);
+      if (attribute) changeAttribute(this, attribute, value);
+      else appendAttribute(this, new Attr(name, value, this.ownerDocument));
     }
+    // "Set an attribute value": an attribute that exists keeps its prefix and
+    // changes its value; only a new one takes the given prefix.
     setAttributeNS(namespaceURI, qualifiedName, value) {
       const { namespace, prefix, localName } = validateAndExtract(namespaceURI, qualifiedName, "attribute");
-      qualifiedName = prefix === null ? localName : `${prefix}:${localName}`;
-      const attribute = new Attr(localName, value, this.ownerDocument, namespace, prefix);
-      const oldValue = this.getAttributeNS(attribute.namespaceURI, attribute.localName);
-      ownAttributes(this).setNamedItemNS(attribute); this._touch();
-      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: qualifiedName, oldValue });
-      attributeChanged(this, attribute.localName, attribute.namespaceURI, oldValue, attribute.value);
+      value = String(value);
+      const attribute = ownAttributes(this).getNamedItemNS(namespace, localName);
+      if (attribute) changeAttribute(this, attribute, value);
+      else appendAttribute(this, new Attr(localName, value, this.ownerDocument, namespace, prefix));
     }
-    setAttributeNode(attribute) {
-      const previous = ownAttributes(this).setNamedItem(attribute); this._touch();
-      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: previous?.value ?? null });
-      attributeChanged(this, attribute.localName, attribute.namespaceURI, previous?.value ?? null, attribute.value);
-      return previous;
-    }
+    setAttributeNode(attribute) { return setAttributeNode(this, attribute); }
+    setAttributeNodeNS(attribute) { return setAttributeNode(this, attribute); }
     removeAttribute(name) {
-      name = qualified(this, name);
-      const attribute = this.getAttributeNode(name);
-      const before = name === "slot" || name === "name" ? assignedSlotFor(this) : null;
-      if (attribute) {
-        ownAttributes(this).removeNamedItem(name); this._touch();
-        this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
-        attributeChanged(this, attribute.localName, attribute.namespaceURI, attribute.value, null);
-        if (name === "disabled") notifyDisabled(this);
-        if (name === "slot" || name === "name") signalReassignment(this, before);
-      }
+      const attribute = ownAttributes(this).getNamedItem(name);
+      if (attribute) removeAttribute(this, attribute);
     }
     removeAttributeNS(namespaceURI, localName) {
       const attribute = this.getAttributeNodeNS(namespaceURI, localName);
-      if (attribute) {
-        ownAttributes(this).removeNamedItemNS(namespaceURI, localName); this._touch();
-        this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
-        attributeChanged(this, attribute.localName, attribute.namespaceURI, attribute.value, null);
-      }
+      if (attribute) removeAttribute(this, attribute);
     }
     removeAttributeNode(attribute) {
-      if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element.");
-      const removed = ownAttributes(this).removeNamedItem(attribute.name); this._touch();
-      this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: removed.name, oldValue: removed.value });
-      attributeChanged(this, removed.localName, removed.namespaceURI, removed.value, null);
-      return removed;
+      if (!slots(this).attributes.includes(attribute)) throw domError("NotFoundError", "The attribute is not owned by this element.");
+      removeAttribute(this, attribute);
+      return attribute;
     }
     get id() { return this.getAttribute("id") ?? ""; }
     set id(value) { this.setAttribute("id", value); }
@@ -3211,5 +3253,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, isValidCustomElementName, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, isValidCustomElementName, setAttributeReaction, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

@@ -1386,6 +1386,54 @@ export const cases = [
   },
   {
     group: "tree",
+    name: "every-way-an-attribute-changes-is-one-change",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const calls = [];
+      const name = unique("attr-watch");
+      window.customElements.define(name, class extends window.HTMLElement {
+        static observedAttributes = ["a", "b", "c", "d"];
+        attributeChangedCallback(attribute, oldValue, value, namespace) { calls.push([attribute, oldValue, value, namespace]); }
+      });
+      const element = document.createElement(name);
+      document.body.append(element);
+      const observer = new window.MutationObserver(() => {});
+      observer.observe(element, { attributes: true, attributeOldValue: true });
+      element.setAttribute("a", "1");
+      element.setAttribute("a", "1");
+      element.attributes.getNamedItem("a").value = "2";
+      const b = document.createAttribute("b");
+      b.value = "x";
+      element.setAttributeNode(b);
+      const c = document.createAttribute("c");
+      element.attributes.setNamedItem(c);
+      element.removeAttributeNode(b);
+      element.setAttributeNS("http://example.com/", "p:d", "1");
+      element.setAttributeNS("http://example.com/", "q:d", "2");
+      const kept = element.attributes.getNamedItemNS("http://example.com/", "d").name;
+      element.removeAttribute("c");
+      const records = observer.takeRecords().map((record) => [record.attributeName, record.attributeNamespace, record.oldValue]);
+      observer.disconnect();
+
+      // A filter never matches a namespaced attribute.
+      const filtered = new window.MutationObserver(() => {});
+      filtered.observe(element, { attributeFilter: ["d"] });
+      element.setAttributeNS("http://example.com/", "d", "3");
+      element.setAttribute("d", "plain");
+      const filteredRecords = filtered.takeRecords().map((record) => [record.attributeName, record.attributeNamespace]);
+      filtered.disconnect();
+
+      // A clone copies a colon-named attribute without namespace validation.
+      const host = document.createElement("div");
+      host.innerHTML = "<p v-on:click=go xlink:title=t></p>";
+      const clone = host.firstElementChild.cloneNode();
+      element.remove();
+      return [calls, records, kept, filteredRecords, clone.getAttributeNames(), clone.attributes[0].prefix];
+    },
+  },
+  {
+    group: "tree",
     name: "character-data-is-edited-in-place",
     async run(window) {
       const { document } = window;

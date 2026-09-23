@@ -13,6 +13,7 @@ const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, upda
 for (const argument of Deno.args) {
   if (argument === "--verbose") flags.verbose = true;
   else if (argument === "--keep") flags.keep = true;
+  else if (argument === "--trace") flags.trace = true;
   else if (argument.startsWith("--jobs=")) flags.jobs = Number(argument.slice("--jobs=".length));
   else if (argument === "--update-expectations") flags.update = true;
   else if (argument.startsWith("--esdev=")) flags.esdev = argument.slice("--esdev=".length);
@@ -123,7 +124,12 @@ if (globalThis.__esdevPageScripts) {
 }
 
 async function run(testPath) {
-  const collector = `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
+  // `--trace`: each subtest as it finishes, on stderr, to see where a page that
+  // never completes stopped.
+  const trace = flags.trace
+    ? `add_result_callback((test) => console.error("TRACE", ${JSON.stringify(testPath)}, test.status, test.name, test.message || ""));`
+    : "";
+  const collector = trace + `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
   const generated = testPath.replace(/\.(js|html)$/, ".__esdev-dom-wpt.test.mjs");
   let body;
   try {
@@ -149,6 +155,7 @@ async function run(testPath) {
     clearTimeout(deadline);
     const stdout = new TextDecoder().decode(output.stdout);
     const stderr = new TextDecoder().decode(output.stderr);
+    if (flags.trace) console.error(stderr.split("\n").filter((line) => line.startsWith("TRACE")).join("\n"));
     const refused = stdout.match(new RegExp(`^${markupMarker}(.+)$`, "m"))?.[1];
     if (refused) return { harness: "MARKUP", tests: [], message: JSON.parse(refused) };
     const report = stdout.match(new RegExp(`^${marker}(.+)$`, "m"))?.[1];

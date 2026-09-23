@@ -4239,7 +4239,7 @@
           ],
           true,
           false,
-          "matrix-registry-24",
+          "matrix-registry-25",
           "DOMException",
           "DOMException",
           "DOMException"
@@ -4401,6 +4401,522 @@
             "NotFoundError"
           ],
           true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "every-way-an-attribute-changes-is-one-change",
+      "chrome": {
+        "result": [
+          [
+            [
+              "a",
+              null,
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "2",
+              null
+            ],
+            [
+              "b",
+              null,
+              "x",
+              null
+            ],
+            [
+              "c",
+              null,
+              "",
+              null
+            ],
+            [
+              "b",
+              "x",
+              null,
+              null
+            ],
+            [
+              "d",
+              null,
+              "1",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              "1",
+              "2",
+              "http://example.com/"
+            ],
+            [
+              "c",
+              "",
+              null,
+              null
+            ],
+            [
+              "d",
+              "2",
+              "3",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              null,
+              "plain",
+              null
+            ]
+          ],
+          [
+            [
+              "a",
+              null,
+              null
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "b",
+              null,
+              null
+            ],
+            [
+              "c",
+              null,
+              null
+            ],
+            [
+              "b",
+              null,
+              "x"
+            ],
+            [
+              "d",
+              "http://example.com/",
+              null
+            ],
+            [
+              "d",
+              "http://example.com/",
+              "1"
+            ],
+            [
+              "c",
+              null,
+              ""
+            ]
+          ],
+          "p:d",
+          [
+            [
+              "d",
+              null
+            ]
+          ],
+          [
+            "v-on:click",
+            "xlink:title"
+          ],
+          null
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              "a",
+              null,
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "2",
+              null
+            ],
+            [
+              "b",
+              null,
+              "x",
+              null
+            ],
+            [
+              "c",
+              null,
+              "",
+              null
+            ],
+            [
+              "b",
+              "x",
+              null,
+              null
+            ],
+            [
+              "d",
+              null,
+              "1",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              "1",
+              "2",
+              "http://example.com/"
+            ],
+            [
+              "c",
+              "",
+              null,
+              null
+            ],
+            [
+              "d",
+              "2",
+              "3",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              null,
+              "plain",
+              null
+            ]
+          ],
+          [
+            [
+              "a",
+              null,
+              null
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "b",
+              null,
+              null
+            ],
+            [
+              "c",
+              null,
+              null
+            ],
+            [
+              "b",
+              null,
+              "x"
+            ],
+            [
+              "d",
+              "http://example.com/",
+              null
+            ],
+            [
+              "d",
+              "http://example.com/",
+              "1"
+            ],
+            [
+              "c",
+              null,
+              ""
+            ]
+          ],
+          "p:d",
+          [
+            [
+              "d",
+              null
+            ]
+          ],
+          [
+            "v-on:click",
+            "xlink:title"
+          ],
+          null
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            [
+              "a",
+              null,
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "1",
+              null
+            ],
+            [
+              "b",
+              null,
+              "x",
+              null
+            ],
+            [
+              "c",
+              null,
+              null,
+              null
+            ],
+            [
+              "b",
+              "x",
+              null,
+              null
+            ],
+            [
+              "c",
+              null,
+              null,
+              null
+            ],
+            [
+              "d",
+              "2",
+              "3",
+              null
+            ],
+            [
+              "d",
+              null,
+              "plain",
+              null
+            ]
+          ],
+          [
+            [
+              "a",
+              null,
+              null
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "b",
+              null,
+              null
+            ],
+            [
+              "c",
+              null,
+              null
+            ],
+            [
+              "b",
+              null,
+              "x"
+            ],
+            [
+              "p:d",
+              null,
+              null
+            ],
+            [
+              "q:d",
+              null,
+              "1"
+            ],
+            [
+              "c",
+              null,
+              null
+            ]
+          ],
+          "q:d",
+          [
+            [
+              "d",
+              null
+            ],
+            [
+              "d",
+              null
+            ]
+          ],
+          [
+            "v-on:click",
+            "xlink:title"
+          ],
+          "v-on"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            [
+              "a",
+              null,
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "1",
+              null
+            ],
+            [
+              "a",
+              "1",
+              "2",
+              null
+            ],
+            [
+              "b",
+              null,
+              "x",
+              null
+            ],
+            [
+              "c",
+              null,
+              "",
+              null
+            ],
+            [
+              "b",
+              "x",
+              null,
+              null
+            ],
+            [
+              "d",
+              null,
+              "1",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              "1",
+              "2",
+              "http://example.com/"
+            ],
+            [
+              "c",
+              "",
+              null,
+              null
+            ],
+            [
+              "d",
+              "2",
+              "3",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              null,
+              "plain",
+              null
+            ]
+          ],
+          [
+            [
+              "a",
+              null,
+              null
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "a",
+              null,
+              "1"
+            ],
+            [
+              "b",
+              null,
+              null
+            ],
+            [
+              "c",
+              null,
+              null
+            ],
+            [
+              "b",
+              null,
+              "x"
+            ],
+            [
+              "d",
+              "http://example.com/",
+              null
+            ],
+            [
+              "d",
+              "http://example.com/",
+              "1"
+            ],
+            [
+              "c",
+              null,
+              ""
+            ]
+          ],
+          "p:d",
+          [
+            [
+              "d",
+              "http://example.com/"
+            ],
+            [
+              "d",
+              null
+            ]
+          ],
+          [
+            "v-on:click",
+            "xlink:title"
+          ],
+          null
         ]
       },
       "emulatorDisagreement": true,
@@ -5164,7 +5680,7 @@
       "name": "a-constructor-is-refused-when-it-misbehaves",
       "chrome": {
         "result": [
-          "matrix-bad-8",
+          "matrix-bad-9",
           false,
           "TypeError",
           null
@@ -5172,7 +5688,7 @@
       },
       "esdev": {
         "result": [
-          "matrix-bad-8",
+          "matrix-bad-9",
           false,
           "TypeError",
           null
@@ -5180,7 +5696,7 @@
       },
       "happy-dom": {
         "result": [
-          "matrix-bad-28",
+          "matrix-bad-30",
           false,
           "TypeError",
           null
@@ -5188,7 +5704,7 @@
       },
       "jsdom": {
         "result": [
-          "matrix-bad-8",
+          "matrix-bad-9",
           false,
           "TypeError",
           null
@@ -5762,7 +6278,7 @@
           [
             [
               "input",
-              "matrix-moved-19"
+              "matrix-moved-20"
             ],
             "kept",
             [
@@ -5789,7 +6305,7 @@
           [
             [
               "input",
-              "matrix-moved-19"
+              "matrix-moved-20"
             ],
             "kept",
             [
@@ -6682,7 +7198,7 @@
         "result": [
           true,
           null,
-          "<button is=\"matrix-built-in-20\"></button>",
+          "<button is=\"matrix-built-in-21\"></button>",
           true,
           true,
           false,
@@ -6702,7 +7218,7 @@
         "result": [
           true,
           null,
-          "<button is=\"matrix-built-in-20\"></button>",
+          "<button is=\"matrix-built-in-21\"></button>",
           true,
           true,
           false,
@@ -6722,12 +7238,12 @@
         "result": [
           true,
           null,
-          "<button is=\"matrix-built-in-38\"></button>",
+          "<button is=\"matrix-built-in-40\"></button>",
           false,
           false,
           false,
           true,
-          "matrix-built-in-38",
+          "matrix-built-in-40",
           [
             "constructed",
             "constructed",
@@ -6740,7 +7256,7 @@
         "result": [
           true,
           null,
-          "<button is=\"matrix-built-in-19\"></button>",
+          "<button is=\"matrix-built-in-20\"></button>",
           true,
           true,
           false,
@@ -9981,7 +10497,7 @@
     }
   ],
   "summary": {
-    "match": 115,
+    "match": 116,
     "intentional-limit": 2,
     "drift": 0
   }

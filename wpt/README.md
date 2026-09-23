@@ -225,6 +225,7 @@ deno run --allow-read --allow-run --allow-write wpt/dom-run.js
 # --esdev=<path>         default target/debug/esdev
 # --jobs=<n>             files at once, default up to 8
 # --keep                 leave each generated test file in place
+# --trace                each subtest's result as it finishes, to stderr
 ```
 
 Collected: `.any.js`, `.window.js`, and every `.html` page that loads

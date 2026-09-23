@@ -6356,7 +6356,7 @@ fn test_dom_custom_element_reactions_filter_attributes_and_track_moves() {
            document.body.appendChild(fragment);\n\
            one.setAttribute('other', 'ignored'); one.setAttribute('state', 'one'); one.setAttribute('state', 'one'); one.removeAttribute('state');\n\
            document.body.appendChild(one); two.remove();\n\
-           assertEquals(calls, ['connected:one', 'connected:two', 'state:null:one', 'state:one:null', 'disconnected:one', 'connected:one', 'disconnected:two']);\n\
+           assertEquals(calls, ['connected:one', 'connected:two', 'state:null:one', 'state:one:one', 'state:one:null', 'disconnected:one', 'connected:one', 'disconnected:two']);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
