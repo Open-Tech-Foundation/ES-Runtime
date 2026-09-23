@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-23
+
 ### Changed
 - **oxc 0.151**, up from 0.146, for transforms, type stripping and declaration
   emit. No output changes; every build, transform and declaration test passes

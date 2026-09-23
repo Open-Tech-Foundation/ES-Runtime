@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-23
+
 ### Added
 
 - **`runtime:test`'s `toHaveBeenCalledOnce()` and accessor `spyOn`** —
