@@ -339,6 +339,8 @@ function enqueue(name, fn, mode, options) {
   }
   const scope = current;
   const title = label(scope, String(name));
+  // A listing names what a filter selected, and nothing else.
+  if (runOptions.list === true && !selected(title)) return;
   const id = ops.test_registered(title);
   if (skip) {
     // Reported now and never queued: nothing about it runs, its group's
@@ -349,6 +351,11 @@ function enqueue(name, fn, mode, options) {
   // Left out by a name filter: counted, and said so, like a `.only`'s others.
   if (!selected(title)) {
     ops.test_skipped(id, "filter");
+    return;
+  }
+  // `--list`: named, and never queued — no test and no hook runs.
+  if (runOptions.list === true) {
+    ops.test_skipped(id, "list");
     return;
   }
   const only = mode === "only" || scope.only;

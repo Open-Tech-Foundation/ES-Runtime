@@ -41,6 +41,19 @@ A group with no selected tests does not run its `beforeAll`. Path filters
 (`esdev test auth`) choose files; `-t` chooses tests within them, and the two
 combine.
 
+## Listing tests
+
+`--list` names the tests each file registers, by full name, and runs none of
+them — no test and no hook. It combines with path filters and `-t`:
+
+```sh
+esdev test --list
+esdev test --list -t=auth
+```
+
+A file's own top-level code does run, since that is where its tests are
+registered.
+
 ## Stopping early
 
 `--bail` stops after the first failed test; `--bail=5` after five. Failures add

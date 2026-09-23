@@ -213,6 +213,8 @@ OPTIONS:
     --seed=<n>                  Shuffle with this seed, to repeat an order
     --repeats=<n>               Run every test <n> more times; it fails if any
                                 run fails
+    --list                      Name the tests each file registers, running
+                                none
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1432,6 +1434,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut randomize = false;
     let mut seed = None;
     let mut repeats = None;
+    let mut list = false;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1536,6 +1539,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     )
                 })?);
             }
+            "--list" => {
+                reject_value(flag, value)?;
+                list = true;
+            }
             "--_summary" => summary = Some(std::path::PathBuf::from(require_value(flag, value)?)),
             "--timeout" => {
                 let text = require_value(flag, value)?;
@@ -1590,6 +1597,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     }
     // `--file` is the child's own flag: it is one run of one file, with no
     // discovery to repeat and no second file to run beside it.
+    if list && watch {
+        return Err("--list names the tests once; there is nothing to watch.".to_string());
+    }
     if file.is_some() && (watch || jobs.is_some()) {
         return Err("--file runs one file, so there is nothing to schedule or \
              re-run.\n\n\
@@ -1612,6 +1622,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         randomize,
         seed,
         repeats,
+        list,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1805,6 +1816,8 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     let report = |total: usize, failed: usize| {
         if config.reporter.as_deref() == Some("json") {
             test::report_as_json(total, failed);
+        } else if config.list {
+            test::report_listed(total, failed);
         } else {
             test::report(total, failed);
         }
@@ -2041,6 +2054,8 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     let total = files.len();
     if config.reporter.as_deref() == Some("json") {
         test::report_as_json(total, failed);
+    } else if config.list {
+        test::report_listed(total, failed);
     } else {
         test::report(total, failed);
     }

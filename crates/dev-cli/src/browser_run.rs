@@ -613,6 +613,9 @@ struct FileState {
     loaded: bool,
     /// Whether `runtime:test`'s queue drained after its last registration.
     drained: bool,
+    /// Whether every case was already settled when the page finished loading
+    /// — so none was queued, and no drain is coming to say it is done.
+    settled_at_load: bool,
     /// What the page wrote to its console, printed ahead of the report as a
     /// process run's output is.
     console: String,
@@ -766,6 +769,9 @@ impl FileState {
             ("drained", _) => self.drained = true,
             ("loaded", _) => {
                 self.loaded = true;
+                // A file whose tests were all skipped, filtered or listed
+                // queued none, so its queue never drains.
+                self.settled_at_load = self.tally.settled();
                 // A module that threw while loading: the cases it registered
                 // before throwing still run, and the throw is a failure of its
                 // own rather than a file that silently tested less.
@@ -781,7 +787,9 @@ impl FileState {
     /// Finished: loaded, every case settled, and — if it registered any — the
     /// queue said it drained after the last.
     fn done(&self) -> bool {
-        self.loaded && self.tally.settled() && (self.registered == 0 || self.drained)
+        self.loaded
+            && self.tally.settled()
+            && (self.registered == 0 || self.drained || self.settled_at_load)
     }
 }
 
@@ -933,6 +941,16 @@ mod tests {
             "{report}"
         );
         assert!(report.contains("1 passed, 1 failed"), "{report}");
+    }
+
+    #[test]
+    fn a_page_whose_tests_were_all_skipped_is_done_once_loaded() {
+        // Nothing was queued, so no drain will ever say it is done.
+        let mut state = FileState::default();
+        state.apply(&message(json!(["registered", 0, "later"])));
+        state.apply(&message(json!(["skipped", 0, ""])));
+        state.apply(&message(json!(["loaded", null])));
+        assert!(state.done());
     }
 
     #[test]

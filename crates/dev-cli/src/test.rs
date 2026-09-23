@@ -58,6 +58,8 @@ pub struct TestConfig {
     pub bail: Option<usize>,
     /// How many more times every test runs, from `--repeats`.
     pub repeats: Option<u32>,
+    /// Name the tests instead of running them, from `--list`.
+    pub list: bool,
     /// Shuffle the run's order, from `--randomize`.
     pub randomize: bool,
     /// The seed the order is shuffled from, from `--seed` or chosen for a
@@ -120,6 +122,7 @@ impl TestConfig {
             bail: self.bail,
             seed: self.seed,
             repeats: self.repeats,
+            list: self.list,
         }
     }
 }
@@ -269,6 +272,7 @@ pub async fn run_all(
                 )
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
+                .chain(config.list.then(|| "--list".to_string()))
                 .chain(
                     config
                         .skip_pattern
@@ -575,6 +579,16 @@ pub fn report_as_json(total: usize, failed: usize) {
     println!(r#"{{"type":"summary","files":{total},"failed":{failed}}}"#);
 }
 
+/// The line a `--list` run ends with: nothing passed, because nothing ran.
+pub fn report_listed(total: usize, failed: usize) {
+    let files = if total == 1 { "file" } else { "files" };
+    if failed == 0 {
+        println!("\n{total} {files} listed");
+    } else {
+        println!("\n{total} {files} listed, {failed} could not be loaded");
+    }
+}
+
 /// The tally a run ends with.
 pub fn report(total: usize, failed: usize) {
     let files = if total == 1 { "file" } else { "files" };
@@ -589,8 +603,15 @@ pub fn report(total: usize, failed: usize) {
 pub fn discover(root: &Path, filters: &[String]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     collect(root, &mut found);
+    // Matched against the path inside the project, not the absolute one: a
+    // filter that happens to spell part of where the project lives — `src`
+    // for a project under `~/src` — would otherwise select every file.
     found.retain(|p| {
-        let text = p.to_string_lossy().into_owned();
+        let text = p
+            .strip_prefix(root)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .into_owned();
         filters.is_empty() || filters.iter().any(|f| text.contains(f.as_str()))
     });
     found.sort();
@@ -685,6 +706,8 @@ mod tests {
         assert_eq!(discover(&dir, &["alpha".to_string()]).len(), 1);
         assert_eq!(discover(&dir, &["nope".to_string()]).len(), 0);
         assert_eq!(discover(&dir, &[]).len(), 2);
+        // Part of where the project lives is not part of any file's path in it.
+        assert_eq!(discover(&dir, &["esdev-filter".to_string()]).len(), 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

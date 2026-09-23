@@ -25,6 +25,12 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **`esdev test <filter>` matches the path inside the project**, not the
+  absolute one. A filter that spelled part of the project's own location —
+  `src` for a project under `~/src` — selected every file.
+- **A browser test file with nothing to run no longer hangs.** A file whose
+  tests were all skipped or filtered out queued none, and the run waited for a
+  queue that would never drain.
 - **`esdev start` and `esdev test --watch` stop on `SIGTERM`**, as they already
   did on ^C. A CI job being cancelled or a process manager stopping esdev used
   to leave the server `esdev start` had started still running.
@@ -58,6 +64,9 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --list`** names the tests each file registers, by full name,
+  without running any test or hook. It combines with path filters and `-t`, and
+  with `--reporter=json`, one `listed` case per line.
 - **`repeats`: `test(name, fn, { repeats: n })` and `esdev test --repeats=<n>`**
   run a test `n` more times after the first, as in Vitest and Bun; it fails if
   any run fails, and the report names the run.

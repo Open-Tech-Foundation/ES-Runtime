@@ -93,6 +93,8 @@ enum Skip {
     Filtered,
     /// `--bail`'s limit of failed tests was reached before it ran.
     Bailed,
+    /// `--list`: registered to be named, not to run.
+    Listed,
 }
 
 /// What the command line asked of the tests in one file, read by
@@ -110,6 +112,8 @@ pub struct RunOptions {
     pub seed: Option<u32>,
     /// How many more times every test runs, unless it says otherwise.
     pub repeats: Option<u32>,
+    /// Register the tests and name them, running none.
+    pub list: bool,
 }
 
 impl RunOptions {
@@ -121,6 +125,7 @@ impl RunOptions {
             "bail": self.bail,
             "seed": self.seed,
             "repeats": self.repeats,
+            "list": self.list,
         })
     }
 }
@@ -1058,6 +1063,7 @@ impl HostExtension for TestExtension {
                     Some("only") => Skip::Only,
                     Some("filter") => Skip::Filtered,
                     Some("bail") => Skip::Bailed,
+                    Some("list") => Skip::Listed,
                     _ => Skip::Asked,
                 };
                 #[expect(
@@ -1249,6 +1255,37 @@ fn mark_finished(cases: &mut [Case], id: usize, passed: bool, detail: String) {
 fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
     use std::fmt::Write as _;
     let mut out = String::new();
+    // `--list`: the tests by name, and how many — nothing ran to report on.
+    let listed: Vec<&Case> = cases
+        .iter()
+        .filter(|case| matches!(case.outcome, Some(Outcome::Skipped(Skip::Listed))))
+        .collect();
+    if !listed.is_empty() {
+        for case in &listed {
+            match as_json {
+                Some(file) => {
+                    let _ = writeln!(
+                        out,
+                        r#"{{"type":"case","file":{},"name":{},"status":"listed"}}"#,
+                        serde_json::Value::String(file.to_string()),
+                        serde_json::Value::String(case.name.clone())
+                    );
+                }
+                None => {
+                    let _ = writeln!(out, "  {}", case.name);
+                }
+            }
+        }
+        if as_json.is_none() {
+            let _ = writeln!(
+                out,
+                "  {} test{}",
+                listed.len(),
+                if listed.len() == 1 { "" } else { "s" }
+            );
+        }
+        return (out, true);
+    }
     let (passed, skipped, held, filtered, bailed, failures) = {
         let mut passed = 0usize;
         let mut skipped = 0usize;
@@ -1263,6 +1300,7 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
                 Some(Outcome::Skipped(Skip::Only)) => held += 1,
                 Some(Outcome::Skipped(Skip::Filtered)) => filtered += 1,
                 Some(Outcome::Skipped(Skip::Bailed)) => bailed += 1,
+                Some(Outcome::Skipped(Skip::Listed)) => {}
                 Some(Outcome::Failed(detail)) => {
                     failures.push((case.name.clone(), detail.clone()));
                 }
@@ -1442,6 +1480,7 @@ impl Tally {
             "only" => Skip::Only,
             "filter" => Skip::Filtered,
             "bail" => Skip::Bailed,
+            "list" => Skip::Listed,
             _ => Skip::Asked,
         };
         mark_skipped(&mut self.cases, id, because);

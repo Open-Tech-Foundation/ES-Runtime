@@ -12799,6 +12799,12 @@ fn test_browser_runs_the_files_in_a_real_page() {
          test(\"waits\", async () => { await new Promise((r) => setTimeout(r, 10)); });\n\
          setTimeout(() => { throw new Error(\"thrown outside any test\"); }, 0);\n",
     );
+    // Nothing to run: every test skipped, so no queue drains to end it.
+    write_in(
+        &dir,
+        "skipped.test.js",
+        "import { test } from \"runtime:test\";\ntest.skip(\"later\", () => {});\n",
+    );
     let out = esdev_in(&dir)
         .args(["test", "--browser", "--timeout=60000"])
         .output()
@@ -12832,7 +12838,11 @@ fn test_browser_runs_the_files_in_a_real_page() {
     // An error no test caught is the file's failure, not a silence.
     assert!(out_text.contains("FAIL uncaught error"), "{out_text}");
     assert!(out_text.contains("thrown outside any test"), "{out_text}");
-    assert!(out_text.contains("2 of 2 files failed"), "{out_text}");
+    assert!(
+        out_text.contains("0 passed, 0 failed, 1 skipped"),
+        "{out_text}"
+    );
+    assert!(out_text.contains("2 of 3 files failed"), "{out_text}");
 
     // JSON on its own: a file that writes nothing to the console, since what
     // a test prints shares stdout with the reporter in either runner.
@@ -13755,6 +13765,61 @@ test("flaky", () => { b++; if (b === 3) throw new Error("third run fails"); }, {
         .expect("spawn");
     assert!(
         stderr(&out).contains("is not a number of repeats"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--list`: every file's tests by full name, nothing run — no test, no hook —
+/// and a filter narrowing what is named.
+#[test]
+fn list_names_the_tests_and_runs_none() {
+    let dir = build_dir("t_list");
+    write_in(
+        &dir,
+        "a.test.js",
+        "import { test, describe, beforeAll } from \"runtime:test\";\n\
+         beforeAll(() => console.log(\"hook ran\"));\n\
+         describe(\"auth\", () => { test(\"logs in\", () => { throw new Error(\"ran\"); }); });\n\
+         test.each([1, 2])(\"row %d\", () => {});\n",
+    );
+    write_in(
+        &dir,
+        "b.test.js",
+        "import { test } from \"runtime:test\";\ntest(\"b one\", () => {});\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--list", "--jobs=1"])
+        .output()
+        .expect("spawn esdev test --list");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(
+        text.contains("a.test.js\n  auth > logs in\n  row 1\n  row 2\n  3 tests\n"),
+        "{text}"
+    );
+    assert!(text.contains("b.test.js\n  b one\n  1 test\n"), "{text}");
+    assert!(text.contains("2 files listed"), "{text}");
+    assert!(
+        !text.contains("hook ran") && !text.contains("FAIL"),
+        "{text}"
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--list", "-t=auth", "--jobs=1"])
+        .output()
+        .expect("spawn esdev test --list -t");
+    let text = stdout(&out);
+    assert!(text.contains("  auth > logs in\n  1 test\n"), "{text}");
+    assert!(!text.contains("row 1") && !text.contains("b one"), "{text}");
+
+    let out = esdev_in(&dir)
+        .args(["test", "--list", "--watch"])
+        .output()
+        .expect("spawn");
+    assert!(
+        stderr(&out).contains("nothing to watch"),
         "{}",
         stderr(&out)
     );
