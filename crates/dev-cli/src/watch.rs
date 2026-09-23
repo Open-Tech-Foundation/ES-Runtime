@@ -353,6 +353,30 @@ fn is_watchable(path: &Path, root: &Path, extensions: &[&str]) -> bool {
         .is_some_and(|ext| extensions.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
+/// Resolves when the process is asked to stop: ^C, or `SIGTERM` on Unix —
+/// which is how a CI job being cancelled, a container stopping or a process
+/// manager ask. Anything esdev started (a server, a browser) is stopped on
+/// either, rather than left running once esdev is gone.
+pub async fn stopped() {
+    #[cfg(unix)]
+    {
+        let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

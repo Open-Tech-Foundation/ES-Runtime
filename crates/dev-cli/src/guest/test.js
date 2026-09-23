@@ -68,6 +68,22 @@
 // suite that passes in a tenth of the time.
 
 const ops = globalThis.__ops;
+
+// What the command line asked of this file: `--test-name-pattern` and
+// `--test-skip-pattern`, matched against a test's full name.
+const runOptions = JSON.parse(ops.test_options?.() ?? "{}");
+const pattern = (flag, source) => {
+  if (!source) return null;
+  try {
+    return new RegExp(source);
+  } catch (err) {
+    throw new SyntaxError(`${flag}: ${err.message}`);
+  }
+};
+const namePattern = pattern("--test-name-pattern", runOptions.namePattern);
+const skipPattern = pattern("--test-skip-pattern", runOptions.skipPattern);
+const selected = (title) =>
+  (namePattern === null || namePattern.test(title)) && (skipPattern === null || !skipPattern.test(title));
 let activeCase = null;
 // How many snapshots of each name the running attempt has taken. Counted per
 // name, so a named snapshot keeps its key when another is added before it.
@@ -269,11 +285,17 @@ function enqueue(name, fn, mode, options) {
     throw new TypeError(`test(${JSON.stringify(String(name))}): needs a function to run`);
   }
   const scope = current;
-  const id = ops.test_registered(label(scope, String(name)));
+  const title = label(scope, String(name));
+  const id = ops.test_registered(title);
   if (skip) {
     // Reported now and never queued: nothing about it runs, its group's
     // `beforeAll` included.
     ops.test_skipped(id, "");
+    return;
+  }
+  // Left out by a name filter: counted, and said so, like a `.only`'s others.
+  if (!selected(title)) {
+    ops.test_skipped(id, "filter");
     return;
   }
   const only = mode === "only" || scope.only;

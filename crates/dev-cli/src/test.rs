@@ -50,6 +50,10 @@ pub struct TestConfig {
     pub browser: Option<crate::browser::Choice>,
     /// Show the browser's window rather than running it headless.
     pub headed: bool,
+    /// Run only the tests whose full name matches, from `-t`.
+    pub name_pattern: Option<String>,
+    /// Skip the tests whose full name matches.
+    pub skip_pattern: Option<String>,
     /// How JSX in a test file compiles, from the project's `jsx` section. Read
     /// by the parent and by every `--file` child, so a test means the same
     /// thing however it was started.
@@ -92,6 +96,16 @@ pub struct TestConfig {
     /// parent keeps its full grant for discovery and reporting. Flags only,
     /// never an `esdev.json` key: a rehearsal decides a single run.
     pub permission_args: Vec<String>,
+}
+
+impl TestConfig {
+    /// What each file's `runtime:test` is told.
+    pub fn run_options(&self) -> crate::guest::test::RunOptions {
+        crate::guest::test::RunOptions {
+            name_pattern: self.name_pattern.clone(),
+            skip_pattern: self.skip_pattern.clone(),
+        }
+    }
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -198,6 +212,18 @@ pub async fn run_all(
                 )
                 .chain(config.ci.then(|| "--ci".to_string()))
                 .chain(config.full_diff.then(|| "--full-diff".to_string()))
+                .chain(
+                    config
+                        .name_pattern
+                        .iter()
+                        .map(|p| format!("--test-name-pattern={p}")),
+                )
+                .chain(
+                    config
+                        .skip_pattern
+                        .iter()
+                        .map(|p| format!("--test-skip-pattern={p}")),
+                )
                 .chain(config.permission_args.iter().cloned())
                 .chain(std::iter::once(format!(
                     "--_snapshot-prune={}",
@@ -404,7 +430,7 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
                     return Ok(());
                 }
             }
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+            () = crate::watch::stopped() => return Ok(()),
         }
         println!();
     }

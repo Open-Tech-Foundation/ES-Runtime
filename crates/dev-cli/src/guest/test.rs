@@ -88,6 +88,39 @@ enum Skip {
     /// because a `.only` left in a commit turns a suite green in a tenth of the
     /// time and the tally is the only place that shows it.
     Only,
+    /// Its name did not match `--test-name-pattern`, or matched
+    /// `--test-skip-pattern`. Counted apart for the same reason as `Only`.
+    Filtered,
+}
+
+/// What the command line asked of the tests in one file, read by
+/// `runtime:test` as it loads. Set before the file runs, in the process that
+/// runs it — or handed to the page, in a browser run.
+#[derive(Clone, Default)]
+pub struct RunOptions {
+    /// Run only the tests whose full name matches this pattern.
+    pub name_pattern: Option<String>,
+    /// Skip the tests whose full name matches this pattern.
+    pub skip_pattern: Option<String>,
+}
+
+impl RunOptions {
+    /// As `runtime:test` reads it.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "namePattern": self.name_pattern,
+            "skipPattern": self.skip_pattern,
+        })
+    }
+}
+
+thread_local! {
+    static RUN_OPTIONS: RefCell<RunOptions> = RefCell::new(RunOptions::default());
+}
+
+/// Sets what the next file run in this thread is asked to do.
+pub fn configure_run(options: RunOptions) {
+    RUN_OPTIONS.with_borrow_mut(|held| *held = options);
 }
 
 thread_local! {
@@ -1012,6 +1045,7 @@ impl HostExtension for TestExtension {
                 let id = args.first().and_then(Value::as_number).unwrap_or(-1.0);
                 let because = match args.get(1).and_then(Value::as_str) {
                     Some("only") => Skip::Only,
+                    Some("filter") => Skip::Filtered,
                     _ => Skip::Asked,
                 };
                 #[expect(
@@ -1072,6 +1106,12 @@ impl HostExtension for TestExtension {
                     Ok(()) => Ok(Value::Undefined),
                     Err(message) => Ok(Value::String(message)),
                 }
+            }),
+            // options() -> JSON — what the command line asked of this file.
+            OpDecl::sync("test_options", |_| {
+                Ok(Value::String(
+                    RUN_OPTIONS.with_borrow(RunOptions::to_json).to_string(),
+                ))
             }),
             // inline_snapshot(id, stack, actual, existing | null) -> message?
             OpDecl::sync("test_inline_snapshot", |args| {
@@ -1197,16 +1237,18 @@ fn mark_finished(cases: &mut [Case], id: usize, passed: bool, detail: String) {
 fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
     use std::fmt::Write as _;
     let mut out = String::new();
-    let (passed, skipped, held, failures) = {
+    let (passed, skipped, held, filtered, failures) = {
         let mut passed = 0usize;
         let mut skipped = 0usize;
         let mut held = 0usize;
+        let mut filtered = 0usize;
         let mut failures: Vec<(String, String)> = Vec::new();
         for case in cases {
             match &case.outcome {
                 Some(Outcome::Passed) => passed += 1,
                 Some(Outcome::Skipped(Skip::Asked)) => skipped += 1,
                 Some(Outcome::Skipped(Skip::Only)) => held += 1,
+                Some(Outcome::Skipped(Skip::Filtered)) => filtered += 1,
                 Some(Outcome::Failed(detail)) => {
                     failures.push((case.name.clone(), detail.clone()));
                 }
@@ -1229,15 +1271,15 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
                 )),
             }
         }
-        (passed, skipped, held, failures)
+        (passed, skipped, held, filtered, failures)
     };
 
-    if passed == 0 && skipped == 0 && held == 0 && failures.is_empty() {
+    if passed == 0 && skipped == 0 && held == 0 && filtered == 0 && failures.is_empty() {
         return (out, true);
     }
 
     if let Some(file) = as_json {
-        json(&mut out, file, passed, skipped + held, &failures);
+        json(&mut out, file, passed, skipped + held + filtered, &failures);
         return (out, failures.is_empty());
     }
 
@@ -1257,9 +1299,16 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
             if held == 1 { "" } else { "s" }
         );
     }
+    if filtered > 0 {
+        let _ = writeln!(
+            out,
+            "  filter: {filtered} other test{} did not match",
+            if filtered == 1 { "" } else { "s" }
+        );
+    }
     let mut tally = format!("  {passed} passed, {} failed", failures.len());
-    if skipped + held > 0 {
-        tally.push_str(&format!(", {} skipped", skipped + held));
+    if skipped + held + filtered > 0 {
+        tally.push_str(&format!(", {} skipped", skipped + held + filtered));
     }
     let _ = writeln!(out, "{tally}");
     (out, failures.is_empty())
@@ -1335,10 +1384,10 @@ impl Tally {
 
     /// `skipped(id, because)`, where `because` is `"only"` or anything else.
     pub fn skipped(&mut self, id: usize, because: &str) {
-        let because = if because == "only" {
-            Skip::Only
-        } else {
-            Skip::Asked
+        let because = match because {
+            "only" => Skip::Only,
+            "filter" => Skip::Filtered,
+            _ => Skip::Asked,
         };
         mark_skipped(&mut self.cases, id, because);
     }

@@ -202,6 +202,10 @@ OPTIONS:
                                 driver on PATH. Nothing is downloaded
     --headed                    Show the browser window instead of running it
                                 headless, to watch a test run
+    -t, --test-name-pattern=<re>
+                                Run only the tests whose full name matches;
+                                the rest are counted as skipped
+    --test-skip-pattern=<re>    Skip the tests whose full name matches
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1414,6 +1418,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut dom = false;
     let mut browser = None;
     let mut headed = false;
+    let mut name_pattern = None;
+    let mut skip_pattern = None;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1482,7 +1488,13 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 headed = true;
             }
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
-            "--timeout" | "-t" => {
+            "-t" | "--test-name-pattern" => {
+                name_pattern = Some(require_value(flag, value)?.to_string());
+            }
+            "--test-skip-pattern" => {
+                skip_pattern = Some(require_value(flag, value)?.to_string());
+            }
+            "--timeout" => {
                 let text = require_value(flag, value)?;
                 timeout = Some(
                     text.parse::<u64>()
@@ -1550,6 +1562,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         dom,
         browser,
         headed,
+        name_pattern,
+        skip_pattern,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1688,27 +1702,6 @@ fn validate_browser_test_config(config: &TestConfig) -> Result<(), String> {
 /// The parent spawns a child per file rather than looping in-process, so a file
 /// that hangs or exits takes only itself down. `--file` is what a child is
 /// invoked with, and is equally a supported way to run one file by hand.
-/// Resolves when the process is asked to stop: ^C, or `SIGTERM` on Unix.
-async fn stopped() {
-    #[cfg(unix)]
-    {
-        let Ok(mut term) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        else {
-            let _ = tokio::signal::ctrl_c().await;
-            return;
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
-
 /// Runs the test files in a browser over WebDriver BiDi.
 ///
 /// What is chosen, and what was passed over, goes to stderr: it describes the
@@ -1771,7 +1764,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         // the run.
         let ran = tokio::select! {
             ran = runner.run(&root, &files, config) => ran,
-            () = stopped() => {
+            () = watch::stopped() => {
                 drop(runner);
                 session.end().await;
                 return ExitCode::from(130);
@@ -1824,7 +1817,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
                         break;
                     }
                 },
-                () = stopped() => break,
+                () = watch::stopped() => break,
             }
         }
         eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
@@ -1834,7 +1827,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
                     break;
                 }
             }
-            () = stopped() => break,
+            () = watch::stopped() => break,
         }
         println!();
     }
@@ -1860,8 +1853,10 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         return run_browser_tests(&config).await;
     }
 
+    let run_options = config.run_options();
     if let Some(file) = config.file {
         guest::test::reset();
+        guest::test::configure_run(run_options);
         guest::test::configure_snapshots(
             Some(std::path::PathBuf::from(&file)),
             config.update_snapshots,
@@ -2017,6 +2012,7 @@ pub(crate) async fn run_tests_unisolated(
     // A watch pass gets a fresh runtime in this host process. Its tally is
     // thread-local host bookkeeping, so start it fresh with the runtime.
     guest::test::reset();
+    guest::test::configure_run(config.run_options());
     guest::test::configure_snapshots(
         None,
         config.update_snapshots,

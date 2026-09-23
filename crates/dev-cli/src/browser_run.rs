@@ -125,6 +125,7 @@ const INSTALL: &str = r#"(send, config) => {
       if (existing === null && store.ci) return "no inline snapshot; --ci does not write them";
       return undefined;
     },
+    test_options() { return JSON.stringify(store.options); },
     test_drained() { post("drained"); },
   };
   Object.defineProperty(globalThis, "__ops", { value: Object.freeze(ops) });
@@ -457,6 +458,7 @@ impl Job {
             config.filters.is_empty(),
         );
         let store = json!({
+            "options": config.run_options().to_json(),
             "update": config.update_snapshots,
             "ci": config.ci,
             "snapshots": snapshots

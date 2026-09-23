@@ -25,6 +25,9 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **`esdev start` and `esdev test --watch` stop on `SIGTERM`**, as they already
+  did on ^C. A CI job being cancelled or a process manager stopping esdev used
+  to leave the server `esdev start` had started still running.
 - **A failing test in a TypeScript or JSX file names the line it was written
   on.** The transform reprints the file, so after the first stripped type the
   lines in a failure's stack were the reprinted code's. The transform now
@@ -55,6 +58,13 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test -t=<regex>` (`--test-name-pattern`) and
+  `--test-skip-pattern=<regex>`** select tests by their full name, groups
+  included, in normal, `--isolation=none` and browser runs. Tests left out are
+  counted as skipped with a `filter:` line, and a group with none selected does
+  not run its `beforeAll`. `-t` was an undocumented alias of `--timeout` in
+  `esdev test`; it now means what it means in Vitest, Jest and Bun, and
+  `--timeout` is unchanged.
 - **Inline snapshots: `toMatchInlineSnapshot` and
   `toThrowErrorMatchingInlineSnapshot`**, as Jest and Vitest spell and write
   them. A missing snapshot is written into the test file on a local run, a

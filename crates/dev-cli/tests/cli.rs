@@ -13464,3 +13464,76 @@ fn test_browser_watch_runs_again_when_a_file_changes() {
     // One browser for both passes.
     assert_eq!(errors.matches("browser: ").count(), 1, "{errors}");
 }
+
+/// `-t` / `--test-name-pattern` and `--test-skip-pattern`: matched against a
+/// test's full name, the tests left out counted rather than hidden, and a group
+/// with nothing selected never set up.
+#[test]
+fn test_name_patterns_select_by_full_name() {
+    let dir = build_dir("t_name_pattern");
+    write_in(
+        &dir,
+        "f.test.js",
+        r#"import { test, describe, beforeAll } from "runtime:test";
+describe("auth", () => {
+  beforeAll(() => console.log("auth setup ran"));
+  test("logs in", () => {});
+  test("logs out", () => {});
+});
+describe("billing", () => {
+  beforeAll(() => console.log("billing setup ran"));
+  test("charges", () => { throw new Error("not selected, never run"); });
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "-t=auth"])
+        .output()
+        .expect("spawn esdev test -t");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("auth setup ran"), "{text}");
+    assert!(!text.contains("billing setup ran"), "{text}");
+    assert!(
+        text.contains("  filter: 1 other test did not match\n  2 passed, 0 failed, 1 skipped"),
+        "{text}"
+    );
+
+    let out = esdev_in(&dir)
+        .args([
+            "test",
+            "--test-name-pattern=auth > logs",
+            "--test-skip-pattern=out$",
+        ])
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        stdout(&out).contains("1 passed, 0 failed, 2 skipped"),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "-t=auth", "--reporter=json"])
+        .output()
+        .expect("spawn esdev test --reporter=json");
+    assert!(
+        stdout(&out).contains(r#""passed":2,"failed":0,"skipped":1"#),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "-t=("])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    assert!(
+        format!("{}{}", stdout(&out), stderr(&out))
+            .contains("--test-name-pattern: Invalid regular expression"),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

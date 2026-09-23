@@ -42,6 +42,22 @@ struct Loop {
 
 impl Drop for Loop {
     fn drop(&mut self) {
+        // Asked to stop, as a person or a CI job would ask, so it stops the
+        // server it started. Killed outright, it cannot, and the server
+        // outlives the test.
+        #[cfg(unix)]
+        {
+            let _ = Command::new("kill")
+                .args(["-TERM", &self.child.id().to_string()])
+                .status();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while Instant::now() < deadline {
+                if let Ok(Some(_)) = self.child.try_wait() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);

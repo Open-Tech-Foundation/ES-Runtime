@@ -629,9 +629,10 @@ fn report_exit(status: std::io::Result<std::process::ExitStatus>) {
     }
 }
 
-/// Resolves after ^C.
+/// Resolves after ^C or `SIGTERM`: either way the server is stopped first,
+/// so it does not outlive the dev loop that started it.
 async fn interrupt() {
-    let _ = tokio::signal::ctrl_c().await;
+    crate::watch::stopped().await;
 }
 
 /// Blocks until a change arrives, then swallows the burst that follows it.

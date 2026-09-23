@@ -17,6 +17,30 @@ That line is the point. A `.only` left in a commit otherwise looks exactly like
 a suite that got faster, and a skipped case missing from the report is the same
 failure as a case that quietly never ran.
 
+## Filtering by name
+
+`-t` runs only the tests whose full name matches a regular expression. The full
+name includes the `describe` groups, joined with ` > `. `--test-skip-pattern`
+leaves out the tests that match:
+
+```sh
+esdev test -t=auth                        # every test under "auth", in every file
+esdev test "-t=auth > logs (in|out)"
+esdev test -t=auth --test-skip-pattern=slow
+```
+
+The value is attached with `=`, as for every esdev flag. Tests left out are
+counted as skipped and named on a line of their own, like `.only`:
+
+```text
+  filter: 12 other tests did not match
+  3 passed, 0 failed, 12 skipped
+```
+
+A group with no selected tests does not run its `beforeAll`. Path filters
+(`esdev test auth`) choose files; `-t` chooses tests within them, and the two
+combine.
+
 ## One process per file
 
 A test suite is where isolation matters most. A file that wedges, exhausts its
