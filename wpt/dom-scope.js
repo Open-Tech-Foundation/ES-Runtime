@@ -14,8 +14,13 @@ export function excluded(path, source = "") {
   if (path.includes("legacy-")) return "legacy behavior is outside the modern-only scope";
   // `createEvent` exists for the modern interface names; the HTML4 aliases are
   // refused by name, and the upstream file tests all of them together.
-  if (path.includes("Document-createEvent-")) return "the HTML4 event-interface aliases are outside the modern-only scope";
-  if (path.includes("insertion-removing-steps/script")) return "script execution is not part of the test DOM";
+  if (path.includes("Document-createEvent")) return "the HTML4 event-interface aliases are outside the modern-only scope";
+  if (path.includes("xpath")) return "XPath is legacy, superseded by the selector APIs";
+  // Geometry: a layout-free DOM has no boxes to hit-test or measure.
+  if (/elementFromPoint|highlightsFromPoint|offsetParent-across|offsetTop-offsetLeft|offsetX-offsetY/.test(path)) {
+    return "requires layout: there are no boxes to measure or hit-test";
+  }
+  if (/currentScript|insertion-removing-steps\/.*script/i.test(path)) return "script execution is not part of the test DOM";
   if (path.includes("tentative")) return "a tentative API, not yet in the specifications";
   // What a page reaches for that a layout-free, single-document DOM has none of.
   if (/\/resources\/testdriver\.js/.test(source)) return "requires WebDriver automation (testdriver.js)";

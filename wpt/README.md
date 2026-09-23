@@ -246,6 +246,13 @@ parser refuses is **skipped with the parser's message** rather than counted as a
 DOM failure: refusing markup that omits optional tags is D93, not a bug to count
 against the DOM. `--keep` leaves the generated file in place to run by hand.
 
+`wpt/chrome-run.js` asks Chrome the same questions. It serves `wpt/upstream`
+over local HTTP and loads each test as a real page, `.html` as itself and
+`.any.js`/`.window.js` through the wrapper page WPT's server would generate.
+`tsr test:dom-wpt-chrome -- --gaps` runs every file with a recorded failure and
+lists only the subtests Chrome passes. That list is the work. A subtest Chrome
+fails too is upstream running ahead of the browsers.
+
 `dom-scope.js` rules out the rest from the path and from the page's source,
 including every script it loads. That covers server substitution, full Web IDL
 exposure, tentative APIs, nested browsing contexts (an `<iframe>`,
