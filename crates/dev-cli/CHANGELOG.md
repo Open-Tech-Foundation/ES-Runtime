@@ -51,10 +51,8 @@ is the point, since none of the three has any business in a deployment.
     first one that can be driven, and prints (to stderr) what it chose and why
     it skipped each one ahead of it. A browser named outright never falls back.
   - **A driver must match its browser's major version.** Chrome and Chromium
-    are separate browsers, because a distribution's driver package moves with
-    its own Chromium and not with a Google Chrome installed beside it:
-    `chromedriver 131 … does not match chrome 120` is a browser skipped, not a
-    session that fails to start.
+    are separate choices. A mismatch (`chromedriver 131 … does not match
+    chrome 120`) skips that browser instead of failing at session start.
   - **A session is opened the standard way for each browser.** Firefox is
     started with `--remote-debugging-port=0` and a throwaway profile, and gets
     a BiDi `session.new`. Chrome, Chromium and Edge are started by their
