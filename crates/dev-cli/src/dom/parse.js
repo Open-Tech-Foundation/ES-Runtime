@@ -187,7 +187,7 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
     if (!parseDocumentRecords) throw new DOMException("This DOM has no document parser attached.", "NotSupportedError");
     const [hasDoctype, records] = parseDocumentRecords(String(source));
     const document = new HTMLDocument();
-    if (hasDoctype) document._preInsert(document.implementation.createDocumentType("html"), null);
+    if (hasDoctype) document._preInsert(document.implementation.createDocumentType("html", "", ""), null);
     const holder = document.createDocumentFragment();
     decode(records, holder);
     const roots = Array.from(holder.childNodes);

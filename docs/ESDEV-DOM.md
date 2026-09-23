@@ -100,6 +100,19 @@ Every mutation goes through the spec algorithms, never through a shortcut. `appe
 
 **Live collections are the part most implementations fake.** `childNodes`, `children`, `getElementsByTagName`, `getElementsByClassName` and `form.elements` are live: a node appended after the collection was obtained must appear in it. The mechanism is a monotonically increasing version counter on the document, bumped by every insert and remove. A collection caches its result plus the version it was computed at, and recomputes when the counter moved. Collections also cache by index for sequential iteration, because `for (i = 0; i < el.children.length; i++)` is common and otherwise quadratic.
 
+**A document is an HTML document or an XML one**, and names behave as they do in
+each. The window's document, `createHTMLDocument()` and a `DOMParser` text/html
+parse are HTML: `createElement("DIV")` makes a `div` and `tagName` reads `DIV`.
+`new Document()` and `createDocument()` are XML, as in a browser: the case is kept,
+and `createElement` makes a null-namespace element unless the document is XHTML.
+Names follow the DOM's current rules, relaxed in 2025 and shipped by Chrome: a name is
+refused only for the characters that would break markup, so `createElement("a!b")`
+succeeds. A qualified name splits the way the specification says, so `a:b:c` is
+prefix `a` and local name `b`. `getElementsByTagName` matches the qualified name;
+`getElementsByTagNameNS` matches namespace and local name. A document reports
+`contentType`, `URL`, `characterSet`, and `compatMode`, which is always `CSS1Compat`
+since the parser has no quirks mode. `baseURI` resolves the first `<base href>`.
+
 Attributes are `Attr` nodes in a `NamedNodeMap`, not a plain string map. `getAttributeNode`, attribute namespaces, and `attributes[0].name` all fall out of that, and `MutationObserver` attribute records need the old value anyway.
 
 `textContent` on an element is a full-subtree walk on read and a replace-all on write. `innerText` and `outerText` are the rendered text, read from the cascade rather than from boxes: `display: none` and `visibility: hidden` text is skipped, a block boundary is a line break (two around a `<p>`), a `<br>` is one, table cells are separated by tabs, white space collapses as the computed `white-space` says and `text-transform` applies. An element that is not rendered — detached, or inside `display: none` — reads its `textContent`, as the specification says. Writing either turns line breaks into `<br>` elements. `CharacterData` has the full editing surface (`appendData`, `insertData`, `deleteData`, `replaceData`, `substringData`), `Text` has `splitText` and `wholeText`, and every edit moves live ranges the way it moved the text.

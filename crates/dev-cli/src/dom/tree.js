@@ -70,12 +70,64 @@ function domError(name, message) {
   return new DOMException(message, name);
 }
 
+// ASCII case changes, which is what the DOM specifies for names: `toLowerCase`
+// would also fold `Ä` to `ä`, and a browser does not.
+const asciiLowercase = (text) => text.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
+const asciiUppercase = (text) => text.replace(/[a-z]+/g, (letters) => letters.toUpperCase());
+
+// A document is an HTML document or an XML one, and names behave differently in
+// each: `new Document()` and `createDocument()` make XML documents, where
+// `createElement("DIV")` keeps its case.
+function isHTMLDocument(document) {
+  return document != null && slots(document)?.html === true;
+}
+
 // An attribute name as this element stores it. HTML elements in an HTML
-// document lowercase it — `setAttribute("tabIndex", 0)` sets `tabindex` — and a
-// namespaced element does not, because in SVG the case is the name.
+// document lowercase it — `setAttribute("tabIndex", 0)` sets `tabindex` — and
+// anything else does not, because in SVG and XML the case is the name.
 function qualified(element, name) {
   name = String(name);
-  return element.namespaceURI === HTML_NAMESPACE ? name.toLowerCase() : name;
+  return element.namespaceURI === HTML_NAMESPACE && isHTMLDocument(element.ownerDocument) ? asciiLowercase(name) : name;
+}
+
+// The DOM's name rules, as relaxed in 2025 and shipped by Chrome: a name is
+// refused for the few characters that would break markup, not for failing the
+// XML `Name` production.
+const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE = "http://www.w3.org/2000/xmlns/";
+function isValidElementLocalName(name) {
+  if (name.length === 0) return false;
+  if (/^[A-Za-z]/.test(name)) return !/[\t\n\f\r \0/>]/.test(name);
+  const [first, ...rest] = name;
+  if (!(first === ":" || first === "_" || first.codePointAt(0) >= 0x80)) return false;
+  return rest.every((character) => /[A-Za-z0-9\-.:_]/.test(character) || character.codePointAt(0) >= 0x80);
+}
+const isValidAttributeLocalName = (name) => name.length > 0 && !/[\t\n\f\r \0/=>]/.test(name);
+const isValidNamespacePrefix = (name) => name.length > 0 && !/[\t\n\f\r \0/>]/.test(name);
+const isValidDoctypeName = (name) => !/[\t\n\f\r \0>]/.test(name);
+
+// "Validate and extract": a namespace and a qualified name become a namespace,
+// prefix and local name, or an error. The split is the specification's strict
+// one, so `a:b:c` is prefix `a` and local name `b`.
+function validateAndExtract(namespace, qualifiedName, context) {
+  namespace = namespace == null || namespace === "" ? null : String(namespace);
+  qualifiedName = String(qualifiedName);
+  let prefix = null;
+  let localName = qualifiedName;
+  if (qualifiedName.includes(":")) {
+    const parts = qualifiedName.split(":");
+    prefix = parts[0];
+    localName = parts[1];
+    if (!isValidNamespacePrefix(prefix)) throw new DOMException(`"${prefix}" is not a valid namespace prefix.`, "InvalidCharacterError");
+  }
+  const valid = context === "attribute" ? isValidAttributeLocalName(localName) : isValidElementLocalName(localName);
+  if (!valid) throw new DOMException(`"${qualifiedName}" is not a valid ${context} name.`, "InvalidCharacterError");
+  if (prefix !== null && namespace === null) throw new DOMException("A prefixed name needs a namespace.", "NamespaceError");
+  if (prefix === "xml" && namespace !== XML_NAMESPACE) throw new DOMException("The xml prefix is reserved for the XML namespace.", "NamespaceError");
+  if ((qualifiedName === "xmlns" || prefix === "xmlns") !== (namespace === XMLNS_NAMESPACE)) {
+    throw new DOMException("xmlns names belong to the XMLNS namespace, and only they do.", "NamespaceError");
+  }
+  return { namespace, prefix, localName };
 }
 
 // The element's own attribute map, read from its slot rather than through the
@@ -237,58 +289,98 @@ export function createTree(events = {}) {
     }
   }
 
+  // The DOM's ordered set of tokens over one attribute: `classList`, and the
+  // `relList`, `htmlFor`, `sandbox` and `sizes` of the elements that have them.
+  // Its tokens are split on ASCII white space only — a no-break space is part
+  // of a token — and an edit that leaves the set empty on an element without
+  // the attribute does not create one.
+  const ASCII_WHITESPACE = /[\t\n\f\r ]/;
   class DOMTokenList {
-    constructor(element) {
-      Object.defineProperty(this, ATTRS, { value: element });
+    constructor(element, attribute = "class", supported = null) {
+      Object.defineProperty(this, ATTRS, { value: { element, attribute, supported } });
       return new Proxy(this, {
         get(target, property, receiver) {
           if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target._tokens()[Number(property)];
           return Reflect.get(target, property, receiver);
         },
+        has(target, property) {
+          if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return Number(property) < target._tokens().length;
+          return Reflect.has(target, property);
+        },
       });
     }
     _tokens() {
-      return [...new Set((this[ATTRS].getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean))];
+      const { element, attribute } = this[ATTRS];
+      const tokens = [];
+      for (const token of (element.getAttribute(attribute) ?? "").split(/[\t\n\f\r ]+/)) {
+        if (token && !tokens.includes(token)) tokens.push(token);
+      }
+      return tokens;
     }
-    _set(tokens) { this[ATTRS].setAttribute("class", tokens.join(" ")); }
+    _update(tokens) {
+      const { element, attribute } = this[ATTRS];
+      if (!element.hasAttribute(attribute) && tokens.length === 0) return;
+      element.setAttribute(attribute, tokens.join(" "));
+    }
     _validate(token) {
       token = String(token);
       if (token === "") throw domError("SyntaxError", "The token must not be empty.");
-      if (/\s/.test(token)) throw domError("InvalidCharacterError", "The token must not contain ASCII whitespace.");
+      if (ASCII_WHITESPACE.test(token)) throw domError("InvalidCharacterError", "The token must not contain ASCII whitespace.");
       return token;
     }
     get length() { return this._tokens().length; }
-    get value() { return this[ATTRS].getAttribute("class") ?? ""; }
-    set value(value) { this[ATTRS].setAttribute("class", String(value)); }
-    item(index) { return this._tokens()[Number(index)] ?? null; }
-    contains(token) { return this._tokens().includes(this._validate(token)); }
+    get value() { const { element, attribute } = this[ATTRS]; return element.getAttribute(attribute) ?? ""; }
+    set value(value) { const { element, attribute } = this[ATTRS]; element.setAttribute(attribute, String(value)); }
+    toString() { return this.value; }
+    item(index) { return this._tokens()[toUnsignedLong(index)] ?? null; }
+    contains(token) { return this._tokens().includes(String(token)); }
     add(...tokens) {
       tokens = tokens.map((token) => this._validate(token));
       const next = this._tokens();
       for (const token of tokens) if (!next.includes(token)) next.push(token);
-      this._set(next);
+      this._update(next);
     }
     remove(...tokens) {
       tokens = new Set(tokens.map((token) => this._validate(token)));
-      this._set(this._tokens().filter((token) => !tokens.has(token)));
+      this._update(this._tokens().filter((token) => !tokens.has(token)));
     }
     toggle(token, force) {
       token = this._validate(token);
-      const has = this._tokens().includes(token);
-      const add = force === undefined ? !has : Boolean(force);
-      if (add && !has) this.add(token);
-      if (!add && has) this.remove(token);
-      return add;
+      const tokens = this._tokens();
+      if (tokens.includes(token)) {
+        if (force === undefined || !force) {
+          this._update(tokens.filter((each) => each !== token));
+          return false;
+        }
+        return true;
+      }
+      if (force === undefined || force) {
+        tokens.push(token);
+        this._update(tokens);
+        return true;
+      }
+      return false;
     }
     replace(token, replacement) {
-      token = this._validate(token);
-      replacement = this._validate(replacement);
+      token = String(token);
+      replacement = String(replacement);
+      if (token === "" || replacement === "") throw domError("SyntaxError", "The token must not be empty.");
+      if (ASCII_WHITESPACE.test(token) || ASCII_WHITESPACE.test(replacement)) {
+        throw domError("InvalidCharacterError", "The token must not contain ASCII whitespace.");
+      }
       const tokens = this._tokens();
-      const index = tokens.indexOf(token);
-      if (index === -1) return false;
-      tokens[index] = replacement;
-      this._set([...new Set(tokens)]);
+      if (!tokens.includes(token)) return false;
+      // The ordered set's replace: the first of either becomes the
+      // replacement, and every other instance of either goes.
+      const first = tokens.findIndex((each) => each === token || each === replacement);
+      this._update(tokens.flatMap((each, index) =>
+        index === first ? [replacement] : each === token || each === replacement ? [] : [each]));
       return true;
+    }
+    supports(token) {
+      const { supported, attribute } = this[ATTRS];
+      if (!supported) throw new TypeError(`The ${attribute} attribute has no supported tokens.`);
+      return supported.has(String(token).toLowerCase());
     }
   }
   iterableLike(DOMTokenList);
@@ -650,8 +742,27 @@ export function createTree(events = {}) {
 
     // Equality is by kind, name and children, never by identity: two separately
     // created trees with the same shape are equal nodes.
+    // The document's base URL: its first `<base href>`, resolved against the
+    // document's URL, or that URL. A document with no URL of its own — made by
+    // `createDocument`, `createHTMLDocument` or `new Document()` — falls back
+    // to the base URL of the document that made it, as in a browser.
+    get baseURI() {
+      const document = this.ownerDocument ?? this;
+      const fallback = document.URL === "about:blank" && currentDocument && currentDocument !== document
+        ? currentDocument.baseURI
+        : document.URL;
+      const base = collect(document, (element) => element.localName === "base" && element.namespaceURI === HTML_NAMESPACE && element.hasAttribute("href"))[0];
+      if (!base) return fallback;
+      try {
+        return new URL(base.getAttribute("href"), fallback).href;
+      } catch {
+        return fallback;
+      }
+    }
     isEqualNode(other) {
-      if (!(other instanceof Node) || other.nodeType !== this.nodeType || other.nodeName !== this.nodeName) return false;
+      // By type, then by what the specification lists for that type — not by
+      // `nodeName`, which for an element depends on its document's kind.
+      if (!(other instanceof Node) || other.nodeType !== this.nodeType) return false;
       if (this instanceof DocumentType && (other.name !== this.name || other.publicId !== this.publicId || other.systemId !== this.systemId)) return false;
       if (this instanceof Element) {
         if (other.namespaceURI !== this.namespaceURI || other.prefix !== this.prefix || other.localName !== this.localName) return false;
@@ -716,7 +827,11 @@ export function createTree(events = {}) {
     cloneNode(deep = false) {
       const document = this.ownerDocument ?? this;
       let clone;
-      if (this instanceof Document) clone = new (this.constructor === HTMLDocument ? HTMLDocument : Document)();
+      if (this instanceof Document) {
+        clone = new (this instanceof HTMLDocument ? HTMLDocument : this instanceof XMLDocument ? XMLDocument : Document)();
+        slots(clone).contentType = slots(this).contentType;
+        slots(clone).url = slots(this).url;
+      }
       else if (this instanceof DocumentFragment) clone = document.createDocumentFragment();
       else if (this instanceof Element) {
         const qualifiedName = this.prefix ? `${this.prefix}:${this.localName}` : this.localName;
@@ -878,15 +993,23 @@ export function createTree(events = {}) {
   }
 
   class Attr extends Node {
-    constructor(name, value, ownerDocument, namespaceURI = null) {
-      super(Node.ATTRIBUTE_NODE, name, ownerDocument);
-      this.name = name;
+    // `name` is the local name when a prefix is given, and otherwise the whole
+    // qualified name, split at its first colon only if it has a namespace.
+    constructor(name, value, ownerDocument, namespaceURI = null, prefix = undefined) {
+      namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+      if (prefix === undefined) {
+        const separator = name.indexOf(":");
+        prefix = namespaceURI === null || separator === -1 ? null : name.slice(0, separator);
+        if (prefix !== null) name = name.slice(separator + 1);
+      }
+      const qualifiedName = prefix === null ? name : `${prefix}:${name}`;
+      super(Node.ATTRIBUTE_NODE, qualifiedName, ownerDocument);
+      this.name = qualifiedName;
       this.value = String(value);
       this.ownerElement = null;
-      this.namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
-      const separator = name.indexOf(":");
-      this.prefix = this.namespaceURI === null || separator === -1 ? null : name.slice(0, separator);
-      this.localName = this.namespaceURI === null || separator === -1 ? name : name.slice(separator + 1);
+      this.namespaceURI = namespaceURI;
+      this.prefix = prefix;
+      this.localName = name;
     }
     get nodeValue() { return this.value; }
     set nodeValue(value) { this.value = String(value ?? ""); }
@@ -951,14 +1074,13 @@ export function createTree(events = {}) {
   NamedNodeMap.prototype[Symbol.iterator] = Array.prototype.values;
 
   class Element extends Node {
+    // `name` is the local name: a prefix is only ever given by
+    // `createElementNS`, which sets it afterwards.
     constructor(name, ownerDocument, namespaceURI = HTML_NAMESPACE) {
-      const html = namespaceURI === HTML_NAMESPACE;
-      super(Node.ELEMENT_NODE, html ? name.toUpperCase() : name, ownerDocument);
+      super(Node.ELEMENT_NODE, name, ownerDocument);
       this.namespaceURI = namespaceURI;
-      const separator = name.indexOf(":");
-      this.prefix = separator === -1 ? null : name.slice(0, separator);
-      this.localName = separator === -1 ? name : name.slice(separator + 1);
-      this.tagName = html ? name.toUpperCase() : name;
+      this.prefix = null;
+      this.localName = name;
       slots(this).attributes = [];
       slots(this).children = null;
       Object.defineProperty(this, NAMED_ATTRIBUTES, { value: new NamedNodeMap(this) });
@@ -966,11 +1088,19 @@ export function createTree(events = {}) {
       Object.defineProperty(this, DATASET, { value: new DOMStringMap(this) });
     }
     get attributes() { return this[NAMED_ATTRIBUTES]; }
+    // The qualified name, uppercased only for an HTML element in an HTML
+    // document — so it follows the element if it is adopted into an XML one.
+    get tagName() {
+      const name = this.prefix === null ? this.localName : `${this.prefix}:${this.localName}`;
+      return this.namespaceURI === HTML_NAMESPACE && isHTMLDocument(this.ownerDocument) ? asciiUppercase(name) : name;
+    }
+    get nodeName() { return this.tagName; }
     getAttribute(name) { return ownAttributes(this).getNamedItem(qualified(this, name))?.value ?? null; }
     getAttributeNames() { return Array.from(ownAttributes(this), (attribute) => attribute.name); }
     getAttributeNode(name) { return ownAttributes(this).getNamedItem(qualified(this, name)); }
     hasAttribute(name) { return this.getAttributeNode(name) !== null; }
     toggleAttribute(name, force) {
+      if (!isValidAttributeLocalName(String(name))) throw domError("InvalidCharacterError", `"${name}" is not a valid attribute name.`);
       name = qualified(this, name);
       const present = this.hasAttribute(name);
       if (force === undefined ? !present : Boolean(force)) {
@@ -984,6 +1114,7 @@ export function createTree(events = {}) {
     getAttributeNodeNS(namespaceURI, localName) { return ownAttributes(this).getNamedItemNS(namespaceURI, localName); }
     hasAttributeNS(namespaceURI, localName) { return this.getAttributeNodeNS(namespaceURI, localName) !== null; }
     setAttribute(name, value) {
+      if (!isValidAttributeLocalName(String(name))) throw domError("InvalidCharacterError", `"${name}" is not a valid attribute name.`);
       name = qualified(this, name);
       const oldValue = this.getAttribute(name);
       // Captured before the change: a node that moves between slots signals the
@@ -996,8 +1127,9 @@ export function createTree(events = {}) {
       if (name === "slot" || name === "name") signalReassignment(this, before);
     }
     setAttributeNS(namespaceURI, qualifiedName, value) {
-      qualifiedName = String(qualifiedName);
-      const attribute = new Attr(qualifiedName, value, this.ownerDocument, namespaceURI);
+      const { namespace, prefix, localName } = validateAndExtract(namespaceURI, qualifiedName, "attribute");
+      qualifiedName = prefix === null ? localName : `${prefix}:${localName}`;
+      const attribute = new Attr(localName, value, this.ownerDocument, namespace, prefix);
       const oldValue = this.getAttributeNS(attribute.namespaceURI, attribute.localName);
       ownAttributes(this).setNamedItemNS(attribute); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: qualifiedName, oldValue });
@@ -1041,6 +1173,7 @@ export function createTree(events = {}) {
     get className() { return this.getAttribute("class") ?? ""; }
     set className(value) { this.setAttribute("class", value); }
     get classList() { return this[CLASS_LIST]; }
+    set classList(value) { this[CLASS_LIST].value = value; }
     get dataset() { return this[DATASET]; }
     get children() {
       const state = slots(this);
@@ -1049,14 +1182,12 @@ export function createTree(events = {}) {
     get firstElementChild() { return this.children.item(0); }
     get lastElementChild() { return this.children.item(this.children.length - 1); }
     get childElementCount() { return this.children.length; }
-    getElementsByTagName(name) {
-      name = String(name);
-      return new HTMLCollection(this, (root) => collect(root, (element) => name === "*" || element.localName === name));
-    }
+    getElementsByTagName(name) { return elementsByQualifiedName(this, String(name)); }
+    getElementsByTagNameNS(namespace, localName) { return elementsByNamespace(this, namespace, localName); }
     getElementsByClassName(names) {
-      const expected = String(names).trim().split(/\s+/).filter(Boolean);
+      const expected = String(names).split(/[\t\n\f\r ]+/).filter(Boolean);
       return new HTMLCollection(this, (root) => collect(root, (element) => {
-        const classes = new Set((element.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean));
+        const classes = new Set((element.getAttribute("class") ?? "").split(/[\t\n\f\r ]+/).filter(Boolean));
         return expected.every((name) => classes.has(name));
       }));
     }
@@ -2367,7 +2498,9 @@ export function createTree(events = {}) {
     if (document === null || document === undefined) return document;
     let owner = document[TEMPLATE_OWNER];
     if (owner === undefined) {
-      owner = new Document();
+      // Of the same kind as the template's document: an HTML document's
+      // templates parse and create as HTML.
+      owner = isHTMLDocument(document) ? new HTMLDocument() : new Document();
       Object.defineProperty(owner, TEMPLATE_OWNER, { value: owner });
       Object.defineProperty(document, TEMPLATE_OWNER, { value: owner });
     }
@@ -2456,12 +2589,29 @@ export function createTree(events = {}) {
       super(Node.DOCUMENT_NODE, "#document", null);
       slots(this).ownerDocument = this;
       slots(this).version = 0;
+      // `new Document()` is an XML document, as it is in a browser; the
+      // HTML-document subclass and `createDocument` say otherwise.
+      slots(this).html = false;
+      slots(this).contentType = "application/xml";
+      slots(this).url = "about:blank";
       // The first document made is the one bare constructors belong to, unless
       // a window said otherwise. A later one — from `DOMParser` or
       // `createHTMLDocument` — does not steal them.
       currentDocument ??= this;
     }
     get documentElement() { return Array.from(this._esdevChildren()).find((node) => node instanceof Element) ?? null; }
+    // What a document says about itself. There is no quirks mode here — the
+    // parser does not implement one — and every document is UTF-8.
+    get contentType() { return slots(this).contentType; }
+    get URL() { return slots(this).url; }
+    get documentURI() { return slots(this).url; }
+    get compatMode() { return "CSS1Compat"; }
+    get characterSet() { return "UTF-8"; }
+    get charset() { return "UTF-8"; }
+    get inputEncoding() { return "UTF-8"; }
+    // Only a document with a browsing context has a location; the window's own
+    // document answers with the window's.
+    get location() { return null; }
     // The ParentNode members, which a Document has as much as an element does:
     // `document.firstElementChild` is the document element.
     get children() {
@@ -2472,28 +2622,26 @@ export function createTree(events = {}) {
     get lastElementChild() { return this.children.item(this.children.length - 1); }
     get childElementCount() { return this.children.length; }
     createElement(name, options = undefined) {
-      // ASCII-lowercased, as the specification requires for an HTML document:
-      // `createElement("DIV")` makes a `div`, and so does the parser.
-      name = String(name).toLowerCase();
-      if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be valid HTML names.");
-      const element = new (elementClass(name))(name, this);
-      return withIsValue(element, options);
+      name = String(name);
+      if (!isValidElementLocalName(name)) throw domError("InvalidCharacterError", `"${name}" is not a valid element name.`);
+      // ASCII-lowercased in an HTML document: `createElement("DIV")` makes a
+      // `div`, and so does the parser. An XML document keeps the case, and makes
+      // an HTML element only if it is XHTML.
+      if (isHTMLDocument(this)) name = asciiLowercase(name);
+      else if (this.contentType !== "application/xhtml+xml") return new Element(name, this, null);
+      return withIsValue(new (elementClass(name))(name, this), options);
     }
     createElementNS(namespaceURI, qualifiedName, options = undefined) {
-      namespaceURI = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
-      qualifiedName = String(qualifiedName);
-      if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
-      if (namespaceURI === HTML_NAMESPACE) {
-        return withIsValue(new (elementClass(qualifiedName))(qualifiedName, this), options);
-      }
-      if (namespaceURI === SVG_NAMESPACE) {
-        // By exact local name: SVG is case-sensitive, so `CIRCLE` is an unknown
-        // element with the base interface, exactly as in a browser.
-        const local = qualifiedName.includes(":") ? qualifiedName.slice(qualifiedName.indexOf(":") + 1) : qualifiedName;
-        return new (SVG_ELEMENT_CLASSES[local] ?? SVGElement)(qualifiedName, this, namespaceURI);
-      }
-      if (namespaceURI === MATHML_NAMESPACE) return new MathMLElement(qualifiedName, this, namespaceURI);
-      return new Element(qualifiedName, this, namespaceURI);
+      const { namespace, prefix, localName } = validateAndExtract(namespaceURI, qualifiedName, "element");
+      let element;
+      if (namespace === HTML_NAMESPACE) element = withIsValue(new (elementClass(localName))(localName, this), options);
+      // By exact local name: SVG is case-sensitive, so `CIRCLE` is an unknown
+      // element with the base interface, exactly as in a browser.
+      else if (namespace === SVG_NAMESPACE) element = new (SVG_ELEMENT_CLASSES[localName] ?? SVGElement)(localName, this, namespace);
+      else if (namespace === MATHML_NAMESPACE) element = new MathMLElement(localName, this, namespace);
+      else element = new Element(localName, this, namespace);
+      element.prefix = prefix;
+      return element;
     }
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
@@ -2547,16 +2695,21 @@ export function createTree(events = {}) {
       if (!(root instanceof Node)) throw new TypeError("createNodeIterator root must be a Node");
       return new NodeIterator(root, whatToShow, filter);
     }
-    createAttribute(name) { return new Attr(String(name), "", this); }
-    createAttributeNS(namespaceURI, qualifiedName) { return new Attr(String(qualifiedName), "", this, namespaceURI); }
-    getElementsByTagName(name) {
+    createAttribute(name) {
       name = String(name);
-      return new HTMLCollection(this, (root) => collect(root, (element) => name === "*" || element.localName === name));
+      if (!isValidAttributeLocalName(name)) throw domError("InvalidCharacterError", `"${name}" is not a valid attribute name.`);
+      return new Attr(isHTMLDocument(this) ? asciiLowercase(name) : name, "", this);
     }
+    createAttributeNS(namespaceURI, qualifiedName) {
+      const { namespace, prefix, localName } = validateAndExtract(namespaceURI, qualifiedName, "attribute");
+      return new Attr(localName, "", this, namespace, prefix);
+    }
+    getElementsByTagName(name) { return elementsByQualifiedName(this, String(name)); }
+    getElementsByTagNameNS(namespace, localName) { return elementsByNamespace(this, namespace, localName); }
     getElementsByClassName(names) {
-      const expected = String(names).trim().split(/\s+/).filter(Boolean);
+      const expected = String(names).split(/[\t\n\f\r ]+/).filter(Boolean);
       return new HTMLCollection(this, (root) => collect(root, (element) => {
-        const classes = new Set((element.getAttribute("class") ?? "").trim().split(/\s+/).filter(Boolean));
+        const classes = new Set((element.getAttribute("class") ?? "").split(/[\t\n\f\r ]+/).filter(Boolean));
         return expected.every((name) => classes.has(name));
       }));
     }
@@ -2591,7 +2744,16 @@ export function createTree(events = {}) {
   // `HTMLDocument`, and code reads that through `Object.prototype.toString`
   // and `instanceof`. `new Document()` and an XML `createDocument()` stay
   // plain, as they do in a browser.
-  class HTMLDocument extends Document {}
+  class HTMLDocument extends Document {
+    constructor() {
+      super();
+      slots(this).html = true;
+      slots(this).contentType = "text/html";
+    }
+  }
+  // What `createDocument` makes: an XML document, whose content type follows
+  // the namespace of its root.
+  class XMLDocument extends Document {}
 
   class DOMImplementation {
     constructor(document, brand) {
@@ -2600,20 +2762,28 @@ export function createTree(events = {}) {
     }
     // Long obsolete, and specified to answer true to everything.
     hasFeature() { return true; }
-    createDocumentType(name, publicId = "", systemId = "") {
+    createDocumentType(name, publicId, systemId) {
+      if (arguments.length < 3) throw new TypeError("createDocumentType takes a name, a public ID and a system ID.");
+      name = String(name);
+      if (!isValidDoctypeName(name)) throw domError("InvalidCharacterError", `"${name}" is not a valid doctype name.`);
       return new DocumentType(name, publicId, systemId, this[IMPLEMENTATION]);
     }
     // An XML document with an optional root element: no XML *parsing* is
     // involved, and this is what a sanitiser building a namespaced document for
     // comparison needs.
-    createDocument(namespaceURI, qualifiedName = "", doctype = null) {
-      const document = new Document();
+    createDocument(namespaceURI, qualifiedName, doctype = null) {
+      if (arguments.length < 2) throw new TypeError("createDocument takes a namespace and a qualified name.");
+      const document = new XMLDocument();
+      const name = qualifiedName === null ? "" : String(qualifiedName);
+      const element = name === "" ? null : document.createElementNS(namespaceURI, name);
       if (doctype !== null && doctype !== undefined) {
         if (!(doctype instanceof DocumentType)) throw new TypeError("createDocument doctype must be a DocumentType");
         document._preInsert(doctype, null);
       }
-      const name = qualifiedName === null || qualifiedName === undefined ? "" : String(qualifiedName);
-      if (name !== "") document._preInsert(document.createElementNS(namespaceURI, name), null);
+      if (element) document._preInsert(element, null);
+      const namespace = namespaceURI == null || namespaceURI === "" ? null : String(namespaceURI);
+      slots(document).contentType = namespace === HTML_NAMESPACE ? "application/xhtml+xml"
+        : namespace === SVG_NAMESPACE ? "image/svg+xml" : "application/xml";
       return document;
     }
     createHTMLDocument(title = undefined) {
@@ -2827,6 +2997,36 @@ export function createTree(events = {}) {
     blockquote: "HTMLQuoteElement",
   })) ELEMENT_CLASSES[element] ??= HTML_INTERFACES[name];
 
+  // The other token lists, each [SameObject] and [PutForwards=value], with the
+  // supported tokens Chrome reports.
+  const LINK_TYPES = new Set(["noopener", "noreferrer", "opener"]);
+  const LINK_RELATIONS = new Set(["alternate", "canonical", "dns-prefetch", "icon", "manifest", "modulepreload", "next",
+    "preconnect", "prefetch", "preload", "prerender", "stylesheet", "apple-touch-icon", "apple-touch-icon-precomposed",
+    "compression-dictionary"]);
+  const SANDBOX_FLAGS = new Set(["allow-downloads", "allow-forms", "allow-modals", "allow-orientation-lock",
+    "allow-pointer-lock", "allow-popups", "allow-popups-to-escape-sandbox", "allow-presentation", "allow-same-origin",
+    "allow-scripts", "allow-storage-access-by-user-activation", "allow-top-navigation",
+    "allow-top-navigation-by-user-activation"]);
+  const tokenLists = new WeakMap();
+  function defineTokenList(Interface, property, attribute, supported) {
+    Object.defineProperty(Interface.prototype, property, {
+      get() {
+        let lists = tokenLists.get(this);
+        if (!lists) tokenLists.set(this, lists = {});
+        return lists[property] ??= new DOMTokenList(this, attribute, supported);
+      },
+      set(value) { this[property].value = value; },
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  for (const name of ["HTMLAnchorElement", "HTMLAreaElement", "HTMLFormElement"]) defineTokenList(HTML_INTERFACES[name], "relList", "rel", LINK_TYPES);
+  defineTokenList(SVG_INTERFACES.SVGAElement, "relList", "rel", LINK_TYPES);
+  defineTokenList(HTML_INTERFACES.HTMLLinkElement, "relList", "rel", LINK_RELATIONS);
+  defineTokenList(HTML_INTERFACES.HTMLLinkElement, "sizes", "sizes", null);
+  defineTokenList(HTML_INTERFACES.HTMLOutputElement, "htmlFor", "for", null);
+  defineTokenList(HTML_INTERFACES.HTMLIFrameElement, "sandbox", "sandbox", SANDBOX_FLAGS);
+
   // A valid custom element name, which is the only kind of element that can be
   // undefined: everything else is defined by being built in.
   const CUSTOM_NAME = /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/;
@@ -2919,6 +3119,27 @@ export function createTree(events = {}) {
     return element;
   }
 
+  // "The list of elements with qualified name": in an HTML document an HTML
+  // element matches the name lowercased and anything else matches it exactly,
+  // and it is the *qualified* name that matches, so `a:b` finds `<a:b>`.
+  function elementsByQualifiedName(root, name) {
+    return new HTMLCollection(root, (from) => {
+      if (name === "*") return collect(from, () => true);
+      const html = isHTMLDocument(from.ownerDocument ?? from);
+      const lower = asciiLowercase(name);
+      return collect(from, (element) => {
+        const qualifiedName = element.prefix === null ? element.localName : `${element.prefix}:${element.localName}`;
+        return html && element.namespaceURI === HTML_NAMESPACE ? qualifiedName === lower : qualifiedName === name;
+      });
+    });
+  }
+  function elementsByNamespace(root, namespace, localName) {
+    namespace = namespace == null || namespace === "" ? null : String(namespace);
+    localName = String(localName);
+    return new HTMLCollection(root, (from) => collect(from, (element) =>
+      (namespace === "*" || element.namespaceURI === namespace) && (localName === "*" || element.localName === localName)));
+  }
+
   function collect(root, predicate) {
     const result = [];
     for (const child of root._esdevChildren()) {
@@ -2930,5 +3151,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, staticNodeList, HTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

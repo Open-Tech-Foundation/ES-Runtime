@@ -51,7 +51,7 @@ const document = tree.setCurrentDocument(new tree.HTMLDocument());
 // `<!doctype html>`, as a node: the starting document is the one the spec for
 // this DOM names, and `document.doctype` is how code asks whether it is in
 // standards mode.
-document.appendChild(document.implementation.createDocumentType("html"));
+document.appendChild(document.implementation.createDocumentType("html", "", ""));
 const html = document.createElement("html");
 const head = document.createElement("head");
 const body = document.createElement("body");
@@ -269,6 +269,13 @@ Object.defineProperty(document, "_eventParent", {
   value: (event) => (event.type === "load" ? null : globalThis),
 });
 const location = new Location();
+// The window's document is the one with a browsing context: its URL and its
+// location are the window's.
+defineIdl(document, {
+  URL: { get: () => location.href },
+  documentURI: { get: () => location.href },
+  location: { get: () => location, set: (value) => { location.href = value; } },
+});
 class History {
   #entries = [{ state: null, href: location.href }];
   #at = 0;

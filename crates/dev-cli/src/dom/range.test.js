@@ -9,7 +9,7 @@ const parse = { parseFragment: () => { throw new Error("not parsed here"); } };
 function fixture() {
   const tree = createTree();
   const ranges = createRanges(tree, parse);
-  const document = new tree.Document();
+  const document = new tree.HTMLDocument();
   ranges.install();
   const root = document.createElement("main");
   document.appendChild(root);
@@ -49,7 +49,7 @@ test("a static range snapshots what a live range follows", () => {
 
 test("refuses a static range that cannot have boundary points", () => {
   const { document, ranges } = fixture();
-  const doctype = document.implementation.createDocumentType("html");
+  const doctype = document.implementation.createDocumentType("html", "", "");
 
   expect(() => new ranges.StaticRange({ startContainer: doctype, startOffset: 0, endContainer: doctype, endOffset: 0 }))
     .toThrow("doctype");

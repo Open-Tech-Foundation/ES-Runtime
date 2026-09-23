@@ -25,6 +25,32 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **Documents are HTML or XML, and names follow the current DOM rules.**
+  `new Document()` and `createDocument()` made HTML documents. They now make XML
+  ones, as in Chrome: the case is kept, `createElement` makes a null-namespace
+  element unless the document is XHTML, and `createDocument` returns an
+  `XMLDocument` whose `contentType` follows its root's namespace. A template's
+  inert contents document is of its template's kind. Name validation is the
+  DOM's 2025 rules in place of the XML `Name` production, and a qualified name
+  splits strictly, so `a:b:c` is prefix `a` and local name `b`.
+  `createAttribute`, `setAttribute` and `createDocumentType` validate too, and
+  case folding is ASCII only. `tagName` depends on the element's document, and
+  `createElement("a:b")` has no prefix. Documents gained `contentType`, `URL`,
+  `documentURI`, `characterSet`/`charset`/`inputEncoding`, `compatMode` and
+  `location` (the window's document reports the window's), and nodes gained
+  `baseURI`. `getElementsByTagName` matches the qualified name, and
+  `getElementsByTagNameNS` exists. `isEqualNode` no longer compares `nodeName`,
+  which separated an XHTML element from its HTML twin.
+  `createDocumentType`/`createDocument` now require their arguments, as Chrome
+  does.
+- **`DOMTokenList` follows the specification.** Tokens are split on ASCII
+  whitespace only; a no-break space is part of a token. `contains` does not
+  validate, so `contains("")` is `false`. An edit that leaves the set empty
+  doesn't create a missing attribute. `replace` is the ordered-set replace, and
+  the list stringifies to its value. `classList` can be assigned. `relList`
+  (`a`, `area`, `form`, `link`, SVG `a`), `htmlFor` (`output`), `sandbox`
+  (`iframe`) and `sizes` (`link`) exist, and `supports()` answers with Chrome's
+  token sets.
 - **An unquoted attribute value keeps its slashes.** `src=/resources/a.js` was
   refused as a missing value, because the parser ended an unquoted value at a
   `/`; HTML ends one only at white space or `>`, and so does the parser now.

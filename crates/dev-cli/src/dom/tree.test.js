@@ -5,10 +5,10 @@ import { createTree } from "./tree.js";
 // With the event classes, because a dialog closing and a popover toggling
 // dispatch events — and a tree built without them would fail asynchronously.
 
-const { CDATASection, CharacterData, Comment, DOMRect, Document, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, isDefined, setCurrentDocument } = createTree(createEvents());
+const { CDATASection, CharacterData, Comment, DOMRect, Document, HTMLDocument, DocumentFragment, DocumentType, Element, HTMLDialogElement, HTMLInputElement, HTMLTableCellElement, HTMLTableRowElement, HTMLTableSectionElement, Node, ProcessingInstruction, SVGElement, Text, ValidityState, isDefined, setCurrentDocument } = createTree(createEvents());
 
 test("inserts fragments as siblings and retains linked-tree identity", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const fragment = document.createDocumentFragment();
   const one = document.createElement("one");
@@ -24,7 +24,7 @@ test("inserts fragments as siblings and retains linked-tree identity", () => {
 });
 
 test("rejects hierarchy violations before mutating the tree", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const child = document.createElement("section");
   document.appendChild(root);
@@ -37,8 +37,8 @@ test("rejects hierarchy violations before mutating the tree", () => {
 });
 
 test("adopts foreign nodes and clones attributes but not tree identity", () => {
-  const left = new Document();
-  const right = new Document();
+  const left = new HTMLDocument();
+  const right = new HTMLDocument();
   const element = left.createElement("card-item");
   element.setAttribute("data-state", "ready");
   element.appendChild(left.createTextNode("hello"));
@@ -55,7 +55,7 @@ test("adopts foreign nodes and clones attributes but not tree identity", () => {
 });
 
 test("attributes are Attr nodes with ownership rules", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const first = document.createElement("a");
   const second = document.createElement("b");
   const attribute = document.createAttribute("title");
@@ -70,7 +70,7 @@ test("attributes are Attr nodes with ownership rules", () => {
 });
 
 test("named node maps expose live numeric attribute entries", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("a");
   const attributes = element.attributes;
   element.setAttribute("first", "one");
@@ -85,7 +85,7 @@ test("named node maps expose live numeric attribute entries", () => {
 });
 
 test("toggleAttribute follows presence and its optional force", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("button");
 
   expect(element.toggleAttribute("disabled")).toBe(true);
@@ -99,7 +99,7 @@ test("toggleAttribute follows presence and its optional force", () => {
 });
 
 test("live NodeLists expose only their indexed own properties", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("div");
   const nodes = root.childNodes;
 
@@ -110,7 +110,7 @@ test("live NodeLists expose only their indexed own properties", () => {
 });
 
 test("live HTMLCollections expose indexed and named properties", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("div");
   const collection = root.getElementsByTagName("span");
   const first = document.createElement("span");
@@ -127,7 +127,7 @@ test("live HTMLCollections expose indexed and named properties", () => {
 });
 
 test("namespace attribute access treats null namespaces as ordinary attributes", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("a");
   element.setAttribute("title", "first");
 
@@ -140,7 +140,7 @@ test("namespace attribute access treats null namespaces as ordinary attributes",
 });
 
 test("namespace attribute operations distinguish local names and preserve clones", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("use");
   const xlink = "http://www.w3.org/1999/xlink";
   element.setAttributeNS(xlink, "xlink:href", "#first");
@@ -158,7 +158,7 @@ test("namespace attribute operations distinguish local names and preserve clones
 });
 
 test("ordinary colon attributes retain their complete local name", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("use");
   element.setAttribute("xlink:href", "#first");
 
@@ -167,7 +167,7 @@ test("ordinary colon attributes retain their complete local name", () => {
 });
 
 test("createElementNS preserves modern namespace identity", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const use = document.createElementNS("http://www.w3.org/2000/svg", "xlink:use");
   const input = document.createElementNS("http://www.w3.org/1999/xhtml", "input");
@@ -180,7 +180,7 @@ test("createElementNS preserves modern namespace identity", () => {
 });
 
 test("DOM internals do not collide with framework child bookkeeping", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("div");
   element.append(document.createElement("span"));
   element._children = { framework: true };
@@ -190,7 +190,7 @@ test("DOM internals do not collide with framework child bookkeeping", () => {
 });
 
 test("dialog open reflects as a boolean attribute", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const dialog = document.createElement("dialog");
 
   expect(dialog).toBeInstanceOf(HTMLDialogElement);
@@ -201,7 +201,7 @@ test("dialog open reflects as a boolean attribute", () => {
 });
 
 test("documents return the first matching element by ID in tree order", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const first = document.createElement("a");
   const second = document.createElement("b");
@@ -217,7 +217,7 @@ test("documents return the first matching element by ID in tree order", () => {
 });
 
 test("class lists are live unique token collections", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("a");
   const classes = element.classList;
   element.className = "one one two";
@@ -236,17 +236,20 @@ test("class lists are live unique token collections", () => {
 });
 
 test("class list token validation happens before mutations", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("a");
   element.className = "ready";
 
   expect(() => element.classList.add("next", "bad token")).toThrow("whitespace");
-  expect(() => element.classList.contains("")).toThrow("empty");
   expect(element.className).toBe("ready");
+  // Only the methods that edit validate: asking about a token that could never
+  // be in the list is just false.
+  expect(element.classList.contains("")).toBe(false);
+  expect(element.classList.contains("a b")).toBe(false);
 });
 
 test("datasets stay live with data attributes and enumerate property names", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("article");
   const dataset = element.dataset;
   element.setAttribute("data-user-id", "first");
@@ -262,7 +265,7 @@ test("datasets stay live with data attributes and enumerate property names", () 
 });
 
 test("datasets use HTML name conversion and reject unrepresentable property names", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("article");
   element.dataset.recordId = "one";
   element.setAttribute("data--leading", "two");
@@ -274,7 +277,7 @@ test("datasets use HTML name conversion and reject unrepresentable property name
 });
 
 test("input indeterminate state defaults to false and does not reflect an attribute", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const input = document.createElement("input");
   input.type = "checkbox";
 
@@ -285,8 +288,8 @@ test("input indeterminate state defaults to false and does not reflect an attrib
 });
 
 test("replaceChild retains the following sibling and imports attribute ownership", () => {
-  const left = new Document();
-  const right = new Document();
+  const left = new HTMLDocument();
+  const right = new HTMLDocument();
   const root = left.createElement("main");
   const first = left.createElement("first");
   const last = left.createElement("last");
@@ -302,7 +305,7 @@ test("replaceChild retains the following sibling and imports attribute ownership
 });
 
 test("textContent replaces descendants and excludes comments", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   root.append(new Text("one", document), document.createComment("ignored"), "two");
   expect(root.textContent).toBe("onetwo");
@@ -312,7 +315,7 @@ test("textContent replaces descendants and excludes comments", () => {
 });
 
 test("contains includes the receiver and follows only descendant links", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const child = document.createElement("article");
   const detached = document.createElement("aside");
@@ -328,7 +331,7 @@ test("contains includes the receiver and follows only descendant links", () => {
 });
 
 test("node lists and HTML collections are live, indexed, and named", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const childNodes = root.childNodes;
   const children = root.children;
@@ -355,7 +358,7 @@ test("node lists and HTML collections are live, indexed, and named", () => {
 });
 
 test("node lists iterate snapshots with forEach", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   root.append(document.createElement("a"), document.createElement("b"));
   const seen = [];
@@ -368,7 +371,7 @@ test("node lists iterate snapshots with forEach", () => {
 });
 
 test("exposes template content as a same-object prototype accessor", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const template = document.createElement("template");
   const fragment = template.content;
 
@@ -380,7 +383,7 @@ test("exposes template content as a same-object prototype accessor", () => {
 });
 
 test("reads validity flags live from one ValidityState per control", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const input = document.createElement("input");
   input.required = true;
   const validity = input.validity;
@@ -396,7 +399,7 @@ test("reads validity flags live from one ValidityState per control", () => {
 });
 
 test("collects the controls a fieldset contains, live", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const fieldset = document.createElement("fieldset");
   const root = document.createElement("main");
   document.appendChild(root);
@@ -411,7 +414,7 @@ test("collects the controls a fieldset contains, live", () => {
 });
 
 test("compares two trees by shape rather than by identity", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const build = (className) => {
     const root = document.createElement("div");
     const child = document.createElement("p");
@@ -433,7 +436,7 @@ test("compares two trees by shape rather than by identity", () => {
 });
 
 test("reports tree order against the common ancestor", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const first = document.createElement("i");
   const second = document.createElement("b");
@@ -450,7 +453,7 @@ test("reports tree order against the common ancestor", () => {
 });
 
 test("merges adjacent text nodes and drops empty ones", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("p");
   const nested = document.createElement("i");
   nested.append(document.createTextNode("x"), document.createTextNode("y"));
@@ -464,22 +467,22 @@ test("merges adjacent text nodes and drops empty ones", () => {
 });
 
 test("holds one doctype, before the document element", () => {
-  const document = new Document();
-  const doctype = document.implementation.createDocumentType("html");
+  const document = new HTMLDocument();
+  const doctype = document.implementation.createDocumentType("html", "", "");
   document.appendChild(doctype);
   document.appendChild(document.createElement("html"));
 
   expect([doctype.name, doctype.nodeType, doctype.nodeName, doctype.publicId, doctype.textContent]).toEqual(["html", 10, "html", "", null]);
   expect(document.doctype).toBe(doctype);
   expect(doctype).toBeInstanceOf(DocumentType);
-  expect(() => document.appendChild(document.implementation.createDocumentType("html"))).toThrow("doctype");
-  const fresh = new Document();
+  expect(() => document.appendChild(document.implementation.createDocumentType("html", "", ""))).toThrow("doctype");
+  const fresh = new HTMLDocument();
   fresh.appendChild(fresh.createElement("html"));
-  expect(() => fresh.appendChild(fresh.implementation.createDocumentType("html"))).toThrow("precede");
+  expect(() => fresh.appendChild(fresh.implementation.createDocumentType("html", "", ""))).toThrow("precede");
 });
 
 test("creates whole HTML documents through the implementation", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const made = document.implementation.createHTMLDocument("Made");
 
   expect(document.implementation).toBe(document.implementation);
@@ -493,7 +496,7 @@ test("creates whole HTML documents through the implementation", () => {
 });
 
 test("makes processing instructions and refuses CDATA in HTML", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const instruction = document.createProcessingInstruction("xml-stylesheet", 'href="x"');
 
   expect([instruction.target, instruction.data, instruction.nodeType]).toEqual(["xml-stylesheet", 'href="x"', 7]);
@@ -507,7 +510,7 @@ test("makes processing instructions and refuses CDATA in HTML", () => {
 });
 
 test("orders table rows by section rather than by position", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const table = document.createElement("table");
   const head = document.createElement("thead");
   const foot = document.createElement("tfoot");
@@ -534,7 +537,7 @@ test("orders table rows by section rather than by position", () => {
 });
 
 test("indexes rows and cells against the tree they are in", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const table = document.createElement("table");
   const body = document.createElement("tbody");
   const row = document.createElement("tr");
@@ -552,7 +555,7 @@ test("indexes rows and cells against the tree they are in", () => {
 });
 
 test("answers geometry with zeros instead of throwing", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const element = document.createElement("div");
   document.appendChild(element);
   const rect = element.getBoundingClientRect();
@@ -570,19 +573,19 @@ test("answers geometry with zeros instead of throwing", () => {
 });
 
 test("lowercases an HTML element name and keeps a namespaced one", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
 
   expect(document.createElement("DIV").localName).toBe("div");
   expect(document.createElement("DIV").tagName).toBe("DIV");
   expect(document.createElement("Input").localName).toBe("input");
   expect(document.createElementNS("http://www.w3.org/2000/svg", "linearGradient").localName).toBe("linearGradient");
-  expect(() => document.createElement("1bad")).toThrow("valid HTML names");
+  expect(() => document.createElement("1bad")).toThrow("not a valid element name");
 });
 
 test("a constructed node belongs to the current document", () => {
   // The window names it; with no window the first document made is it, so this
   // case says which one it means rather than depending on test order.
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const root = document.createElement("main");
   document.appendChild(root);
 
@@ -596,7 +599,7 @@ test("a constructed node belongs to the current document", () => {
 });
 
 test("a fragment and a shadow root answer getElementById", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const fragment = new DocumentFragment();
   const inside = document.createElement("b");
   inside.id = "in-fragment";
@@ -616,7 +619,7 @@ test("a fragment and a shadow root answer getElementById", () => {
 });
 
 test("a radio group holds one checked button, however it was checked", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const form = document.createElement("form");
   document.appendChild(form);
   const radio = (name) => {
@@ -648,7 +651,7 @@ test("a radio group holds one checked button, however it was checked", () => {
 });
 
 test("reflects the ARIA mixin to its attributes", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const element = document.createElement("div");
 
   expect(element.ariaLabel).toBeNull();
@@ -664,7 +667,7 @@ test("reflects the ARIA mixin to its attributes", () => {
 });
 
 test("refuses a shadow root on an element that cannot host one", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const hosts = ["div", "span", "section", "p"].map((name) => document.createElement(name).attachShadow({ mode: "open" }));
 
   expect(hosts.every((root) => root.mode === "open")).toBe(true);
@@ -675,7 +678,7 @@ test("refuses a shadow root on an element that cannot host one", () => {
 });
 
 test("a template's content is inert until it is cloned into a tree", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const template = document.createElement("template");
   const inside = document.createElement("x-inert");
   template.content.appendChild(inside);
@@ -689,7 +692,7 @@ test("a template's content is inert until it is cloned into a tree", () => {
 });
 
 test("moves a node without disconnecting it", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const from = document.createElement("div");
   const to = document.createElement("div");
   const root = document.createElement("main");
@@ -716,7 +719,7 @@ test("moves a node without disconnecting it", () => {
 });
 
 test("opens and closes a dialog", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const dialog = document.createElement("dialog");
   document.appendChild(dialog);
 
@@ -733,7 +736,7 @@ test("opens and closes a dialog", () => {
 });
 
 test("toggles a popover and refuses one that is not", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const popover = document.createElement("div");
   popover.setAttribute("popover", "");
   document.appendChild(popover);
@@ -752,7 +755,7 @@ test("toggles a popover and refuses one that is not", () => {
 });
 
 test("lowercases an attribute name for an HTML element only", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const element = document.createElement("div");
 
   element.setAttribute("tabIndex", "0");
@@ -771,8 +774,8 @@ test("lowercases an attribute name for an HTML element only", () => {
 });
 
 test("a document has no text content to read or write", () => {
-  const document = setCurrentDocument(new Document());
-  document.appendChild(document.implementation.createDocumentType("html"));
+  const document = setCurrentDocument(new HTMLDocument());
+  document.appendChild(document.implementation.createDocumentType("html", "", ""));
   const root = document.createElement("html");
   document.appendChild(root);
   root.appendChild(document.createTextNode("text"));
@@ -785,7 +788,7 @@ test("a document has no text content to read or write", () => {
 });
 
 test("attribute work does not go through the public accessor", () => {
-  const document = setCurrentDocument(new Document());
+  const document = setCurrentDocument(new HTMLDocument());
   const original = Object.getOwnPropertyDescriptor(Element.prototype, "attributes");
   let reads = 0;
   Object.defineProperty(Element.prototype, "attributes", {
@@ -815,7 +818,7 @@ test("attribute work does not go through the public accessor", () => {
 // operation nobody performed. Preact's keyed-diff suite caught `remove()`
 // dispatching `removeChild`.
 test("a mutation method is not observable as another one", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("ol");
   document.appendChild(root);
   const names = ["appendChild", "insertBefore", "removeChild", "replaceChild"];

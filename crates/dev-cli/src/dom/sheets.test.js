@@ -24,7 +24,7 @@ function fixture({ sheets = {}, media = () => true } = {}) {
     return sheets[text];
   };
   const module = createSheets({ tree, parse, selectors, css, mediaMatches: media, colors });
-  const document = new tree.Document();
+  const document = new tree.HTMLDocument();
   const html = document.createElement("html");
   const head = document.createElement("head");
   const body = document.createElement("body");

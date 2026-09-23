@@ -3,10 +3,10 @@ import { createEvents } from "./events.js";
 import { createTree } from "./tree.js";
 
 const events = createEvents();
-const { Document } = createTree(events);
+const { HTMLDocument } = createTree(events);
 
 test("dispatches capture, target and bubble over a frozen ancestor path", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const root = document.createElement("main");
   const child = document.createElement("button");
   document.appendChild(root); root.appendChild(child);
@@ -22,7 +22,7 @@ test("dispatches capture, target and bubble over a frozen ancestor path", () => 
 });
 
 test("honors once, passive, signals, and immediate propagation", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const target = document.createElement("button");
   const calls = [];
   const controller = new AbortController();
@@ -52,7 +52,7 @@ test("event constructors preserve their defined values", () => {
 });
 
 test("inline handlers run during modern event dispatch", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const target = document.createElement("button");
   const calls = [];
   target.onclick = (received) => { calls.push(received.type); received.preventDefault(); };
@@ -83,7 +83,7 @@ test("constructed targets expose standard event state and listener options", () 
 });
 
 test("creates an event by modern interface name and refuses the HTML4 aliases", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const target = document.createElement("div");
   document.appendChild(target);
   const event = events.createLegacy("Event");
@@ -105,7 +105,7 @@ test("creates an event by modern interface name and refuses the HTML4 aliases", 
 });
 
 test("a closed root is not in the path a listener outside it sees", () => {
-  const document = new Document();
+  const document = new HTMLDocument();
   const body = document.createElement("body");
   document.appendChild(body);
   const host = document.createElement("div");
