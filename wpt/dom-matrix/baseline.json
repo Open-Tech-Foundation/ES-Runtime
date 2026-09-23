@@ -7047,10 +7047,224 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "every-html-name-has-its-interface",
+      "chrome": {
+        "result": [
+          [
+            "HTMLScriptElement",
+            "HTMLImageElement",
+            "HTMLLinkElement",
+            "HTMLMetaElement",
+            "HTMLIFrameElement",
+            "HTMLVideoElement",
+            "HTMLAudioElement"
+          ],
+          [
+            "HTMLHeadingElement",
+            "HTMLHeadingElement",
+            "HTMLParagraphElement",
+            "HTMLSpanElement",
+            "HTMLBRElement",
+            "HTMLUListElement",
+            "HTMLLIElement"
+          ],
+          [
+            "HTMLModElement",
+            "HTMLModElement",
+            "HTMLQuoteElement",
+            "HTMLQuoteElement"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "HTMLUnknownElement",
+            "HTMLElement"
+          ],
+          "[object HTMLScriptElement]"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "HTMLScriptElement",
+            "HTMLImageElement",
+            "HTMLLinkElement",
+            "HTMLMetaElement",
+            "HTMLIFrameElement",
+            "HTMLVideoElement",
+            "HTMLAudioElement"
+          ],
+          [
+            "HTMLHeadingElement",
+            "HTMLHeadingElement",
+            "HTMLParagraphElement",
+            "HTMLSpanElement",
+            "HTMLBRElement",
+            "HTMLUListElement",
+            "HTMLLIElement"
+          ],
+          [
+            "HTMLModElement",
+            "HTMLModElement",
+            "HTMLQuoteElement",
+            "HTMLQuoteElement"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "HTMLUnknownElement",
+            "HTMLElement"
+          ],
+          "[object HTMLScriptElement]"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "HTMLScriptElement",
+            "HTMLImageElement",
+            "HTMLLinkElement",
+            "HTMLMetaElement",
+            "HTMLIFrameElement",
+            "HTMLVideoElement",
+            "HTMLAudioElement"
+          ],
+          [
+            "HTMLHeadingElement",
+            "HTMLHeadingElement",
+            "HTMLParagraphElement",
+            "HTMLSpanElement",
+            "HTMLBRElement",
+            "HTMLUListElement",
+            "HTMLLIElement"
+          ],
+          [
+            "HTMLModElement",
+            "HTMLModElement",
+            "HTMLQuoteElement",
+            "HTMLQuoteElement"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "HTMLUnknownElement",
+            "HTMLElement"
+          ],
+          "[object HTMLScriptElement]"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "HTMLScriptElement",
+            "HTMLImageElement",
+            "HTMLLinkElement",
+            "HTMLMetaElement",
+            "HTMLIFrameElement",
+            "HTMLVideoElement",
+            "HTMLAudioElement"
+          ],
+          [
+            "HTMLHeadingElement",
+            "HTMLHeadingElement",
+            "HTMLParagraphElement",
+            "HTMLSpanElement",
+            "HTMLBRElement",
+            "HTMLUListElement",
+            "HTMLLIElement"
+          ],
+          [
+            "HTMLModElement",
+            "HTMLModElement",
+            "HTMLQuoteElement",
+            "HTMLQuoteElement"
+          ],
+          [
+            true,
+            true
+          ],
+          [
+            "HTMLUnknownElement",
+            "HTMLElement"
+          ],
+          "[object HTMLScriptElement]"
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "a-template-content-lives-in-its-own-document",
+      "chrome": {
+        "result": [
+          false,
+          false,
+          true,
+          true,
+          true,
+          "HierarchyRequestError",
+          true,
+          false,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          false,
+          false,
+          true,
+          true,
+          true,
+          "HierarchyRequestError",
+          true,
+          false,
+          true
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          true,
+          true,
+          true,
+          true,
+          false,
+          null,
+          true,
+          true,
+          true
+        ]
+      },
+      "jsdom": {
+        "result": [
+          false,
+          false,
+          true,
+          true,
+          true,
+          "HierarchyRequestError",
+          true,
+          false,
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 101,
+    "match": 103,
     "intentional-limit": 2,
     "drift": 0
   }

@@ -2374,6 +2374,73 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "tree",
+    name: "every-html-name-has-its-interface",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const name = (tag) => document.createElement(tag).constructor.name;
+      return [
+        // The ones a framework is most likely to branch on.
+        [name("script"), name("img"), name("link"), name("meta"), name("iframe"), name("video"), name("audio")],
+        [name("h1"), name("h6"), name("p"), name("span"), name("br"), name("ul"), name("li")],
+        // Two names sharing one interface, and two sharing another.
+        [name("ins"), name("del"), name("blockquote"), name("q")],
+        // A media element is a media element before it is an HTML element.
+        [
+          document.createElement("video") instanceof window.HTMLMediaElement,
+          document.createElement("video") instanceof window.HTMLElement,
+        ],
+        // A name the language does not have is unknown; a name it could still be
+        // given is not.
+        [name("nonsense"), name("my-thing")],
+        // And the interface says its own name.
+        Object.prototype.toString.call(document.createElement("script")),
+      ];
+    },
+  },
+  {
+    group: "tree",
+    name: "a-template-content-lives-in-its-own-document",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const template = document.createElement("template");
+      const child = template.content.appendChild(document.createElement("span"));
+      const inert = document.implementation.createHTMLDocument("");
+      const before = template.content.ownerDocument;
+      const result = [
+        // The content belongs to the template contents owner, not to the
+        // template's own document.
+        before === document,
+        before === template.ownerDocument,
+        // Adopting the content itself is allowed and takes its children with it.
+        inert.adoptNode(template.content) === template.content,
+        template.content.ownerDocument === inert,
+        child.ownerDocument === inert,
+        // A shadow root is a fragment with a host, and cannot be adopted away.
+        errorName(() => {
+          const host = document.createElement("div");
+          inert.adoptNode(host.attachShadow({ mode: "closed" }));
+        }),
+      ];
+      // Adopting the *element* runs the template adopting steps: the content
+      // follows into the new document's own contents owner.
+      const source = document.implementation.createHTMLDocument("");
+      const moving = source.createElement("template");
+      const inner = moving.content.appendChild(source.createElement("i"));
+      const contentDocument = moving.content.ownerDocument;
+      const target = document.implementation.createHTMLDocument("");
+      target.adoptNode(moving);
+      result.push(
+        moving.ownerDocument === target,
+        moving.content.ownerDocument === contentDocument,
+        inner.ownerDocument === moving.content.ownerDocument,
+      );
+      return result;
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

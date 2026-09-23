@@ -6444,12 +6444,20 @@ fn test_dom_focus_returns_to_body_when_the_active_subtree_is_removed() {
         &dir,
         "focus-removal.test.mjs",
         "import { test, assertEquals } from 'runtime:test';\n\
-         test('removing a focused descendant clears focus once', () => {\n\
+         test('removing a focused descendant clears focus silently', () => {\n\
            const wrapper = document.createElement('section'); const input = document.createElement('input');\n\
-           let blurred = 0; input.addEventListener('blur', () => { blurred += 1; });\n\
+           let events = [];\n\
+           for (const type of ['blur', 'focusout', 'focus', 'focusin']) {\n\
+             input.addEventListener(type, () => events.push(type));\n\
+             document.body.addEventListener(type, () => events.push(`body:${type}`), true);\n\
+           }\n\
            wrapper.appendChild(input); document.body.appendChild(wrapper); input.focus();\n\
+           events = [];\n\
            wrapper.remove();\n\
-           assertEquals(document.activeElement, document.body); assertEquals(blurred, 1);\n\
+           // A removal resets the focus and fires nothing: the element that would\n\
+           // receive the event is no longer in the document. Verified upstream by\n\
+           // dom/nodes/insertion-removing-steps/blur-event.window.js.\n\
+           assertEquals(document.activeElement, document.body); assertEquals(events, []);\n\
          });\n",
     );
     let ran = esdev_in(&dir)

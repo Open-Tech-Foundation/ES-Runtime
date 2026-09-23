@@ -137,10 +137,15 @@ function isFocusable(element) {
   return ["a", "area"].includes(element.localName) && element.hasAttribute("href");
 }
 
-function changeFocus(next) {
+// `quietly` is what a *removal* does: the focused element leaving the tree resets
+// `document.activeElement` and fires nothing at all. A browser is explicit about
+// it — no `blur`, no `focusout`, and no `focus` on whatever inherits the focus —
+// because the element that would receive the event is no longer in the document.
+function changeFocus(next, quietly = false) {
   const previous = activeElement;
   if (previous === next) return;
   activeElement = next;
+  if (quietly) return;
   if (previous) {
     previous.dispatchEvent(new events.FocusEvent("blur", { relatedTarget: next }));
     previous.dispatchEvent(new events.FocusEvent("focusout", { bubbles: true, relatedTarget: next }));
@@ -202,7 +207,7 @@ defineIdl(document, {
 Object.defineProperty(document, "_activeElementRemoved", {
   value(node) {
     for (let current = activeElement; current; current = current.parentNode) {
-      if (current === node) { changeFocus(body); return; }
+      if (current === node) { changeFocus(body, true); return; }
     }
   },
 });

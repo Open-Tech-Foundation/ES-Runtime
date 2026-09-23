@@ -25,6 +25,21 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **Every HTML name has its interface.** `<script>` was an `HTMLElement`, and so
+  were `<img>`, `<link>`, `<meta>`, `<iframe>`, `<video>`, the six headings and
+  forty more; a test that branches on the interface, or logs one, read the wrong
+  answer. All 112 element names now answer as Chrome does, over the one shared
+  base a browser has (`HTMLMediaElement`), each exposed as a global — generated
+  from the name table rather than declared one by one, like the SVG table before
+  it. A name the language does not have is an `HTMLUnknownElement`; a hyphenated
+  one stays an `HTMLElement`, because it could still be defined.
+- **A template's content lives in its own document.** `template.content.ownerDocument`
+  was the template's own document; in a browser it is the *template contents
+  owner*, a second inert document, and code reads the difference. Adopting the
+  content is allowed and takes its children along; adopting the template
+  *element* runs HTML's template adopting steps, so the content follows into the
+  new document's contents owner, nested templates included. A shadow root — a
+  fragment with a host — now refuses adoption with `HierarchyRequestError`.
 - **A declaration block holds longhands, and serializes shorthands back out of
   them** — the CSS OM's own model, which is what `style.length`, `style.item()`,
   `cssText` and the `style` attribute all read from. `el.style.border = "1px
@@ -447,6 +462,11 @@ is the point, since none of the three has any business in a deployment.
   and stable library stylesheet exports in the build guides.
 
 ### Fixed
+- **Removing the focused element fires nothing.** It fired `blur` and
+  `focusout`, and a browser fires neither: the element that would receive the
+  event has left the document. `document.activeElement` still returns to the
+  body. Two upstream WPT subtests were failing on it, and one of ours asserted
+  the old behaviour.
 - **A value is checked against the property, from a table read out of Chrome.**
   The hand-written version of this knowledge was wrong twice — it thought `cx`
   took only a number, then that a bare `0` was a valid `transition-duration` —

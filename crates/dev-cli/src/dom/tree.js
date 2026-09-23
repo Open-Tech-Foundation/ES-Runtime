@@ -2216,10 +2216,29 @@ export function createTree(events = {}) {
     for (const slot of collect(root, (element) => element instanceof HTMLSlotElement)) slot._signalChange();
   }
 
+  // The "template contents owner": a second, inert document that owns a
+  // document's templates' contents. `template.content.ownerDocument` is *not*
+  // the template's own document, and code reads that — a fragment moved out of a
+  // template is adopted, while the fragment itself stays where it is. The owner
+  // is its own owner, so a template inside template content does not start a
+  // chain of documents.
+  const TEMPLATE_OWNER = Symbol("esdev DOM template contents owner");
+
+  function templateContentsOwner(document) {
+    if (document === null || document === undefined) return document;
+    let owner = document[TEMPLATE_OWNER];
+    if (owner === undefined) {
+      owner = new Document();
+      Object.defineProperty(owner, TEMPLATE_OWNER, { value: owner });
+      Object.defineProperty(document, TEMPLATE_OWNER, { value: owner });
+    }
+    return owner;
+  }
+
   class HTMLTemplateElement extends HTMLElement {
     constructor(name, ownerDocument) {
       super(name, ownerDocument);
-      this[TEMPLATE_CONTENT] = new DocumentFragment(ownerDocument);
+      this[TEMPLATE_CONTENT] = new DocumentFragment(templateContentsOwner(ownerDocument));
       // Inert: a template's content belongs to no browsing context, so a custom
       // element written inside one is not upgraded and is not `:defined` until
       // the content is cloned into a tree that is.
@@ -2318,7 +2337,7 @@ export function createTree(events = {}) {
       // `createElement("DIV")` makes a `div`, and so does the parser.
       name = String(name).toLowerCase();
       if (!/^[a-z][a-z0-9_:-]*$/.test(name)) throw domError("InvalidCharacterError", "Element names must be valid HTML names.");
-      const element = new (ELEMENT_CLASSES[name] ?? HTMLElement)(name, this);
+      const element = new (elementClass(name))(name, this);
       return withIsValue(element, options);
     }
     createElementNS(namespaceURI, qualifiedName, options = undefined) {
@@ -2326,7 +2345,7 @@ export function createTree(events = {}) {
       qualifiedName = String(qualifiedName);
       if (!/^[A-Za-z][A-Za-z0-9_:-]*$/.test(qualifiedName)) throw domError("InvalidCharacterError", "Element names must be valid XML qualified names.");
       if (namespaceURI === HTML_NAMESPACE) {
-        return withIsValue(new (ELEMENT_CLASSES[qualifiedName] ?? HTMLElement)(qualifiedName, this), options);
+        return withIsValue(new (elementClass(qualifiedName))(qualifiedName, this), options);
       }
       if (namespaceURI === SVG_NAMESPACE) {
         // By exact local name: SVG is case-sensitive, so `CIRCLE` is an unknown
@@ -2408,8 +2427,11 @@ export function createTree(events = {}) {
     }
     adoptNode(node) {
       if (!(node instanceof Node) || node instanceof Document) throw domError("NotSupportedError", "A document cannot be adopted.");
+      // A shadow root is a fragment with a host, and its host is what owns it: it
+      // cannot be adopted away on its own.
+      if (node instanceof ShadowRoot) throw domError("HierarchyRequestError", "A shadow root cannot be adopted.");
       if (node.parentNode) node.parentNode._remove(node);
-      descendants(node, (item) => { slots(item).ownerDocument = this; });
+      adoptInto(this, node);
       return node;
     }
     importNode(node, deep = false) {
@@ -2610,9 +2632,75 @@ export function createTree(events = {}) {
     fieldset: HTMLFieldSetElement,
   };
 
+  // The rest of the HTML interfaces, as Chrome answers them. `<script>` is an
+  // `HTMLScriptElement`, `<h1>` an `HTMLHeadingElement`, `<ins>` and `<del>`
+  // both `HTMLModElement` — a test that branches on the interface, or logs one,
+  // reads the difference. Generated from the name map rather than declared one
+  // by one, like the SVG table, because nothing about them differs but the name.
+  //
+  // The families above are absent here: they carry behaviour, and this adds only
+  // identity.
+  class HTMLMediaElement extends HTMLElement {}
+  // Not an HTML element at all: a name the language does not have. `<my-thing>`
+  // is an `HTMLElement` because it could still be defined; `<nonsense>` cannot.
+  class HTMLUnknownElement extends HTMLElement {}
+
+  // Seeded with the interfaces that already exist, so a name they own keeps the
+  // class that carries its behaviour: generating a second, empty
+  // `HTMLAnchorElement` would take `href` and `tabIndex` away from `<a>`.
+  const HTML_INTERFACES = {
+    HTMLMediaElement, HTMLUnknownElement, HTMLAnchorElement, HTMLButtonElement, HTMLCanvasElement,
+    HTMLDialogElement, HTMLDivElement, HTMLFormElement, HTMLInputElement, HTMLLabelElement,
+    HTMLOptionElement, HTMLOptGroupElement, HTMLProgressElement, HTMLSelectElement, HTMLSlotElement,
+    HTMLTextAreaElement, HTMLTemplateElement, HTMLStyleElement, HTMLTableElement,
+    HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement,
+    HTMLTableColElement, HTMLFieldSetElement,
+  };
+  for (const [base, table] of [
+    [HTMLMediaElement, { audio: "HTMLAudioElement", video: "HTMLVideoElement" }],
+    [HTMLElement, {
+      a: "HTMLAnchorElement", area: "HTMLAreaElement", base: "HTMLBaseElement", body: "HTMLBodyElement",
+      br: "HTMLBRElement", data: "HTMLDataElement", datalist: "HTMLDataListElement",
+      del: "HTMLModElement", details: "HTMLDetailsElement", dl: "HTMLDListElement",
+      embed: "HTMLEmbedElement", h1: "HTMLHeadingElement", head: "HTMLHeadElement",
+      hr: "HTMLHRElement", html: "HTMLHtmlElement", iframe: "HTMLIFrameElement",
+      img: "HTMLImageElement", legend: "HTMLLegendElement", li: "HTMLLIElement",
+      link: "HTMLLinkElement", map: "HTMLMapElement", menu: "HTMLMenuElement",
+      meta: "HTMLMetaElement", meter: "HTMLMeterElement", object: "HTMLObjectElement",
+      ol: "HTMLOListElement", output: "HTMLOutputElement", p: "HTMLParagraphElement",
+      picture: "HTMLPictureElement", pre: "HTMLPreElement", q: "HTMLQuoteElement",
+      script: "HTMLScriptElement", source: "HTMLSourceElement", span: "HTMLSpanElement",
+      time: "HTMLTimeElement", title: "HTMLTitleElement", track: "HTMLTrackElement",
+      ul: "HTMLUListElement",
+    }],
+  ]) {
+    for (const [element, name] of Object.entries(table)) {
+      // The computed key names the class, so `constructor.name` and the
+      // `Symbol.toStringTag` taken from it read as the interface.
+      HTML_INTERFACES[name] ??= { [name]: class extends base {} }[name];
+      ELEMENT_CLASSES[element] ??= HTML_INTERFACES[name];
+    }
+  }
+  // The names that share an interface with one above.
+  for (const [element, name] of Object.entries({
+    h2: "HTMLHeadingElement", h3: "HTMLHeadingElement", h4: "HTMLHeadingElement",
+    h5: "HTMLHeadingElement", h6: "HTMLHeadingElement", ins: "HTMLModElement",
+    blockquote: "HTMLQuoteElement",
+  })) ELEMENT_CLASSES[element] ??= HTML_INTERFACES[name];
+
   // A valid custom element name, which is the only kind of element that can be
   // undefined: everything else is defined by being built in.
   const CUSTOM_NAME = /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/;
+
+  // Which class an HTML name makes. A name the language has gets its interface;
+  // a hyphenated one gets `HTMLElement`, because it could still be defined; any
+  // other name gets `HTMLUnknownElement`, as in a browser.
+  function elementClass(name) {
+    const found = ELEMENT_CLASSES[name];
+    if (found !== undefined) return found;
+    if (CUSTOM_NAME.test(name) || HTML_ELEMENT_NAMES.has(name)) return HTMLElement;
+    return HTML_INTERFACES.HTMLUnknownElement;
+  }
 
   function hasFailedUpgrade(element) {
     return slots(element).customFailed === true;
@@ -2634,6 +2722,22 @@ export function createTree(events = {}) {
 
   function isValueOf(element) {
     return slots(element).isValue ?? null;
+  }
+
+  // "Adopt": the node and its descendants take the new document — and HTML's
+  // template adopting steps run with them, so a template's content follows into
+  // the new document's template contents owner rather than staying behind in the
+  // old one's. The content is not a descendant in the node tree, which is why it
+  // needs saying.
+  function adoptInto(document, node) {
+    descendants(node, (item) => {
+      slots(item).ownerDocument = document;
+      const content = item[TEMPLATE_CONTENT];
+      if (content === undefined) return;
+      const owner = templateContentsOwner(document);
+      slots(content).ownerDocument = owner;
+      for (const child of Array.from(content._esdevChildren())) adoptInto(owner, child);
+    });
   }
 
   function setCustomLookup(lookup) {
@@ -2687,5 +2791,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, HTMLDocument, isValueOf, isKnownHtmlElement, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, HTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

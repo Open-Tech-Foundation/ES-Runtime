@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-101 of 103 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+103 of 105 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -139,6 +139,8 @@ compares the result.
 | the-layered-shorthands-expand-too | cascade | yes | no | no |
 | a-computed-shorthand-comes-from-its-longhands | cascade | yes | no | no |
 | a-declaration-block-holds-longhands | cascade | yes | no | no |
+| every-html-name-has-its-interface | tree | yes | yes | yes |
+| a-template-content-lives-in-its-own-document | tree | yes | yes | no |
 
 ## Where esdev is closer to Chrome than an emulator
 
