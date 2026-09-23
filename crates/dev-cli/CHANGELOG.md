@@ -25,6 +25,33 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **A click activates, however it is dispatched.** Checkboxes, radios, submit
+  and reset buttons, labels, links and `<summary>` acted only through their
+  own `click()` methods. `dispatchEvent(new MouseEvent("click"))`, which is
+  what testing-library's `fireEvent.click` does, did nothing, and a checkbox
+  toggled after its listeners had run. Activation is now part of dispatch, as
+  the DOM specifies:
+  - The target, or the nearest ancestor of a bubbling click, is activated.
+  - Its pre-activation step runs before any listener.
+  - If a listener cancelled the click, it's undone.
+  - A clicked checkbox or radio now fires `input` and `change`; it fired
+    neither before.
+  - A form outside the document doesn't submit.
+  - A disabled control is checked when its behaviour runs, not when the
+    click began.
+  - A `<details>` summary toggles it.
+  - A link with an `href` follows it as far as the location, and a
+    fragment-only change fires `hashchange` (a new `HashChangeEvent`).
+
+  `popstate` is a `PopStateEvent`, and the window's own `on…` handlers
+  (`onhashchange`, `onpopstate`, `onmessage`, …) exist.
+- **Links have their URL parts.** `<a>` had only `href`, and `<area>` not even
+  that. Both now have `origin`, `protocol`, `username`, `password`, `host`,
+  `hostname`, `port`, `pathname`, `search` and `hash`, each settable, plus the
+  reflected `target`, `download`, `ping`, `rel` and `referrerPolicy`. `<a>`
+  also has `hreflang`, `type` and `text`; `<area>` has `alt`, `coords` and
+  `shape`. A missing `href` reads as `""`, not the page's URL, and resolves
+  against the element's base URL.
 - **`class extends HTMLTableElement` can be defined.** A customized built-in's
   constructor returns the element it upgrades, and the table element's private
   method couldn't be installed on it a second time, so defining one threw.

@@ -222,9 +222,38 @@ class Storage {
   clear() { this.#values.clear(); }
 }
 
+// The events of navigating within a document: `hashchange` when the fragment
+// changes, and `popstate` when history moves.
+class HashChangeEvent extends events.Event {
+  constructor(type, init = {}) {
+    super(type, init);
+    this.oldURL = String(init.oldURL ?? "");
+    this.newURL = String(init.newURL ?? "");
+  }
+}
+class PopStateEvent extends events.Event {
+  constructor(type, init = {}) {
+    super(type, init);
+    this.state = init.state ?? null;
+    this.hasUAVisualTransition = Boolean(init.hasUAVisualTransition);
+  }
+}
+
 class Location {
   #url = new URL("http://localhost/");
-  #set(value) { this.#url = new URL(String(value), this.#url.href); }
+  // A navigation that changes only the fragment is a same-document one, and
+  // fires `hashchange` from a task, as a browser does — which is how an
+  // `<a href="#x">` click is seen. History's own updates are quiet.
+  #set(value, quiet = false) {
+    const old = this.#url;
+    this.#url = new URL(String(value), old.href);
+    if (quiet || this.#url.hash === old.hash) return;
+    const without = (url) => url.href.slice(0, url.href.length - url.hash.length);
+    if (without(this.#url) !== without(old)) return;
+    const init = { oldURL: old.href, newURL: this.#url.href };
+    setTimeout(() => globalThis.dispatchEvent(new HashChangeEvent("hashchange", init)), 0);
+  }
+  _quietly(value) { this.#set(value, true); }
   get href() { return this.#url.href; }
   set href(value) { this.#set(value); }
   get origin() { return this.#url.origin; }
@@ -285,20 +314,18 @@ class History {
   #move(index) {
     if (index < 0 || index >= this.#entries.length || index === this.#at) return;
     this.#at = index;
-    location.assign(this.#entries[index].href);
-    const event = new events.Event("popstate");
-    event.state = this.state;
-    globalThis.dispatchEvent(event);
+    location._quietly(this.#entries[index].href);
+    globalThis.dispatchEvent(new PopStateEvent("popstate", { state: this.state }));
   }
   pushState(state, _unused, url) {
     this.#entries.splice(this.#at + 1);
     this.#entries.push({ state, href: this.#url(url) });
     this.#at = this.#entries.length - 1;
-    location.assign(this.#entries[this.#at].href);
+    location._quietly(this.#entries[this.#at].href);
   }
   replaceState(state, _unused, url) {
     this.#entries[this.#at] = { state, href: this.#url(url) };
-    location.assign(this.#entries[this.#at].href);
+    location._quietly(this.#entries[this.#at].href);
   }
   back() { this.#move(this.#at - 1); }
   forward() { this.#move(this.#at + 1); }
@@ -647,6 +674,8 @@ Object.assign(globalThis, events, tree, css, elements, { document, customElement
 globalThis.window = globalThis;
 const globals = {
   DOMParser: parse.DOMParser,
+  HashChangeEvent,
+  PopStateEvent,
   History,
   FormData: DomFormData,
   IntersectionObserver,
@@ -777,6 +806,12 @@ for (const target of [tree.HTMLElement.prototype, tree.SVGElement.prototype, tre
   const accessors = {};
   for (const type of HANDLER_TYPES) accessors[`on${type}`] = eventHandlerAccessor(type);
   Object.defineProperties(target, accessors);
+}
+// The window's own handlers — WindowEventHandlers — where the runtime has not
+// already defined one: `onerror` and `onunhandledrejection` are the runtime's.
+for (const type of `afterprint beforeprint beforeunload hashchange languagechange message messageerror offline
+  online pagehide pageshow popstate storage unload`.split(/\s+/)) {
+  if (!(`on${type}` in globalThis)) Object.defineProperty(globalThis, `on${type}`, eventHandlerAccessor(type));
 }
 
 // Named access on the window object: `window.someId` is the element with that

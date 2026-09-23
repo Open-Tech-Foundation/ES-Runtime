@@ -309,7 +309,19 @@ export function createEvents() {
       const clearTargets = inShadowTree(this) || inShadowTree(related);
       const path = [this];
       for (let current = this._eventParent?.(event) ?? null; current; current = current._eventParent?.(event) ?? null) path.push(current);
+      // Activation: a click finds the element whose behaviour it triggers —
+      // the target, or for a bubbling click the nearest ancestor that has one —
+      // and runs that element's pre-activation step before any listener sees
+      // the event. A checkbox is already toggled when its click listener runs.
+      let activation = null;
+      if (event instanceof MouseEvent && event.type === "click") {
+        activation = this._esdevActivation?.(event) ?? null;
+        for (let index = 1; activation === null && state.bubbles && index < path.length; index += 1) {
+          activation = path[index]._esdevActivation?.(event) ?? null;
+        }
+      }
       state.dispatching = true; state.target = this; state.path = path;
+      activation?.pre?.(event);
       try {
         for (let index = path.length - 1; index > 0 && !state.propagationStopped; index -= 1) this._invoke(path[index], event, Event.CAPTURING_PHASE, true);
         if (!state.propagationStopped) {
@@ -321,6 +333,12 @@ export function createEvents() {
         state.target = clearTargets ? null : this;
         if (clearTargets && "relatedTarget" in event) event.relatedTarget = null;
         state.currentTarget = null; state.phase = Event.NONE; state.path = []; state.passive = false; state.dispatching = false;
+      }
+      // After the listeners: the behaviour itself, or — for a click a listener
+      // cancelled — undoing what the pre-activation step did.
+      if (activation) {
+        if (!state.defaultPrevented) activation.activate?.(event);
+        else activation.canceled?.(event);
       }
       return !state.defaultPrevented;
     }

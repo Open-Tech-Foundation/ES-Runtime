@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-116 of 118 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+117 of 119 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -44,6 +44,7 @@ compares the result.
 | details-dialog-and-popover-toggle-alike | events | yes | no | no |
 | a-removed-subtree-stays-observed-until-delivery | events | yes | no | no |
 | an-observer-that-throws-is-reported-and-the-rest-still-run | events | yes | yes | yes |
+| a-click-runs-activation-behaviour-however-it-is-dispatched | events | yes | no | no |
 | keyboard-and-mouse-events-carry-their-modifiers | events | yes | yes | no |
 | capturing-and-bubbling-order | events | yes | yes | yes |
 | cancelled-event-returns-false | events | yes | yes | yes |

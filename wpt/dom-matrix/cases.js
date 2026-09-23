@@ -294,6 +294,63 @@ export const cases = [
   },
   {
     group: "events",
+    name: "a-click-runs-activation-behaviour-however-it-is-dispatched",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const log = [];
+      const host = document.createElement("div");
+      host.innerHTML = `
+        <input type=checkbox id=box>
+        <input type=radio name=g id=r1 checked><input type=radio name=g id=r2>
+        <label id=lab>label <input type=checkbox id=inner></label>
+        <details id=det><summary id=sum>s</summary>x</details>
+        <area id=area>`;
+      document.body.append(host);
+      const $ = (id) => document.getElementById(id);
+      for (const id of ["box", "r1", "r2", "inner"]) {
+        for (const type of ["click", "input", "change"]) {
+          $(id).addEventListener(type, () => log.push(`${id}:${type}:${$(id).checked}`));
+        }
+      }
+      const click = (target, init = {}) => target.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+      click($("box"));
+      const cancel = (event) => event.preventDefault();
+      $("box").addEventListener("click", cancel);
+      click($("box"));
+      $("box").removeEventListener("click", cancel);
+      click($("r2"));
+      $("r1").addEventListener("click", cancel);
+      click($("r1"));
+      $("lab").click();
+      click($("sum"));
+      const detached = document.createElement("input");
+      detached.type = "checkbox";
+      click(detached);
+      const notBubbling = document.createElement("input");
+      notBubbling.type = "checkbox";
+      $("lab").append(notBubbling);
+      $("lab").dispatchEvent(new window.MouseEvent("click", { bubbles: false }));
+      // Following the link is left to WPT, which runs as a real page: on the
+      // matrix's about:blank it would navigate the page away.
+      const hashes = [new window.HashChangeEvent("hashchange", { newURL: "http://x/#y" }).newURL];
+      const area = $("area");
+      area.href = "https://example.com:8080/p?q#h";
+      const parts = ["href", "protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin"].map((key) => [key, area[key]]);
+      area.hash = "#other";
+      const absent = document.createElement("a");
+      const result = [
+        log, [$("box").checked, $("r1").checked, $("r2").checked, $("inner").checked, detached.checked],
+        [$("det").open], hashes, parts, area.getAttribute("href"),
+        [absent.href, absent.protocol, absent.origin],
+        typeof window.HashChangeEvent, typeof window.onhashchange,
+      ];
+      host.remove();
+      return result;
+    },
+  },
+  {
+    group: "events",
     name: "keyboard-and-mouse-events-carry-their-modifiers",
     run(window) {
       const read = (event) => [

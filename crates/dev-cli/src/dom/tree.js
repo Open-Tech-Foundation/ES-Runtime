@@ -1423,8 +1423,21 @@ export function createTree(events = {}) {
       }
       super(name, ownerDocument);
     }
+    // "Fire a synthetic pointer event named click": what the click does is
+    // the activation behaviour dispatch finds, not this method — so
+    // `dispatchEvent(new MouseEvent("click"))` does the same thing, as in a
+    // browser. A disabled form control ignores it, and a click inside its own
+    // click is dropped.
     click() {
-      this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      if (isFormControl(this) && isDisabled(this)) return;
+      const state = slots(this);
+      if (state.clickInProgress) return;
+      state.clickInProgress = true;
+      try {
+        this.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }));
+      } finally {
+        state.clickInProgress = false;
+      }
     }
   }
 
@@ -1514,15 +1527,74 @@ export function createTree(events = {}) {
       this[INPUT_VALUE] = null; this[INPUT_CHECKED] = null; this[INPUT_INDETERMINATE] = false;
       this[INPUT_SELECTION_START] = null; this[INPUT_SELECTION_END] = null; this[INPUT_SELECTION_DIRECTION] = "none";
     }
-    click() {
-      if (this.disabled) return;
-      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
-      if (!this.dispatchEvent(event)) return;
-      if (this.type === "checkbox") this.checked = !this.checked;
-      if (this.type === "radio" && !this.checked) this.checked = true;
-      if (this.type === "submit") this.form?.requestSubmit(this);
-      if (this.type === "reset") this.form?.reset();
+    // Every input has activation behaviour, even one whose type does nothing
+    // with it: an input inside a clickable ancestor is what a click activates.
+    _esdevActivation() {
+      const input = this;
+      const type = input.type;
+      if (type === "checkbox") {
+        let checked;
+        let indeterminate;
+        return {
+          pre() {
+            checked = input.checked;
+            indeterminate = input.indeterminate;
+            input.checked = !checked;
+            input.indeterminate = false;
+          },
+          canceled() { input.checked = checked; input.indeterminate = indeterminate; },
+          activate() { if (input.isConnected) fireInputAndChange(input); },
+        };
+      }
+      if (type === "radio") {
+        let checked;
+        let previous;
+        return {
+          pre() {
+            checked = input.checked;
+            previous = checked ? null : radioGroup(input).find((other) => other !== input && other.checked) ?? null;
+            input.checked = true;
+          },
+          canceled() {
+            if (checked) return;
+            input.checked = false;
+            if (previous) previous.checked = true;
+          },
+          activate() { if (input.isConnected && !checked) fireInputAndChange(input); },
+        };
+      }
+      if (type === "submit" || type === "image") {
+        return { activate() { if (!isDisabled(input) && input.form) submitForm(input.form, input); } };
+      }
+      if (type === "reset") return { activate() { if (!isDisabled(input) && input.form?.isConnected) input.form.reset(); } };
+      return {};
     }
+  }
+
+  // The events a checkbox or radio fires once a click has changed it.
+  function fireInputAndChange(input) {
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // The radio buttons one checked button unchecks: same name, same form owner,
+  // same tree.
+  function radioGroup(input) {
+    const name = input.name;
+    if (!name) return [input];
+    const owner = formOwner(input);
+    const root = input.getRootNode();
+    const scope = root instanceof Document || root instanceof ShadowRoot ? root : input.ownerDocument;
+    return collect(scope, (element) => element instanceof HTMLInputElement && element.type === "radio"
+      && element.name === name && formOwner(element) === owner);
+  }
+
+  // "Submit a form from a submitter": nothing for a form that is not in a
+  // document, as in a browser.
+  function submitForm(form, submitter) {
+    if (!form.isConnected) return;
+    if (!form.noValidate && !submitter?.formNoValidate && !form.checkValidity()) return;
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter }));
   }
 
   // A radio button group holds at most one checked button, and the invariant
@@ -1563,13 +1635,16 @@ export function createTree(events = {}) {
   }
 
   class HTMLButtonElement extends HTMLElement {
-    click() {
-      if (this.disabled) return;
-      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
-      if (!this.dispatchEvent(event)) return;
-      runCommand(this);
-      if (this.type === "submit") this.form?.requestSubmit(this);
-      if (this.type === "reset") this.form?.reset();
+    _esdevActivation() {
+      const button = this;
+      return {
+        activate() {
+          if (isDisabled(button)) return;
+          runCommand(button);
+          if (button.type === "submit" && button.form) submitForm(button.form, button);
+          if (button.type === "reset" && button.form?.isConnected) button.form.reset();
+        },
+      };
     }
   }
 
@@ -1675,7 +1750,26 @@ export function createTree(events = {}) {
   }
   class HTMLDivElement extends HTMLElement {}
   class HTMLCanvasElement extends HTMLElement {}
-  class HTMLAnchorElement extends HTMLElement {}
+  class HTMLAnchorElement extends HTMLElement {
+    _esdevActivation() { return hyperlinkActivation(this); }
+  }
+
+  // Following a hyperlink: only an element with an `href`, in the document
+  // that has a location, and only as far as the location — nothing navigates.
+  function hyperlinkActivation(element) {
+    if (!element.hasAttribute("href")) return null;
+    return {
+      activate() {
+        const location = element.ownerDocument?.location;
+        if (!location || element.hasAttribute("download")) return;
+        try {
+          location.assign(new URL(element.getAttribute("href"), element.baseURI).href);
+        } catch {
+          // An href that is not a URL goes nowhere.
+        }
+      },
+    };
+  }
   class HTMLProgressElement extends HTMLElement {
     get value() {
       const value = Number(this.getAttribute("value"));
@@ -1780,6 +1874,13 @@ export function createTree(events = {}) {
     if (id !== null) return Array.from(control.ownerDocument.getElementsByTagName("form")).find((form) => form.id === id) ?? null;
     for (let parent = control.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLFormElement) return parent;
     return null;
+  }
+
+  // The elements `click()` ignores while disabled: HTML's form controls, and a
+  // form-associated custom element.
+  const FORM_CONTROLS = new Set(["button", "fieldset", "input", "object", "output", "select", "textarea"]);
+  function isFormControl(element) {
+    return (element.namespaceURI === HTML_NAMESPACE && FORM_CONTROLS.has(element.localName)) || isFormAssociated(element);
   }
 
   function isDisabled(control) {
@@ -2086,10 +2187,11 @@ export function createTree(events = {}) {
   }
 
   class HTMLLabelElement extends HTMLElement {
-    click() {
-      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
-      if (!this.dispatchEvent(event)) return;
-      this.control?.click?.();
+    // A click on the label that nothing inside it took is a click on its
+    // control.
+    _esdevActivation() {
+      const label = this;
+      return { activate() { label.control?.click?.(); } };
     }
     get control() {
       if (this.htmlFor) return Array.from(this.ownerDocument.getElementsByTagName("*")).find((element) => element.id === this.htmlFor && isLabelable(element)) ?? null;
@@ -2166,10 +2268,70 @@ export function createTree(events = {}) {
     };
   }
 
-  function reflectUrl(attribute) {
+  // A URL attribute reads back resolved against the element's base URL: ""
+  // when it is absent, and as written when it does not parse.
+  // `action` and `formAction` differ in one way: missing or empty, they read
+  // as the document's URL.
+  function reflectUrl(attribute, emptyIsDocumentUrl = false) {
     return {
-      get() { return new URL(this.getAttribute(attribute) ?? "", globalThis.location?.href ?? "http://localhost/").href; },
+      get() {
+        const value = this.getAttribute(attribute);
+        if (emptyIsDocumentUrl && (value === null || value === "")) return this.ownerDocument?.URL ?? "";
+        if (value === null) return "";
+        try {
+          return new URL(value, this.baseURI).href;
+        } catch {
+          return value;
+        }
+      },
       set(value) { this.setAttribute(attribute, String(value)); },
+    };
+  }
+
+  // HTMLHyperlinkElementUtils, for `<a>` and `<area>`: the parts of the
+  // resolved `href`, each settable by rewriting the whole of it — and each the
+  // empty string (or ":" for the protocol) when the href does not parse.
+  function hyperlinkUrl(element) {
+    const value = element.getAttribute("href");
+    if (value === null) return null;
+    try {
+      return new URL(value, element.baseURI);
+    } catch {
+      return null;
+    }
+  }
+  const HYPERLINK_PARTS = ["protocol", "username", "password", "host", "hostname", "port", "pathname", "search", "hash"];
+  function hyperlinkUtils() {
+    const properties = {
+      href: reflectUrl("href"),
+      origin: { get() { return hyperlinkUrl(this)?.origin ?? ""; } },
+    };
+    for (const part of HYPERLINK_PARTS) {
+      properties[part] = {
+        get() {
+          const url = hyperlinkUrl(this);
+          return url === null ? (part === "protocol" ? ":" : "") : url[part];
+        },
+        set(value) {
+          const url = hyperlinkUrl(this);
+          if (url === null) return;
+          url[part] = String(value);
+          this.setAttribute("href", url.href);
+        },
+      };
+    }
+    return properties;
+  }
+  const REFERRER_POLICIES = new Set(["no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
+    "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"]);
+  // An enumerated attribute that reads back only a keyword it knows.
+  function reflectReferrerPolicy() {
+    return {
+      get() {
+        const value = (this.getAttribute("referrerpolicy") ?? "").toLowerCase();
+        return REFERRER_POLICIES.has(value) ? value : "";
+      },
+      set(value) { this.setAttribute("referrerpolicy", String(value)); },
     };
   }
 
@@ -2255,7 +2417,16 @@ export function createTree(events = {}) {
   installReflectors(HTMLDialogElement, {}, { open: "open" });
   installReflectors(HTMLDetailsElement, { name: "name" }, { open: "open" });
   installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
-  defineIdl(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
+  defineIdl(HTMLAnchorElement.prototype, {
+    ...hyperlinkUtils(),
+    referrerPolicy: reflectReferrerPolicy(),
+    // The text of the link, as `textContent` is.
+    text: {
+      get() { return this.textContent; },
+      set(value) { this.textContent = value; },
+    },
+  });
+  installReflectors(HTMLAnchorElement, { target: "target", download: "download", ping: "ping", rel: "rel", hreflang: "hreflang", type: "type" });
   installReflectors(HTMLTableElement, { border: "border" });
   installReflectors(HTMLFormElement, { name: "name", target: "target" }, { noValidate: "novalidate" });
   installReflectors(HTMLLabelElement, { htmlFor: "for" });
@@ -2411,12 +2582,12 @@ export function createTree(events = {}) {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
   });
   defineIdl(HTMLFormElement.prototype, {
-    action: reflectUrl("action"),
+    action: reflectUrl("action", true),
     method: { get() { return (this.getAttribute("method") ?? "get").toLowerCase(); }, set(value) { this.setAttribute("method", String(value).toLowerCase()); } },
     enctype: { get() { return this.getAttribute("enctype") ?? "application/x-www-form-urlencoded"; }, set(value) { this.setAttribute("enctype", String(value)); } },
   });
-  defineIdl(HTMLButtonElement.prototype, { formAction: reflectUrl("formaction") });
-  defineIdl(HTMLInputElement.prototype, { formAction: reflectUrl("formaction") });
+  defineIdl(HTMLButtonElement.prototype, { formAction: reflectUrl("formaction", true) });
+  defineIdl(HTMLInputElement.prototype, { formAction: reflectUrl("formaction", true) });
   for (const Class of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement]) {
     Object.defineProperty(Class.prototype, "form", { configurable: true, enumerable: true, get() { return formOwner(this); } });
     Object.defineProperty(Class.prototype, "labels", { configurable: true, enumerable: true,
@@ -3345,6 +3516,20 @@ export function createTree(events = {}) {
     h5: "HTMLHeadingElement", h6: "HTMLHeadingElement", ins: "HTMLModElement",
     blockquote: "HTMLQuoteElement",
   })) ELEMENT_CLASSES[element] ??= HTML_INTERFACES[name];
+
+  defineIdl(HTML_INTERFACES.HTMLAreaElement.prototype, { ...hyperlinkUtils(), referrerPolicy: reflectReferrerPolicy() });
+  installReflectors(HTML_INTERFACES.HTMLAreaElement, { alt: "alt", coords: "coords", shape: "shape", target: "target", download: "download", ping: "ping", rel: "rel" });
+
+  // Activation behaviour for the elements whose interfaces are generated.
+  HTML_INTERFACES.HTMLAreaElement.prototype._esdevActivation = function () { return hyperlinkActivation(this); };
+  // A `<details>`'s summary — its first `<summary>` child — toggles it.
+  HTMLElement.prototype._esdevActivation = function () {
+    if (this.localName !== "summary" || this.namespaceURI !== HTML_NAMESPACE) return null;
+    const details = this.parentElement;
+    if (!(details instanceof HTMLDetailsElement)) return null;
+    if (Array.from(details.children).find((child) => child.localName === "summary") !== this) return null;
+    return { activate() { details.open = !details.open; } };
+  };
 
   // The other token lists, each [SameObject] and [PutForwards=value], with the
   // supported tokens Chrome reports.
