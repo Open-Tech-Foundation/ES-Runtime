@@ -132,10 +132,59 @@ const INSTALL: &str = r#"(send, config) => {
   globalThis.__esdev_start();
 }"#;
 
-/// Runs `files` in the browser `session` is on, prints each file's report,
-/// and returns how many failed.
-pub async fn run(
-    session: &Session,
+/// A browser session set up to run test files: subscribed to the events a
+/// page reports through, with one router sending them to the file each came
+/// from. Made once per session, so `--watch` can run pass after pass in the
+/// same browser.
+pub struct Runner {
+    client: Arc<Client>,
+    routes: Routes,
+    router: tokio::task::JoinHandle<()>,
+}
+
+impl Runner {
+    pub async fn new(session: &Session) -> Result<Runner, String> {
+        let client = Arc::clone(&session.client);
+        client
+            .command(
+                "session.subscribe",
+                json!({ "events": ["script.message", "log.entryAdded"] }),
+            )
+            .await?;
+        let routes: Routes = Arc::default();
+        let router = tokio::spawn(route(
+            client
+                .take_events()
+                .ok_or("the browser's events are already taken")?,
+            Arc::clone(&routes),
+        ));
+        Ok(Runner {
+            client,
+            routes,
+            router,
+        })
+    }
+
+    /// Runs `files`, prints each file's report, and returns how many failed.
+    pub async fn run(
+        &self,
+        root: &Path,
+        files: &[PathBuf],
+        config: &TestConfig,
+    ) -> Result<usize, String> {
+        run(&self.client, &self.routes, root, files, config).await
+    }
+}
+
+impl Drop for Runner {
+    fn drop(&mut self) {
+        self.router.abort();
+    }
+}
+
+async fn run(
+    client: &Arc<Client>,
+    routes: &Routes,
     root: &Path,
     files: &[PathBuf],
     config: &TestConfig,
@@ -157,21 +206,6 @@ pub async fn run(
     );
     let server = tokio::spawn(serve(listener, stage.clone()));
 
-    let client = Arc::clone(&session.client);
-    client
-        .command(
-            "session.subscribe",
-            json!({ "events": ["script.message", "log.entryAdded"] }),
-        )
-        .await?;
-    let routes: Routes = Arc::default();
-    let router = tokio::spawn(route(
-        client
-            .take_events()
-            .ok_or("the browser's events are already taken")?,
-        Arc::clone(&routes),
-    ));
-
     let quiet = config.reporter.as_deref() == Some("json");
     let jobs = config
         .jobs
@@ -186,8 +220,8 @@ pub async fn run(
     };
     let runs = files.iter().enumerate().map(|(index, file)| {
         let job = Job {
-            client: Arc::clone(&client),
-            routes: Arc::clone(&routes),
+            client: Arc::clone(client),
+            routes: Arc::clone(routes),
             root: root.to_path_buf(),
             dir: stage.join(format!("f{index}")),
             path: format!("f{index}"),
@@ -211,7 +245,6 @@ pub async fn run(
         }
     }
 
-    router.abort();
     server.abort();
     Ok(failed)
 }

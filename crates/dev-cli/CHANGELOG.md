@@ -106,7 +106,8 @@ is the point, since none of the three has any business in a deployment.
     `--setup` and filters mean what they mean in a normal run.
   - **Stack frames point at the source.** They are source-mapped back to the
     file that was written, and frames inside the harness read `runtime:test`.
-  - `--watch` and a headed window are not there yet.
+  - **`--watch`** runs the files again on every change, in the same browser,
+    and **`--headed`** shows the browser window to watch a test run.
   - **WebDriver BiDi only, and nothing is downloaded.** Firefox serves BiDi
     itself; Chrome, Chromium and Edge need `chromedriver` or `msedgedriver` on
     `PATH`. A missing browser or driver is an error naming what to install.

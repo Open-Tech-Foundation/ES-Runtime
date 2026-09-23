@@ -48,6 +48,8 @@ pub struct TestConfig {
     /// Run the files in a real browser over WebDriver BiDi instead, from
     /// `--browser` or the project's `test.browser`.
     pub browser: Option<crate::browser::Choice>,
+    /// Show the browser's window rather than running it headless.
+    pub headed: bool,
     /// How JSX in a test file compiles, from the project's `jsx` section. Read
     /// by the parent and by every `--file` child, so a test means the same
     /// thing however it was started.
@@ -371,26 +373,7 @@ pub(crate) fn timed_out(timeout: Option<u64>) -> String {
 /// The exit status of a watched run is nobody's: it ends when the developer ends
 /// it, and what they read is the tally printed after each pass.
 pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), String> {
-    use notify::{RecursiveMode, Watcher};
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-    let scope = root.to_path_buf();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res
-            && crate::watch::is_change(&event.kind)
-            && event
-                .paths
-                .iter()
-                .any(|path| crate::watch::is_interesting(path, &scope))
-        {
-            let _ = tx.send(());
-        }
-    })
-    .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-    watcher
-        .watch(root, RecursiveMode::Recursive)
-        .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
-
+    let (_watcher, mut rx) = change_watcher(root)?;
     let paint = crate::style::Palette::stderr();
     loop {
         let files = discover(root, &config.filters);
@@ -425,6 +408,40 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
         }
         println!();
     }
+}
+
+/// Watches `root` for the changes a test run cares about. The watcher must be
+/// kept alive for as long as changes are wanted; each change arrives as `()`.
+pub fn change_watcher(
+    root: &Path,
+) -> Result<
+    (
+        notify::RecommendedWatcher,
+        tokio::sync::mpsc::UnboundedReceiver<()>,
+    ),
+    String,
+> {
+    use notify::{RecursiveMode, Watcher};
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let scope = root.to_path_buf();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res
+            && crate::watch::is_change(&event.kind)
+            && event
+                .paths
+                .iter()
+                .any(|path| crate::watch::is_interesting(path, &scope))
+        {
+            let _ = tx.send(());
+        }
+    })
+    .map_err(|e| format!("cannot start the file watcher: {e}"))?;
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
+
+    Ok((watcher, rx))
 }
 
 /// The tally a run ends with, as one more JSON object.

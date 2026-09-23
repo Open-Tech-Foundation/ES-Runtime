@@ -14,6 +14,8 @@ runs the **same file** in a real browser page:
 esdev test --browser                  # the first browser this machine can drive
 esdev test --browser=firefox          # this one, or fail
 esdev test --browser --file=src/button.test.ts
+esdev test --browser --watch          # run again on every change, in the same browser
+esdev test --browser --headed         # show the window, to watch a test run
 ```
 
 Nothing in the file changes. It imports from `runtime:test` as it always does:
@@ -88,10 +90,6 @@ and Edge are started by their driver. Either way:
 
 - **Snapshots work as in a normal run**, against the same files:
   `--update-snapshots`, `--ci` and `--full-diff` apply.
-
-## What it does not do yet
-
-`--watch`, and a headed window for watching a test run.
 
 ## Refused options
 

@@ -200,6 +200,8 @@ OPTIONS:
                                 chrome, chromium, firefox, edge that can be
                                 driven; all but firefox need their matching
                                 driver on PATH. Nothing is downloaded
+    --headed                    Show the browser window instead of running it
+                                headless, to watch a test run
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1411,6 +1413,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut snapshot_prune = None;
     let mut dom = false;
     let mut browser = None;
+    let mut headed = false;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1473,6 +1476,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                         browser::Choice::parse(name).map_err(|err| format!("{flag}: {err}"))?
                     }
                 });
+            }
+            "--headed" => {
+                reject_value(flag, value)?;
+                headed = true;
             }
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
             "--timeout" | "-t" => {
@@ -1542,6 +1549,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     Ok(TestConfig {
         dom,
         browser,
+        headed,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1642,6 +1650,13 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
 /// puts a run in a browser as surely as the flag does.
 fn validate_browser_test_config(config: &TestConfig) -> Result<(), String> {
     if config.browser.is_none() {
+        if config.headed {
+            return Err(
+                "--headed shows the browser a run uses, and this run uses none.\n\n\
+                 Add --browser, or set \"browser\" under \"test\" in esdev.json."
+                    .to_string(),
+            );
+        }
         return Ok(());
     }
     if config.dom {
@@ -1707,11 +1722,12 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let files = match &config.file {
+    let discover = || match &config.file {
         Some(file) => vec![root.join(file)],
         None => test::discover(&root, &config.filters),
     };
-    if files.is_empty() {
+    let files = discover();
+    if files.is_empty() && !config.watch {
         eprintln!(
             "no test files found (looked for {})",
             test::sought_description()
@@ -1726,40 +1742,105 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         }
     };
     eprintln!("{}", selected.describe());
-    let session = match bidi::Session::start(&selected.launch, true).await {
+    let session = match bidi::Session::start(&selected.launch, !config.headed).await {
         Ok(session) => session,
         Err(err) => {
             eprintln!("error: {err}");
             return ExitCode::FAILURE;
         }
     };
-    // Stopped from outside — ^C, or a CI job cancelled — the browser is still
-    // closed: it is a separate process, and would otherwise outlive the run.
-    let ran = tokio::select! {
-        ran = browser_run::run(&session, &root, &files, config) => ran,
-        () = stopped() => {
-            session.end().await;
-            return ExitCode::from(130);
-        }
-    };
-    session.end().await;
-    let failed = match ran {
-        Ok(failed) => failed,
+    let runner = match browser_run::Runner::new(&session).await {
+        Ok(runner) => runner,
         Err(err) => {
+            session.end().await;
             eprintln!("error: {err}");
             return ExitCode::FAILURE;
         }
     };
-    if config.reporter.as_deref() == Some("json") {
-        test::report_as_json(files.len(), failed);
-    } else {
-        test::report(files.len(), failed);
+    let report = |total: usize, failed: usize| {
+        if config.reporter.as_deref() == Some("json") {
+            test::report_as_json(total, failed);
+        } else {
+            test::report(total, failed);
+        }
+    };
+
+    if !config.watch {
+        // Stopped from outside — ^C, or a CI job cancelled — the browser is
+        // still closed: it is a separate process, and would otherwise outlive
+        // the run.
+        let ran = tokio::select! {
+            ran = runner.run(&root, &files, config) => ran,
+            () = stopped() => {
+                drop(runner);
+                session.end().await;
+                return ExitCode::from(130);
+            }
+        };
+        drop(runner);
+        session.end().await;
+        return match ran {
+            Ok(failed) => {
+                report(files.len(), failed);
+                if failed == 0 {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::FAILURE
+            }
+        };
     }
-    if failed == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+
+    // `--watch`: the same browser for every pass, and the files discovered
+    // afresh each time, so a test written after the watch began is found.
+    let (_watcher, mut changes) = match test::change_watcher(&root) {
+        Ok(watching) => watching,
+        Err(err) => {
+            drop(runner);
+            session.end().await;
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let paint = style::Palette::stderr();
+    loop {
+        let files = discover();
+        if files.is_empty() {
+            eprintln!(
+                "no test files found (looked for {})",
+                test::sought_description()
+            );
+        } else {
+            tokio::select! {
+                ran = runner.run(&root, &files, config) => match ran {
+                    Ok(failed) => report(files.len(), failed),
+                    Err(err) => {
+                        // The browser went away; nothing more can run in it.
+                        eprintln!("error: {err}");
+                        break;
+                    }
+                },
+                () = stopped() => break,
+            }
+        }
+        eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
+        tokio::select! {
+            change = watch::coalesce(&mut changes) => {
+                if change.is_none() {
+                    break;
+                }
+            }
+            () = stopped() => break,
+        }
+        println!();
     }
+    drop(runner);
+    session.end().await;
+    ExitCode::SUCCESS
 }
 
 async fn run_tests(mut config: TestConfig) -> ExitCode {
@@ -1775,7 +1856,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         }
     }
 
-    if config.browser.is_some() {
+    if config.browser.is_some() || config.headed {
         return run_browser_tests(&config).await;
     }
 

@@ -12745,6 +12745,10 @@ fn test_browser_refuses_what_has_no_meaning_in_a_page() {
             &["test", "--browser", "--isolation=none"][..],
             "--isolation=none",
         ),
+        (
+            &["test", "--headed"][..],
+            "--headed shows the browser a run uses",
+        ),
     ] {
         let out = esdev().args(args).output().expect("spawn esdev test");
         assert!(!out.status.success(), "{args:?} was accepted");
@@ -13401,4 +13405,62 @@ test("written by another runner", () => {
         stdout(&looped)
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--watch` with `--browser`: one browser for every pass, and a change runs
+/// the files again in it. Stopped the way a person stops it, with ^C, so the
+/// browser is closed rather than orphaned.
+#[cfg(unix)]
+#[test]
+fn test_browser_watch_runs_again_when_a_file_changes() {
+    let dir = build_dir("t_browser_watch");
+    let test = dir.join("w.test.js");
+    let body = |want: u32| {
+        format!(
+            "import {{ test, expect }} from \"runtime:test\";\n\
+             test(\"adds\", () => {{ expect(1 + 1).toBe({want}); }});\n"
+        )
+    };
+    std::fs::write(&test, body(2)).expect("write test");
+    let out = dir.join("out.txt");
+    let err = dir.join("err.txt");
+    let mut child = esdev_in(&dir)
+        .args(["test", "--browser", "--watch", "--timeout=60000"])
+        .stdout(std::fs::File::create(&out).expect("create out"))
+        .stderr(std::fs::File::create(&err).expect("create err"))
+        .spawn()
+        .expect("spawn esdev test --browser --watch");
+    let stop = |child: &mut std::process::Child| {
+        let _ = Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status();
+        let _ = child.wait();
+    };
+
+    let first = wait_for_file(&out, Duration::from_secs(60), |s| {
+        s.contains("1 file passed")
+    });
+    if !first.contains("1 file passed") {
+        let errors = std::fs::read_to_string(&err).unwrap_or_default();
+        stop(&mut child);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            errors.contains("no browser that can run the tests"),
+            "the first pass never finished:\n{first}\n{errors}"
+        );
+        return;
+    }
+    std::fs::write(&test, body(3)).expect("rewrite test");
+    let second = wait_for_file(&out, Duration::from_secs(60), |s| {
+        s.contains("1 of 1 file failed")
+    });
+    stop(&mut child);
+    let errors = std::fs::read_to_string(&err).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        second.contains("1 of 1 file failed"),
+        "the change did not rerun it:\n{second}"
+    );
+    // One browser for both passes.
+    assert_eq!(errors.matches("browser: ").count(), 1, "{errors}");
 }
