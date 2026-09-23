@@ -24,7 +24,25 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+- **Every `esdev create` template is a hello world.** Each writes the smallest
+  project that runs, builds and tests: a `hello(name)` function, a test for it
+  using `runtime:test`, and an entry that shows the greeting. What each
+  template is for is kept — `react`'s static and fullstack modes and Fast
+  Refresh, `api`'s narrow grant, `lib`'s `.d.ts` output, the OTF starters'
+  language, styling and blog options — and the example code around it is gone:
+  routers and route tables, the fullstack HTTP helpers, `react-router`, the
+  signal drain, stylesheets, and long comments and READMEs. `vanilla` ships a
+  DOM test and a `test:dom` script. The `react` template goes from 34 files to
+  19, and the esdev templates from about 2,800 lines to about 650.
+
 ### Fixed
+- **The `micro-ui` template's first run is green.** It shipped no
+  `tsconfig.json` — so `npm run typecheck` printed the tsc help and checked
+  nothing — and no test file, so `npm test` failed. It now ships both.
+- **No template chooses a license.** `lib` and the OTF `library` starter wrote
+  `"license": "MIT"` into `package.json`; the field is now left out for the
+  user to decide.
 - **`esdev test <filter>` matches the path inside the project**, not the
   absolute one. A filter that spelled part of the project's own location —
   `src` for a project under `~/src` — selected every file.
@@ -34,15 +52,15 @@ is the point, since none of the three has any business in a deployment.
 - **`esdev start` and `esdev test --watch` stop on `SIGTERM`**, as they already
   did on ^C. A CI job being cancelled or a process manager stopping esdev used
   to leave the server `esdev start` had started still running.
+- **`--reporter=json` output is JSON and nothing else.** What a test printed
+  used to land on stdout between the JSON lines; it now goes to stderr, with
+  every machine reporter.
 - **A failing test in a TypeScript or JSX file names the line it was written
   on.** The transform reprints the file, so after the first stripped type the
   lines in a failure's stack were the reprinted code's. The transform now
   records a source map and failures are mapped back through it.
 - **Snapshot keys stay stable.**
   - A test name containing a line break no longer corrupts the `.snap` file:
-- **`--reporter=json` output is JSON and nothing else.** What a test printed
-  used to land on stdout between the JSON lines; it now goes to stderr, with
-  every machine reporter.
     it is stored as `\n` in the entry's heading.
   - Named snapshots are numbered per name. Adding a snapshot before a named
     one no longer renames it. A test that mixes named and unnamed snapshots
@@ -70,6 +88,12 @@ is the point, since none of the three has any business in a deployment.
 - **`esdev test --list`** names the tests each file registers, by full name,
   without running any test or hook. It combines with path filters and `-t`, and
   with `--reporter=json`, one `listed` case per line.
+- **More reporters: `--reporter=junit`, `tap` and `dots`**, alongside `human`
+  and `json`, and **`--reporter-outfile=<path>`**, which writes the report to a
+  file while the terminal keeps the human one. JUnit follows the shape Vitest
+  writes: a `<testsuite>` per file, the file as `classname`, the full test name
+  as `name`, and per-test `time`. Works in normal and browser runs, and in
+  `esdev.json`'s `reporter`.
 - **`repeats`: `test(name, fn, { repeats: n })` and `esdev test --repeats=<n>`**
   run a test `n` more times after the first, as in Vitest and Bun; it fails if
   any run fails, and the report names the run.
@@ -79,12 +103,6 @@ is the point, since none of the three has any business in a deployment.
   `beforeAll` and `afterAll` still wrap its own tests. A browser run of the
   same seed runs the same order.
 - **`esdev test --bail[=<n>]`** stops after `n` failed tests (1 by default), as
-- **More reporters: `--reporter=junit`, `tap` and `dots`**, alongside `human`
-  and `json`, and **`--reporter-outfile=<path>`**, which writes the report to a
-  file while the terminal keeps the human one. JUnit follows the shape Vitest
-  writes: a `<testsuite>` per file, the file as `classname`, the full test name
-  as `name`, and per-test `time`. Works in normal and browser runs, and in
-  `esdev.json`'s `reporter`.
   in Vitest and Bun. Failures add up across files, the tests left in a file are
   counted as skipped with a `bail:` line, and the files not started are named.
   Works in normal, `--isolation=none` and browser runs.

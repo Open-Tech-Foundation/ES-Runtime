@@ -20,8 +20,7 @@ script tag in its `index.html`, its `runtime:` types installed and wired into
 already narrow:
 
 ```sh
-esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 \
-      --allow-signals=SIGTERM,SIGINT dist/server.js
+esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 dist/server.js
 ```
 
 A project that deploys to a static host has no such line, because it runs
@@ -36,13 +35,13 @@ esdev create my-app --template=react --mode=fullstack
 
 | | |
 | --- | --- |
-| `react` | React + react-router — a static site, or an app with a server of its own |
-| `api` | A JSON API — one route, a `URLPattern` router. **Nothing it ships depends on** |
+| `react` | React — a static site, or an app with a server of its own |
+| `api` | A JSON API under a narrow grant. **Nothing it ships depends on** |
 | `vanilla` | TypeScript and the DOM — no framework |
 | `micro-ui` | Micro apps with Micro-UI — framework-free UI with a tiny reactive core |
-| `lib` | A publishable package — module tree, `.d.ts`, `exports` wired |
+| `lib` | A publishable package — `.d.ts` and `exports` wired |
 | `spa` | An OTF Web single-page app — browser-only UI, static deploy, no server |
-| `fullstack` | An OTF Web fullstack app — middleware, loaders, API routes, SSR on demand |
+| `fullstack` | An OTF Web fullstack app — loaders, API routes, SSR on demand |
 | `docs` | An OTF Web documentation site — MDX docs, sidebar, search, optional blog |
 | `library` | An OTF Web component library — publishable components, `esdev`-tested |
 
@@ -68,26 +67,23 @@ esdev create my-app --template=docs --no-blog
 
 TypeScript is a conversion, not a second template: sources rename (`.jsx` to
 `.tsx`) and a `tsconfig.json` plus the compiler-macro declarations arrive
-beside them. The library's test suite converts with it — from the upstream
-`bun:test` click test, which needs a DOM and the OTF compiler, to a contract
-test (`entry resolves, re-export names the component`) that runs under
-`esdev test`.
+beside them. The library's test runs under `esdev test` in either language.
 
-## A template is a scaffold, not a demo
+## Every template is a hello world
 
-What each one writes is a project that runs and **one page** — its name, what it
-was built with, the file to edit, three links — or for `api`, one route
-answering the same in JSON. That page is there to be deleted.
+Each one writes the smallest project that runs, builds and tests: a
+`hello(name)` function, a test for it, and an entry that shows the greeting. For
+`api`, the server answers `{"message":"Hello, world!"}`.
 
-Nothing else is in it: no blog, no task store, no counter. What is kept is the
-machinery a project needs on its first day and would otherwise have to be
-assembled — the route table, the error boundary that renders a real 404, one
-render shared by the server and the static build, Fast Refresh, the security
-headers, the `SIGTERM` drain, the access log, and a permission line that is
-already narrow.
+```text
+src/hello.ts        hello(name) → "Hello, world!"
+src/hello.test.ts   its test, with runtime:test
+src/main.ts         shows it (App.tsx and entry.client.tsx for react)
+```
 
-Both `react` modes are that one page on a route table, with the layout and the
-error boundary wired. What differs is what runs it — see [Modes](#modes).
+The scripts are all there from the start: `dev`, `build`, `test` and
+`typecheck`, plus `test:dom` where a template has a DOM test. Nothing chooses a
+license for you; add one when you publish.
 
 ## Modes
 
@@ -100,21 +96,13 @@ half is how a starter ends up shipping a server nobody runs.
 | | `--mode=static` (default) | `--mode=fullstack` |
 | --- | --- | --- |
 | **Runs in production** | Nothing | `src/server.tsx`, under `esrun` |
-| **`npm run build`** | Every route prerendered to `dist/static/` | Server and browser bundles into `dist/` |
-| **`npm run build:spa`** | One shell, routed in the browser | — |
-| **Grants** | None — nothing runs | `read`, `env`, `listen`, `signals` |
+| **`npm run build`** | The page prerendered into `dist/index.html` | Server and browser bundles into `dist/` |
+| **`npm run build:spa`** | The page rendered in the browser | — |
+| **Grants** | None — nothing runs | `read`, `env`, `listen` |
 | **Deploy** | Any static host | `dist/`, whole |
 
-SSG and SPA are one mode on purpose. Which of the two a site wants is a
-deployment decision that moves with the content, and both come out of the same
-routes and components with no file edited — the switch is which script you run.
-Which routes are prerendered is `staticPaths()` in `src/paths.ts`, and a route
-left out of it is rendered in the browser instead.
-
-A `fullstack` project is a file you own answering requests: a
-Content-Security-Policy with a per-response nonce, a `SIGTERM` that drains
-before it exits, immutable caching on hashed assets, `HEAD` answered with the
-headers and nothing after them, and one JSON log line per request.
+Both modes render the same `App` through `src/render.tsx`, and both keep React
+Fast Refresh during `npm run dev`.
 
 ## It asks, or it writes files and stops
 
@@ -126,10 +114,10 @@ choosing explicitly:
 
 ```text
 ? Which Template?
-  ❯ API       A JSON API — one route, a URLPattern router, a narrow grant. No deps
-    Library   A publishable TypeScript package — module tree, .d.ts, no runtime deps
+  ❯ API       A JSON API — a hello-world server under a narrow grant. No deps
+    Library   A publishable TypeScript package — .d.ts included, no runtime deps
     Micro-UI  Micro apps with Micro-UI — framework-free UI with a tiny reactive core
-    ReactJS   React + react-router — a static site, or an app with a server of its own
+    ReactJS   React — a static site, or an app with a server of its own
     Vanilla   TypeScript and the DOM — no framework, nothing it ships depends on
     OTF Web   OTF Web starters — SPA, fullstack, docs or library
 
@@ -143,7 +131,7 @@ what is chosen still resolves to the flag spelling, so `--template=spa`,
 ```text
 ? Which OTF Web Starter?
   ❯ SPA                 An OTF Web single-page app — browser-only UI, static deploy, no server
-    FullStack           An OTF Web fullstack app — middleware, loaders, API routes, SSR on demand
+    FullStack           An OTF Web fullstack app — loaders, API routes, SSR on demand
     Docs                An OTF Web documentation site — MDX docs, sidebar, search, optional blog
     Component Library   An OTF Web component library — publishable components, esdev-tested
 

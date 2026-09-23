@@ -7,6 +7,7 @@
     "build": "esdev build --minify",
     "build:debug": "esdev build",
     "test": "esdev test",
+    "test:dom": "esdev test --dom",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

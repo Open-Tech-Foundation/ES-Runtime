@@ -20,7 +20,6 @@
     "@opentf/web": "latest",
     "@opentf/esrun-types": "latest"
   },
-  "license": "MIT",
   "publishConfig": {
     "access": "public"
   }

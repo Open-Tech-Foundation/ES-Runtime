@@ -12,8 +12,7 @@
   "permissions": {
     "allow": {
       "listen": ["8080"],
-      "env": ["PORT"],
-      "signals": ["SIGTERM", "SIGINT"]
+      "env": ["PORT"]
     }
   }
 }

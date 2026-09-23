@@ -188,12 +188,13 @@ mod tests {
         }
     }
 
-    /// The same property over the project's own stylesheet, which is the
-    /// realistic input and the one a regression would actually reach.
+    /// The same property over two real application stylesheets — custom
+    /// properties, nesting, media queries — the realistic input a regression
+    /// would actually reach.
     #[test]
-    fn the_templates_own_stylesheets_round_trip() {
+    fn real_stylesheets_round_trip() {
         for name in ["app.css", "theme.css"] {
-            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/templates/react/styles/");
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/css/fixtures/");
             let source = std::fs::read_to_string(format!("{path}{name}"))
                 .unwrap_or_else(|e| panic!("read {name}: {e}"));
             assert_eq!(

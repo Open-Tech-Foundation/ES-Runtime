@@ -661,6 +661,16 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D100 — Every template is a hello world · *Accepted (2026-09-24)* · *amends D68, D72, D76*
+
+**Context:** the templates had grown into small applications. `react` was 34 files and 1,614 lines: a route table with `react-router`, an error boundary, a head/meta system, a fullstack server with a static-file server, a Content-Security-Policy with per-response nonces, a `SIGTERM` drain and an access log, each with tests and long explanatory comments. `api` carried a hand-written router and HTTP error layer. D68 and D76 kept this machinery on the argument that a project would otherwise assemble it on its first day. In practice a new project has to read and delete most of it before writing its own code, and none of it is esdev tooling.
+
+**Decision (maintainer, 2026-09-24):** every template — esdev's and the OTF starters — is a hello world: a `hello(name)` function, a `runtime:test` test for it, an entry that shows the greeting, a short README, and only the configuration the tooling needs. What a template is *for* stays: `react`'s static and fullstack modes, React Fast Refresh, `api`'s narrow grant, `lib`'s `.d.ts` output, the OTF starters' language, styling and blog options. No template names a license. Rejected: moving the removed machinery into the runtime (`runtime:http` helpers for static files and routing) to keep the templates' behaviour while shrinking them — that is a runtime API decided for the sake of a scaffold, and features can be added back to the templates deliberately, one at a time.
+
+**Consequences:** the esdev templates go from 2,793 lines to 646. A fullstack React project now serves its page and its built assets and nothing more: no security headers, no graceful drain, no access log. Those are the project's to add. Documented per D27 (site `esdev/create`, `crates/dev-cli/CHANGELOG.md`).
+
+---
+
 ### D99 — Test files run in a real browser over WebDriver BiDi, with what the machine already has · *Proposed (2026-09-23)*
 
 **Context:** the test DOM answers Chrome's way for what the behaviour matrix covers, and nothing else can say whether a component test that passes under `--dom` passes in a browser. The repository already asks Chrome questions (`wpt/chrome-run.js`, `bench/dev-server`), but through Puppeteer over CDP: one vendor's protocol, driven from a Node library, which is neither something `esdev` can ship nor something that reaches Firefox.

@@ -75,15 +75,15 @@ include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 const DESCRIPTIONS: &[(&str, &str)] = &[
     (
         "api",
-        "A JSON API — one route, a URLPattern router, a narrow grant. No deps",
+        "A JSON API — a hello-world server under a narrow grant. No deps",
     ),
     (
         "react",
-        "React + react-router — a static site, or an app with a server of its own",
+        "React — a static site, or an app with a server of its own",
     ),
     (
         "lib",
-        "A publishable TypeScript package — module tree, .d.ts, no runtime deps",
+        "A publishable TypeScript package — .d.ts included, no runtime deps",
     ),
     (
         "vanilla",
@@ -99,7 +99,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "fullstack",
-        "An OTF Web fullstack app — middleware, loaders, API routes, SSR on demand",
+        "An OTF Web fullstack app — loaders, API routes, SSR on demand",
     ),
     (
         "docs",
@@ -1379,7 +1379,7 @@ mod tests {
             "package.json",
             "esdev.json",
             "index.html",
-            "src/routes.tsx",
+            "src/App.tsx",
             "src/entry.client.tsx",
             "_gitignore",
         ] {
@@ -1406,27 +1406,19 @@ mod tests {
         let full = resolved("react", Some("fullstack"));
 
         assert!(statik.contains(&"src/prerender.tsx".to_string()));
-        assert!(statik.contains(&"src/paths.ts".to_string()));
         assert!(
             !statik.iter().any(|path| path == "src/server.tsx"),
             "a static project has no server: {statik:?}"
         );
-        assert!(
-            !statik
-                .iter()
-                .any(|path| path.starts_with("src/http/headers")),
-            "a static project sets no response headers: {statik:?}"
-        );
 
         assert!(full.contains(&"src/server.tsx".to_string()));
-        assert!(full.contains(&"src/http/headers.ts".to_string()));
         assert!(
             !full.iter().any(|path| path == "src/prerender.tsx"),
             "a fullstack project renders per request, so it prerenders nothing: {full:?}"
         );
 
         // The shared half really is shared, rather than duplicated per mode.
-        for both in ["src/routes.tsx", "index.html", "styles/app.css"] {
+        for both in ["src/App.tsx", "index.html", "src/render.tsx"] {
             assert!(statik.contains(&both.to_string()) && full.contains(&both.to_string()));
         }
     }
@@ -1624,6 +1616,50 @@ mod tests {
                     && String::from_utf8_lossy(contents).contains("@opentf/esrun-types")
             });
             assert!(found, "{name} has no @opentf/esrun-types dev dependency");
+        }
+    }
+
+    /// The templates esdev itself can build and test. A fresh scaffold's
+    /// `npm test` and `npm run typecheck` must mean something, so each one
+    /// ships a `tsconfig.json` and at least one test file.
+    ///
+    /// Scoped to the esdev-native set: the OTF templates are `otfw` projects
+    /// until that migration lands, and are covered by their own tests.
+    #[test]
+    fn esdev_templates_ship_a_config_and_a_test() {
+        for template in ["api", "react", "vanilla", "micro-ui", "lib"] {
+            // `react` is two projects; the shared files (with the config and
+            // the tests) are in both, so either mode proves the point.
+            let mode = default_mode(template);
+            let paths = resolved(template, mode);
+            assert!(
+                paths.iter().any(|path| path == "tsconfig.json"),
+                "{template} ships no tsconfig.json, so `npm run typecheck` checks nothing"
+            );
+            assert!(
+                paths.iter().any(|path| path.contains(".test.")),
+                "{template} ships no test, so a fresh `npm test` fails"
+            );
+        }
+    }
+
+    /// A scaffolder must not choose the user's license. Caught here rather
+    /// than by whoever publishes and finds the registry took them at their
+    /// template's word.
+    #[test]
+    fn no_template_names_a_license() {
+        for (template, files) in TEMPLATES {
+            for (path, contents) in *files {
+                if !path.ends_with("package.json") {
+                    continue;
+                }
+                let manifest: serde_json::Value = serde_json::from_slice(contents)
+                    .unwrap_or_else(|e| panic!("{template}/{path}: {e}"));
+                assert!(
+                    manifest.get("license").is_none(),
+                    "{template}/{path} chooses a license for the user"
+                );
+            }
         }
     }
 
@@ -2015,7 +2051,7 @@ mod tests {
             "plain CSS pulls no compiler"
         );
         let tw = otf_written("spa", "js", Some("tailwind"), None);
-        assert!(otf_text(&tw, "app/global.css").starts_with("@import \"tailwindcss\";\n\n:root {"));
+        assert!(otf_text(&tw, "app/global.css").starts_with("@import \"tailwindcss\";\n\nbody {"));
         // An `@import` the project resolves is a dependency the project
         // declares: npm hoisting (upstream's default manager) finds the
         // toolchain's copy, and a strict `node_modules` layout does not.

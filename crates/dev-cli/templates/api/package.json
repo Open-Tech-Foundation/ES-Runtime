@@ -6,7 +6,7 @@
     "dev": "esdev start",
     "build": "esdev build --minify",
     "build:debug": "esdev build",
-    "start": "esrun --allow-listen=8080 --allow-env=PORT --allow-signals=SIGTERM,SIGINT dist/server.js",
+    "start": "esrun --allow-listen=8080 --allow-env=PORT dist/server.js",
     "test": "esdev test",
     "typecheck": "tsc --noEmit"
   },

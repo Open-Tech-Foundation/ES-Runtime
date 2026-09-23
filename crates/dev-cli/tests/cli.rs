@@ -10410,7 +10410,7 @@ fn create_refuses_a_directory_that_holds_something() {
         "{ \"name\": \"mine\" }\n"
     );
     // …and the rest of the project was written around it.
-    assert!(dir.join("src/routes.tsx").is_file());
+    assert!(dir.join("src/App.tsx").is_file());
 
     let _ = std::fs::remove_dir_all(&parent);
 }
@@ -10429,7 +10429,7 @@ fn create_refuses_a_directory_that_holds_something() {
 fn every_dependency_free_template_passes_its_own_tests() {
     let parent = watch_dir("c_all");
 
-    for template in ["api", "lib", "vanilla"] {
+    for template in ["api", "lib", "vanilla", "micro-ui"] {
         let dir = parent.join(template);
         let created = esdev_in(&parent)
             .args(["create", template, &format!("--template={template}")])
@@ -10469,8 +10469,49 @@ fn every_dependency_free_template_passes_its_own_tests() {
             stdout(&built),
             stderr(&built)
         );
+
+        // …and the DOM run passes with nothing installed. DOM tests guard
+        // on `document`, so this also proves a plain `esdev test` stays
+        // green beside them.
+        let domed = esdev_in(&dir)
+            .args(["test", "--dom"])
+            .output()
+            .expect("spawn esdev test --dom");
+        assert!(
+            domed.status.success(),
+            "the {template} template fails under --dom:\n{}{}",
+            stdout(&domed),
+            stderr(&domed)
+        );
     }
 
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// A library builds with a flag, not a config — so a bare `esdev build`
+/// inside one must say so rather than fail cryptically.
+#[test]
+fn a_bare_build_in_a_lib_project_names_the_flag() {
+    let parent = watch_dir("c_lib_hint");
+    let dir = parent.join("libbed");
+
+    let created = esdev_in(&parent)
+        .args(["create", "libbed", "--template=lib"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let built = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(!built.status.success(), "a bare build wrote a library");
+    assert!(
+        stderr(&built).contains("--lib"),
+        "the error does not name the flag:\n{}",
+        stderr(&built)
+    );
     let _ = std::fs::remove_dir_all(&parent);
 }
 
@@ -10510,7 +10551,7 @@ fn each_mode_writes_its_own_project_and_none_of_the_other() {
             "{mode} was written with {theirs}, which belongs to the other mode"
         );
         // The shared half is in both, rather than duplicated into each.
-        assert!(dir.join("src/routes.tsx").is_file(), "{mode} has no routes");
+        assert!(dir.join("src/App.tsx").is_file(), "{mode} has no App");
 
         // And the tests it ships pass — the react template's own suite needs no
         // node_modules, which is what makes this checkable here at all.
