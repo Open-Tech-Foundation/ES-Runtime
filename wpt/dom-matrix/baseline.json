@@ -6589,10 +6589,109 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "a-computed-shorthand-comes-from-its-longhands",
+      "chrome": {
+        "result": [
+          [
+            "1px solid rgb(255, 0, 0)",
+            "1px solid rgb(255, 0, 0)",
+            "1px",
+            "solid",
+            "rgb(255, 0, 0)"
+          ],
+          [
+            "1px 2px",
+            "3px",
+            "4px"
+          ],
+          [
+            "0px",
+            "0px",
+            "0px",
+            "normal",
+            "visible"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "1px solid rgb(255, 0, 0)",
+            "1px solid rgb(255, 0, 0)",
+            "1px",
+            "solid",
+            "rgb(255, 0, 0)"
+          ],
+          [
+            "1px 2px",
+            "3px",
+            "4px"
+          ],
+          [
+            "0px",
+            "0px",
+            "0px",
+            "normal",
+            "visible"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "1px solid red",
+            "1px solid red",
+            "1px",
+            "solid",
+            "red"
+          ],
+          [
+            "1px 2px",
+            "3px",
+            "4px"
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "",
+            "",
+            "1px",
+            "solid",
+            "rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0)"
+          ],
+          [
+            "1px 2px",
+            "3px",
+            "4px"
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 99,
+    "match": 100,
     "intentional-limit": 2,
     "drift": 0
   }

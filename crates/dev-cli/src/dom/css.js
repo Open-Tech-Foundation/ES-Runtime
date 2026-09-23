@@ -294,6 +294,77 @@ function kebab(name) {
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
+// Serializing a shorthand out of the longhands a declaration holds, which is how
+// `getComputedStyle(el).border` answers `1px solid rgb(255, 0, 0)` — a computed
+// style has no shorthands in it, only the parts.
+//
+// The families whose serialization is mechanical are listed here; a shorthand
+// that is not is answered with `""`, as a browser answers one it cannot
+// represent.
+const EDGE_FAMILIES = new Set([
+  "margin", "padding", "inset", "scroll-margin", "scroll-padding",
+  "border-width", "border-style", "border-color", "border-radius",
+]);
+
+// The per-family initial values a serialization leaves out.
+const OMITTED = new Map(Object.entries({
+  "border-width": "medium", "border-style": "none", "border-color": "currentcolor",
+  "outline-width": "medium", "outline-style": "none", "outline-color": "currentcolor",
+  "text-decoration-style": "solid", "text-decoration-color": "currentcolor",
+  "text-decoration-thickness": "auto", "list-style-position": "outside",
+  "list-style-image": "none", "list-style-type": "disc",
+}));
+
+// A run of equal values collapses, the way the 1-to-4 value pattern does.
+function collapse(values) {
+  const [top, right, bottom, left] = values;
+  if (left === right && bottom === top && right === top) return top;
+  if (left === right && bottom === top) return `${top} ${right}`;
+  if (left === right) return `${top} ${right} ${bottom}`;
+  return values.join(" ");
+}
+
+function serializeShorthandFrom(shorthand, read) {
+  const property = String(shorthand).toLowerCase();
+  const names = shorthandLonghands(property);
+  if (names.length === 0) return "";
+  const values = names.map((name) => read(name));
+  if (values.some((value) => value === "" || value === undefined)) return "";
+  if (EDGE_FAMILIES.has(property)) return collapse(values);
+  // `border`, `border-top`, `outline`: the three parts in order, and only where
+  // each side agrees with the others.
+  if (property === "border") {
+    const sides = ["top", "right", "bottom", "left"];
+    for (const part of ["width", "style", "color"]) {
+      const answers = sides.map((side) => read(`border-${side}-${part}`));
+      if (answers.some((answer) => answer !== answers[0])) return "";
+    }
+    return serializeShorthandFrom("border-top", read);
+  }
+  if (/^(border-(top|right|bottom|left)|outline|text-decoration|list-style|columns|flex-flow)$/.test(property)) {
+    const printed = names
+      .map((name) => [name, read(name)])
+      .filter(([name, value]) => value !== OMITTED.get(name))
+      .map(([, value]) => value);
+    return printed.length === 0 ? OMITTED.get(names[0]) ?? "" : printed.join(" ");
+  }
+  if (property === "flex") return values.join(" ");
+  if (property === "gap" || property === "overflow" || property.startsWith("place-")
+      || property === "overscroll-behavior" || /^(margin|padding|inset)-(block|inline)$/.test(property)) {
+    return values[0] === values[1] ? values[0] : values.join(" ");
+  }
+  if (/^grid-(row|column)$/.test(property)) {
+    return values[0] === values[1] ? values[0] : values.join(" / ");
+  }
+  if (property === "grid-area") {
+    const [rowStart, columnStart, rowEnd, columnEnd] = values;
+    return rowEnd === rowStart && columnEnd === columnStart
+      ? `${rowStart} / ${columnStart}`
+      : `${rowStart} / ${columnStart} / ${rowEnd} / ${columnEnd}`;
+  }
+  return "";
+}
+
 export function createCss({ Element, colors = null, valueTable = null }) {
   const types = valueTable === null ? null : valueTypes(valueTable);
   const realm = { colors, types };
@@ -454,7 +525,14 @@ export function createCss({ Element, colors = null, valueTable = null }) {
     }
     get length() { return this[STYLE].size; }
     item(index) { return Array.from(this[STYLE].keys())[index] ?? ""; }
-    getPropertyValue(name) { return this[STYLE].get(String(name))?.value ?? ""; }
+    getPropertyValue(name) {
+      const property = String(name);
+      const own = this[STYLE].get(property);
+      if (own) return own.value;
+      // A computed style holds longhands; a shorthand asked of it is serialized
+      // back out of them.
+      return serializeShorthandFrom(property, (longhand) => this[STYLE].get(longhand)?.value ?? "");
+    }
     getPropertyPriority(name) { return this[STYLE].get(String(name))?.priority ?? ""; }
     get cssText() { return serialize(this[STYLE]); }
     setProperty() { throw new TypeError("This style declaration is read-only"); }

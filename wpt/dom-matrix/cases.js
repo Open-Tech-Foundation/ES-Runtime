@@ -2290,6 +2290,31 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "cascade",
+    name: "a-computed-shorthand-comes-from-its-longhands",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      element.style.cssText = "border: 1px solid red; margin: 1px 2px; padding: 3px; border-radius: 4px";
+      document.body.appendChild(element);
+      const computed = window.getComputedStyle(element);
+      const read = (name) => computed.getPropertyValue(name);
+      const plain = document.createElement("div");
+      document.body.appendChild(plain);
+      const bare = window.getComputedStyle(plain);
+      return [
+        // A computed style holds no shorthands, so each of these is serialized
+        // back out of the parts — which is how `border` reports the colour it
+        // computed rather than the name that was written.
+        [read("border"), read("border-top"), read("border-width"), read("border-style"), read("border-color")],
+        [read("margin"), read("padding"), read("border-radius")],
+        // And with nothing declared, the initial values collapse the same way.
+        [bare.margin, bare.padding, bare.borderWidth, bare.gap, bare.overflow],
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

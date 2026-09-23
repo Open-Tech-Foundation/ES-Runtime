@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-99 of 101 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+100 of 102 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -137,6 +137,7 @@ compares the result.
 | colour-functions-are-canonical | cascade | yes | no | no |
 | lengths-are-absolute-when-they-can-be | cascade | yes | no | no |
 | the-layered-shorthands-expand-too | cascade | yes | no | no |
+| a-computed-shorthand-comes-from-its-longhands | cascade | yes | no | no |
 
 ## Where esdev is closer to Chrome than an emulator
 

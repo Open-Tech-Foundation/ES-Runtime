@@ -25,6 +25,17 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **A computed shorthand is serialized from its longhands.** `getComputedStyle(el).border`
+  answered the text that was written — `1px solid red` — where a browser answers
+  `1px solid rgb(255, 0, 0)`, because a computed style holds no shorthands at all:
+  only the parts, and a shorthand asked of it is assembled from them. It is
+  assembled here now, for the families whose serialization is mechanical — the
+  box edges and the radius with their 1-to-4 collapsing, the border and outline
+  families, the per-side borders, `flex`, `flex-flow`, `gap`, `overflow`,
+  `place-*`, `list-style`, `text-decoration`, `columns`, the logical edge pairs
+  and the grid line pairs. With nothing declared the initial values collapse the
+  same way, so `margin` reads `0px` rather than nothing. jsdom answers `""` here
+  and happy-dom answers the uncomputed text.
 - **A computed length is a length in pixels.** `font-size: 2em` read `2em` and
   `line-height: 1.5` read `1.5`; a browser answers `32px` and, at a 12px font,
   `18px`. Most of that conversion needs no layout, so it is done: the root font

@@ -90,7 +90,6 @@ const INITIAL = new Map(Object.entries({
   // browser answers those with a used value in pixels.
   "transform": "none",
   "opacity": "1",
-  "overflow": "visible",
   "overflow-x": "visible",
   "overflow-y": "visible",
   "float": "none",
@@ -104,7 +103,6 @@ const INITIAL = new Map(Object.entries({
   "align-items": "normal",
   "justify-content": "normal",
   "order": "0",
-  "gap": "normal",
   "row-gap": "normal",
   "column-gap": "normal",
   "grid-template-columns": "none",
@@ -119,7 +117,10 @@ const INITIAL = new Map(Object.entries({
   "border-right-width": "0px",
   "border-bottom-width": "0px",
   "border-left-width": "0px",
-  "border-radius": "0px",
+  "border-top-left-radius": "0px",
+  "border-top-right-radius": "0px",
+  "border-bottom-right-radius": "0px",
+  "border-bottom-left-radius": "0px",
   "outline-style": "none",
   "text-decoration-line": "none",
   "text-overflow": "clip",
@@ -143,13 +144,10 @@ const INITIAL = new Map(Object.entries({
   "right": "auto",
   "bottom": "auto",
   "left": "auto",
-  "inset": "auto",
-  "margin": "0px",
   "margin-top": "0px",
   "margin-right": "0px",
   "margin-bottom": "0px",
   "margin-left": "0px",
-  "padding": "0px",
   "padding-top": "0px",
   "padding-right": "0px",
   "padding-bottom": "0px",
@@ -591,14 +589,17 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
   // than nothing at all.
   function declarations(name, value) {
     const expanded = css.expandShorthand(name, value);
-    if (expanded.length > 0) return [[name, value], ...expanded];
+    // Only the longhands: a computed style holds no shorthands, and one asked of
+    // it is serialized back out of the parts — which is how `border` reports the
+    // colour it computed rather than the name that was written.
+    if (expanded.length > 0) return expanded;
     // A shorthand written with `var()` cannot be split until the custom
     // property is substituted, which happens when the value is computed. Its
     // longhands take the whole text now and are expanded then — the
     // specification's "pending substitution value", under a plainer name.
     if (String(value).includes("var(")) {
       const longhands = css.shorthandLonghands(name);
-      if (longhands.length > 0) return [[name, value], ...longhands.map((longhand) => [longhand, value, name])];
+      if (longhands.length > 0) return longhands.map((longhand) => [longhand, value, name]);
     }
     return [[name, value]];
   }
