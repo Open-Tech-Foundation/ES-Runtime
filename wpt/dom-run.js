@@ -9,9 +9,11 @@ const expectationsPath = new URL("./dom-expectations.json", import.meta.url);
 // testharness.js subtest statuses, by their numeric value.
 const statusNames = ["PASS", "FAIL", "TIMEOUT", "NOTRUN", "PRECONDITION_FAILED"];
 
-const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, update: false, verbose: false };
+const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, update: false, verbose: false, keep: false, jobs: Math.min(navigator.hardwareConcurrency ?? 4, 8) };
 for (const argument of Deno.args) {
   if (argument === "--verbose") flags.verbose = true;
+  else if (argument === "--keep") flags.keep = true;
+  else if (argument.startsWith("--jobs=")) flags.jobs = Number(argument.slice("--jobs=".length));
   else if (argument === "--update-expectations") flags.update = true;
   else if (argument.startsWith("--esdev=")) flags.esdev = argument.slice("--esdev=".length);
   else if (argument.startsWith("--filter=")) flags.filter = argument.slice("--filter=".length);
@@ -21,15 +23,62 @@ for (const argument of Deno.args) {
 }
 if (!Number.isFinite(flags.timeout) || flags.timeout <= 0) throw new Error("--timeout wants milliseconds");
 
+// A test is a `.any.js`/`.window.js` file, or an `.html` page that loads
+// testharness.js — which leaves out reftests, crash tests and the helper pages
+// under `resources/` and `support/`, none of which report subtests.
 async function files(directory) {
   const found = [];
   for await (const entry of Deno.readDir(new URL(`${directory}/`, root))) {
     const path = `${directory}/${entry.name}`;
-    if (entry.isDirectory) found.push(...await files(path));
-    else if (entry.isFile && (path.endsWith(".any.js") || path.endsWith(".window.js"))) found.push(path);
+    if (entry.isDirectory) {
+      if (entry.name !== "resources" && entry.name !== "support") found.push(...await files(path));
+    } else if (entry.isFile && (path.endsWith(".any.js") || path.endsWith(".window.js"))) found.push(path);
+    else if (entry.isFile && path.endsWith(".html")) {
+      const source = await Deno.readTextFile(new URL(path, root));
+      if (/<script[^>]*src=["']?\/resources\/testharness\.js/.test(source)) found.push(path);
+    }
   }
   return found;
 }
+
+// The harness is loaded once, ahead of the page; a page's own `<script src>` for
+// it, or for the report shim, is already satisfied.
+const PROVIDED = new Set(["/resources/testharness.js", "/resources/testharnessreport.js"]);
+
+// What runs an `.html` test: its markup becomes the document — parsed as a
+// document, then adopted into this one, with its script elements left in the
+// tree as a browser leaves them — and each classic script then runs in tree
+// order at global scope. A script that throws is reported and the next one
+// still runs, as in a page. A page the strict parser refuses is not a DOM
+// failure to count but a stated limit (D93), so it is reported as such.
+function pagePrelude(markup, externals) {
+  return `
+const markup = ${JSON.stringify(markup)};
+const externals = new Map(${JSON.stringify([...externals])});
+let parsed;
+try {
+  parsed = new DOMParser().parseFromString(markup, "text/html");
+} catch (error) {
+  console.log(${JSON.stringify(markupMarker)} + JSON.stringify(String(error?.message ?? error)));
+}
+if (parsed) {
+  for (const attribute of Array.from(parsed.documentElement.attributes)) document.documentElement.setAttribute(attribute.name, attribute.value);
+  for (const attribute of Array.from(parsed.body.attributes)) document.body.setAttribute(attribute.name, attribute.value);
+  // Snapshot before adopting: adoption takes each node out of the live list.
+  document.head.replaceChildren(...Array.from(parsed.head.childNodes).map((node) => document.adoptNode(node)));
+  document.body.replaceChildren(...Array.from(parsed.body.childNodes).map((node) => document.adoptNode(node)));
+  globalThis.__esdevPageScripts = Array.from(document.querySelectorAll("script")).flatMap((script) => {
+    const type = (script.getAttribute("type") ?? "").trim().toLowerCase();
+    if (type !== "" && type !== "text/javascript" && type !== "application/javascript") return [];
+    const src = script.getAttribute("src");
+    if (src === null) return [script.textContent];
+    return externals.has(src) ? [externals.get(src)] : [];
+  });
+}
+`;
+}
+
+const markupMarker = "__ESDEV_WPT_MARKUP__=";
 
 function metaScripts(source) {
   return [...source.matchAll(/^\/\/ META: script=(.+)$/gm)].map((match) => match[1].trim());
@@ -55,12 +104,39 @@ const harness = patch(await Deno.readTextFile(new URL("resources/testharness.js"
   ["selects its environment by `document`", "if ('document' in global_scope) {", "if (false) {"],
 ]);
 
+async function htmlTest(testPath, collector) {
+  const markup = await Deno.readTextFile(new URL(testPath, root));
+  const externals = new Map();
+  for (const [, src] of markup.matchAll(/<script\b[^>]*\bsrc=["']?([^"' >]+)/g)) {
+    if (PROVIDED.has(src) || externals.has(src)) continue;
+    externals.set(src, await Deno.readTextFile(scriptPath(src, testPath)));
+  }
+  return `${pagePrelude(markup, externals)}
+if (globalThis.__esdevPageScripts) {
+  (0,eval)(${JSON.stringify([harness, collector].join("\n;\n"))});
+  for (const script of globalThis.__esdevPageScripts) {
+    try { (0,eval)(script); } catch (error) { reportError(error); }
+  }
+  setTimeout(() => window.dispatchEvent(new Event("load")), 0);
+}
+`;
+}
+
 async function run(testPath) {
-  const source = await Deno.readTextFile(new URL(testPath, root));
-  const dependencies = await Promise.all(metaScripts(source).map((specifier) => Deno.readTextFile(scriptPath(specifier, testPath))));
-  const generated = testPath.replace(/\.js$/, ".__esdev-dom-wpt.test.mjs");
   const collector = `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
-  await Deno.writeTextFile(new URL(generated, root), `(0,eval)(${JSON.stringify([harness, collector, ...dependencies, source].join("\n;\n"))});\n`);
+  const generated = testPath.replace(/\.(js|html)$/, ".__esdev-dom-wpt.test.mjs");
+  let body;
+  try {
+    if (testPath.endsWith(".html")) body = await htmlTest(testPath, collector);
+    else {
+      const source = await Deno.readTextFile(new URL(testPath, root));
+      const dependencies = await Promise.all(metaScripts(source).map((specifier) => Deno.readTextFile(scriptPath(specifier, testPath))));
+      body = `(0,eval)(${JSON.stringify([harness, collector, ...dependencies, source].join("\n;\n"))});\n`;
+    }
+  } catch (error) {
+    return { harness: "ERROR", tests: [], message: `could not assemble the test: ${error.message}` };
+  }
+  await Deno.writeTextFile(new URL(generated, root), body);
   const child = new Deno.Command(flags.esdev, {
     args: ["test", "--dom", `--file=${generated}`], cwd: root.pathname, stdout: "piped", stderr: "piped",
   }).spawn();
@@ -73,11 +149,18 @@ async function run(testPath) {
     clearTimeout(deadline);
     const stdout = new TextDecoder().decode(output.stdout);
     const stderr = new TextDecoder().decode(output.stderr);
+    const refused = stdout.match(new RegExp(`^${markupMarker}(.+)$`, "m"))?.[1];
+    if (refused) return { harness: "MARKUP", tests: [], message: JSON.parse(refused) };
     const report = stdout.match(new RegExp(`^${marker}(.+)$`, "m"))?.[1];
     // Exit code included deliberately: a file whose harness never completes
     // prints nothing at all and exits 0, and "" is not a report of anything.
     if (!report) {
       const expired = output.signal !== null;
+      // Exit 0 and no report: every task ran and the harness was still
+      // waiting — on an event, a load, a callback that never came.
+      if (!expired && output.code === 0 && stdout.trim() === "" && stderr.trim() === "") {
+        return { harness: "INCOMPLETE", tests: [], message: "the harness never completed: it was waiting on something that never happened" };
+      }
       return {
         harness: expired ? "TIMEOUT" : "ERROR",
         tests: [],
@@ -87,27 +170,55 @@ async function run(testPath) {
     return { harness: "OK", ...JSON.parse(report) };
   } finally {
     clearTimeout(deadline);
-    await Deno.remove(new URL(generated, root)).catch(() => {});
+    // `--keep` leaves the generated file behind, to run by hand with `esdev test --dom --file=…`.
+    if (!flags.keep) await Deno.remove(new URL(generated, root)).catch(() => {});
   }
+}
+
+// The page and the scripts it loads, which is what scope decisions read.
+async function sourceOf(path) {
+  const text = await Deno.readTextFile(new URL(path, root));
+  const specifiers = path.endsWith(".html")
+    ? [...text.matchAll(/<script\b[^>]*\bsrc=["']?([^"' >]+)/g)].map((match) => match[1]).filter((src) => !PROVIDED.has(src))
+    : metaScripts(text);
+  const helpers = await Promise.all(specifiers.map((specifier) => Deno.readTextFile(scriptPath(specifier, path)).catch(() => "")));
+  return [text, ...helpers].join("\n");
 }
 
 const selected = (await Promise.all(roots.map(files))).flat().sort()
   .filter((path) => path.includes(flags.filter));
+const reasons = new Map(await Promise.all(selected.map(async (path) => [path, excluded(path, await sourceOf(path))])));
 const skipped = selected.flatMap((path) => {
-  const reason = excluded(path);
+  const reason = reasons.get(path);
   return reason ? [{ path, reason }] : [];
 });
-const runnable = selected.filter((path) => !excluded(path));
+const runnable = selected.filter((path) => !reasons.get(path));
 const totals = { files: selected.length, runnable: runnable.length, skipped: skipped.length, passed: 0, failed: 0, errored: 0, timeout: 0 };
 const failures = [];
 const results = {};
-for (const path of runnable) {
-  const result = await run(path);
-  if (flags.verbose) console.error(`${result.harness.padEnd(7)} ${path}`);
+// Files run in parallel — each is its own process — and are accounted in path
+// order afterwards, so the report does not depend on which finished first.
+const outcomes = new Array(runnable.length);
+let next = 0;
+await Promise.all(Array.from({ length: Math.max(1, flags.jobs) }, async () => {
+  while (next < runnable.length) {
+    const index = next++;
+    outcomes[index] = await run(runnable[index]);
+    if (flags.verbose) console.error(`${outcomes[index].harness.padEnd(7)} ${runnable[index]}`);
+  }
+}));
+for (const [index, path] of runnable.entries()) {
+  const result = outcomes[index];
+  if (result.harness === "MARKUP") {
+    totals.skipped++;
+    totals.runnable--;
+    skipped.push({ path, reason: `markup the strict parser refuses (D93): ${result.message}` });
+    continue;
+  }
   const subtests = {};
   results[path] = { harness: result.harness, subtests };
   if (result.harness !== "OK") {
-    if (result.harness === "TIMEOUT") totals.timeout++;
+    if (result.harness === "TIMEOUT" || result.harness === "INCOMPLETE") totals.timeout++;
     else totals.errored++;
     failures.push({ path, harness: result.harness, message: result.message });
     continue;

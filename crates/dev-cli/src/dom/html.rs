@@ -503,11 +503,12 @@ impl<'a> Parser<'a> {
             self.at += quote.len_utf8();
             return Ok(value);
         }
+        // An unquoted value runs to white space or `>`. A `/` is part of it, as
+        // in `src=/resources/a.js` — the tokenizer has no self-closing reading
+        // inside an unquoted value, and neither does a browser.
         let end = self
             .rest()
-            .find(|character: char| {
-                character.is_ascii_whitespace() || matches!(character, '>' | '/')
-            })
+            .find(|character: char| character.is_ascii_whitespace() || character == '>')
             .map_or(self.source.len(), |offset| self.at + offset);
         if end == self.at {
             return Err(self.error("attribute value is missing"));
@@ -816,6 +817,18 @@ mod tests {
         assert_eq!(
             script.children,
             vec![Node::Text("if (a < b) c()".to_string())]
+        );
+    }
+
+    #[test]
+    fn an_unquoted_value_keeps_its_slashes() {
+        let nodes = parse_fragment(
+            "<script src=/resources/a.js></script><a href=/x/ id=b>l</a><img alt=c />",
+        )
+        .expect("parse");
+        assert_eq!(
+            render(&nodes),
+            "<script src=\"/resources/a.js\"></script><a href=\"/x/\" id=\"b\">l</a><img alt=\"c\"></img>"
         );
     }
 

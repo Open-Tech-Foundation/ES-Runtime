@@ -223,13 +223,36 @@ deno run --allow-read --allow-run --allow-write wpt/dom-run.js
 # --json=<path>          write the report as well as printing it
 # --timeout=<ms>         per file, default 10000
 # --esdev=<path>         default target/debug/esdev
+# --jobs=<n>             files at once, default up to 8
+# --keep                 leave each generated test file in place
 ```
 
-Only `.any.js` and `.window.js` are collected: a `.html` test needs a document
-the runner would have to supply itself, which would make the result a test of
-the runner. `dom-scope.js` rules out the rest — server substitution, full Web
-IDL exposure, tentative APIs, nested browsing contexts, legacy APIs and script
-execution — and the report names the reason per file.
+Collected: `.any.js`, `.window.js`, and every `.html` page that loads
+`testharness.js` (reftests, crash tests and the pages under `resources/` and
+`support/` report no subtests and are not). An `.html` page used to be left out
+because the runner would have to supply its document, making the result a test
+of the runner. It supplies as little as it can: the page's own markup goes
+through this DOM's `DOMParser` and is adopted into the document, so what builds
+the page is the parser and `adoptNode` under test, not runner code. Its
+`<script>` elements stay in the tree, and each classic script then runs in tree
+order at global scope; one that throws is reported and the next still runs,
+then `load` fires. Leaving out the `.html` pages had hidden entire interfaces:
+`CharacterData`'s editing methods and `Text.splitText` were missing, and only
+their `.html` tests would have said so.
+
+Two differences from a browser remain. Every element exists before the first
+script runs, where a browser parses up to each script. And a page the strict
+parser refuses is **skipped with the parser's message** rather than counted as a
+DOM failure: refusing markup that omits optional tags is D93, not a bug to count
+against the DOM. `--keep` leaves the generated file in place to run by hand.
+
+`dom-scope.js` rules out the rest from the path and from the page's source,
+including every script it loads. That covers server substitution, full Web IDL
+exposure, tentative APIs, nested browsing contexts (an `<iframe>`,
+`contentWindow`, `window.open`), WebDriver automation (`testdriver.js`),
+scrolling, CSS animation, legacy APIs and script execution. The report names
+the reason per file. Files run in parallel (`--jobs=`, default the machine's
+parallelism up to 8) and are accounted in path order.
 
 Each file becomes one generated module beside the original, the same shape the
 worker slice uses and for the same reason:
@@ -253,8 +276,9 @@ result.)
 `--file=` is the per-file *child* of `esdev test`, so the timeout the parent
 would have applied is the runner's to apply. Without it a harness that never
 completes waits forever; with it the file is reported as `TIMEOUT`. A file that
-completes no harness at all exits `0` and prints nothing, so the report carries
-the exit code — `""` is not a diagnosis.
+completes no harness at all exits `0` and prints nothing, and is reported as
+`INCOMPLETE`: every task ran and the harness was still waiting on something
+that never happened.
 
 `dom-expectations.json` records every subtest's status per file, the same
 contract the worker slice works to: a recorded `PASS` that stops passing fails

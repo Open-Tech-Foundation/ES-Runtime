@@ -25,6 +25,10 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **An unquoted attribute value keeps its slashes.** `src=/resources/a.js` was
+  refused as a missing value, because the parser ended an unquoted value at a
+  `/`; HTML ends one only at white space or `>`, and so does the parser now.
+  Found by running WPT's `.html` pages, 88 of which it refused.
 - **A `MutationObserver` callback that throws is reported, not fatal.** It
   escaped the delivery microtask, failing the running test and starving every
   observer after it of its records. It is now reported as a listener's exception

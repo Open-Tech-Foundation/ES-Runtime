@@ -11,7 +11,10 @@ set -euo pipefail
 # expectations.json in the same commit.
 REV=ce9441ee673c68c5d175d2363c9ff2e4893b827c
 
-DIRS=(resources common workers webmessaging html/webappapis/structured-clone dom custom-elements shadow-dom)
+# html/resources and the one form-submission helper are scripts the DOM pages
+# load, not tests of their own.
+DIRS=(resources common workers webmessaging html/webappapis/structured-clone dom custom-elements shadow-dom
+  html/resources html/semantics/forms/form-submission-0/resources)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dest="$here/upstream"
