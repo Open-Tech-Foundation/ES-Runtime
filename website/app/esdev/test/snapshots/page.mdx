@@ -93,3 +93,20 @@ error. An inline snapshot cannot be taken in a loop with different values; use
 
 [Browser runs](/esdev/test/browser) read and write the same snapshot files, and
 write inline snapshots into the source the same way.
+
+## Coming from Jest or Vitest
+
+The matchers, their arguments and the update workflow are the same. Plain
+objects, arrays, strings and numbers are written the same way too, so those
+snapshots carry over as they are.
+
+A few values are written more precisely here:
+
+| Value | Jest | esdev |
+| --- | --- | --- |
+| A thrown error | `"bad input"` | `TypeError("bad input")` |
+| A date | `1970-01-01T00:00:00.000Z` | `Date("1970-01-01T00:00:00.000Z")` |
+| `expect.any(Number)` | `Any<Number>` | `any(Number)` |
+
+Snapshots holding these fail once after moving. Review them and run
+`esdev test --update-snapshots`.
