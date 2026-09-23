@@ -12568,3 +12568,176 @@ await server.stop();
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `esdev test --browser` against a machine made of stubs: a `PATH` holding
+/// only the executables written here, each printing the version it is given,
+/// so the choice does not depend on which browsers the machine running the
+/// tests happens to have. The versions are fixtures, not anybody's machine.
+///
+/// **Linux only**, because only there is `PATH` the whole search. On macOS and
+/// Windows esdev also looks where the vendor's installer puts a browser
+/// (`/Applications`, `Program Files`), and a CI runner has real browsers
+/// there that a replaced `PATH` cannot hide. Those locations are covered by
+/// the unit tests in `browser.rs`, against a described machine.
+#[cfg(target_os = "linux")]
+fn browser_machine(name: &str, executables: &[(&str, &str)]) -> (PathBuf, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = build_dir(name);
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    for (command, version) in executables {
+        let path = bin.join(command);
+        std::fs::write(&path, format!("#!/bin/sh\necho \"{version}\"\n")).expect("write stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let path = bin.display().to_string();
+    (dir, path)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_browser_takes_the_first_that_can_be_driven_and_says_what_it_skipped() {
+    let (dir, path) = browser_machine(
+        "t_browser_auto",
+        &[
+            ("google-chrome", "Google Chrome 120.0.6099.71"),
+            (
+                "chromium",
+                "Chromium 131.0.6778.85 built on Debian GNU/Linux 12 (bookworm)",
+            ),
+            (
+                "chromedriver",
+                "ChromeDriver 131.0.6778.85 (0a1b2c3d-refs/branch-heads/6778@{#1})",
+            ),
+            ("firefox", "Mozilla Firefox 128.0"),
+        ],
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--browser"])
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test --browser");
+    let err = slash_paths(&stderr(&out));
+    assert!(
+        err.contains("browser: chromium 131 (") && err.contains("/bin/chromium, driven by "),
+        "{err}"
+    );
+    assert!(
+        err.contains("skipped chrome: chromedriver 131 (")
+            && err.contains("does not match chrome 120"),
+        "{err}"
+    );
+    // The choice goes to stderr: stdout belongs to the reporter.
+    assert_eq!(stdout(&out), "");
+    // Chosen, and not yet driven — which fails rather than passing a suite
+    // that never ran.
+    assert!(!out.status.success());
+    assert!(err.contains("not built yet"), "{err}");
+
+    // Named, the same mismatch is the answer rather than a reason to move on.
+    let out = esdev_in(&dir)
+        .args(["test", "--browser=chrome"])
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test --browser=chrome");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("cannot run the tests in chrome"), "{err}");
+    assert!(
+        !err.contains("browser: "),
+        "a named browser fell back: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_browser_with_nothing_to_drive_says_so_and_downloads_nothing() {
+    let (dir, path) = browser_machine(
+        "t_browser_none",
+        &[("google-chrome", "Google Chrome 120.0")],
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--browser"])
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test --browser");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("no browser that can run the tests"), "{err}");
+    assert!(
+        err.contains("install the chromedriver 120 matching"),
+        "{err}"
+    );
+    for browser in ["chrome", "chromium", "firefox", "edge", "safari"] {
+        assert!(
+            err.contains(&format!("\n  {browser}: ")),
+            "{browser} missing: {err}"
+        );
+    }
+    assert!(
+        err.contains("downloads neither browsers nor drivers"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_browser_comes_from_esdev_json_and_the_flag_wins() {
+    let (dir, path) = browser_machine("t_browser_config", &[("firefox", "Mozilla Firefox 128.0")]);
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "browser": "firefox" } }"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test");
+    let err = stderr(&out);
+    assert!(err.contains("browser: firefox 128 ("), "{err}");
+
+    let out = esdev_in(&dir)
+        .args(["test", "--browser=safari"])
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test --browser=safari");
+    let err = stderr(&out);
+    assert!(err.contains("cannot run the tests in safari"), "{err}");
+    assert!(err.contains("not ready"), "{err}");
+
+    write_in(&dir, "esdev.json", r#"{ "test": { "browser": "opera" } }"#);
+    let out = esdev_in(&dir)
+        .arg("test")
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("`test`'s `browser`"), "{err}");
+    assert!(err.contains("`opera` is not a browser"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_browser_refuses_what_has_no_meaning_in_a_page() {
+    for (args, want) in [
+        (&["test", "--browser=opera"][..], "`opera` is not a browser"),
+        (&["test", "--browser", "--dom"][..], "--dom and --browser"),
+        (
+            &["test", "--browser", "--deny-all"][..],
+            "permission flags rehearse",
+        ),
+        (
+            &["test", "--browser", "--isolation=none"][..],
+            "--isolation=none",
+        ),
+    ] {
+        let out = esdev().args(args).output().expect("spawn esdev test");
+        assert!(!out.status.success(), "{args:?} was accepted");
+        let err = stderr(&out);
+        assert!(err.contains(want), "{args:?}: {err}");
+    }
+}

@@ -180,6 +180,8 @@ pub struct TestSettings {
     pub isolation: Option<TestIsolation>,
     /// `"human"` (the default) or `"json"`.
     pub reporter: Option<String>,
+    /// Run the files in a real browser rather than this runtime, and which.
+    pub browser: Option<crate::browser::Choice>,
 }
 
 /// The boundary between files selected by `esdev test`.
@@ -356,7 +358,14 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "devdir"];
 
 /// The keys `test` may carry.
-const TEST_KEYS: &[&str] = &["setup", "timeout", "jobs", "isolation", "reporter"];
+const TEST_KEYS: &[&str] = &[
+    "setup",
+    "timeout",
+    "jobs",
+    "isolation",
+    "reporter",
+    "browser",
+];
 
 /// The keys `jsx` may carry.
 const JSX_KEYS: &[&str] = &["importSource", "factory", "fragment", "development"];
@@ -694,12 +703,29 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
             ));
         }
     };
+    let browser = match map.get("browser") {
+        None => None,
+        Some(Value::String(name)) => Some(
+            crate::browser::Choice::parse(name)
+                .map_err(|err| format!("{file}: `test`'s `browser`: {err}"))?,
+        ),
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `browser` is {}, and it names the browser the test \
+                 files run in.\n\n\
+                 \"auto\" for the first available, or one of \"chrome\", \"chromium\", \
+                 \"firefox\", \"edge\": \"browser\": \"auto\".",
+                kind(other)
+            ));
+        }
+    };
     Ok(TestSettings {
         setup,
         timeout,
         jobs,
         isolation,
         reporter,
+        browser,
     })
 }
 
@@ -2233,6 +2259,25 @@ mod tests {
 
         // Nothing said is nothing assumed.
         assert_eq!(read(r#"{ "test": {} }"#).expect("read").jsx.function, None);
+    }
+
+    #[test]
+    fn a_test_section_names_its_browser() {
+        use crate::browser::{Browser, Choice};
+        assert_eq!(read(r#"{ "test": {} }"#).expect("read").test.browser, None);
+        let auto = read(r#"{ "test": { "browser": "auto" } }"#).expect("read");
+        assert_eq!(auto.test.browser, Some(Choice::Auto));
+        let firefox = read(r#"{ "test": { "browser": "firefox" } }"#).expect("read");
+        assert_eq!(firefox.test.browser, Some(Choice::Named(Browser::Firefox)));
+
+        let unknown = read(r#"{ "test": { "browser": "opera" } }"#).expect_err("refused");
+        assert!(unknown.contains("`test`'s `browser`"), "{unknown}");
+        assert!(unknown.contains("`opera` is not a browser"), "{unknown}");
+        let wrong = read(r#"{ "test": { "browser": true } }"#).expect_err("refused");
+        assert!(
+            wrong.contains("names the browser the test files run in"),
+            "{wrong}"
+        );
     }
 
     #[test]

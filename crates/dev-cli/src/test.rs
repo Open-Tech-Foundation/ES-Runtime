@@ -45,6 +45,9 @@ use crate::config::TestIsolation;
 pub struct TestConfig {
     /// Install the esdev-only DOM realm before the test module evaluates.
     pub dom: bool,
+    /// Run the files in a real browser over WebDriver BiDi instead, from
+    /// `--browser` or the project's `test.browser`.
+    pub browser: Option<crate::browser::Choice>,
     /// How JSX in a test file compiles, from the project's `jsx` section. Read
     /// by the parent and by every `--file` child, so a test means the same
     /// thing however it was started.

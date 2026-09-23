@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D99 — Test files run in a real browser over WebDriver BiDi, with what the machine already has · *Proposed (2026-09-23)*
+
+**Context:** the test DOM answers Chrome's way for what the behaviour matrix covers, and nothing else can say whether a component test that passes under `--dom` passes in a browser. The repository already asks Chrome questions (`wpt/chrome-run.js`, `bench/dev-server`), but through Puppeteer over CDP: one vendor's protocol, driven from a Node library, which is neither something `esdev` can ship nor something that reaches Firefox.
+
+**Decision (maintainer approved the scope; sign-off pending on the record):**
+- **`esdev test --browser` runs the same test files, with the same `runtime:test`, in a real page.** Unit and component tests only. Rejected: a page-driving API for end-to-end flows (`runtime:browser` — open, click, fill, navigate). That is a Playwright, and it is a different product; this is the missing half of DOM testing, not a second test framework.
+- **Standard WebDriver BiDi and nothing else.** Firefox serves it itself. Chrome, Chromium and Edge serve only CDP, and speak BiDi through their vendor's driver (`chromedriver`, `msedgedriver`), reached with a classic `POST /session` asking for `webSocketUrl`. Rejected: CDP (one vendor's protocol) and running Google's BiDi-to-CDP mapper ourselves, which is CDP underneath.
+- **Nothing is downloaded.** The environment provides the browser and its driver, or the run fails saying which is missing and which version to install. Rejected: fetching drivers or browsers on demand (D7 — a binary the build did not pin, from a network the run should not need).
+- **`auto` is an order, and says what it passed over:** Chrome, Chromium, Firefox, Edge, Safari, first one that can be driven. A browser named outright never falls back. Safari is placed in the order and never available until its BiDi support is.
+- **Chrome and Chromium are two browsers, and a driver must match its browser's major version.** Found on the machine this was written on: Debian's `chromium-driver` upgrades Chromium to its own version, and leaves the Google Chrome beside it where it was. Treated as one browser, `chrome` would have paired Chrome 147 with chromedriver 153 and failed at session start with the driver's message. A version either side will not state is left to the driver.
+
+**Consequences:** browser selection, the flag and the `test.browser` key land first; a run stops after choosing, saying it cannot drive the browser yet. The runner — a BiDi client, the `__ops` shim that reports over `script.channel`, a user context per file — follows. **Not solved here:** Safari; `--isolation=none`, `--dom` and permission flags, each of which has no meaning in a page and is refused. Documented per D27 (`esdev test --help`, `crates/dev-cli/CHANGELOG.md`); the API and guide pages follow the runner, since a page describing a run that cannot happen yet would be the documentation lying first.
+
+---
+
 ### D94 — The test DOM resolves what needs no box, and says what it leaves · *Proposed (2026-09-23)* · *extends D93*
 
 **Context:** `getComputedStyle` answered specified values: `font-size: 2em` read `2em`, `line-height: 1.5` read `1.5`, `color: red` read `red`, and a shorthand read the text that was written. The stated reason was "resolving a used value needs layout", which is true of a percentage of the containing block and false of almost everything else — a framework port made that visible, because a component test asserting on a theme colour reads `rgb(255, 0, 0)` or it reads nothing useful.

@@ -24,6 +24,27 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+- **`esdev test --browser[=<name>]` chooses the browser the test files will
+  run in**, and `"test": { "browser": "auto" }` says the same in `esdev.json`
+  (the flag wins). This is the first half: the run stops once it has chosen,
+  saying it cannot drive the browser yet, and fails. The runner is next
+  (DECISIONS D99).
+  - **WebDriver BiDi only, and nothing is downloaded.** Firefox serves BiDi
+    itself; Chrome, Chromium and Edge need `chromedriver` or `msedgedriver` on
+    `PATH`. A missing browser or driver is an error naming what to install.
+  - **`auto` tries Chrome, Chromium, Firefox, Edge, then Safari**, takes the
+    first one that can be driven, and prints (to stderr) what it chose and why
+    it skipped each one ahead of it. A browser named outright never falls back.
+  - **A driver must match its browser's major version.** Chrome and Chromium
+    are separate browsers, because a distribution's driver package moves with
+    its own Chromium and not with a Google Chrome installed beside it:
+    `chromedriver 131 … does not match chrome 120` is a browser skipped, not a
+    session that fails to start.
+  - Safari is refused until its BiDi support is ready. `--dom`, the permission
+    flags and `--isolation=none` are refused beside `--browser`, since none of
+    them means anything in a page.
+
 ## [0.9.0] - 2026-09-23
 
 ### Changed

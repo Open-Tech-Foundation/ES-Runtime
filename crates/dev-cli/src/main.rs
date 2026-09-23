@@ -40,6 +40,7 @@ use es_runtime_cli_common::{Config, Source};
 
 mod adapter;
 mod assets;
+mod browser;
 mod build;
 mod bundler;
 mod check;
@@ -191,6 +192,11 @@ OPTIONS:
                                 files serially in one process and retain caches
     --watch                     Run them again whenever a source file changes
     --dom                       Install esdev's test-only DOM globals
+    --browser[=<name>]          Run the files in a real browser over WebDriver
+                                BiDi: auto (the default) takes the first of
+                                chrome, chromium, firefox, edge that can be
+                                driven; all but firefox need their matching
+                                driver on PATH. Nothing is downloaded
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -205,7 +211,7 @@ OPTIONS:
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
 
-`setup`, `timeout`, `jobs`, `isolation` and `reporter` are also esdev.json
+`setup`, `timeout`, `jobs`, `isolation`, `reporter` and `browser` are also esdev.json
 keys, under \"test\" — the rest (`--update-snapshots`, `--ci`, `--full-diff`
 and the permission flags) are flags only: they decide a single run, not the
 project:
@@ -1401,6 +1407,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut full_diff = false;
     let mut snapshot_prune = None;
     let mut dom = false;
+    let mut browser = None;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1455,6 +1462,14 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--dom" => {
                 reject_value(flag, value)?;
                 dom = true;
+            }
+            "--browser" => {
+                browser = Some(match value {
+                    None => browser::Choice::Auto,
+                    Some(name) => {
+                        browser::Choice::parse(name).map_err(|err| format!("{flag}: {err}"))?
+                    }
+                });
             }
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
             "--timeout" | "-t" => {
@@ -1523,6 +1538,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     test_capabilities(&permission_args)?;
     Ok(TestConfig {
         dom,
+        browser,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1611,6 +1627,41 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
     if config.reporter.is_none() {
         config.reporter = project.test.reporter.clone();
     }
+    if config.browser.is_none() {
+        config.browser = project.test.browser;
+    }
+    Ok(())
+}
+
+/// Refuses what cannot mean anything once the files run in a browser.
+///
+/// Checked after the project is read, since `test.browser` in `esdev.json`
+/// puts a run in a browser as surely as the flag does.
+fn validate_browser_test_config(config: &TestConfig) -> Result<(), String> {
+    if config.browser.is_none() {
+        return Ok(());
+    }
+    if config.dom {
+        return Err("--dom and --browser are two answers to one question.\n\n\
+             --dom installs esdev's own DOM in this runtime; --browser runs the file \
+             in a browser, which has the real one. Pick one."
+            .to_string());
+    }
+    if !config.permission_args.is_empty() {
+        return Err(
+            "permission flags rehearse this runtime's grant, and a browser \
+             run is not in this runtime.\n\n\
+             A page has the browser's own sandbox; drop the --deny/--allow flags, \
+             or drop --browser to rehearse the production grant."
+                .to_string(),
+        );
+    }
+    if config.isolation == Some(TestIsolation::None) {
+        return Err("--isolation=none shares one process between files, and a \
+             browser run has no process of esdev's to share.\n\n\
+             In a browser each file gets a browsing context of its own."
+            .to_string());
+    }
     Ok(())
 }
 
@@ -1619,6 +1670,33 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
 /// The parent spawns a child per file rather than looping in-process, so a file
 /// that hangs or exits takes only itself down. `--file` is what a child is
 /// invoked with, and is equally a supported way to run one file by hand.
+/// Runs the test files in a browser over WebDriver BiDi.
+///
+/// What is chosen, and what was passed over, goes to stderr: it describes the
+/// run rather than being a result of it, and stdout belongs to the reporter.
+fn run_browser_tests(config: &TestConfig) -> ExitCode {
+    if let Err(err) = validate_browser_test_config(config) {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
+    let Some(choice) = config.browser else {
+        return ExitCode::FAILURE;
+    };
+    let selected = match browser::select(choice, &browser::System) {
+        Ok(selected) => selected,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    eprintln!("{}", selected.describe());
+    eprintln!(
+        "error: running test files in a browser is not built yet — this esdev can \
+         choose the browser, but not drive it."
+    );
+    ExitCode::FAILURE
+}
+
 async fn run_tests(mut config: TestConfig) -> ExitCode {
     // The file's `test` section, where a flag did not already answer. Read here
     // rather than in the parser because the parser has no project: a `--file`
@@ -1630,6 +1708,10 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             eprintln!("error: {err}");
             return ExitCode::FAILURE;
         }
+    }
+
+    if config.browser.is_some() {
+        return run_browser_tests(&config);
     }
 
     if let Some(file) = config.file {
