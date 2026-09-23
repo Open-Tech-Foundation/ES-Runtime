@@ -5248,6 +5248,112 @@
     },
     {
       "group": "tree",
+      "name": "form-and-select-collections-are-their-interfaces",
+      "chrome": {
+        "result": [
+          true,
+          "HTMLFormControlsCollection",
+          7,
+          [
+            "input:a",
+            "input:g",
+            "input:g",
+            "output:o",
+            "fieldset:f",
+            "input:inner",
+            "select:s"
+          ],
+          "RadioNodeList",
+          true,
+          2,
+          "y",
+          "x",
+          null,
+          null,
+          "1",
+          true,
+          "HTMLOptionsCollection",
+          1,
+          2,
+          1,
+          true,
+          1,
+          "<option>1</option>"
+        ]
+      },
+      "esdev": {
+        "result": [
+          true,
+          "HTMLFormControlsCollection",
+          7,
+          [
+            "input:a",
+            "input:g",
+            "input:g",
+            "output:o",
+            "fieldset:f",
+            "input:inner",
+            "select:s"
+          ],
+          "RadioNodeList",
+          true,
+          2,
+          "y",
+          "x",
+          null,
+          null,
+          "1",
+          true,
+          "HTMLOptionsCollection",
+          1,
+          2,
+          1,
+          true,
+          1,
+          "<option>1</option>"
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          true,
+          "HTMLFormControlsCollection",
+          7,
+          [
+            "input:a",
+            "input:g",
+            "input:g",
+            "output:o",
+            "fieldset:f",
+            "input:inner",
+            "select:s"
+          ],
+          "RadioNodeList",
+          true,
+          2,
+          "y",
+          "x",
+          null,
+          null,
+          "1",
+          true,
+          "HTMLOptionsCollection",
+          1,
+          2,
+          1,
+          true,
+          1,
+          "<option>1</option>"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
       "name": "character-data-is-edited-in-place",
       "chrome": {
         "result": [
@@ -10820,7 +10926,7 @@
     }
   ],
   "summary": {
-    "match": 117,
+    "match": 118,
     "intentional-limit": 2,
     "drift": 0
   }

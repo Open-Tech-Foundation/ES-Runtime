@@ -670,7 +670,19 @@ function nameInterfaces(source) {
   }
 }
 
-Object.assign(globalThis, events, tree, css, elements, { document, customElements });
+// The interfaces, and only those: a module's internal helpers are not the
+// platform's, and code that found them here would not find them in a browser.
+// Web IDL makes an interface object writable, configurable and not enumerable.
+for (const source of [events, tree, css, elements]) {
+  for (const [name, value] of Object.entries(source)) {
+    // Constructors, and `NodeFilter`, an interface object that is not one; a
+    // module's ALL_CAPS constants are not the platform's.
+    const isInterface = /^[A-Z]/.test(name) && (typeof value === "function" || /^[A-Z][a-z]/.test(name));
+    if (!isInterface) continue;
+    Object.defineProperty(globalThis, name, { value, writable: true, configurable: true, enumerable: false });
+  }
+}
+Object.assign(globalThis, { document, customElements });
 globalThis.window = globalThis;
 const globals = {
   DOMParser: parse.DOMParser,
@@ -714,7 +726,14 @@ const globals = {
   sessionStorage,
   getSelection: () => selection,
 };
-Object.assign(globalThis, globals);
+// Interfaces non-enumerable, as above; the window's own members — functions
+// like `getComputedStyle`, objects like `history` — as plain properties.
+for (const [name, value] of Object.entries(globals)) {
+  // `CSS` is a namespace object, which Web IDL exposes the same way.
+  if (/^[A-Z]/.test(name) && (typeof value === "function" || name === "CSS")) {
+    Object.defineProperty(globalThis, name, { value, writable: true, configurable: true, enumerable: false });
+  } else globalThis[name] = value;
+}
 
 nameInterfaces(events);
 nameInterfaces(tree);

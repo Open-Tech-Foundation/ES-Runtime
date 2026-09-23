@@ -8,7 +8,7 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 # DOM parity
 
 Chrome is the oracle. 228 features — interfaces, members and behaviours — are
-put to all four runtimes, and 119 behaviour cases run the same code in each.
+put to all four runtimes, and 120 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
@@ -32,7 +32,7 @@ put to all four runtimes, and 119 behaviour cases run the same code in each.
 
 ## Behaviour cases
 
-117 of 119 cases match Chrome exactly, and 2 is a documented limit.
+118 of 120 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -95,6 +95,7 @@ put to all four runtimes, and 119 behaviour cases run the same code in each.
 | an-element-can-be-upgraded-on-demand | components | yes | yes | no |
 | constants-node-values-and-odd-nodes-serialize | tree | yes | no | no |
 | every-way-an-attribute-changes-is-one-change | tree | yes | no | no |
+| form-and-select-collections-are-their-interfaces | tree | yes | yes | no |
 | character-data-is-edited-in-place | tree | yes | no | no |
 | a-range-edits-text-through-character-data | tree | yes | yes | no |
 | slots-assign-and-flatten | components | yes | yes | no |

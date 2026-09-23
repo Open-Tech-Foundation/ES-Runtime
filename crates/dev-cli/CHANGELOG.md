@@ -25,6 +25,20 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **A form's controls and a select's options are their interfaces.**
+  - `form.elements` is one live `HTMLFormControlsCollection` for the form's
+    life. It includes `object` and `output`, leaves out image buttons as the
+    specification says, and a name several controls share is a
+    `RadioNodeList`, whose `value` reads and checks the group.
+  - `select.options` is one `HTMLOptionsCollection`, with `length`,
+    `selectedIndex`, `add` and `remove`.
+  - `fieldset.elements` is the same object on every read.
+  - `<output>` reflects `name` and reports `type` as `"output"`.
+- **Only interfaces are globals, and they are not enumerable.** The DOM's
+  modules put their internal helpers on the global as well:
+  `staticNodeList`, `ownAttributes`, `isDisabled`, `install`, `types` and
+  more, which don't exist in a browser. Only interface objects are exposed
+  now, non-enumerable, as Web IDL defines them.
 - **A click activates, however it is dispatched.** Checkboxes, radios, submit
   and reset buttons, labels, links and `<summary>` acted only through their
   own `click()` methods. `dispatchEvent(new MouseEvent("click"))`, which is

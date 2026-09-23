@@ -352,6 +352,47 @@ export function createTree(events = {}) {
   // of a token — and an edit that leaves the set empty on an element without
   // the attribute does not create one.
   const ASCII_WHITESPACE = /[\t\n\f\r ]/;
+  // A form's `elements`: its listed controls, where a name that more than one
+  // control answers to is a RadioNodeList of all of them.
+  class HTMLFormControlsCollection extends HTMLCollection {
+    namedItem(name) {
+      name = String(name);
+      if (name === "") return null;
+      const matches = this._values().filter((element) => element.id === name || element.getAttribute("name") === name);
+      if (matches.length === 0) return null;
+      if (matches.length === 1) return matches[0];
+      const owner = this;
+      return new RadioNodeList(this[COLLECTION].root, () => owner._values().filter((element) => element.id === name || element.getAttribute("name") === name));
+    }
+    _namedProperty(name) { return this.namedItem(name) ?? undefined; }
+  }
+
+  // The controls one name answers to, with the radio group's `value`: the
+  // checked button's, and setting it checks the button that has it.
+  class RadioNodeList extends NodeList {
+    get value() {
+      const checked = this._values().find((node) => node instanceof HTMLInputElement && node.type === "radio" && node.checked);
+      if (!checked) return "";
+      return checked.getAttribute("value") ?? "on";
+    }
+    set value(value) {
+      value = String(value);
+      const radio = this._values().find((node) => node instanceof HTMLInputElement && node.type === "radio"
+        && (node.getAttribute("value") ?? "on") === value);
+      if (radio) radio.checked = true;
+    }
+  }
+
+  // A select's `options`: the collection that edits the list it reads.
+  class HTMLOptionsCollection extends HTMLCollection {
+    get length() { return this._values().length; }
+    set length(value) { this[COLLECTION].root.length = value; }
+    get selectedIndex() { return this[COLLECTION].root.selectedIndex; }
+    set selectedIndex(value) { this[COLLECTION].root.selectedIndex = value; }
+    add(element, before = null) { this[COLLECTION].root.add(element, before); }
+    remove(index) { this[COLLECTION].root.remove(index); }
+  }
+
   class DOMTokenList {
     constructor(element, attribute = "class", supported = null) {
       Object.defineProperty(this, ATTRS, { value: { element, attribute, supported } });
@@ -1896,9 +1937,17 @@ export function createTree(events = {}) {
     return false;
   }
 
+  // The "listed elements" a form or fieldset gathers. An image button is one,
+  // but a form's `elements` leaves it out, as the specification says.
+  const LISTED = new Set(["button", "fieldset", "input", "object", "output", "select", "textarea"]);
+  const isListed = (element) => (element.namespaceURI === HTML_NAMESPACE && LISTED.has(element.localName)) || isFormAssociated(element);
+
   class HTMLFormElement extends HTMLElement {
+    // [SameObject]: one live collection for the form's life.
     get elements() {
-      return new HTMLCollection(this, () => Array.from(this.ownerDocument.getElementsByTagName("*")).filter((element) => (["button", "fieldset", "input", "select", "textarea"].includes(element.localName) || isFormAssociated(element)) && formOwner(element) === this));
+      const state = slots(this);
+      return state.formElements ??= new HTMLFormControlsCollection(this, (form) => collect(form.getRootNode(), (element) =>
+        isListed(element) && !(element instanceof HTMLInputElement && element.type === "image") && formOwner(element) === form));
     }
     reset() {
       const event = new Event("reset", { bubbles: true, cancelable: true });
@@ -1956,7 +2005,11 @@ export function createTree(events = {}) {
     // Not a reflection of anything: `type` says which kind of select this is,
     // and a framework reads it to decide whether one value or many are in play.
     get type() { return this.multiple ? "select-multiple" : "select-one"; }
-    get options() { return new HTMLCollection(this, (root) => collect(root, (element) => element instanceof HTMLOptionElement)); }
+    // [SameObject]: the one live collection of the select's options.
+    get options() {
+      const state = slots(this);
+      return state.options ??= new HTMLOptionsCollection(this, (root) => collect(root, (element) => element instanceof HTMLOptionElement));
+    }
     get length() { return this.options.length; }
     set length(value) {
       value = Math.max(0, Math.trunc(Number(value) || 0));
@@ -2020,7 +2073,8 @@ export function createTree(events = {}) {
     // the same question a form asks: a form follows the form owner, so a
     // control can belong to a form it is nowhere near.
     get elements() {
-      return new HTMLCollection(this, () => Array.from(this.getElementsByTagName("*")).filter((element) => ["button", "fieldset", "input", "object", "output", "select", "textarea"].includes(element.localName)));
+      const state = slots(this);
+      return state.fieldsetElements ??= new HTMLCollection(this, (fieldset) => collect(fieldset, isListed));
     }
   }
   class HTMLOptGroupElement extends HTMLElement {}
@@ -3559,6 +3613,8 @@ export function createTree(events = {}) {
   defineTokenList(HTML_INTERFACES.HTMLLinkElement, "relList", "rel", LINK_RELATIONS);
   defineTokenList(HTML_INTERFACES.HTMLLinkElement, "sizes", "sizes", null);
   defineTokenList(HTML_INTERFACES.HTMLOutputElement, "htmlFor", "for", null);
+  installReflectors(HTML_INTERFACES.HTMLOutputElement, { name: "name" });
+  defineIdl(HTML_INTERFACES.HTMLOutputElement.prototype, { type: { get() { return "output"; } } });
   defineTokenList(HTML_INTERFACES.HTMLIFrameElement, "sandbox", "sandbox", SANDBOX_FLAGS);
 
   // A valid custom element name, which is the only kind of element that can be
@@ -3693,5 +3749,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, isValidCustomElementName, setAttributeReaction, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, HTMLFormControlsCollection, HTMLOptionsCollection, RadioNodeList, isValidCustomElementName, setAttributeReaction, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }

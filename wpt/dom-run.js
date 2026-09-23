@@ -123,7 +123,10 @@ if (globalThis.__esdevPageScripts) {
   for (const script of globalThis.__esdevPageScripts) {
     try { (0,eval)(";" + script); } catch (error) { reportError(error); }
   }
-  setTimeout(() => { window.dispatchEvent(new Event("load")); globalThis.__esdevArm(); }, 0);
+  // The constructor taken now: a page may delete the global (interface-objects
+  // deletes every one).
+  const LoadEvent = Event;
+  setTimeout(() => { window.dispatchEvent(new LoadEvent("load")); globalThis.__esdevArm(); }, 0);
 }
 `;
 }

@@ -1491,6 +1491,38 @@ export const cases = [
   },
   {
     group: "tree",
+    name: "form-and-select-collections-are-their-interfaces",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const form = document.createElement("form");
+      form.innerHTML = "<input name=a value=1><input type=radio name=g value=x><input type=radio name=g value=y checked>"
+        + "<input type=image name=img><output name=o></output><fieldset name=f><input name=inner></fieldset>"
+        + "<select name=s><option>1</option><option selected>2</option></select>";
+      document.body.append(form);
+      const elements = form.elements;
+      const group = elements.namedItem("g");
+      const before = group.value;
+      group.value = "x";
+      const select = form.querySelector("select");
+      const options = select.options;
+      const shape = [
+        elements === form.elements, elements.constructor.name, elements.length,
+        Array.from(elements, (element) => element.localName + (element.name ? `:${element.name}` : "")),
+        group.constructor.name, group instanceof window.NodeList, group.length, before, group.value,
+        elements.namedItem("img"), elements.namedItem("nope"), elements.namedItem("a").value,
+        options === select.options, options.constructor.name, options.selectedIndex, options.length,
+        form.querySelector("fieldset").elements.length,
+        form.querySelector("fieldset").elements === form.querySelector("fieldset").elements,
+      ];
+      options.length = 1;
+      shape.push(select.options.length, select.innerHTML);
+      form.remove();
+      return shape;
+    },
+  },
+  {
+    group: "tree",
     name: "character-data-is-edited-in-place",
     async run(window) {
       const { document } = window;
