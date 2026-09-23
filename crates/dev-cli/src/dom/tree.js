@@ -14,7 +14,6 @@ const TEMPLATE_CONTENT = Symbol("esdev DOM template content");
 const VALIDITY = Symbol("esdev DOM validity state");
 const VALIDITY_CONTROL = Symbol("esdev DOM validity control");
 const IMPLEMENTATION = Symbol("esdev DOM implementation");
-const ITERATOR = Symbol("esdev DOM node iterator position");
 const SHADOW_OPTIONS = Symbol("esdev DOM shadow root options");
 const INTERNALS = Symbol("esdev DOM element internals");
 const FORM_VALUE = Symbol("esdev DOM submission value");
@@ -814,6 +813,7 @@ export function createTree(events = {}) {
 
     _remove(child, suppress = false) {
       child.ownerDocument?._activeElementRemoved?.(child);
+      if (liveIterators.size > 0) iteratorsBeforeRemoval(child);
       const state = slots(child);
       const parent = slots(this);
       const previousSibling = state.previous;
@@ -2848,8 +2848,7 @@ export function createTree(events = {}) {
     }
     createDocumentFragment() { return new DocumentFragment(this); }
     createTreeWalker(root, whatToShow = NodeFilter.SHOW_ALL, filter = null) {
-      if (!(root instanceof Node)) throw new TypeError("createTreeWalker root must be a Node");
-      return new TreeWalker(root, whatToShow, filter);
+      return new TreeWalker(root, whatToShow, filter, TRAVERSAL);
     }
     // Legacy, and still normative: a library that builds events this way is
     // asking for an interface by name. The modern names are answered; the
@@ -2861,8 +2860,7 @@ export function createTree(events = {}) {
       return events.createLegacy(interfaceName);
     }
     createNodeIterator(root, whatToShow = NodeFilter.SHOW_ALL, filter = null) {
-      if (!(root instanceof Node)) throw new TypeError("createNodeIterator root must be a Node");
-      return new NodeIterator(root, whatToShow, filter);
+      return new NodeIterator(root, whatToShow, filter, TRAVERSAL);
     }
     createAttribute(name) {
       name = String(name);
@@ -2975,63 +2973,115 @@ export function createTree(events = {}) {
     }
   }
 
-  // `whatToShow` is a bit per node type: bit `nodeType - 1`.
-  function showMask(node) {
-    return 1 << (node.nodeType - 1);
-  }
-
   // Pre-order, with the reference node and `pointerBeforeReferenceNode` the
   // specification names. It is not a TreeWalker with a different surface: a
   // NodeIterator's position is *between* nodes, which is what makes going
   // forward and then back land on the same node rather than skipping one.
+  // Traversal, from the DOM specification's algorithms. Both kinds share
+  // "filter": the node type against `whatToShow`, then the filter — a function
+  // called as itself, or an object whose `acceptNode` is called on it — with a
+  // flag that makes a filter walking its own traverser an InvalidStateError.
+  const TRAVERSAL = Symbol("esdev DOM traversal");
+  function traversalFilter(traverser, node) {
+    const state = traverser[TRAVERSAL];
+    if (state.active) throw domError("InvalidStateError", "A traversal filter cannot use the traverser it filters for.");
+    if (!(state.whatToShow & (1 << (node.nodeType - 1)))) return NodeFilter.FILTER_SKIP;
+    const filter = state.filter;
+    if (filter === null) return NodeFilter.FILTER_ACCEPT;
+    state.active = true;
+    try {
+      let result;
+      if (typeof filter === "function") result = filter.call(undefined, node);
+      else {
+        const accept = filter.acceptNode;
+        if (typeof accept !== "function") throw new TypeError("A NodeFilter needs an acceptNode method.");
+        result = accept.call(filter, node);
+      }
+      // `unsigned short`, as Web IDL converts it.
+      const number = Number(result);
+      return Number.isFinite(number) ? Math.trunc(number) & 0xFFFF : 0;
+    } finally {
+      state.active = false;
+    }
+  }
+  function traversalState(root, whatToShow, filter) {
+    if (!(root instanceof Node)) throw new TypeError("A traversal root must be a Node");
+    const number = Number(whatToShow);
+    return {
+      root,
+      whatToShow: Number.isFinite(number) ? Math.trunc(number) >>> 0 : 0,
+      filter: filter ?? null,
+      active: false,
+    };
+  }
+
+  // Every NodeIterator that may need its reference moved when a node leaves
+  // the tree, held weakly so an abandoned iterator costs nothing.
+  const liveIterators = new Set();
+
   class NodeIterator {
-    constructor(root, whatToShow, filter) {
-      defineIdl(this, {
-        root: { value: root, enumerable: true },
-        whatToShow: { value: Number(whatToShow) >>> 0, enumerable: true },
-        filter: { value: filter ?? null, enumerable: true },
-      });
-      this[ITERATOR] = { reference: root, before: true };
+    constructor(root, whatToShow, filter, brand) {
+      if (brand !== TRAVERSAL) throw new TypeError("Illegal constructor");
+      this[TRAVERSAL] = { ...traversalState(root, whatToShow, filter), reference: root, before: true };
+      liveIterators.add(new WeakRef(this));
     }
-    get referenceNode() { return this[ITERATOR].reference; }
-    get pointerBeforeReferenceNode() { return this[ITERATOR].before; }
-    _accepts(node) {
-      if (!(this.whatToShow & showMask(node))) return false;
-      if (this.filter === null) return true;
-      const decision = typeof this.filter === "function" ? this.filter(node) : this.filter.acceptNode(node);
-      // A NodeIterator has no REJECT: a rejected node is skipped, and its
-      // children are still visited.
-      return decision === NodeFilter.FILTER_ACCEPT;
-    }
-    _step(forward) {
-      const state = this[ITERATOR];
+    get root() { return this[TRAVERSAL].root; }
+    get whatToShow() { return this[TRAVERSAL].whatToShow; }
+    get filter() { return this[TRAVERSAL].filter; }
+    get referenceNode() { return this[TRAVERSAL].reference; }
+    get pointerBeforeReferenceNode() { return this[TRAVERSAL].before; }
+    _traverse(next) {
+      const state = this[TRAVERSAL];
       let node = state.reference;
       let before = state.before;
       for (;;) {
-        if (forward) {
-          if (before) before = false;
-          else {
-            const next = following(node, this.root);
-            if (!next) return null;
-            node = next;
-          }
-        } else if (!before) before = true;
-        else {
-          const previous = preceding(node, this.root);
-          if (!previous) return null;
-          node = previous;
-        }
-        if (this._accepts(node)) {
-          state.reference = node;
-          state.before = before;
-          return node;
-        }
+        if (next) {
+          if (!before) {
+            node = following(node, state.root);
+            if (!node) return null;
+          } else before = false;
+        } else if (before) {
+          node = preceding(node, state.root);
+          if (!node) return null;
+        } else before = true;
+        if (traversalFilter(this, node) === NodeFilter.FILTER_ACCEPT) break;
       }
+      state.reference = node;
+      state.before = before;
+      return node;
     }
-    nextNode() { return this._step(true); }
-    previousNode() { return this._step(false); }
+    nextNode() { return this._traverse(true); }
+    previousNode() { return this._traverse(false); }
     // Long obsolete and specified to do nothing.
     detach() {}
+  }
+
+  // "NodeIterator pre-removing steps": a reference node about to leave moves
+  // to the nearest node that stays.
+  function iteratorsBeforeRemoval(removed) {
+    for (const ref of liveIterators) {
+      const iterator = ref.deref();
+      if (!iterator) { liveIterators.delete(ref); continue; }
+      const state = iterator[TRAVERSAL];
+      if (removed === state.root || !isInclusiveAncestor(removed, state.reference)) continue;
+      if (state.before) {
+        let next = null;
+        for (let at = removed; at && at !== state.root; at = at.parentNode) {
+          if (at.nextSibling) { next = at.nextSibling; break; }
+        }
+        if (next && isInclusiveAncestor(state.root, next)) {
+          state.reference = next;
+          continue;
+        }
+        state.before = false;
+      }
+      let previous = removed.previousSibling;
+      if (previous === null) state.reference = removed.parentNode;
+      else {
+        while (previous.lastChild) previous = previous.lastChild;
+        state.reference = previous;
+      }
+    }
   }
 
   function following(node, root) {
@@ -3042,40 +3092,128 @@ export function createTree(events = {}) {
     return null;
   }
 
+  // The node before this one in tree order, within `root` — which includes the
+  // root itself.
   function preceding(node, root) {
     if (node === root) return null;
     let previous = node.previousSibling;
-    if (!previous) return node.parentNode === root ? null : node.parentNode;
+    if (!previous) return node.parentNode;
     while (previous.lastChild) previous = previous.lastChild;
     return previous;
   }
 
   class TreeWalker {
-    constructor(root, whatToShow, filter) {
-      this.root = root;
-      this.whatToShow = Number(whatToShow) >>> 0;
-      this.filter = filter;
-      this.currentNode = root;
+    constructor(root, whatToShow, filter, brand) {
+      if (brand !== TRAVERSAL) throw new TypeError("Illegal constructor");
+      this[TRAVERSAL] = { ...traversalState(root, whatToShow, filter), current: root };
     }
-    _result(node) {
-      if (!(this.whatToShow & showMask(node))) return NodeFilter.FILTER_SKIP;
-      if (this.filter === null) return NodeFilter.FILTER_ACCEPT;
-      const result = typeof this.filter === "function" ? this.filter(node) : this.filter.acceptNode(node);
-      return [NodeFilter.FILTER_ACCEPT, NodeFilter.FILTER_REJECT, NodeFilter.FILTER_SKIP].includes(result) ? result : NodeFilter.FILTER_SKIP;
+    get root() { return this[TRAVERSAL].root; }
+    get whatToShow() { return this[TRAVERSAL].whatToShow; }
+    get filter() { return this[TRAVERSAL].filter; }
+    get currentNode() { return this[TRAVERSAL].current; }
+    set currentNode(node) {
+      if (!(node instanceof Node)) throw new TypeError("currentNode must be a Node");
+      this[TRAVERSAL].current = node;
     }
-    nextNode() {
-      let node = this.currentNode;
-      while (node) {
-        const result = node === this.currentNode ? NodeFilter.FILTER_SKIP : this._result(node);
-        if (node.firstChild && result !== NodeFilter.FILTER_REJECT) node = node.firstChild;
-        else {
-          while (node && node !== this.root && !node.nextSibling) node = node.parentNode;
-          if (!node || node === this.root) return null;
-          node = node.nextSibling;
-        }
-        if (this._result(node) === NodeFilter.FILTER_ACCEPT) { this.currentNode = node; return node; }
+    _accept(node) {
+      this[TRAVERSAL].current = node;
+      return node;
+    }
+    parentNode() {
+      const { root } = this[TRAVERSAL];
+      let node = this[TRAVERSAL].current;
+      while (node && node !== root) {
+        node = node.parentNode;
+        if (node && traversalFilter(this, node) === NodeFilter.FILTER_ACCEPT) return this._accept(node);
       }
       return null;
+    }
+    _children(first) {
+      const { root } = this[TRAVERSAL];
+      const current = this[TRAVERSAL].current;
+      let node = first ? current.firstChild : current.lastChild;
+      while (node) {
+        const result = traversalFilter(this, node);
+        if (result === NodeFilter.FILTER_ACCEPT) return this._accept(node);
+        if (result === NodeFilter.FILTER_SKIP) {
+          const child = first ? node.firstChild : node.lastChild;
+          if (child) { node = child; continue; }
+        }
+        for (;;) {
+          const sibling = first ? node.nextSibling : node.previousSibling;
+          if (sibling) { node = sibling; break; }
+          const parent = node.parentNode;
+          if (parent === null || parent === root || parent === current) return null;
+          node = parent;
+        }
+      }
+      return null;
+    }
+    firstChild() { return this._children(true); }
+    lastChild() { return this._children(false); }
+    _siblings(next) {
+      const { root } = this[TRAVERSAL];
+      let node = this[TRAVERSAL].current;
+      if (node === root) return null;
+      for (;;) {
+        let sibling = next ? node.nextSibling : node.previousSibling;
+        while (sibling) {
+          node = sibling;
+          const result = traversalFilter(this, node);
+          if (result === NodeFilter.FILTER_ACCEPT) return this._accept(node);
+          sibling = next ? node.firstChild : node.lastChild;
+          if (result === NodeFilter.FILTER_REJECT || sibling === null) sibling = next ? node.nextSibling : node.previousSibling;
+        }
+        node = node.parentNode;
+        if (node === null || node === root) return null;
+        if (traversalFilter(this, node) === NodeFilter.FILTER_ACCEPT) return null;
+      }
+    }
+    nextSibling() { return this._siblings(true); }
+    previousSibling() { return this._siblings(false); }
+    previousNode() {
+      const { root } = this[TRAVERSAL];
+      let node = this[TRAVERSAL].current;
+      while (node !== root) {
+        let sibling = node.previousSibling;
+        while (sibling) {
+          node = sibling;
+          let result = traversalFilter(this, node);
+          while (result !== NodeFilter.FILTER_REJECT && node.hasChildNodes()) {
+            node = node.lastChild;
+            result = traversalFilter(this, node);
+          }
+          if (result === NodeFilter.FILTER_ACCEPT) return this._accept(node);
+          sibling = node.previousSibling;
+        }
+        if (node === root || node.parentNode === null) return null;
+        node = node.parentNode;
+        if (traversalFilter(this, node) === NodeFilter.FILTER_ACCEPT) return this._accept(node);
+      }
+      return null;
+    }
+    nextNode() {
+      const { root } = this[TRAVERSAL];
+      let node = this[TRAVERSAL].current;
+      let result = NodeFilter.FILTER_ACCEPT;
+      for (;;) {
+        while (result !== NodeFilter.FILTER_REJECT && node.hasChildNodes()) {
+          node = node.firstChild;
+          result = traversalFilter(this, node);
+          if (result === NodeFilter.FILTER_ACCEPT) return this._accept(node);
+        }
+        let sibling = null;
+        for (let temporary = node; temporary; temporary = temporary.parentNode) {
+          if (temporary === root) return null;
+          sibling = temporary.nextSibling;
+          if (sibling) break;
+        }
+        // Outside the root with nowhere left to go: the walk is over.
+        if (sibling === null) return null;
+        node = sibling;
+        result = traversalFilter(this, node);
+        if (result === NodeFilter.FILTER_ACCEPT) return this._accept(node);
+      }
     }
   }
 

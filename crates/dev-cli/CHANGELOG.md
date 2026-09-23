@@ -25,6 +25,25 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **TreeWalker, NodeIterator and Range are complete.** TreeWalker had only
+  `nextNode`. It now has `parentNode`, `firstChild`, `lastChild`,
+  `previousSibling`, `nextSibling`, `previousNode` and a settable
+  `currentNode`, each the specification's algorithm. A filter is called as the
+  specification says, and one that uses its own traverser is an
+  `InvalidStateError`. A NodeIterator walks back to its root, and its reference
+  moves when that node is removed. Range gained `cloneRange`, `comparePoint`,
+  `isPointInRange`, `intersectsNode` and `new Range()`. Setting a boundary in
+  another tree collapses the range there instead of throwing, as in Chrome. A
+  comment's or processing instruction's length is its data, `compareBoundaryPoints`
+  converts its mode as Web IDL does, and `detach()` does nothing, as specified.
+  `root`, `whatToShow` and `filter` are prototype attributes on both traversal
+  interfaces. `Selection.addRange` ignores a range outside its document, or a
+  second range, instead of throwing or replacing.
+- **Live ranges no longer cost every mutation.** Every range ever created was
+  kept and walked on each insert, removal and text edit. Ranges are now indexed
+  by the nodes they are anchored in and held weakly, so a mutation touches only
+  the ranges where it happened, and a document with no ranges does no range work.
+  3,000 edits of a node holding 3,000 ranges took 6.2 s; they take 0.66 s.
 - **One mutation, one record.** Inserting a fragment, `append(a, b)`,
   `textContent`, `innerHTML` and `replaceChildren` each queued a record per node.
   The specification queues one, with every added and removed node in it, and a

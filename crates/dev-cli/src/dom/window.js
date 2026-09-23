@@ -313,9 +313,11 @@ class Selection {
   get focusNode() { return this.#ranges[0]?.endContainer ?? null; }
   get focusOffset() { return this.#ranges[0]?.endOffset ?? 0; }
   get isCollapsed() { return this.#ranges.length === 0 || this.#ranges.every((range) => range.collapsed); }
+  // A range outside this document, or a second range, is ignored rather than
+  // refused: a selection holds at most one range, as in Chrome.
   addRange(range) {
     if (!(range instanceof ranges.Range)) throw new TypeError("Selection.addRange expects a Range");
-    if (range.document !== document) throw new DOMException("The range belongs to another document.", "WrongDocumentError");
+    if (range.startContainer.getRootNode() !== document || this.#ranges.length > 0) return;
     this.#ranges = [range];
   }
   removeAllRanges() { this.#ranges = []; }

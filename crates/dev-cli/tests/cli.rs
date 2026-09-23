@@ -5318,7 +5318,8 @@ fn test_dom_range_tracks_and_validates_boundary_points() {
            range.setEnd(parent, 0); assertEquals([range.startOffset, range.endOffset, range.collapsed], [0, 0, true]);\n\
            range.setStartBefore(second); range.setEndAfter(second); assertEquals([range.startOffset, range.endOffset], [1, 2]);\n\
            assertThrows(() => range.setStart(parent, 3), DOMException); assertThrows(() => range.setEnd(parent, -1), DOMException);\n\
-           const other = new Document().createElement('div'); assertThrows(() => range.setStart(other, 0), DOMException);\n\
+           const other = new Document().createElement('div'); range.setStart(other, 0);\n\
+           assertEquals([range.startContainer, range.endContainer, range.collapsed], [other, other, true]);\n\
          });\n",
     );
     let ran = esdev_in(&dir)
