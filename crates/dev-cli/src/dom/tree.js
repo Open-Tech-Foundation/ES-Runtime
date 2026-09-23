@@ -185,6 +185,14 @@ function asNodes(value, document, NodeClass) {
   return value.map((item) => (item instanceof NodeClass ? item : document.createTextNode(String(item))));
 }
 
+// "Convert nodes into a node": one node as itself, several in a new fragment.
+function convertNodes(nodes, document) {
+  if (nodes.length === 1) return nodes[0];
+  const fragment = document.createDocumentFragment();
+  for (const node of nodes) fragment._preInsert(node, null);
+  return fragment;
+}
+
 // Web IDL puts an interface's members on the prototype as **configurable**, and
 // a test relies on it: `vi.spyOn(input, "checked", "set")` and every other stub
 // redefines the property it is replacing, and a descriptor that forgot the flag
@@ -597,21 +605,42 @@ export function createTree(events = {}) {
       return node;
     }
 
+    // `Node? child` is required: missing, or anything but a node or null, is a
+    // TypeError before any tree check runs.
     insertBefore(node, child) {
       if (!(node instanceof Node)) throw new TypeError("insertBefore expects a Node");
-      if (child !== null && child.parentNode !== this) throw domError("NotFoundError", "The reference child is not a child of this node.");
-      this._preInsert(node, child);
+      if (arguments.length < 2) throw new TypeError("insertBefore takes a reference child, or null");
+      if (child !== null && child !== undefined && !(child instanceof Node)) throw new TypeError("insertBefore's reference child must be a Node or null");
+      this._preInsert(node, child ?? null);
       return node;
     }
 
+    // "Replace": the old child leaves and the new one arrives with observers
+    // suppressed, and one record says both — even when a node replaces itself.
     replaceChild(node, child) {
       if (!(node instanceof Node)) throw new TypeError("replaceChild expects a Node");
       if (!(child instanceof Node)) throw new TypeError("replaceChild expects a Node to replace");
+      return this._replace(node, child);
+    }
+
+    _replace(node, child) {
       this._validateInsertion(node, child, true);
-      if (node === child) return child;
-      const reference = child.nextSibling === node ? node.nextSibling : child.nextSibling;
-      this._remove(child);
-      this._insert(node, reference);
+      let reference = child.nextSibling;
+      if (reference === node) reference = node.nextSibling;
+      let previousSibling = child.previousSibling;
+      if (previousSibling === node) previousSibling = node.previousSibling;
+      // Adopting the new node first takes it out of wherever it was, with a
+      // record of its own — so a node replacing its own sibling, or itself,
+      // is seen leaving before the replacement happens.
+      if (!(node instanceof DocumentFragment) && node.parentNode) node.parentNode._remove(node);
+      const removedNodes = [];
+      if (child.parentNode !== null) {
+        removedNodes.push(child);
+        this._remove(child, true);
+      }
+      const addedNodes = node instanceof DocumentFragment ? Array.from(node._esdevChildren()) : [node];
+      this._insert(node, reference, true);
+      (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes, removedNodes, previousSibling, nextSibling: reference });
       return child;
     }
 
@@ -628,46 +657,74 @@ export function createTree(events = {}) {
       if (this.parentNode) this.parentNode._remove(this);
     }
 
+    // The ChildNode and ParentNode methods "convert nodes into a node" — one
+    // node, or a fragment holding all of them — and insert that once, so they
+    // make one record. `before`, `after` and `replaceWith` find a viable
+    // sibling first: one that is not itself among what is being inserted.
     before(...items) {
-      if (!this.parentNode) return;
-      this.parentNode._insertMany(asNodes(items, this.ownerDocument, Node), this);
+      const parent = this.parentNode;
+      if (!parent) return;
+      const nodes = asNodes(items, this.ownerDocument, Node);
+      let viable = this.previousSibling;
+      while (viable && nodes.includes(viable)) viable = viable.previousSibling;
+      const node = convertNodes(nodes, this.ownerDocument);
+      parent._preInsert(node, viable === null ? parent.firstChild : viable.nextSibling);
     }
 
     after(...items) {
-      if (!this.parentNode) return;
-      this.parentNode._insertMany(asNodes(items, this.ownerDocument, Node), this.nextSibling);
+      const parent = this.parentNode;
+      if (!parent) return;
+      const nodes = asNodes(items, this.ownerDocument, Node);
+      let viable = this.nextSibling;
+      while (viable && nodes.includes(viable)) viable = viable.nextSibling;
+      parent._preInsert(convertNodes(nodes, this.ownerDocument), viable);
     }
 
     replaceWith(...items) {
-      if (!this.parentNode) return;
       const parent = this.parentNode;
-      parent._insertMany(asNodes(items, this.ownerDocument, Node), this);
-      parent._remove(this);
+      if (!parent) return;
+      const nodes = asNodes(items, this.ownerDocument, Node);
+      let viable = this.nextSibling;
+      while (viable && nodes.includes(viable)) viable = viable.nextSibling;
+      const node = convertNodes(nodes, this.ownerDocument);
+      if (this.parentNode === parent) parent._replace(node, this);
+      else parent._preInsert(node, viable);
     }
 
-    append(...items) { this._insertMany(asNodes(items, this.ownerDocument ?? this, Node), null); }
-    prepend(...items) { this._insertMany(asNodes(items, this.ownerDocument ?? this, Node), this.firstChild); }
+    append(...items) { this._preInsert(convertNodes(asNodes(items, this.ownerDocument ?? this, Node), this.ownerDocument ?? this), null); }
+    prepend(...items) { this._preInsert(convertNodes(asNodes(items, this.ownerDocument ?? this, Node), this.ownerDocument ?? this), this.firstChild); }
     replaceChildren(...items) {
-      const nodes = asNodes(items, this.ownerDocument ?? this, Node);
-      while (this.firstChild) this._remove(this.firstChild);
-      this._insertMany(nodes, null);
+      const node = convertNodes(asNodes(items, this.ownerDocument ?? this, Node), this.ownerDocument ?? this);
+      this._validateInsertion(node, null);
+      this._replaceAll(node);
     }
 
     // The spec's "replace all", as one operation rather than as a call to
     // `replaceChildren`: `innerHTML` is defined in terms of this, and a browser
-    // makes no public call a patched prototype could see.
+    // makes no public call a patched prototype could see. Everything leaves and
+    // arrives with observers suppressed, and one record says so.
     _replaceAll(node) {
-      while (this.firstChild) this._remove(this.firstChild);
-      if (node) this._insert(node, null);
+      const removedNodes = Array.from(this._esdevChildren());
+      const addedNodes = node === null || node === undefined ? []
+        : node instanceof DocumentFragment ? Array.from(node._esdevChildren()) : [node];
+      for (const child of removedNodes) this._remove(child, true);
+      if (node) this._insert(node, null, true);
+      if (addedNodes.length > 0 || removedNodes.length > 0) {
+        (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes, removedNodes, previousSibling: null, nextSibling: null });
+      }
     }
 
+    // Internal inserts of several nodes, which a public call would have made
+    // one operation.
     _insertMany(nodes, before) {
-      for (const node of nodes) this._preInsert(node, before);
+      if (nodes.length > 0) this._preInsert(convertNodes(nodes, this.ownerDocument ?? this), before);
     }
 
     _preInsert(node, before) {
       this._validateInsertion(node, before ?? null);
-      this._insert(node, before);
+      let reference = before ?? null;
+      if (reference === node) reference = node.nextSibling;
+      this._insert(node, reference);
     }
 
     // "Ensure pre-insert validity", and with `replacing` "ensure replace
@@ -722,9 +779,18 @@ export function createTree(events = {}) {
       }
     }
 
-    _insert(node, before) {
+    // "Insert": a fragment gives up its children in one step, with a record of
+    // its own, and the parent gets one record for everything that arrived —
+    // unless the caller is making the record itself (`suppress`).
+    _insert(node, before, suppress = false) {
       const document = this instanceof Document ? this : this.ownerDocument;
       const candidates = node instanceof DocumentFragment ? Array.from(node._esdevChildren()) : [node];
+      if (candidates.length === 0) return;
+      if (node instanceof DocumentFragment) {
+        for (const child of candidates) node._remove(child, true);
+        (node.ownerDocument ?? node)._queueMutation?.({ type: "childList", target: node, addedNodes: [], removedNodes: candidates, previousSibling: null, nextSibling: null });
+      }
+      const previousSibling = before ? before.previousSibling : slots(this).last;
       for (const candidate of candidates) {
         if (candidate.ownerDocument !== document) document.adoptNode(candidate);
         if (candidate.parentNode) candidate.parentNode._remove(candidate);
@@ -739,12 +805,14 @@ export function createTree(events = {}) {
         if (next) slots(next).previous = candidate; else target.last = candidate;
         document._adjustRanges?.insert(this, childIndex(candidate));
         this._touch();
-        document._queueMutation?.({ type: "childList", target: this, addedNodes: [candidate], removedNodes: [], previousSibling: previous, nextSibling: next });
         signalSlotChange(this instanceof Element ? this : null);
+      }
+      if (!suppress) {
+        document._queueMutation?.({ type: "childList", target: this, addedNodes: candidates, removedNodes: [], previousSibling, nextSibling: before ?? null });
       }
     }
 
-    _remove(child) {
+    _remove(child, suppress = false) {
       child.ownerDocument?._activeElementRemoved?.(child);
       const state = slots(child);
       const parent = slots(this);
@@ -758,7 +826,7 @@ export function createTree(events = {}) {
       state.next = null;
       this._touch();
       (this.ownerDocument ?? this)._keepObserving?.(this, child);
-      (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes: [], removedNodes: [child], previousSibling, nextSibling });
+      if (!suppress) (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes: [], removedNodes: [child], previousSibling, nextSibling });
       signalSlotChange(this instanceof Element ? this : null);
     }
 
@@ -771,19 +839,22 @@ export function createTree(events = {}) {
       // `null` — and assigning to one does nothing. Anything else would let
       // `document.textContent = ""` empty the document.
       if (this instanceof Document || this instanceof DocumentType) return null;
+      if (this instanceof CharacterData) return this.data;
+      // The descendant text content: Text nodes only, so neither a comment nor
+      // a processing instruction contributes.
       let text = "";
-      for (const child of this._esdevChildren()) {
-        if (!(child instanceof Comment)) text += child.textContent;
-      }
+      descendants(this, (node) => { if (node instanceof Text && node !== this) text += node.data; });
       return text;
     }
 
     set textContent(value) {
-      if (this instanceof Text || this instanceof Comment) { this.data = value ?? ""; return; }
+      if (this instanceof CharacterData) { this.data = value ?? ""; return; }
       if (this instanceof Attr) { this.value = value ?? ""; return; }
       if (this instanceof Document || this instanceof DocumentType) return;
-      while (this.firstChild) this._remove(this.firstChild);
-      if (value !== null && value !== "") this._insert((this.ownerDocument ?? this).createTextNode(String(value)), null);
+      // "String replace all": one record, whatever was there. `DOMString?`
+      // makes undefined null, so it clears rather than writing "undefined".
+      value = value == null ? "" : String(value);
+      this._replaceAll(value === "" ? null : (this.ownerDocument ?? this).createTextNode(value));
     }
 
     isSameNode(other) { return other === this; }
@@ -2740,8 +2811,11 @@ export function createTree(events = {}) {
     }
     createTextNode(data) { return new Text(data, this); }
     createComment(data) { return new Comment(data, this); }
-    createCDATASection(_data) {
-      throw domError("NotSupportedError", "An HTML document cannot contain a CDATA section.");
+    createCDATASection(data) {
+      if (isHTMLDocument(this)) throw domError("NotSupportedError", "An HTML document cannot contain a CDATA section.");
+      data = String(data);
+      if (data.includes("]]>")) throw domError("InvalidCharacterError", "A CDATA section cannot contain ']]>'.");
+      return new CDATASection(data, this);
     }
     createProcessingInstruction(target, data) {
       target = String(target);

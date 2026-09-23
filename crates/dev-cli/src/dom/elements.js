@@ -129,10 +129,10 @@ export function createElements(tree) {
   };
 
   const originalInsert = Node.prototype._insert;
-  Node.prototype._insert = function (node, before) {
+  Node.prototype._insert = function (node, before, suppress) {
     const inserted = node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? Array.from(node.childNodes) : [node];
     for (const child of inserted) upgradeTree(child);
-    const result = originalInsert.call(this, node, before);
+    const result = originalInsert.call(this, node, before, suppress);
     // A connected callback may synchronously add a custom-element child.  It
     // receives its own insertion reaction, so walk a pre-reaction snapshot to
     // avoid invoking that child a second time while descending the parent.
@@ -143,9 +143,9 @@ export function createElements(tree) {
   };
 
   const originalRemove = Node.prototype._remove;
-  Node.prototype._remove = function (child) {
+  Node.prototype._remove = function (child, suppress) {
     const connected = child.isConnected;
-    const result = originalRemove.call(this, child);
+    const result = originalRemove.call(this, child, suppress);
     if (connected) walk(child, (element) => react(element, "disconnectedCallback"));
     return result;
   };

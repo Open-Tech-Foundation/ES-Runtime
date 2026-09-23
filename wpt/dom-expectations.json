@@ -7091,8 +7091,47 @@
     }
   },
   "dom/nodes/MutationObserver-childList.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "OK",
+    "subtests": {
+      "childList Node.nodeValue: no mutation": "PASS",
+      "childList Node.textContent: replace content mutation": "PASS",
+      "childList Node.textContent: no previous content mutation": "PASS",
+      "childList Node.textContent: textContent no mutation": "PASS",
+      "childList Node.textContent: empty string mutation": "PASS",
+      "childList Node.normalize mutation": "PASS",
+      "childList Node.normalize mutations": "PASS",
+      "childList Node.insertBefore: addition mutation": "PASS",
+      "childList Node.insertBefore: removal mutation": "PASS",
+      "childList Node.insertBefore: removal and addition mutations": "PASS",
+      "childList Node.insertBefore: fragment addition mutations": "PASS",
+      "childList Node.insertBefore: fragment removal mutations": "PASS",
+      "childList Node.insertBefore: last child addition mutation": "PASS",
+      "childList Node.appendChild: addition mutation": "PASS",
+      "childList Node.appendChild: removal mutation": "PASS",
+      "childList Node.appendChild: removal and addition mutations": "PASS",
+      "childList Node.appendChild: fragment addition mutations": "PASS",
+      "childList Node.appendChild: fragment removal mutations": "PASS",
+      "childList Node.appendChild: addition outside document tree mutation": "PASS",
+      "childList Node.replaceChild: replacement mutation": "PASS",
+      "childList Node.replaceChild: removal mutation": "PASS",
+      "childList Node.replaceChild: internal replacement mutation": "PASS",
+      "childList Node.replaceChild: self internal replacement mutation": "PASS",
+      "childList Node.removeChild: removal mutation": "PASS",
+      "Range (r70) is created": "PASS",
+      "childList Range.deleteContents: child removal mutation": "PASS",
+      "Range (r71) is created": "PASS",
+      "childList Range.deleteContents: child and data removal mutation": "PASS",
+      "Range (r80) is created": "PASS",
+      "childList Range.extractContents: child removal mutation": "PASS",
+      "Range (r81) is created": "PASS",
+      "childList Range.extractContents: child and data removal mutation": "PASS",
+      "Range (r90) is created": "PASS",
+      "childList Range.insertNode: child insertion mutation": "PASS",
+      "Range (r91) is created": "PASS",
+      "childList Range.insertNode: children insertion mutation": "PASS",
+      "Range (r100) is created": "PASS",
+      "childList Range.surroundContents: children removal and addition mutation": "PASS"
+    }
   },
   "dom/nodes/MutationObserver-disconnect.html": {
     "harness": "OK",
@@ -7108,8 +7147,8 @@
   "dom/nodes/MutationObserver-inner-outer.html": {
     "harness": "OK",
     "subtests": {
-      "innerHTML mutation": "FAIL",
-      "innerHTML with 2 children mutation": "FAIL",
+      "innerHTML mutation": "PASS",
+      "innerHTML with 2 children mutation": "PASS",
       "outerHTML mutation": "FAIL"
     }
   },
@@ -7382,8 +7421,49 @@
     "subtests": {}
   },
   "dom/nodes/Node-insertBefore.html": {
-    "harness": "TIMEOUT",
-    "subtests": {}
+    "harness": "OK",
+    "subtests": {
+      "Should check the 'parent' type before checking whether 'child' is a child of 'parent'": "PASS",
+      "Should check that 'node' is not an ancestor of 'parent' before checking whether 'child' is a child of 'parent'": "PASS",
+      "Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent.": "PASS",
+      "Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent of the type that 'parent' is.": "PASS",
+      "Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now.": "PASS",
+      "If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is a Text node and parent is a document, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is a DocumentFragment with multiple elements and parent is a document, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is a DocumentFragment with an element and parent is a document with another element, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is an Element and parent is a document with another element, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is a doctype and parent is a document with another doctype, then throw a HierarchyRequestError DOMException.": "PASS",
+      "If node is a doctype and parent is a document with an element, then throw a HierarchyRequestError DOMException.": "PASS",
+      "Calling insertBefore with a non-Node first argument must throw TypeError.": "PASS",
+      "Calling insertBefore with second argument missing, or other than Node, null, or undefined, must throw TypeError.": "PASS",
+      "Calling insertBefore with a non-Node first argument on a leaf node DocumentType must throw TypeError.": "PASS",
+      "Calling insertBefore an a leaf node DocumentType must throw HIERARCHY_REQUEST_ERR.": "PASS",
+      "Calling insertBefore with a non-Node first argument on a leaf node Text must throw TypeError.": "PASS",
+      "Calling insertBefore an a leaf node Text must throw HIERARCHY_REQUEST_ERR.": "PASS",
+      "Calling insertBefore with a non-Node first argument on a leaf node Comment must throw TypeError.": "PASS",
+      "Calling insertBefore an a leaf node Comment must throw HIERARCHY_REQUEST_ERR.": "PASS",
+      "Calling insertBefore with a non-Node first argument on a leaf node ProcessingInstruction must throw TypeError.": "PASS",
+      "Calling insertBefore an a leaf node ProcessingInstruction must throw HIERARCHY_REQUEST_ERR.": "PASS",
+      "Calling insertBefore with an inclusive ancestor of the context object must throw HIERARCHY_REQUEST_ERR.": "PASS",
+      "Calling insertBefore with a reference child whose parent is not the context node must throw a NotFoundError.": "PASS",
+      "If the context node is a document, inserting a document or text node should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting a DocumentFragment that contains a text node or too many elements should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting a DocumentFragment with an element if there already is an element child should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document and a doctype is following the reference child, inserting a DocumentFragment with an element should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting a DocumentFragment with an element before the doctype should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting an element if there already is an element child should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting an element before the doctype should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document and a doctype is following the reference child, inserting an element should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting a doctype if there already is a doctype child should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document, inserting a doctype after the document element should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a document with and element child, appending a doctype should throw a HierarchyRequestError.": "PASS",
+      "If the context node is a DocumentFragment, inserting a document or a doctype should throw a HierarchyRequestError.": "PASS",
+      "If the context node is an element, inserting a document or a doctype should throw a HierarchyRequestError.": "PASS",
+      "Inserting a node before itself should not move the node": "PASS"
+    }
   },
   "dom/nodes/Node-isEqualNode.html": {
     "harness": "OK",
@@ -7486,7 +7566,7 @@
       "For an empty ProcessingInstruction, textContent should be the empty string": "PASS",
       "For an empty Comment, textContent should be the empty string": "PASS",
       "For a Text with data, textContent should be that data": "PASS",
-      "For a ProcessingInstruction with data, textContent should be that data": "FAIL",
+      "For a ProcessingInstruction with data, textContent should be that data": "PASS",
       "For a Comment with data, textContent should be that data": "PASS",
       "For Documents created by parser, textContent should be null": "PASS",
       "For Documents created by createDocument, textContent should be null": "PASS",
@@ -7501,14 +7581,14 @@
       "DocumentFragment with empty text node as child set to null": "PASS",
       "DocumentFragment with children set to null": "PASS",
       "DocumentFragment with descendants set to null": "PASS",
-      "Element without children set to undefined": "FAIL",
-      "Element with empty text node as child set to undefined": "FAIL",
-      "Element with children set to undefined": "FAIL",
-      "Element with descendants set to undefined": "FAIL",
-      "DocumentFragment without children set to undefined": "FAIL",
-      "DocumentFragment with empty text node as child set to undefined": "FAIL",
-      "DocumentFragment with children set to undefined": "FAIL",
-      "DocumentFragment with descendants set to undefined": "FAIL",
+      "Element without children set to undefined": "PASS",
+      "Element with empty text node as child set to undefined": "PASS",
+      "Element with children set to undefined": "PASS",
+      "Element with descendants set to undefined": "PASS",
+      "DocumentFragment without children set to undefined": "PASS",
+      "DocumentFragment with empty text node as child set to undefined": "PASS",
+      "DocumentFragment with children set to undefined": "PASS",
+      "DocumentFragment with descendants set to undefined": "PASS",
       "Element without children set to \"\"": "PASS",
       "Element with empty text node as child set to \"\"": "PASS",
       "Element with children set to \"\"": "PASS",
@@ -7550,7 +7630,7 @@
       "DocumentFragment with children set to \"d\\0e\"": "PASS",
       "DocumentFragment with descendants set to \"d\\0e\"": "PASS",
       "For a Text, textContent should set the data": "PASS",
-      "For a ProcessingInstruction, textContent should set the data": "FAIL",
+      "For a ProcessingInstruction, textContent should set the data": "PASS",
       "For a Comment, textContent should set the data": "PASS",
       "For Documents created by parser, setting textContent should do nothing": "PASS",
       "For Documents created by createDocument, setting textContent should do nothing": "PASS",
@@ -8529,7 +8609,9 @@
   },
   "dom/ranges/Range-isPointInRange.html": {
     "harness": "OK",
-    "subtests": {}
+    "subtests": {
+      "Setup": "FAIL"
+    }
   },
   "dom/ranges/Range-mutations-appendChild.html": {
     "harness": "OK",
@@ -8639,7 +8721,14 @@
   },
   "dom/traversal/NodeIterator.html": {
     "harness": "OK",
-    "subtests": {}
+    "subtests": {
+      "detach() should be a no-op": "PASS",
+      "createNodeIterator() parameter defaults": "PASS",
+      "createNodeIterator() with null as arguments": "PASS",
+      "createNodeIterator() with undefined as arguments": "PASS",
+      "Propagate exception from filter function": "PASS",
+      "Recursive filters need to throw": "FAIL"
+    }
   },
   "dom/traversal/TreeWalker-acceptNode-filter.html": {
     "harness": "OK",
@@ -8735,7 +8824,9 @@
   },
   "dom/traversal/TreeWalker.html": {
     "harness": "OK",
-    "subtests": {}
+    "subtests": {
+      "Recursive filters need to throw": "FAIL"
+    }
   },
   "shadow-dom/Document-prototype-adoptNode.html": {
     "harness": "OK",

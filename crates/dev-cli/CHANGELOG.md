@@ -25,6 +25,19 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **One mutation, one record.** Inserting a fragment, `append(a, b)`,
+  `textContent`, `innerHTML` and `replaceChildren` each queued a record per node.
+  The specification queues one, with every added and removed node in it, and a
+  fragment reports being emptied in a record of its own. `append`, `prepend`,
+  `before`, `after` and `replaceWith` now "convert nodes into a node" and insert
+  once, finding a viable sibling first so `el.before(el)` works. `replaceChild`
+  adopts the new node before removing the old one, as the spec orders it, so a
+  node replacing its sibling, or itself, reports leaving first; replacing a node
+  with itself no longer returns without doing anything. `insertBefore(x, x)`
+  uses the next sibling as the reference instead of hanging. `insertBefore`
+  requires its second argument, as a node or null. `textContent` reads only
+  descendant Text, and `undefined` clears it. `createCDATASection` works in an
+  XML document.
 - **Every way an attribute changes is one change.** Setting `attr.value` on an
   attached attribute changed it silently, with no mutation record, change steps
   or `attributeChangedCallback`. `attributes.setNamedItem` did the same, because

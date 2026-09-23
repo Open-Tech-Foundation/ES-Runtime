@@ -6490,11 +6490,10 @@ fn test_dom_mutation_observer_delivers_child_list_records_at_microtasks() {
            parent.append(first, second); parent.removeChild(first);\n\
            assertEquals(deliveries.length, 0); await Promise.resolve();\n\
            assertEquals(deliveries.length, 1);\n\
-           const records = deliveries[0][1]; assertEquals(deliveries[0][0], true); assertEquals(records.length, 3);\n\
-           assertEquals(records.map((record) => [record.type, record.target, record.addedNodes.item(0), record.removedNodes.item(0), record.previousSibling, record.nextSibling]), [\n\
-             ['childList', parent, first, null, null, null],\n\
-             ['childList', parent, second, null, first, null],\n\
-             ['childList', parent, null, first, null, second],\n\
+           const records = deliveries[0][1]; assertEquals(deliveries[0][0], true); assertEquals(records.length, 2);\n\
+           assertEquals(records.map((record) => [record.type, record.target, [...record.addedNodes], [...record.removedNodes], record.previousSibling, record.nextSibling]), [\n\
+             ['childList', parent, [first, second], [], null, null],\n\
+             ['childList', parent, [], [first], null, second],\n\
            ]);\n\
          });\n",
     );
