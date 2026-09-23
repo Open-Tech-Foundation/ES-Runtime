@@ -1429,7 +1429,7 @@ pub(crate) fn take_unhandled_rejections(
     let (rejections, handled) = {
         let mut state = op_state.borrow_mut();
         let rejections: Vec<(i32, Rejection)> = state.unhandled_rejections.drain().collect();
-        let handled: Vec<v8::Global<v8::Promise>> = state.rejections_handled.drain(..).collect();
+        let handled: Vec<v8::Global<v8::Promise>> = std::mem::take(&mut state.rejections_handled);
         (rejections, handled)
     };
     if rejections.is_empty() && handled.is_empty() {

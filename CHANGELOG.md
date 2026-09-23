@@ -13,6 +13,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **The pinned toolchain is Rust 1.98.1**, up from 1.95.0. The declared MSRV is
+  unchanged at 1.95, and the CI job that builds against it is unchanged; only the
+  channel local and CI builds use moves. One new lint (`clippy::drain_collect`)
+  came with it and is fixed in the engine's rejection bookkeeping.
+
 - **An expired timer no longer costs a millisecond.** The event-loop driver
   parked on a zero-length sleep when the next timer was already due, and tokio's
   timer wheel charges a full tick for that — so `await new Promise(r =>
