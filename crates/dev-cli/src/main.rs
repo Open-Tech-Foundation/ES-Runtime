@@ -1672,6 +1672,27 @@ fn validate_browser_test_config(config: &TestConfig) -> Result<(), String> {
 /// The parent spawns a child per file rather than looping in-process, so a file
 /// that hangs or exits takes only itself down. `--file` is what a child is
 /// invoked with, and is equally a supported way to run one file by hand.
+/// Resolves when the process is asked to stop: ^C, or `SIGTERM` on Unix.
+async fn stopped() {
+    #[cfg(unix)]
+    {
+        let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 /// Runs the test files in a browser over WebDriver BiDi.
 ///
 /// What is chosen, and what was passed over, goes to stderr: it describes the
@@ -1711,7 +1732,15 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ran = browser_run::run(&session, &root, &files, config).await;
+    // Stopped from outside — ^C, or a CI job cancelled — the browser is still
+    // closed: it is a separate process, and would otherwise outlive the run.
+    let ran = tokio::select! {
+        ran = browser_run::run(&session, &root, &files, config) => ran,
+        () = stopped() => {
+            session.end().await;
+            return ExitCode::from(130);
+        }
+    };
     session.end().await;
     let failed = match ran {
         Ok(failed) => failed,

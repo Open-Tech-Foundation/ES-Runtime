@@ -37,6 +37,14 @@ is the point, since none of the three has any business in a deployment.
   - Snapshots of skipped tests, tests left out by `.only`, and tests that did
     not pass are no longer listed as obsolete.
   - With `retry`, only the last attempt's snapshot results are counted.
+- **A browser that exits or crashes mid-run no longer hangs
+  `esdev test --browser`.** The files still running fail with "the browser
+  closed before the file finished", keeping what they had reported.
+- **`esdev test --browser` closes its browser when stopped** with ^C or
+  `SIGTERM`, and removes its temporary files. If a driver dies, the browser it
+  started is stopped as well.
+- **A Chrome, Chromium or Edge run no longer waits five seconds at the end** for
+  its driver to exit.
 
 ### Added
 - **More of the test vocabulary in `runtime:test`.**

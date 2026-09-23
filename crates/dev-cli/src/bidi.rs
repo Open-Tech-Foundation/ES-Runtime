@@ -60,6 +60,10 @@ pub struct Client {
     /// shared by everything sending commands.
     events: std::sync::Mutex<Option<mpsc::UnboundedReceiver<Event>>>,
     next: AtomicU64,
+    /// Set once the connection has ended, before the commands waiting on it
+    /// are failed — so a command sent afterwards fails too, rather than waiting
+    /// for an answer nothing will send.
+    closed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Client {
@@ -89,6 +93,8 @@ impl Client {
         let pending: Pending = Arc::default();
         let (deliver, events) = mpsc::unbounded_channel();
         let answers = Arc::clone(&pending);
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ended = Arc::clone(&closed);
         tokio::spawn(async move {
             while let Some(Ok(message)) = stream.next().await {
                 let Message::Text(text) = message else {
@@ -111,6 +117,7 @@ impl Client {
             }
             // The socket is gone: every command still waiting will never be
             // answered, and says so rather than hanging the run.
+            ended.store(true, Ordering::SeqCst);
             for (_, waiting) in answers.lock().await.drain() {
                 let _ = waiting.send(Err("the browser closed the connection".to_string()));
             }
@@ -121,6 +128,7 @@ impl Client {
             pending,
             events: std::sync::Mutex::new(Some(events)),
             next: AtomicU64::new(1),
+            closed,
         })
     }
 
@@ -130,6 +138,13 @@ impl Client {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (answer, answered) = oneshot::channel();
         self.pending.lock().await.insert(id, answer);
+        // Checked after the command is registered: either the reader fails it
+        // when it drains, or it had already finished draining and this sees
+        // the flag it set first.
+        if self.closed.load(Ordering::SeqCst) {
+            self.pending.lock().await.remove(&id);
+            return Err(format!("{method}: the browser closed the connection"));
+        }
         let text = json!({ "id": id, "method": method, "params": params }).to_string();
         if self.outgoing.send(Message::text(text)).is_err() {
             self.pending.lock().await.remove(&id);
@@ -206,9 +221,9 @@ pub struct Session {
     pub client: Arc<Client>,
     /// The browser itself (Firefox) or the driver that started it.
     process: Child,
-    /// A driver's classic session, ended over HTTP so the driver closes the
-    /// browser it started.
-    classic: Option<(String, String)>,
+    /// A driver's classic session — its address, id, and the browser's
+    /// process — ended over HTTP so the driver closes the browser it started.
+    classic: Option<(String, String, Option<u32>)>,
     /// Firefox's throwaway profile.
     profile: Option<PathBuf>,
 }
@@ -237,12 +252,20 @@ impl Session {
     /// is killed either way.
     pub async fn end(mut self) {
         match self.classic.take() {
-            Some((address, id)) => {
-                let _ = tokio::time::timeout(
+            Some((address, id, browser_pid)) => {
+                let deleted = tokio::time::timeout(
                     Duration::from_secs(10),
                     http(&address, "DELETE", &format!("/session/{id}"), None),
                 )
                 .await;
+                let closed = matches!(deleted, Ok(Ok((status, _))) if (200..300).contains(&status));
+                // A driver that could not close its browser — because it
+                // died, or hung — leaves it running with nothing to stop it.
+                if !closed && let Some(pid) = browser_pid {
+                    crate::watch::end(pid);
+                }
+                // A driver stays up after its session ends; it is ours to stop.
+                let _ = self.process.kill().await;
             }
             None => {
                 let _ = tokio::time::timeout(
@@ -250,13 +273,13 @@ impl Session {
                     self.client.command("browser.close", json!({})),
                 )
                 .await;
+                if tokio::time::timeout(Duration::from_secs(5), self.process.wait())
+                    .await
+                    .is_err()
+                {
+                    let _ = self.process.kill().await;
+                }
             }
-        }
-        if tokio::time::timeout(Duration::from_secs(5), self.process.wait())
-            .await
-            .is_err()
-        {
-            let _ = self.process.kill().await;
         }
         if let Some(profile) = self.profile.take() {
             let _ = std::fs::remove_dir_all(profile);
@@ -333,18 +356,18 @@ async fn start_driver(
     let address = format!("127.0.0.1:{port}");
     let body = new_session_body(launch, headless);
     let (status, answer) = http(&address, "POST", "/session", Some(&body)).await?;
-    let (id, url) = new_session_answer(status, &answer).map_err(|err| {
+    let granted = new_session_answer(status, &answer).map_err(|err| {
         format!(
             "{} refused a session for {}: {err}",
             driver.display(),
             launch.binary.display()
         )
     })?;
-    let client = Client::connect(&url).await?;
+    let client = Client::connect(&granted.url).await?;
     Ok(Session {
         client: Arc::new(client),
         process,
-        classic: Some((address, id)),
+        classic: Some((address, granted.id, granted.browser_pid)),
         profile: None,
     })
 }
@@ -403,7 +426,7 @@ fn new_session_body(launch: &Launch, headless: bool) -> String {
 /// The session id and BiDi socket out of a new-session answer, or the driver's
 /// own reason for refusing — which is where a version mismatch the browser
 /// would not state ends up.
-fn new_session_answer(status: u16, body: &str) -> Result<(String, String), String> {
+fn new_session_answer(status: u16, body: &str) -> Result<Granted, String> {
     let value: Value =
         serde_json::from_str(body).map_err(|_| format!("HTTP {status}: {}", body.trim()))?;
     let value = value.get("value").unwrap_or(&Value::Null);
@@ -425,7 +448,32 @@ fn new_session_answer(status: u16, body: &str) -> Result<(String, String), Strin
              (`webSocketUrl`); it is too old to speak BiDi"
                 .to_string()
         })?;
-    Ok((id.to_string(), url.to_string()))
+    // The browser's own process, which the vendors report under their prefix
+    // (`goog:processID`). Kept to stop the browser if its driver cannot.
+    let browser_pid = value
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .and_then(|capabilities| {
+            capabilities
+                .iter()
+                .find(|(key, _)| key.ends_with(":processID"))
+                .and_then(|(_, pid)| pid.as_u64())
+        })
+        .and_then(|pid| u32::try_from(pid).ok());
+    Ok(Granted {
+        id: id.to_string(),
+        url: url.to_string(),
+        browser_pid,
+    })
+}
+
+/// A classic session a driver granted.
+#[derive(Debug, PartialEq)]
+struct Granted {
+    id: String,
+    /// The BiDi socket.
+    url: String,
+    browser_pid: Option<u32>,
 }
 
 /// One HTTP/1.1 request on loopback, read to the end. The classic protocol is
@@ -681,6 +729,25 @@ mod tests {
         assert_eq!(events.recv().await, None);
     }
 
+    #[tokio::test]
+    async fn a_command_after_the_connection_closed_fails_at_once() {
+        let url = mock(|_| vec![]).await;
+        let client = Client::connect(&url).await.expect("connect");
+        let mut events = client.take_events().expect("the event stream");
+        let _ = client.command("test.hangUp", json!({})).await;
+        assert_eq!(events.recv().await, None);
+        let late = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.command("browser.removeUserContext", json!({})),
+        )
+        .await
+        .expect("a command on a closed connection must not wait");
+        assert_eq!(
+            late.unwrap_err(),
+            "browser.removeUserContext: the browser closed the connection"
+        );
+    }
+
     #[test]
     fn an_answer_without_a_type_is_still_an_answer() {
         let Routed::Answer(7, Ok(result)) = route(json!({ "id": 7, "result": { "ok": true } }))
@@ -743,13 +810,14 @@ mod tests {
 
     #[test]
     fn a_new_session_answer_gives_the_socket_or_the_drivers_reason() {
-        let granted = r#"{"value":{"sessionId":"abc","capabilities":{"webSocketUrl":"ws://127.0.0.1:9222/session/abc"}}}"#;
+        let granted = r#"{"value":{"sessionId":"abc","capabilities":{"webSocketUrl":"ws://127.0.0.1:9222/session/abc","goog:processID":4242}}}"#;
         assert_eq!(
             new_session_answer(200, granted),
-            Ok((
-                "abc".to_string(),
-                "ws://127.0.0.1:9222/session/abc".to_string()
-            ))
+            Ok(Granted {
+                id: "abc".to_string(),
+                url: "ws://127.0.0.1:9222/session/abc".to_string(),
+                browser_pid: Some(4242),
+            })
         );
         let refused = r#"{"value":{"error":"session not created","message":"session not created: This version of ChromeDriver only supports Chrome version 131\nCurrent browser version is 120.0.6099.71\nStacktrace:\n#0 0x55d…"}}"#;
         let err = new_session_answer(500, refused).unwrap_err();

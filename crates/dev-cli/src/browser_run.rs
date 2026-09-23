@@ -79,10 +79,8 @@ pub async fn run(
     files: &[PathBuf],
     config: &TestConfig,
 ) -> Result<usize, String> {
-    let stage = std::env::temp_dir().join(format!("esdev-browser-run-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&stage);
-    std::fs::create_dir_all(&stage)
-        .map_err(|err| format!("cannot create {}: {err}", stage.display()))?;
+    let staged = Stage::create()?;
+    let stage = staged.0.clone();
     let runtime_test = stage.join("runtime-test.js");
     std::fs::write(&runtime_test, crate::guest::test::SOURCE)
         .map_err(|err| format!("cannot write {}: {err}", runtime_test.display()))?;
@@ -154,8 +152,27 @@ pub async fn run(
 
     router.abort();
     server.abort();
-    let _ = std::fs::remove_dir_all(&stage);
     Ok(failed)
+}
+
+/// The directory a run's bundles and pages are written to, removed when the
+/// run is over however it ends — including when it is stopped part way.
+struct Stage(PathBuf);
+
+impl Stage {
+    fn create() -> Result<Stage, String> {
+        let dir = std::env::temp_dir().join(format!("esdev-browser-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+        Ok(Stage(dir))
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Where each browsing context's events go.
@@ -180,6 +197,13 @@ async fn route(mut events: mpsc::UnboundedReceiver<Event>, routes: Routes) {
             let _ = sender.send(event);
         }
     }
+    // The connection is gone — the browser or its driver exited. Dropping
+    // every file's sender ends each file's wait now, rather than leaving it
+    // waiting for events that will never come.
+    routes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
 }
 
 /// One test file's run.
@@ -355,15 +379,15 @@ impl Job {
             while let Some(event) = events.recv().await {
                 state.apply(&event);
                 if state.done() {
-                    return true;
+                    return Ended::Finished;
                 }
             }
-            false
+            Ended::Closed
         };
-        let finished = match config.timeout {
+        let ended = match config.timeout {
             Some(ms) => tokio::time::timeout(std::time::Duration::from_millis(ms), waited)
                 .await
-                .unwrap_or(false),
+                .unwrap_or(Ended::TimedOut),
             None => waited.await,
         };
         self.routes
@@ -378,12 +402,29 @@ impl Job {
         let (report, passed) = state.tally.render(as_json);
         let mut output = state.console;
         output.push_str(&report);
-        if !finished {
-            output.push_str(&crate::test::timed_out(config.timeout));
-            output.push('\n');
+        match ended {
+            Ended::Finished => {}
+            Ended::TimedOut => {
+                output.push_str(&crate::test::timed_out(config.timeout));
+                output.push('\n');
+            }
+            Ended::Closed => output.push_str(
+                "  FAIL the browser closed before the file finished\n    \
+                 It exited or crashed; the results above are what it reported first.\n",
+            ),
         }
+        let finished = ended == Ended::Finished;
         Ok((output, passed && finished))
     }
+}
+
+/// How waiting on a page ended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Finished,
+    TimedOut,
+    /// The browser's connection closed first.
+    Closed,
 }
 
 /// What a page has reported so far.
@@ -734,6 +775,27 @@ mod tests {
         );
         // Text that names no page location is left as it was.
         assert_eq!(locations.remap("Error: plain"), "Error: plain");
+    }
+
+    #[tokio::test]
+    async fn a_closed_browser_releases_every_file_waiting_on_it() {
+        let (events_in, events) = mpsc::unbounded_channel();
+        let routes: Routes = Arc::default();
+        let (sender, mut waiting) = mpsc::unbounded_channel();
+        routes.lock().unwrap().insert("ctx".to_string(), sender);
+        let router = tokio::spawn(route(events, Arc::clone(&routes)));
+        events_in
+            .send(Event {
+                method: "script.message".to_string(),
+                params: json!({ "source": { "context": "ctx" } }),
+            })
+            .unwrap();
+        assert!(waiting.recv().await.is_some(), "an event reaches its file");
+        // The connection ends: nothing is left to send on.
+        drop(events_in);
+        router.await.unwrap();
+        assert!(waiting.recv().await.is_none(), "the file's wait ends");
+        assert!(routes.lock().unwrap().is_empty());
     }
 
     #[test]
