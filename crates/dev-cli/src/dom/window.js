@@ -461,7 +461,14 @@ function scheduleMutationDelivery() {
       // A transient registration lives until the next delivery, whether or not
       // it produced anything.
       observer.transients.clear();
-      if (records.length) observer.callback(records, observer);
+      if (!records.length) continue;
+      // A callback that throws is reported — an `ErrorEvent` on the global, as
+      // for a listener — and the observers after it are still delivered to.
+      try {
+        observer.callback.call(observer, records, observer);
+      } catch (error) {
+        globalThis.reportError(error);
+      }
     }
   });
 }

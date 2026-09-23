@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-113 of 115 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+114 of 116 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -43,6 +43,7 @@ compares the result.
 | list-interfaces-iterate-as-web-idl-declares | tree | yes | no | no |
 | details-dialog-and-popover-toggle-alike | events | yes | no | no |
 | a-removed-subtree-stays-observed-until-delivery | events | yes | no | no |
+| an-observer-that-throws-is-reported-and-the-rest-still-run | events | yes | yes | yes |
 | keyboard-and-mouse-events-carry-their-modifiers | events | yes | yes | no |
 | capturing-and-bubbling-order | events | yes | yes | yes |
 | cancelled-event-returns-false | events | yes | yes | yes |

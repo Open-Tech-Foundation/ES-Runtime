@@ -25,6 +25,12 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **A `MutationObserver` callback that throws is reported, not fatal.** It
+  escaped the delivery microtask, failing the running test and starving every
+  observer after it of its records. It is now reported as a listener's exception
+  is — an `ErrorEvent` on the global — and delivery carries on. Unhandled
+  rejections are unchanged: they fail the test unless a listener calls
+  `preventDefault()`, which the test guide now says.
 - **A removed subtree stays observed until delivery.** Taking a node out of an
   observed tree silenced it at once, so anything done inside it before the
   records were delivered — removing its children, changing their attributes —

@@ -1481,6 +1481,81 @@
     },
     {
       "group": "events",
+      "name": "an-observer-that-throws-is-reported-and-the-rest-still-run",
+      "chrome": {
+        "result": [
+          [
+            [
+              1,
+              true
+            ]
+          ],
+          [
+            [
+              "ErrorEvent",
+              true,
+              "from the observer"
+            ]
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              1,
+              true
+            ]
+          ],
+          [
+            [
+              "ErrorEvent",
+              true,
+              "from the observer"
+            ]
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            [
+              1,
+              true
+            ]
+          ],
+          [
+            [
+              "ErrorEvent",
+              true,
+              "from the observer"
+            ]
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            [
+              1,
+              true
+            ]
+          ],
+          [
+            [
+              "ErrorEvent",
+              true,
+              "from the observer"
+            ]
+          ]
+        ]
+      },
+      "emulatorDisagreement": false,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "events",
       "name": "keyboard-and-mouse-events-carry-their-modifiers",
       "chrome": {
         "result": [
@@ -9797,7 +9872,7 @@
     }
   ],
   "summary": {
-    "match": 113,
+    "match": 114,
     "intentional-limit": 2,
     "drift": 0
   }

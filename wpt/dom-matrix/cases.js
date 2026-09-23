@@ -266,6 +266,34 @@ export const cases = [
   },
   {
     group: "events",
+    name: "an-observer-that-throws-is-reported-and-the-rest-still-run",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      document.body.append(element);
+      const seen = [];
+      const reported = [];
+      const onError = (event) => {
+        reported.push([event.constructor.name, event.message.includes("from the observer"), event.error?.message ?? null]);
+        event.preventDefault();
+      };
+      window.addEventListener("error", onError);
+      const throwing = new window.MutationObserver(() => { throw new Error("from the observer"); });
+      throwing.observe(element, { attributes: true });
+      const after = new window.MutationObserver((records, observer) => seen.push([records.length, observer === after]));
+      after.observe(element, { attributes: true });
+      element.setAttribute("a", "1");
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      window.removeEventListener("error", onError);
+      throwing.disconnect();
+      after.disconnect();
+      element.remove();
+      return [seen, reported];
+    },
+  },
+  {
+    group: "events",
     name: "keyboard-and-mouse-events-carry-their-modifiers",
     run(window) {
       const read = (event) => [
