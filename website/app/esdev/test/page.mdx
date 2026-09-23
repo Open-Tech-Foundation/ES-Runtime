@@ -3,8 +3,6 @@ title: esdev test
 description: Find the test files and run each in its own process, with the assertion vocabulary the runtime's own suite uses.
 ---
 
-import { Callout } from "@opentf/web-docs";
-
 # esdev test
 
 Find and run test files with the assertion vocabulary provided by
@@ -33,78 +31,28 @@ test and in a build.
 
 ## DOM tests
 
-Pass `--dom` when a test needs the browser-like DOM surface currently provided
-by esdev. It installs a fresh realm for each isolated test file, including
-`document`, the core node and event classes, and strict `innerHTML` parsing.
-It is test-runner-only: ordinary `esdev` runs do not receive these globals.
-The core tree also includes element-child traversal accessors and
-`replaceChildren()` with string-to-text coercion.
-The current selector surface includes `querySelector`, `querySelectorAll`,
-`matches`, `closest`, attribute selectors, selector lists, and structural
-combinators, plus logical, structural, `:nth-*()`, and `:focus`
-pseudo-classes, form/link state, and `:scope`; unsupported selector syntax
-throws `SyntaxError`.
-`HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLFormElement`, and
-`HTMLLabelElement`, `HTMLSelectElement`, `HTMLOptionElement`, and
-`HTMLTextAreaElement` are also available, with common reflected attributes,
-select values/options, form reset, and the basic checkbox, radio, and
-submit-button click defaults. Controls associate with a containing form or its
-`form` attribute; `new FormData(form)` serializes successful controls.
-Disabled `fieldset` and `optgroup` ancestors disable their descendant controls
-for validation and form-data serialization.
-Labels resolve their `for` target or nested control; checkbox and radio groups
-use their form owner when applying click defaults.
-Input and textarea values, plus checked controls, retain their markup defaults
-and are restored by `form.reset()`.
-Number and date inputs normalize their values and expose `valueAsNumber` and
-`valueAsDate` without locale or layout dependencies.
-Inputs, selects, and textareas expose layout-free constraint validation
-(`validity`, `checkValidity()`, `reportValidity()`, and custom errors); form
-`requestSubmit()` validates before dispatching `submit`.
-Form action settings resolve against the in-memory location; method, encoding,
-target, and no-validate settings are reflected;
-submit-button clicks and `requestSubmit()` dispatch events but never perform
-navigation. `button` and `input[type="submit"]` controls expose their reflected
-per-submitter form settings and can bypass validation with `formNoValidate`.
-`button[type="reset"]` and `input[type="reset"]` activate the form's
-cancelable reset algorithm.
-Inline styles are supported through `element.style` and stay synchronized with
-the `style` attribute. `getComputedStyle` exposes those inline values only;
-stylesheet cascade and resolved values are not present.
-`customElements` supports registration, lookup, `whenDefined`, and upgrades;
-its registered elements receive connected, disconnected, adopted, and observed
-attribute callbacks.
-Focus is tracked without layout: supported controls and elements with a
-`tabindex` can use `focus()` and `blur()`, update `document.activeElement`, and
-dispatch the standard focus event sequence.
-`MutationObserver` records child-list, attribute, and character-data changes
-and delivers them at the microtask checkpoint; subtree, attribute-filter, and
-old-value options are supported.
-`document.createRange()` supports node and text boundary points, text extraction,
-boundary comparisons, contextual fragments, cloning, extraction, insertion,
-deletion, surrounding contents, and automatic boundary adjustment.
-The DOM realm also includes in-memory `location`, `history`, `localStorage`,
-and `sessionStorage`. Animation frames use the test clock, while media, resize,
-and intersection observers are safe never-firing stubs.
-
-For the strict-parser contract, browser-only boundaries, and WPT conformance
-audit, see [DOM testing](/esdev/test/dom).
+Pass `--dom` to give each test file a fresh, in-memory DOM: `document`,
+elements, events, forms, selectors, styles, custom elements, Shadow DOM and
+`MutationObserver`. It is available to tests only; ordinary `esdev` runs do not
+get these globals.
 
 ```sh
 esdev test --dom
 ```
 
+For a test that needs layout or anything else only a real browser has, run the
+same file with `--browser`. See [DOM testing](/esdev/test/dom) and
+[Browser testing](/esdev/test/browser).
+
 ## Test guide
 
 - [Writing tests](/esdev/test/writing) — assertions, helpers, and table-driven
   cases.
-- [DOM testing](/esdev/test/dom) — strict modern markup, isolation, and DOM
-  boundaries.
-- [Browser testing](/esdev/test/browser) — the same files in a real browser,
-  over WebDriver BiDi.
 - [Running and isolating tests](/esdev/test/running) — filters, process
   boundaries, and hangs.
 - [Mocks, setup, and imports](/esdev/test/mocks) — mock behavior, clocks,
   budgets, reports, and module resolution.
+- [DOM testing](/esdev/test/dom) — the in-memory DOM behind `--dom`.
+- [Browser testing](/esdev/test/browser) — the same files in a real browser.
 
 Exits non-zero if any file fails.

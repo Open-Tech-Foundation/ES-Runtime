@@ -43,20 +43,20 @@ const NAV = [
     ],
   },
   {
-    title: "Testing & diagnostics",
+    title: "Testing",
     items: [
-      {
-        title: "Testing",
-        items: [
-          { title: "Overview", path: "/esdev/test" },
-          { title: "DOM testing", path: "/esdev/test/dom" },
-          { title: "DOM parity", path: "/esdev/test/dom/parity" },
-          { title: "Browser testing", path: "/esdev/test/browser" },
-          { title: "Writing tests", path: "/esdev/test/writing" },
-          { title: "Running & isolating", path: "/esdev/test/running" },
-          { title: "Mocks, setup & imports", path: "/esdev/test/mocks" },
-        ],
-      },
+      { title: "Overview", path: "/esdev/test" },
+      { title: "Writing tests", path: "/esdev/test/writing" },
+      { title: "Running & isolating", path: "/esdev/test/running" },
+      { title: "Mocks, setup & imports", path: "/esdev/test/mocks" },
+      { title: "DOM testing", path: "/esdev/test/dom" },
+      { title: "DOM parity", path: "/esdev/test/dom/parity" },
+      { title: "Browser testing", path: "/esdev/test/browser" },
+    ],
+  },
+  {
+    title: "Diagnostics",
+    items: [
       { title: "Debugging", path: "/esdev/debugging" },
       { title: "Tracing permissions", path: "/esdev/permissions" },
     ],
