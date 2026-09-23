@@ -293,13 +293,15 @@ fn key_name(name: &str) -> String {
 /// A case is being attempted again: what its previous attempt counted no
 /// longer stands.
 fn restart_case_snapshots(case_id: usize) {
-    SNAPSHOTS.with_borrow_mut(|state| {
-        let counts = &mut state.counts;
-        if let Some((matched, failed)) = counts.by_case.remove(&case_id) {
-            counts.matched -= matched;
-            counts.failed -= failed;
-        }
-    });
+    SNAPSHOTS.with_borrow_mut(|state| restart_in(state, case_id));
+}
+
+fn restart_in(state: &mut SnapshotState, case_id: usize) {
+    let counts = &mut state.counts;
+    if let Some((matched, failed)) = counts.by_case.remove(&case_id) {
+        counts.matched -= matched;
+        counts.failed -= failed;
+    }
 }
 
 /// Counts a snapshot result against the whole run and against its case.
@@ -360,12 +362,15 @@ fn snapshot_diff(expected: &str, actual: &str, full: bool) -> String {
         if i < before.len() && j < after.len() && before[i] == after[j] {
             rows.push((' ', visible_line(before[i])));
             i += 1;
-        } else if j < after.len() && (i == before.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
-            rows.push(('+', visible_line(after[j])));
             j += 1;
-        } else {
+        } else if i < before.len() && (j == after.len() || lcs[i + 1][j] >= lcs[i][j + 1]) {
+            // A removal before the addition that replaces it, as a unified
+            // diff reads.
             rows.push(('-', visible_line(before[i])));
             i += 1;
+        } else {
+            rows.push(('+', visible_line(after[j])));
+            j += 1;
         }
     }
     let mut out = String::from("--- snapshot\n+++ received\n");
@@ -425,11 +430,25 @@ fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> 
                 .and_then(|case| case.file.clone().map(|file| (file, case.name.clone())))
         })
         .ok_or_else(|| "toMatchSnapshot is available when esdev runs a test file".to_string())?;
+    SNAPSHOTS
+        .with_borrow_mut(|state| check_snapshot_in(state, file, &name, case_id, &key, kind, actual))
+}
+
+/// Checks one value snapshot of the test `name` in `file` against the store.
+fn check_snapshot_in(
+    state: &mut SnapshotState,
+    file: PathBuf,
+    name: &str,
+    case_id: usize,
+    key: &str,
+    kind: String,
+    actual: String,
+) -> Result<(), String> {
     let key = key_name(&format!("{name}: {key}"));
-    SNAPSHOTS.with_borrow_mut(|state| {
+    {
         let owner = *state
             .owners
-            .entry((file.clone(), name.clone()))
+            .entry((file.clone(), name.to_string()))
             .or_insert(case_id);
         if owner != case_id {
             state.counts.failed += 1;
@@ -484,7 +503,7 @@ fn check_snapshot(case_id: usize, key: String, kind: String, actual: String) -> 
                 Ok(())
             }
         }
-    })
+    }
 }
 
 fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<(), String> {
@@ -493,8 +512,19 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
         .ok_or_else(|| {
             "toMatchFileSnapshot is available when esdev runs a test file".to_string()
         })?;
-    let path = file_snapshot_path(&file, name)?;
-    SNAPSHOTS.with_borrow_mut(|state| {
+    SNAPSHOTS.with_borrow_mut(|state| check_file_snapshot_in(state, &file, case_id, name, actual))
+}
+
+/// Checks one file snapshot, `name`, of the test file `file`.
+fn check_file_snapshot_in(
+    state: &mut SnapshotState,
+    file: &std::path::Path,
+    case_id: usize,
+    name: &str,
+    actual: Vec<u8>,
+) -> Result<(), String> {
+    let path = file_snapshot_path(file, name)?;
+    {
         state.file_used.insert(path.clone());
         let expected = state
             .file_writes
@@ -515,7 +545,7 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
                 Err(format!(
                     "file snapshot differs: {}\n\n{detail}{}",
                     path.display(),
-                    snapshot_accept_hint(state.ci, &file)
+                    snapshot_accept_hint(state.ci, file)
                 ))
             }
             None if state.ci => {
@@ -538,7 +568,7 @@ fn check_file_snapshot(case_id: usize, name: &str, actual: Vec<u8>) -> Result<()
                 Ok(())
             }
         }
-    })
+    }
 }
 
 fn text_snapshot(bytes: &[u8]) -> Option<&str> {
@@ -580,7 +610,13 @@ fn binary_diff(expected: &[u8], actual: &[u8]) -> String {
 }
 
 fn reconcile_snapshots() -> Result<(), String> {
-    let (complete, test_files, unjudged) = CASES.with_borrow(|cases| {
+    CASES.with_borrow(|cases| SNAPSHOTS.with_borrow_mut(|state| reconcile_in(state, cases)))
+}
+
+/// Decides which stored snapshots no test used, and — on a complete,
+/// unfiltered `--update-snapshots` run — removes them.
+fn reconcile_in(state: &mut SnapshotState, cases: &[Case]) -> Result<(), String> {
+    let (complete, test_files, unjudged) = {
         (
             !cases.is_empty()
                 && cases
@@ -603,8 +639,8 @@ fn reconcile_snapshots() -> Result<(), String> {
                 })
                 .collect::<Vec<_>>(),
         )
-    });
-    SNAPSHOTS.with_borrow_mut(|state| {
+    };
+    {
         // Preload every file's value store even when the current source no
         // longer calls a value matcher. Otherwise a deleted last matcher can
         // never make its old entry observable for reporting or pruning.
@@ -675,14 +711,41 @@ fn reconcile_snapshots() -> Result<(), String> {
             }
         }
         Ok(())
-    })
+    }
+}
+
+/// The snapshot lines a report ends with, or nothing when no snapshot was
+/// used.
+fn snapshot_report(state: &SnapshotState) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if let Some((tally, written, obsolete, reason)) = snapshot_tally_in(state) {
+        let _ = writeln!(out, "{tally}");
+        if !written.is_empty() {
+            let _ = writeln!(out, "written:");
+            for entry in written {
+                let _ = writeln!(out, "  {entry}");
+            }
+        }
+        if !obsolete.is_empty() {
+            let _ = writeln!(
+                out,
+                "obsolete — kept ({}):",
+                reason.unwrap_or("not updating")
+            );
+            for entry in obsolete {
+                let _ = writeln!(out, "  {entry}");
+            }
+        }
+    }
+    out
 }
 
 /// The summary text plus the entries that the reporter expands below it.
 type SnapshotTally = (String, Vec<String>, Vec<String>, Option<&'static str>);
 
-fn snapshot_tally() -> Option<SnapshotTally> {
-    SNAPSHOTS.with_borrow(|state| {
+fn snapshot_tally_in(state: &SnapshotState) -> Option<SnapshotTally> {
+    {
         let used = state.counts.matched + state.counts.failed + state.written + state.updated;
         (used > 0 || state.removed > 0 || !state.obsolete_entries.is_empty()).then(|| {
             let mut tally = if state.update {
@@ -706,11 +769,16 @@ fn snapshot_tally() -> Option<SnapshotTally> {
                 state.obsolete_reason,
             )
         })
-    })
+    }
 }
 
 fn flush_snapshots() -> Result<(), String> {
-    SNAPSHOTS.with_borrow_mut(|state| {
+    SNAPSHOTS.with_borrow_mut(flush_in)
+}
+
+/// Writes every changed snapshot, and removes the obsolete ones a prune chose.
+fn flush_in(state: &mut SnapshotState) -> Result<(), String> {
+    {
         for (file, snapshots) in &mut state.files {
             if !snapshots.dirty {
                 continue;
@@ -750,7 +818,7 @@ fn flush_snapshots() -> Result<(), String> {
                 .map_err(|err| format!("cannot remove obsolete {}: {err}", path.display()))?;
         }
         Ok(())
-    })
+    }
 }
 
 /// The `runtime:test` extension.
@@ -912,21 +980,7 @@ pub fn finish() -> ExitCode {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
     }
-    if let Some((tally, written, obsolete, reason)) = snapshot_tally() {
-        println!("{tally}");
-        if !written.is_empty() {
-            println!("written:");
-            for entry in written {
-                println!("  {entry}");
-            }
-        }
-        if !obsolete.is_empty() {
-            println!("obsolete — kept ({}):", reason.unwrap_or("not updating"));
-            for entry in obsolete {
-                println!("  {entry}");
-            }
-        }
-    }
+    print!("{}", SNAPSHOTS.with_borrow(snapshot_report));
     if let Err(err) = flush_snapshots() {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
@@ -1109,12 +1163,28 @@ fn json(
 #[derive(Default)]
 pub struct Tally {
     cases: Vec<Case>,
+    /// The test file every case belongs to, which is what snapshots are
+    /// stored beside.
+    file: Option<PathBuf>,
 }
 
 impl Tally {
+    /// A tally for the cases of one test file.
+    pub fn for_file(file: PathBuf) -> Tally {
+        Tally {
+            cases: Vec::new(),
+            file: Some(file),
+        }
+    }
+
     /// `registered(name)`; the id is the index, as it is for the op.
     pub fn register(&mut self, name: String) -> usize {
-        register(&mut self.cases, name, None)
+        register(&mut self.cases, name, self.file.clone())
+    }
+
+    /// The name a case was registered under.
+    pub fn name(&self, id: usize) -> Option<&str> {
+        self.cases.get(id).map(|case| case.name.as_str())
     }
 
     /// `running(id)`.
@@ -1148,9 +1218,146 @@ impl Tally {
     }
 }
 
+/// One test file's snapshots, kept for a run whose tests execute elsewhere —
+/// a browser page — and report each snapshot back. The same store, checks and
+/// report a file run in this runtime uses, over state that belongs to this
+/// file rather than to the process.
+pub struct FileSnapshots {
+    state: SnapshotState,
+    file: PathBuf,
+}
+
+impl FileSnapshots {
+    /// `update`, `ci`, `full_diff` and `prune` mean what the flags do.
+    pub fn new(
+        file: PathBuf,
+        update: bool,
+        ci: bool,
+        full_diff: bool,
+        prune: bool,
+    ) -> FileSnapshots {
+        let state = SnapshotState {
+            update,
+            ci,
+            full_diff,
+            prune,
+            current_file: Some(file.clone()),
+            ..SnapshotState::default()
+        };
+        FileSnapshots { state, file }
+    }
+
+    /// Every stored value snapshot as `(key, kind, body)`, with keys exactly
+    /// as a check builds them.
+    pub fn stored(&mut self) -> Result<Vec<(String, String, String)>, String> {
+        if !self.state.files.contains_key(&self.file) {
+            let loaded = load_snapshots(&self.file)?;
+            self.state.files.insert(self.file.clone(), loaded);
+        }
+        Ok(self.state.files[&self.file]
+            .snapshots
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.kind.clone(), entry.body.clone()))
+            .collect())
+    }
+
+    /// Every stored file snapshot, by name, base64-encoded.
+    pub fn stored_files(&self) -> Vec<(String, String)> {
+        use base64::Engine as _;
+        let Some(dir) = file_snapshot_path(&self.file, ".probe")
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+        else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| {
+                let bytes = std::fs::read(entry.path()).ok()?;
+                let name = entry.file_name().into_string().ok()?;
+                Some((
+                    name,
+                    base64::engine::general_purpose::STANDARD.encode(bytes),
+                ))
+            })
+            .collect()
+    }
+
+    /// A value snapshot the page took, for the test `name`.
+    pub fn check(
+        &mut self,
+        case_id: usize,
+        name: &str,
+        key: &str,
+        kind: String,
+        actual: String,
+    ) -> Result<(), String> {
+        check_snapshot_in(
+            &mut self.state,
+            self.file.clone(),
+            name,
+            case_id,
+            key,
+            kind,
+            actual,
+        )
+    }
+
+    /// A file snapshot the page took, its bytes base64-encoded.
+    pub fn check_file(&mut self, case_id: usize, name: &str, actual: &str) -> Result<(), String> {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(actual)
+            .map_err(|_| "the page sent a file snapshot that is not base64".to_string())?;
+        check_file_snapshot_in(&mut self.state, &self.file, case_id, name, bytes)
+    }
+
+    /// A case is being attempted again.
+    pub fn restart(&mut self, case_id: usize) {
+        restart_in(&mut self.state, case_id);
+    }
+
+    /// Where a file snapshot called `name` is stored, as a report names it,
+    /// or why `name` is not a file snapshot name.
+    pub fn file_path(&self, name: &str) -> Result<String, String> {
+        file_snapshot_path(&self.file, name).map(|path| path.display().to_string())
+    }
+
+    /// Settles the file's snapshots once its tests are done: decides what is
+    /// obsolete (pruning it on a complete `--update-snapshots` run), writes what
+    /// changed, and returns the lines its report ends with. `summary: false` is
+    /// the JSON reporter's form, which writes and says nothing.
+    pub fn finish(&mut self, tally: &Tally, summary: bool) -> Result<String, String> {
+        if !summary {
+            flush_in(&mut self.state)?;
+            return Ok(String::new());
+        }
+        reconcile_in(&mut self.state, &tally.cases)?;
+        let report = snapshot_report(&self.state);
+        flush_in(&mut self.state)?;
+        Ok(report)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A changed line is one removal and one addition, with its unchanged
+    /// neighbours shown once each as context.
+    #[test]
+    fn a_snapshot_diff_shows_only_what_changed() {
+        let before = "{\n  \"user\": \"ada\",\n  \"ids\": [1, 2],\n}";
+        let after = "{\n  \"user\": \"bob\",\n  \"ids\": [1, 2],\n}";
+        assert_eq!(
+            snapshot_diff(before, after, false),
+            "--- snapshot\n+++ received\n  {\n-   \"user\": \"ada\",\n+   \"user\": \"bob\",\n    \"ids\": [1, 2],\n  }\n"
+        );
+    }
 
     /// A run with no tests in it prints nothing and succeeds — `finish()` is
     /// called after every run, including the ones that are not tests at all.

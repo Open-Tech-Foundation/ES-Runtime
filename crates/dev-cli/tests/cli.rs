@@ -13184,3 +13184,86 @@ test("dup", () => { expect("first").toMatchSnapshot(); });
     assert!(!text.contains("obsolete"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Snapshots in a browser run are the same snapshots: what a process run wrote
+/// matches in the page, a change fails with the host's diff, and what the
+/// browser run updates is what the process run then matches. Needs a browser
+/// that can be driven; on a machine without one it checks nothing.
+#[test]
+fn test_browser_snapshots_are_the_process_runs_snapshots() {
+    let dir = build_dir("t_browser_snapshots");
+    let file = |user: &str| {
+        write_in(
+            &dir,
+            "snap.test.js",
+            &format!(
+                "import {{ test, expect }} from \"runtime:test\";\n\
+                 test(\"value\", () => {{ expect({{ user: \"{user}\", ids: [1, 2] }}).toMatchSnapshot(); }});\n\
+                 test(\"file\", () => {{ expect(new Uint8Array([1, 2, 3])).toMatchFileSnapshot(\"bytes.bin\"); }});\n"
+            ),
+        );
+    };
+    file("ada");
+    let written = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        written.status.success(),
+        "{}{}",
+        stdout(&written),
+        stderr(&written)
+    );
+
+    let matched = esdev_in(&dir)
+        .args(["test", "--browser", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser");
+    let (out, err) = (stdout(&matched), stderr(&matched));
+    if err.contains("no browser that can run the tests") {
+        eprintln!("no browser can be driven here; the browser snapshot run did not happen");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(matched.status.success(), "{out}{err}");
+    assert!(
+        out.contains("snapshots: 2 matched, 0 failed, 0 written"),
+        "{out}"
+    );
+
+    file("bob");
+    let changed = esdev_in(&dir)
+        .args(["test", "--browser", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser");
+    let out = stdout(&changed);
+    assert!(!changed.status.success(), "{out}");
+    assert!(
+        out.contains("snapshot changed — value: snapshot 1"),
+        "{out}"
+    );
+    assert!(
+        out.contains("-   \"user\": \"ada\",\n    +   \"user\": \"bob\","),
+        "the host's diff, not the page's one line:\n{out}"
+    );
+
+    let updated = esdev_in(&dir)
+        .args(["test", "--browser", "--update-snapshots", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser --update-snapshots");
+    assert!(
+        stdout(&updated).contains("snapshots: 1 updated, 0 written, 0 removed, 1 unchanged"),
+        "{}",
+        stdout(&updated)
+    );
+    let after = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        stdout(&after).contains("snapshots: 2 matched, 0 failed, 0 written"),
+        "{}",
+        stdout(&after)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

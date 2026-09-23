@@ -37,6 +37,10 @@ is the point, since none of the three has any business in a deployment.
   - Snapshots of skipped tests, tests left out by `.only`, and tests that did
     not pass are no longer listed as obsolete.
   - With `retry`, only the last attempt's snapshot results are counted.
+- **A snapshot diff shows only what changed.** Every unchanged line was also
+  printed a second time as an addition, which made any diff of a changed
+  snapshot unreadable. Removed lines now come before the lines that replace
+  them.
 - **A browser that exits or crashes mid-run no longer hangs
   `esdev test --browser`.** The files still running fail with "the browser
   closed before the file finished", keeping what they had reported.
@@ -47,6 +51,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Snapshots in `esdev test --browser`.** `toMatchSnapshot`,
+  `toMatchFileSnapshot` and `toThrowErrorMatchingSnapshot` work in the page,
+  against the same `__snapshots__` files a normal run uses, with the same
+  diffs, `--update-snapshots`, `--ci` and pruning.
 - **More of the test vocabulary in `runtime:test`.**
   - **Test options:** `test(name, fn, { timeout, retry })`, or the options
     before the body, or a number of milliseconds; the same on `test.skip` and
@@ -86,9 +94,7 @@ is the point, since none of the three has any business in a deployment.
     `--setup` and filters mean what they mean in a normal run.
   - **Stack frames point at the source.** They are source-mapped back to the
     file that was written, and frames inside the harness read `runtime:test`.
-  - Snapshots are refused with a message in a browser run rather than passing
-    without comparing anything. `--watch` and a headed window are not there
-    yet.
+  - `--watch` and a headed window are not there yet.
   - **WebDriver BiDi only, and nothing is downloaded.** Firefox serves BiDi
     itself; Chrome, Chromium and Edge need `chromedriver` or `msedgedriver` on
     `PATH`. A missing browser or driver is an error naming what to install.

@@ -40,7 +40,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use crate::bidi::{Client, Event, Session};
-use crate::guest::test::Tally;
+use crate::guest::test::{FileSnapshots, Tally};
 use crate::test::TestConfig;
 
 /// Installs `__ops` in the page, then lets the page start. `send` is the
@@ -49,21 +49,75 @@ use crate::test::TestConfig;
 /// back unchanged.
 ///
 /// Ids are handed out here, since `test_registered` must answer at once; the
-/// runner follows the page's numbering. Snapshots need the snapshot files,
-/// which live beside the test file rather than in the page, and are refused
-/// with a message saying so rather than passing without a comparison.
-const INSTALL: &str = r#"(send) => {
+/// runner follows the page's numbering.
+///
+/// **Snapshots are compared twice.** A snapshot matcher has to fail where it
+/// is called, and the page cannot wait on the host, so `store` carries the
+/// file's stored snapshots in and the page decides pass or fail itself. Every
+/// snapshot is also posted back, and the host runs the same check a process
+/// run does: it keeps the tally, writes and prunes the files, and its fuller
+/// message — a diff — replaces the page's one-line one in the report. The
+/// page's messages are the first lines of the host's, which is what makes
+/// the replacement possible.
+const INSTALL: &str = r#"(send, config) => {
   let next = 0;
   const post = (...message) => send(JSON.stringify(message));
-  const unavailable = (what) => `${what} is not available in a browser run yet`;
+  const store = JSON.parse(config);
+  const names = new Map();
+  const owners = new Map();
+  const keyName = (text) => text.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const toBase64 = (bytes) => {
+    let binary = "";
+    for (let at = 0; at < bytes.length; at += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(at, at + 0x8000));
+    }
+    return btoa(binary);
+  };
   const ops = {
-    test_registered(name) { const id = next++; post("registered", id, String(name)); return id; },
+    test_registered(name) {
+      const id = next++;
+      names.set(id, String(name));
+      post("registered", id, String(name));
+      return id;
+    },
     test_running(id) { post("running", id); },
     test_skipped(id, because) { post("skipped", id, String(because ?? "")); },
     test_finished(id, ok, detail) { post("finished", id, ok === true, String(detail ?? "")); },
     test_set_file() {},
-    test_snapshot() { return unavailable("toMatchSnapshot"); },
-    test_file_snapshot() { return unavailable("toMatchFileSnapshot"); },
+    test_snapshot(id, key, actual, kind) {
+      post("snapshot", id, String(key), String(kind), String(actual));
+      const name = names.get(id) ?? "";
+      const owner = owners.get(name);
+      if (owner === undefined) owners.set(name, id);
+      else if (owner !== id) {
+        return `another test in this file is also named ${JSON.stringify(name)}, and snapshots are stored by test name — rename one of them`;
+      }
+      const full = keyName(`${name}: ${key}`);
+      const stored = store.snapshots[full];
+      if (stored !== undefined && stored[0] === kind && stored[1] === actual) return undefined;
+      if (stored !== undefined && !store.update) return `snapshot changed — ${full}`;
+      if (stored === undefined && store.ci) return `no stored snapshot: ${full}; --ci does not write them`;
+      return undefined;
+    },
+    test_file_snapshot(id, name, actual) {
+      let bytes;
+      if (typeof actual === "string") bytes = new TextEncoder().encode(actual);
+      else if (actual instanceof ArrayBuffer) bytes = new Uint8Array(actual);
+      else if (ArrayBuffer.isView(actual)) bytes = new Uint8Array(actual.buffer, actual.byteOffset, actual.byteLength);
+      else return "toMatchFileSnapshot accepts a string or byte buffer";
+      name = String(name);
+      if (name === "" || name === "." || name === ".." || /[\/\\]/.test(name)) {
+        return "toMatchFileSnapshot(name) needs a filename, not a path";
+      }
+      const encoded = toBase64(bytes);
+      post("file-snapshot", id, name, encoded);
+      const path = store.filePath.replace("\u0000", name);
+      const stored = store.files[name];
+      if (stored === encoded) return undefined;
+      if (stored !== undefined && !store.update) return `file snapshot differs: ${path}`;
+      if (stored === undefined && store.ci) return `no stored file snapshot: ${path}; --ci does not write them`;
+      return undefined;
+    },
     test_drained() { post("drained"); },
   };
   Object.defineProperty(globalThis, "__ops", { value: Object.freeze(ops) });
@@ -353,6 +407,32 @@ impl Job {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(context.clone(), sender);
+        let mut snapshots = FileSnapshots::new(
+            self.file.clone(),
+            config.update_snapshots,
+            config.ci,
+            config.full_diff,
+            // Pruning needs every file's tests to have run, which a filter
+            // says they did not.
+            config.filters.is_empty(),
+        );
+        let store = json!({
+            "update": config.update_snapshots,
+            "ci": config.ci,
+            "snapshots": snapshots
+                .stored()?
+                .into_iter()
+                .map(|(key, kind, body)| (key, json!([kind, body])))
+                .collect::<serde_json::Map<_, _>>(),
+            "files": snapshots
+                .stored_files()
+                .into_iter()
+                .map(|(name, bytes)| (name, json!(bytes)))
+                .collect::<serde_json::Map<_, _>>(),
+            // `\0` stands for the name, which no file name contains.
+            "filePath": snapshots.file_path("\0").unwrap_or_default(),
+        })
+        .to_string();
         self.client
             .command(
                 "browsingContext.navigate",
@@ -364,7 +444,10 @@ impl Job {
                 "script.callFunction",
                 json!({
                     "functionDeclaration": INSTALL,
-                    "arguments": [{ "type": "channel", "value": { "channel": format!("esdev-{}", self.path) } }],
+                    "arguments": [
+                        { "type": "channel", "value": { "channel": format!("esdev-{}", self.path) } },
+                        { "type": "string", "value": store },
+                    ],
                     "target": { "context": context },
                     "awaitPromise": false,
                 }),
@@ -372,7 +455,9 @@ impl Job {
             .await?;
 
         let mut state = FileState {
+            tally: Tally::for_file(self.file.clone()),
             locations: Locations::new(&self.origin, &self.stage, &self.runtime_test),
+            snapshots: Some(snapshots),
             ..FileState::default()
         };
         let waited = async {
@@ -402,6 +487,18 @@ impl Job {
         let (report, passed) = state.tally.render(as_json);
         let mut output = state.console;
         output.push_str(&report);
+        // Written after the page is done with them, as a process run writes
+        // them when it exits.
+        let mut snapshots_written = true;
+        if let Some(snapshots) = &mut state.snapshots {
+            match snapshots.finish(&state.tally, as_json.is_none()) {
+                Ok(summary) => output.push_str(&summary),
+                Err(err) => {
+                    output.push_str(&format!("error: {err}\n"));
+                    snapshots_written = false;
+                }
+            }
+        }
         match ended {
             Ended::Finished => {}
             Ended::TimedOut => {
@@ -413,7 +510,7 @@ impl Job {
                  It exited or crashed; the results above are what it reported first.\n",
             ),
         }
-        let finished = ended == Ended::Finished;
+        let finished = ended == Ended::Finished && snapshots_written;
         Ok((output, passed && finished))
     }
 }
@@ -445,6 +542,13 @@ struct FileState {
     /// What the page wrote to its console, printed ahead of the report as a
     /// process run's output is.
     console: String,
+    /// The file's snapshots, checked again here as the page reports them.
+    snapshots: Option<FileSnapshots>,
+    /// The host's message for each snapshot that failed, by case — the fuller
+    /// form of what the page threw.
+    snapshot_failures: Vec<(usize, String)>,
+    /// Cases that have started, so a second start is known to be a retry.
+    started: std::collections::HashSet<usize>,
 }
 
 impl FileState {
@@ -501,18 +605,62 @@ impl FileState {
                 self.registered += 1;
                 self.drained = false;
             }
-            ("running", Some(index)) => self.tally.running(index),
+            ("running", Some(index)) => {
+                // A retry: what the earlier attempt counted no longer stands.
+                if !self.started.insert(index) {
+                    if let Some(snapshots) = &mut self.snapshots {
+                        snapshots.restart(index);
+                    }
+                    self.snapshot_failures.retain(|(case, _)| *case != index);
+                }
+                self.tally.running(index);
+            }
+            ("snapshot", Some(index)) => {
+                let text = |at: usize| message.get(at).and_then(Value::as_str).unwrap_or_default();
+                let name = self.tally.name(index).unwrap_or_default().to_string();
+                if let Some(snapshots) = &mut self.snapshots
+                    && let Err(failure) = snapshots.check(
+                        index,
+                        &name,
+                        text(2),
+                        text(3).to_string(),
+                        text(4).to_string(),
+                    )
+                {
+                    self.snapshot_failures.push((index, failure));
+                }
+            }
+            ("file-snapshot", Some(index)) => {
+                let text = |at: usize| message.get(at).and_then(Value::as_str).unwrap_or_default();
+                if let Some(snapshots) = &mut self.snapshots
+                    && let Err(failure) = snapshots.check_file(index, text(2), text(3))
+                {
+                    self.snapshot_failures.push((index, failure));
+                }
+            }
             ("skipped", Some(index)) => {
                 let because = message.get(2).and_then(Value::as_str).unwrap_or_default();
                 self.tally.skipped(index, because);
             }
             ("finished", Some(index)) => {
                 let passed = message.get(2).and_then(Value::as_bool) == Some(true);
-                let detail = message
+                let mut detail = message
                     .get(3)
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                // Each snapshot failure the page reported in one line, in the
+                // host's words: with the diff, and the file it is stored in.
+                for (_, failure) in self
+                    .snapshot_failures
+                    .iter()
+                    .filter(|(case, _)| *case == index)
+                {
+                    let first = failure.lines().next().unwrap_or_default();
+                    if !first.is_empty() && detail.contains(first) {
+                        detail = detail.replacen(first, failure, 1);
+                    }
+                }
                 self.tally
                     .finished(index, passed, self.locations.remap(&detail));
             }

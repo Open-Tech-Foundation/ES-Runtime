@@ -86,12 +86,14 @@ and Edge are started by their driver. Either way:
 
 `--timeout`, `--reporter=json` and filters mean what they do in a normal run.
 
+- **Snapshots work as in a normal run**, against the same files:
+  `--update-snapshots`, `--ci` and `--full-diff` apply.
+
 ## What it does not do yet
 
-- **Snapshots.** `toMatchSnapshot` and `toMatchFileSnapshot` fail with a message
-  saying they are not available in a browser run yet, rather than passing
-  without comparing anything.
-- **`--watch`**, and a headed window for watching a test run.
+`--watch`, and a headed window for watching a test run.
+
+## Refused options
 
 These are refused beside `--browser`, because none of them means anything in a
 page: `--dom` (the page has the real DOM), the permission flags (a page has the
