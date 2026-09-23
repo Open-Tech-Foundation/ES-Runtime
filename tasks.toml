@@ -42,7 +42,7 @@ run = "cargo run -p es-runtime-cli -- --allow-read --allow-write --allow-imports
 run = "rustup toolchain install nightly --profile minimal --component miri && cargo +nightly miri test -p es-runtime-common -p es-runtime-providers"
 
 [tasks.msrv]
-run = "rustup toolchain install 1.95.0 --profile minimal && cargo +1.95.0 build --workspace --all-features"
+run = "rustup toolchain install 1.96.0 --profile minimal && cargo +1.96.0 build --workspace --all-features"
 
 # A script, not a `run` line: this needs a loop and ::group:: annotations, and
 # tsr's mini-shell has no for-loops by design.

@@ -13,10 +13,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
-- **The pinned toolchain is Rust 1.98.1**, up from 1.95.0. The declared MSRV is
-  unchanged at 1.95, and the CI job that builds against it is unchanged; only the
-  channel local and CI builds use moves. One new lint (`clippy::drain_collect`)
-  came with it and is fixed in the engine's rejection bookkeeping.
+- **The pinned toolchain is Rust 1.98.1**, up from 1.95.0, and the **MSRV is
+  1.96**, up from 1.95. The MSRV moves because `esdev`'s oxc 0.151 requires 1.96;
+  the CI job and `tsr msrv` build against 1.96.0. One new lint
+  (`clippy::drain_collect`) came with the toolchain and is fixed in the engine's
+  rejection bookkeeping.
 
 - **An expired timer no longer costs a millisecond.** The event-loop driver
   parked on a zero-length sleep when the next timer was already due, and tokio's

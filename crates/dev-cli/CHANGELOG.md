@@ -24,6 +24,11 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+- **oxc 0.151**, up from 0.146, for transforms, type stripping and declaration
+  emit. No output changes; every build, transform and declaration test passes
+  unchanged.
+
 ### Fixed
 - **Media lists and grouping rules are their interfaces.** A sheet's `media`
   was a string, and every at-rule block was a bare `CSSGroupingRule` whose

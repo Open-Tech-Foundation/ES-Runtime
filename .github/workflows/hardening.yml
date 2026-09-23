@@ -57,7 +57,7 @@ jobs:
           fi
 
   msrv:
-    name: msrv build (1.95)
+    name: msrv build (1.96)
     needs: changes
     if: needs.changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
