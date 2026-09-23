@@ -1895,9 +1895,7 @@ export const cases = [
         [read("flex-grow"), read("flex-shrink"), read("flex-basis")],
         [read("row-gap"), read("column-gap")],
         [read("overflow-x"), read("overflow-y")],
-        // No `line-height`: a number there computes against the font size, and
-        // that is a resolved value this DOM does not pretend to have.
-        [read("font-size"), read("font-style"), read("font-weight"), read("font-family")],
+        [read("font-size"), read("line-height"), read("font-style"), read("font-weight"), read("font-family")],
         [read("grid-row-start"), read("grid-row-end")],
         [read("list-style-type"), read("list-style-position")],
         [read("text-decoration-line"), read("text-decoration-style")],
@@ -2210,6 +2208,56 @@ export const cases = [
         both("color-mix(in oklab, red, blue)")[0],
         both("color-mix(in srgb, red, blue)"), both("color-mix(in srgb, red 30%, blue)"),
       ];
+    },
+  },
+  {
+    group: "cascade",
+    name: "lengths-are-absolute-when-they-can-be",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = new window.CSSStyleSheet();
+      document.adoptedStyleSheets = [sheet];
+      const read = (css, markup, selector, properties) => {
+        sheet.replaceSync(css);
+        const host = document.createElement("div");
+        host.innerHTML = markup;
+        document.body.appendChild(host);
+        const target = selector ? host.querySelector(selector) : host.firstElementChild;
+        const computed = window.getComputedStyle(target);
+        const answer = properties.map((property) => computed.getPropertyValue(property));
+        host.remove();
+        return answer;
+      };
+      const result = [
+        // The root size, and the three ways of being relative to it.
+        read("", "<p>x</p>", null, ["font-size", "line-height"]),
+        read(".a { font-size: 2em }", "<p class=a>x</p>", null, ["font-size"]),
+        read(".a { font-size: 2em } .b { font-size: 0.5em }", "<div class=a><span class=b>x</span></div>", ".b", ["font-size"]),
+        read(".a { font-size: 50% }", "<p class=a>x</p>", null, ["font-size"]),
+        read(".a { font-size: 2rem }", "<p class=a>x</p>", null, ["font-size"]),
+        // The keyword sizes, including the two relative ones.
+        ["xx-small", "small", "medium", "large", "xx-large", "smaller", "larger"]
+          .map((keyword) => read(`.a { font-size: ${keyword} }`, "<p class=a>x</p>", null, ["font-size"])[0]),
+        // The user-agent sheet's headings, which are written in `em`.
+        ["h1", "h3", "h6"].map((tag) => read("", `<${tag}>x</${tag}>`, null, ["font-size"])[0]),
+        // `line-height` takes a number, a percentage, a length — and `normal`,
+        // which resolves against a font this DOM is not measuring.
+        [
+          read(".a { font-size: 10px; line-height: 2 }", "<p class=a>x</p>", null, ["line-height"])[0],
+          read(".a { font-size: 10px; line-height: 150% }", "<p class=a>x</p>", null, ["line-height"])[0],
+          read(".a { font-size: 10px; line-height: 2em }", "<p class=a>x</p>", null, ["line-height"])[0],
+          read(".a { font-size: 10px; line-height: normal }", "<p class=a>x</p>", null, ["line-height"])[0],
+        ],
+        // Other lengths: `em` and `rem` resolve, a percentage of the containing
+        // block does not, and a border with no style has no width.
+        read(".a { font-size: 10px; letter-spacing: 2em; word-spacing: 1em; text-indent: 50%; border-top-width: 0.5em }",
+          "<p class=a>x</p>", null, ["letter-spacing", "word-spacing", "text-indent", "border-top-width"]),
+        // An inherited font size is what a child's own relative value resolves against.
+        read(".a { font-size: 20px } .b { line-height: 1.5 }", "<div class=a><span class=b>x</span></div>", ".b", ["font-size", "line-height"]),
+      ];
+      document.adoptedStyleSheets = [];
+      return result;
     },
   },
 ];

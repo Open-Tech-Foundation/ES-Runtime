@@ -8,11 +8,11 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 # DOM parity
 
 Chrome is the oracle. 228 features — interfaces, members and behaviours — are
-put to all four runtimes, and 99 behaviour cases run the same code in each.
+put to all four runtimes, and 100 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 207 / 228 | 91% |
+| esdev | 208 / 228 | 91% |
 | jsdom | 178 / 228 | 78% |
 | happy-dom | 179 / 228 | 79% |
 
@@ -23,7 +23,7 @@ put to all four runtimes, and 99 behaviour cases run the same code in each.
 | tree | 55 | 54 | 49 | 44 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
-| cascade | 26 | 22 | 12 | 17 |
+| cascade | 26 | 23 | 12 | 17 |
 | window | 34 | 25 | 22 | 24 |
 | events | 26 | 24 | 22 | 25 |
 | components | 32 | 32 | 20 | 20 |
@@ -32,7 +32,7 @@ put to all four runtimes, and 99 behaviour cases run the same code in each.
 
 ## Behaviour cases
 
-97 of 99 cases match Chrome exactly, and 2 is a documented limit.
+98 of 100 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -135,10 +135,11 @@ put to all four runtimes, and 99 behaviour cases run the same code in each.
 | a-colour-resolves-when-it-is-computed | cascade | yes | no | no |
 | a-value-is-checked-against-the-property | cascade | yes | no | no |
 | colour-functions-are-canonical | cascade | yes | no | no |
+| lengths-are-absolute-when-they-can-be | cascade | yes | no | no |
 
 ## Closer to Chrome than an emulator
 
-61 features where esdev matches Chrome and jsdom or happy-dom does not.
+62 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -194,6 +195,7 @@ put to all four runtimes, and 99 behaviour cases run the same code in each.
 | CSS.supports | `true,true` | `undefined,undefined` | `true,true` |
 | CSS nesting resolves | `rgb(2, 2, 2)` | `rgb(1, 1, 1)` | `` |
 | scrollIntoView | yes | no | yes |
+| resolved font size | `32px` | `2em` | `16px` |
 | structuredClone | yes | no | no |
 | fetch | yes | no | yes |
 | WebSocket | yes | yes | no |
@@ -206,7 +208,7 @@ put to all four runtimes, and 99 behaviour cases run the same code in each.
 
 ## Differences from Chrome
 
-21 features, each with its reason. There are no others.
+20 features, each with its reason. There are no others.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
 
@@ -244,12 +246,6 @@ put to all four runtimes, and 99 behaviour cases run the same code in each.
 | --- | --- | --- |
 | Element.animate (WAAPI) | yes | no |
 | document.startViewTransition | yes | no |
-
-**Specified values only: resolving one needs layout and a font.**
-
-| Feature | Chrome | esdev |
-| --- | --- | --- |
-| resolved font size | `32px` | `2em` |
 
 **Harness artifact: Chrome ran the probe on about:blank, which is an opaque, insecure origin.**
 

@@ -25,6 +25,24 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **A computed length is a length in pixels.** `font-size: 2em` read `2em` and
+  `line-height: 1.5` read `1.5`; a browser answers `32px` and, at a 12px font,
+  `18px`. Most of that conversion needs no layout, so it is done: the root font
+  size is 16px, an absolute unit is a fixed multiple of a pixel, `em` is a
+  multiple of the element's own font size and `rem` of the root's, the keyword
+  sizes (`small`, `x-large`, `smaller`, …) are Chrome's own numbers, and
+  `line-height` takes a number or a percentage of the font size. Every
+  length-valued property is resolved, not just the two — `letter-spacing: 2em`
+  is `20px` — and a border whose style is `none` has a width of `0px`, which is
+  the one used-value rule that needs nothing measured. The user-agent sheet's
+  headings are written in `em`, so `h1` now reports `32px` and `h3` `18.72px`,
+  exactly as Chrome does.
+
+  Left as written, because each needs a box, a font or a window this DOM does not
+  measure: a percentage of the containing block (`text-indent: 50%`), `ex` and
+  `ch`, the viewport and container units, and `line-height: normal`. The surface
+  probe's *resolved font size* moved from a recorded difference to an agreement,
+  taking esdev to 208 of 228.
 - **A computed colour is a colour.** `getComputedStyle(el).color` answered `red`
   where a browser answers `rgb(255, 0, 0)`, which is the form every component
   test asserting on a theme reads. Colours now follow Chrome on both sides of

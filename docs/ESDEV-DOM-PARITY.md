@@ -13,7 +13,7 @@ keep current.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 207 / 228 | 91% |
+| esdev | 208 / 228 | 91% |
 | jsdom | 178 / 228 | 78% |
 | happy-dom | 179 / 228 | 79% |
 
@@ -22,7 +22,7 @@ keep current.
 | tree | 55 | 54 | 49 | 44 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
-| cascade | 26 | 22 | 12 | 17 |
+| cascade | 26 | 23 | 12 | 17 |
 | window | 34 | 25 | 22 | 24 |
 | events | 26 | 24 | 22 | 25 |
 | components | 32 | 32 | 20 | 20 |
@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-97 of 99 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+98 of 100 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -135,10 +135,11 @@ compares the result.
 | a-colour-resolves-when-it-is-computed | cascade | yes | no | no |
 | a-value-is-checked-against-the-property | cascade | yes | no | no |
 | colour-functions-are-canonical | cascade | yes | no | no |
+| lengths-are-absolute-when-they-can-be | cascade | yes | no | no |
 
 ## Where esdev is closer to Chrome than an emulator
 
-61 of the 228 features.
+62 of the 228 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -194,6 +195,7 @@ compares the result.
 | CSS.supports | `true,true` | `undefined,undefined` | `true,true` |
 | CSS nesting resolves | `rgb(2, 2, 2)` | `rgb(1, 1, 1)` | `` |
 | scrollIntoView | yes | no | yes |
+| resolved font size | `32px` | `2em` | `16px` |
 | structuredClone | yes | no | no |
 | fetch | yes | no | yes |
 | WebSocket | yes | yes | no |
@@ -206,7 +208,7 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-21 of 228. Every one of them is here:
+20 of 228. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **No layout: there is no box model, so there is nothing to measure or scroll.**
@@ -245,12 +247,6 @@ a difference with no entry fails `tsr docs:parity`.
 | --- | --- | --- |
 | Element.animate (WAAPI) | yes | no |
 | document.startViewTransition | yes | no |
-
-**Specified values only: resolving one needs layout and a font.**
-
-| Feature | Chrome | esdev |
-| --- | --- | --- |
-| resolved font size | `32px` | `2em` |
 
 **Harness artifact: Chrome ran the probe on about:blank, which is an opaque, insecure origin.**
 
@@ -468,7 +464,7 @@ a difference with no entry fails `tsr docs:parity`.
 | cascade | offsetWidth measures | `measured` | `zero` | `zero` | `zero` |
 | cascade | scrollIntoView | yes | yes | no | yes |
 | cascade | Element.animate (WAAPI) | yes | no | no | no |
-| cascade | resolved font size | `32px` | `2em` | `2em` | `16px` |
+| cascade | resolved font size | `32px` | `32px` | `2em` | `16px` |
 | window | window === globalThis | yes | yes | yes | yes |
 | window | location | yes | yes | yes | yes |
 | window | location parts are assignable | yes | yes | yes | yes |

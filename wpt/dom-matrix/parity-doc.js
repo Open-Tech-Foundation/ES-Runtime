@@ -20,7 +20,6 @@ const outputs = {
 // the thing this document exists to prevent.
 const LAYOUT = "No layout: there is no box model, so there is nothing to measure or scroll.";
 const RENDERING = "No rendering: the top layer, animations and transitions have nothing to paint.";
-const SPECIFIED = "Specified values only: resolving one needs layout and a font.";
 const LEGACY = "Legacy or superseded by a modern API that is implemented.";
 const STRICT = "Deliberately strict: malformed markup is refused rather than repaired.";
 const HOST = "No host resource: this DOM reaches no network, no file and no browsing context.";
@@ -33,7 +32,6 @@ const REASONS = new Map(Object.entries({
   "offsetWidth measures": LAYOUT,
   "Element.animate (WAAPI)": RENDERING,
   "document.startViewTransition": RENDERING,
-  "resolved font size": SPECIFIED,
   "XPathEvaluator (document.evaluate)": LEGACY,
   "XMLSerializer": LEGACY,
   "document.write": LEGACY,

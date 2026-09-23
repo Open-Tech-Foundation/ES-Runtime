@@ -156,12 +156,88 @@ const INITIAL = new Map(Object.entries({
   "padding-left": "0px",
 }));
 
+// ---------------------------------------------------------------------------
+// Absolute lengths
+//
+// A computed style reports lengths in pixels, and most of that conversion needs
+// no layout: an absolute unit is a fixed multiple of a pixel, `em` is a multiple
+// of the element's own font size, and `rem` of the root's. So those are resolved
+// here, and the ones that genuinely need a box — a percentage of the containing
+// block, `ex` and `ch` (font metrics), the viewport and container units — are
+// left exactly as written, which is this DOM's standing answer for a value it
+// cannot compute.
+// ---------------------------------------------------------------------------
+
+const ROOT_FONT_SIZE = 16;
+
+// Each unit as a multiple of a pixel, at the 96dpi CSS reference.
+const ABSOLUTE_UNITS = {
+  px: 1, pt: 96 / 72, pc: 16, in: 96, cm: 96 / 2.54, mm: 96 / 25.4, q: 96 / 101.6,
+};
+
+// The absolute keyword sizes, and the two relative ones, checked against Chrome.
+const FONT_SIZE_KEYWORDS = {
+  "xx-small": 9, "x-small": 10, small: 13, medium: 16, large: 18,
+  "x-large": 24, "xx-large": 32, "xxx-large": 48,
+};
+
+const LENGTH = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$/i;
+
+// As a browser prints one: four decimals at most, and no trailing zeros.
+function printPx(value) {
+  return `${Number(value.toFixed(4))}px`;
+}
+
+// One component as pixels, or null when it is not a length this DOM can make
+// absolute.
+function toPixels(component, fontSize, rootFontSize) {
+  const match = LENGTH.exec(component);
+  if (match === null) return null;
+  const number = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit === "" ) return number === 0 ? 0 : null;
+  if (unit === "em") return number * fontSize;
+  if (unit === "rem") return number * rootFontSize;
+  const factor = ABSOLUTE_UNITS[unit];
+  return factor === undefined ? null : number * factor;
+}
+
+// The element's own font size in pixels, from whatever was declared for it.
+function resolveFontSize(declared, parentSize, rootFontSize) {
+  if (declared === undefined) return parentSize;
+  const value = String(declared).trim().toLowerCase();
+  if (Object.hasOwn(FONT_SIZE_KEYWORDS, value)) return FONT_SIZE_KEYWORDS[value];
+  if (value === "smaller") return parentSize / 1.2;
+  if (value === "larger") return parentSize * 1.2;
+  const percent = /^([+-]?[\d.]+)%$/.exec(value);
+  if (percent) return (Number(percent[1]) / 100) * parentSize;
+  // `em` on `font-size` is a multiple of the *parent's* size, not its own.
+  const pixels = toPixels(value, parentSize, rootFontSize);
+  return pixels === null ? parentSize : pixels;
+}
+
+// `line-height`, which takes a number as a multiple of the font size and a
+// percentage as one too. `normal` stays `normal`: what it resolves to is the
+// font's own metric.
+function resolveLineHeight(declared, fontSize, rootFontSize) {
+  if (declared === undefined) return undefined;
+  const value = String(declared).trim().toLowerCase();
+  if (value === "normal" || value === "") return declared;
+  const number = /^[+-]?(?:\d+\.?\d*|\.\d+)$/.exec(value);
+  if (number) return printPx(Number(value) * fontSize);
+  const percent = /^([+-]?[\d.]+)%$/.exec(value);
+  if (percent) return printPx((Number(percent[1]) / 100) * fontSize);
+  const pixels = toPixels(value, fontSize, rootFontSize);
+  return pixels === null ? declared : printPx(pixels);
+}
+
 // Where an element's own `style` attribute sits, above every author rule that
 // is not `!important`.
 const ORIGIN = { ua: 0, author: 1, inline: 2 };
 
 export function createSheets({ tree, parse, selectors, css, mediaMatches, colors = null }) {
   const { Document, Element, ShadowRoot, HTML_NAMESPACE } = tree;
+  const types = css.types ?? null;
 
   class CSSRuleList {
     constructor(rules) {
@@ -698,6 +774,40 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
         const value = values.get(name);
         if (value !== undefined) values.set(name, colors.computedColor(value, currentColor));
       }
+    }
+
+    // Lengths, in pixels, before anything else reads one: `line-height: 1.5`
+    // needs the font size, and the font size needs the parent's.
+    const parentFontSize = Number.parseFloat(inherited.get("font-size") ?? "") || ROOT_FONT_SIZE;
+    const rootFontSize = () => {
+      const root = element.ownerDocument?.documentElement;
+      if (!root || root === element) return ROOT_FONT_SIZE;
+      return Number.parseFloat(computedValues(root).get("font-size") ?? "") || ROOT_FONT_SIZE;
+    };
+    const fontSize = resolveFontSize(values.get("font-size"), parentFontSize, rootFontSize());
+    values.set("font-size", printPx(fontSize));
+    const lineHeight = resolveLineHeight(values.get("line-height"), fontSize, rootFontSize());
+    if (lineHeight !== undefined) values.set("line-height", lineHeight);
+    // And every other length the table says a property takes: `em` against this
+    // element's font size, `rem` against the root's, an absolute unit against
+    // the pixel. A percentage, `ex`, `ch` and the viewport units are left as
+    // written, because those need a box, a font or a window this DOM is not
+    // measuring.
+    for (const [name, value] of values) {
+      if (name === "font-size" || name === "line-height" || name.startsWith("--")) continue;
+      if (!types?.get(name)?.kinds.has("length")) continue;
+      if (!/\d(?:px|em|rem|pt|pc|in|cm|mm|q)\b/i.test(value)) continue;
+      const converted = String(value).split(/\s+/).map((component) => {
+        const pixels = toPixels(component, fontSize, rootFontSize());
+        return pixels === null ? component : printPx(pixels);
+      }).join(" ");
+      values.set(name, converted);
+    }
+    // A border with no style has no width, whatever was asked for — the one
+    // used-value rule that needs nothing measured.
+    for (const side of ["top", "right", "bottom", "left"]) {
+      const style = values.get(`border-${side}-style`) ?? INITIAL.get(`border-${side}-style`);
+      if (style === "none" || style === "hidden") values.set(`border-${side}-width`, "0px");
     }
 
     // The one keyword-to-number computation that needs no layout: a browser's

@@ -4379,6 +4379,7 @@
           ],
           [
             "12px",
+            "18px",
             "italic",
             "700",
             "serif"
@@ -4437,6 +4438,7 @@
           ],
           [
             "12px",
+            "18px",
             "italic",
             "700",
             "serif"
@@ -4495,6 +4497,7 @@
           ],
           [
             "12px",
+            "1.5",
             "italic",
             "bold",
             "serif"
@@ -4553,6 +4556,7 @@
           ],
           [
             "12px",
+            "1.5",
             "italic",
             "bold",
             "serif"
@@ -6127,10 +6131,217 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "lengths-are-absolute-when-they-can-be",
+      "chrome": {
+        "result": [
+          [
+            "16px",
+            "normal"
+          ],
+          [
+            "32px"
+          ],
+          [
+            "16px"
+          ],
+          [
+            "8px"
+          ],
+          [
+            "32px"
+          ],
+          [
+            "9px",
+            "13px",
+            "16px",
+            "18px",
+            "32px",
+            "13.3333px",
+            "19.2px"
+          ],
+          [
+            "32px",
+            "18.72px",
+            "10.72px"
+          ],
+          [
+            "20px",
+            "15px",
+            "20px",
+            "normal"
+          ],
+          [
+            "20px",
+            "10px",
+            "50%",
+            "0px"
+          ],
+          [
+            "20px",
+            "30px"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "16px",
+            "normal"
+          ],
+          [
+            "32px"
+          ],
+          [
+            "16px"
+          ],
+          [
+            "8px"
+          ],
+          [
+            "32px"
+          ],
+          [
+            "9px",
+            "13px",
+            "16px",
+            "18px",
+            "32px",
+            "13.3333px",
+            "19.2px"
+          ],
+          [
+            "32px",
+            "18.72px",
+            "10.72px"
+          ],
+          [
+            "20px",
+            "15px",
+            "20px",
+            "normal"
+          ],
+          [
+            "20px",
+            "10px",
+            "50%",
+            "0px"
+          ],
+          [
+            "20px",
+            "30px"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "16px",
+            "normal"
+          ],
+          [
+            "32px"
+          ],
+          [
+            "16px"
+          ],
+          [
+            "8px"
+          ],
+          [
+            "32px"
+          ],
+          [
+            "xx-small",
+            "small",
+            "medium",
+            "large",
+            "xx-large",
+            "smaller",
+            "larger"
+          ],
+          [
+            "16px",
+            "16px",
+            "16px"
+          ],
+          [
+            "2",
+            "150%",
+            "32px",
+            "normal"
+          ],
+          [
+            "32px",
+            "16px",
+            "50%",
+            "8px"
+          ],
+          [
+            "20px",
+            "1.5"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "",
+            ""
+          ],
+          [
+            ""
+          ],
+          [
+            ""
+          ],
+          [
+            ""
+          ],
+          [
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "2em",
+            "1.17em",
+            "0.67em"
+          ],
+          [
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            ""
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 97,
+    "match": 98,
     "intentional-limit": 2,
     "drift": 0
   }

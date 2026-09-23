@@ -487,6 +487,9 @@ export function createCss({ Element, colors = null, valueTable = null }) {
     readOnlyDeclaration: (entries) => new ReadOnlyStyleDeclaration(entries),
     supportsDeclaration,
     keepsDeclaration,
+    // The realm's value table, so the cascade can ask the same questions the
+    // declaration does — which properties take a length, above all.
+    types,
     expandShorthand,
     shorthandLonghands,
     install,

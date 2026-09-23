@@ -2,7 +2,7 @@
   "summary": {
     "features": 228,
     "agreesWithChrome": {
-      "esdev": 207,
+      "esdev": 208,
       "jsdom": 178,
       "happy-dom": 179
     },
@@ -33,7 +33,7 @@
     {
       "group": "cascade",
       "features": 26,
-      "esdev": 22,
+      "esdev": 23,
       "jsdom": 12,
       "happy-dom": 17
     },
@@ -1824,7 +1824,7 @@
       "group": "cascade",
       "name": "resolved font size",
       "chrome": "32px",
-      "esdev": "2em",
+      "esdev": "32px",
       "jsdom": "2em",
       "happy-dom": "16px",
       "drift": false
