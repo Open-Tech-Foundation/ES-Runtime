@@ -223,6 +223,17 @@ export function createEvents() {
     }
   }
 
+  // What a popover, a dialog and a `<details>` fire either side of opening or
+  // closing: `beforetoggle` and `toggle` both carry the two states.
+  class ToggleEvent extends Event {
+    constructor(type, options = {}) {
+      super(type, options);
+      this.oldState = String(options.oldState ?? "");
+      this.newState = String(options.newState ?? "");
+      this.source = options.source ?? null;
+    }
+  }
+
   class SubmitEvent extends Event {
     constructor(type, options = {}) { super(type, options); this.submitter = options.submitter ?? null; }
   }
@@ -397,5 +408,5 @@ export function createEvents() {
     return target;
   }
 
-  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
+  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, ToggleEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
 }

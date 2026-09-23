@@ -130,6 +130,87 @@ export const cases = [
   },
   {
     group: "events",
+    name: "details-dialog-and-popover-toggle-alike",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const tick = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+      const watch = (element, log) => {
+        for (const type of ["beforetoggle", "toggle", "close", "cancel"]) {
+          element.addEventListener(type, (event) => log.push([type, event.constructor.name,
+            event.oldState ?? null, event.newState ?? null, event.cancelable, event.bubbles]));
+        }
+      };
+      const run = async (create, act) => {
+        const element = create();
+        const log = [];
+        watch(element, log);
+        await act(element, log);
+        await tick();
+        element.remove();
+        return log;
+      };
+      const details = (attached = true, open = false) => () => {
+        const element = document.createElement("details");
+        element.open = open;
+        if (attached) document.body.append(element);
+        return element;
+      };
+      const dialog = () => {
+        const element = document.createElement("dialog");
+        document.body.append(element);
+        return element;
+      };
+      const result = {
+        detailsOpen: await run(details(), (element, log) => { element.open = true; log.push("sync"); }),
+        detailsFlip: await run(details(), (element) => { element.open = true; element.open = false; }),
+        detailsThrice: await run(details(), (element) => {
+          element.setAttribute("open", ""); element.removeAttribute("open"); element.setAttribute("open", "");
+        }),
+        detailsDetached: await run(details(false), (element) => { element.open = true; }),
+        detailsToggleAttribute: await run(details(true, true), (element) => { element.toggleAttribute("open"); }),
+        detailsSetTwice: await run(details(), (element) => { element.setAttribute("open", ""); element.setAttribute("open", "x"); }),
+        dialogShowClose: await run(dialog, async (element, log) => {
+          element.show(); log.push("sync"); await tick(); log.push("tick"); element.close(); log.push("sync");
+        }),
+        dialogModal: await run(dialog, async (element) => { element.showModal(); await tick(); element.close("x"); }),
+        dialogCancelOpen: await run(dialog, (element, log) => {
+          element.addEventListener("beforetoggle", (event) => { if (event.newState === "open") event.preventDefault(); });
+          element.show();
+          log.push(element.open);
+        }),
+        dialogCoalesce: await run(dialog, (element) => { element.show(); element.close(); }),
+        dialogAttribute: await run(dialog, async (element) => { element.setAttribute("open", ""); await tick(); element.removeAttribute("open"); }),
+        dialogRequestClose: await run(dialog, async (element) => { element.show(); await tick(); element.requestClose("r"); }),
+        popoverCoalesce: await run(() => {
+          const element = document.createElement("div");
+          element.popover = "manual";
+          document.body.append(element);
+          return element;
+        }, (element) => { element.showPopover(); element.hidePopover(); }),
+      };
+      // A `name` group is exclusive: opening one closes the others, at once.
+      const first = document.createElement("details");
+      const second = document.createElement("details");
+      first.name = "group";
+      second.name = "group";
+      document.body.append(first, second);
+      first.open = true;
+      await tick();
+      const log = [];
+      watch(first, log);
+      watch(second, log);
+      second.open = true;
+      result.groupSync = [first.open, second.open];
+      await tick();
+      result.groupLog = log;
+      const made = new window.ToggleEvent("x", { oldState: "a", newState: "b" });
+      result.constructed = [made.oldState, made.newState, made.source, made instanceof window.Event];
+      return result;
+    },
+  },
+  {
+    group: "events",
     name: "keyboard-and-mouse-events-carry-their-modifiers",
     run(window) {
       const read = (event) => [

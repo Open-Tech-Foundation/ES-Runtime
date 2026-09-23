@@ -621,6 +621,623 @@
     },
     {
       "group": "events",
+      "name": "details-dialog-and-popover-toggle-alike",
+      "chrome": {
+        "result": {
+          "detailsOpen": [
+            "sync",
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "detailsFlip": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "detailsThrice": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "detailsDetached": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "detailsToggleAttribute": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "detailsSetTwice": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "dialogShowClose": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            "sync",
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            "tick",
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            "sync",
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "dialogModal": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "dialogCancelOpen": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            false
+          ],
+          "dialogCoalesce": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "dialogAttribute": [],
+          "dialogRequestClose": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            [
+              "cancel",
+              "Event",
+              null,
+              null,
+              true,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "popoverCoalesce": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "groupSync": [
+            false,
+            true
+          ],
+          "groupLog": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "constructed": [
+            "a",
+            "b",
+            null,
+            true
+          ]
+        }
+      },
+      "esdev": {
+        "result": {
+          "detailsOpen": [
+            "sync",
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "detailsFlip": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "detailsThrice": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "detailsDetached": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "detailsToggleAttribute": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "detailsSetTwice": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ]
+          ],
+          "dialogShowClose": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            "sync",
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            "tick",
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            "sync",
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "dialogModal": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "dialogCancelOpen": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            false
+          ],
+          "dialogCoalesce": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "dialogAttribute": [],
+          "dialogRequestClose": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            [
+              "cancel",
+              "Event",
+              null,
+              null,
+              true,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "close",
+              "Event",
+              null,
+              null,
+              false,
+              false
+            ]
+          ],
+          "popoverCoalesce": [
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              true,
+              false
+            ],
+            [
+              "beforetoggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "groupSync": [
+            false,
+            true
+          ],
+          "groupLog": [
+            [
+              "toggle",
+              "ToggleEvent",
+              "closed",
+              "open",
+              false,
+              false
+            ],
+            [
+              "toggle",
+              "ToggleEvent",
+              "open",
+              "closed",
+              false,
+              false
+            ]
+          ],
+          "constructed": [
+            "a",
+            "b",
+            null,
+            true
+          ]
+        }
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "error": "TypeError"
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "events",
       "name": "keyboard-and-mouse-events-carry-their-modifiers",
       "chrome": {
         "result": [
@@ -3304,7 +3921,7 @@
           ],
           true,
           false,
-          "matrix-registry-7",
+          "matrix-registry-24",
           "DOMException",
           "DOMException",
           "DOMException"
@@ -3318,7 +3935,7 @@
           ],
           true,
           true,
-          "matrix-registry-8",
+          "matrix-registry-4",
           "NotSupportedError",
           "NotSupportedError",
           "SyntaxError"
@@ -4136,7 +4753,7 @@
       },
       "happy-dom": {
         "result": [
-          "matrix-bad-15",
+          "matrix-bad-28",
           false,
           "TypeError",
           null
@@ -4144,7 +4761,7 @@
       },
       "jsdom": {
         "result": [
-          "matrix-bad-19",
+          "matrix-bad-8",
           false,
           "TypeError",
           null
@@ -5678,12 +6295,12 @@
         "result": [
           true,
           null,
-          "<button is=\"matrix-built-in-36\"></button>",
+          "<button is=\"matrix-built-in-38\"></button>",
           false,
           false,
           false,
           true,
-          "matrix-built-in-36",
+          "matrix-built-in-38",
           [
             "constructed",
             "constructed",
@@ -5696,7 +6313,7 @@
         "result": [
           true,
           null,
-          "<button is=\"matrix-built-in-38\"></button>",
+          "<button is=\"matrix-built-in-19\"></button>",
           true,
           true,
           false,
@@ -8937,7 +9554,7 @@
     }
   ],
   "summary": {
-    "match": 111,
+    "match": 112,
     "intentional-limit": 2,
     "drift": 0
   }

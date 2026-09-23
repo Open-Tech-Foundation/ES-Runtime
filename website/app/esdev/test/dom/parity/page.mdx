@@ -8,7 +8,7 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 # DOM parity
 
 Chrome is the oracle. 228 features — interfaces, members and behaviours — are
-put to all four runtimes, and 113 behaviour cases run the same code in each.
+put to all four runtimes, and 114 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
@@ -32,7 +32,7 @@ put to all four runtimes, and 113 behaviour cases run the same code in each.
 
 ## Behaviour cases
 
-111 of 113 cases match Chrome exactly, and 2 is a documented limit.
+112 of 114 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -41,6 +41,7 @@ put to all four runtimes, and 113 behaviour cases run the same code in each.
 | deep-clone-is-independent | tree | yes | yes | yes |
 | collections-stay-live | tree | yes | yes | yes |
 | list-interfaces-iterate-as-web-idl-declares | tree | yes | no | no |
+| details-dialog-and-popover-toggle-alike | events | yes | no | no |
 | keyboard-and-mouse-events-carry-their-modifiers | events | yes | yes | no |
 | capturing-and-bubbling-order | events | yes | yes | yes |
 | cancelled-event-returns-false | events | yes | yes | yes |
@@ -87,7 +88,7 @@ put to all four runtimes, and 113 behaviour cases run the same code in each.
 | reaction-order-on-creation-and-connection | components | yes | yes | yes |
 | an-existing-element-upgrades-when-it-is-defined | components | yes | yes | no |
 | parsed-children-upgrade-in-tree-order | components | yes | yes | yes |
-| the-registry-answers-about-a-definition | components | yes | no | no |
+| the-registry-answers-about-a-definition | components | yes | yes | no |
 | an-element-can-be-upgraded-on-demand | components | yes | yes | no |
 | character-data-is-edited-in-place | tree | yes | no | no |
 | a-range-edits-text-through-character-data | tree | yes | yes | no |
@@ -97,7 +98,7 @@ put to all four runtimes, and 113 behaviour cases run the same code in each.
 | internals-reflect-aria-and-form-state | components | yes | no | no |
 | a-clonable-shadow-root-is-cloned | components | yes | no | yes |
 | shadow-styles-reach-the-host-and-the-slotted | components | yes | no | no |
-| a-constructor-is-refused-when-it-misbehaves | components | yes | no | no |
+| a-constructor-is-refused-when-it-misbehaves | components | yes | yes | no |
 | an-element-moved-between-documents-is-adopted | components | yes | yes | no |
 | attributes-report-their-namespace-and-old-value | components | yes | yes | no |
 | a-shadow-host-refuses-a-second-root-and-the-wrong-element | components | yes | yes | no |

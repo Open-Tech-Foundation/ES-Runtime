@@ -136,7 +136,7 @@ function defineIdl(target, properties) {
 }
 
 export function createTree(events = {}) {
-  const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {}, CommandEvent = class {} } = events;
+  const { EventTarget = class {}, Event = class {}, MouseEvent = class {}, SubmitEvent = class {}, CommandEvent = class {}, ToggleEvent = Event } = events;
   const customConstruction = [];
   // Set by the custom-element registry, which is the only thing that knows
   // which class was defined under which name.
@@ -990,6 +990,7 @@ export function createTree(events = {}) {
       const before = name === "slot" || name === "name" ? assignedSlotFor(this) : null;
       ownAttributes(this).setNamedItem(new Attr(name, value, this.ownerDocument)); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: name, oldValue });
+      attributeChanged(this, name, null, oldValue, this.getAttribute(name));
       if (name === "disabled") notifyDisabled(this);
       if (name === "slot" || name === "name") signalReassignment(this, before);
     }
@@ -999,10 +1000,12 @@ export function createTree(events = {}) {
       const oldValue = this.getAttributeNS(attribute.namespaceURI, attribute.localName);
       ownAttributes(this).setNamedItemNS(attribute); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: qualifiedName, oldValue });
+      attributeChanged(this, attribute.localName, attribute.namespaceURI, oldValue, attribute.value);
     }
     setAttributeNode(attribute) {
       const previous = ownAttributes(this).setNamedItem(attribute); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: previous?.value ?? null });
+      attributeChanged(this, attribute.localName, attribute.namespaceURI, previous?.value ?? null, attribute.value);
       return previous;
     }
     removeAttribute(name) {
@@ -1012,6 +1015,7 @@ export function createTree(events = {}) {
       if (attribute) {
         ownAttributes(this).removeNamedItem(name); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
+        attributeChanged(this, attribute.localName, attribute.namespaceURI, attribute.value, null);
         if (name === "disabled") notifyDisabled(this);
         if (name === "slot" || name === "name") signalReassignment(this, before);
       }
@@ -1021,12 +1025,14 @@ export function createTree(events = {}) {
       if (attribute) {
         ownAttributes(this).removeNamedItemNS(namespaceURI, localName); this._touch();
         this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: attribute.name, oldValue: attribute.value });
+        attributeChanged(this, attribute.localName, attribute.namespaceURI, attribute.value, null);
       }
     }
     removeAttributeNode(attribute) {
       if (attribute.ownerElement !== this) throw domError("NotFoundError", "The attribute is not owned by this element.");
       const removed = ownAttributes(this).removeNamedItem(attribute.name); this._touch();
       this.ownerDocument?._queueMutation?.({ type: "attributes", target: this, attributeName: removed.name, oldValue: removed.value });
+      attributeChanged(this, removed.localName, removed.namespaceURI, removed.value, null);
       return removed;
     }
     get id() { return this.getAttribute("id") ?? ""; }
@@ -1236,14 +1242,66 @@ export function createTree(events = {}) {
     setTimeout(callback, 0);
   }
 
+  // `beforetoggle` is synchronous, and only opening can be cancelled.
+  function fireBeforeToggle(element, oldState, newState) {
+    const event = new ToggleEvent("beforetoggle", { oldState, newState, cancelable: newState === "open" });
+    return element.dispatchEvent(event);
+  }
+
+  // One pending `toggle` per element: a second change before it fires updates
+  // the state it reports rather than queueing another, so opening and closing
+  // in one task reports `closed` → `closed`, once. Chrome does this for all
+  // three of popover, dialog and `<details>`.
+  const PENDING_TOGGLE = Symbol("pendingToggle");
+  function queueToggle(element, oldState, newState) {
+    const pending = element[PENDING_TOGGLE];
+    if (pending) {
+      pending.newState = newState;
+      return;
+    }
+    const task = { oldState, newState };
+    element[PENDING_TOGGLE] = task;
+    queueElementTask(() => {
+      element[PENDING_TOGGLE] = null;
+      element.dispatchEvent(new ToggleEvent("toggle", task));
+    });
+  }
+
+  // The specification's "attribute change steps", run after every change to an
+  // attribute however it was made.
+  function attributeChanged(element, localName, namespace, oldValue, value) {
+    if (namespace !== null) return;
+    if (element instanceof HTMLDetailsElement) detailsAttributeChanged(element, localName, oldValue, value);
+  }
+
+  // A `<details>` fires `toggle` whenever its `open` attribute appears or goes
+  // — by script, by attribute, attached or not — and never `beforetoggle`.
+  // Opening one in a `name` group closes the others in the same tree.
+  function detailsAttributeChanged(details, localName, oldValue, value) {
+    if (localName !== "open" || (oldValue === null) === (value === null)) return;
+    queueToggle(details, oldValue === null ? "closed" : "open", value === null ? "closed" : "open");
+    const group = details.getAttribute("name");
+    if (value === null || !group) return;
+    for (const other of collect(details.getRootNode(), (element) => element instanceof HTMLDetailsElement)) {
+      if (other !== details && other.getAttribute("name") === group && other.hasAttribute("open")) other.removeAttribute("open");
+    }
+  }
+
+  class HTMLDetailsElement extends HTMLElement {}
+
   // A dialog's *state* needs no rendering: what is open, what it returned, and
   // which events that produced. There is no top layer and no backdrop here, so
   // `showModal` differs from `show` in the modal flag and in nothing visual.
   class HTMLDialogElement extends HTMLElement {
+    // Showing asks first — a cancelable `beforetoggle` — and closing announces
+    // itself; each queues a `toggle`, and closing a `close` after it. Setting
+    // the `open` attribute directly does neither, as in Chrome.
     show() {
       if (this.open) return;
+      if (!fireBeforeToggle(this, "closed", "open") || this.open) return;
       this.setAttribute("open", "");
       this[DIALOG_MODAL] = false;
+      queueToggle(this, "closed", "open");
     }
     showModal() {
       if (this.open) {
@@ -1252,14 +1310,19 @@ export function createTree(events = {}) {
       if (!this.isConnected) {
         throw domError("InvalidStateError", "A dialog must be in the document to be shown modally.");
       }
+      if (!fireBeforeToggle(this, "closed", "open") || this.open) return;
       this.setAttribute("open", "");
       this[DIALOG_MODAL] = true;
+      queueToggle(this, "closed", "open");
     }
     close(returnValue) {
+      if (!this.open) return;
+      fireBeforeToggle(this, "open", "closed");
       if (!this.open) return;
       if (returnValue !== undefined) this.returnValue = String(returnValue);
       this.removeAttribute("open");
       this[DIALOG_MODAL] = false;
+      queueToggle(this, "open", "closed");
       queueElementTask(() => this.dispatchEvent(new Event("close")));
     }
     requestClose(returnValue) {
@@ -1849,6 +1912,7 @@ export function createTree(events = {}) {
     { formEnctype: "formenctype", formMethod: "formmethod", formTarget: "formtarget", name: "name", value: "value" },
     { disabled: "disabled", formNoValidate: "formnovalidate" });
   installReflectors(HTMLDialogElement, {}, { open: "open" });
+  installReflectors(HTMLDetailsElement, { name: "name" }, { open: "open" });
   installReflectors(HTMLCanvasElement, {}, {}, { width: ["width", 300, 0], height: ["height", 150, 0] });
   defineIdl(HTMLAnchorElement.prototype, { href: reflectUrl("href") });
   installReflectors(HTMLTableElement, { border: "border" });
@@ -2081,16 +2145,8 @@ export function createTree(events = {}) {
   }
 
   function toggleEvents(element, from, to) {
-    const before = new Event("beforetoggle", { cancelable: true });
-    before.oldState = from;
-    before.newState = to;
-    if (!element.dispatchEvent(before)) return false;
-    queueElementTask(() => {
-      const after = new Event("toggle");
-      after.oldState = from;
-      after.newState = to;
-      element.dispatchEvent(after);
-    });
+    if (!fireBeforeToggle(element, from, to)) return false;
+    queueToggle(element, from, to);
     return true;
   }
 
@@ -2732,7 +2788,7 @@ export function createTree(events = {}) {
   // `HTMLAnchorElement` would take `href` and `tabIndex` away from `<a>`.
   const HTML_INTERFACES = {
     HTMLMediaElement, HTMLUnknownElement, HTMLAnchorElement, HTMLButtonElement, HTMLCanvasElement,
-    HTMLDialogElement, HTMLDivElement, HTMLFormElement, HTMLInputElement, HTMLLabelElement,
+    HTMLDialogElement, HTMLDetailsElement, HTMLDivElement, HTMLFormElement, HTMLInputElement, HTMLLabelElement,
     HTMLOptionElement, HTMLOptGroupElement, HTMLProgressElement, HTMLSelectElement, HTMLSlotElement,
     HTMLTextAreaElement, HTMLTemplateElement, HTMLStyleElement, HTMLTableElement,
     HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement,

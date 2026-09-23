@@ -25,6 +25,18 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **`<details>` and `<dialog>` fire `toggle`.** A `<details>` fires it whenever
+  its `open` attribute appears or goes — by property, by attribute, attached or
+  not — and a `name` group closes its other members as one opens. A dialog's
+  `show()`/`showModal()` fire a cancelable `beforetoggle` and `close()` a
+  non-cancelable one, each followed by a queued `toggle`, and `close` after it.
+  All three togglers, popover included, now coalesce: a second change before
+  the `toggle` fires updates it rather than queueing another, so opening and
+  closing in one task reports `closed` → `closed` once. The events are
+  `ToggleEvent`s, now a global; a popover's `beforetoggle` on hiding is no longer
+  cancelable. `HTMLDetailsElement` reflects `open` and `name`. Every way of
+  changing an attribute now runs one set of attribute-change steps, which is
+  where this hangs.
 - **Keyboard events carry their modifiers.** `KeyboardEvent` read `ctrlKey`,
   `shiftKey`, `altKey` and `metaKey` as `undefined`, which a filter comparing
   against `false` reads as held; they are now booleans, as on `MouseEvent`, with
