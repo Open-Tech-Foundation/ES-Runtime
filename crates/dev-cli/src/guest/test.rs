@@ -108,6 +108,8 @@ pub struct RunOptions {
     pub bail: Option<usize>,
     /// Shuffle the order tests run in, from this seed.
     pub seed: Option<u32>,
+    /// How many more times every test runs, unless it says otherwise.
+    pub repeats: Option<u32>,
 }
 
 impl RunOptions {
@@ -118,6 +120,7 @@ impl RunOptions {
             "skipPattern": self.skip_pattern,
             "bail": self.bail,
             "seed": self.seed,
+            "repeats": self.repeats,
         })
     }
 }

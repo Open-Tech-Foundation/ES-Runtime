@@ -56,6 +56,8 @@ pub struct TestConfig {
     pub skip_pattern: Option<String>,
     /// Stop after this many tests have failed, from `--bail`.
     pub bail: Option<usize>,
+    /// How many more times every test runs, from `--repeats`.
+    pub repeats: Option<u32>,
     /// Shuffle the run's order, from `--randomize`.
     pub randomize: bool,
     /// The seed the order is shuffled from, from `--seed` or chosen for a
@@ -117,6 +119,7 @@ impl TestConfig {
             skip_pattern: self.skip_pattern.clone(),
             bail: self.bail,
             seed: self.seed,
+            repeats: self.repeats,
         }
     }
 }
@@ -265,6 +268,7 @@ pub async fn run_all(
                         .map(|p| format!("--test-name-pattern={p}")),
                 )
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
+                .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
                 .chain(
                     config
                         .skip_pattern

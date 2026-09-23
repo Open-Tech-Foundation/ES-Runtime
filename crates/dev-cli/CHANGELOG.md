@@ -58,6 +58,9 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`repeats`: `test(name, fn, { repeats: n })` and `esdev test --repeats=<n>`**
+  run a test `n` more times after the first, as in Vitest and Bun; it fails if
+  any run fails, and the report names the run.
 - **`esdev test --randomize`** runs files, and tests within their groups, in a
   shuffled order, and prints the seed; **`--seed=<n>`** repeats an order. As
   in Jest and Bun, tests are shuffled among their siblings, so a group's

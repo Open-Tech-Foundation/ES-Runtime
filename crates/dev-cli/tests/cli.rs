@@ -13708,3 +13708,55 @@ describe("g2", () => {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `repeats` (and `--repeats`): `n` more runs after the first, as Vitest and
+/// Bun count them, each with its hooks; the first failing run fails the test
+/// and is named.
+#[test]
+fn repeats_run_a_test_again_and_name_the_failing_run() {
+    let dir = build_dir("t_repeats");
+    write_in(
+        &dir,
+        "rep.test.js",
+        r#"import { test, beforeEach } from "runtime:test";
+let each = 0, a = 0, b = 0;
+beforeEach(() => { each++; });
+test("stable", () => { a++; }, { repeats: 4 });
+test("counted", () => { console.log(`stable ran ${a} times, beforeEach ${each}`); });
+test("flaky", () => { b++; if (b === 3) throw new Error("third run fails"); }, { repeats: 5 });
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(text.contains("stable ran 5 times, beforeEach 6"), "{text}");
+    assert!(
+        text.contains("  FAIL flaky\n    failed on run 3 of 6\n    Error: third run fails"),
+        "{text}"
+    );
+
+    write_in(
+        &dir,
+        "d.test.js",
+        "import { test } from \"runtime:test\";\nlet n = 0;\n\
+         test(\"x\", () => { n++; });\n\
+         test(\"y\", () => { console.log(`x ran ${n} times`); }, { repeats: 0 });\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--repeats=2", "d"])
+        .output()
+        .expect("spawn");
+    assert!(stdout(&out).contains("x ran 3 times"), "{}", stdout(&out));
+    let out = esdev_in(&dir)
+        .args(["test", "--repeats=-1"])
+        .output()
+        .expect("spawn");
+    assert!(
+        stderr(&out).contains("is not a number of repeats"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

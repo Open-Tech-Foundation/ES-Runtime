@@ -128,6 +128,9 @@ function shuffleQueue() {
   queue.splice(0, queue.length, ...ordered);
 }
 
+// `--repeats`: how many more times every test runs, unless it says otherwise.
+const defaultRepeats = Number.isInteger(runOptions.repeats) ? runOptions.repeats : 0;
+
 // `--bail`: how many tests may fail in this run before the rest are not run.
 const bailAt = Number.isInteger(runOptions.bail) ? runOptions.bail : null;
 let failedTests = 0;
@@ -371,14 +374,17 @@ function optionsOf(name, value) {
   if (value === null || typeof value !== "object") {
     throw new TypeError(`${where}: options are { timeout, retry }, or a number of milliseconds`);
   }
-  const { timeout, retry } = value;
+  const { timeout, retry, repeats } = value;
   if (timeout !== undefined && !(Number.isFinite(timeout) && timeout > 0)) {
     throw new TypeError(`${where}: timeout is a number of milliseconds above zero`);
   }
   if (retry !== undefined && !(Number.isInteger(retry) && retry >= 0)) {
     throw new TypeError(`${where}: retry is how many more times to try, a whole number`);
   }
-  return { timeout, retry };
+  if (repeats !== undefined && !(Number.isInteger(repeats) && repeats >= 0)) {
+    throw new TypeError(`${where}: repeats is how many more times to run it, a whole number`);
+  }
+  return { timeout, retry, repeats };
 }
 
 // Registers a test. It runs when the ones before it have finished.
@@ -595,26 +601,37 @@ async function runCase({ id, fn, scope, options }) {
     await settled(scope);
     return;
   }
-  // `retry` more attempts after the first, each a whole run of the case — its
-  // `beforeEach`, its body and its `afterEach` — so a retry starts from the
-  // same state the first attempt did. Only the last attempt is reported.
+  // `repeats` more runs after the first, as Vitest and Bun count them — to
+  // find a test that passes only sometimes. Each run must pass; the first that
+  // fails ends it. Within a run, `retry` more attempts after the first, each a
+  // whole run of the case — its `beforeEach`, its body and its `afterEach` —
+  // so a retry starts from the same state the first attempt did. Only the last
+  // attempt is reported.
+  const runs = 1 + (options.repeats ?? defaultRepeats);
   const attempts = 1 + (options.retry ?? 0);
   let failure = null;
-  for (let tried = 1; tried <= attempts; tried++) {
-    // Said again for each retry: the host counts an attempt's snapshot
-    // results, and only the last attempt's are the case's.
-    if (tried > 1) ops.test_running(id);
-    failure = await runAttempt(id, fn, scope, options);
-    if (options.fails) {
-      failure =
-        failure === null
-          ? new Error("expected this test to fail, and it passed — remove test.fails if it is fixed")
-          : null;
+  let failedRun = 0;
+  let started = false;
+  for (let run = 1; run <= runs && failure === null; run++) {
+    for (let tried = 1; tried <= attempts; tried++) {
+      // Said again for each run and retry: the host counts an attempt's
+      // snapshot results, and only the last attempt's are the case's.
+      if (started) ops.test_running(id);
+      started = true;
+      failure = await runAttempt(id, fn, scope, options);
+      if (options.fails) {
+        failure =
+          failure === null
+            ? new Error("expected this test to fail, and it passed — remove test.fails if it is fixed")
+            : null;
+      }
+      if (failure === null) break;
     }
-    if (failure === null) break;
+    if (failure !== null) failedRun = run;
   }
-  const reported =
-    failure === null ? "" : attempts > 1 ? `failed ${attempts} attempts; the last:\n${detail(failure)}` : detail(failure);
+  let reported = failure === null ? "" : detail(failure);
+  if (failure !== null && attempts > 1) reported = `failed ${attempts} attempts; the last:\n${reported}`;
+  if (failure !== null && runs > 1) reported = `failed on run ${failedRun} of ${runs}\n${reported}`;
   ops.test_finished(id, failure === null, reported);
   if (failure !== null) failedTests += 1;
   await settled(scope);

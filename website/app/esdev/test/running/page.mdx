@@ -73,6 +73,17 @@ Tests are shuffled among their siblings inside each `describe`, and groups
 among theirs, so a group's `beforeAll` and `afterAll` still wrap exactly its
 own tests.
 
+## Flaky tests
+
+`--repeats=<n>` runs every test `n` more times after the first; a test that
+fails on any run fails, and the report names the run. A single test can ask for
+the same with `{ repeats: n }`, which takes precedence over the flag:
+
+```text
+  FAIL uploads the file
+    failed on run 7 of 21
+```
+
 ## One process per file
 
 A test suite is where isolation matters most. A file that wedges, exhausts its

@@ -13,6 +13,8 @@ declare module "runtime:test" {
         timeout?: number;
         /** Run it again, up to this many more times, until it passes. */
         retry?: number;
+        /** Run it this many more times after the first; it fails if any run fails. */
+        repeats?: number;
       };
 
   /** The ways a test is registered: name, body, and optional options. */

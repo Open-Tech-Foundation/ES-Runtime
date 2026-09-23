@@ -211,6 +211,8 @@ OPTIONS:
     --randomize                 Run files, and tests within their groups, in a
                                 shuffled order; the seed is printed
     --seed=<n>                  Shuffle with this seed, to repeat an order
+    --repeats=<n>               Run every test <n> more times; it fails if any
+                                run fails
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1429,6 +1431,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut summary = None;
     let mut randomize = false;
     let mut seed = None;
+    let mut repeats = None;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1524,6 +1527,15 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     format!("{flag}={text} is not a seed: a whole number from 0 to 4294967295.")
                 })?);
             }
+            "--repeats" => {
+                let text = require_value(flag, value)?;
+                repeats = Some(text.parse::<u32>().map_err(|_| {
+                    format!(
+                        "{flag}={text} is not a number of repeats.\n\n\
+                         How many more times every test runs after the first: --repeats=20 runs each 21 times."
+                    )
+                })?);
+            }
             "--_summary" => summary = Some(std::path::PathBuf::from(require_value(flag, value)?)),
             "--timeout" => {
                 let text = require_value(flag, value)?;
@@ -1599,6 +1611,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         summary,
         randomize,
         seed,
+        repeats,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,

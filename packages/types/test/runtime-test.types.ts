@@ -178,7 +178,7 @@ test("the clock takes milliseconds and moments", async () => {
 // --- per-test options, test.fails, and cleanup ---------------------------------
 
 test("a timeout after the body", () => {}, 5000);
-test("options after the body", () => {}, { timeout: 100, retry: 2 });
+test("options after the body", () => {}, { timeout: 100, retry: 2, repeats: 3 });
 test("options before the body", { retry: 1 }, () => {});
 test.only("only takes options too", () => {}, { timeout: 10 });
 test.fails("a known failure", () => {

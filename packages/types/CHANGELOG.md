@@ -23,6 +23,7 @@ itself.
   `onTestFinished`, `onTestFailed` and `waitFor`; `toSatisfy`, `toBeOneOf` and
   the DOM matchers.
 - **`toMatchInlineSnapshot` and `toThrowErrorMatchingInlineSnapshot`**.
+- **The `repeats` test option.**
 
 ## [0.7.0] - 2026-09-23
 

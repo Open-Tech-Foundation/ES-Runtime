@@ -93,6 +93,7 @@ test("flaky upstream", { retry: 2 }, async () => { … });
 | --- | --- |
 | `timeout` | Fails the test if its body has not settled within this many milliseconds. The body is not stopped. |
 | `retry` | Runs the test again, up to this many more times, until it passes. Each attempt runs the `beforeEach` and `afterEach` hooks. Only the last attempt is reported. |
+| `repeats` | Runs the test this many more times after the first, each run with its hooks. It fails if any run fails, naming the run. |
 
 `test.fails(name, fn, options?)` registers a test that is expected to fail. It
 passes while it fails, and fails once it passes. `test.skip` and `test.only`
