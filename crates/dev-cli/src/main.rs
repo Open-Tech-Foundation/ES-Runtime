@@ -208,6 +208,9 @@ OPTIONS:
     --test-skip-pattern=<re>    Skip the tests whose full name matches
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
+    --randomize                 Run files, and tests within their groups, in a
+                                shuffled order; the seed is printed
+    --seed=<n>                  Shuffle with this seed, to repeat an order
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default) or json — one object per line
@@ -1424,6 +1427,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut skip_pattern = None;
     let mut bail = None;
     let mut summary = None;
+    let mut randomize = false;
+    let mut seed = None;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1509,6 +1514,16 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     })?,
                 });
             }
+            "--randomize" => {
+                reject_value(flag, value)?;
+                randomize = true;
+            }
+            "--seed" => {
+                let text = require_value(flag, value)?;
+                seed = Some(text.parse::<u32>().map_err(|_| {
+                    format!("{flag}={text} is not a seed: a whole number from 0 to 4294967295.")
+                })?);
+            }
             "--_summary" => summary = Some(std::path::PathBuf::from(require_value(flag, value)?)),
             "--timeout" => {
                 let text = require_value(flag, value)?;
@@ -1582,6 +1597,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         skip_pattern,
         bail,
         summary,
+        randomize,
+        seed,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1735,7 +1752,11 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let discover = || match &config.file {
         Some(file) => vec![root.join(file)],
-        None => test::discover(&root, &config.filters),
+        None => {
+            let mut files = test::discover(&root, &config.filters);
+            test::shuffle(&mut files, config.seed);
+            files
+        }
     };
     let files = discover();
     if files.is_empty() && !config.watch {
@@ -1867,6 +1888,16 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         }
     }
 
+    // A shuffled run says its seed, so the order that failed can be run again.
+    // A child is handed the seed alone and says nothing.
+    if config.randomize || config.seed.is_some() {
+        let seed = config.seed.unwrap_or_else(test::fresh_seed);
+        config.seed = Some(seed);
+        if config.randomize || config.file.is_none() {
+            eprintln!("randomize: seed={seed} (run this order again with --seed={seed})");
+        }
+    }
+
     if config.browser.is_some() || config.headed {
         return run_browser_tests(&config).await;
     }
@@ -1969,7 +2000,8 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         };
     }
 
-    let files = test::discover(&root, &config.filters);
+    let mut files = test::discover(&root, &config.filters);
+    test::shuffle(&mut files, config.seed);
     config.snapshot_prune = config.filters.is_empty();
     if files.is_empty() {
         eprintln!(

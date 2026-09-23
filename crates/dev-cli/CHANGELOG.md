@@ -58,6 +58,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --randomize`** runs files, and tests within their groups, in a
+  shuffled order, and prints the seed; **`--seed=<n>`** repeats an order. As
+  in Jest and Bun, tests are shuffled among their siblings, so a group's
+  `beforeAll` and `afterAll` still wrap its own tests. A browser run of the
+  same seed runs the same order.
 - **`esdev test --bail[=<n>]`** stops after `n` failed tests (1 by default), as
   in Vitest and Bun. Failures add up across files, the tests left in a file are
   counted as skipped with a `bail:` line, and the files not started are named.

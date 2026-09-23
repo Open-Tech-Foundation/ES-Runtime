@@ -13622,3 +13622,89 @@ fn bail_stops_after_the_failure_limit_across_files() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `--randomize` / `--seed`: a shuffled order that a seed repeats exactly, that
+/// the run prints so it can be repeated, and that never splits a group from
+/// the hooks around it.
+#[test]
+fn randomize_shuffles_within_groups_and_a_seed_repeats_it() {
+    let dir = build_dir("t_randomize");
+    write_in(
+        &dir,
+        "r.test.js",
+        r#"import { test, describe, beforeAll, afterAll } from "runtime:test";
+const log = (s) => console.log(`order ${s}`);
+describe("g1", () => {
+  beforeAll(() => log("g1 open"));
+  afterAll(() => log("g1 close"));
+  for (const n of [1, 2, 3, 4, 5]) test(`g1-${n}`, () => log(`g1-${n}`));
+});
+describe("g2", () => {
+  beforeAll(() => log("g2 open"));
+  afterAll(() => log("g2 close"));
+  for (const n of [1, 2, 3, 4, 5]) test(`g2-${n}`, () => log(`g2-${n}`));
+});
+"#,
+    );
+    let order = |seed: &str| {
+        let out = esdev_in(&dir)
+            .args(["test", &format!("--seed={seed}")])
+            .output()
+            .expect("spawn esdev test --seed");
+        assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!(
+                "randomize: seed={seed} (run this order again with --seed={seed})"
+            )),
+            "{}",
+            stderr(&out)
+        );
+        stdout(&out)
+            .lines()
+            .filter_map(|line| line.strip_prefix("order "))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let first = order("7");
+    assert_eq!(first, order("7"), "one seed is one order");
+    assert_ne!(first, order("99"), "another seed is another order");
+    let written: Vec<String> = ["g1", "g2"]
+        .iter()
+        .flat_map(|g| (1..=5).map(move |n| format!("{g}-{n}")))
+        .collect();
+    let tests: Vec<&String> = first.iter().filter(|s| !s.contains(' ')).collect();
+    assert_ne!(
+        tests,
+        written.iter().collect::<Vec<_>>(),
+        "not the written order: {first:?}"
+    );
+    // Each group's tests sit between its own open and close.
+    for g in ["g1", "g2"] {
+        let open = first
+            .iter()
+            .position(|s| *s == format!("{g} open"))
+            .unwrap();
+        let close = first
+            .iter()
+            .position(|s| *s == format!("{g} close"))
+            .unwrap();
+        assert_eq!(close - open, 6, "{first:?}");
+        assert!(
+            first[open + 1..close]
+                .iter()
+                .all(|s| s.starts_with(&format!("{g}-"))),
+            "{first:?}"
+        );
+    }
+
+    let out = esdev_in(&dir)
+        .args(["test", "--randomize"])
+        .output()
+        .expect("spawn");
+    assert!(
+        stderr(&out).contains("randomize: seed="),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

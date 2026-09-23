@@ -56,6 +56,12 @@ pub struct TestConfig {
     pub skip_pattern: Option<String>,
     /// Stop after this many tests have failed, from `--bail`.
     pub bail: Option<usize>,
+    /// Shuffle the run's order, from `--randomize`.
+    pub randomize: bool,
+    /// The seed the order is shuffled from, from `--seed` or chosen for a
+    /// `--randomize` run. Passed to every file, so the whole run can be
+    /// repeated.
+    pub seed: Option<u32>,
     /// Internal parent-to-child: where a child writes its pass and fail
     /// counts, for the parent to add up.
     pub summary: Option<PathBuf>,
@@ -110,8 +116,42 @@ impl TestConfig {
             name_pattern: self.name_pattern.clone(),
             skip_pattern: self.skip_pattern.clone(),
             bail: self.bail,
+            seed: self.seed,
         }
     }
+}
+
+/// Puts the files in the order `seed` shuffles them into — the same
+/// generator `runtime:test` shuffles tests with, so a seed names one order of
+/// the whole run.
+pub fn shuffle(files: &mut [PathBuf], seed: Option<u32>) {
+    let Some(seed) = seed else {
+        return;
+    };
+    let mut state = seed;
+    let mut next = move || {
+        state = state.wrapping_add(0x6d2b_79f5);
+        let mut t = (state ^ (state >> 15)).wrapping_mul(1 | state);
+        t = (t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t))) ^ t;
+        f64::from(t ^ (t >> 14)) / 4_294_967_296.0
+    };
+    for i in (1..files.len()).rev() {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a fraction below one of a small length"
+        )]
+        let j = (next() * (i + 1) as f64) as usize;
+        files.swap(i, j);
+    }
+}
+
+/// A seed for a `--randomize` run that did not name one.
+pub fn fresh_seed() -> u32 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.subsec_nanos());
+    nanos ^ std::process::id().rotate_left(16)
 }
 
 /// How many test files run at once when `--jobs` did not say.
@@ -224,6 +264,7 @@ pub async fn run_all(
                         .iter()
                         .map(|p| format!("--test-name-pattern={p}")),
                 )
+                .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(
                     config
                         .skip_pattern
@@ -456,7 +497,8 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
     let (_watcher, mut rx) = change_watcher(root)?;
     let paint = crate::style::Palette::stderr();
     loop {
-        let files = discover(root, &config.filters);
+        let mut files = discover(root, &config.filters);
+        shuffle(&mut files, config.seed);
         if files.is_empty() {
             eprintln!("no test files found (looked for {})", sought_description());
         } else {

@@ -57,6 +57,22 @@ bail: 3 files did not run after the failure limit
 Files already running when the limit is reached finish on their own count,
 which is why `--jobs=1` stops the soonest.
 
+## Random order
+
+`--randomize` runs files, and tests within their groups, in a shuffled order.
+A test that passes only after another one ran shows up as a failure in some
+orders. The run prints its seed; `--seed` runs that order again:
+
+```sh
+esdev test --randomize
+# randomize: seed=1327238386 (run this order again with --seed=1327238386)
+esdev test --seed=1327238386
+```
+
+Tests are shuffled among their siblings inside each `describe`, and groups
+among theirs, so a group's `beforeAll` and `afterAll` still wrap exactly its
+own tests.
+
 ## One process per file
 
 A test suite is where isolation matters most. A file that wedges, exhausts its

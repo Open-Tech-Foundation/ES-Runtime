@@ -82,6 +82,52 @@ const pattern = (flag, source) => {
 };
 const namePattern = pattern("--test-name-pattern", runOptions.namePattern);
 const skipPattern = pattern("--test-skip-pattern", runOptions.skipPattern);
+// `--randomize` / `--seed`: the order tests run in, shuffled from a seed so an
+// order that failed can be run again. Sibling tests are shuffled among
+// themselves inside each group, and groups among theirs — never across a
+// group's edge, so a `beforeAll` still wraps exactly its own tests.
+const seed = Number.isInteger(runOptions.seed) ? runOptions.seed : null;
+const nextRandom = seed === null ? null : mulberry32(seed);
+
+function mulberry32(start) {
+  let state = start >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleQueue() {
+  const root = { children: [] };
+  const nodes = new Map();
+  const node = (scope) => {
+    if (scope === null || scope === file) return root;
+    let made = nodes.get(scope);
+    if (made === undefined) {
+      made = { children: [] };
+      nodes.set(scope, made);
+      node(scope.parent).children.push({ group: made });
+    }
+    return made;
+  };
+  for (const entry of queue) node(entry.scope).children.push({ entry });
+  const ordered = [];
+  const walk = (at) => {
+    for (let i = at.children.length - 1; i > 0; i--) {
+      const j = Math.floor(nextRandom() * (i + 1));
+      [at.children[i], at.children[j]] = [at.children[j], at.children[i]];
+    }
+    for (const child of at.children) {
+      if (child.entry) ordered.push(child.entry);
+      else walk(child.group);
+    }
+  };
+  walk(root);
+  queue.splice(0, queue.length, ...ordered);
+}
+
 // `--bail`: how many tests may fail in this run before the rest are not run.
 const bailAt = Number.isInteger(runOptions.bail) ? runOptions.bail : null;
 let failedTests = 0;
@@ -465,6 +511,7 @@ function schedule() {
 
 async function drain() {
   try {
+    if (nextRandom !== null) shuffleQueue();
     while (queue.length > 0) {
       const next = queue.shift();
       // Something asked to be the only thing that runs, and this is not it.

@@ -106,6 +106,8 @@ pub struct RunOptions {
     pub skip_pattern: Option<String>,
     /// How many more tests may fail before the rest are not run.
     pub bail: Option<usize>,
+    /// Shuffle the order tests run in, from this seed.
+    pub seed: Option<u32>,
 }
 
 impl RunOptions {
@@ -115,6 +117,7 @@ impl RunOptions {
             "namePattern": self.name_pattern,
             "skipPattern": self.skip_pattern,
             "bail": self.bail,
+            "seed": self.seed,
         })
     }
 }
