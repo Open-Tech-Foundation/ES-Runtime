@@ -1691,13 +1691,16 @@ export function createTree(events = {}) {
   // The table family. `rows` is in the specification's order rather than tree
   // order: head first, then the bodies, then the foot, wherever the markup put
   // them — a `<tfoot>` written before a `<tbody>` still comes last.
+  // A function, not a `#private` method: a customized built-in's constructor
+  // returns the element it upgrades, and private members cannot be installed
+  // on one object twice — `class extends HTMLTableElement` threw on define.
+  function tableSections(table, name) {
+    return Array.from(table._esdevChildren()).filter((child) => child.localName === name);
+  }
   class HTMLTableElement extends HTMLElement {
-    #sections(name) {
-      return Array.from(this._esdevChildren()).filter((child) => child.localName === name);
-    }
-    get caption() { return this.#sections("caption")[0] ?? null; }
-    get tHead() { return this.#sections("thead")[0] ?? null; }
-    get tFoot() { return this.#sections("tfoot")[0] ?? null; }
+    get caption() { return tableSections(this, "caption")[0] ?? null; }
+    get tHead() { return tableSections(this, "thead")[0] ?? null; }
+    get tFoot() { return tableSections(this, "tfoot")[0] ?? null; }
     get tBodies() {
       return new HTMLCollection(this, (root) => Array.from(root._esdevChildren()).filter((child) => child.localName === "tbody"));
     }

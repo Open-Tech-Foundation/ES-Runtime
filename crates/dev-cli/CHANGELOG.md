@@ -25,6 +25,9 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **`class extends HTMLTableElement` can be defined.** A customized built-in's
+  constructor returns the element it upgrades, and the table element's private
+  method couldn't be installed on it a second time, so defining one threw.
 - **`compareDocumentPosition` is the specification's.** It climbed from a
   shadow root to its host, where a shadow tree is its own tree. It answered
   `PRECEDING` for two disconnected nodes in both directions, where the answer
