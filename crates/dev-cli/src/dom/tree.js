@@ -70,6 +70,17 @@ function domError(name, message) {
   return new DOMException(message, name);
 }
 
+// Web IDL constants: on the interface and its prototype, so `node.ELEMENT_NODE`
+// reads as `Node.ELEMENT_NODE` does, and neither writable nor configurable.
+function defineConstants(Interface, names) {
+  for (const name of names) {
+    const value = Interface[name];
+    for (const target of [Interface, Interface.prototype]) {
+      Object.defineProperty(target, name, { value, writable: false, enumerable: true, configurable: false });
+    }
+  }
+}
+
 // ASCII case changes, which is what the DOM specifies for names: `toLowerCase`
 // would also fold `Ä` to `ä`, and a browser does not.
 const asciiLowercase = (text) => text.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
@@ -154,6 +165,15 @@ function descendants(node, visitor) {
   for (let child = node.firstChild; child; child = child.nextSibling) descendants(child, visitor);
 }
 
+// Across shadow boundaries: a host is an ancestor of what is in its shadow
+// tree, so a host cannot be inserted into its own shadow root.
+function isHostIncludingInclusiveAncestor(ancestor, node) {
+  for (let current = node; current; current = current.parentNode ?? current.host ?? null) {
+    if (current === ancestor) return true;
+  }
+  return false;
+}
+
 function isInclusiveAncestor(ancestor, node) {
   for (let current = node; current; current = current.parentNode) {
     if (current === ancestor) return true;
@@ -193,9 +213,14 @@ export function createTree(events = {}) {
   // Set by the custom-element registry, which is the only thing that knows
   // which class was defined under which name.
   let customLookup = null;
+  // The modern flags. `SHOW_ENTITY_REFERENCE`, `SHOW_ENTITY` and
+  // `SHOW_NOTATION` are marked legacy in the specification, for node types that
+  // no DOM creates any more, and are left out.
   const NodeFilter = Object.freeze({
     FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3,
-    SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_TEXT: 0x4, SHOW_COMMENT: 0x80,
+    SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_ATTRIBUTE: 0x2, SHOW_TEXT: 0x4, SHOW_CDATA_SECTION: 0x8,
+    SHOW_PROCESSING_INSTRUCTION: 0x40, SHOW_COMMENT: 0x80, SHOW_DOCUMENT: 0x100, SHOW_DOCUMENT_TYPE: 0x200,
+    SHOW_DOCUMENT_FRAGMENT: 0x400,
   });
   class LiveCollection {
     constructor(root, filter) {
@@ -472,6 +497,11 @@ export function createTree(events = {}) {
 
     get nodeType() { return slots(this).type; }
     get nodeName() { return slots(this).name; }
+    // Null for every node that holds no value of its own — an element, a
+    // document, a fragment, a doctype — and setting it does nothing; text and
+    // attributes override both.
+    get nodeValue() { return null; }
+    set nodeValue(_value) {}
     get ownerDocument() { return slots(this).ownerDocument; }
     get parentNode() { return slots(this).parent; }
     get firstChild() { return slots(this).first; }
@@ -536,7 +566,7 @@ export function createTree(events = {}) {
       if (node.parentNode === null || node.getRootNode() !== this.getRootNode()) {
         throw domError("HierarchyRequestError", "moveBefore only moves a node that is already in this tree.");
       }
-      this._validateInsertion(node, reference, null);
+      this._validateInsertion(node, reference);
       if (node === reference) return node;
       const from = node.parentNode;
       const state = slots(node);
@@ -576,10 +606,10 @@ export function createTree(events = {}) {
 
     replaceChild(node, child) {
       if (!(node instanceof Node)) throw new TypeError("replaceChild expects a Node");
-      if (child.parentNode !== this) throw domError("NotFoundError", "The child is not a child of this node.");
+      if (!(child instanceof Node)) throw new TypeError("replaceChild expects a Node to replace");
+      this._validateInsertion(node, child, true);
       if (node === child) return child;
-      const reference = child.nextSibling;
-      this._validateInsertion(node, reference, child);
+      const reference = child.nextSibling === node ? node.nextSibling : child.nextSibling;
       this._remove(child);
       this._insert(node, reference);
       return child;
@@ -636,42 +666,60 @@ export function createTree(events = {}) {
     }
 
     _preInsert(node, before) {
-      this._validateInsertion(node, before, null);
+      this._validateInsertion(node, before ?? null);
       this._insert(node, before);
     }
 
-    _validateInsertion(node, before, replacing) {
+    // "Ensure pre-insert validity", and with `replacing` "ensure replace
+    // validity", step for step: `child` is the reference child for an insert
+    // and the child being replaced for a replace.
+    _validateInsertion(node, child, replacing = false) {
       if (!(this instanceof Document || this instanceof DocumentFragment || this instanceof Element)) {
         throw domError("HierarchyRequestError", "This node cannot have children.");
       }
-      if (isInclusiveAncestor(node, this)) {
+      if (isHostIncludingInclusiveAncestor(node, this)) {
         throw domError("HierarchyRequestError", "A node cannot be inserted into one of its descendants.");
       }
-      const candidates = node instanceof DocumentFragment ? Array.from(node._esdevChildren()) : [node];
-      for (const candidate of candidates) {
-        if (candidate instanceof Document || candidate instanceof Attr) {
-          throw domError("HierarchyRequestError", "Document and attribute nodes cannot be inserted here.");
+      if (child !== null && child.parentNode !== this) {
+        throw domError("NotFoundError", "The reference child is not a child of this node.");
+      }
+      if (!(node instanceof DocumentFragment || node instanceof DocumentType || node instanceof Element || node instanceof CharacterData)) {
+        throw domError("HierarchyRequestError", "Only fragments, doctypes, elements and character data can be inserted.");
+      }
+      if (node instanceof Text && this instanceof Document) {
+        throw domError("HierarchyRequestError", "A document cannot have text-node children.");
+      }
+      if (node instanceof DocumentType && !(this instanceof Document)) {
+        throw domError("HierarchyRequestError", "Only a document can have a doctype.");
+      }
+      if (!(this instanceof Document)) return;
+      const children = Array.from(this._esdevChildren());
+      const others = replacing ? children.filter((each) => each !== child) : children;
+      const hasElement = others.some((each) => each instanceof Element);
+      const at = child === null ? -1 : children.indexOf(child);
+      const doctypeFollows = at !== -1 && children.slice(at + 1).some((each) => each instanceof DocumentType);
+      const elementPrecedes = at !== -1 && children.slice(0, at).some((each) => each instanceof Element);
+      const beforeDoctype = !replacing && child instanceof DocumentType;
+      const oneElement = () => {
+        if (hasElement || beforeDoctype || doctypeFollows) {
+          throw domError("HierarchyRequestError", "A document can have only one document element, after its doctype.");
+        }
+      };
+      if (node instanceof DocumentFragment) {
+        const incoming = Array.from(node._esdevChildren());
+        const elements = incoming.filter((each) => each instanceof Element).length;
+        if (elements > 1 || incoming.some((each) => each instanceof Text)) {
+          throw domError("HierarchyRequestError", "A document can have only one element child, and no text.");
+        }
+        if (elements === 1) oneElement();
+      } else if (node instanceof Element) {
+        oneElement();
+      } else if (node instanceof DocumentType) {
+        const hasDoctype = others.some((each) => each instanceof DocumentType);
+        if (hasDoctype || elementPrecedes || (!replacing && child === null && hasElement)) {
+          throw domError("HierarchyRequestError", "A document can have only one doctype, before its document element.");
         }
       }
-      if (this instanceof Document) {
-        const elements = Array.from(this._esdevChildren()).filter((node) => node instanceof Element && node !== replacing);
-        const incoming = candidates.filter((node) => node instanceof Element);
-        if (candidates.some((node) => node instanceof Text && node.data.trim() !== "")) {
-          throw domError("HierarchyRequestError", "A document cannot have text-node children.");
-        }
-        if (elements.length + incoming.length > 1) {
-          throw domError("HierarchyRequestError", "A document can have only one document element.");
-        }
-        const doctypes = Array.from(this._esdevChildren()).filter((node) => node instanceof DocumentType && node !== replacing);
-        const incomingDoctypes = candidates.filter((node) => node instanceof DocumentType);
-        if (doctypes.length + incomingDoctypes.length > 1) {
-          throw domError("HierarchyRequestError", "A document can have only one doctype.");
-        }
-        if (incomingDoctypes.length > 0 && elements.length > 0 && (before === null || childIndex(before) > childIndex(elements[0]))) {
-          throw domError("HierarchyRequestError", "A doctype must precede the document element.");
-        }
-      }
-      if (before !== null && before.parentNode !== this) throw domError("NotFoundError", "The reference child is not a child of this node.");
     }
 
     _insert(node, before) {
@@ -868,6 +916,11 @@ export function createTree(events = {}) {
       return clone;
     }
   }
+
+  defineConstants(Node, ["ELEMENT_NODE", "ATTRIBUTE_NODE", "TEXT_NODE", "CDATA_SECTION_NODE", "PROCESSING_INSTRUCTION_NODE",
+    "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE", "DOCUMENT_FRAGMENT_NODE", "DOCUMENT_POSITION_DISCONNECTED",
+    "DOCUMENT_POSITION_PRECEDING", "DOCUMENT_POSITION_FOLLOWING", "DOCUMENT_POSITION_CONTAINS",
+    "DOCUMENT_POSITION_CONTAINED_BY", "DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC"]);
 
   class CharacterData extends Node {
     constructor(type, name, data, ownerDocument) {
@@ -2806,10 +2859,9 @@ export function createTree(events = {}) {
     }
   }
 
+  // `whatToShow` is a bit per node type: bit `nodeType - 1`.
   function showMask(node) {
-    return node.nodeType === Node.ELEMENT_NODE ? NodeFilter.SHOW_ELEMENT
-      : node.nodeType === Node.TEXT_NODE ? NodeFilter.SHOW_TEXT
-        : node.nodeType === Node.COMMENT_NODE ? NodeFilter.SHOW_COMMENT : 0;
+    return 1 << (node.nodeType - 1);
   }
 
   // Pre-order, with the reference node and `pointerBeforeReferenceNode` the

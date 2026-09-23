@@ -7,6 +7,17 @@ function rangeError(name, message) {
 
 const POINTS = Symbol("esdev DOM range boundary points");
 
+// Web IDL constants: on the interface and its prototype, so `node.ELEMENT_NODE`
+// reads as `Node.ELEMENT_NODE` does, and neither writable nor configurable.
+function defineConstants(Interface, names) {
+  for (const name of names) {
+    const value = Interface[name];
+    for (const target of [Interface, Interface.prototype]) {
+      Object.defineProperty(target, name, { value, writable: false, enumerable: true, configurable: false });
+    }
+  }
+}
+
 export function createRanges({ Document, Node, Element, Text, DocumentType, Attr, DOMRect }, parse) {
   const ranges = new Set();
   function childIndex(node) {
@@ -355,6 +366,8 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
       configurable: true,
     });
   }
+
+  defineConstants(Range, ["START_TO_START", "START_TO_END", "END_TO_END", "END_TO_START"]);
 
   return { AbstractRange, Range, StaticRange, install };
 }

@@ -60,6 +60,17 @@ function reportUncaught(error) {
   else globalThis.console?.error?.(error);
 }
 
+// Web IDL constants: on the interface and its prototype, so `node.ELEMENT_NODE`
+// reads as `Node.ELEMENT_NODE` does, and neither writable nor configurable.
+function defineConstants(Interface, names) {
+  for (const name of names) {
+    const value = Interface[name];
+    for (const target of [Interface, Interface.prototype]) {
+      Object.defineProperty(target, name, { value, writable: false, enumerable: true, configurable: false });
+    }
+  }
+}
+
 export function createEvents() {
   function retarget(original, current) {
     let target = original;
@@ -407,6 +418,10 @@ export function createEvents() {
     }
     return target;
   }
+
+  defineConstants(Event, ["NONE", "CAPTURING_PHASE", "AT_TARGET", "BUBBLING_PHASE"]);
+  defineConstants(KeyboardEvent, ["DOM_KEY_LOCATION_STANDARD", "DOM_KEY_LOCATION_LEFT", "DOM_KEY_LOCATION_RIGHT", "DOM_KEY_LOCATION_NUMPAD"]);
+  defineConstants(WheelEvent, ["DOM_DELTA_PIXEL", "DOM_DELTA_LINE", "DOM_DELTA_PAGE"]);
 
   return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, ToggleEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
 }

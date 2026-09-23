@@ -478,7 +478,7 @@ test("holds one doctype, before the document element", () => {
   expect(() => document.appendChild(document.implementation.createDocumentType("html", "", ""))).toThrow("doctype");
   const fresh = new HTMLDocument();
   fresh.appendChild(fresh.createElement("html"));
-  expect(() => fresh.appendChild(fresh.implementation.createDocumentType("html", "", ""))).toThrow("precede");
+  expect(() => fresh.appendChild(fresh.implementation.createDocumentType("html", "", ""))).toThrow("before its document element");
 });
 
 test("creates whole HTML documents through the implementation", () => {

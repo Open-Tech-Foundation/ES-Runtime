@@ -1355,6 +1355,37 @@ export const cases = [
   },
   {
     group: "tree",
+    name: "constants-node-values-and-odd-nodes-serialize",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const element = document.createElement("div");
+      const descriptor = Object.getOwnPropertyDescriptor(window.Node.prototype, "ELEMENT_NODE");
+      element.append(document.createProcessingInstruction("target", "some data"), document.createComment("c"));
+      const doctype = document.implementation.createDocumentType("html", "", "");
+      const holder = document.createElement("div");
+      const refused = [
+        errorName(() => document.createDocumentFragment().append(doctype)),
+        errorName(() => holder.append(doctype)),
+        errorName(() => document.appendChild(document.createTextNode(" "))),
+        errorName(() => holder.insertBefore(document.createElement("i"), document.createElement("b"))),
+      ];
+      const parsed = document.implementation.createHTMLDocument("");
+      parsed.replaceChild(doctype, parsed.doctype);
+      element.nodeValue = "ignored";
+      return [
+        [element.ELEMENT_NODE, document.DOCUMENT_NODE, new window.Event("x").AT_TARGET, window.Range.prototype.END_TO_START],
+        [descriptor.writable, descriptor.enumerable, descriptor.configurable],
+        [window.NodeFilter.SHOW_PROCESSING_INSTRUCTION, window.NodeFilter.SHOW_DOCUMENT_FRAGMENT],
+        [element.nodeValue, document.nodeValue, document.createDocumentFragment().nodeValue, element.childNodes.length],
+        element.innerHTML,
+        refused,
+        parsed.doctype === doctype,
+      ];
+    },
+  },
+  {
+    group: "tree",
     name: "character-data-is-edited-in-place",
     async run(window) {
       const { document } = window;

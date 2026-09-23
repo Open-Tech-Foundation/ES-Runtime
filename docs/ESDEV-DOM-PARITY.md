@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-114 of 116 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+115 of 117 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -92,6 +92,7 @@ compares the result.
 | parsed-children-upgrade-in-tree-order | components | yes | yes | yes |
 | the-registry-answers-about-a-definition | components | yes | yes | no |
 | an-element-can-be-upgraded-on-demand | components | yes | yes | no |
+| constants-node-values-and-odd-nodes-serialize | tree | yes | no | no |
 | character-data-is-edited-in-place | tree | yes | no | no |
 | a-range-edits-text-through-character-data | tree | yes | yes | no |
 | slots-assign-and-flatten | components | yes | yes | no |

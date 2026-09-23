@@ -25,6 +25,22 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **Constants read from instances, and every node has a `nodeValue`.**
+  `doc.DOCUMENT_NODE`, `event.AT_TARGET` and the other Web IDL constants were on
+  the constructor only. They are on the prototype too now, non-writable, as in
+  Chrome. `NodeFilter` gained its six missing modern `SHOW_*` flags, and a
+  TreeWalker or NodeIterator shows every node type by them. The three flags
+  and three node types the specification marks legacy are left out.
+  `nodeValue` is `null` on elements, documents, fragments and doctypes, where
+  it read `undefined`.
+- **Insertion is validated as the specification says.** A doctype could be put
+  into a fragment or an element, whitespace text into a document, and a host
+  into its own shadow root. The pre-insert and replace checks now follow the
+  specification step for step, in its order, so a bad reference child is a
+  `NotFoundError` before anything else is checked.
+- **A processing instruction or doctype in a tree serializes.** `innerHTML`
+  threw on either. They write `<?target data?>`, as Chrome does, and
+  `<!DOCTYPE name>`.
 - **Documents are HTML or XML, and names follow the current DOM rules.**
   `new Document()` and `createDocument()` made HTML documents. They now make XML
   ones, as in Chrome: the case is kept, `createElement` makes a null-namespace

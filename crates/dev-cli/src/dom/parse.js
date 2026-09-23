@@ -122,6 +122,11 @@ export function createParsing(tree, parseRecords, parseDocumentRecords = null) {
   function serialize(node, options = {}) {
     if (node instanceof Text) return escapeText(node.data);
     if (node instanceof Comment) return `<!--${node.data}-->`;
+    // The two nodes the parser never makes but a script can put in a tree. A
+    // processing instruction ends `?>` as Chrome writes it; the HTML algorithm
+    // says `>`, and Chrome is what a test is compared against.
+    if (node.nodeType === Node.PROCESSING_INSTRUCTION_NODE) return `<?${node.target} ${node.data}?>`;
+    if (node.nodeType === Node.DOCUMENT_TYPE_NODE) return `<!DOCTYPE ${node.name}>`;
     if (node instanceof DocumentFragment || node instanceof ShadowRoot || node.nodeType === Node.DOCUMENT_NODE) return Array.from(node.childNodes, (child) => serialize(child, options)).join("");
     if (!(node instanceof Element)) throw new TypeError("Cannot serialize this node type");
     // The element's own map, not the public accessor: serializing is an

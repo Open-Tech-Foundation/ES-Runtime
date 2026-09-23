@@ -4300,6 +4300,115 @@
     },
     {
       "group": "tree",
+      "name": "constants-node-values-and-odd-nodes-serialize",
+      "chrome": {
+        "result": [
+          [
+            1,
+            9,
+            2,
+            3
+          ],
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            64,
+            1024
+          ],
+          [
+            null,
+            null,
+            null,
+            2
+          ],
+          "<?target some data?><!--c-->",
+          [
+            "HierarchyRequestError",
+            "HierarchyRequestError",
+            "HierarchyRequestError",
+            "NotFoundError"
+          ],
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            1,
+            9,
+            2,
+            3
+          ],
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            64,
+            1024
+          ],
+          [
+            null,
+            null,
+            null,
+            2
+          ],
+          "<?target some data?><!--c-->",
+          [
+            "HierarchyRequestError",
+            "HierarchyRequestError",
+            "HierarchyRequestError",
+            "NotFoundError"
+          ],
+          true
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          [
+            1,
+            9,
+            2,
+            3
+          ],
+          [
+            false,
+            true,
+            false
+          ],
+          [
+            64,
+            1024
+          ],
+          [
+            null,
+            null,
+            null,
+            2
+          ],
+          "<!--c-->",
+          [
+            "HierarchyRequestError",
+            "HierarchyRequestError",
+            "HierarchyRequestError",
+            "NotFoundError"
+          ],
+          true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
       "name": "character-data-is-edited-in-place",
       "chrome": {
         "result": [
@@ -9872,7 +9981,7 @@
     }
   ],
   "summary": {
-    "match": 114,
+    "match": 115,
     "intentional-limit": 2,
     "drift": 0
   }
