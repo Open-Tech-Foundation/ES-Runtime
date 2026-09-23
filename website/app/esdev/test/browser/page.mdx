@@ -1,0 +1,102 @@
+---
+title: Browser testing
+description: Run the same esdev test files in a real browser, over standard WebDriver BiDi.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Browser testing
+
+`--dom` runs a test file against esdev's own DOM, in this runtime. `--browser`
+runs the **same file** in a real browser page:
+
+```sh
+esdev test --browser                  # the first browser this machine can drive
+esdev test --browser=firefox          # this one, or fail
+esdev test --browser --file=src/button.test.ts
+```
+
+Nothing in the file changes. It imports from `runtime:test` as it always does:
+`test`, `describe`, the hooks, `expect`, `mock` and `clock` all behave the same.
+Only the page is different. It has layout, so `getBoundingClientRect()` and
+`offsetWidth` return real numbers, along with the browser's own parser, CSS
+engine and events.
+
+Reach for it when a test depends on what only a browser has. Keep `--dom` for
+everything else: it starts in milliseconds rather than seconds.
+
+<Callout>
+This runs unit and component tests in a page. It is not an end-to-end tool:
+there is no API for opening pages, clicking through a login or navigating an
+app.
+</Callout>
+
+## Which browser
+
+The order is **Chrome, Chromium, Firefox, Edge**. With no name given, the first
+one the machine can drive is used. The run says what it chose, and why it
+skipped the ones ahead of it:
+
+```text
+browser: chromium 131 (/usr/bin/chromium, driven by /usr/bin/chromedriver)
+  skipped chrome: chromedriver 131 (/usr/bin/chromedriver) does not match chrome 120 (/usr/bin/google-chrome); a driver serves only its own major version
+```
+
+A browser you name outright is that browser or an error. It never falls back to
+another one.
+
+| Browser | Needs |
+| --- | --- |
+| `firefox` | Firefox. It speaks WebDriver BiDi itself. |
+| `chrome` | Google Chrome, and a `chromedriver` of the same major version on `PATH`. |
+| `chromium` | Chromium, and a `chromedriver` of the same major version on `PATH`. |
+| `edge` | Microsoft Edge, and an `msedgedriver` of the same major version on `PATH`. |
+| `safari` | Not supported yet. Safari's WebDriver BiDi support is not ready. |
+
+**esdev downloads nothing.** A browser or driver the machine does not have is an
+error naming what is missing and which version to install. Nothing is fetched
+on your behalf, in CI or anywhere else.
+
+Chrome and Chromium count as two browsers because their drivers go stale
+separately. On Debian, installing `chromium-driver` upgrades Chromium to the
+driver's version but leaves a Google Chrome installed beside it where it was.
+
+The key in `esdev.json` works the same way, and the flag wins over it:
+
+```json
+{ "test": { "browser": "auto" } }
+```
+
+## How a run works
+
+The browser is driven over **WebDriver BiDi**, the W3C standard, and nothing
+vendor-specific. Firefox is started with a throwaway profile. Chrome, Chromium
+and Edge are started by their driver. Either way:
+
+- **One browser per run, one user context per file.** A user context has its
+  own cookies, storage and cache, the browser's equivalent of the process each
+  file gets in a normal run.
+- **One bundle per file.** A file is bundled for the browser, `--setup` modules
+  first. An import that does not resolve fails that file alone, and a `runtime:`
+  module other than `runtime:test` is refused when the file is bundled, naming
+  the module.
+- **`--jobs` files at once**, each printed whole when it finishes. The browser
+  runs headless.
+- **Failures point at your source.** Stack frames are source-mapped back to the
+  file you wrote, and frames inside the harness read `runtime:test`, as in a
+  normal run.
+- **What the page logs is the file's output.** An error nothing caught, such
+  as one thrown in a timer, fails the file as a case of its own.
+
+`--timeout`, `--reporter=json` and filters mean what they do in a normal run.
+
+## What it does not do yet
+
+- **Snapshots.** `toMatchSnapshot` and `toMatchFileSnapshot` fail with a message
+  saying they are not available in a browser run yet, rather than passing
+  without comparing anything.
+- **`--watch`**, and a headed window for watching a test run.
+
+These are refused beside `--browser`, because none of them means anything in a
+page: `--dom` (the page has the real DOM), the permission flags (a page has the
+browser's sandbox, not this runtime's grants) and `--isolation=none`.

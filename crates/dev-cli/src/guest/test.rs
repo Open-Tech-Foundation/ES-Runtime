@@ -696,9 +696,13 @@ pub fn reset() {
     configure_snapshots(None, false, false, false, false);
 }
 
+/// `runtime:test`'s source — also what a browser run bundles in its place,
+/// so a file means the same thing in a page as in this runtime.
+pub const SOURCE: &str = include_str!("test.js");
+
 const MODULES: &[HostModule] = &[HostModule {
     specifier: "runtime:test",
-    source: include_str!("test.js"),
+    source: SOURCE,
 }];
 
 impl HostExtension for TestExtension {
@@ -721,15 +725,8 @@ impl HostExtension for TestExtension {
                     .and_then(Value::as_str)
                     .unwrap_or("(unnamed)")
                     .to_string();
-                let id = CASES.with_borrow_mut(|cases| {
-                    cases.push(Case {
-                        name,
-                        file: SNAPSHOTS.with_borrow(|state| state.current_file.clone()),
-                        started: false,
-                        outcome: None,
-                    });
-                    cases.len() - 1
-                });
+                let file = SNAPSHOTS.with_borrow(|state| state.current_file.clone());
+                let id = CASES.with_borrow_mut(|cases| register(cases, name, file));
                 Ok(Value::Number(id as f64))
             }),
             // running(id) — the queue reached this case.
@@ -741,11 +738,7 @@ impl HostExtension for TestExtension {
                     reason = "the id came from `registered`, which handed out an index"
                 )]
                 let index = id as usize;
-                CASES.with_borrow_mut(|cases| {
-                    if let Some(case) = cases.get_mut(index) {
-                        case.started = true;
-                    }
-                });
+                CASES.with_borrow_mut(|cases| mark_running(cases, index));
                 Ok(Value::Undefined)
             }),
             // skipped(id, because) — the case will not run, and is in the
@@ -762,11 +755,7 @@ impl HostExtension for TestExtension {
                     reason = "the id came from `registered`, which handed out an index"
                 )]
                 let index = id as usize;
-                CASES.with_borrow_mut(|cases| {
-                    if let Some(case) = cases.get_mut(index) {
-                        case.outcome = Some(Outcome::Skipped(because));
-                    }
-                });
+                CASES.with_borrow_mut(|cases| mark_skipped(cases, index, because));
                 Ok(Value::Undefined)
             }),
             // finished(id, ok, detail)
@@ -784,15 +773,7 @@ impl HostExtension for TestExtension {
                     reason = "the id came from `registered`, which handed out an index"
                 )]
                 let index = id as usize;
-                CASES.with_borrow_mut(|cases| {
-                    if let Some(case) = cases.get_mut(index) {
-                        case.outcome = Some(if passed {
-                            Outcome::Passed
-                        } else {
-                            Outcome::Failed(detail)
-                        });
-                    }
-                });
+                CASES.with_borrow_mut(|cases| mark_finished(cases, index, passed, detail));
                 Ok(Value::Undefined)
             }),
             OpDecl::sync("test_set_file", |args| {
@@ -898,7 +879,55 @@ pub fn finish_as_json(file: &str) -> ExitCode {
 }
 
 fn report(as_json: Option<&str>) -> ExitCode {
-    let (passed, skipped, held, failures) = CASES.with_borrow(|cases| {
+    let (text, passed) = CASES.with_borrow(|cases| render(cases, as_json));
+    print!("{text}");
+    if passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// A new case, in registration order; its index is its id.
+fn register(cases: &mut Vec<Case>, name: String, file: Option<PathBuf>) -> usize {
+    cases.push(Case {
+        name,
+        file,
+        started: false,
+        outcome: None,
+    });
+    cases.len() - 1
+}
+
+fn mark_running(cases: &mut [Case], id: usize) {
+    if let Some(case) = cases.get_mut(id) {
+        case.started = true;
+    }
+}
+
+fn mark_skipped(cases: &mut [Case], id: usize, because: Skip) {
+    if let Some(case) = cases.get_mut(id) {
+        case.outcome = Some(Outcome::Skipped(because));
+    }
+}
+
+fn mark_finished(cases: &mut [Case], id: usize, passed: bool, detail: String) {
+    if let Some(case) = cases.get_mut(id) {
+        case.outcome = Some(if passed {
+            Outcome::Passed
+        } else {
+            Outcome::Failed(detail)
+        });
+    }
+}
+
+/// The report for a set of cases — what a person reads, or the JSON lines
+/// for `file` — and whether it passed. Rendered rather than printed, so a run
+/// holding several files at once can print each one's whole.
+fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let (passed, skipped, held, failures) = {
         let mut passed = 0usize;
         let mut skipped = 0usize;
         let mut held = 0usize;
@@ -931,27 +960,29 @@ fn report(as_json: Option<&str>) -> ExitCode {
             }
         }
         (passed, skipped, held, failures)
-    });
+    };
 
     if passed == 0 && skipped == 0 && held == 0 && failures.is_empty() {
-        return ExitCode::SUCCESS;
+        return (out, true);
     }
 
     if let Some(file) = as_json {
-        return json(file, passed, skipped + held, &failures);
+        json(&mut out, file, passed, skipped + held, &failures);
+        return (out, failures.is_empty());
     }
 
     for (name, detail) in &failures {
-        println!("  FAIL {name}");
+        let _ = writeln!(out, "  FAIL {name}");
         for line in detail.lines() {
-            println!("    {line}");
+            let _ = writeln!(out, "    {line}");
         }
     }
     // Named on its own line, because it is the one that is easy to leave in a
     // commit: the tally underneath it is otherwise a small green number, and a
     // suite that ran one of its two hundred tests looks exactly like a fast one.
     if held > 0 {
-        println!(
+        let _ = writeln!(
+            out,
             "  only: {held} other test{} did not run",
             if held == 1 { "" } else { "s" }
         );
@@ -960,13 +991,8 @@ fn report(as_json: Option<&str>) -> ExitCode {
     if skipped + held > 0 {
         tally.push_str(&format!(", {} skipped", skipped + held));
     }
-    println!("{tally}");
-
-    if failures.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    let _ = writeln!(out, "{tally}");
+    (out, failures.is_empty())
 }
 
 /// One object per case, then one for the file.
@@ -975,25 +1001,75 @@ fn report(as_json: Option<&str>) -> ExitCode {
 /// escaping are a test's name and an error's text, `serde_json` is already in
 /// the graph for exactly that, and a schema this small is easier to read as the
 /// lines it produces.
-fn json(file: &str, passed: usize, skipped: usize, failures: &[(String, String)]) -> ExitCode {
+fn json(
+    out: &mut String,
+    file: &str,
+    passed: usize,
+    skipped: usize,
+    failures: &[(String, String)],
+) {
+    use std::fmt::Write as _;
     let string = |text: &str| serde_json::Value::String(text.to_string()).to_string();
     for (name, detail) in failures {
-        println!(
+        let _ = writeln!(
+            out,
             r#"{{"type":"case","file":{},"name":{},"status":"failed","detail":{}}}"#,
             string(file),
             string(name),
             string(detail)
         );
     }
-    println!(
+    let _ = writeln!(
+        out,
         r#"{{"type":"file","file":{},"passed":{passed},"failed":{},"skipped":{skipped}}}"#,
         string(file),
         failures.len()
     );
-    if failures.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+}
+
+/// A tally kept outside the host thread's own — for a run whose tests execute
+/// somewhere else and report back, as a file in a browser does. The same
+/// bookkeeping and the same report as a file run in this runtime, because
+/// they are the same functions.
+#[derive(Default)]
+pub struct Tally {
+    cases: Vec<Case>,
+}
+
+impl Tally {
+    /// `registered(name)`; the id is the index, as it is for the op.
+    pub fn register(&mut self, name: String) -> usize {
+        register(&mut self.cases, name, None)
+    }
+
+    /// `running(id)`.
+    pub fn running(&mut self, id: usize) {
+        mark_running(&mut self.cases, id);
+    }
+
+    /// `skipped(id, because)`, where `because` is `"only"` or anything else.
+    pub fn skipped(&mut self, id: usize, because: &str) {
+        let because = if because == "only" {
+            Skip::Only
+        } else {
+            Skip::Asked
+        };
+        mark_skipped(&mut self.cases, id, because);
+    }
+
+    /// `finished(id, ok, detail)`.
+    pub fn finished(&mut self, id: usize, passed: bool, detail: String) {
+        mark_finished(&mut self.cases, id, passed, detail);
+    }
+
+    /// Whether every case has an outcome.
+    pub fn settled(&self) -> bool {
+        self.cases.iter().all(|case| case.outcome.is_some())
+    }
+
+    /// The report, and whether the file passed.
+    pub fn render(&self, as_json: Option<&str>) -> (String, bool) {
+        render(&self.cases, as_json)
     }
 }
 

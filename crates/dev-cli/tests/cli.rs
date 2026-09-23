@@ -12590,6 +12590,13 @@ fn browser_machine(name: &str, executables: &[(&str, &str)]) -> (PathBuf, String
         std::fs::write(&path, format!("#!/bin/sh\necho \"{version}\"\n")).expect("write stub");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
+    // Discovery comes before choosing a browser: a run with no test files
+    // has nothing to open one for.
+    write_in(
+        &dir,
+        "a.test.js",
+        "import { test } from \"runtime:test\";\ntest(\"t\", () => {});\n",
+    );
     let path = bin.display().to_string();
     (dir, path)
 }
@@ -12629,10 +12636,10 @@ fn test_browser_takes_the_first_that_can_be_driven_and_says_what_it_skipped() {
     );
     // The choice goes to stderr: stdout belongs to the reporter.
     assert_eq!(stdout(&out), "");
-    // Chosen, and not yet driven — which fails rather than passing a suite
-    // that never ran.
+    // A stub is not a driver: it says its version and exits, and the run
+    // fails saying so rather than passing a suite that never ran.
     assert!(!out.status.success());
-    assert!(err.contains("not built yet"), "{err}");
+    assert!(err.contains("exited without saying its port"), "{err}");
 
     // Named, the same mismatch is the answer rather than a reason to move on.
     let out = esdev_in(&dir)
@@ -12698,6 +12705,10 @@ fn test_browser_comes_from_esdev_json_and_the_flag_wins() {
         .expect("spawn esdev test");
     let err = stderr(&out);
     assert!(err.contains("browser: firefox 128 ("), "{err}");
+    assert!(
+        err.contains("firefox exited without serving WebDriver BiDi"),
+        "{err}"
+    );
 
     let out = esdev_in(&dir)
         .args(["test", "--browser=safari"])
@@ -12740,4 +12751,122 @@ fn test_browser_refuses_what_has_no_meaning_in_a_page() {
         let err = stderr(&out);
         assert!(err.contains(want), "{args:?}: {err}");
     }
+}
+
+/// The whole run, in whichever real browser this machine can drive: a file
+/// that passes, fails, skips, logs and measures layout, and one that throws
+/// outside any test. On a machine that can drive none it checks the refusal
+/// instead — which browsers a CI runner carries is not this suite's to decide,
+/// and the stubbed tests above cover the choosing everywhere.
+#[test]
+fn test_browser_runs_the_files_in_a_real_page() {
+    let dir = build_dir("t_browser_real");
+    write_in(
+        &dir,
+        "dom.test.ts",
+        "import { test, describe, expect } from \"runtime:test\";\n\
+         \n\
+         describe(\"page\", () => {\n\
+           test(\"has layout\", () => {\n\
+             const box = document.createElement(\"div\");\n\
+             box.style.width = \"120px\";\n\
+             document.body.append(box);\n\
+             console.log(\"measured\", box.getBoundingClientRect().width);\n\
+             expect(box.getBoundingClientRect().width).toBe(120);\n\
+           });\n\
+           test(\"fails where it was written\", () => {\n\
+             expect(1 + 1).toBe(3);\n\
+           });\n\
+           test.skip(\"skipped\", () => {});\n\
+         });\n",
+    );
+    write_in(
+        &dir,
+        "timer.test.js",
+        "import { test } from \"runtime:test\";\n\
+         test(\"waits\", async () => { await new Promise((r) => setTimeout(r, 10)); });\n\
+         setTimeout(() => { throw new Error(\"thrown outside any test\"); }, 0);\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--browser", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser");
+    let (out_text, err) = (stdout(&out), stderr(&out));
+    if err.contains("no browser that can run the tests") {
+        assert!(!out.status.success());
+        eprintln!("no browser can be driven here; the real-browser run did not happen");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(err.starts_with("browser: "), "{err}");
+    assert!(
+        !out.status.success(),
+        "a failing test passed:\n{out_text}{err}"
+    );
+    // Real layout, and the page's console in the file's report.
+    assert!(out_text.contains("measured 120"), "{out_text}");
+    assert!(
+        out_text
+            .contains("  FAIL page > fails where it was written\n    Error: expected 2 to be 3"),
+        "{out_text}"
+    );
+    // The frame names the line in the file that was written, not the bundle.
+    assert!(out_text.contains("dom.test.ts:12:"), "{out_text}");
+    assert!(!out_text.contains("127.0.0.1"), "{out_text}");
+    assert!(
+        out_text.contains("1 passed, 1 failed, 1 skipped"),
+        "{out_text}"
+    );
+    // An error no test caught is the file's failure, not a silence.
+    assert!(out_text.contains("FAIL uncaught error"), "{out_text}");
+    assert!(out_text.contains("thrown outside any test"), "{out_text}");
+    assert!(out_text.contains("2 of 2 files failed"), "{out_text}");
+
+    // JSON on its own: a file that writes nothing to the console, since what
+    // a test prints shares stdout with the reporter in either runner.
+    write_in(
+        &dir,
+        "quiet.test.js",
+        "import { test } from \"runtime:test\";\n\
+         test(\"passes\", () => {});\n\
+         test(\"fails\", () => { throw new Error(\"no\"); });\n\
+         test.skip(\"skipped\", () => {});\n",
+    );
+    let json = esdev_in(&dir)
+        .args([
+            "test",
+            "--browser",
+            "--reporter=json",
+            "--timeout=60000",
+            "quiet",
+        ])
+        .output()
+        .expect("spawn esdev test --browser --reporter=json");
+    let json_out = stdout(&json);
+    let lines: Vec<serde_json::Value> = json_out
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|err| panic!("not JSON ({err}): {line}\n{json_out}"))
+        })
+        .collect();
+    let file = lines
+        .iter()
+        .find(|line| line["type"] == "file")
+        .unwrap_or_else(|| panic!("no file line:\n{json_out}"));
+    // Named as a process run names it: by the path the file was run from.
+    assert!(
+        std::path::Path::new(file["file"].as_str().unwrap()).is_absolute(),
+        "{json_out}"
+    );
+    assert_eq!(
+        (&file["passed"], &file["failed"], &file["skipped"]),
+        (
+            &serde_json::json!(1),
+            &serde_json::json!(1),
+            &serde_json::json!(1)
+        ),
+        "{json_out}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -352,7 +352,7 @@ struct Finished {
 }
 
 /// What a file that ran out of time is told.
-fn timed_out(timeout: Option<u64>) -> String {
+pub(crate) fn timed_out(timeout: Option<u64>) -> String {
     let ms = timeout.unwrap_or_default();
     format!(
         "  FAIL the file took longer than {ms}ms and was stopped\n    \

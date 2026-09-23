@@ -25,11 +25,25 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
-- **`esdev test --browser[=<name>]` chooses the browser the test files will
-  run in**, and `"test": { "browser": "auto" }` says the same in `esdev.json`
-  (the flag wins). This is the first half: the run stops once it has chosen,
-  saying it cannot drive the browser yet, and fails. The runner is next
+- **`esdev test --browser[=<name>]` runs the test files in a real browser**,
+  and `"test": { "browser": "auto" }` says the same in `esdev.json` (the flag
+  wins). The same files, importing the same `runtime:test`: each is bundled
+  for the browser and loaded into a page with real layout, parsing and events
   (DECISIONS D99).
+  - **One browser per run, one user context per file** — its own cookies,
+    storage and cache, as a process gives a normal run — and `--jobs` files at
+    once, each printed whole. One bundle per file, so a broken import fails
+    only its file, and a `runtime:` module other than `runtime:test` is
+    refused when bundling, by name.
+  - **The same tally and report.** What the page logs is the file's output;
+    an error nothing caught fails the file as a case of its own; a case that
+    never finishes is reported as one. `--timeout`, `--reporter=json`,
+    `--setup` and filters mean what they mean in a normal run.
+  - **Stack frames point at the source.** They are source-mapped back to the
+    file that was written, and frames inside the harness read `runtime:test`.
+  - Snapshots are refused with a message in a browser run rather than passing
+    without comparing anything. `--watch` and a headed window are not there
+    yet.
   - **WebDriver BiDi only, and nothing is downloaded.** Firefox serves BiDi
     itself; Chrome, Chromium and Edge need `chromedriver` or `msedgedriver` on
     `PATH`. A missing browser or driver is an error naming what to install.
@@ -50,6 +64,13 @@ is the point, since none of the three has any business in a deployment.
   - Safari is refused until its BiDi support is ready. `--dom`, the permission
     flags and `--isolation=none` are refused beside `--browser`, since none of
     them means anything in a page.
+
+### Fixed
+- **A failure's detail says what failed in every engine**, not only in V8.
+  `runtime:test` reported a failure as the error's `stack`, and a
+  SpiderMonkey or JavaScriptCore stack starts at the first frame rather than
+  with the error — so a failure in Firefox said where, and never what it
+  expected. The error is now put in front when the stack left it out.
 
 ## [0.9.0] - 2026-09-23
 

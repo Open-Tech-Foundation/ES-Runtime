@@ -40,12 +40,9 @@ use es_runtime_cli_common::{Config, Source};
 
 mod adapter;
 mod assets;
-#[allow(
-    dead_code,
-    reason = "the client the browser runner drives; used by tests until it lands"
-)]
 mod bidi;
 mod browser;
+mod browser_run;
 mod build;
 mod bundler;
 mod check;
@@ -1679,7 +1676,7 @@ fn validate_browser_test_config(config: &TestConfig) -> Result<(), String> {
 ///
 /// What is chosen, and what was passed over, goes to stderr: it describes the
 /// run rather than being a result of it, and stdout belongs to the reporter.
-fn run_browser_tests(config: &TestConfig) -> ExitCode {
+async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     if let Err(err) = validate_browser_test_config(config) {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
@@ -1687,6 +1684,18 @@ fn run_browser_tests(config: &TestConfig) -> ExitCode {
     let Some(choice) = config.browser else {
         return ExitCode::FAILURE;
     };
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let files = match &config.file {
+        Some(file) => vec![root.join(file)],
+        None => test::discover(&root, &config.filters),
+    };
+    if files.is_empty() {
+        eprintln!(
+            "no test files found (looked for {})",
+            test::sought_description()
+        );
+        return ExitCode::FAILURE;
+    }
     let selected = match browser::select(choice, &browser::System) {
         Ok(selected) => selected,
         Err(err) => {
@@ -1695,11 +1704,32 @@ fn run_browser_tests(config: &TestConfig) -> ExitCode {
         }
     };
     eprintln!("{}", selected.describe());
-    eprintln!(
-        "error: running test files in a browser is not built yet — this esdev can \
-         choose the browser, but not drive it."
-    );
-    ExitCode::FAILURE
+    let session = match bidi::Session::start(&selected.launch, true).await {
+        Ok(session) => session,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ran = browser_run::run(&session, &root, &files, config).await;
+    session.end().await;
+    let failed = match ran {
+        Ok(failed) => failed,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if config.reporter.as_deref() == Some("json") {
+        test::report_as_json(files.len(), failed);
+    } else {
+        test::report(files.len(), failed);
+    }
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 async fn run_tests(mut config: TestConfig) -> ExitCode {
@@ -1716,7 +1746,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     }
 
     if config.browser.is_some() {
-        return run_browser_tests(&config);
+        return run_browser_tests(&config).await;
     }
 
     if let Some(file) = config.file {

@@ -22,7 +22,9 @@ storage, and document mutations leaking into another test file.
 The DOM realm is intended for modern component tests: creating and querying
 nodes, mutating attributes and text, dispatching events, rendering templates,
 using forms, custom elements, Shadow DOM, `MutationObserver`, and focused
-controls. It is a DOM implementation, not a browser renderer.
+controls. It is a DOM implementation, not a browser renderer. A test that needs
+layout or anything else only a browser has can run the same file in one with
+[`--browser`](/esdev/test/browser).
 
 ```js
 import { test, assertEquals } from "runtime:test";

@@ -56,7 +56,9 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 pub struct Client {
     outgoing: mpsc::UnboundedSender<Message>,
     pending: Pending,
-    events: mpsc::UnboundedReceiver<Event>,
+    /// Taken once, by whoever routes events — so the client itself can be
+    /// shared by everything sending commands.
+    events: std::sync::Mutex<Option<mpsc::UnboundedReceiver<Event>>>,
     next: AtomicU64,
 }
 
@@ -117,7 +119,7 @@ impl Client {
         Ok(Client {
             outgoing,
             pending,
-            events,
+            events: std::sync::Mutex::new(Some(events)),
             next: AtomicU64::new(1),
         })
     }
@@ -140,9 +142,13 @@ impl Client {
         }
     }
 
-    /// The next event, or `None` once the connection has closed.
-    pub async fn next_event(&mut self) -> Option<Event> {
-        self.events.recv().await
+    /// Every event the connection will deliver, in order, ending when it
+    /// closes. There is one stream, so only the first call gets it.
+    pub fn take_events(&self) -> Option<mpsc::UnboundedReceiver<Event>> {
+        self.events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 }
 
@@ -197,7 +203,7 @@ fn route(mut value: Value) -> Routed {
 /// A running browser with a BiDi session on it, and whatever has to be torn
 /// down when it ends.
 pub struct Session {
-    pub client: Client,
+    pub client: Arc<Client>,
     /// The browser itself (Firefox) or the driver that started it.
     process: Child,
     /// A driver's classic session, ended over HTTP so the driver closes the
@@ -296,7 +302,7 @@ async fn start_direct(launch: &Launch, headless: bool) -> Result<Session, String
         .command("session.new", json!({ "capabilities": {} }))
         .await?;
     Ok(Session {
-        client,
+        client: Arc::new(client),
         process,
         classic: None,
         profile: Some(profile),
@@ -336,7 +342,7 @@ async fn start_driver(
     })?;
     let client = Client::connect(&url).await?;
     Ok(Session {
-        client,
+        client: Arc::new(client),
         process,
         classic: Some((address, id)),
         profile: None,
@@ -645,13 +651,15 @@ mod tests {
             ]
         })
         .await;
-        let mut client = Client::connect(&url).await.expect("connect");
+        let client = Client::connect(&url).await.expect("connect");
+        let mut events = client.take_events().expect("the event stream");
+        assert!(client.take_events().is_none(), "there is one stream");
         client
             .command("session.subscribe", json!({}))
             .await
             .expect("answered");
-        let first = client.next_event().await.expect("an event");
-        let second = client.next_event().await.expect("an event");
+        let first = events.recv().await.expect("an event");
+        let second = events.recv().await.expect("an event");
         assert_eq!(first.method, "log.entryAdded");
         assert_eq!(first.params, json!({ "n": 1 }));
         assert_eq!(second.method, "script.message");
@@ -660,7 +668,8 @@ mod tests {
     #[tokio::test]
     async fn a_closed_connection_fails_what_was_waiting_instead_of_hanging() {
         let url = mock(|_| vec![]).await;
-        let mut client = Client::connect(&url).await.expect("connect");
+        let client = Client::connect(&url).await.expect("connect");
+        let mut events = client.take_events().expect("the event stream");
         let (waiting, _) = tokio::join!(
             client.command("test.neverAnswered", json!({})),
             client.command("test.hangUp", json!({})),
@@ -669,7 +678,7 @@ mod tests {
             waiting.unwrap_err(),
             "test.neverAnswered: the browser closed the connection"
         );
-        assert_eq!(client.next_event().await, None);
+        assert_eq!(events.recv().await, None);
     }
 
     #[test]

@@ -152,8 +152,21 @@ function armRejectionListener() {
 armRejectionListener();
 
 // The detail a failure is reported with: the stack when there is one, because a
-// failure is only actionable if it names the line that failed.
-const detail = (err) => (err?.stack ? String(err.stack) : String(err));
+// failure is only actionable if it names the line that failed. V8 starts a stack
+// with the error itself; SpiderMonkey and JavaScriptCore start at the first
+// frame, which in a browser run would report where a test failed and never what
+// it expected — so the error is put back in front when the stack left it out.
+const detail = (err) => {
+  if (!err?.stack) return String(err);
+  const stack = String(err.stack);
+  let head;
+  try {
+    head = String(err);
+  } catch {
+    return stack;
+  }
+  return stack.startsWith(head) ? stack : `${head}\n${stack}`;
+};
 
 // The name a case is reported under: its groups, outermost first, then its own.
 function label(scope, name) {
@@ -390,6 +403,10 @@ async function drain() {
     }
   } finally {
     draining = false;
+    // The queue is empty and every group closed. A process run learns this by
+    // reaching quiescence and does not listen; a page never goes quiet, so a
+    // browser run is told instead.
+    ops.test_drained?.();
   }
 }
 
