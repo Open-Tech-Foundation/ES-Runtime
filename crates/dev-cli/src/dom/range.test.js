@@ -41,8 +41,10 @@ test("a static range snapshots what a live range follows", () => {
 
   expect(snapshot).toBeInstanceOf(ranges.AbstractRange);
   expect(snapshot).not.toBeInstanceOf(ranges.Range);
+  // Setting `data` replaces all of it, which collapses a live range inside the
+  // node to its start (Chrome agrees); the static one does not move.
   text.data = "hi";
-  expect([live.endOffset, snapshot.endOffset]).toEqual([2, 4]);
+  expect([live.endOffset, snapshot.endOffset]).toEqual([0, 4]);
 });
 
 test("refuses a static range that cannot have boundary points", () => {

@@ -5551,7 +5551,9 @@ fn test_dom_ranges_adjust_boundaries_for_tree_and_text_mutations() {
            first.remove(); assertEquals([children.startOffset, children.endOffset], [2, 3]);\n\
            const inside = document.createRange(); inside.selectNodeContents(second); second.remove(); assertEquals([inside.startContainer, inside.startOffset, inside.endContainer, inside.endOffset], [parent, 1, parent, 1]);\n\
            const text = document.createTextNode('abcdef'); parent.appendChild(text); const characters = document.createRange(); characters.setStart(text, 1); characters.setEnd(text, 5); text.data = 'xy';\n\
-           assertEquals([characters.startOffset, characters.endOffset], [1, 2]);\n\
+           assertEquals([characters.startOffset, characters.endOffset], [0, 0]);\n\
+           const edited = document.createTextNode('abcdef'); parent.appendChild(edited); const span = document.createRange(); span.setStart(edited, 1); span.setEnd(edited, 5); edited.deleteData(0, 2); edited.insertData(3, 'XY');\n\
+           assertEquals([span.startOffset, span.endOffset], [0, 3]);\n\
          });\n",
     );
     let ran = esdev_in(&dir)

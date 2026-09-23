@@ -13,13 +13,13 @@ keep current.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 208 / 228 | 91% |
+| esdev | 209 / 228 | 92% |
 | jsdom | 178 / 228 | 78% |
 | happy-dom | 179 / 228 | 79% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
-| tree | 55 | 54 | 49 | 44 |
+| tree | 55 | 55 | 49 | 44 |
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 23 | 12 | 17 |
@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-103 of 105 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+109 of 111 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -70,6 +70,9 @@ compares the result.
 | media-and-supports-conditions-gate-their-rules | cascade | yes | no | no |
 | constructed-sheets-apply-while-adopted | cascade | yes | no | no |
 | a-shadow-root-is-styled-by-its-own-sheets | cascade | yes | no | no |
+| an-equal-specificity-tie-goes-to-the-later-sheet | cascade | yes | no | no |
+| floats-positioned-boxes-and-flex-items-are-blockified | cascade | yes | no | no |
+| inner-text-is-the-rendered-text | cascade | yes | no | no |
 | nesting-resolves-against-its-parent-rule | cascade | yes | no | no |
 | geometry-answers-zero-and-rendering-is-knowable | cascade | no | no | no |
 | html-names-are-case-insensitive | tree | yes | yes | yes |
@@ -84,7 +87,10 @@ compares the result.
 | parsed-children-upgrade-in-tree-order | components | yes | yes | yes |
 | the-registry-answers-about-a-definition | components | yes | no | no |
 | an-element-can-be-upgraded-on-demand | components | yes | yes | no |
+| character-data-is-edited-in-place | tree | yes | no | no |
+| a-range-edits-text-through-character-data | tree | yes | yes | no |
 | slots-assign-and-flatten | components | yes | yes | no |
+| flattening-recurses-through-a-slotted-slot | components | yes | yes | no |
 | a-slot-reports-a-change | components | yes | yes | yes |
 | internals-reflect-aria-and-form-state | components | yes | no | no |
 | a-clonable-shadow-root-is-cloned | components | yes | no | yes |
@@ -144,7 +150,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-62 of the 228 features.
+63 of the 228 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -157,6 +163,7 @@ compares the result.
 | Element.setHTMLUnsafe | yes | no | no |
 | Element.getHTML | yes | no | yes |
 | Element.checkVisibility | yes | no | no |
+| innerText | yes | no | yes |
 | document.hasFocus() | yes | no | yes |
 | implementation.createDocument | `svg/http://www.w3.org/2000/svg` | `svg/http://www.w3.org/2000/svg` | `html/http://www.w3.org/1999/xhtml` |
 | unknown property is undefined | `undefined/false/false` | `undefined/false/undefined` | `undefined/false/true` |
@@ -213,16 +220,8 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-20 of 228. Every one of them is here:
+19 of 228. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
-
-**No layout: there is no box model, so there is nothing to measure or scroll.**
-
-| Feature | Chrome | esdev |
-| --- | --- | --- |
-| innerText | yes | no |
-| getBoundingClientRect measures | `measured` | `zero` |
-| offsetWidth measures | `measured` | `zero` |
 
 **Legacy or superseded by a modern API that is implemented.**
 
@@ -245,6 +244,13 @@ a difference with no entry fails `tsr docs:parity`.
 | --- | --- | --- |
 | malformed HTML | `<p><i>unclosed</i></p>` | `throws:SyntaxError` |
 | misnested tags | `<b><i>x</i></b>` | `throws:SyntaxError` |
+
+**No layout: there is no box model, so there is nothing to measure or scroll.**
+
+| Feature | Chrome | esdev |
+| --- | --- | --- |
+| getBoundingClientRect measures | `measured` | `zero` |
+| offsetWidth measures | `measured` | `zero` |
 
 **No rendering: the top layer, animations and transitions have nothing to paint.**
 
@@ -311,7 +317,7 @@ a difference with no entry fails `tsr docs:parity`.
 | tree | document.adoptNode | yes | yes | yes | yes |
 | tree | document.importNode | yes | yes | yes | yes |
 | tree | document.firstElementChild | yes | yes | yes | yes |
-| tree | innerText | yes | no | no | yes |
+| tree | innerText | yes | yes | no | yes |
 | tree | outerHTML | yes | yes | yes | yes |
 | tree | table.rows | yes | yes | yes | yes |
 | tree | table.tBodies | yes | yes | yes | yes |

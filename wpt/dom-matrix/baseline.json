@@ -1373,6 +1373,398 @@
     },
     {
       "group": "cascade",
+      "name": "floats-positioned-boxes-and-flex-items-are-blockified",
+      "chrome": {
+        "result": [
+          [
+            "block",
+            "block",
+            "block",
+            "inline",
+            "flex",
+            "grid",
+            "table",
+            "block",
+            "block",
+            "block",
+            "contents",
+            "none",
+            "list-item"
+          ],
+          [
+            "block",
+            "block",
+            "block",
+            "block"
+          ],
+          [
+            "block",
+            "table",
+            "block",
+            "contents",
+            "list-item"
+          ],
+          "block",
+          [
+            "pre",
+            "pre",
+            "pre",
+            "pre",
+            "pre-wrap",
+            "nowrap",
+            "normal"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "block",
+            "block",
+            "block",
+            "inline",
+            "flex",
+            "grid",
+            "table",
+            "block",
+            "block",
+            "block",
+            "contents",
+            "none",
+            "list-item"
+          ],
+          [
+            "block",
+            "block",
+            "block",
+            "block"
+          ],
+          [
+            "block",
+            "table",
+            "block",
+            "contents",
+            "list-item"
+          ],
+          "block",
+          [
+            "pre",
+            "pre",
+            "pre",
+            "pre",
+            "pre-wrap",
+            "nowrap",
+            "normal"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "",
+            "",
+            "",
+            "",
+            "inline-flex",
+            "inline-grid",
+            "",
+            "table-row",
+            "",
+            "inline-block",
+            "contents",
+            "none",
+            "list-item"
+          ],
+          [
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "inline-block",
+            "",
+            "",
+            "contents",
+            "list-item"
+          ],
+          "block",
+          [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "inline",
+            "inline",
+            "inline",
+            "inline",
+            "inline-flex",
+            "inline-grid",
+            "inline-table",
+            "table-row",
+            "table-cell",
+            "inline-block",
+            "contents",
+            "none",
+            "list-item"
+          ],
+          [
+            "inline",
+            "inline",
+            "inline",
+            "inline"
+          ],
+          [
+            "inline-block",
+            "inline-table",
+            "table-cell",
+            "contents",
+            "list-item"
+          ],
+          "block",
+          [
+            "pre",
+            "pre",
+            "pre",
+            "pre",
+            "pre-wrap",
+            "nowrap",
+            ""
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "inner-text-is-the-rendered-text",
+      "chrome": {
+        "result": [
+          "hello",
+          "a\n\nb\n\nc",
+          "x\n\na\n\ny",
+          "ab",
+          "a\nb",
+          "a\nb",
+          "a\n",
+          "\na",
+          "a\n\nb",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "a b",
+          "  a   \n  b  ",
+          "a\nb",
+          "  a   \n  b  ",
+          "a b",
+          "a\nb",
+          "a b",
+          "a  b",
+          "a b",
+          "ABC",
+          "Hello World",
+          "ab",
+          "a\nb",
+          "ab",
+          "a\nb",
+          "a\nb",
+          "a\tb\nc",
+          "cap\na",
+          "a\nb",
+          "",
+          "a\nb",
+          "a",
+          "a",
+          "ab",
+          "a  b",
+          "",
+          [
+            "a<br><br>b<br>c<br>d",
+            8
+          ],
+          [
+            "",
+            0
+          ],
+          [
+            "5",
+            1
+          ],
+          [
+            "xp<br>qy",
+            3
+          ],
+          [
+            "xy",
+            1
+          ],
+          "NoModificationAllowedError",
+          false,
+          true
+        ]
+      },
+      "esdev": {
+        "result": [
+          "hello",
+          "a\n\nb\n\nc",
+          "x\n\na\n\ny",
+          "ab",
+          "a\nb",
+          "a\nb",
+          "a\n",
+          "\na",
+          "a\n\nb",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "ab",
+          "a b",
+          "  a   \n  b  ",
+          "a\nb",
+          "  a   \n  b  ",
+          "a b",
+          "a\nb",
+          "a b",
+          "a  b",
+          "a b",
+          "ABC",
+          "Hello World",
+          "ab",
+          "a\nb",
+          "ab",
+          "a\nb",
+          "a\nb",
+          "a\tb\nc",
+          "cap\na",
+          "a\nb",
+          "",
+          "a\nb",
+          "a",
+          "a",
+          "ab",
+          "a  b",
+          "",
+          [
+            "a<br><br>b<br>c<br>d",
+            8
+          ],
+          [
+            "",
+            0
+          ],
+          [
+            "5",
+            1
+          ],
+          [
+            "xp<br>qy",
+            3
+          ],
+          [
+            "xy",
+            1
+          ],
+          "NoModificationAllowedError",
+          false,
+          true
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          [
+            "x<span>old</span>y",
+            3
+          ],
+          [
+            "x<span>old</span>y",
+            3
+          ],
+          [
+            "x<span>old</span>y",
+            3
+          ],
+          [
+            "x<span>old</span>y",
+            3
+          ],
+          [
+            "x<span>old</span>y",
+            3
+          ],
+          "no error",
+          false,
+          false
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
       "name": "nesting-resolves-against-its-parent-rule",
       "chrome": {
         "result": [
@@ -2179,7 +2571,7 @@
           ],
           true,
           false,
-          "matrix-registry-9",
+          "matrix-registry-8",
           "DOMException",
           "DOMException",
           "DOMException"
@@ -2193,7 +2585,7 @@
           ],
           true,
           true,
-          "matrix-registry-6",
+          "matrix-registry-7",
           "NotSupportedError",
           "NotSupportedError",
           "SyntaxError"
@@ -2232,6 +2624,412 @@
           null,
           true,
           true
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "character-data-is-edited-in-place",
+      "chrome": {
+        "result": [
+          [
+            "Jllo, world",
+            11,
+            "llo",
+            "rld"
+          ],
+          [
+            "IndexSizeError",
+            "IndexSizeError",
+            "IndexSizeError",
+            "IndexSizeError"
+          ],
+          "Jll",
+          [
+            "",
+            0
+          ],
+          [
+            3,
+            "de00"
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            4,
+            9
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            "abc",
+            "def",
+            true,
+            3
+          ],
+          [
+            true,
+            1,
+            true,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            [
+              "characterData",
+              "abcdef",
+              0
+            ],
+            [
+              "childList",
+              null,
+              1
+            ]
+          ],
+          [
+            "y",
+            null
+          ],
+          [
+            "ab",
+            "ab",
+            "d"
+          ],
+          "undefined"
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "Jllo, world",
+            11,
+            "llo",
+            "rld"
+          ],
+          [
+            "IndexSizeError",
+            "IndexSizeError",
+            "IndexSizeError",
+            "IndexSizeError"
+          ],
+          "Jll",
+          [
+            "",
+            0
+          ],
+          [
+            3,
+            "de00"
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            4,
+            9
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            "abc",
+            "def",
+            true,
+            3
+          ],
+          [
+            true,
+            1,
+            true,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            [
+              "characterData",
+              "abcdef",
+              0
+            ],
+            [
+              "childList",
+              null,
+              1
+            ]
+          ],
+          [
+            "y",
+            null
+          ],
+          [
+            "ab",
+            "ab",
+            "d"
+          ],
+          "undefined"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "Jllo, world",
+            11,
+            "llo",
+            "rld"
+          ],
+          [
+            "no error",
+            "no error",
+            "no error",
+            "IndexSizeError"
+          ],
+          "Jlllo, worldx",
+          [
+            "null",
+            4
+          ],
+          [
+            3,
+            "de00"
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            "abc",
+            "def",
+            true,
+            3
+          ],
+          [
+            true,
+            1,
+            false,
+            3
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            [
+              "childList",
+              null,
+              1
+            ],
+            [
+              "characterData",
+              "abcdef",
+              0
+            ]
+          ],
+          [
+            "y",
+            null
+          ],
+          [
+            null,
+            null,
+            null
+          ],
+          "undefined"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "Jllo, world",
+            11,
+            "llo",
+            "rld"
+          ],
+          [
+            "IndexSizeError",
+            "IndexSizeError",
+            "IndexSizeError",
+            "IndexSizeError"
+          ],
+          "Jll",
+          [
+            "",
+            0
+          ],
+          [
+            3,
+            "de00"
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            4,
+            9
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            "abc",
+            "def",
+            true,
+            3
+          ],
+          [
+            true,
+            1,
+            true,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            [
+              "childList",
+              null,
+              1
+            ],
+            [
+              "characterData",
+              "abcdef",
+              0
+            ]
+          ],
+          [
+            "y",
+            null
+          ],
+          [
+            "ab",
+            "ab",
+            "d"
+          ],
+          "undefined"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "tree",
+      "name": "a-range-edits-text-through-character-data",
+      "chrome": {
+        "result": [
+          [
+            [
+              "#text:abc",
+              "B:",
+              "#text:"
+            ],
+            true,
+            3,
+            true,
+            2
+          ],
+          [
+            "abef",
+            2,
+            2
+          ],
+          [
+            "abcdef"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            [
+              "#text:abc",
+              "B:",
+              "#text:"
+            ],
+            true,
+            3,
+            true,
+            2
+          ],
+          [
+            "abef",
+            2,
+            2
+          ],
+          [
+            "abcdef"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            [
+              "#text:abc",
+              "B:",
+              "#text:"
+            ],
+            true,
+            3,
+            true,
+            2
+          ],
+          [
+            "abef",
+            2,
+            4
+          ],
+          [
+            "abcdef"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            [
+              "#text:abc",
+              "B:",
+              "#text:"
+            ],
+            true,
+            3,
+            true,
+            2
+          ],
+          [
+            "abef",
+            2,
+            2
+          ],
+          [
+            "abcdef"
+          ]
         ]
       },
       "emulatorDisagreement": true,
@@ -2605,7 +3403,7 @@
       },
       "happy-dom": {
         "result": [
-          "matrix-bad-18",
+          "matrix-bad-15",
           false,
           "TypeError",
           null
@@ -2613,7 +3411,7 @@
       },
       "jsdom": {
         "result": [
-          "matrix-bad-15",
+          "matrix-bad-18",
           false,
           "TypeError",
           null
@@ -7406,7 +8204,7 @@
     }
   ],
   "summary": {
-    "match": 105,
+    "match": 109,
     "intentional-limit": 2,
     "drift": 0
   }

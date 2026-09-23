@@ -37,7 +37,7 @@ const INHERITED = new Set([
 // text defaults a test asserts on. A browser's is thousands of declarations
 // long, and the rest of them describe how something looks.
 const UA_RULES = [
-  ["html, body, div, p, h1, h2, h3, h4, h5, h6, ol, ul, li, dl, dt, dd, figure, figcaption, main, header, footer, section, article, aside, nav, address, blockquote, pre, hr, form, fieldset, legend, details, summary, dialog, search, hgroup, menu", { display: "block" }],
+  ["html, body, div, p, h1, h2, h3, h4, h5, h6, ol, ul, li, dl, dt, dd, figure, figcaption, main, header, footer, section, article, aside, nav, address, blockquote, pre, listing, xmp, plaintext, hr, form, fieldset, legend, details, summary, dialog, search, hgroup, menu", { display: "block" }],
   ["li", { display: "list-item" }],
   ["table", { display: "table" }],
   ["thead", { display: "table-header-group" }],
@@ -48,7 +48,7 @@ const UA_RULES = [
   ["caption", { display: "table-caption" }],
   ["colgroup", { display: "table-column-group" }],
   ["col", { display: "table-column" }],
-  ["head, link, meta, style, script, title, template, base, param, source, track, area", { display: "none" }],
+  ["head, link, meta, style, script, noscript, title, template, base, param, source, track, area", { display: "none" }],
   ["[hidden]", { display: "none" }],
   ["b, strong", { "font-weight": "700" }],
   ["i, em, cite, var, dfn, address", { "font-style": "italic" }],
@@ -59,10 +59,22 @@ const UA_RULES = [
   ["h5", { "font-size": "0.83em", "font-weight": "700" }],
   ["h6", { "font-size": "0.67em", "font-weight": "700" }],
   ["pre, code, kbd, samp, tt", { "font-family": "monospace" }],
+  ["pre, listing, xmp, plaintext", { "white-space": "pre" }],
+  ["textarea", { "white-space": "pre-wrap" }],
+  ["nobr", { "white-space": "nowrap" }],
   ["center, caption, th", { "text-align": "center" }],
   ["ul, ol", { "list-style-type": "disc" }],
   ["ol", { "list-style-type": "decimal" }],
 ];
+
+// What each display computes to when it is blockified; one absent from the
+// table is already block-level, or `contents`/`none`, and stays as it is.
+const BLOCKIFY = new Map([
+  ["inline", "block"], ["inline-block", "block"], ["inline-flex", "flex"], ["inline-grid", "grid"],
+  ["inline-table", "table"], ["ruby", "block ruby"],
+  ...["table-row", "table-cell", "table-row-group", "table-header-group", "table-footer-group",
+    "table-column", "table-column-group", "table-caption"].map((display) => [display, "block"]),
+]);
 
 // Initial values, for the properties whose initial value is a keyword a test can
 // assert on. A length or a colour that a browser resolves against layout or a
@@ -706,7 +718,14 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     return root instanceof ShadowRoot ? root.host : null;
   }
 
+  // Set only for the length of one read that asks for the computed values of a
+  // whole subtree (`innerText`), where each element would otherwise recompute
+  // every ancestor it inherits from. Nothing can change the cascade mid-read.
+  let memo = null;
+
   function computedValues(element) {
+    const remembered = memo?.get(element);
+    if (remembered) return remembered;
     const values = new Map();
     const entries = declared(element);
     const names = new Set(entries.map((entry) => entry.name));
@@ -828,6 +847,17 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     for (const [name, value] of INITIAL) {
       if (!values.has(name)) values.set(name, value);
     }
+    // Blockification: a float, an absolutely positioned box, a flex or grid
+    // item and the root element all compute to their block-level display.
+    // Chrome reports it, and `innerText` breaks lines on it.
+    const blockified = BLOCKIFY.get(values.get("display"));
+    if (blockified && (values.get("float") !== "none"
+      || ["absolute", "fixed"].includes(values.get("position"))
+      || ["flex", "inline-flex", "grid", "inline-grid"].includes(inherited.get("display"))
+      || element === element.ownerDocument?.documentElement)) {
+      values.set("display", blockified);
+    }
+    memo?.set(element, values);
     return values;
   }
 
@@ -847,6 +877,167 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     if (!element.isConnected) return css.readOnlyDeclaration([]);
     const values = computedValues(element);
     return css.readOnlyDeclaration(Array.from(values, ([name, value]) => [name, value, false]));
+  }
+
+  // `innerText` is the rendered-text collection the HTML specification defines
+  // over computed values, not over boxes: which elements are rendered, which are
+  // block-level, how white space collapses and how text is transformed are all
+  // answered by the cascade above. So it is answered here rather than refused.
+  // What a box alone would decide — a soft wrap, `::first-letter` — contributes
+  // nothing to `innerText` in a browser either.
+  const BLOCK_LEVEL = new Set(["block", "list-item", "table", "table-caption", "flex", "grid", "flow-root"]);
+  // Elements whose children a browser renders inside a control, or not at all,
+  // so contribute no text of their own.
+  const NO_RENDERED_CHILDREN = new Set(["input", "textarea", "img", "canvas", "video", "audio", "iframe", "object", "embed", "meter", "progress"]);
+
+  function renderedText(element) {
+    // Not rendered — detached, or `display: none` here or above — reads its
+    // text content, as the specification says.
+    if (!element.checkVisibility()) return element.textContent;
+    memo = new Map();
+    try {
+      const tokens = [];
+      collectRendered(element, tokens, false);
+      return joinRendered(tokens);
+    } finally {
+      memo = null;
+    }
+  }
+
+  function collectRendered(node, tokens, inSelect) {
+    for (const child of node.childNodes) {
+      if (child instanceof tree.Text) {
+        const values = computedValues(child.parentElement);
+        if (values.get("visibility") !== "visible") continue;
+        textTokens(child.data, values, inSelect, tokens);
+        continue;
+      }
+      if (!(child instanceof Element)) continue;
+      const values = computedValues(child);
+      const display = values.get("display");
+      if (display === "none") continue;
+      const html = child.namespaceURI === HTML_NAMESPACE;
+      if (html && child.localName === "br") {
+        tokens.push({ text: "\n" });
+        continue;
+      }
+      if (html && NO_RENDERED_CHILDREN.has(child.localName)) continue;
+      const option = inSelect && html && (child.localName === "option" || child.localName === "optgroup");
+      const breaks = option || BLOCK_LEVEL.has(display) ? (html && child.localName === "p" ? 2 : 1) : 0;
+      if (breaks) tokens.push({ breaks });
+      collectRendered(child, tokens, inSelect || (html && child.localName === "select"));
+      if (display === "table-cell" && followingBox(child, "table-cell", child.parentElement)) tokens.push({ text: "\t" });
+      if (display === "table-row" && followingBox(child, "table-row", enclosingTable(child))) tokens.push({ breaks: 1 });
+      if (breaks) tokens.push({ breaks });
+    }
+  }
+
+  // Whether another box of the same display follows this one inside `within`,
+  // without descending into a nested table.
+  function followingBox(element, display, within) {
+    if (!within) return false;
+    let seen = false;
+    const walk = (parent) => {
+      for (const child of parent.children) {
+        if (child === element) { seen = true; continue; }
+        const own = computedValues(child).get("display");
+        if (own === "none") continue;
+        if (seen && own === display) return true;
+        if (own === "table") continue;
+        if (walk(child)) return true;
+      }
+      return false;
+    };
+    return walk(within);
+  }
+
+  function enclosingTable(element) {
+    for (let at = element.parentElement; at; at = at.parentElement) {
+      if (computedValues(at).get("display") === "table") return at;
+    }
+    return null;
+  }
+
+  function textTokens(data, values, inSelect, tokens) {
+    const mode = values.get("white-space") ?? "normal";
+    // A select's options are drawn by the control, which does not take the
+    // page's `text-transform`.
+    const transform = inSelect ? "none" : values.get("text-transform") ?? "none";
+    let text = data;
+    if (transform === "uppercase") text = text.toUpperCase();
+    else if (transform === "lowercase") text = text.toLowerCase();
+    else if (transform === "capitalize") text = text.replace(/(^|[\s ])(\p{L})/gu, (_, gap, letter) => gap + letter.toUpperCase());
+    if (mode === "pre" || mode === "pre-wrap" || mode === "break-spaces") {
+      if (text) tokens.push({ text });
+      return;
+    }
+    // `pre-line` keeps its line breaks and collapses the rest; everything else
+    // collapses both. Only ASCII white space collapses — a no-break space is text.
+    const pieces = mode === "pre-line"
+      ? text.replace(/[ \t]*\n[ \t]*/g, "\n").split(/[ \t\r\f]+/)
+      : text.split(/[ \t\n\r\f]+/);
+    pieces.forEach((piece, index) => {
+      if (index > 0) tokens.push({ space: true });
+      if (piece) tokens.push({ text: piece });
+    });
+  }
+
+  // Collapsible spaces merge, and vanish at the start and end of a line; runs of
+  // required line breaks become the largest of them, and none survive at the
+  // very start or end.
+  function joinRendered(tokens) {
+    const spaced = [];
+    for (const token of tokens) {
+      if (token.space && spaced.at(-1)?.space) continue;
+      spaced.push(token);
+    }
+    const lineEdge = (token, end) => token === undefined || token.breaks
+      || (token.text !== undefined && (end ? token.text.endsWith("\n") : token.text.startsWith("\n")));
+    const kept = spaced.filter((token, index) =>
+      !token.space || !(lineEdge(spaced[index - 1], true) || lineEdge(spaced[index + 1], false)));
+    while (kept[0]?.breaks) kept.shift();
+    while (kept.at(-1)?.breaks) kept.pop();
+    let out = "";
+    let pending = 0;
+    for (const token of kept) {
+      if (token.breaks) {
+        pending = Math.max(pending, token.breaks);
+        continue;
+      }
+      if (pending) out += "\n".repeat(pending);
+      pending = 0;
+      out += token.space ? " " : token.text;
+    }
+    return out;
+  }
+
+  // Setting `innerText` or `outerText`: the value's line breaks become `<br>`
+  // elements and the rest text, replacing the children or the element itself.
+  function replaceWithText(element, value, outer) {
+    const document = element.ownerDocument;
+    const fragment = document.createDocumentFragment();
+    String(value).split(/\r\n|\r|\n/).forEach((line, index) => {
+      if (index > 0) fragment.append(document.createElement("br"));
+      if (line) fragment.append(document.createTextNode(line));
+    });
+    if (!outer) {
+      element.replaceChildren(fragment);
+      return;
+    }
+    const parent = element.parentNode;
+    if (!parent) throw new DOMException("outerText can only be set on an element with a parent.", "NoModificationAllowedError");
+    const previous = element.previousSibling;
+    const next = element.nextSibling;
+    if (fragment.childNodes.length === 0) fragment.append(document.createTextNode(""));
+    element.replaceWith(fragment);
+    // The text either side merges with what it now touches.
+    const merge = (text) => {
+      if (!(text instanceof tree.Text) || !(text.nextSibling instanceof tree.Text)) return;
+      text.appendData(text.nextSibling.data);
+      text.nextSibling.remove();
+    };
+    if (next?.previousSibling) merge(next.previousSibling);
+    merge(previous);
   }
 
   // On the prototypes: every document has stylesheets, including one built by
@@ -906,6 +1097,18 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
       },
       writable: true,
       configurable: true,
+    });
+    Object.defineProperty(tree.HTMLElement.prototype, "innerText", {
+      get() { return renderedText(this); },
+      set(value) { replaceWithText(this, value, false); },
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(tree.HTMLElement.prototype, "outerText", {
+      get() { return renderedText(this); },
+      set(value) { replaceWithText(this, value, true); },
+      configurable: true,
+      enumerable: true,
     });
     Object.defineProperty(tree.HTMLStyleElement.prototype, "sheet", {
       get() { return styleSheetFor(this); },

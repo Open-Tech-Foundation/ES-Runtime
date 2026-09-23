@@ -692,6 +692,138 @@ export const cases = [
   },
   {
     group: "cascade",
+    name: "floats-positioned-boxes-and-flex-items-are-blockified",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const display = (parentStyle, childStyle) => {
+        const parent = document.createElement("div");
+        parent.setAttribute("style", parentStyle);
+        const child = document.createElement("span");
+        child.setAttribute("style", childStyle);
+        parent.append(child);
+        document.body.append(parent);
+        const value = window.getComputedStyle(child).display;
+        parent.remove();
+        return value;
+      };
+      const whiteSpace = (tag) => {
+        const element = document.createElement(tag);
+        document.body.append(element);
+        const value = window.getComputedStyle(element).whiteSpace;
+        element.remove();
+        return value;
+      };
+      return [
+        ["float: left", "position: absolute", "position: fixed", "position: relative",
+          "float: left; display: inline-flex", "float: left; display: inline-grid",
+          "float: left; display: inline-table", "float: left; display: table-row",
+          "float: left; display: table-cell", "float: left; display: inline-block",
+          "float: left; display: contents", "float: left; display: none", "float: left; display: list-item"]
+          .map((style) => display("", style)),
+        ["display: flex", "display: grid", "display: inline-flex", "display: inline-grid"]
+          .map((style) => display(style, "")),
+        ["display: inline-block", "display: inline-table", "display: table-cell", "display: contents", "display: list-item"]
+          .map((style) => display("display: flex", style)),
+        window.getComputedStyle(document.documentElement).display,
+        ["pre", "listing", "xmp", "plaintext", "textarea", "nobr", "td"].map(whiteSpace),
+      ];
+    },
+  },
+  {
+    group: "cascade",
+    name: "inner-text-is-the-rendered-text",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const read = (html) => {
+        const host = document.createElement("div");
+        host.innerHTML = html;
+        document.body.append(host);
+        const text = host.innerText;
+        host.remove();
+        return text;
+      };
+      const detached = document.createElement("div");
+      detached.innerHTML = "<p>a</p><p>b</p>";
+      const own = (html) => {
+        const host = document.createElement("div");
+        host.innerHTML = html;
+        document.body.append(host);
+        const text = host.firstElementChild.innerText;
+        host.remove();
+        return text;
+      };
+      const written = (value, outer) => {
+        const host = document.createElement("div");
+        host.innerHTML = "x<span>old</span>y";
+        document.body.append(host);
+        if (outer) host.firstElementChild.outerText = value;
+        else host.innerText = value;
+        const answer = [host.innerHTML, host.childNodes.length];
+        host.remove();
+        return answer;
+      };
+      let orphan;
+      try {
+        document.createElement("span").outerText = "a";
+        orphan = "no error";
+      } catch (error) {
+        orphan = error.name;
+      }
+      return [
+        read("hello"),
+        read("<p>a</p><p>b</p><p>c</p>"),
+        read("<div>x<p>a</p>y</div>"),
+        read("<span>a</span><span>b</span>"),
+        read("<div><div>a</div><div>b</div></div>"),
+        read("a<br>b"), read("a<br>"), read("<br>a"), read("a<br><br>b"),
+        read("a<span style='display:none'>x</span>b"),
+        read("a<span style='visibility:hidden'>x</span>b"),
+        read("a<span hidden>x</span>b"),
+        read("a<script>var x = 1</script>b"),
+        read("a<style>p {}</style>b"),
+        read("a<noscript>x</noscript>b"),
+        read("a<!--c-->b"),
+        read("  a   \n  b  "),
+        read("<pre>  a   \n  b  </pre>"),
+        read("<div style='white-space: pre-line'>  a   \n  b  </div>"),
+        read("<div style='white-space: pre-wrap'>  a   \n  b  </div>"),
+        read("<div style='white-space: nowrap'>  a   \n  b  </div>"),
+        read("<div>a</div>  <div>b</div>"),
+        read("<div>a <span> b </span> </div>"),
+        read("a  b"),
+        read("a\tb"),
+        read("<span style='text-transform: uppercase'>abc</span>"),
+        read("<span style='text-transform: capitalize'>hello world</span>"),
+        read("<span style='display: inline-block'>a</span><span style='display: inline-block'>b</span>"),
+        read("<div style='display: flex'><span>a</span><span>b</span></div>"),
+        read("<div style='display: contents'>a</div>b"),
+        read("<div style='position: absolute'>a</div>b"),
+        read("<span style='float: left'>a</span>b"),
+        read("<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>"),
+        read("<table><caption>cap</caption><tr><td>a</td></tr></table>"),
+        read("<ul><li>a</li><li>b</li></ul>"),
+        read("<textarea>hi</textarea><input value=hi>"),
+        read("<select><option>a</option><option>b</option></select>"),
+        read("<select style='text-transform: uppercase'><option>a</option></select>"),
+        read("<div></div>a"),
+        detached.innerText,
+        own("<div style='display: none'>a  b</div>"),
+        own("<div style='visibility: hidden'>a b</div>"),
+        written("a\n\nb\r\nc\rd", false),
+        written("", false),
+        written(5, false),
+        written("p\nq", true),
+        written("", true),
+        orphan,
+        "innerText" in document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+        Object.hasOwn(window.HTMLElement.prototype, "outerText"),
+      ];
+    },
+  },
+  {
+    group: "cascade",
     name: "nesting-resolves-against-its-parent-rule",
     run(window) {
       const { document } = window;
@@ -993,6 +1125,117 @@ export const cases = [
       const before = element.upgraded ?? null;
       window.customElements.upgrade(detached);
       return [before, element.upgraded === true, element.matches(":defined")];
+    },
+  },
+  {
+    group: "tree",
+    name: "character-data-is-edited-in-place",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const text = document.createTextNode("hello");
+      const errors = [];
+      const attempt = (edit) => {
+        try {
+          edit();
+          errors.push("no error");
+        } catch (error) {
+          errors.push(error.name);
+        }
+      };
+      text.appendData(" world");
+      text.insertData(5, ",");
+      text.deleteData(0, 1);
+      text.replaceData(0, 1, "J");
+      const edited = [text.data, text.length, text.substringData(1, 3), text.substringData(8, 100)];
+      attempt(() => text.substringData(99, 1));
+      attempt(() => text.insertData(99, "x"));
+      attempt(() => text.deleteData(-1, 1));
+      text.deleteData(3, -1);
+      const unsignedCount = text.data;
+      text.data = null;
+      const nulled = [text.data, text.length];
+      // Surrogate pairs are two code units, and an edit can split one.
+      const astral = document.createTextNode("a\u{1F600}b");
+      astral.deleteData(1, 1);
+      const halved = [astral.length, astral.data.charCodeAt(1).toString(16)];
+
+      // A live range moves the way the edit moved the text.
+      const host = document.createElement("p");
+      document.body.append(host);
+      const node = document.createTextNode("abcdefgh");
+      host.append(node);
+      const range = document.createRange();
+      range.setStart(node, 2);
+      range.setEnd(node, 6);
+      node.replaceData(3, 2, "XYZ");
+      const afterReplace = [range.startOffset, range.endOffset];
+      node.insertData(0, "--");
+      const afterInsert = [range.startOffset, range.endOffset];
+      node.data = "short";
+      const afterSet = [range.startOffset, range.endOffset];
+
+      // Splitting: the tail follows in the tree, ranges past the split go with it.
+      const split = document.createTextNode("abcdef");
+      host.replaceChildren(split, document.createElement("br"));
+      const inside = document.createRange();
+      inside.setStart(split, 1);
+      inside.setEnd(split, 5);
+      const after = document.createRange();
+      after.setStart(host, 1);
+      after.setEnd(host, 1);
+      const observer = new window.MutationObserver(() => {});
+      observer.observe(host, { childList: true, characterData: true, subtree: true, characterDataOldValue: true });
+      const tail = split.splitText(3);
+      const records = observer.takeRecords().map((record) => [record.type, record.oldValue, record.addedNodes.length]);
+      attempt(() => split.splitText(99));
+      const detached = document.createTextNode("xy").splitText(1);
+      const whole = document.createElement("div");
+      whole.append("a", "b", document.createComment("c"), "d");
+      return [
+        edited, errors, unsignedCount, nulled, halved,
+        afterReplace, afterInsert, afterSet,
+        [split.data, tail.data, split.nextSibling === tail, host.childNodes.length],
+        [inside.startContainer === split, inside.startOffset, inside.endContainer === tail, inside.endOffset],
+        [after.startOffset, after.endOffset],
+        records,
+        [detached.data, detached.parentNode],
+        [whole.firstChild.wholeText, whole.childNodes[1].wholeText, whole.lastChild.wholeText],
+        typeof document.createComment("x").splitText,
+      ];
+    },
+  },
+  {
+    group: "tree",
+    name: "a-range-edits-text-through-character-data",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      // Inserting at a text boundary splits the text — even at its end, which
+      // leaves an empty Text node — and a collapsed range grows over the insert.
+      const paragraph = document.createElement("p");
+      paragraph.append("abc");
+      document.body.append(paragraph);
+      const caret = document.createRange();
+      caret.setStart(paragraph.firstChild, 3);
+      caret.collapse(true);
+      caret.insertNode(document.createElement("b"));
+      const inserted = [
+        Array.from(paragraph.childNodes, (node) => `${node.nodeName}:${node.data ?? ""}`),
+        caret.startContainer === paragraph.firstChild, caret.startOffset,
+        caret.endContainer === paragraph, caret.endOffset,
+      ];
+      // Deleting inside one Text node is one character-data edit.
+      const other = document.createElement("p");
+      other.append("abcdef");
+      document.body.append(other);
+      const span = document.createRange();
+      span.setStart(other.firstChild, 2);
+      span.setEnd(other.firstChild, 4);
+      const observer = new window.MutationObserver(() => {});
+      observer.observe(other, { characterData: true, subtree: true, characterDataOldValue: true });
+      span.deleteContents();
+      return [inserted, [other.textContent, span.startOffset, span.endOffset], observer.takeRecords().map((record) => record.oldValue)];
     },
   },
   {

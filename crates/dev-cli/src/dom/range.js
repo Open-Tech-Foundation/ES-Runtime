@@ -167,31 +167,35 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
     }
     insertNode(node) {
       if (!(node instanceof Node)) throw new TypeError("insertNode expects a Node");
+      // The specification's steps: a text start is split — even at its end,
+      // which leaves an empty Text node, as Chrome does — and a collapsed
+      // range grows to cover what was inserted.
       const container = this.startContainer;
+      const collapsed = this.collapsed;
+      let parent = container;
+      let reference = container.childNodes.item(this.startOffset);
       if (container instanceof Text) {
-        const parent = container.parentNode;
+        parent = container.parentNode;
         if (!parent) rangeError("HierarchyRequestError", "Cannot insert beside a detached text node.");
-        const tail = container.data.slice(this.startOffset);
-        container.data = container.data.slice(0, this.startOffset);
-        const reference = tail === "" ? container.nextSibling : this.document.createTextNode(tail);
-        if (tail !== "") parent._preInsert(reference, container.nextSibling);
-        parent._preInsert(node, reference);
-        return;
+        reference = container.splitText(this.startOffset);
       }
-      container._preInsert(node, container.childNodes.item(this.startOffset));
+      if (node === reference) reference = reference.nextSibling;
+      if (node.parentNode) node.remove();
+      let offset = reference ? childIndex(reference) : parent.childNodes.length;
+      offset += node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? node.childNodes.length : 1;
+      parent._preInsert(node, reference);
+      if (collapsed) this.setEnd(parent, offset);
     }
     deleteContents() {
       if (this.collapsed) return;
       if (this.startContainer === this.endContainer && this.startContainer instanceof Text) {
-        const text = this.startContainer;
-        text.data = text.data.slice(0, this.startOffset) + text.data.slice(this.endOffset);
-        this.setEnd(text, this.startOffset);
+        this.startContainer.deleteData(this.startOffset, this.endOffset - this.startOffset);
         return;
       }
       const start = { node: this.startContainer, offset: this.startOffset };
       const end = { node: this.endContainer, offset: this.endOffset };
-      if (start.node instanceof Text) start.node.data = start.node.data.slice(0, start.offset);
-      if (end.node instanceof Text) end.node.data = end.node.data.slice(end.offset);
+      if (start.node instanceof Text) start.node.deleteData(start.offset, start.node.length - start.offset);
+      if (end.node instanceof Text) end.node.deleteData(0, end.offset);
       const selected = [];
       for (const node of descendants(root(start.node))) {
         if (!node.parentNode) continue;
@@ -309,11 +313,41 @@ export function createRanges({ Document, Node, Element, Text, DocumentType, Attr
             }
           }
         },
-        characterData(node, _oldLength, newLength) {
+        // "Replace data": a boundary inside the replaced span moves to its
+        // start, and one after it shifts by the change in length.
+        replaceData(node, offset, count, added) {
           for (const range of ranges) {
             if (range.document !== document) continue;
-            if (range.startContainer === node) range[POINTS].startOffset = Math.min(range.startOffset, newLength);
-            if (range.endContainer === node) range[POINTS].endOffset = Math.min(range.endOffset, newLength);
+            for (const boundary of ["start", "end"]) {
+              if (range[`${boundary}Container`] !== node) continue;
+              const at = range[`${boundary}Offset`];
+              if (at > offset + count) range[POINTS][`${boundary}Offset`] = at + added - count;
+              else if (at > offset) range[POINTS][`${boundary}Offset`] = offset;
+            }
+          }
+        },
+        // "Split a Text node": boundaries past the split move into the new
+        // node…
+        splitText(node, tail, offset) {
+          for (const range of ranges) {
+            if (range.document !== document) continue;
+            for (const boundary of ["start", "end"]) {
+              if (range[`${boundary}Container`] !== node || range[`${boundary}Offset`] <= offset) continue;
+              range[POINTS][`${boundary}Container`] = tail;
+              range[POINTS][`${boundary}Offset`] -= offset;
+            }
+          }
+        },
+        // …and, once the new node is inserted, a boundary in the parent just
+        // after the old node moves past the new one too.
+        afterSplit(parent, index) {
+          for (const range of ranges) {
+            if (range.document !== document) continue;
+            for (const boundary of ["start", "end"]) {
+              if (range[`${boundary}Container`] === parent && range[`${boundary}Offset`] === index + 1) {
+                range[POINTS][`${boundary}Offset`] += 1;
+              }
+            }
           }
         },
         };

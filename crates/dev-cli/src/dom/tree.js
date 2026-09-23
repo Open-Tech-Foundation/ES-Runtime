@@ -746,15 +746,42 @@ export function createTree(events = {}) {
       Object.defineProperty(this, DATA, { value: String(data), writable: true });
     }
     get data() { return this[DATA]; }
-    set data(value) {
-      const oldValue = this[DATA];
-      this[DATA] = String(value);
-      this.ownerDocument?._adjustRanges?.characterData(this, oldValue.length, this[DATA].length);
-      this.ownerDocument?._queueMutation?.({ type: "characterData", target: this, oldValue });
-    }
+    set data(value) { this.replaceData(0, this.length, value === null ? "" : String(value)); }
     get nodeValue() { return this.data; }
     set nodeValue(value) { this.data = String(value ?? ""); }
+    get length() { return this[DATA].length; }
+
+    // Every edit is the specification's "replace data": one mutation record, and
+    // live ranges inside the node moved the way the edit moved the text. Offsets
+    // are UTF-16 code units, which is what a JavaScript string counts in.
+    replaceData(offset, count, data) {
+      offset = toUnsignedLong(offset);
+      count = toUnsignedLong(count);
+      data = String(data);
+      const oldValue = this[DATA];
+      if (offset > oldValue.length) throw new DOMException("The offset is past the end of the data.", "IndexSizeError");
+      count = Math.min(count, oldValue.length - offset);
+      this.ownerDocument?._queueMutation?.({ type: "characterData", target: this, oldValue });
+      this[DATA] = oldValue.slice(0, offset) + data + oldValue.slice(offset + count);
+      this.ownerDocument?._adjustRanges?.replaceData(this, offset, count, data.length);
+    }
+    substringData(offset, count) {
+      offset = toUnsignedLong(offset);
+      count = toUnsignedLong(count);
+      if (offset > this.length) throw new DOMException("The offset is past the end of the data.", "IndexSizeError");
+      return this[DATA].slice(offset, offset + count);
+    }
+    appendData(data) { this.replaceData(this.length, 0, String(data)); }
+    insertData(offset, data) { this.replaceData(offset, 0, String(data)); }
+    deleteData(offset, count) { this.replaceData(offset, count, ""); }
   }
+
+  // Web IDL's `unsigned long`: modulo 2^32, so `-1` is 4294967295 and an offset
+  // past the end, not a count from it.
+  const toUnsignedLong = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.trunc(number) >>> 0 : 0;
+  };
 
   // `new Text()`, `new Comment()` and `new DocumentFragment()` take no document
   // in Web IDL: they belong to the current global's associated document, which
@@ -769,6 +796,34 @@ export function createTree(events = {}) {
 
   class Text extends CharacterData {
     constructor(data = "", ownerDocument = currentDocument) { super(Node.TEXT_NODE, "#text", data, ownerDocument); }
+
+    splitText(offset) {
+      offset = toUnsignedLong(offset);
+      const length = this.length;
+      if (offset > length) throw new DOMException("The offset is past the end of the data.", "IndexSizeError");
+      const tail = new this.constructor(this.substringData(offset, length - offset), this.ownerDocument);
+      const parent = this.parentNode;
+      // Boundaries past the split go with the tail before the data is cut, or
+      // cutting it would pull them back to the split point.
+      this.ownerDocument?._adjustRanges?.splitText(this, tail, offset);
+      // Chrome records the cut before the insertion, where the specification
+      // inserts first; the records are what a test observes, so Chrome's order.
+      this.replaceData(offset, length - offset, "");
+      if (parent) {
+        parent.insertBefore(tail, this.nextSibling);
+        this.ownerDocument?._adjustRanges?.afterSplit(parent, childIndex(this));
+      }
+      return tail;
+    }
+
+    // The text of this node and every contiguous Text sibling either side.
+    get wholeText() {
+      let first = this;
+      while (first.previousSibling instanceof Text) first = first.previousSibling;
+      let text = "";
+      for (let at = first; at instanceof Text; at = at.nextSibling) text += at.data;
+      return text;
+    }
   }
 
   class Comment extends CharacterData {

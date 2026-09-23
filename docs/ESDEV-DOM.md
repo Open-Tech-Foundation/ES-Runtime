@@ -102,7 +102,7 @@ Every mutation goes through the spec algorithms, never through a shortcut. `appe
 
 Attributes are `Attr` nodes in a `NamedNodeMap`, not a plain string map. `getAttributeNode`, attribute namespaces, and `attributes[0].name` all fall out of that, and `MutationObserver` attribute records need the old value anyway.
 
-`textContent` on an element is a full-subtree walk on read and a replace-all on write. `innerText` is not implemented — it is layout-dependent by definition, and returning `textContent` for it would be a lie that passes tests locally and fails in a browser.
+`textContent` on an element is a full-subtree walk on read and a replace-all on write. `innerText` and `outerText` are the rendered text, read from the cascade rather than from boxes: `display: none` and `visibility: hidden` text is skipped, a block boundary is a line break (two around a `<p>`), a `<br>` is one, table cells are separated by tabs, white space collapses as the computed `white-space` says and `text-transform` applies. An element that is not rendered — detached, or inside `display: none` — reads its `textContent`, as the specification says. Writing either turns line breaks into `<br>` elements. `CharacterData` has the full editing surface (`appendData`, `insertData`, `deleteData`, `replaceData`, `substringData`), `Text` has `splitText` and `wholeText`, and every edit moves live ranges the way it moved the text.
 
 `cloneNode(true)` is a spec clone: it copies attributes, runs the cloning steps for `<template>` (which clones the content fragment separately), and does not copy event listeners or private framework state. This path matters more than usual here — see the OTF Web section.
 

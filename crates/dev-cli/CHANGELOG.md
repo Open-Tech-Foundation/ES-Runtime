@@ -25,6 +25,28 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **`innerText` and `outerText` exist.** They were refused as layout-dependent,
+  but the rendered text is defined over computed values the cascade already
+  resolves, so they now read Chrome's answer: hidden text skipped, block
+  boundaries and `<br>` as line breaks (two around a `<p>`), tabs between table
+  cells, white space collapsed per `white-space`, `text-transform` applied, and
+  `textContent` for an element that is not rendered. Writing either turns line
+  breaks into `<br>`. Recorded as D98.
+- **`CharacterData` can be edited in place.** `appendData`, `insertData`,
+  `deleteData`, `replaceData`, `substringData` and `length` were missing, as were
+  `Text.splitText` and `wholeText`. Each edit queues one mutation record and
+  moves live ranges as the specification says; setting `data` is now a
+  replace-all, which collapses a range inside the node to its start instead of
+  clamping it. `Range.insertNode` into text now splits it as the specification
+  and Chrome do — even at its end, leaving an empty Text node — and a collapsed
+  range grows over what it inserted; `deleteContents` edits text with
+  `deleteData`, so it queues one record per edit.
+- **Computed `display` is blockified.** A float, an absolutely positioned box, a
+  flex or grid item and the root element read their block-level display
+  (`block`, `flex`, `table`, …) as they do in Chrome, rather than `inline`.
+- **`<pre>` reads `white-space: pre`**, with `listing`, `xmp` and `plaintext`;
+  `textarea` reads `pre-wrap` and `nobr` `nowrap`. `noscript` is `display: none`,
+  since scripts run here.
 - **A tie between two sheets is decided by sheet order.** The order counter that
   breaks a tie between two declarations of equal specificity restarted at zero
   for every sheet, so the first sheet's rule and the second's carried the same

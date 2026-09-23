@@ -27,7 +27,6 @@ const ALIAS = "Refused by name: the modern interface name is accepted, and the H
 const ARTIFACT = "Harness artifact: Chrome ran the probe on about:blank, which is an opaque, insecure origin.";
 
 const REASONS = new Map(Object.entries({
-  "innerText": LAYOUT,
   "getBoundingClientRect measures": LAYOUT,
   "offsetWidth measures": LAYOUT,
   "Element.animate (WAAPI)": RENDERING,

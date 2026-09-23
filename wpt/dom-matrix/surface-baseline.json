@@ -2,7 +2,7 @@
   "summary": {
     "features": 228,
     "agreesWithChrome": {
-      "esdev": 208,
+      "esdev": 209,
       "jsdom": 178,
       "happy-dom": 179
     },
@@ -12,7 +12,7 @@
     {
       "group": "tree",
       "features": 55,
-      "esdev": 54,
+      "esdev": 55,
       "jsdom": 49,
       "happy-dom": 44
     },
@@ -402,7 +402,7 @@
       "group": "tree",
       "name": "innerText",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
       "jsdom": false,
       "happy-dom": true,
       "drift": false

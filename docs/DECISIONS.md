@@ -695,6 +695,16 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D98 — The test DOM answers `innerText` from the cascade · *Accepted (2026-09-23)* · *reverses the non-goal stated in `docs/ESDEV-DOM.md`*
+
+**Context:** `innerText` was left unimplemented as "layout-dependent by definition", on the argument that answering `textContent` for it would pass locally and fail in a browser. Lit reported it missing. Probing Chrome showed the premise was wrong: the HTML specification's rendered-text collection is defined over computed values — whether an element is rendered, whether it is block-level, a table cell or row, its `white-space`, `text-transform` and `visibility` — and every one of those is something the cascade here already resolves. The one input that genuinely needs a box, a soft wrap, contributes nothing to `innerText` in a browser either.
+
+**Decision (maintainer approved):** implement `innerText` and `outerText`, reading and writing, from computed style, on `HTMLElement` as Chrome places them. Two computed-style gaps this surfaced were fixed as parity bugs in their own right rather than special-cased in `innerText`: blockification (a float, an absolutely positioned box, a flex or grid item and the root all compute to their block-level `display`), and the user-agent `white-space` of `pre`, `listing`, `xmp`, `plaintext`, `textarea` and `nobr`. Where Chrome departs from the specification it is followed, and each such place is a matrix case: a shadow host reads its light children, not its shadow tree; a `<select>`'s options ignore the page's `text-transform`; form controls, media and embedded content contribute no text. Rejected: returning `textContent` (the reason the non-goal existed), and implementing only the unambiguous subset (a partly-right value is harder to reason about than a complete one, and the subset turned out to be nearly all of it).
+
+**Consequences:** a test reading `innerText` gets Chrome's answer for everything the behaviour matrix covers (fifty shapes, one case). Reading it walks the subtree's computed values once, memoised for the length of the read. **Not solved here:** `::first-line`/`::first-letter` transforms and text inside SVG are not modelled. Documented per D27 (`docs/ESDEV-DOM.md`, `crates/dev-cli/CHANGELOG.md`, generated parity pages).
+
+---
+
 ### D97 — The test runner crosses one task boundary per case, and the driver stops paying for it · *Proposed (2026-09-23)*
 
 **Context:** a suite that leaves `resolve().then(assert)` un-awaited — the shape browser-era tests are written in — ran its assertion against a fixture the runner had already torn down, because `afterEach` came one microtask after the case body returned. Vitest lets the whole microtask queue drain first. Crossing a task boundary is the only way to know the queue is empty, and a task boundary cost 1.3ms: the event-loop driver parked on a zero-length sleep for a timer that was already due, and tokio's timer wheel charges a full tick for that.
