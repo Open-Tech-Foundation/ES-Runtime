@@ -25,7 +25,7 @@ The target is spec fidelity without layout. Algorithms that do not need a box mo
 **Out of scope, deliberately**
 
 - Layout. `getBoundingClientRect()`, `offsetWidth`, `scrollTop` return zeros rather than throwing, so feature-probing code runs instead of exploding.
-- Used values. The cascade is implemented (see [Styles](#styles)) and `getComputedStyle` answers with *specified* values: a percentage stays a percentage, `auto` stays `auto`, `2em` stays `2em`. Resolving those needs layout.
+- Used values. The cascade is implemented (see [Styles](#styles)) and `getComputedStyle` resolves everything that needs no box: `2em` is pixels, `red` is `rgb(255, 0, 0)`, a shorthand is serialized from its longhands. What stays as written is what a box would decide — a percentage of the containing block, `ex`, `ch`, the viewport units, `line-height: normal`.
 - Navigation: no real `location` changes, no history side effects, no `document.write`.
 - `XMLHttpRequest`. `fetch` is the runtime's own.
 - Shadow DOM has tree and event-boundary support (`attachShadow`, open/closed
@@ -203,16 +203,59 @@ Invalid selectors throw `SyntaxError` with the offending position. Tests that as
 
 ## Styles
 
-Inline styles, stylesheets and the cascade — but specified values only, because
-resolving a used value needs layout.
+Inline styles, stylesheets and the cascade. Computed values are resolved as far
+as they can be without layout — which turns out to be most of the way.
 
-`element.style` is a real `CSSStyleDeclaration`: `setProperty`, `removeProperty`, `getPropertyValue`, `getPropertyPriority`, indexed access, `length`, `cssText` both ways, and camelCase property accessors. It stays in sync with the `style` attribute in both directions — writing the attribute reparses the declaration, writing a property reserializes the attribute.
+`element.style` is a real `CSSStyleDeclaration`: `setProperty`, `removeProperty`,
+`getPropertyValue`, `getPropertyPriority`, indexed access, `length`, `cssText`
+both ways, and camelCase accessors. It stays in sync with the `style` attribute
+in both directions — writing the attribute reparses the declaration, writing a
+property reserializes the attribute.
 
-Property values are stored as written and lightly normalized, not computed. `style.width = '10px'` reads back `10px`; `style.color = 'red'` reads back `red`, not `rgb(255, 0, 0)`. Browsers do normalize colors, so this is a known divergence, and the alternative is a colour parser plus a per-property value grammar for the sake of assertions that tests should not be making.
+**A declaration block holds longhands.** `style.border = "1px solid red"` stores
+seventeen of them, `style.length` is 17, and `cssText` is serialized back out of
+them as `border: 1px solid red;`. Override one and the serialization drops to the
+sub-shorthands, exactly as a browser's does:
 
-Shorthands expand: setting `margin` sets the four longhands and setting a longhand updates the shorthand's serialization. This is the one place where per-property knowledge is unavoidable, and it is table-driven for the common shorthands — `margin`, `padding`, `border`, `background`, `font`, `flex`, `grid-template`, `inset`, `gap`, `overflow`.
+```js
+el.style.border = "1px solid red";
+el.style.cssText; // "border: 1px solid red;"
+el.style.borderTopWidth = "9px";
+el.style.cssText; // "border-width: 9px 1px 1px; border-style: solid; border-color: red; border-image: initial;"
+```
 
-Custom properties (`--x`) pass through untouched, since their value grammar is deliberately open.
+Each family serializes in its own order, taken from Chrome family by family:
+`border` prints width, style, colour while `outline` prints colour, style, width;
+`animation` prints all eight parts with the name last while `transition` omits a
+part at its default. Normal declarations print before important ones.
+
+**Values are canonical, per property.** Which kinds of value a property takes —
+and whether negatives are allowed — is a table generated out of Chrome
+(`tsr gen:css-table`, checked for drift by `tsr test:dom-matrix`), because every
+hand-written version of that knowledge was wrong about something. So
+`margin: -5px` is kept and `width: -5px` is refused, `transition-duration: 0` is
+dropped while `box-shadow: 0 0 2px red` is kept (a bare zero is a length, not a
+time), `style.width = 0` reads back `0px`, and `aspect-ratio: 0` reads `0 / 1`.
+
+**Colours** follow Chrome on both sides of the line. A name survives the
+declaration and resolves when computed — `style.color = "RED"` reads `red`, and
+`getComputedStyle(el).color` reads `rgb(255, 0, 0)`. A hex or legacy function is
+canonical in the declaration already (`#fff` and `hsl(0, 100%, 50%)` both read
+`rgb(…)`), `transparent` computes to `rgba(0, 0, 0, 0)`, `currentcolor` to the
+element's own computed colour, and a modern colour keeps the space it was written
+in, because converting `oklch()` would be a wrong answer rather than a better
+one. The 148 colour names come from `@opentf/std`, bundled into the binary by
+`tsr build` in `crates/dev-cli/js`; the CSS rules are hand-written beside them.
+
+**Lengths are pixels.** The root font size is 16px, an absolute unit is a fixed
+multiple of a pixel, `em` is a multiple of the element's own font size and `rem`
+of the root's, and the keyword sizes are Chrome's own numbers — so
+`getComputedStyle(h1).fontSize` is `32px` and `line-height: 1.5` at a 12px font
+is `18px`. Every length-valued property is resolved, and a border whose style is
+`none` has a width of `0px`.
+
+Custom properties (`--x`) pass through untouched, since their value grammar is
+deliberately open, and `var()` is substituted when a value is computed.
 
 ### The cascade
 
@@ -222,16 +265,18 @@ works on a document and on a shadow root. Stylesheets are parsed by the build
 pipeline's own CSS parser (`crates/dev-cli/src/css`), so a stylesheet means the
 same thing to `esdev build` and to `esdev test --dom`.
 
-`getComputedStyle(el)` resolves a **specified** value, in the order the cascade
-specifies:
+`getComputedStyle(el)` resolves in the order the cascade specifies:
 
 | Step | What it does |
 | --- | --- |
 | Origin and importance | normal user-agent, normal author, the `style` attribute, important author, an important `style` attribute, important user-agent |
 | Specificity | `[ids, classes, types]`, with `:is()`/`:not()`/`:has()` taking their most specific argument and `:where()` taking none |
 | Order | the later declaration in the sheet wins a tie |
-| Inheritance | the inherited properties, and any explicit `inherit`, come from the parent; a custom property always does |
-| Initial values | the keyword initial values — `display: inline`, `font-weight: 400`, `visibility: visible`, `color: rgb(0, 0, 0)` — for anything still unset |
+| Shorthands | expanded to longhands before any of this, so a longhand written after a shorthand wins; a shorthand asked of the result is serialized back out of the parts |
+| Inheritance | the inherited properties, and any explicit `inherit`, come from the **flat tree**: a shadow root's child inherits from the host, and a slotted element through its slot |
+| `var()` | substituted here, with a missing or cyclic name falling back after the comma and an unresolvable one leaving the property unset |
+| Lengths and colours | resolved as above |
+| Initial values | the keyword initial values for anything still unset |
 
 A declaration list is the surface of the known properties, as in a browser: an
 unknown name reads `undefined` and `"nonsense" in style` is false, while a known
@@ -249,14 +294,23 @@ that appear in `cssRules`, where a browser would show the nested structure.
 
 A user-agent stylesheet supplies what a layout-free DOM can honestly report —
 which elements are blocks, list items, table parts or hidden, and the handful of
-text defaults — and nothing about how anything looks.
+text defaults, including the `em`-written heading sizes — and nothing about how
+anything looks.
 
 ### What the cascade does not do
 
-- **No used values.** A length is what was written. `getComputedStyle(h1).fontSize`
-  is `2em` here and `32px` in a browser, because resolving it needs a font and a
-  parent box. Assertions on resolved lengths, colours a browser normalises, or
-  anything geometric belong in the GUI driver harness.
+- **No used values, and no resolved value that needs a box.** A percentage of the
+  containing block stays a percentage (`text-indent: 50%`), and so do `ex`, `ch`,
+  the viewport and container units, and `line-height: normal`. Each needs a box,
+  a font or a window this DOM is not measuring. Anything geometric belongs in the
+  GUI driver harness.
+- **`color-mix()` resolves only in sRGB.** A mix in another space is left as
+  written: matching Chrome's `oklab(0.539974 …)` means reproducing its conversion
+  to the sixth decimal, and a number that is nearly right is worse than a value
+  that says it was not resolved. `lab(50% …)` also keeps its percentage where
+  Chrome rewrites it.
+- **A computed style enumerates only what it has** — what was declared, inherited
+  or given an initial value. A browser enumerates all 450-odd properties.
 - **An element outside the tree has no computed style at all**, as in a browser.
 - **A pseudo-element has none either**: `getComputedStyle(el, '::before')` is
   empty, and a rule whose selector names a pseudo-element is not applied to the
@@ -270,7 +324,6 @@ text defaults — and nothing about how anything looks.
   being guessed at.
 - **`@layer` does not order anything** and `@container` has no container: their
   blocks contribute as if the condition held.
-
 ## Window surface
 
 `window` is the global object of the test realm, with `window === globalThis` and `window.window === window`, because libraries check both.
@@ -358,13 +411,42 @@ The acceptance gate for this phase is otfw's existing component test suite passi
 | Module unit tests | `tsr test:dom-unit` | the tree, events, parsing, ranges, sheets and selectors, on esdev's own binary |
 | WPT slice | `tsr test:dom-wpt` | `dom`, `custom-elements`, `shadow-dom` against `wpt/dom-expectations.json` |
 | Behaviour matrix | `tsr test:dom-matrix` | every case matching headless Chrome, and no drift |
-| Surface probe | `tsr test:dom-surface` | no drift in what 192 features answer, in all four runtimes |
+| Surface probe | `tsr test:dom-surface` | no drift in what 228 features answer, in all four runtimes |
+| CSS value table | `tsr gen:css-table` (checked by the matrix) | no drift between the committed table and what Chrome accepts |
 
 The matrix and the probe run the same code under Chrome, esdev, jsdom and
 happy-dom. Chrome is the oracle; the emulators are context, never a verdict. A
 difference from Chrome is either fixed or written down with its reason — the
 parity document fails to generate if one has no reason, which is what keeps the
 boundary from quietly moving.
+
+**A failing WPT subtest is not by itself a defect.** Some of the upstream suite
+tests behaviour no browser has shipped, so the first step in triaging one is to
+ask Chrome the same question:
+
+```sh
+tsr test:dom-wpt-chrome -- dom/events/relatedTarget.window.js
+```
+
+A subtest Chrome fails too is upstream running ahead of the browsers, and is
+recorded in `wpt/dom-expectations.json` rather than fixed. One Chrome passes and
+this DOM does not is a gap. `relatedTarget.window.js` is the worked example:
+Chrome passes 3 of its 6 subtests, so only one of this DOM's failures there was
+ever work.
+
+**When the DOM story is closed.** The subsystem is done when these four hold,
+and a finding after that is an ordinary bug rather than a phase of work:
+
+1. Every difference from Chrome has a recorded reason — enforced, since
+   `tsr docs:parity` refuses to generate without one.
+2. The matrix and the surface probe show zero drift — enforced by their tasks.
+3. The WPT slice has no failure outside the recorded non-goals: scoped
+   registries, script execution, `document.write`, a second realm, and the three
+   `relatedTarget` subtests that need `XMLHttpRequest`.
+4. The framework suites pass at their recorded counts — Lit 111, preact compat
+   32 files, preact core 105 with the iframe non-goal — which is the check the
+   matrix cannot make, because only a real framework exercises the DOM the way a
+   component does.
 
 The WPT slice is the external half of the same question.
 
@@ -381,6 +463,11 @@ WPT files are run through a small harness that provides `testharness.js` against
 Pass rates are recorded per directory and tracked over time, so a refactor that regresses selector matching shows up as a number rather than as a mystery in someone's test suite. Publishing those numbers is a stronger claim than jsdom makes cleanly.
 
 The bar for merging a feature: its WPT directory pass rate does not go down, and the otfw suite still passes.
+
+At the time of writing the slice runs 35 of its 72 files — the other 37 are
+skipped with a reason each — and passes 111 subtests. Of the 80 failures, 72 are
+scoped registries (a proposal-stage non-goal) and the remaining 8 are the ones
+listed under criterion 3 above.
 
 ## Build order
 

@@ -13,6 +13,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **An expired timer no longer costs a millisecond.** The event-loop driver
+  parked on a zero-length sleep when the next timer was already due, and tokio's
+  timer wheel charges a full tick for that — so `await new Promise(r =>
+  setTimeout(r, 0))` cost about 1.18ms, and a thousand of them 1.2 seconds. The
+  driver now yields and re-ticks when the deadline has already passed: the same
+  thousand take 34ms. Nothing about the semantics changes — a zero timer is still
+  a task, still after every microtask — and every program on this runtime that
+  awaits an expired timer stops paying for a wheel tick it was not using.
+  Verified by the provider, runtime and CLI suites; recorded as
+  [D97](docs/DECISIONS.md).
+
 - **The installer one-liners come from the site, not GitHub.** `install.sh` and
   `install.ps1` are served from `https://esrun.opentechf.org` — the site build
   copies the repo-root scripts into its output, so the canonical copies stay in

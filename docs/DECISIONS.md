@@ -661,6 +661,52 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D94 — The test DOM resolves what needs no box, and says what it leaves · *Proposed (2026-09-23)* · *extends D93*
+
+**Context:** `getComputedStyle` answered specified values: `font-size: 2em` read `2em`, `line-height: 1.5` read `1.5`, `color: red` read `red`, and a shorthand read the text that was written. The stated reason was "resolving a used value needs layout", which is true of a percentage of the containing block and false of almost everything else — a framework port made that visible, because a component test asserting on a theme colour reads `rgb(255, 0, 0)` or it reads nothing useful.
+
+**Decision (maintainer sign-off pending):** resolve everything that needs no box, and name what is left.
+- **Lengths become pixels.** Root 16px, absolute units by their fixed ratios, `em` against the element's own font size, `rem` against the root's, the keyword sizes from Chrome's table, `line-height` from a number or a percentage of the font size. Every length-valued property, not only the font ones. A border whose style is `none` has width `0px` — the one used-value rule that needs nothing measured.
+- **Colours become `rgb()`/`rgba()` when computed, and canonical in the declaration.** A name survives the declaration and resolves when computed; hex and the legacy functions are canonical in both; `transparent` and `currentcolor` resolve only when computed; a modern colour keeps its space, because converting `oklch()` is a wrong answer rather than a better one. Rejected: converting modern colours to sRGB for uniformity, which would make this DOM disagree with Chrome in order to look consistent.
+- **Shorthands become longhands, in the declaration and in the cascade**, with the shorthand serialized back out of the parts on read. Rejected: keeping the declared shorthand text alongside the longhands, which is what the first version did — it answered `border` with the text that was written and so disagreed with Chrome about the colour it had just computed.
+- **Left as written, and recorded:** a percentage of the containing block, `ex`, `ch`, the viewport and container units, `line-height: normal`, `color-mix()` outside sRGB, and the `lab()` percentage form. Each is a value a box, a font, a window or Chrome's own sixth-decimal conversion decides.
+
+**Consequences:** the computed-style surface is now Chrome's for the cases tests read, verified by six behaviour-matrix cases; the surface probe's *resolved font size* moved from a recorded difference to an agreement. The cost is a per-property value table (D95) and roughly 700 lines of CSS knowledge that has to be maintained against a moving specification — accepted because the alternative was a DOM whose computed styles could not be asserted on. **Not solved here:** the enumeration of a computed style, which lists what it has rather than all 450-odd properties. Documented per D27 (`docs/ESDEV-DOM.md`, site `esdev/test/dom`, `CHANGELOG`).
+
+---
+
+### D95 — What a CSS property accepts is generated from Chrome, not written by hand · *Proposed (2026-09-23)*
+
+**Context:** deciding whether to keep a declaration needs to know what each property accepts. That knowledge was hand-written twice and wrong twice: a "properties that take a bare number" set said `cx` did not (it does), and the correction shipped a regression where `transition-duration: 0` serialized as `0px` — a duration in pixels. Each fix was another intuition about 436 properties.
+
+**Decision (maintainer sign-off pending):** generate it. `tsr gen:css-table` asks headless Chrome, for every property this DOM knows, which value kinds it accepts (number, length, percentage, time, angle, resolution, frequency, flex), whether each may be negative, and what a bare `0` serializes as; the answer is committed as `crates/dev-cli/src/dom/css-table.js` and `tsr test:dom-matrix` re-asks Chrome and fails on drift. Five probe shapes per kind, because a property may not accept a value in the first position it is offered — `box-shadow` needs two lengths before it accepts any, `counter-reset` wants a name first, `border-image` takes a length only after a slash. A shorthand is validated through its longhands, since no probe of the shorthand alone can see which kind belongs in which position.
+
+**Consequences:** the validator is Chrome's answer by construction rather than by inspection, and a new Chrome release that changes a grammar shows up as a drift failure rather than as a mystery. It costs a Chrome run in the matrix job, which already had one. Rejected: shipping the table as JSON data read at runtime (it is code, and the module system already carries code); and deriving it from a specification database, which would be a second source of truth to keep current. **Not solved here:** per-property *grammar* — how many components a property takes and in what order — which remains beyond the checker. Documented per D27 (`docs/ESDEV-DOM.md`, `CHANGELOG`).
+
+---
+
+### D96 — Markup becomes code in one place, and it is not the tree · *Proposed (2026-09-23)*
+
+**Context:** `el.setAttribute("onclick", "this.spy(1)")` did nothing: only the IDL half of event handlers existed. The attribute's value is a function *body* by specification, compiled with the element and the document in scope, so implementing it means compiling a string from markup with `new Function`.
+
+**Decision (maintainer sign-off pending):** implement it, in `window.js` rather than in the tree. The objection considered — that a DOM for tests should not turn markup into code — does not survive contact with the realm: `eval` and `new Function` are already available to any test file, so refusing the attribute buys no safety and leaves a hole that a suite writing handlers as markup falls into. Putting it in the window module rather than in `tree.js` keeps the one place where this happens visible; text that will not compile is reported and leaves the handler `null`, as in a browser. Rejected: compiling it behind a config flag, which would make a spec behaviour opt-in and leave every suite to discover the flag.
+
+**Consequences:** attribute handlers work, including in markup parsed by `innerHTML`, and the behaviour matrix records a case where this DOM is alone with Chrome — jsdom and happy-dom both fail it. **Not solved here:** nothing about the runtime's own `eval` posture changes; this uses what the realm already has. Documented per D27 (`docs/ESDEV-DOM.md`, `CHANGELOG`).
+
+---
+
+### D97 — The test runner crosses one task boundary per case, and the driver stops paying for it · *Proposed (2026-09-23)*
+
+**Context:** a suite that leaves `resolve().then(assert)` un-awaited — the shape browser-era tests are written in — ran its assertion against a fixture the runner had already torn down, because `afterEach` came one microtask after the case body returned. Vitest lets the whole microtask queue drain first. Crossing a task boundary is the only way to know the queue is empty, and a task boundary cost 1.3ms: the event-loop driver parked on a zero-length sleep for a timer that was already due, and tokio's timer wheel charges a full tick for that.
+
+**Decision (maintainer sign-off pending):** two changes, in two crates.
+- The runner awaits one task boundary between a case and its cleanup, through the `setTimeout` it captured at load — so a file that freezes the clock cannot freeze the runner.
+- The driver, finding a timer already due, yields and re-ticks instead of parking. `setTimeout(fn, 0)` goes from 1.18ms to 34µs, and every program on this runtime that awaits a zero timer stops paying for a wheel tick it was not using.
+
+**Consequences:** the un-awaited-assertion shape works, and Preact's suspense suite — which reported this as an engine scheduling difference — passes whole. The driver change is **runtime-wide**: `esrun` shares the driver, so this is a DOM-test fix reaching into the event loop, which is the part of this decision that deserved a question and did not get one. Its risk is that a due timer now spins rather than sleeps if a tick ever fails to fire one; `tick` does fire them, and 319 provider tests, 353 runtime tests and the runtime-cli suite agree. **Not solved here:** the runner still cannot attribute a rejection that surfaces after the run to the case that caused it. Documented per D27 (`crates/dev-cli/CHANGELOG.md`, root `CHANGELOG.md`).
+
+---
+
 ### D93 — The test DOM's parser stays strict, including for custom elements · *Proposed (2026-09-23)*
 
 **Context:** `esdev test --dom` parses HTML strictly: an unclosed element is a byte-offset error rather than something to repair, which is the property the whole DOM is built on (D-numbered nowhere until now, but stated in `docs/ESDEV-DOM.md` and on the site since the parser landed). Framework fixtures do not always oblige. Vue's `provide/inject` tests write `<my-provider><my-provider>` — a custom element opened twice and never closed — and a browser nests the second inside the first and auto-closes both at the end of the parse. Eight filings from one port traced back to this single mechanism, and custom-element-heavy SSR output will hit it more often than that: an unclosed hyphenated tag is a typo a browser forgives silently.

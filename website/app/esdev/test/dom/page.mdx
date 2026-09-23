@@ -99,8 +99,9 @@ their selectors and their events.
 
 `getComputedStyle()` resolves the cascade — stylesheets, `<style>` elements,
 constructable sheets, `adoptedStyleSheets`, specificity, `!important`,
-inheritance, custom properties, user-agent defaults, `@media`, `@supports` and
-CSS nesting — and answers with **specified** values.
+inheritance through the flat tree, custom properties, user-agent defaults,
+`@media`, `@supports` and CSS nesting — and resolves everything that needs no
+box.
 
 ```js
 import { test, assertEquals } from "runtime:test";
@@ -119,9 +120,17 @@ test("a variant restyles the button", () => {
 `@media` is evaluated against a declared viewport: `window.innerWidth` and
 `innerHeight` start at 1024×768 and are assignable.
 
-What it does not do: resolve a used value (`getComputedStyle(h1).fontSize` is
-`2em`, not `32px`), answer for an element outside the tree, or style a
-pseudo-element. See [DOM parity](/esdev/test/dom/parity).
+| | |
+| --- | --- |
+| Lengths | pixels: `getComputedStyle(h1).fontSize` is `32px`, `line-height: 1.5` at a 12px font is `18px`, `letter-spacing: 2em` is `20px` |
+| Colours | `rgb()`/`rgba()`: `color: red` reads `rgb(255, 0, 0)`, `transparent` reads `rgba(0, 0, 0, 0)`, `currentcolor` the element's own colour |
+| Shorthands | expanded to longhands, and serialized back from them: `computed.border` is `1px solid rgb(255, 0, 0)` |
+| A declaration | holds longhands too — `style.border = "1px solid red"` gives `style.length === 17`, and `cssText` prints the shorthand back |
+
+What it does not do: resolve anything a box decides — a percentage of the
+containing block, `ex`, `ch`, the viewport units, `line-height: normal` — answer
+for an element outside the tree, or style a pseudo-element. See
+[DOM parity](/esdev/test/dom/parity).
 
 ## Conformance checks
 
@@ -132,6 +141,10 @@ scope rules cover inputs that are inapplicable by design—for example, WPT-serv
 substitution, multiple browsing contexts, rendering, network clients, classic
 script execution, and legacy APIs. Unsupported modern DOM behavior remains a
 failure until it is implemented.
+
+A failing WPT subtest is triaged against Chrome before it becomes work: part of
+the upstream suite tests behaviour no browser has shipped, and a subtest Chrome
+fails too is recorded rather than chased.
 
 The audit is an implementation check, not a browser-compatibility claim: WPT
 HTML/layout fixtures still require a real browser. Its commands and scoped
