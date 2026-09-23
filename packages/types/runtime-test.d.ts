@@ -576,6 +576,23 @@ declare module "runtime:test" {
     typed<T>(value: T): T;
     /** Replaces a global for the file. Undone by {@link mock.restoreAll}. */
     global(name: string, value: unknown): typeof mock;
+    /**
+     * Replaces a module for everything that imports it afterwards. Called at
+     * the top of a test file, it runs before that file's own imports. The
+     * factory's object is the module's exports; `importOriginal()` loads the
+     * real module. Mocks last the rest of the file. Not in browser runs.
+     * An async factory's call returns a promise to await.
+     */
+    module(
+      specifier: string,
+      factory: (importOriginal: <M = Record<string, unknown>>() => Promise<M>) => Promise<object>,
+    ): Promise<void>;
+    module(
+      specifier: string,
+      factory: (importOriginal: <M = Record<string, unknown>>() => Promise<M>) => object,
+    ): void;
+    /** The real module, whether or not it is mocked. */
+    importActual<M = Record<string, unknown>>(specifier: string): Promise<M>;
     /** Forgets every mock's calls. */
     clearAll(): typeof mock;
     /** …and how each was told to answer. */

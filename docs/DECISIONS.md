@@ -661,6 +661,20 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D101 — `mock.module`: a module replaced where it loads, hoisted where it is imported · *Accepted (2026-09-24)*
+
+**Context:** module mocking is the largest gap between `runtime:test` and the runners suites migrate from. The runners disagree about the one hard part — ES modules link their static imports before any code runs, so a mock registered in the test body is too late for them. Vitest hoists `vi.mock` with a transform that turns the file's static imports into dynamic ones. Bun rebinds modules already imported, and still recommends `--preload` because the original's side effects have run. Node (`mock.module`, experimental) and Jest's ESM API (`jest.unstable_mockModule`) require a dynamic `import()` after the mock.
+
+**Decision:**
+- **`mock.module(specifier, factory)`, replaced at load.** The factory runs (sync or async, given `importOriginal`), and its object's keys become the module's exports. The specifier is resolved by the loader's own synchronous resolution — the same bundler-style resolution `import` uses — from the calling file, which the transform passes in. When that URL is later loaded, the source transform serves a generated module whose exports read the factory's values.
+- **Hoisted in a file that calls it at top level**, as Vitest does: the transform runs those calls first and turns the file's other static imports into dynamic `import()`s on the same lines, so line numbers do not move. Everywhere else — a helper module, a test body — a mock applies to modules loaded after it, the Node and Jest ESM way.
+- **`importOriginal` and `mock.importActual(specifier)` load the real module under a reserved query (`?esdev-actual`)** that esdev's transforming loader keeps on the module id, so the real module and its mock are two module-map entries. `esrun` has no transform and no such query.
+- Rejected: Bun's rebinding of an already-imported module — an ES module namespace cannot be re-pointed without engine support, and the original's side effects would have run anyway. Automocking and `__mocks__` directories — Bun supports neither, and a factory states what the test depends on. A module already imported before `mock.module` stays real, as in Node.
+
+**Consequences:** a Vitest suite needs `vi.mock` renamed to `mock.module`; a Jest ESM or Node suite already imports dynamically. A factory cannot use the file's other imports, which are loaded after it (Vitest's rule too). Mocks are per file, since a file is a process; under `isolation: "none"`, where the files share one runtime and its module map, a mock lasts the rest of the run. **Not solved here:** browser runs, where the bundler resolves modules at build time; `mock.module` refuses there with a message.
+
+---
+
 ### D100 — Every template is a hello world · *Accepted (2026-09-24)* · *amends D68, D72, D76*
 
 **Context:** the templates had grown into small applications. `react` was 34 files and 1,614 lines: a route table with `react-router`, an error boundary, a head/meta system, a fullstack server with a static-file server, a Content-Security-Policy with per-response nonces, a `SIGTERM` drain and an access log, each with tests and long explanatory comments. `api` carried a hand-written router and HTTP error layer. D68 and D76 kept this machinery on the argument that a project would otherwise assemble it on its first day. In practice a new project has to read and delete most of it before writing its own code, and none of it is esdev tooling.

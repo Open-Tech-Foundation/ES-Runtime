@@ -2197,6 +2197,34 @@ function spyOn(object, key, accessType) {
 /// Globals a test replaced, and what was there before.
 const stubbed = new Map();
 
+// Mocked modules' exports, by resolved URL: the generated module that stands
+// in for each one reads its exports from here (D101).
+const MODULE_MOCKS = Symbol.for("runtime:test.moduleMocks");
+const mockedModules = () => (globalThis[MODULE_MOCKS] ??= new Map());
+
+// A specifier resolved as an `import` in the calling file would resolve it.
+// `base` is that file — esdev's transform passes it, so a call cannot be made
+// on the file's behalf from somewhere else.
+function resolveModule(name, specifier, base) {
+  if (typeof ops.module_resolve_sync !== "function") {
+    throw new TypeError(`mock.${name} is not available in browser runs yet`);
+  }
+  if (typeof specifier !== "string") {
+    throw new TypeError(`mock.${name} needs a module specifier, as an import would name it`);
+  }
+  if (typeof base !== "string") {
+    throw new TypeError(
+      `mock.${name}(${JSON.stringify(specifier)}) must be called by name in the file, as \`mock.${name}(…)\`, so the specifier resolves from it`,
+    );
+  }
+  const url = ops.module_resolve_sync(specifier, base);
+  if (typeof url !== "string") throw new TypeError(`cannot resolve ${JSON.stringify(specifier)}`);
+  return url;
+}
+
+// The real module beside its mock: the loader keeps this query on the id.
+const actualModule = (url) => import(`${url}?esdev-actual`);
+
 const mock = {
   fn: mockFn,
   spyOn,
@@ -2217,6 +2245,35 @@ const mock = {
       enumerable: true,
     });
     return mock;
+  },
+
+  /// Replaces a module for everything that imports it afterwards — and, when
+  /// called at the top of a test file, for that file's own imports, which run
+  /// after it. `factory(importOriginal)` returns the module's exports.
+  module(specifier, factory, base) {
+    if (typeof factory !== "function") {
+      throw new TypeError(
+        `mock.module(${JSON.stringify(specifier)}) needs a factory returning the module's exports`,
+      );
+    }
+    const url = resolveModule("module", specifier, base);
+    const settle = (exports) => {
+      if (exports === null || typeof exports !== "object") {
+        throw new TypeError(
+          `mock.module(${JSON.stringify(specifier)}): the factory must return an object of exports`,
+        );
+      }
+      mockedModules().set(url, exports);
+      ops.test_mock_module(url, JSON.stringify(Object.keys(exports)));
+    };
+    const made = factory(() => actualModule(url));
+    if (made !== null && typeof made?.then === "function") return made.then(settle);
+    settle(made);
+  },
+
+  /// The real module, whether or not it is mocked.
+  importActual(specifier, base) {
+    return actualModule(resolveModule("importActual", specifier, base));
   },
 
   clearAll() {

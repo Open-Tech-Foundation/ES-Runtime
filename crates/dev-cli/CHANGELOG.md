@@ -37,6 +37,9 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
+- **A browser-run file that fails to load names the error in Firefox.** The
+  report showed only the stack, because Firefox's `error.stack` leaves out the
+  message; the message now comes first, as in Chrome.
 - **The `micro-ui` template's first run is green.** It shipped no
   `tsconfig.json` — so `npm run typecheck` printed the tsc help and checked
   nothing — and no test file, so `npm test` failed. It now ships both.
@@ -85,6 +88,13 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`mock.module(specifier, factory)` and `mock.importActual(specifier)`**
+  replace a module in `runtime:test`. The factory, given `importOriginal`,
+  returns the exports, sync or async. Called at the top of a test file, the
+  mock runs before that file's own imports, as `vi.mock` does; inside a test
+  it applies to modules loaded afterwards. The specifier resolves as an
+  `import` in the calling file would. Browser runs refuse it with a message
+  (DECISIONS D101).
 - **`esdev test --list`** names the tests each file registers, by full name,
   without running any test or hook. It combines with path filters and `-t`, and
   with `--reporter=json`, one `listed` case per line.

@@ -466,7 +466,11 @@ impl Job {
              for (const src of [{scripts}]) await import(src);\n\
              }})().then(\n  \
              () => globalThis.__esdev_loaded(null),\n  \
-             (error) => globalThis.__esdev_loaded(String((error && error.stack) || error)),\n);\n\
+             (error) => {{\n    \
+             const head = String(error), stack = error && error.stack;\n    \
+             // Firefox's stack leaves out the message; V8's starts with it.\n    \
+             globalThis.__esdev_loaded(!stack ? head : stack.startsWith(head) ? stack : `${{head}}\\n${{stack}}`);\n  \
+             }},\n);\n\
              </script></body></html>\n",
             title = escape_html(&self.name),
         );

@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **`mock.module` and `mock.importActual`** in `runtime:test`. A `mock.module`
+  call with an async factory is typed to return `Promise<void>`.
 - **`runtime:test`'s new utilities** — test options (`timeout`, `retry`) and
   `test.fails`; `expect.extend` with the `MatcherResult`, `MatcherContext`
   and `CustomMatcher` types, and an `AsymmetricMatchers` interface to augment;

@@ -62,6 +62,7 @@ mod inline_snapshot;
 mod inspect;
 mod install;
 mod jsx;
+mod module_mocks;
 mod plugins;
 mod preview;
 mod prompt;
@@ -259,7 +260,7 @@ from runtime:test:
     });
 
 Also exported: describe (and it/suite), the before*/after* hooks,
-assert/assertEquals/assertThrows/assertRejects, mock (mock.fn, mock.spyOn) and
+assert/assertEquals/assertThrows/assertRejects, mock (mock.fn, mock.spyOn, mock.module) and
 clock (clock.freeze, clock.advance). test and describe carry .skip, .only,
 .todo, .each(table), .skipIf(cond) and .runIf(cond).
 

@@ -390,7 +390,14 @@ test("posts once per item", async () => {
 | `mock.spyOn(object, key)` | …installed over a method; `mockRestore()` puts it back |
 | `mock.is(value)` | Whether it is one |
 | `mock.global(name, value)` | Replaces a global for the file |
+| `mock.module(specifier, factory)` | Replaces a module for imports that load afterwards; a promise when `factory` is async |
+| `mock.importActual(specifier)` | The real module, as a promise |
 | `mock.clearAll()` / `resetAll()` / `restoreAll()` | Forget the calls / the answers / everything |
+
+`factory(importOriginal)` returns the module's exports. Called at the top of a
+test file, `mock.module` runs before that file's imports. It must be called by
+name, lasts the rest of the file, and is refused in browser runs. See
+[Mocking a module](/esdev/test/mocks#mocking-a-module).
 
 On the mock itself: `mock.calls`, `mock.results`, `mock.instances`,
 `mock.lastCall`; `mockImplementation`, `mockReturnValue`, `mockReturnThis`,

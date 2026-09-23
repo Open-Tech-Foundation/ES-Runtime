@@ -155,6 +155,23 @@ test("spyOn needs an object and a key of it", () => {
   mock.spyOn(client, "put");
 });
 
+test("mock.module takes exports, now or later", async () => {
+  const sync: void = mock.module("./mail.ts", () => ({ send: mock.fn() }));
+  const later: Promise<void> = mock.module("./mail.ts", async (importOriginal) => ({
+    ...(await importOriginal()),
+    send: mock.fn(),
+  }));
+  await later;
+  const real = await mock.importActual<{ send(to: string): string }>("./mail.ts");
+  real.send("ada");
+
+  // @ts-expect-error — a module's exports are an object.
+  mock.module("./mail.ts", () => 42);
+  // @ts-expect-error — and there is a factory to give them.
+  mock.module("./mail.ts");
+  return sync;
+});
+
 // --- clock ------------------------------------------------------------------
 
 test("the clock takes milliseconds and moments", async () => {

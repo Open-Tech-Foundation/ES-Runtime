@@ -590,7 +590,16 @@ fn first_error(diagnostics: &[oxc::diagnostics::OxcDiagnostic]) -> Option<String
 }
 
 impl SourceTransform for TypeStripper {
+    fn reserved_query(&self) -> Option<&'static str> {
+        Some(crate::module_mocks::ACTUAL)
+    }
+
     fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
+        // A mocked module is replaced whole (D101); its real source is loaded
+        // under the reserved query, which is a different id.
+        if let Some(mocked) = crate::module_mocks::synthetic(specifier) {
+            return Ok(mocked);
+        }
         // The specifier is a file: URL; oxc wants a path, and only to read the
         // extension off it. A URL that will not convert (there should be none —
         // the loader produces file: URLs) is left alone rather than guessed at.
@@ -604,6 +613,9 @@ impl SourceTransform for TypeStripper {
         // written, which is the property D71 is built on. A plain `.js` is not
         // reprinted at all, so it takes the prelude directly.
         let prelude = self.prelude_for(specifier, path);
+        // `mock.module` calls resolved from this file, and hoisted above its
+        // imports when they are at its top level (D101).
+        let source = crate::module_mocks::rewrite(&source, Path::new(path)).unwrap_or(source);
         // A plain `.js` is left alone unless it might hold an auto-accessor,
         // which the engine cannot parse. The word is the trigger, not the
         // answer: the parse below decides, and a file that turns out to have

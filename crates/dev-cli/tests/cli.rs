@@ -12610,6 +12610,191 @@ await server.stop();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `mock.module` over a small project: a module the file under test imports,
+/// a package, and the real module beside its mock.
+fn module_mock_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("node_modules/greeting")).unwrap();
+    write_in(
+        &dir,
+        "src/mail.ts",
+        "console.log(\"real mail evaluated\");\n\
+         export const provider = \"smtp\";\n\
+         export function send(to: string): string { return `sent to ${to}`; }\n",
+    );
+    write_in(
+        &dir,
+        "src/signup.ts",
+        "import { send } from \"./mail\";\n\
+         export const signup = (to: string) => send(to);\n",
+    );
+    write_in(
+        &dir,
+        "node_modules/greeting/package.json",
+        "{\"name\":\"greeting\",\"type\":\"module\",\"exports\":\"./index.js\"}\n",
+    );
+    write_in(
+        &dir,
+        "node_modules/greeting/index.js",
+        "export default function greet() { return \"real greeting\"; }\n",
+    );
+    dir
+}
+
+#[test]
+fn test_mock_module_at_the_top_replaces_the_files_own_imports() {
+    let dir = module_mock_project("t_mock_module_hoisted");
+    write_in(
+        &dir,
+        "src/signup.test.ts",
+        "import { expect, mock, test } from \"runtime:test\";\n\
+         import { signup } from \"./signup.ts\";\n\
+         import greet from \"greeting\";\n\
+         import * as mail from \"./mail.ts\";\n\
+         \n\
+         mock.module(\"./mail.ts\", async (importOriginal) => ({\n\
+           ...(await importOriginal()),\n\
+           send: mock.fn(() => \"mocked\"),\n\
+         }));\n\
+         mock.module(\"greeting\", () => ({ default: () => \"mocked greeting\" }));\n\
+         \n\
+         test(\"an import written above the mock is the mock\", () => {\n\
+           expect(signup(\"ada\")).toBe(\"mocked\");\n\
+           expect(mail.send).toHaveBeenCalledWith(\"ada\");\n\
+         });\n\
+         test(\"importOriginal keeps what the factory spreads\", () => {\n\
+           expect(mail.provider).toBe(\"smtp\");\n\
+         });\n\
+         test(\"a package is mocked by its name\", () => {\n\
+           expect(greet()).toBe(\"mocked greeting\");\n\
+         });\n\
+         test(\"importActual is the real module\", async () => {\n\
+           const real = await mock.importActual<typeof import(\"./mail.ts\")>(\"./mail.ts\");\n\
+           expect(real.send(\"ada\")).toBe(\"sent to ada\");\n\
+         });\n\
+         test(\"the line numbers are the file's\", () => {\n\
+           expect(1).toBe(2);\n\
+         });\n",
+    );
+    // A file that mocks nothing gets the real module: mocks are per file.
+    write_in(
+        &dir,
+        "src/real.test.ts",
+        "import { expect, test } from \"runtime:test\";\n\
+         import { signup } from \"./signup.ts\";\n\
+         test(\"unmocked\", () => { expect(signup(\"bo\")).toBe(\"sent to bo\"); });\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--jobs=1"])
+        .output()
+        .expect("spawn esdev test");
+    let text = slash_paths(&stdout(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("4 passed, 1 failed"), "{text}");
+    assert!(
+        text.contains("FAIL the line numbers are the file's\n    Error: expected 1 to be 2"),
+        "{text}"
+    );
+    assert!(text.contains("src/signup.test.ts:27:11"), "{text}");
+    assert!(text.contains("src/real.test.ts\n"), "{text}");
+    assert!(text.contains("1 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_mock_module_in_a_test_applies_to_what_is_imported_after_it() {
+    let dir = module_mock_project("t_mock_module_later");
+    write_in(
+        &dir,
+        "src/later.test.js",
+        "import { expect, mock, test } from \"runtime:test\";\n\
+         \n\
+         test(\"a dynamic import after the mock gets it\", async () => {\n\
+           await mock.module(\"./signup.ts\", () => ({ signup: () => \"stubbed\" }));\n\
+           const { signup } = await import(\"./signup.ts\");\n\
+           expect(signup(\"ada\")).toBe(\"stubbed\");\n\
+         });\n\
+         test(\"an async factory is waited for\", async () => {\n\
+           await mock.module(\"./mail.ts\", async () => ({ send: () => \"later\" }));\n\
+           const { send } = await import(\"./mail.ts\");\n\
+           expect(send(\"ada\")).toBe(\"later\");\n\
+         });\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("2 passed, 0 failed"), "{text}");
+    // Nothing loaded the real module.
+    assert!(!text.contains("real mail evaluated"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_mock_module_says_what_is_wrong_with_a_call() {
+    let dir = module_mock_project("t_mock_module_errors");
+    write_in(
+        &dir,
+        "src/errors.test.js",
+        "import { expect, mock, test } from \"runtime:test\";\n\
+         \n\
+         test(\"a factory is required\", () => {\n\
+           expect(() => mock.module(\"./mail.ts\")).toThrow(\"needs a factory\");\n\
+         });\n\
+         test(\"the factory returns exports\", () => {\n\
+           expect(() => mock.module(\"./mail.ts\", () => 42)).toThrow(\"must return an object of exports\");\n\
+         });\n\
+         test(\"a call not made by name has no file to resolve from\", () => {\n\
+           const call = mock.module;\n\
+           expect(() => call(\"./mail.ts\", () => ({}))).toThrow(\"must be called by name in the file\");\n\
+         });\n\
+         test(\"an unknown module is named\", () => {\n\
+           expect(() => mock.module(\"./missing.ts\", () => ({}))).toThrow(\"missing.ts\");\n\
+         });\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("4 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A page's modules are bundled before it loads, so there is no load to
+/// replace a module at: the file fails with the reason, not a silent real module.
+#[test]
+fn test_mock_module_in_a_browser_run_is_refused_by_name() {
+    let dir = module_mock_project("t_mock_module_browser");
+    write_in(
+        &dir,
+        "src/mocked.test.ts",
+        "import { expect, mock, test } from \"runtime:test\";\n\
+         import { send } from \"./mail.ts\";\n\
+         mock.module(\"./mail.ts\", () => ({ send: () => \"mocked\" }));\n\
+         test(\"x\", () => expect(send(\"a\")).toBe(\"mocked\"));\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--browser", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser");
+    let (text, err) = (stdout(&out), stderr(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+    if err.contains("no browser that can run the tests") {
+        eprintln!("no browser can be driven here; the real-browser run did not happen");
+        return;
+    }
+    assert!(!out.status.success(), "{text}{err}");
+    assert!(
+        text.contains("FAIL the file failed to load\n    TypeError: mock.module is not available in browser runs yet"),
+        "{text}{err}"
+    );
+}
+
 /// `esdev test --browser` against a machine made of stubs: a `PATH` holding
 /// only the executables written here, each printing the version it is given,
 /// so the choice does not depend on which browsers the machine running the

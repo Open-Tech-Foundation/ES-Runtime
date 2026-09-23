@@ -142,6 +142,26 @@ pub trait SourceTransform: Send + Sync {
     /// reports why it could not. Returning `source` unchanged is the correct
     /// answer for a file this transform has nothing to do with.
     fn transform(&self, specifier: &str, source: String) -> Result<String, String>;
+
+    /// A query this transform reserves on module ids: an import of
+    /// `file:///a.ts?<query>` loads the same file as a **separate module**,
+    /// and the transform sees the query in the specifier it is handed.
+    ///
+    /// For loading a module twice on purpose — esdev's module mocks load the
+    /// real module beside its mock. `None`, the default, keeps no query: the
+    /// loader's own resolution decides what a query means, as without a
+    /// transform.
+    fn reserved_query(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// `specifier` without the reserved `?query`, and whether it had it.
+fn without_query<'a>(specifier: &'a str, query: Option<&str>) -> (&'a str, bool) {
+    match query.and_then(|query| specifier.strip_suffix(&format!("?{query}"))) {
+        Some(bare) => (bare, true),
+        None => (specifier, false),
+    }
 }
 
 /// Wraps a [`ModuleLoader`] so a specifier that names no file is retried the
@@ -314,7 +334,19 @@ impl ModuleLoader for TransformingLoader {
         specifier: &str,
         referrer: &str,
     ) -> es_runtime_providers::BoxFuture<Result<String, ProviderError>> {
-        self.inner.resolve(specifier, referrer)
+        let query = self.transform.reserved_query();
+        let (bare, reserved) = without_query(specifier, query);
+        // A module loaded under the reserved query imports its own
+        // dependencies as any module would: its id's query is not theirs.
+        let (referrer, _) = without_query(referrer, query);
+        let resolving = self.inner.resolve(bare, referrer);
+        Box::pin(async move {
+            let id = resolving.await?;
+            Ok(match (reserved, query) {
+                (true, Some(query)) => format!("{id}?{query}"),
+                _ => id,
+            })
+        })
     }
 
     fn resolve_sync(
@@ -322,7 +354,14 @@ impl ModuleLoader for TransformingLoader {
         specifier: &str,
         referrer: &str,
     ) -> Option<Result<String, ProviderError>> {
-        self.inner.resolve_sync(specifier, referrer)
+        let query = self.transform.reserved_query();
+        let (bare, reserved) = without_query(specifier, query);
+        let (referrer, _) = without_query(referrer, query);
+        let resolved = self.inner.resolve_sync(bare, referrer)?;
+        Some(resolved.map(|id| match (reserved, query) {
+            (true, Some(query)) => format!("{id}?{query}"),
+            _ => id,
+        }))
     }
 
     fn load(
@@ -333,7 +372,8 @@ impl ModuleLoader for TransformingLoader {
         let transform = self.transform.clone();
         let specifier = specifier.to_string();
         Box::pin(async move {
-            match inner.load(&specifier).await? {
+            let (bare, _) = without_query(&specifier, transform.reserved_query());
+            match inner.load(bare).await? {
                 ModuleSource::Text(text) => transform
                     .transform(&specifier, text)
                     .map(ModuleSource::Text)

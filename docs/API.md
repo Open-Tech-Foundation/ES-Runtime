@@ -4086,7 +4086,16 @@ Functions that stand in for real ones.
 | `mock.is(v)` | Whether a value is one. |
 | `mock.typed(v)` | Identity — for telling a type checker that a real function is a mock. |
 | `mock.global(name, v)` | Replaces a global for the file. |
+| `mock.module(specifier, factory)` | Replaces a module for every import of it that loads afterwards. `factory(importOriginal)` returns the exports object, or a promise of one — then the call returns a promise. At the top level of a test file it runs before that file's own imports. |
+| `mock.importActual(specifier)` | A promise of the real module, whether or not it is mocked. |
 | `mock.clearAll()` / `mock.resetAll()` / `mock.restoreAll()` | Forget the calls / also the answers / also put every spy and global back. |
+
+`mock.module` resolves `specifier` as an `import` in the calling file would, so
+it must be called by that name in the file (`mock.module(…)`, not through a
+variable). It throws a `TypeError` when the factory is missing, returns a
+non-object, or the module cannot be resolved. A module already loaded before
+the call stays real. A mock lasts the rest of the file; `restoreAll` does not
+undo it. Browser runs (`--browser`) refuse it.
 
 On the mock itself: the record — `mock.calls`, `mock.results` (`{ type: "return" \| "throw", value }`), `mock.instances`, `mock.lastCall` — and the
 answers: `mockImplementation`, `mockReturnValue`, `mockReturnThis`,

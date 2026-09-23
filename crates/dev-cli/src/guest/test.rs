@@ -1129,6 +1129,18 @@ impl HostExtension for TestExtension {
                     Err(message) => Ok(Value::String(message)),
                 }
             }),
+            // mock_module(url, names JSON) — the module at `url` is mocked,
+            // exporting these names (D101).
+            OpDecl::sync("test_mock_module", |args| {
+                let url = args.first().and_then(Value::as_str).unwrap_or_default();
+                let names: Vec<String> = args
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .and_then(|text| serde_json::from_str(text).ok())
+                    .unwrap_or_default();
+                crate::module_mocks::register(url.to_string(), names);
+                Ok(Value::Undefined)
+            }),
             // options() -> JSON — what the command line asked of this file.
             OpDecl::sync("test_options", |_| {
                 Ok(Value::String(

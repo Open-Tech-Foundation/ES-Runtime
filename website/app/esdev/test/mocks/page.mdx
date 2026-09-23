@@ -1,14 +1,14 @@
 ---
 title: Mocks and fake timers
-description: Stand in for a function with mock, and for time with clock.
+description: Stand in for a function or module with mock, and for time with clock.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # Mocks and fake timers
 
-`mock` and `clock` are the two subsystems that stand in for something real: a
-function you want to assert about, and code that waits.
+`mock` and `clock` stand in for something real: a function or module you want
+to assert about, and code that waits.
 
 ```ts
 import { test, expect, mock, clock } from "runtime:test";
@@ -31,6 +31,7 @@ test("gives up after a minute", async () => {
 | `mock.fn(impl?)` | Records `mock.calls`, `mock.results`; `mockReturnValue`, `mockResolvedValue`, `mockImplementation`, each with a `…Once` |
 | `mock.spyOn(o, k)` | Replaces a method and **still calls the original**; `mockRestore()` puts it back |
 | `mock.global(name, v)` | Replaces a global for the file |
+| `mock.module(spec, factory)` | Replaces a module — see [below](#mocking-a-module) |
 | `mock.restoreAll()` | Every spy's method and every replaced global, back |
 | `clock.freeze(at?)` | Stops time — and `setTimeout`, `setInterval`, `Date` |
 | `clock.advance(ms)` | Moves it, running what comes due |
@@ -48,7 +49,61 @@ and restore mocks before the file ends: the next file shares the same globals.
 The runner drains on microtasks rather than timers, so a file that forgets
 `clock.release()` still reports.
 
-<Callout type="note" title="Not yet">
-  **Module mocking** (`mock.module`). A mock replaces a method on an object,
-  not a module in the import graph.
+## Mocking a module
+
+`mock.module` replaces a module for everything that imports it. Called at the
+top of a test file, it runs **before** that file's imports, so the code under
+test gets the mock too:
+
+```ts
+import { test, expect, mock } from "runtime:test";
+import { signup } from "./signup.ts"; // imports ./mail.ts
+import { send } from "./mail.ts";
+
+mock.module("./mail.ts", async (importOriginal) => ({
+  ...(await importOriginal()),
+  send: mock.fn(() => "queued"),
+}));
+
+test("sends a welcome mail", () => {
+  signup("ada@example.com");
+  expect(send).toHaveBeenCalledWith("ada@example.com");
+});
+```
+
+The specifier resolves the way an `import` in the same file would, so a relative
+path or a package name. The factory's object becomes the
+module's exports. `importOriginal()` loads the real module, for keeping the
+exports you don't replace. `mock.importActual(specifier)` does the same anywhere
+in the file.
+
+Inside a test, a mock applies to modules loaded **after** it. Import the code
+under test dynamically once the mock is in place:
+
+```ts
+test("reports a mail service that is down", async () => {
+  mock.module("./mail.ts", () => ({ send: () => { throw new Error("down"); } }));
+  const { signup } = await import("./signup.ts");
+  expect(() => signup("ada@example.com")).toThrow("down");
+});
+```
+
+A few rules follow from how ES modules load:
+
+- A module that was already imported before the mock stays real.
+- The factory runs before the file's own imports, so it cannot use them. Use
+  `importOriginal()` or `mock.fn()` instead.
+- A mock lasts until the file ends. Each file runs in its own process, so other
+  files never see it. `mock.restoreAll()` does not undo it.
+- Call it as `mock.module(…)`, not through a variable, so esdev knows which file
+  the specifier is relative to.
+
+Migrating from Vitest, rename `vi.mock` to `mock.module` and
+`vi.importActual` to `mock.importActual`. Jest's ESM
+`jest.unstable_mockModule` and Node's `mock.module` suites already import
+dynamically.
+
+<Callout type="note" title="Not in browser runs">
+  In `--browser` runs a file's modules are bundled before the page loads, so
+  `mock.module` throws there.
 </Callout>
