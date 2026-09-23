@@ -1107,6 +1107,38 @@ export const cases = [
   },
   {
     group: "cascade",
+    name: "media-lists-and-grouping-rules-are-their-interfaces",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const sheet = new window.CSSStyleSheet({ media: "SCREEN,  print and (min-width:100px)" });
+      const media = sheet.media;
+      const result = [media.constructor.name, media.mediaText, media.length, media[0], media[1], media.item(5), String(media)];
+      media.appendMedium("tv");
+      media.appendMedium("screen");
+      result.push(media.mediaText);
+      media.deleteMedium("tv");
+      result.push(media.mediaText, errorName(() => media.deleteMedium("nope")));
+      sheet.media = "all";
+      result.push(sheet.media.mediaText, sheet.media === media);
+      result.push(["(MIN-WIDTH: 1PX)", "not screen", "only screen and (color)", "screen, , print", "@bad"]
+        .map((query) => { const list = new window.CSSStyleSheet({ media: query }).media; return [list.mediaText, list.length]; }));
+      sheet.replaceSync("@media (max-width: 10px) and (orientation:portrait) { a { color: red } } @supports (display: grid) { b { color: blue } } @layer x { i { color: green } }");
+      const [mediaRule, supports, layer] = sheet.cssRules;
+      result.push([mediaRule.constructor.name, mediaRule.media.mediaText, mediaRule.conditionText, mediaRule.cssText,
+        mediaRule instanceof window.CSSConditionRule, mediaRule instanceof window.CSSGroupingRule,
+        supports.constructor.name, supports.conditionText, layer.constructor.name, layer.name]);
+      const style = document.createElement("style");
+      style.media = "print";
+      style.textContent = "a {}";
+      document.head.append(style);
+      result.push(style.sheet.media.mediaText);
+      style.remove();
+      return result;
+    },
+  },
+  {
+    group: "cascade",
     name: "nesting-resolves-against-its-parent-rule",
     run(window) {
       const { document } = window;

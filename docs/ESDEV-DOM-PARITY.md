@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-118 of 120 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+119 of 121 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
@@ -79,6 +79,7 @@ compares the result.
 | an-equal-specificity-tie-goes-to-the-later-sheet | cascade | yes | no | no |
 | floats-positioned-boxes-and-flex-items-are-blockified | cascade | yes | no | no |
 | inner-text-is-the-rendered-text | cascade | yes | no | no |
+| media-lists-and-grouping-rules-are-their-interfaces | cascade | yes | no | no |
 | nesting-resolves-against-its-parent-rule | cascade | yes | no | no |
 | geometry-answers-zero-and-rendering-is-knowable | cascade | no | no | no |
 | html-names-are-case-insensitive | tree | yes | yes | yes |

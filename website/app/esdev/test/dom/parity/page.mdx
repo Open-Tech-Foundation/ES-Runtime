@@ -8,7 +8,7 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 # DOM parity
 
 Chrome is the oracle. 228 features — interfaces, members and behaviours — are
-put to all four runtimes, and 120 behaviour cases run the same code in each.
+put to all four runtimes, and 121 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
@@ -32,7 +32,7 @@ put to all four runtimes, and 120 behaviour cases run the same code in each.
 
 ## Behaviour cases
 
-118 of 120 cases match Chrome exactly, and 2 is a documented limit.
+119 of 121 cases match Chrome exactly, and 2 is a documented limit.
 
 | Case | Area | esdev | jsdom | happy-dom |
 | --- | --- | :--: | :--: | :--: |
@@ -79,6 +79,7 @@ put to all four runtimes, and 120 behaviour cases run the same code in each.
 | an-equal-specificity-tie-goes-to-the-later-sheet | cascade | yes | no | no |
 | floats-positioned-boxes-and-flex-items-are-blockified | cascade | yes | no | no |
 | inner-text-is-the-rendered-text | cascade | yes | no | no |
+| media-lists-and-grouping-rules-are-their-interfaces | cascade | yes | no | no |
 | nesting-resolves-against-its-parent-rule | cascade | yes | no | no |
 | geometry-answers-zero-and-rendering-is-knowable | cascade | no | no | no |
 | html-names-are-case-insensitive | tree | yes | yes | yes |

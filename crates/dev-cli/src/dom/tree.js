@@ -3614,6 +3614,9 @@ export function createTree(events = {}) {
   defineTokenList(HTML_INTERFACES.HTMLLinkElement, "sizes", "sizes", null);
   defineTokenList(HTML_INTERFACES.HTMLOutputElement, "htmlFor", "for", null);
   installReflectors(HTML_INTERFACES.HTMLOutputElement, { name: "name" });
+  installReflectors(HTMLStyleElement, { media: "media" });
+  installReflectors(HTML_INTERFACES.HTMLLinkElement, { media: "media", rel: "rel", type: "type", hreflang: "hreflang" });
+  defineIdl(HTML_INTERFACES.HTMLLinkElement.prototype, { href: reflectUrl("href") });
   defineIdl(HTML_INTERFACES.HTMLOutputElement.prototype, { type: { get() { return "output"; } } });
   defineTokenList(HTML_INTERFACES.HTMLIFrameElement, "sandbox", "sandbox", SANDBOX_FLAGS);
 

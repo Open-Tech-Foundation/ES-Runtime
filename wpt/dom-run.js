@@ -144,9 +144,20 @@ async function run(testPath) {
   // progress is never cut short.
   // Armed only once the page's scripts have run, since a long synchronous
   // script is progress the timer cannot see.
+  // A timer that fires well after its deadline did so because the page was
+  // busy — a long synchronous stretch holds the loop — not because it was
+  // waiting, so it re-arms instead of ending the page.
   const guard = `let __esdevGuard = null;
 let __esdevDone = false;
-globalThis.__esdevArm = () => { if (__esdevDone) return; clearTimeout(__esdevGuard); __esdevGuard = setTimeout(() => timeout(), ${flags.grace}); };
+globalThis.__esdevArm = () => {
+  if (__esdevDone) return;
+  clearTimeout(__esdevGuard);
+  const armed = Date.now();
+  __esdevGuard = setTimeout(() => {
+    if (Date.now() - armed > ${flags.grace} * 1.5) globalThis.__esdevArm();
+    else timeout();
+  }, ${flags.grace});
+};
 add_result_callback(() => { if (__esdevGuard !== null) globalThis.__esdevArm(); });
 add_completion_callback(() => { __esdevDone = true; clearTimeout(__esdevGuard); });`;
   const collector = guard + trace + `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, harnessMessage: status.message || "", tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;

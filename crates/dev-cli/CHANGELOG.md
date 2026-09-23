@@ -25,6 +25,17 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **Media lists and grouping rules are their interfaces.** A sheet's `media`
+  was a string, and every at-rule block was a bare `CSSGroupingRule` whose
+  `name` was the at-keyword. `MediaList` now exists. It serializes a query list
+  as Chrome does (lowercased, `": "` in a feature, `not all` for an empty or
+  invalid query), has `appendMedium` and `deleteMedium`, and is what
+  `sheet.media` holds, assignable through `mediaText`. `@media`, `@supports`,
+  `@container` and `@layer` blocks are `CSSMediaRule` (with `media`),
+  `CSSSupportsRule`, `CSSContainerRule` and `CSSLayerBlockRule` (whose `name` is
+  the layer's). Their `cssText` has Chrome's one-rule-per-line layout. A
+  `<style media>` feeds its sheet's list, and `<style>` and `<link>` reflect
+  `media`; `<link>` also reflects `href`, `rel`, `type` and `hreflang`.
 - **A form's controls and a select's options are their interfaces.**
   - `form.elements` is one live `HTMLFormControlsCollection` for the form's
     life. It includes `object` and `output`, leaves out image buttons as the

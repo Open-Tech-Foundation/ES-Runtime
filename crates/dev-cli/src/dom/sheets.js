@@ -245,6 +245,59 @@ function resolveLineHeight(declared, fontSize, rootFontSize) {
 // is not `!important`.
 const ORIGIN = { ua: 0, author: 1, inline: 2 };
 
+// A media query list as Chrome writes it back: lowercased, one space after a
+// feature's colon, queries joined by ", " — and a query that is empty or does
+// not start like one reads "not all".
+const MEDIA_LIST = Symbol("esdev CSS media list");
+function mediaQueries(text) {
+  text = String(text);
+  if (text.trim() === "") return [];
+  const queries = [];
+  let depth = 0;
+  let current = "";
+  for (const character of text) {
+    if (character === "(") depth += 1;
+    else if (character === ")") depth = Math.max(0, depth - 1);
+    if (character === "," && depth === 0) {
+      queries.push(current);
+      current = "";
+    } else current += character;
+  }
+  queries.push(current);
+  return queries.map((query) => {
+    const normal = query.trim().replace(/\s+/g, " ").replace(/[A-Z]+/g, (letters) => letters.toLowerCase())
+      .replace(/\(\s*/g, "(").replace(/\s*\)/g, ")").replace(/\(([a-z-]+)\s*:\s*/g, "($1: ");
+    return /^[a-z(]/.test(normal) ? normal : "not all";
+  });
+}
+class MediaList {
+  constructor(text) {
+    Object.defineProperty(this, MEDIA_LIST, { value: { queries: mediaQueries(text) } });
+    return new Proxy(this, {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^(0|[1-9][0-9]*)$/.test(property)) return target[MEDIA_LIST].queries[Number(property)];
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  }
+  get mediaText() { return this[MEDIA_LIST].queries.join(", "); }
+  set mediaText(value) { this[MEDIA_LIST].queries = mediaQueries(value ?? ""); }
+  get length() { return this[MEDIA_LIST].queries.length; }
+  item(index) { return this[MEDIA_LIST].queries[Number(index)] ?? null; }
+  appendMedium(medium) {
+    const [query] = mediaQueries(medium);
+    if (query !== undefined && !this[MEDIA_LIST].queries.includes(query)) this[MEDIA_LIST].queries.push(query);
+  }
+  deleteMedium(medium) {
+    const [query] = mediaQueries(medium);
+    const list = this[MEDIA_LIST].queries;
+    if (!list.includes(query)) throw new DOMException("The medium is not in the list.", "NotFoundError");
+    this[MEDIA_LIST].queries = list.filter((each) => each !== query);
+  }
+  toString() { return this.mediaText; }
+}
+MediaList.prototype[Symbol.iterator] = Array.prototype.values;
+
 export function createSheets({ tree, parse, selectors, css, mediaMatches, colors = null }) {
   const { Document, Element, ShadowRoot, HTML_NAMESPACE } = tree;
   const types = css.types ?? null;
@@ -294,17 +347,47 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     }
   }
 
+  // A grouping rule's at-keyword and prelude are its own business: `name` is
+  // a layer's name on CSSLayerBlockRule, not "media".
+  const AT_RULE = Symbol("esdev CSS at-rule");
   class CSSGroupingRule extends CSSRule {
-    constructor(name, conditionText, rules) {
+    constructor(keyword, prelude, rules) {
       super();
-      this.conditionText = conditionText;
-      Object.defineProperty(this, "name", { value: name });
+      Object.defineProperty(this, AT_RULE, { value: { keyword, prelude } });
       this.cssRules = new CSSRuleList(rules);
     }
+    // Chrome's serialization: the prelude, then each rule on its own indented
+    // line.
     get cssText() {
-      return `@${this.name} ${this.conditionText} { ${Array.from(this.cssRules, (rule) => rule.cssText).join(" ")} }`;
+      const { keyword, prelude } = this[AT_RULE];
+      const rules = Array.from(this.cssRules, (rule) => `\n  ${rule.cssText}`).join("");
+      return `@${keyword}${prelude ? ` ${prelude}` : ""} {${rules}\n}`;
     }
   }
+  class CSSConditionRule extends CSSGroupingRule {
+    get conditionText() { return this[AT_RULE].prelude; }
+  }
+  class CSSMediaRule extends CSSConditionRule {
+    constructor(keyword, prelude, rules) {
+      const media = new MediaList(prelude);
+      super(keyword, media.mediaText, rules);
+      Object.defineProperty(this, MEDIA_LIST, { value: media });
+    }
+    // [SameObject, PutForwards=mediaText].
+    get media() { return this[MEDIA_LIST]; }
+    set media(value) { this[MEDIA_LIST].mediaText = value; }
+    get conditionText() { return this[MEDIA_LIST].mediaText; }
+    get cssText() {
+      const rules = Array.from(this.cssRules, (rule) => `\n  ${rule.cssText}`).join("");
+      return `@media ${this.conditionText} {${rules}\n}`;
+    }
+  }
+  class CSSSupportsRule extends CSSConditionRule {}
+  class CSSContainerRule extends CSSConditionRule {}
+  class CSSLayerBlockRule extends CSSGroupingRule {
+    get name() { return this[AT_RULE].prelude; }
+  }
+  const GROUPING_RULES = { media: CSSMediaRule, supports: CSSSupportsRule, container: CSSContainerRule, layer: CSSLayerBlockRule };
 
   class CSSOtherRule extends CSSRule {
     constructor(name, prelude) {
@@ -320,7 +403,7 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     // A declaration whose value the DOM cannot parse is dropped from the rule,
     // the way a browser drops it: the rest of the block still applies.
     if (kind === STYLE_RULE) return new CSSStyleRule(first, second.filter(([name, value]) => css.keepsDeclaration(name, value)));
-    if (kind === GROUP_RULE) return new CSSGroupingRule(first, second, children.map(ruleFrom));
+    if (kind === GROUP_RULE) return new (GROUPING_RULES[first] ?? CSSGroupingRule)(first, second, children.map(ruleFrom));
     if (kind === OTHER_RULE) return new CSSOtherRule(first, second);
     throw new TypeError(`Unsupported CSS rule kind: ${kind}`);
   }
@@ -328,12 +411,15 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
   class CSSStyleSheet {
     constructor(options = {}) {
       Object.defineProperty(this, RULES, { value: { rules: [], version: 0 } });
-      this.media = String(options.media ?? "");
+      Object.defineProperty(this, MEDIA_LIST, { value: new MediaList(options.media instanceof MediaList ? options.media.mediaText : String(options.media ?? "")) });
       this.disabled = false;
       this.cssRules = new CSSRuleList([]);
       Object.defineProperty(this, OWNER, { value: { node: null }, writable: true });
     }
     get ownerNode() { return this[OWNER].node; }
+    // [SameObject, PutForwards=mediaText].
+    get media() { return this[MEDIA_LIST]; }
+    set media(value) { this[MEDIA_LIST].mediaText = value; }
     get type() { return "text/css"; }
     replaceSync(text) {
       const rules = parse(String(text)).map(ruleFrom);
@@ -382,6 +468,8 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
       state.sheet[OWNER].node = element;
       Object.defineProperty(element, SHEETS, { value: state });
     }
+    const media = element.getAttribute("media") ?? "";
+    if (state.sheet.media.mediaText !== mediaQueries(media).join(", ")) state.sheet.media.mediaText = media;
     const text = element.textContent ?? "";
     if (state.text !== text) {
       state.sheet.replaceSync(text);
@@ -408,8 +496,8 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
   // --- the cascade ---------------------------------------------------------
 
   function conditionHolds(rule) {
-    if (rule.name === "media") return mediaMatches(rule.conditionText);
-    if (rule.name === "supports") return supportsCondition(rule.conditionText);
+    if (rule instanceof CSSMediaRule) return mediaMatches(rule.conditionText);
+    if (rule instanceof CSSSupportsRule) return supportsCondition(rule.conditionText);
     // `@layer`, `@scope` and `@container` blocks always contribute here: layer
     // ordering is not implemented, and a container query has no container.
     return true;
@@ -1117,5 +1205,9 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     });
   }
 
-  return { CSSStyleSheet, CSSRule, CSSRuleList, StyleSheetList, CSSStyleRule, CSSGroupingRule, getComputedStyle, supportsCondition, install };
+  return {
+    CSSStyleSheet, CSSRule, CSSRuleList, StyleSheetList, CSSStyleRule, CSSGroupingRule, CSSConditionRule,
+    CSSMediaRule, CSSSupportsRule, CSSContainerRule, CSSLayerBlockRule, MediaList,
+    getComputedStyle, supportsCondition, install,
+  };
 }

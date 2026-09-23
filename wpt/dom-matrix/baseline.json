@@ -3756,6 +3756,169 @@
     },
     {
       "group": "cascade",
+      "name": "media-lists-and-grouping-rules-are-their-interfaces",
+      "chrome": {
+        "result": [
+          "MediaList",
+          "screen, print and (min-width: 100px)",
+          2,
+          "screen",
+          "print and (min-width: 100px)",
+          null,
+          "screen, print and (min-width: 100px)",
+          "screen, print and (min-width: 100px), tv",
+          "screen, print and (min-width: 100px)",
+          "NotFoundError",
+          "all",
+          true,
+          [
+            [
+              "(min-width: 1px)",
+              1
+            ],
+            [
+              "not screen",
+              1
+            ],
+            [
+              "only screen and (color)",
+              1
+            ],
+            [
+              "screen, not all, print",
+              3
+            ],
+            [
+              "not all",
+              1
+            ]
+          ],
+          [
+            "CSSMediaRule",
+            "(max-width: 10px) and (orientation: portrait)",
+            "(max-width: 10px) and (orientation: portrait)",
+            "@media (max-width: 10px) and (orientation: portrait) {\n  a { color: red; }\n}",
+            true,
+            true,
+            "CSSSupportsRule",
+            "(display: grid)",
+            "CSSLayerBlockRule",
+            "x"
+          ],
+          "print"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "MediaList",
+          "screen, print and (min-width: 100px)",
+          2,
+          "screen",
+          "print and (min-width: 100px)",
+          null,
+          "screen, print and (min-width: 100px)",
+          "screen, print and (min-width: 100px), tv",
+          "screen, print and (min-width: 100px)",
+          "NotFoundError",
+          "all",
+          true,
+          [
+            [
+              "(min-width: 1px)",
+              1
+            ],
+            [
+              "not screen",
+              1
+            ],
+            [
+              "only screen and (color)",
+              1
+            ],
+            [
+              "screen, not all, print",
+              3
+            ],
+            [
+              "not all",
+              1
+            ]
+          ],
+          [
+            "CSSMediaRule",
+            "(max-width: 10px) and (orientation: portrait)",
+            "(max-width: 10px) and (orientation: portrait)",
+            "@media (max-width: 10px) and (orientation: portrait) {\n  a { color: red; }\n}",
+            true,
+            true,
+            "CSSSupportsRule",
+            "(display: grid)",
+            "CSSLayerBlockRule",
+            "x"
+          ],
+          "print"
+        ]
+      },
+      "happy-dom": {
+        "error": "TypeError"
+      },
+      "jsdom": {
+        "result": [
+          "MediaList",
+          "SCREEN, print and (min-width:100px)",
+          2,
+          "SCREEN",
+          "print and (min-width:100px)",
+          null,
+          "SCREEN, print and (min-width:100px)",
+          "SCREEN, print and (min-width:100px), tv, screen",
+          "SCREEN, print and (min-width:100px), screen",
+          null,
+          "all",
+          true,
+          [
+            [
+              "(MIN-WIDTH: 1PX)",
+              1
+            ],
+            [
+              "not screen",
+              1
+            ],
+            [
+              "only screen and (color)",
+              1
+            ],
+            [
+              "screen, , print",
+              3
+            ],
+            [
+              "@bad",
+              1
+            ]
+          ],
+          [
+            "CSSMediaRule",
+            "(max-width: 10px) and (orientation:portrait)",
+            "(max-width: 10px) and (orientation:portrait)",
+            "@media (max-width: 10px) and (orientation:portrait) {\n  a { color: red; }\n}",
+            true,
+            true,
+            "CSSSupportsRule",
+            "(display: grid)",
+            "CSSLayerBlockRule",
+            "x"
+          ],
+          "print"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
       "name": "nesting-resolves-against-its-parent-rule",
       "chrome": {
         "result": [
@@ -10926,7 +11089,7 @@
     }
   ],
   "summary": {
-    "match": 118,
+    "match": 119,
     "intentional-limit": 2,
     "drift": 0
   }
