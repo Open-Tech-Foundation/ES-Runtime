@@ -241,8 +241,12 @@ then `load` fires. Leaving out the `.html` pages had hidden entire interfaces:
 `CharacterData`'s editing methods and `Text.splitText` were missing, and only
 their `.html` tests would have said so.
 
-Two differences from a browser remain. Every element exists before the first
-script runs, where a browser parses up to each script. And a page the strict
+Three differences from a browser remain. Every element exists before the first
+script runs, where a browser parses up to each script. A page script's top
+level runs sloppy: an indirect eval of `"use strict"` code keeps its `var`s to
+itself, where a classic script makes them global, so the runner prefixes `;`
+to make the directive an ordinary expression. Functions inside that declare
+`"use strict"` stay strict. And a page the strict
 parser refuses is **skipped with the parser's message** rather than counted as a
 DOM failure: refusing markup that omits optional tags is D93, not a bug to count
 against the DOM. `--keep` leaves the generated file in place to run by hand.

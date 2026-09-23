@@ -115,8 +115,12 @@ async function htmlTest(testPath, collector) {
   return `${pagePrelude(markup, externals)}
 if (globalThis.__esdevPageScripts) {
   (0,eval)(${JSON.stringify([harness, collector].join("\n;\n"))});
+  // A classic script declares its top-level names globally even under "use
+  // strict"; an indirect eval of strict code keeps them to itself. The leading
+  // ";" turns a script's "use strict" into an ordinary expression, so what
+  // a page declares is global, as in a browser.
   for (const script of globalThis.__esdevPageScripts) {
-    try { (0,eval)(script); } catch (error) { reportError(error); }
+    try { (0,eval)(";" + script); } catch (error) { reportError(error); }
   }
   setTimeout(() => window.dispatchEvent(new Event("load")), 0);
 }
@@ -129,7 +133,7 @@ async function run(testPath) {
   const trace = flags.trace
     ? `add_result_callback((test) => console.error("TRACE", ${JSON.stringify(testPath)}, test.status, test.name, test.message || ""));`
     : "";
-  const collector = trace + `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
+  const collector = trace + `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, harnessMessage: status.message || "", tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
   const generated = testPath.replace(/\.(js|html)$/, ".__esdev-dom-wpt.test.mjs");
   let body;
   try {
@@ -174,7 +178,12 @@ async function run(testPath) {
         message: [expired ? `no result in ${flags.timeout} ms` : `exit ${output.code}`, stdout, stderr].join("\n").trim(),
       };
     }
-    return { harness: "OK", ...JSON.parse(report) };
+    const parsed = JSON.parse(report);
+    // testharness's own verdict on the page: a setup that threw, or an
+    // uncaught error, is not "OK" just because the harness finished — a file
+    // that died before registering a test would otherwise pass with nothing.
+    if (parsed.status !== 0) return { ...parsed, harness: "ERROR", message: `harness ${statusNames[parsed.status] ?? parsed.status}: ${parsed.harnessMessage}` };
+    return { harness: "OK", ...parsed };
   } finally {
     clearTimeout(deadline);
     // `--keep` leaves the generated file behind, to run by hand with `esdev test --dom --file=…`.
