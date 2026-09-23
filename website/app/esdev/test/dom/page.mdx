@@ -134,25 +134,12 @@ containing block, `ex`, `ch`, the viewport units, `line-height: normal` — answ
 for an element outside the tree, or style a pseudo-element. See
 [DOM parity](/esdev/test/dom/parity).
 
-## Conformance checks
+## Conformance
 
-Maintainers audit the implemented surface against the JavaScript portions of
-Web Platform Tests (WPT). The audit runs upstream `testharness.js` against an
-`esdev test --dom` realm and records each reported WPT subtest. Its explicit
-scope rules cover inputs that are inapplicable by design—for example, WPT-server
-substitution, multiple browsing contexts, rendering, network clients, classic
-script execution, and legacy APIs. Unsupported modern DOM behavior remains a
-failure until it is implemented.
+The DOM is checked against the JavaScript tests of the
+[Web Platform Tests](https://web-platform-tests.org), and against headless
+Chrome, jsdom and happy-dom on the same cases, with Chrome's result taken as
+correct. The current results are on [DOM parity](/esdev/test/dom/parity).
 
-A failing WPT subtest is triaged against Chrome before it becomes work: part of
-the upstream suite tests behaviour no browser has shipped, and a subtest Chrome
-fails too is recorded rather than chased.
-
-The audit is an implementation check, not a browser-compatibility claim: WPT
-HTML/layout fixtures still require a real browser. Its commands and scoped
-inputs live in [`wpt/`](https://github.com/Open-Tech-Foundation/ES-Runtime/tree/main/wpt)
-in the repository.
-
-Alongside it, a behaviour matrix and a surface probe run the same cases under
-headless Chrome, esdev, jsdom and happy-dom, with Chrome as the oracle. The
-recorded results are published as [DOM parity](/esdev/test/dom/parity).
+Tests that need rendering, layout, navigation or a network are outside its
+scope. For those, use [`--browser`](/esdev/test/browser).

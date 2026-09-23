@@ -95,13 +95,8 @@ TypeScript — and nothing is added to it. What runs is byte for byte the file o
 disk, so a failing assertion names the line you wrote because it *is* the line
 you wrote.
 
-That was not always true. The API used to be five globals prepended to the file
-as a single physical line, with an epilogue appended to await and report, and
-keeping your line 1 as line 1 was a constraint the harness had to be written
-around. Moving the API into a module and the tally into the host removed both.
-
-Since a test file is now an ordinary module, running one directly works and
-reports the same way:
+A test file is an ordinary module, so running one directly works and reports
+the same way:
 
 ```sh
 esdev app.test.ts
@@ -128,6 +123,5 @@ It is reported as a **failure**, not a hang:
   3 passed, 1 failed
 ```
 
-The runner knows a case started and never settled. It used to await every
-pending promise, so a test waiting on something that never happened hung the
-file forever.
+The cases queued behind it are reported as never started, so the report points
+at the one that is stuck.
