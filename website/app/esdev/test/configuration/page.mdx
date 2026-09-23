@@ -1,0 +1,54 @@
+---
+title: Configuration
+description: Setup modules, per-file time limits and the JSON reporter, as flags or esdev.json keys.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Configuration
+
+```sh
+esdev test --setup=./test/setup.ts   # imported before every test file
+esdev test --timeout=5000            # a file that takes longer is stopped
+esdev test --reporter=json           # one JSON object per line
+```
+
+Each is also an `esdev.json` key, because a project's setup files and its
+per-file budget are properties *of the project* — a flag repeated in every
+script is one that gets repeated differently in two of them. **A flag beats the
+file.**
+
+```json
+{
+  "test": {
+    "setup": ["./test/setup.ts"],
+    "timeout": 5000,
+    "jobs": 4,
+    "isolation": "process",
+    "reporter": "json"
+  }
+}
+```
+
+A setup module is imported **before** the file under test, so a global it stubs
+is in place before anything reads it — and it costs no line numbers: a failing
+assertion still names the line you wrote.
+
+`--timeout` is enforced by the parent, which **ends** the process. The case it
+exists for is a file that wedges, and a budget the file kept for itself is one
+it never gets round to noticing. There is no default: a suite is not a place to
+guess how long a machine takes.
+
+`--reporter=json` writes one object per line — a `case` for each failure, a
+`file` for each file, and a `summary` at the end — so a CI job reads results as
+they land rather than parsing a document once the run is over.
+
+```json
+{"type":"file","file":"/p/ok.test.ts","passed":1,"failed":0,"skipped":1}
+{"type":"summary","files":2,"failed":1}
+```
+
+<Callout type="note" title="Not yet">
+  **Coverage**, and an `include` pattern for discovery: test files are found by
+  their `*.test.*` and `*.spec.*` names.
+</Callout>
