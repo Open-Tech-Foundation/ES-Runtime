@@ -260,9 +260,10 @@ from runtime:test:
     });
 
 Also exported: describe (and it/suite), the before*/after* hooks,
-assert/assertEquals/assertThrows/assertRejects, mock (mock.fn, mock.spyOn, mock.module) and
-clock (clock.freeze, clock.advance). test and describe carry .skip, .only,
-.todo, .each(table), .skipIf(cond) and .runIf(cond).
+assert/assertEquals/assertThrows/assertRejects, mock (mock.fn, mock.spyOn,
+mock.when, mock.module) and clock (clock.freeze, clock.advance). test and
+describe carry .skip, .only, .todo, .each(table), .skipIf(cond) and
+.runIf(cond).
 
 Nothing is ambient: there is no global `test`, and a file that calls one fails
 with a ReferenceError. Types come from @opentf/esrun-types

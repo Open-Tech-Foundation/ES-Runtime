@@ -172,6 +172,36 @@ test("mock.module takes exports, now or later", async () => {
   return sync;
 });
 
+test("mocks throw, answer for a while, and answer by argument", async () => {
+  const load = mock.fn((id: number) => `user ${id}`);
+  load.mockThrowOnce(new Error("down")).mockThrow("always");
+  const impl: ((id: number) => string) | undefined = load.getMockImplementation();
+  load.withImplementation(() => "temporary", () => load(1));
+  const later: Promise<void> = load.withImplementation(() => "t", async () => {});
+  await later;
+
+  {
+    using spy = mock.spyOn(console, "log");
+    using answers = mock.when(load, { onUnmatched: "throw" })
+      .calledWith(1)
+      .thenReturn("one")
+      .thenReturnOnce("first")
+      .calledWith(expect.any(Number))
+      .thenThrow(new Error("no"), { times: 2 });
+    expect(answers).toHaveBeenExhausted();
+    spy.mockClear();
+    // @ts-expect-error — the answer is what the mock returns.
+    answers.thenReturn(42);
+    // @ts-expect-error — and the arguments are the mock's.
+    answers.calledWith("one");
+  }
+
+  mock.env("PORT", "8080").env("DEBUG", undefined);
+  // @ts-expect-error — an environment holds strings.
+  mock.env("PORT", 8080);
+  impl?.(1);
+});
+
 // --- clock ------------------------------------------------------------------
 
 test("the clock takes milliseconds and moments", async () => {

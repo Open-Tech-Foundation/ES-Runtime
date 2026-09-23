@@ -28,11 +28,13 @@ test("gives up after a minute", async () => {
 
 | | |
 | --- | --- |
-| `mock.fn(impl?)` | Records `mock.calls`, `mock.results`; `mockReturnValue`, `mockResolvedValue`, `mockImplementation`, each with a `…Once` |
+| `mock.fn(impl?)` | Records `mock.calls`, `mock.results`; `mockReturnValue`, `mockResolvedValue`, `mockThrow`, `mockImplementation`, each with a `…Once` |
 | `mock.spyOn(o, k)` | Replaces a method and **still calls the original**; `mockRestore()` puts it back |
 | `mock.global(name, v)` | Replaces a global for the file |
+| `mock.env(name, v)` | Sets an environment variable — see [below](#environment-variables) |
+| `mock.when(spy)` | Answers by argument — see [below](#answers-by-argument) |
 | `mock.module(spec, factory)` | Replaces a module — see [below](#mocking-a-module) |
-| `mock.restoreAll()` | Every spy's method and every replaced global, back |
+| `mock.restoreAll()` | Every spy's method, replaced global and environment variable, back |
 | `clock.freeze(at?)` | Stops time — and `setTimeout`, `setInterval`, `Date` |
 | `clock.advance(ms)` | Moves it, running what comes due |
 | `clock.advanceAsync(ms)` | …pausing after each callback, so an `await` resumes |
@@ -48,6 +50,73 @@ under the default process-per-file runner. With `--isolation=none`, release it
 and restore mocks before the file ends: the next file shares the same globals.
 The runner drains on microtasks rather than timers, so a file that forgets
 `clock.release()` still reports.
+
+## Restoring a spy with `using`
+
+A spy declared with `using` puts the method back when its block ends, even
+when an assertion in the block fails:
+
+```ts
+test("warns once", () => {
+  using warn = mock.spyOn(console, "warn").mockImplementation(() => {});
+  load({ legacy: true });
+  expect(warn).toHaveBeenCalledOnce();
+});
+```
+
+For one stretch of a test, `withImplementation` answers differently until its
+callback returns, or its promise settles:
+
+```ts
+await fetchUser.withImplementation(() => Promise.reject(new Error("down")), async () => {
+  await expect(showProfile(1)).rejects.toThrow("down");
+});
+```
+
+## Answers by argument
+
+`mock.when` gives a mock a different answer for each set of arguments:
+
+```ts
+const price = mock.fn((sku: string) => 0);
+
+using answers = mock
+  .when(price)
+  .calledWith("apple")
+  .thenReturn(1.2)
+  .calledWith(expect.any(String))
+  .thenThrow(new Error("unknown sku"), { times: 1 });
+
+expect(price("apple")).toBe(1.2);
+expect(() => price("pear")).toThrow("unknown sku");
+expect(answers).toHaveBeenExhausted();
+```
+
+Arguments match the way `toHaveBeenCalledWith` matches them, asymmetric
+matchers included. The newest answer for matching arguments is used first;
+`{ times }` or a `…Once` form limits it, and an older answer takes over once it
+is used up. A call no answer matches goes to what the mock did before, unless
+`onUnmatched` says `"throw"` or gives a function. The chain restores the mock's
+previous answer when it is disposed, as `using` does at the end of the block.
+
+## Environment variables
+
+`mock.env` sets a variable in `runtime:process`'s `env`. `undefined` removes it,
+and `mock.restoreAll()` puts every one back:
+
+```ts
+import { env } from "runtime:process";
+import { afterEach, expect, mock, test } from "runtime:test";
+
+afterEach(() => mock.restoreAll());
+
+test("reads the port", () => {
+  mock.env("PORT", "8080");
+  expect(env.PORT).toBe("8080");
+});
+```
+
+It needs the `env` capability.
 
 ## Mocking a module
 
@@ -103,7 +172,8 @@ Migrating from Vitest, rename `vi.mock` to `mock.module` and
 `jest.unstable_mockModule` and Node's `mock.module` suites already import
 dynamically.
 
-<Callout type="note" title="Not in browser runs">
+<Callout type="note" title="In browser runs">
   In `--browser` runs a file's modules are bundled before the page loads, so
-  `mock.module` throws there.
+  `mock.module` throws there. A page has no process environment, so `mock.env`
+  throws too.
 </Callout>

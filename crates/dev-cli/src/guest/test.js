@@ -1522,6 +1522,25 @@ function expectation(actual, negated, mode = "hard") {
         called(actual, `call ${n} was ${show(call)}`, args, negated),
       );
     },
+    // Every answer of a `mock.when` chain used: `times` of them, or at least
+    // once for one with no limit.
+    toHaveBeenExhausted() {
+      const chain = actual?.[WHEN];
+      if (!chain) throw new TypeError("toHaveBeenExhausted needs a mock.when(…) chain");
+      const left = chain.answers.filter((a) => a.used < (a.times === Infinity ? 1 : a.times));
+      check(chain.answers.length > 0 && left.length === 0, negated, () =>
+        called(
+          chain.spy,
+          negated
+            ? "not to have used every answer"
+            : chain.answers.length === 0
+              ? "to have answers, and it has none"
+              : `to have used every answer; left: ${left
+                  .map((a) => `calledWith${showArgs(a.args)}.${a.verb} (${a.used} of ${a.times === Infinity ? 1 : a.times})`)
+                  .join(", ")}`,
+        ),
+      );
+    },
     toHaveReturned() {
       const results = resultsOf(actual, "toHaveReturned");
       check(results.some((r) => r.type === "return"), negated, () =>
@@ -2110,6 +2129,39 @@ function mockFn(implementation) {
   fn.mockResolvedValueOnce = (v) => fn.mockImplementationOnce(() => Promise.resolve(v));
   fn.mockRejectedValue = (e) => fn.mockImplementation(() => Promise.reject(e));
   fn.mockRejectedValueOnce = (e) => fn.mockImplementationOnce(() => Promise.reject(e));
+  fn.mockThrow = (e) =>
+    fn.mockImplementation(() => {
+      throw e;
+    });
+  fn.mockThrowOnce = (e) =>
+    fn.mockImplementationOnce(() => {
+      throw e;
+    });
+  fn.getMockImplementation = () => impl;
+  // Answers with `f` while `callback` runs — until it settles, when it is async.
+  fn.withImplementation = (f, callback) => {
+    const before = impl;
+    impl = f;
+    let ran;
+    try {
+      ran = callback();
+    } catch (err) {
+      impl = before;
+      throw err;
+    }
+    if (ran !== null && typeof ran?.then === "function") {
+      return Promise.resolve(ran).then(
+        () => {
+          impl = before;
+        },
+        (err) => {
+          impl = before;
+          throw err;
+        },
+      );
+    }
+    impl = before;
+  };
 
   // Three verbs, and the difference between them is what a test means by
   // "start again": forget the calls, forget how it was told to answer, or stop
@@ -2126,6 +2178,9 @@ function mockFn(implementation) {
     if (restore) restore();
     return fn;
   };
+
+  // `using spy = mock.spyOn(…)` puts the method back when the block ends.
+  Object.defineProperty(fn, Symbol.dispose, { value: () => void fn.mockRestore() });
 
   fn.mockName = (name) => ((named = name), fn);
   fn.getMockName = () => named;
@@ -2197,6 +2252,87 @@ function spyOn(object, key, accessType) {
 /// Globals a test replaced, and what was there before.
 const stubbed = new Map();
 
+// `runtime:process`, for `mock.env`. A page has no process environment, and a
+// specifier that is not a literal is one the browser bundle leaves alone.
+const PROCESS = ["runtime", "process"].join(":");
+const processModule =
+  typeof ops.module_resolve_sync === "function" ? await import(PROCESS) : null;
+
+/// Environment variables a test replaced, and what was there before —
+/// `undefined` for one that was not set.
+const envStubbed = new Map();
+
+const WHEN = Symbol.for("runtime:test.when");
+
+/// Arguments as the call that passed them is written.
+const showArgs = (args) => `(${args.map((arg) => show(arg)).join(", ")})`;
+
+/// Answers a mock gives by its arguments, until the chain is disposed.
+function when(spy, options = {}) {
+  if (!isMock(spy)) {
+    throw new TypeError("mock.when needs a mock: mock.fn() or mock.spyOn()");
+  }
+  const unmatched = options.onUnmatched ?? "passthrough";
+  if (unmatched !== "passthrough" && unmatched !== "throw" && typeof unmatched !== "function") {
+    throw new TypeError('mock.when: onUnmatched is "passthrough", "throw" or a function');
+  }
+  const before = spy.getMockImplementation();
+  const answers = [];
+  let args = null;
+
+  spy.mockImplementation(function (...called) {
+    // The newest answer for these arguments first; a used-up one lets an
+    // older one answer.
+    for (let i = answers.length - 1; i >= 0; i--) {
+      const answer = answers[i];
+      if (answer.used < answer.times && equal(called, answer.args, [])) {
+        answer.used += 1;
+        return answer.give();
+      }
+    }
+    if (unmatched === "throw") {
+      throw new Error(`${spy.getMockName()} has no answer for the arguments ${showArgs(called)}`);
+    }
+    if (unmatched !== "passthrough") return Reflect.apply(unmatched, this, called);
+    return before ? Reflect.apply(before, this, called) : undefined;
+  });
+
+  const then = (verb, give) => (value, options) => {
+    if (args === null) {
+      throw new TypeError(`mock.when: call .calledWith(…) before .${verb}(…)`);
+    }
+    const times = options?.times ?? Infinity;
+    if (times !== Infinity && !(Number.isInteger(times) && times > 0)) {
+      throw new TypeError(`mock.when: ${verb}'s times is a whole number above 0`);
+    }
+    answers.push({ args, times, used: 0, verb, give: () => give(value) });
+    return chain;
+  };
+  const once = (verb) => (value) => chain[verb](value, { times: 1 });
+
+  const chain = {
+    calledWith(...expected) {
+      args = expected;
+      return chain;
+    },
+    thenReturn: then("thenReturn", (value) => value),
+    thenThrow: then("thenThrow", (err) => {
+      throw err;
+    }),
+    thenResolve: then("thenResolve", (value) => Promise.resolve(value)),
+    thenReject: then("thenReject", (err) => Promise.reject(err)),
+    thenReturnOnce: once("thenReturn"),
+    thenThrowOnce: once("thenThrow"),
+    thenResolveOnce: once("thenResolve"),
+    thenRejectOnce: once("thenReject"),
+    [Symbol.dispose]() {
+      spy.mockImplementation(before);
+    },
+  };
+  Object.defineProperty(chain, WHEN, { value: { spy, answers } });
+  return chain;
+}
+
 // Mocked modules' exports, by resolved URL: the generated module that stands
 // in for each one reads its exports from here (D101).
 const MODULE_MOCKS = Symbol.for("runtime:test.moduleMocks");
@@ -2247,6 +2383,22 @@ const mock = {
     return mock;
   },
 
+  when,
+
+  /// Sets an environment variable in `runtime:process`'s `env` — `undefined`
+  /// removes it. `restoreAll` puts every one back.
+  env(name, value) {
+    if (!processModule) throw new TypeError("mock.env is not available in browser runs");
+    if (typeof name !== "string") throw new TypeError("mock.env needs a variable name");
+    const { env, unmask } = processModule;
+    if (!envStubbed.has(name)) {
+      envStubbed.set(name, Object.hasOwn(env, name) ? unmask(env[name]) : undefined);
+    }
+    if (value === undefined) delete env[name];
+    else env[name] = value;
+    return mock;
+  },
+
   /// Replaces a module for everything that imports it afterwards — and, when
   /// called at the top of a test file, for that file's own imports, which run
   /// after it. `factory(importOriginal)` returns the module's exports.
@@ -2294,6 +2446,13 @@ const mock = {
       else delete globalThis[name];
     }
     stubbed.clear();
+    if (processModule) {
+      for (const [name, value] of envStubbed) {
+        if (value === undefined) delete processModule.env[name];
+        else processModule.env[name] = value;
+      }
+    }
+    envStubbed.clear();
     return mock;
   },
 };

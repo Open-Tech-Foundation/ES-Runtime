@@ -15,6 +15,10 @@ itself.
 
 ### Added
 
+- **`mock.when`** with the `When`, `WhenOptions` and `AnswerOptions` types, and
+  the `toHaveBeenExhausted` matcher; **`mock.env`**; and, on `Mock`,
+  `mockThrow`, `mockThrowOnce`, `withImplementation`, `getMockImplementation`
+  and `Disposable`.
 - **`mock.module` and `mock.importActual`** in `runtime:test`. A `mock.module`
   call with an async factory is typed to return `Promise<void>`.
 - **`runtime:test`'s new utilities** — test options (`timeout`, `retry`) and

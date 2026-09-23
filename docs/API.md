@@ -3942,6 +3942,7 @@ mismatched `Promise`; `await` them.
 | `toThrow(want?)` / `toThrowError(want?)` | Calls the function; `want` is the expectation `assertThrows` takes. |
 | `toHaveBeenCalled()` / `toHaveBeenCalledTimes(n)` / `toHaveBeenCalledOnce()` / `toHaveBeenCalledWith(...)` | Needs a mock; anything else is a `TypeError` naming the matcher. |
 | `toHaveBeenLastCalledWith(...)` / `toHaveBeenNthCalledWith(n, ...)` | 1-based. |
+| `toHaveBeenExhausted()` | Needs a `mock.when` chain: every answer used. A chain with no answers never is. |
 | `toHaveReturned()` / `toHaveReturnedTimes(n)` / `toHaveReturnedWith(v)` | Returned **without throwing**. |
 | `toHaveLastReturnedWith(v)` / `toHaveNthReturnedWith(n, v)` | |
 
@@ -4086,9 +4087,11 @@ Functions that stand in for real ones.
 | `mock.is(v)` | Whether a value is one. |
 | `mock.typed(v)` | Identity — for telling a type checker that a real function is a mock. |
 | `mock.global(name, v)` | Replaces a global for the file. |
+| `mock.env(name, v)` | Sets a variable in `runtime:process`'s `env`; `undefined` removes it. Needs the `env` capability; throws in browser runs. |
+| `mock.when(spy, { onUnmatched }?)` | Answers by argument, replacing what `spy` answers with until the chain is disposed. See below. |
 | `mock.module(specifier, factory)` | Replaces a module for every import of it that loads afterwards. `factory(importOriginal)` returns the exports object, or a promise of one — then the call returns a promise. At the top level of a test file it runs before that file's own imports. |
 | `mock.importActual(specifier)` | A promise of the real module, whether or not it is mocked. |
-| `mock.clearAll()` / `mock.resetAll()` / `mock.restoreAll()` | Forget the calls / also the answers / also put every spy and global back. |
+| `mock.clearAll()` / `mock.resetAll()` / `mock.restoreAll()` | Forget the calls / also the answers / also put every spy, global and environment variable back. |
 
 `mock.module` resolves `specifier` as an `import` in the calling file would, so
 it must be called by that name in the file (`mock.module(…)`, not through a
@@ -4099,8 +4102,21 @@ undo it. Browser runs (`--browser`) refuse it.
 
 On the mock itself: the record — `mock.calls`, `mock.results` (`{ type: "return" \| "throw", value }`), `mock.instances`, `mock.lastCall` — and the
 answers: `mockImplementation`, `mockReturnValue`, `mockReturnThis`,
-`mockResolvedValue`, `mockRejectedValue`, each with a `…Once` that queues;
-`mockClear`, `mockReset`, `mockRestore`, `mockName`, `getMockName`.
+`mockResolvedValue`, `mockRejectedValue`, `mockThrow`, each with a `…Once`
+that queues; `withImplementation(fn, callback)`, which answers with `fn` until
+`callback` returns or its promise settles; `getMockImplementation`;
+`mockClear`, `mockReset`, `mockRestore`, `mockName`, `getMockName`. A mock is
+disposable: `using spy = mock.spyOn(…)` calls `mockRestore` when the block ends.
+
+`mock.when(spy)` returns a chain: `calledWith(...args)` names the arguments,
+matched as `toHaveBeenCalledWith` matches them, and `thenReturn`, `thenThrow`,
+`thenResolve` and `thenReject` give the answer, each taking `{ times }` and
+each with a `…Once`. The newest answer for matching arguments is used first;
+one that has used up its `times` lets an older one answer. `onUnmatched` is
+`"passthrough"` (the default: what the mock answered with before), `"throw"`,
+or a function called with the arguments. `expect(chain).toHaveBeenExhausted()`
+passes when every answer was used — `times` of them, or once for one without a
+limit. Disposing the chain puts back what the mock answered with before.
 
 Those method names are the ecosystem's deliberately: they are the vocabulary the
 matchers read. A throw is **recorded and rethrown** — a mock that swallowed it

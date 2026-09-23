@@ -331,6 +331,11 @@ declare module "runtime:test" {
     toHaveBeenLastCalledWith(...args: unknown[]): void;
     /** 1-based: the first call is `1`. */
     toHaveBeenNthCalledWith(n: number, ...args: unknown[]): void;
+    /**
+     * Needs a {@link When} chain: every answer used — `times` of them, or at
+     * least once for one without a limit. A chain with no answers never is.
+     */
+    toHaveBeenExhausted(): void;
     /** Returned at least once **without throwing**. */
     toHaveReturned(): void;
     toHaveReturnedTimes(n: number): void;
@@ -517,7 +522,7 @@ declare module "runtime:test" {
    * was told to. The method names are the ecosystem's, because they are the
    * vocabulary the matchers read.
    */
-  export interface Mock<A extends unknown[] = any[], R = any> {
+  export interface Mock<A extends unknown[] = any[], R = any> extends Disposable {
     (...args: A): R;
     /** The record. Cleared by {@link Mock.mockClear}. */
     mock: MockRecord<A, R>;
@@ -532,17 +537,65 @@ declare module "runtime:test" {
     mockResolvedValueOnce(value: Awaited<R>): this;
     mockRejectedValue(error: unknown): this;
     mockRejectedValueOnce(error: unknown): this;
+    /** Throws `error` from every call. */
+    mockThrow(error: unknown): this;
+    /** Throws `error` from the next call only. */
+    mockThrowOnce(error: unknown): this;
+    /** The implementation it answers with, or `undefined`. */
+    getMockImplementation(): ((...args: A) => R) | undefined;
+    /**
+     * Answers with `fn` while `callback` runs — until its promise settles, when
+     * it returns one.
+     */
+    withImplementation(fn: (...args: A) => R, callback: () => Promise<unknown>): Promise<void>;
+    withImplementation(fn: (...args: A) => R, callback: () => unknown): void;
 
     /** Forgets the calls. */
     mockClear(): this;
     /** …and how it was told to answer, back to what it was created with. */
     mockReset(): this;
-    /** …and, for a spy, puts the original method back. */
+    /**
+     * …and, for a spy, puts the original method back. `using spy = …` calls it
+     * when the block ends.
+     */
     mockRestore(): this;
 
     /** Names it, so a failure says which mock. */
     mockName(name: string): this;
     getMockName(): string;
+  }
+
+  /** What a mock does with arguments no answer matches. */
+  export interface WhenOptions {
+    /**
+     * `"passthrough"` (the default) calls what the mock answered with before;
+     * `"throw"` throws, naming the arguments; a function is called with them.
+     */
+    onUnmatched?: "passthrough" | "throw" | ((...args: any[]) => unknown);
+  }
+
+  /** How many calls an answer is for. Without `times`, every call. */
+  export interface AnswerOptions {
+    times?: number;
+  }
+
+  /**
+   * A mock's answers by argument, from {@link mock.when}. The newest answer for
+   * matching arguments is used first; one that has used up its `times` lets an
+   * older one answer. Disposing it (`using`) puts back what the mock answered
+   * with before.
+   */
+  export interface When<A extends unknown[] = any[], R = any> extends Disposable {
+    /** The arguments the next answers are for: equal, or asymmetric matchers. */
+    calledWith(...args: A): When<A, R>;
+    thenReturn(value: R, options?: AnswerOptions): When<A, R>;
+    thenReturnOnce(value: R): When<A, R>;
+    thenThrow(error: unknown, options?: AnswerOptions): When<A, R>;
+    thenThrowOnce(error: unknown): When<A, R>;
+    thenResolve(value: Awaited<R>, options?: AnswerOptions): When<A, R>;
+    thenResolveOnce(value: Awaited<R>): When<A, R>;
+    thenReject(error: unknown, options?: AnswerOptions): When<A, R>;
+    thenRejectOnce(error: unknown): When<A, R>;
   }
 
   /**
@@ -577,6 +630,13 @@ declare module "runtime:test" {
     /** Replaces a global for the file. Undone by {@link mock.restoreAll}. */
     global(name: string, value: unknown): typeof mock;
     /**
+     * Sets a variable in `runtime:process`'s `env`; `undefined` removes it.
+     * Undone by {@link mock.restoreAll}. Not in browser runs.
+     */
+    env(name: string, value: string | undefined): typeof mock;
+    /** Answers by argument, replacing what `spy` answers with until disposed. */
+    when<A extends unknown[], R>(spy: Mock<A, R>, options?: WhenOptions): When<A, R>;
+    /**
      * Replaces a module for everything that imports it afterwards. Called at
      * the top of a test file, it runs before that file's own imports. The
      * factory's object is the module's exports; `importOriginal()` loads the
@@ -597,7 +657,10 @@ declare module "runtime:test" {
     clearAll(): typeof mock;
     /** …and how each was told to answer. */
     resetAll(): typeof mock;
-    /** Puts it all back: every spy's method, and every replaced global. */
+    /**
+     * Puts it all back: every spy's method, every replaced global and every
+     * environment variable.
+     */
     restoreAll(): typeof mock;
   };
 

@@ -661,6 +661,19 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D102 — Answers by argument, `using`, and `mock.env` · *Accepted (2026-09-24)*
+
+**Context:** Vitest 4.1 added `mockThrow` and `mockThrowOnce`, and Vitest 5 added `vi.when(spy).calledWith(…).thenReturn(…)` with a `toHaveBeenExhausted` matcher; Jest has no per-argument API (suites use the third-party `jest-when`). Vitest and Jest both make a spy disposable, so `using spy = …spyOn(…)` restores it. Vitest stubs the environment with `vi.stubEnv` and undoes it with a separate `vi.unstubAllEnvs`; Jest and Bun have no environment API.
+
+**Decision:**
+- **`mockThrow`, `mockThrowOnce`, `withImplementation`, `getMockImplementation` and `Symbol.dispose` on every mock**, under the names Vitest and Jest use.
+- **`mock.when` follows `vi.when`** — the same chain, `times` option, newest-first order, `onUnmatched` modes and `toHaveBeenExhausted` — because a suite written against it should move by renaming `vi` to `mock`. Arguments match as `toHaveBeenCalledWith` matches them, so asymmetric matchers work in both. Not taken: `vi.isWhenChain`, which exists for type narrowing a test rarely needs.
+- **`mock.env(name, value)`, beside `mock.global(name, value)`**, writes `runtime:process`'s `env`, the object a program reads. `undefined` removes the variable. `mock.restoreAll()` undoes it together with spies and globals; rejected: a separate `unstubAllEnvs`, since one verb for "put back what the test changed" is already the rule here. Nothing is restored automatically; a suite that wants it calls `restoreAll` in `afterEach`.
+
+**Consequences:** `runtime:test` imports `runtime:process` at load, except in a page. The import needs no capability; `mock.env` then reads the variable it replaces, so it needs `env` as reading `env` does. In browser runs `mock.env` throws, since a page has no process environment.
+
+---
+
 ### D101 — `mock.module`: a module replaced where it loads, hoisted where it is imported · *Accepted (2026-09-24)*
 
 **Context:** module mocking is the largest gap between `runtime:test` and the runners suites migrate from. The runners disagree about the one hard part — ES modules link their static imports before any code runs, so a mock registered in the test body is too late for them. Vitest hoists `vi.mock` with a transform that turns the file's static imports into dynamic ones. Bun rebinds modules already imported, and still recommends `--preload` because the original's side effects have run. Node (`mock.module`, experimental) and Jest's ESM API (`jest.unstable_mockModule`) require a dynamic `import()` after the mock.

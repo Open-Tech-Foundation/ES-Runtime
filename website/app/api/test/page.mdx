@@ -227,6 +227,7 @@ mismatched `Promise` — `await` them.
 | `toSatisfy` / `toBeOneOf` | A predicate holds; equal to one of an array |
 | `toThrow` / `toThrowError` | Calls it; takes the same expectation `assertThrows` does |
 | `toHaveBeenCalled` / `…Times` / `…With` / `…LastCalledWith` / `…NthCalledWith` | Needs a `mock.fn()` |
+| `toHaveBeenExhausted()` | Needs a `mock.when` chain: every answer used |
 | `toHaveReturned` / `…Times` / `…With` / `toHaveLastReturnedWith` / `toHaveNthReturnedWith` | |
 
 The shorter jest spellings — `toBeCalled`, `toBeCalledWith`, `lastCalledWith`,
@@ -390,6 +391,8 @@ test("posts once per item", async () => {
 | `mock.spyOn(object, key)` | …installed over a method; `mockRestore()` puts it back |
 | `mock.is(value)` | Whether it is one |
 | `mock.global(name, value)` | Replaces a global for the file |
+| `mock.env(name, value)` | Sets an environment variable; `undefined` removes it |
+| `mock.when(spy, options?)` | Answers by argument: `calledWith(…).thenReturn(…)` |
 | `mock.module(specifier, factory)` | Replaces a module for imports that load afterwards; a promise when `factory` is async |
 | `mock.importActual(specifier)` | The real module, as a promise |
 | `mock.clearAll()` / `resetAll()` / `restoreAll()` | Forget the calls / the answers / everything |
@@ -401,8 +404,16 @@ name, lasts the rest of the file, and is refused in browser runs. See
 
 On the mock itself: `mock.calls`, `mock.results`, `mock.instances`,
 `mock.lastCall`; `mockImplementation`, `mockReturnValue`, `mockReturnThis`,
-`mockResolvedValue`, `mockRejectedValue` — each with a `…Once` — and
-`mockClear`, `mockReset`, `mockRestore`, `mockName`.
+`mockResolvedValue`, `mockRejectedValue`, `mockThrow` — each with a `…Once` —
+`withImplementation`, `getMockImplementation`, and `mockClear`, `mockReset`,
+`mockRestore`, `mockName`. `using spy = mock.spyOn(…)` restores it when the
+block ends.
+
+A `mock.when` chain takes `calledWith(...args)` and then `thenReturn`,
+`thenThrow`, `thenResolve` or `thenReject`, each with `{ times }` and a
+`…Once`. `onUnmatched` is `"passthrough"` (default), `"throw"` or a function.
+`expect(chain).toHaveBeenExhausted()` checks every answer was used. See
+[Answers by argument](/esdev/test/mocks#answers-by-argument).
 
 Those method names are the ecosystem's, deliberately: they are the vocabulary
 the matchers read.

@@ -88,6 +88,15 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`mock.when(spy)`** gives a mock an answer per set of arguments:
+  `calledWith(…)` followed by `thenReturn`, `thenThrow`, `thenResolve` or
+  `thenReject`, each with `{ times }` and a `…Once` form, plus an `onUnmatched`
+  option and the `toHaveBeenExhausted` matcher. It follows Vitest's `vi.when`.
+- **`mockThrow`, `mockThrowOnce`, `withImplementation` and
+  `getMockImplementation`** on every mock, and **`using`** support:
+  `using spy = mock.spyOn(…)` restores the method when the block ends.
+- **`mock.env(name, value)`** sets a variable in `runtime:process`'s `env`, and
+  `mock.restoreAll()` puts it back (DECISIONS D102).
 - **`mock.module(specifier, factory)` and `mock.importActual(specifier)`**
   replace a module in `runtime:test`. The factory, given `importOriginal`,
   returns the exports, sync or async. Called at the top of a test file, the

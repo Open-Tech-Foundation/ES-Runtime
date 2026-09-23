@@ -12642,6 +12642,115 @@ fn module_mock_project(name: &str) -> PathBuf {
     dir
 }
 
+/// The answers a mock gives beyond one implementation: throwing, for the
+/// length of a callback, by argument, and for a block with `using` — and the
+/// environment put back after `mock.env`.
+#[test]
+fn test_mock_answers_by_argument_and_puts_back_what_it_changed() {
+    let dir = build_dir("t_mock_when");
+    write_in(
+        &dir,
+        "w.test.ts",
+        r#"import { expect, mock, test } from "runtime:test";
+import { env } from "runtime:process";
+
+test("mockThrow", () => {
+  const f = mock.fn().mockThrowOnce(new Error("once")).mockThrow(new Error("always"));
+  expect(() => f()).toThrow("once");
+  expect(() => f()).toThrow("always");
+  expect(f.mock.results.map((r) => r.type)).toEqual(["throw", "throw"]);
+});
+test("withImplementation", async () => {
+  const f = mock.fn(() => "a");
+  f.withImplementation(() => "b", () => expect(f()).toBe("b"));
+  expect(f()).toBe("a");
+  await f.withImplementation(() => "c", async () => { await null; expect(f()).toBe("c"); });
+  expect(f()).toBe("a");
+  expect(f.getMockImplementation()!()).toBe("a");
+});
+test("using restores a spy", () => {
+  const o = { m: () => "real" };
+  {
+    using spy = mock.spyOn(o, "m").mockReturnValue("fake");
+    expect(o.m()).toBe("fake");
+    expect(spy).toHaveBeenCalledOnce();
+  }
+  expect(o.m()).toBe("real");
+});
+test("when", () => {
+  const spy = mock.fn((k: string) => `orig ${k}`);
+  const w = mock.when(spy).calledWith("theme").thenReturn("light").thenReturn("dark", { times: 2 })
+    .calledWith(expect.any(Number)).thenReturnOnce("num");
+  expect(w).not.toHaveBeenExhausted();
+  expect(spy("theme")).toBe("dark");
+  expect(spy("theme")).toBe("dark");
+  expect(spy("theme")).toBe("light");
+  expect(spy(4)).toBe("num");
+  expect(spy(4)).toBe("orig 4");
+  expect(w).toHaveBeenExhausted();
+  w[Symbol.dispose]();
+  expect(spy("theme")).toBe("orig theme");
+});
+test("when throw", async () => {
+  const spy = mock.fn();
+  using w = mock.when(spy, { onUnmatched: "throw" }).calledWith(1).thenResolve("one").calledWith(2).thenThrow(new Error("two"));
+  await expect(spy(1)).resolves.toBe("one");
+  expect(() => spy(2)).toThrow("two");
+  expect(() => spy(3)).toThrow("has no answer for the arguments (3)");
+});
+test("exhausted failure message", () => {
+  const spy = mock.fn().mockName("fetchUser");
+  const w = mock.when(spy).calledWith(1, "a").thenReturnOnce("x");
+  expect(() => expect(w).toHaveBeenExhausted()).toThrow('expected fetchUser to have used every answer; left: calledWith(1, "a").thenReturn (0 of 1)');
+  expect(() => expect(mock.when(mock.fn())).toHaveBeenExhausted()).toThrow("to have answers, and it has none");
+  expect(() => expect(spy).toHaveBeenExhausted()).toThrow("needs a mock.when");
+});
+test("env", () => {
+  env.KEEP = "kept";
+  mock.env("KEEP", "changed").env("NEW_ONE", "1").env("HOME", undefined).env("MY_TOKEN", "abc");
+  expect(env.KEEP).toBe("changed");
+  expect(env.NEW_ONE).toBe("1");
+  expect("HOME" in env).toBe(false);
+  mock.restoreAll();
+  expect(env.KEEP).toBe("kept");
+  expect("NEW_ONE" in env).toBe(false);
+  expect(typeof env.HOME).toBe("string");
+  expect("MY_TOKEN" in env).toBe(false);
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("7 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_mock_env_needs_the_env_capability() {
+    let dir = build_dir("t_mock_env_denied");
+    write_in(
+        &dir,
+        "env.test.js",
+        "import { mock, test } from \"runtime:test\";\n\
+         test(\"stubs\", () => { mock.env(\"PORT\", \"1\"); });\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--deny-all"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains("NotAllowedError: capability denied: Env"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_mock_module_at_the_top_replaces_the_files_own_imports() {
     let dir = module_mock_project("t_mock_module_hoisted");
@@ -12768,7 +12877,7 @@ fn test_mock_module_says_what_is_wrong_with_a_call() {
 /// A page's modules are bundled before it loads, so there is no load to
 /// replace a module at: the file fails with the reason, not a silent real module.
 #[test]
-fn test_mock_module_in_a_browser_run_is_refused_by_name() {
+fn test_mock_in_a_browser_run_refuses_only_what_needs_the_process() {
     let dir = module_mock_project("t_mock_module_browser");
     write_in(
         &dir,
@@ -12777,6 +12886,20 @@ fn test_mock_module_in_a_browser_run_is_refused_by_name() {
          import { send } from \"./mail.ts\";\n\
          mock.module(\"./mail.ts\", () => ({ send: () => \"mocked\" }));\n\
          test(\"x\", () => expect(send(\"a\")).toBe(\"mocked\"));\n",
+    );
+    // What needs no module loader works in a page; the environment does not.
+    write_in(
+        &dir,
+        "src/answers.test.ts",
+        r#"import { expect, mock, test } from "runtime:test";
+test("when in a page", () => {
+  const spy = mock.fn();
+  using w = mock.when(spy).calledWith(1).thenReturn("one");
+  expect(spy(1)).toBe("one");
+  expect(w).toHaveBeenExhausted();
+  expect(() => mock.env("X", "1")).toThrow("mock.env is not available in browser runs");
+});
+"#,
     );
     let out = esdev_in(&dir)
         .args(["test", "--browser", "--timeout=60000"])
@@ -12791,6 +12914,10 @@ fn test_mock_module_in_a_browser_run_is_refused_by_name() {
     assert!(!out.status.success(), "{text}{err}");
     assert!(
         text.contains("FAIL the file failed to load\n    TypeError: mock.module is not available in browser runs yet"),
+        "{text}{err}"
+    );
+    assert!(
+        text.contains("src/answers.test.ts\n  1 passed, 0 failed"),
         "{text}{err}"
     );
 }
