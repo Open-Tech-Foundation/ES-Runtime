@@ -41,6 +41,12 @@ is the point, since none of the three has any business in a deployment.
     its own Chromium and not with a Google Chrome installed beside it:
     `chromedriver 131 … does not match chrome 120` is a browser skipped, not a
     session that fails to start.
+  - **A session is opened the standard way for each browser.** Firefox is
+    started with `--remote-debugging-port=0` and a throwaway profile, and gets
+    a BiDi `session.new`. Chrome, Chromium and Edge are started by their
+    driver through a classic `POST /session` asking for `webSocketUrl`. Both
+    read back the port they were given rather than guessing one. A driver
+    that refuses the session is reported with its own first line of reason.
   - Safari is refused until its BiDi support is ready. `--dom`, the permission
     flags and `--isolation=none` are refused beside `--browser`, since none of
     them means anything in a page.

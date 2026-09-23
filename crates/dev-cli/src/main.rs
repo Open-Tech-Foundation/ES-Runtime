@@ -40,6 +40,11 @@ use es_runtime_cli_common::{Config, Source};
 
 mod adapter;
 mod assets;
+#[allow(
+    dead_code,
+    reason = "the client the browser runner drives; used by tests until it lands"
+)]
+mod bidi;
 mod browser;
 mod build;
 mod bundler;
