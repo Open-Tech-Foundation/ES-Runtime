@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-09-23
+
 ### Changed
 
 - **The pinned toolchain is Rust 1.98.1**, up from 1.95.0, and the **MSRV is
