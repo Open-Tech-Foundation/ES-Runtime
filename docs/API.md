@@ -3927,6 +3927,8 @@ mismatched `Promise`; `await` them.
 | `toEqual(v)` / `toStrictEqual(v)` | Structural, the `assertEquals` walk. This runner draws no stricter distinction. |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test. `name` is optional; unnamed calls count from one. |
 | `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory. |
+| `toMatchInlineSnapshot(propertyMatchers?, snapshot?)` | Matches the snapshot written in the call. With none yet, a local run writes it into the source file; `--ci` fails instead. |
+| `toThrowErrorMatchingInlineSnapshot(snapshot?)` | Calls the function and matches the thrown error against the snapshot written in the call. |
 | `toBeTruthy()` / `toBeFalsy()` / `toBeNull()` / `toBeUndefined()` / `toBeDefined()` / `toBeNaN()` | |
 | `toBeInstanceOf(C)` / `toBeTypeOf(t)` | |
 | `toContain(v)` / `toContainEqual(v)` | A member, a substring, or a `Set`/`Map` key — by identity, then structurally. |

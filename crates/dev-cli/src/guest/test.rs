@@ -116,6 +116,12 @@ struct SnapshotState {
     obsolete_reason: Option<&'static str>,
     updated: usize,
     removed: usize,
+    /// Inline snapshots to write into source files, by file: the line and
+    /// column the matcher ran at, and the value.
+    inline_writes: BTreeMap<PathBuf, Vec<crate::inline_snapshot::Write>>,
+    /// Which positions already have a value to write, so a call reached twice
+    /// with different values is refused rather than written with either.
+    inline_seen: BTreeMap<(PathBuf, u32, u32), String>,
     /// Which case first took a snapshot under each test name, per file. Keys
     /// are made from the test's name, so a second case with the same name
     /// would read and write the first one's snapshots.
@@ -280,6 +286,8 @@ pub fn configure_snapshots(
             updated: 0,
             removed: 0,
             owners: BTreeMap::new(),
+            inline_writes: BTreeMap::new(),
+            inline_seen: BTreeMap::new(),
         };
     });
 }
@@ -571,6 +579,110 @@ fn check_file_snapshot_in(
     }
 }
 
+fn check_inline_snapshot(
+    case_id: usize,
+    stack: &str,
+    actual: String,
+    existing: Option<String>,
+) -> Result<(), String> {
+    let stack = es_runtime_cli_common::sourcemap::remap(stack);
+    SNAPSHOTS.with_borrow_mut(|state| check_inline_in(state, case_id, &stack, actual, existing))
+}
+
+/// Checks an inline snapshot against the value written in the call, and when
+/// there is none — or `--update-snapshots` asked — queues the value to be
+/// written there. `stack` is the matcher's own, mapped back to the source, so
+/// its first frame outside `runtime:test` is the call.
+fn check_inline_in(
+    state: &mut SnapshotState,
+    case_id: usize,
+    stack: &str,
+    actual: String,
+    existing: Option<String>,
+) -> Result<(), String> {
+    if existing.as_deref() == Some(actual.as_str()) {
+        count(&mut state.counts, case_id, true);
+        return Ok(());
+    }
+    let caller = caller(stack);
+    let at = caller
+        .as_ref()
+        .map(|(path, line, column)| format!("{}:{line}:{column}", path.display()))
+        .unwrap_or_default();
+    match existing {
+        Some(expected) if !state.update => {
+            count(&mut state.counts, case_id, false);
+            let accept = caller
+                .as_ref()
+                .map(|(path, _, _)| snapshot_accept_hint(state.ci, path))
+                .unwrap_or_default();
+            Err(format!(
+                "inline snapshot changed\n{at}\n\n{}{accept}",
+                snapshot_diff(&expected, &actual, state.full_diff)
+            ))
+        }
+        None if state.ci => {
+            count(&mut state.counts, case_id, false);
+            Err(format!(
+                "no inline snapshot; --ci does not write them\n{at}"
+            ))
+        }
+        existing => {
+            let Some((path, line, column)) = caller else {
+                count(&mut state.counts, case_id, false);
+                return Err(
+                    "cannot tell where toMatchInlineSnapshot was called, so its snapshot cannot be written"
+                        .to_string(),
+                );
+            };
+            let position = (path.clone(), line, column);
+            if let Some(queued) = state.inline_seen.get(&position) {
+                if *queued == actual {
+                    return Ok(());
+                }
+                count(&mut state.counts, case_id, false);
+                return Err(format!(
+                    "this inline snapshot ran more than once with different values — inline \
+                     snapshots cannot be taken in a loop; use toMatchSnapshot\n{at}"
+                ));
+            }
+            state.inline_seen.insert(position, actual.clone());
+            if existing.is_some() {
+                state.updated += 1;
+            } else {
+                state.written += 1;
+                state.written_entries.push(at);
+            }
+            state
+                .inline_writes
+                .entry(path)
+                .or_default()
+                .push(crate::inline_snapshot::Write {
+                    line,
+                    column,
+                    value: actual,
+                });
+            Ok(())
+        }
+    }
+}
+
+/// The first frame of `stack` in a file — not in `runtime:test` — as a path,
+/// line and column.
+fn caller(stack: &str) -> Option<(PathBuf, u32, u32)> {
+    stack.lines().skip(1).find_map(|line| {
+        let start = line.find("file://")?;
+        let rest = &line[start..];
+        let end = rest
+            .find(|c: char| c == ')' || c.is_whitespace())
+            .unwrap_or(rest.len());
+        let (url, column) = rest[..end].rsplit_once(':')?;
+        let (url, line) = url.rsplit_once(':')?;
+        let path = url::Url::parse(url).ok()?.to_file_path().ok()?;
+        Some((path, line.parse().ok()?, column.parse().ok()?))
+    })
+}
+
 fn text_snapshot(bytes: &[u8]) -> Option<&str> {
     let text = std::str::from_utf8(bytes).ok()?;
     // UTF-8 control bytes other than whitespace make a file snapshot binary.
@@ -817,6 +929,16 @@ fn flush_in(state: &mut SnapshotState) -> Result<(), String> {
             std::fs::remove_file(path)
                 .map_err(|err| format!("cannot remove obsolete {}: {err}", path.display()))?;
         }
+        for (path, writes) in std::mem::take(&mut state.inline_writes) {
+            let source = std::fs::read_to_string(&path)
+                .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+            let written = crate::inline_snapshot::rewrite(&source, &path, &writes)?;
+            let temp = path.with_extension("inline-snapshot.tmp");
+            std::fs::write(&temp, written)
+                .map_err(|err| format!("cannot write {}: {err}", temp.display()))?;
+            std::fs::rename(&temp, &path)
+                .map_err(|err| format!("cannot replace {}: {err}", path.display()))?;
+        }
         Ok(())
     }
 }
@@ -916,6 +1038,10 @@ impl HostExtension for TestExtension {
                     reason = "the id came from `registered`, which handed out an index"
                 )]
                 let index = id as usize;
+                // Frames in a file rewritten as it loaded — TypeScript, JSX —
+                // name positions in the code that ran; put them back on the
+                // lines that were written.
+                let detail = es_runtime_cli_common::sourcemap::remap(&detail);
                 CASES.with_borrow_mut(|cases| mark_finished(cases, index, passed, detail));
                 Ok(Value::Undefined)
             }),
@@ -943,6 +1069,21 @@ impl HostExtension for TestExtension {
                     .unwrap_or("value")
                     .to_string();
                 match check_snapshot(id, key, kind, actual) {
+                    Ok(()) => Ok(Value::Undefined),
+                    Err(message) => Ok(Value::String(message)),
+                }
+            }),
+            // inline_snapshot(id, stack, actual, existing | null) -> message?
+            OpDecl::sync("test_inline_snapshot", |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(-1.0) as usize;
+                let stack = args.get(1).and_then(Value::as_str).unwrap_or_default();
+                let actual = args
+                    .get(2)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let existing = args.get(3).and_then(Value::as_str).map(str::to_string);
+                match check_inline_snapshot(id, stack, actual, existing) {
                     Ok(()) => Ok(Value::Undefined),
                     Err(message) => Ok(Value::String(message)),
                 }
@@ -1314,6 +1455,18 @@ impl FileSnapshots {
             .decode(actual)
             .map_err(|_| "the page sent a file snapshot that is not base64".to_string())?;
         check_file_snapshot_in(&mut self.state, &self.file, case_id, name, bytes)
+    }
+
+    /// An inline snapshot the page took. `stack` is already mapped back to
+    /// the source.
+    pub fn check_inline(
+        &mut self,
+        case_id: usize,
+        stack: &str,
+        actual: String,
+        existing: Option<String>,
+    ) -> Result<(), String> {
+        check_inline_in(&mut self.state, case_id, stack, actual, existing)
     }
 
     /// A case is being attempted again.

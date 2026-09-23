@@ -115,9 +115,7 @@ fn split_position(url: &str) -> Option<(PathBuf, u32, u32)> {
 /// and a bundle with no map beside it should be looked for once rather than
 /// once per frame.
 fn map_for(file: &Path) -> Option<Arc<SourceMap>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<SourceMap>>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut held = cache.lock().ok()?;
+    let mut held = cache().lock().ok()?;
     if let Some(known) = held.get(file) {
         return known.clone();
     }
@@ -126,6 +124,25 @@ fn map_for(file: &Path) -> Option<Arc<SourceMap>> {
         .map(Arc::new);
     held.insert(file.to_path_buf(), found.clone());
     found
+}
+
+/// Every map looked for so far, by the file a frame names — misses included.
+fn cache() -> &'static Mutex<HashMap<PathBuf, Option<Arc<SourceMap>>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<SourceMap>>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Records the map for code that was generated in memory rather than written
+/// to disk — a file rewritten as it was loaded, whose frames name the file on
+/// disk while describing the code that actually ran. It replaces whatever was
+/// found, or not found, for that file before.
+pub fn register(file: &Path, map_json: &str) {
+    let Some(map) = SourceMap::parse(map_json) else {
+        return;
+    };
+    if let Ok(mut held) = cache().lock() {
+        held.insert(file.to_path_buf(), Some(Arc::new(map)));
+    }
 }
 
 /// The map's JSON, from beside the file or from inside it.

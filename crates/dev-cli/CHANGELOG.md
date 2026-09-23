@@ -25,6 +25,10 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **A failing test in a TypeScript or JSX file names the line it was written
+  on.** The transform reprints the file, so after the first stripped type the
+  lines in a failure's stack were the reprinted code's. The transform now
+  records a source map and failures are mapped back through it.
 - **Snapshot keys stay stable.**
   - A test name containing a line break no longer corrupts the `.snap` file:
     it is stored as `\n` in the entry's heading.
@@ -51,6 +55,14 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Inline snapshots: `toMatchInlineSnapshot` and
+  `toThrowErrorMatchingInlineSnapshot`**, as Jest and Vitest spell and write
+  them. A missing snapshot is written into the test file on a local run, a
+  different value fails with a diff, `--update-snapshots` rewrites it, and
+  `--ci` refuses to write. Property matchers come first, as in Jest. A
+  multi-line literal is compared with its added indentation removed, so one
+  written by Jest or Vitest matches as it stands. Works in TypeScript files
+  and in browser runs.
 - **Snapshots in `esdev test --browser`.** `toMatchSnapshot`,
   `toMatchFileSnapshot` and `toThrowErrorMatchingSnapshot` work in the page,
   against the same `__snapshots__` files a normal run uses, with the same

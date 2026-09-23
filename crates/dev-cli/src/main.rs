@@ -58,6 +58,7 @@ mod dts;
 mod guest;
 mod html;
 mod init;
+mod inline_snapshot;
 mod inspect;
 mod install;
 mod jsx;

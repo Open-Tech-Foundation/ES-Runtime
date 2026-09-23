@@ -118,6 +118,13 @@ const INSTALL: &str = r#"(send, config) => {
       if (stored === undefined && store.ci) return `no stored file snapshot: ${path}; --ci does not write them`;
       return undefined;
     },
+    test_inline_snapshot(id, stack, actual, existing) {
+      post("inline-snapshot", id, String(stack), String(actual), existing);
+      if (existing === actual) return undefined;
+      if (existing !== null && !store.update) return "inline snapshot changed";
+      if (existing === null && store.ci) return "no inline snapshot; --ci does not write them";
+      return undefined;
+    },
     test_drained() { post("drained"); },
   };
   Object.defineProperty(globalThis, "__ops", { value: Object.freeze(ops) });
@@ -630,6 +637,17 @@ impl FileState {
                     self.snapshot_failures.push((index, failure));
                 }
             }
+            ("inline-snapshot", Some(index)) => {
+                let text = |at: usize| message.get(at).and_then(Value::as_str).unwrap_or_default();
+                let stack = self.locations.remap(text(2));
+                let existing = message.get(4).and_then(Value::as_str).map(str::to_string);
+                if let Some(snapshots) = &mut self.snapshots
+                    && let Err(failure) =
+                        snapshots.check_inline(index, &stack, text(3).to_string(), existing)
+                {
+                    self.snapshot_failures.push((index, failure));
+                }
+            }
             ("file-snapshot", Some(index)) => {
                 let text = |at: usize| message.get(at).and_then(Value::as_str).unwrap_or_default();
                 if let Some(snapshots) = &mut self.snapshots
@@ -643,12 +661,26 @@ impl FileState {
                 self.tally.skipped(index, because);
             }
             ("finished", Some(index)) => {
-                let passed = message.get(2).and_then(Value::as_bool) == Some(true);
+                let mut passed = message.get(2).and_then(Value::as_bool) == Some(true);
                 let mut detail = message
                     .get(3)
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                // A snapshot the host refused that the page could not — one
+                // taken in a loop, say — fails the case all the same.
+                if passed {
+                    let refused: Vec<&str> = self
+                        .snapshot_failures
+                        .iter()
+                        .filter(|(case, _)| *case == index)
+                        .map(|(_, failure)| failure.as_str())
+                        .collect();
+                    if !refused.is_empty() {
+                        passed = false;
+                        detail = refused.join("\n");
+                    }
+                }
                 // Each snapshot failure the page reported in one line, in the
                 // host's words: with the diff, and the file it is stored in.
                 for (_, failure) in self

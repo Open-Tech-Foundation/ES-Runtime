@@ -896,6 +896,34 @@ function snapshot(actual, nameOrMatchers, kind = "value") {
   if (message !== undefined) throw message;
 }
 
+// An inline snapshot: compared against the value written in the call, with
+// the indentation the writer added taken off first. The matcher's own stack
+// goes to the host, which finds the call in the source from its first frame
+// outside `runtime:test` — to write the value there when there is none yet.
+function inlineSnapshot(serialized, inline) {
+  if (activeCase === null) throw new Error("toMatchInlineSnapshot must run inside a test");
+  if (inline !== undefined && typeof inline !== "string") {
+    throw new TypeError("an inline snapshot is a string");
+  }
+  const existing = inline === undefined ? null : stripIndentation(inline);
+  const message = ops.test_inline_snapshot(activeCase, String(new Error().stack), serialized, existing);
+  if (message !== undefined) throw message;
+}
+
+// Takes off the indentation a multi-line inline snapshot is written with: a
+// literal that opens and closes on lines of its own, every line in between
+// indented at least as far as the first. Anything else is compared as written.
+// The same rule Jest and Vitest apply, so their snapshots read the same here.
+function stripIndentation(text) {
+  const lines = text.split("\n");
+  if (lines.length <= 2) return text;
+  if (lines[0].trim() !== "" || lines.at(-1).trim() !== "") return text;
+  const indentation = lines[1].match(/^[ \t]*/)[0];
+  const body = lines.slice(1, -1);
+  if (body.some((line) => line !== "" && !line.startsWith(indentation))) return text;
+  return body.map((line) => line.slice(indentation.length)).join("\n");
+}
+
 // The assert spelling is useful to helpers that deliberately avoid constructing
 // an expectation chain. It shares the same active-case key and host store.
 function assertSnapshot(actual, name) {
@@ -1240,6 +1268,31 @@ function expectation(actual, negated, mode = "hard") {
       const result = throwsSync(actual);
       if (!result.caught) throw new Error("expected function to throw");
       snapshot(result.err, name, "error");
+    },
+    // The snapshot kept in the call itself, as the ecosystem writes it:
+    // `toMatchInlineSnapshot(propertyMatchers?, snapshot?)`. With no snapshot
+    // yet, a local run writes one into the source; `--ci` refuses.
+    toMatchInlineSnapshot(first, second) {
+      if (negated) throw new TypeError("expect(...).not.toMatchInlineSnapshot is not meaningful");
+      let value = actual;
+      let inline = second;
+      if (typeof first === "string") {
+        inline = first;
+      } else if (first !== undefined) {
+        if (first === null || typeof first !== "object") {
+          throw new TypeError("toMatchInlineSnapshot(propertyMatchers?, snapshot?) takes an object of property matchers");
+        }
+        if (!matchesObject(actual, first, [])) throw new Error("snapshot value did not satisfy its property matchers");
+        value = maskSnapshot(actual, first);
+      }
+      inlineSnapshot(snapshotValue(value), inline);
+    },
+    toThrowErrorMatchingInlineSnapshot(inline) {
+      if (negated) throw new TypeError("expect(...).not.toThrowErrorMatchingInlineSnapshot is not meaningful");
+      if (typeof actual !== "function") throw new TypeError("expect(...).toThrowErrorMatchingInlineSnapshot needs a function");
+      const result = throwsSync(actual);
+      if (!result.caught) throw new Error("expected function to throw");
+      inlineSnapshot(snapshotValue(result.err), inline);
     },
     toBeTruthy() {
       check(Boolean(actual), negated, () =>

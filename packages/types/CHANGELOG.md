@@ -22,6 +22,7 @@ itself.
   `expect.unreachable`, `expect.poll`, `expect.closeTo` and `expect.not`;
   `onTestFinished`, `onTestFailed` and `waitFor`; `toSatisfy`, `toBeOneOf` and
   the DOM matchers.
+- **`toMatchInlineSnapshot` and `toThrowErrorMatchingInlineSnapshot`**.
 
 ## [0.7.0] - 2026-09-23
 

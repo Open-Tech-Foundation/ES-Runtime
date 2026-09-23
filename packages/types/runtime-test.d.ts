@@ -248,6 +248,14 @@ declare module "runtime:test" {
     toMatchFileSnapshot(name: string): void;
     /** Calls the function and snapshots the error it throws. */
     toThrowErrorMatchingSnapshot(name?: string): void;
+    /**
+     * Matches the snapshot written in the call. With none yet, a local run
+     * writes it into the source; `--ci` fails instead.
+     */
+    toMatchInlineSnapshot(snapshot?: string): void;
+    toMatchInlineSnapshot(propertyMatchers: Record<string, unknown>, snapshot?: string): void;
+    /** Calls the function and matches the error it throws against the snapshot written in the call. */
+    toThrowErrorMatchingInlineSnapshot(snapshot?: string): void;
     toBeTruthy(): void;
     toBeFalsy(): void;
     toBeNull(): void;

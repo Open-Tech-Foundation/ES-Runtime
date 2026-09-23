@@ -13267,3 +13267,138 @@ fn test_browser_snapshots_are_the_process_runs_snapshots() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Inline snapshots, as Jest and Vitest write them: taken into the source on a
+/// local run, matched after, refused in `--ci`, updated by
+/// `--update-snapshots` — in a TypeScript file, whose lines the transform
+/// reflows, so finding the call depends on the frame being mapped back.
+#[test]
+fn inline_snapshots_are_written_into_the_source_and_matched() {
+    let dir = build_dir("t_inline_snapshots");
+    let test = dir.join("inline.test.ts");
+    write_in(
+        &dir,
+        "inline.test.ts",
+        r#"import { test, expect } from "runtime:test";
+
+type User = { id: number; name: string };
+
+test("taken", () => {
+  const user: User = { id: 7, name: "ada" };
+  expect(user.id).toMatchInlineSnapshot();
+  expect(user).toMatchInlineSnapshot({ id: expect.any(Number) });
+});
+
+test("written by another runner", () => {
+  expect({ name: "ada", tags: ["a", "b"] }).toMatchInlineSnapshot(`
+    {
+      "name": "ada",
+      "tags": [
+        "a",
+        "b",
+      ],
+    }
+  `);
+});
+"#,
+    );
+    let ci = esdev_in(&dir)
+        .args(["test", "--ci"])
+        .output()
+        .expect("spawn esdev test --ci");
+    assert!(!ci.status.success());
+    assert!(
+        stdout(&ci).contains("no inline snapshot; --ci does not write them"),
+        "{}",
+        stdout(&ci)
+    );
+    assert!(
+        std::fs::read_to_string(&test)
+            .unwrap()
+            .contains("toMatchInlineSnapshot();"),
+        "--ci wrote into the source"
+    );
+
+    let first = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&first), stderr(&first));
+    assert!(first.status.success(), "{text}");
+    // The literal written the way Jest writes one matched as it stands.
+    assert!(
+        text.contains("snapshots: 1 matched, 0 failed, 2 written"),
+        "{text}"
+    );
+    let source = std::fs::read_to_string(&test).unwrap();
+    assert!(
+        source.contains("expect(user.id).toMatchInlineSnapshot(`7`);"),
+        "{source}"
+    );
+    assert!(
+        source.contains(
+            "expect(user).toMatchInlineSnapshot({ id: expect.any(Number) }, `\n    {\n      \"id\": any(Number),\n      \"name\": \"ada\",\n    }\n  `);"
+        ),
+        "{source}"
+    );
+
+    let again = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        stdout(&again).contains("snapshots: 3 matched, 0 failed, 0 written"),
+        "{}",
+        stdout(&again)
+    );
+
+    std::fs::write(
+        &test,
+        source.replace("name: \"ada\" };", "name: \"bob\" };"),
+    )
+    .unwrap();
+    let changed = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let out = stdout(&changed);
+    assert!(!changed.status.success(), "{out}");
+    assert!(out.contains("inline snapshot changed"), "{out}");
+    assert!(
+        out.contains("inline.test.ts:8:"),
+        "the call, on the line it was written: {out}"
+    );
+    assert!(
+        out.contains("-   \"name\": \"ada\",\n    +   \"name\": \"bob\","),
+        "{out}"
+    );
+
+    let updated = esdev_in(&dir)
+        .args(["test", "--update-snapshots"])
+        .output()
+        .expect("spawn esdev test -u");
+    assert!(updated.status.success(), "{}", stdout(&updated));
+    assert!(
+        std::fs::read_to_string(&test)
+            .unwrap()
+            .contains("\"name\": \"bob\",")
+    );
+
+    write_in(
+        &dir,
+        "loop.test.js",
+        "import { test, expect } from \"runtime:test\";\n\
+         test(\"loop\", () => { for (const n of [1, 2]) expect(n).toMatchInlineSnapshot(); });\n",
+    );
+    let looped = esdev_in(&dir)
+        .args(["test", "loop"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!looped.status.success());
+    assert!(
+        stdout(&looped).contains("cannot be taken in a loop"),
+        "{}",
+        stdout(&looped)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

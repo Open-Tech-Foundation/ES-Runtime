@@ -216,6 +216,7 @@ mismatched `Promise` — `await` them.
 | `toEqual` / `toStrictEqual` | Structural, the `assertEquals` walk |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test; unnamed calls count from one |
 | `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory |
+| `toMatchInlineSnapshot(matchers?, snapshot?)` / `toThrowErrorMatchingInlineSnapshot(snapshot?)` | Matches the snapshot written in the call; written into the source when missing, except under `--ci` |
 | `toBeTruthy` / `toBeFalsy` / `toBeNull` / `toBeUndefined` / `toBeDefined` / `toBeNaN` | |
 | `toBeInstanceOf` / `toBeTypeOf` | |
 | `toContain` / `toContainEqual` | A member, a substring, a `Set`/`Map` key |

@@ -60,4 +60,36 @@ small hexadecimal window. Text diffs render trailing spaces as `·`, tabs as
 Each passing run that used snapshots prints a summary such as
 `snapshots: 3 matched, 0 failed, 1 written`.
 
-[Browser runs](/esdev/test/browser) read and write the same snapshot files.
+## Inline snapshots
+
+`toMatchInlineSnapshot()` keeps the snapshot in the test file, as the call's
+argument:
+
+```js
+test("user", () => {
+  expect(user).toMatchInlineSnapshot({ id: expect.any(Number) });
+});
+```
+
+The first local run writes the value into the call, in the format Jest and
+Vitest use:
+
+```js
+test("user", () => {
+  expect(user).toMatchInlineSnapshot({ id: expect.any(Number) }, `
+    {
+      "id": any(Number),
+      "name": "ada",
+    }
+  `);
+});
+```
+
+After that, a different value fails with a diff, `--update-snapshots` rewrites
+the argument, and `--ci` fails rather than writing. A one-line value is written
+on one line. `toThrowErrorMatchingInlineSnapshot()` does the same for a thrown
+error. An inline snapshot cannot be taken in a loop with different values; use
+`toMatchSnapshot` there.
+
+[Browser runs](/esdev/test/browser) read and write the same snapshot files, and
+write inline snapshots into the source the same way.

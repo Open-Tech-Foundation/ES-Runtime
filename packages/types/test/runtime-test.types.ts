@@ -266,3 +266,16 @@ test("DOM matchers", () => {
   // @ts-expect-error — text is a string or a RegExp.
   expect(element).toHaveTextContent(42);
 });
+
+// --- inline snapshots ------------------------------------------------------------
+
+test("inline snapshots", () => {
+  expect(1).toMatchInlineSnapshot();
+  expect(1).toMatchInlineSnapshot(`1`);
+  expect({ id: 1 }).toMatchInlineSnapshot({ id: expect.any(Number) }, `{}`);
+  expect(() => {
+    throw new Error("x");
+  }).toThrowErrorMatchingInlineSnapshot(`Error("x")`);
+  // @ts-expect-error — the snapshot is a string.
+  expect(1).toMatchInlineSnapshot(1);
+});

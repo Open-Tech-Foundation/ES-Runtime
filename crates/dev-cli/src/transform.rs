@@ -690,7 +690,7 @@ impl SourceTransform for TypeStripper {
             if let Some(error) = first_error(&result.diagnostics) {
                 return Err(error);
             }
-            return Ok(format!("{prelude}{}", Codegen::new().build(&program).code));
+            return Ok(format!("{prelude}{}", print(&program, path)));
         };
         let options = TransformOptions {
             jsx,
@@ -704,8 +704,26 @@ impl SourceTransform for TypeStripper {
 
         // No newline between them: the prelude shares line 1 with whatever the
         // printer put there, so every line below keeps the number it had.
-        Ok(format!("{prelude}{}", Codegen::new().build(&program).code))
+        Ok(format!("{prelude}{}", print(&program, path)))
     }
+}
+
+/// Prints a transformed program, and records where each of its positions came
+/// from. The printer lays the code out afresh, so after the first stripped type
+/// a line no longer is the line that was written; the map is how a stack frame
+/// naming the file is put back on the line that was, by the same remapping an
+/// uncaught error's stack goes through.
+fn print(program: &oxc::ast::ast::Program<'_>, path: &Path) -> String {
+    let printed = Codegen::new()
+        .with_options(oxc::codegen::CodegenOptions {
+            source_map_path: Some(path.to_path_buf()),
+            ..oxc::codegen::CodegenOptions::default()
+        })
+        .build(program);
+    if let Some(map) = printed.map {
+        es_runtime_cli_common::sourcemap::register(path, &map.to_json_string());
+    }
+    printed.code
 }
 
 #[cfg(test)]
