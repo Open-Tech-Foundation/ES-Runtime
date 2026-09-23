@@ -212,7 +212,16 @@ function canonical(realm, name, value) {
   const { colors = null, types = null } = realm ?? {};
   const property = String(name).toLowerCase();
   if (colors?.COLOR_PROPERTIES.has(property)) return colors.specifiedColor(value);
-  return normalizeZeros(types, property, value);
+  return normalizeZeros(types, property, quoteArguments(value));
+}
+
+// `url(x.svg)` is stored as `url("x.svg")`, and so is a `path()`'s string: a
+// browser quotes both however they were written.
+function quoteArguments(value) {
+  return String(value).replace(/\b(url|path)\(\s*("[^"]*"|'[^']*'|[^)]*)\s*\)/gi, (whole, name, argument) => {
+    const inner = /^["']/.test(argument) ? argument.slice(1, -1) : argument;
+    return `${name.toLowerCase()}("${inner}")`;
+  });
 }
 
 // A name script can ask a declaration about: a known property, a custom
@@ -664,6 +673,174 @@ function ends(names, values, initial) {
   return names.map((name, index) => [name, parts[index] ?? parts[0] ?? initial]);
 }
 
+// The comma-separated families. Each layer is read on its own and the answers
+// are joined back with commas, which is how a browser reports them: `transition:
+// opacity 2s ease-in 1s, color 3s` gives `transition-duration: 2s, 3s`.
+function layers(text) {
+  const found = [];
+  let depth = 0;
+  let quote = null;
+  let start = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (quote) { if (char === quote) quote = null; continue; }
+    if (char === "'" || char === '"') quote = char;
+    else if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (char === "," && depth === 0) { found.push(text.slice(start, at).trim()); start = at + 1; }
+  }
+  found.push(text.slice(start).trim());
+  return found.filter(Boolean);
+}
+
+const TIMING_KEYWORDS = new Set(["ease", "linear", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end"]);
+const isTiming = (token) => TIMING_KEYWORDS.has(token.toLowerCase()) || /^(cubic-bezier|steps|linear)\(/i.test(token);
+const isTime = (token) => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(s|ms)$/i.test(token);
+
+// One layer of a comma-separated family: the answers for each longhand, by
+// reading each token for what it can be. A time is the duration the first time
+// and the delay the second, which is the only positional rule in the family.
+function perLayer(names, read) {
+  return (parts, text) => {
+    const found = layers(text).map((layer) => read(components(layer, /\s/)));
+    return names.map((name, index) => [name, found.map((answers) => answers[index]).join(", ")]);
+  };
+}
+
+const transition = perLayer(
+  ["transition-property", "transition-duration", "transition-timing-function", "transition-delay", "transition-behavior"],
+  (tokens) => {
+    const answers = ["all", "0s", "ease", "0s", "normal"];
+    let times = 0;
+    for (const token of tokens) {
+      const lower = token.toLowerCase();
+      if (isTime(token)) { answers[times === 0 ? 1 : 3] = token; times += 1; }
+      else if (isTiming(token)) answers[2] = token;
+      else if (lower === "normal" || lower === "allow-discrete") answers[4] = token;
+      else answers[0] = token;
+    }
+    return answers;
+  },
+);
+
+const ANIMATION_DIRECTIONS = new Set(["normal", "reverse", "alternate", "alternate-reverse"]);
+const ANIMATION_FILLS = new Set(["none", "forwards", "backwards", "both"]);
+const ANIMATION_STATES = new Set(["running", "paused"]);
+
+const animation = perLayer(
+  ["animation-name", "animation-duration", "animation-timing-function", "animation-delay",
+   "animation-iteration-count", "animation-direction", "animation-fill-mode", "animation-play-state"],
+  (tokens) => {
+    const answers = ["none", "0s", "ease", "0s", "1", "normal", "none", "running"];
+    let times = 0;
+    let named = false;
+    for (const token of tokens) {
+      const lower = token.toLowerCase();
+      if (isTime(token)) { answers[times === 0 ? 1 : 3] = token; times += 1; }
+      else if (isTiming(token)) answers[2] = token;
+      else if (lower === "infinite" || NUMBER.test(token)) answers[4] = token;
+      else if (ANIMATION_DIRECTIONS.has(lower) && answers[5] === "normal" && lower !== "normal") answers[5] = token;
+      // `none` is a name as much as it is a fill mode, and the name wins while
+      // the name is still unset — which is the order a browser reads them in.
+      else if (ANIMATION_FILLS.has(lower) && !(lower === "none" && !named) && answers[6] === "none") answers[6] = token;
+      else if (ANIMATION_STATES.has(lower) && lower !== "running") answers[7] = token;
+      else if (lower === "running" && answers[7] === "running" && named) answers[7] = token;
+      else { answers[0] = token; named = true; }
+    }
+    return answers;
+  },
+);
+
+// `grid-template`, whose left side may interleave area strings with row sizes.
+function gridTemplate(parts, text) {
+  const names = ["grid-template-rows", "grid-template-columns", "grid-template-areas"];
+  const slash = text.indexOf("/");
+  const rowsText = (slash === -1 ? text : text.slice(0, slash)).trim();
+  const columns = slash === -1 ? "none" : text.slice(slash + 1).trim() || "none";
+  if (rowsText.toLowerCase() === "none") return names.map((name) => [name, "none"]);
+  const tokens = components(rowsText, /\s/);
+  const areas = [];
+  const rows = [];
+  for (const token of tokens) {
+    if (/^["']/.test(token)) {
+      // A browser quotes an area row with double quotes, whatever it was written
+      // with, and a row with no size after it is `auto`.
+      areas.push(`"${token.slice(1, -1)}"`);
+      rows.push("auto");
+    } else if (areas.length > 0) rows[rows.length - 1] = token;
+    else rows.push(token);
+  }
+  return [
+    [names[0], rows.join(" ") || "none"],
+    [names[1], columns],
+    [names[2], areas.length > 0 ? areas.join(" ") : "none"],
+  ];
+}
+
+const MASK_REPEATS = new Set(["repeat", "repeat-x", "repeat-y", "no-repeat", "space", "round"]);
+const MASK_COMPOSITES = new Set(["add", "subtract", "intersect", "exclude"]);
+const MASK_MODES = new Set(["alpha", "luminance", "match-source"]);
+
+// `mask`, read the way `background` is — by what each token can be — with the
+// part after a slash as the size. A single position component is doubled, as a
+// browser doubles it.
+function mask(parts) {
+  const found = {
+    "mask-image": "none", "mask-position": "0% 0%", "mask-size": "auto", "mask-repeat": "repeat",
+    "mask-origin": "border-box", "mask-clip": "border-box", "mask-composite": "add",
+    "mask-mode": "match-source",
+  };
+  const position = [];
+  const size = [];
+  const boxes = [];
+  let afterSlash = false;
+  const isSize = (token) => ["auto", "cover", "contain"].includes(token.toLowerCase()) || isLength(token);
+  for (const token of parts) {
+    if (token === "/") { afterSlash = true; continue; }
+    const lower = token.toLowerCase();
+    // Only while the tokens still read as a size: `center / cover no-repeat`
+    // ends the size at `cover`.
+    if (afterSlash && isSize(token)) { size.push(token); continue; }
+    afterSlash = false;
+    if (isImage(lower) || lower === "none") found["mask-image"] = token;
+    else if (MASK_REPEATS.has(lower)) found["mask-repeat"] = token;
+    else if (MASK_COMPOSITES.has(lower)) found["mask-composite"] = token;
+    else if (MASK_MODES.has(lower)) found["mask-mode"] = token;
+    else if (BOXES.has(lower) || lower === "fill-box" || lower === "stroke-box" || lower === "view-box") boxes.push(token);
+    else if (POSITIONS.has(lower) || isLength(token)) position.push(token);
+  }
+  if (position.length === 1) found["mask-position"] = `${position[0]} center`;
+  else if (position.length > 1) found["mask-position"] = position.join(" ");
+  if (size.length) found["mask-size"] = size.join(" ");
+  if (boxes.length) {
+    found["mask-origin"] = boxes[0];
+    found["mask-clip"] = boxes[1] ?? boxes[0];
+  }
+  return Object.entries(found);
+}
+
+// `offset`: a path, how far along it, which way round, and — after a slash — the
+// anchor.
+function offset(parts, text) {
+  const found = {
+    "offset-position": "normal", "offset-path": "none", "offset-distance": "0",
+    "offset-rotate": "auto", "offset-anchor": "auto",
+  };
+  const slash = text.indexOf("/");
+  const head = components((slash === -1 ? text : text.slice(0, slash)).trim(), /\s/);
+  if (slash !== -1) found["offset-anchor"] = text.slice(slash + 1).trim() || "auto";
+  const rotate = [];
+  for (const token of head) {
+    const lower = token.toLowerCase();
+    if (/^(path|ray|url|circle|ellipse|inset|polygon|rect|xywh)\(/i.test(lower) || lower === "none") found["offset-path"] = token;
+    else if (lower === "auto" || lower === "reverse" || /^[+-]?[\d.]+(deg|grad|rad|turn)$/i.test(lower)) rotate.push(token);
+    else if (isLength(token)) found["offset-distance"] = token;
+    else found["offset-position"] = token;
+  }
+  if (rotate.length) found["offset-rotate"] = rotate.join(" ");
+  return Object.entries(found);
+}
+
 const SHORTHANDS = new Map(Object.entries({
   margin: (v) => SIDES.map((side, i) => [`margin-${side}`, edges(v)[i]]),
   padding: (v) => SIDES.map((side, i) => [`padding-${side}`, edges(v)[i]]),
@@ -733,6 +910,11 @@ const SHORTHANDS = new Map(Object.entries({
   },
   "grid-row": (v) => ends(["grid-row-start", "grid-row-end"], v, "auto"),
   "grid-column": (v) => ends(["grid-column-start", "grid-column-end"], v, "auto"),
+  transition,
+  animation,
+  "grid-template": gridTemplate,
+  mask,
+  offset,
   "grid-area": (v) => {
     const parts = v.join(" ").split("/").map((part) => part.trim());
     const [rowStart = "auto", columnStart = "auto", rowEnd = rowStart, columnEnd = columnStart] = parts;
@@ -750,6 +932,11 @@ export const isShorthand = (name) => SHORTHANDS.has(name);
 // `var()` needs, since its parts are not known until the custom property is
 // substituted at computed-value time.
 const SAMPLES = {
+  transition: "opacity 2s",
+  animation: "spin 2s",
+  "grid-template": "1fr / 1fr",
+  mask: "url(m.svg)",
+  offset: "path('M 0 0') 0%",
   font: "italic small-caps bold 10px/1 serif",
   background: "url(x) no-repeat red",
   flex: "1 1 auto",
@@ -781,10 +968,10 @@ export function expandShorthand(name, value) {
   // A global keyword sets every longhand of the shorthand to itself, whatever
   // the family's own grammar is.
   if (parts.length === 1 && GLOBALS.has(parts[0].toLowerCase())) {
-    return expand(["0"]).map(([longhand]) => [longhand, parts[0]]);
+    return expand(["0"], "0").map(([longhand]) => [longhand, parts[0]]);
   }
   // A value with `var()` in it cannot be split before substitution, and this
   // runs before that: the shorthand stays whole rather than being guessed at.
   if (text.includes("var(")) return [];
-  return expand(parts).filter(([, longhand]) => longhand !== undefined && longhand !== null);
+  return expand(parts, text).filter(([, longhand]) => longhand !== undefined && longhand !== null);
 }

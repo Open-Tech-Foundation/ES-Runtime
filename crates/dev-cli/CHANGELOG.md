@@ -507,10 +507,20 @@ is the point, since none of the three has any business in a deployment.
   pairs and the grid line pairs — with a longhand written after a shorthand
   still winning, since both are in the cascade at longhand granularity. A
   shorthand written with `var()` is split after substitution, the way a pending
-  substitution value is. `transition`, `animation`, `mask`, `offset` and
-  `grid-template` are deliberately left whole: their values are comma-separated
-  lists that need each property's own grammar, and a wrong expansion is worse
-  than none.
+  substitution value is.
+
+  The comma-separated families expand too, layer by layer, with the answers
+  joined back the way a browser reports them — `transition: opacity 2s ease-in
+  1s, color 3s` gives `transition-duration: 2s, 3s`. A time is the duration the
+  first time it appears and the delay the second; `animation`'s keywords each
+  claim the slot still at its default, so `animation: spin 2s linear 1s infinite
+  alternate both running` fills all eight longhands while `animation: 3s spin`
+  takes the defaults for the rest. `grid-template` reads its rows before the
+  slash and its columns after, with area strings interleaved among the rows and
+  requoted with double quotes. `mask` is read by what each token can be, its
+  size ending where the sizes end, so `center / cover no-repeat` does not
+  swallow the repeat. `offset` takes its anchor after the slash. A `url()` or
+  `path()` argument is stored quoted, as a browser stores it.
 - **Inheritance follows the flat tree.** A shadow root's child inherited from
   nothing, so a custom property declared on `:host` never reached the markup
   inside it and every themed component computed the initial value. A child now

@@ -2260,6 +2260,36 @@ export const cases = [
       return result;
     },
   },
+  {
+    group: "cascade",
+    name: "the-layered-shorthands-expand-too",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const style = document.createElement("div").style;
+      const read = (declaration, longhands) => {
+        style.cssText = declaration;
+        const answer = longhands.map((name) => style.getPropertyValue(name));
+        style.cssText = "";
+        return answer;
+      };
+      return [
+        // A time is the duration the first time and the delay the second, and a
+        // layer that names neither takes the defaults.
+        read("transition: opacity 2s", ["transition-property", "transition-duration", "transition-timing-function", "transition-delay", "transition-behavior"]),
+        read("transition: opacity 2s ease-in 1s, color 3s", ["transition-property", "transition-duration", "transition-timing-function", "transition-delay"]),
+        read("animation: spin 2s linear 1s infinite alternate both running", ["animation-name", "animation-duration", "animation-timing-function", "animation-delay", "animation-iteration-count", "animation-direction", "animation-fill-mode", "animation-play-state"]),
+        read("animation: 3s spin", ["animation-name", "animation-duration", "animation-timing-function", "animation-delay", "animation-iteration-count"]),
+        // Rows before the slash, columns after — with the area strings
+        // interleaved in the rows, and quoted as a browser quotes them.
+        read("grid-template: 1fr 2fr / 100px 200px", ["grid-template-rows", "grid-template-columns", "grid-template-areas"]),
+        read("grid-template: 'a b' 50px 'c d' 1fr / 100px auto", ["grid-template-rows", "grid-template-columns", "grid-template-areas"]),
+        // `mask`, read by what each token can be, with the size after the slash.
+        read("mask: url(m.svg) center / cover no-repeat", ["mask-image", "mask-position", "mask-size", "mask-repeat", "mask-origin", "mask-clip", "mask-composite", "mask-mode"]),
+        read("offset: path('M 0 0 L 10 10') 50% 90deg / auto", ["offset-path", "offset-distance", "offset-rotate", "offset-anchor", "offset-position"]),
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at

@@ -6338,10 +6338,261 @@
       "emulatorDisagreement": true,
       "status": "match",
       "drift": false
+    },
+    {
+      "group": "cascade",
+      "name": "the-layered-shorthands-expand-too",
+      "chrome": {
+        "result": [
+          [
+            "opacity",
+            "2s",
+            "ease",
+            "0s",
+            "normal"
+          ],
+          [
+            "opacity, color",
+            "2s, 3s",
+            "ease-in, ease",
+            "1s, 0s"
+          ],
+          [
+            "spin",
+            "2s",
+            "linear",
+            "1s",
+            "infinite",
+            "alternate",
+            "both",
+            "running"
+          ],
+          [
+            "spin",
+            "3s",
+            "ease",
+            "0s",
+            "1"
+          ],
+          [
+            "1fr 2fr",
+            "100px 200px",
+            "none"
+          ],
+          [
+            "50px 1fr",
+            "100px auto",
+            "\"a b\" \"c d\""
+          ],
+          [
+            "url(\"m.svg\")",
+            "center center",
+            "cover",
+            "no-repeat",
+            "border-box",
+            "border-box",
+            "add",
+            "match-source"
+          ],
+          [
+            "path(\"M 0 0 L 10 10\")",
+            "50%",
+            "90deg",
+            "auto",
+            "normal"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "opacity",
+            "2s",
+            "ease",
+            "0s",
+            "normal"
+          ],
+          [
+            "opacity, color",
+            "2s, 3s",
+            "ease-in, ease",
+            "1s, 0s"
+          ],
+          [
+            "spin",
+            "2s",
+            "linear",
+            "1s",
+            "infinite",
+            "alternate",
+            "both",
+            "running"
+          ],
+          [
+            "spin",
+            "3s",
+            "ease",
+            "0s",
+            "1"
+          ],
+          [
+            "1fr 2fr",
+            "100px 200px",
+            "none"
+          ],
+          [
+            "50px 1fr",
+            "100px auto",
+            "\"a b\" \"c d\""
+          ],
+          [
+            "url(\"m.svg\")",
+            "center center",
+            "cover",
+            "no-repeat",
+            "border-box",
+            "border-box",
+            "add",
+            "match-source"
+          ],
+          [
+            "path(\"M 0 0 L 10 10\")",
+            "50%",
+            "90deg",
+            "auto",
+            "normal"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
     }
   ],
   "summary": {
-    "match": 98,
+    "match": 99,
     "intentional-limit": 2,
     "drift": 0
   }
