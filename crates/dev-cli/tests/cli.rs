@@ -12778,6 +12778,14 @@ fn test_browser_runs_the_files_in_a_real_page() {
              expect(1 + 1).toBe(3);\n\
            });\n\
            test.skip(\"skipped\", () => {});\n\
+           test(\"matchers read the real DOM\", () => {\n\
+             const box = document.createElement(\"div\");\n\
+             box.style.width = \"120px\";\n\
+             document.body.append(box);\n\
+             expect(box).toBeInTheDocument();\n\
+             expect(box).toBeVisible();\n\
+             expect(box).toHaveStyle({ width: \"120px\" });\n\
+           });\n\
          });\n",
     );
     write_in(
@@ -12814,7 +12822,7 @@ fn test_browser_runs_the_files_in_a_real_page() {
     assert!(out_text.contains("dom.test.ts:12:"), "{out_text}");
     assert!(!out_text.contains("127.0.0.1"), "{out_text}");
     assert!(
-        out_text.contains("1 passed, 1 failed, 1 skipped"),
+        out_text.contains("2 passed, 1 failed, 1 skipped"),
         "{out_text}"
     );
     // An error no test caught is the file's failure, not a silence.
@@ -12867,6 +12875,244 @@ fn test_browser_runs_the_files_in_a_real_page() {
             &serde_json::json!(1)
         ),
         "{json_out}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The utilities around the matchers: custom matchers, counted and soft
+/// assertions, polling, per-test options, `test.fails`, and cleanup that belongs
+/// to one test. Each is exercised both ways — a case that must pass, and a case
+/// that must fail with its own message — because a utility that never fails
+/// looks exactly like one that works.
+#[test]
+fn test_utilities_hold_and_fail_where_they_should() {
+    let dir = build_dir("t_utilities");
+    write_in(
+        &dir,
+        "utils.test.js",
+        r#"
+import { test, expect, onTestFinished, onTestFailed, waitFor, clock } from "runtime:test";
+
+expect.extend({
+  toBeWithin(received, lo, hi) {
+    return { pass: received >= lo && received <= hi, message: () => `expected ${received} to be within ${lo}..${hi}` };
+  },
+  async toResolveTo(received, want) {
+    return { pass: (await received) === want, message: () => `did not resolve to ${want}` };
+  },
+});
+
+test("extend: direct, negated, asymmetric, async", async () => {
+  expect(5).toBeWithin(1, 10);
+  expect(50).not.toBeWithin(1, 10);
+  expect({ n: 3 }).toEqual({ n: expect.toBeWithin(1, 5) });
+  expect({ n: 30 }).toEqual({ n: expect.not.toBeWithin(1, 5) });
+  await expect(Promise.resolve(2)).toResolveTo(2);
+  await expect(Promise.resolve(4)).resolves.toBeWithin(1, 5);
+});
+
+test("assertions are counted once each", () => {
+  expect.assertions(3);
+  expect(1).toBe(1);
+  expect(2).toStrictEqual(2);
+  expect(3).not.toBe(4);
+});
+
+test("toSatisfy, toBeOneOf, closeTo, expect.not", () => {
+  expect(4).toSatisfy((n) => n % 2 === 0);
+  expect("b").toBeOneOf(["a", "b"]);
+  expect({ x: 0.1 + 0.2 }).toEqual({ x: expect.closeTo(0.3, 5) });
+  expect("hello").toEqual(expect.not.stringContaining("bye"));
+});
+
+test("poll and waitFor run on the real clock while time is frozen", async () => {
+  clock.freeze();
+  let n = 0;
+  let ready = false;
+  queueMicrotask(() => { ready = true; });
+  await expect.poll(() => ++n, { interval: 1 }).toBeGreaterThan(3);
+  expect(await waitFor(() => { if (!ready) throw new Error("not yet"); return "ok"; })).toBe("ok");
+  clock.release();
+});
+
+let flaky = 0;
+test("retry runs the case again", () => { flaky++; expect(flaky).toBe(3); }, { retry: 2 });
+
+test.fails("a known failure passes", () => { expect(1).toBe(2); });
+
+const order = [];
+test("onTestFinished runs newest first", () => {
+  onTestFinished(() => order.push("a"));
+  onTestFinished(() => order.push("b"));
+});
+test("after the test it belonged to", () => { expect(order).toEqual(["b", "a"]); });
+
+test("MUSTFAIL soft", () => {
+  expect.soft(1).toBe(2);
+  expect.soft("a").toBe("b");
+  expect(true).toBe(true);
+});
+test("MUSTFAIL assertions", () => { expect.assertions(3); expect(1).toBe(1); });
+test("MUSTFAIL hasAssertions", () => { expect.hasAssertions(); });
+test("MUSTFAIL timeout", async () => { await new Promise(() => {}); }, 50);
+test.fails("MUSTFAIL fixed", () => {});
+test("MUSTFAIL onTestFailed", () => {
+  onTestFailed((err) => console.log(`onTestFailed saw: ${err.message}`));
+  throw new Error("boom");
+});
+test("MUSTFAIL poll", async () => { await expect.poll(() => 1, { timeout: 30, interval: 5 }).toBe(2); });
+test("MUSTFAIL retry", () => { throw new Error("always"); }, { retry: 1 });
+test("MUSTFAIL unreachable", () => { expect.unreachable("nope"); });
+test("MUSTFAIL custom", () => { expect(0).toBeWithin(1, 2); });
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("8 passed, 10 failed"), "{text}");
+    for (case, want) in [
+        (
+            "soft",
+            "2 assertions failed:\n      1. Error: expected 1 to be 2\n      2. Error: expected \"a\" to be \"b\"",
+        ),
+        ("assertions", "expected 3 assertions, and 1 ran"),
+        (
+            "hasAssertions",
+            "expected at least one assertion, and none ran",
+        ),
+        ("timeout", "the test did not finish within 50ms"),
+        ("fixed", "expected this test to fail, and it passed"),
+        ("onTestFailed", "Error: boom"),
+        (
+            "poll",
+            "expected 1 to be 2 (still failing after 30ms of polling)",
+        ),
+        ("retry", "failed 2 attempts; the last:\n    Error: always"),
+        ("unreachable", "Error: nope"),
+        ("custom", "expected 0 to be within 1..2"),
+    ] {
+        let heading = format!("  FAIL MUSTFAIL {case}\n");
+        let at = text
+            .find(&heading)
+            .unwrap_or_else(|| panic!("{case} did not fail:\n{text}"));
+        let rest = &text[at + heading.len()..];
+        let section = &rest[..rest.find("  FAIL ").unwrap_or(rest.len())];
+        assert!(
+            section.contains(want),
+            "{case} failed with the wrong message:\n{text}"
+        );
+    }
+    // Said once, not repeated by the stack under it.
+    assert_eq!(
+        text.matches("still failing after 30ms").count(),
+        1,
+        "{text}"
+    );
+    assert!(text.contains("onTestFailed saw: boom"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The DOM matchers, against esdev's DOM — the browser run of the same file is
+/// covered by the real-browser test. Every one is used, and a failure names the
+/// element it was about.
+#[test]
+fn dom_matchers_read_the_dom() {
+    let dir = build_dir("t_dom_matchers");
+    write_in(
+        &dir,
+        "dom.test.js",
+        r##"
+import { test, expect, beforeEach } from "runtime:test";
+
+beforeEach(() => {
+  document.body.innerHTML = `
+    <form>
+      <input id="name" class="field big" value="Ada" required>
+      <input id="age" type="number" value="36">
+      <input id="ok" type="checkbox" checked>
+      <select id="multi" multiple><option value="a" selected>A</option><option value="b">B</option><option value="c" selected>C</option></select>
+      <fieldset disabled><legend><button id="inlegend">L</button></legend><button id="off">Off</button></fieldset>
+      <div role="switch" aria-checked="true" id="sw"></div>
+      <p id="text">  Hello,
+         world  </p>
+      <div id="empty"><!-- note --></div>
+      <div id="gone" style="display: none"><span id="inner">x</span></div>
+      <div id="styled" style="color: rgb(255, 0, 0); margin-top: 4px"></div>
+    </form>`;
+});
+
+const $ = (id) => document.getElementById(id);
+
+test("presence and visibility", () => {
+  expect($("name")).toBeInTheDocument();
+  expect(document.querySelector("#missing")).not.toBeInTheDocument();
+  expect(document.createElement("div")).not.toBeInTheDocument();
+  expect($("text")).toBeVisible();
+  expect($("inner")).not.toBeVisible();
+});
+
+test("text, attributes, classes", () => {
+  expect($("text")).toHaveTextContent("Hello, world");
+  expect($("text")).toHaveTextContent(/^Hello/);
+  expect($("name")).toHaveAttribute("required");
+  expect($("name")).toHaveAttribute("value", "Ada");
+  expect($("name")).not.toHaveAttribute("disabled");
+  expect($("name")).toHaveClass("field");
+  expect($("name")).toHaveClass("big field", { exact: true });
+  expect($("name")).not.toHaveClass("small");
+});
+
+test("values and state", () => {
+  expect($("name")).toHaveValue("Ada");
+  expect($("age")).toHaveValue(36);
+  expect($("multi")).toHaveValue(["a", "c"]);
+  expect($("ok")).toBeChecked();
+  expect($("sw")).toBeChecked();
+  expect($("off")).toBeDisabled();
+  expect($("inlegend")).toBeEnabled();
+  expect($("name")).toBeRequired();
+  $("name").focus();
+  expect($("name")).toHaveFocus();
+  expect($("age")).not.toHaveFocus();
+});
+
+test("structure and style", () => {
+  expect($("empty")).toBeEmptyDOMElement();
+  expect($("text")).not.toBeEmptyDOMElement();
+  expect($("gone")).toContainElement($("inner"));
+  expect($("gone")).toContainHTML('<span id="inner">x</span>');
+  expect($("styled")).toHaveStyle({ color: "rgb(255, 0, 0)", marginTop: "4px" });
+  expect($("styled")).toHaveStyle("margin-top: 4px");
+  expect($("gone")).toHaveStyle({ display: "none" });
+});
+
+test("MUSTFAIL named", () => { expect($("name")).toHaveClass("small"); });
+test("MUSTFAIL not a node", () => { expect(null).toHaveTextContent("x"); });
+test("MUSTFAIL checkbox value", () => { expect($("ok")).toHaveValue("on"); });
+"##,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("4 passed, 3 failed"), "{text}");
+    assert!(
+        text.contains(
+            r#"expected <input id="name" class="field big"> to have the class small — found class="field big""#
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("expect(...).toHaveTextContent needs a DOM node, and null is not one"),
+        "{text}"
+    );
+    assert!(
+        text.contains("a checkbox or radio's state is toBeChecked()"),
+        "{text}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

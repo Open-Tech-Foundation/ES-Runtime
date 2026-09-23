@@ -12,7 +12,19 @@
 // breaks this file rather than passing it. The lines without it are the other
 // half: legitimate usage must keep compiling.
 
-import { assertSnapshot, clock, describe, expect, it, mock, suite, test } from "runtime:test";
+import {
+  assertSnapshot,
+  clock,
+  describe,
+  expect,
+  it,
+  mock,
+  onTestFailed,
+  onTestFinished,
+  suite,
+  test,
+  waitFor,
+} from "runtime:test";
 
 // --- the vocabulary -----------------------------------------------------------
 
@@ -161,4 +173,96 @@ test("the clock takes milliseconds and moments", async () => {
   clock.advance(new Date());
   // @ts-expect-error — the async form is awaited, not chained synchronously.
   clock.advanceAsync(1).release();
+});
+
+// --- per-test options, test.fails, and cleanup ---------------------------------
+
+test("a timeout after the body", () => {}, 5000);
+test("options after the body", () => {}, { timeout: 100, retry: 2 });
+test("options before the body", { retry: 1 }, () => {});
+test.only("only takes options too", () => {}, { timeout: 10 });
+test.fails("a known failure", () => {
+  expect(1).toBe(2);
+});
+// @ts-expect-error — a retry count is a number.
+test("retry is a number", () => {}, { retry: "twice" });
+
+test("cleanup belongs to the test", () => {
+  onTestFinished(() => {});
+  onTestFailed((error) => {
+    void error;
+  });
+});
+
+// --- expect's utilities --------------------------------------------------------
+
+test("counting, soft, poll and waitFor", async () => {
+  expect.assertions(2);
+  expect.hasAssertions();
+  expect.soft(1).toBe(1);
+  expect.soft("a").not.toBe("b");
+  await expect.poll(() => 3, { timeout: 100, interval: 5 }).toBeGreaterThan(2);
+  await expect.poll(async () => "x").not.toBe("y");
+  const value: number = await waitFor(() => 7, { timeout: 50 });
+  void value;
+  // @ts-expect-error — poll's matchers are awaited, and toBe keeps its type.
+  await expect.poll(() => 3).toBe("three");
+  if (value < 0) expect.unreachable("never negative");
+  expect(4).toSatisfy((n) => n > 3);
+  expect("b").toBeOneOf(["a", "b"]);
+  expect({ x: 0.3 }).toEqual({ x: expect.closeTo(0.3), y: expect.not.stringContaining("z") });
+});
+
+// Custom matchers: added at runtime, declared by augmentation.
+declare module "runtime:test" {
+  interface Matchers<T> {
+    toBeWithin(lo: number, hi: number): void;
+  }
+  interface AsymmetricMatchers {
+    toBeWithin(lo: number, hi: number): any;
+  }
+}
+
+expect.extend({
+  toBeWithin(received: number, lo: number, hi: number) {
+    return {
+      pass: received >= lo && received <= hi,
+      message: () => `${this.isNot ? "not " : ""}within`,
+    };
+  },
+});
+
+test("an extended matcher", async () => {
+  expect(5).toBeWithin(1, 10);
+  expect(50).not.toBeWithin(1, 10);
+  expect({ n: 3 }).toEqual({ n: expect.toBeWithin(1, 5) });
+  await expect(Promise.resolve(4)).resolves.toBeWithin(1, 5);
+  // @ts-expect-error — an extend entry is a function.
+  expect.extend({ notAFunction: 1 });
+});
+
+// --- DOM matchers ---------------------------------------------------------------
+
+declare const element: HTMLElement;
+
+test("DOM matchers", () => {
+  expect(element).toBeInTheDocument();
+  expect(null).not.toBeInTheDocument();
+  expect(element).toBeVisible();
+  expect(element).toHaveTextContent(/hello/, { normalizeWhitespace: false });
+  expect(element).toHaveAttribute("id", "x");
+  expect(element).toHaveClass("a", "b", { exact: true });
+  expect(element).toHaveValue(["a"]);
+  expect(element).toBeChecked();
+  expect(element).toBeDisabled();
+  expect(element).toBeEnabled();
+  expect(element).toBeRequired();
+  expect(element).toHaveFocus();
+  expect(element).toBeEmptyDOMElement();
+  expect(element).toContainElement(null);
+  expect(element).toContainHTML("<b>x</b>");
+  expect(element).toHaveStyle({ marginTop: "4px", opacity: 1 });
+  expect(element).toHaveStyle("display: none");
+  // @ts-expect-error — text is a string or a RegExp.
+  expect(element).toHaveTextContent(42);
 });

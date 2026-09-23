@@ -25,6 +25,29 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **More of the test vocabulary in `runtime:test`.**
+  - **Test options:** `test(name, fn, { timeout, retry })`, or the options
+    before the body, or a number of milliseconds; the same on `test.skip` and
+    `test.only`. `test.fails` for a test that is expected to fail.
+  - **`expect.extend`** for custom matchers, usable with `.not`, `.resolves`,
+    `.rejects`, `expect.soft`, `expect.poll`, and asymmetrically
+    (`expect.name(...)`, `expect.not.name(...)`). Async matchers are supported.
+  - **`expect.soft`**, **`expect.assertions`**, **`expect.hasAssertions`** and
+    **`expect.unreachable`**. Every matcher call, and each `assert*` call,
+    counts as one assertion.
+  - **`expect.poll`** and **`waitFor`**, which retry until a check passes and
+    wait on real time even while the `clock` is frozen.
+  - **`onTestFinished`** and **`onTestFailed`**, for cleanup registered inside a
+    test.
+  - **`toSatisfy`**, **`toBeOneOf`**, the asymmetric **`expect.closeTo`**, and
+    **`expect.not`** with the inverted asymmetric matchers.
+  - **DOM matchers**: `toBeInTheDocument`, `toBeVisible`,
+    `toBeEmptyDOMElement`, `toContainElement`, `toContainHTML`,
+    `toHaveTextContent`, `toHaveAttribute`, `toHaveClass`, `toHaveValue`,
+    `toBeChecked`, `toBeDisabled`, `toBeEnabled`, `toBeRequired`,
+    `toHaveFocus` and `toHaveStyle`. They read the DOM only, so they behave the
+    same under `--dom` and `--browser`. A failure names the element, such as
+    `<input id="name" class="field">`.
 - **`esdev test --browser[=<name>]` runs the test files in a real browser**,
   and `"test": { "browser": "auto" }` says the same in `esdev.json` (the flag
   wins). The same files, importing the same `runtime:test`: each is bundled

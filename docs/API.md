@@ -3817,6 +3817,25 @@ suite that got smaller.
 
 `describe` carries the same four, plus `.each`.
 
+### Test options and `test.fails`
+
+A test takes options after its body or before it: a number of milliseconds, or
+`{ timeout, retry }`.
+
+```js
+test("loads", async () => { … }, 5000);
+test("flaky upstream", { retry: 2 }, async () => { … });
+```
+
+| Option | |
+| --- | --- |
+| `timeout` | Fails the test if its body has not settled within this many milliseconds. The body is not stopped. |
+| `retry` | Runs the test again, up to this many more times, until it passes. Each attempt runs the `beforeEach` and `afterEach` hooks. Only the last attempt is reported. |
+
+`test.fails(name, fn, options?)` registers a test that is expected to fail. It
+passes while it fails, and fails once it passes. `test.skip` and `test.only`
+take the same options.
+
 ### `test.each` / `describe.each`
 
 One case per row, named by substituting the row into the name.
@@ -3915,6 +3934,8 @@ mismatched `Promise`; `await` them.
 | `toMatch(s\|re)` / `toMatchObject(o)` | A subset of keys, at any depth. |
 | `toBeGreaterThan(n)` / `toBeGreaterThanOrEqual(n)` / `toBeLessThan(n)` / `toBeLessThanOrEqual(n)` | |
 | `toBeCloseTo(n, digits?)` | Two digits by default. |
+| `toSatisfy(predicate)` | `predicate(value)` is truthy. |
+| `toBeOneOf(values)` | Structurally equal to one of `values`. |
 | `toThrow(want?)` / `toThrowError(want?)` | Calls the function; `want` is the expectation `assertThrows` takes. |
 | `toHaveBeenCalled()` / `toHaveBeenCalledTimes(n)` / `toHaveBeenCalledOnce()` / `toHaveBeenCalledWith(...)` | Needs a mock; anything else is a `TypeError` naming the matcher. |
 | `toHaveBeenLastCalledWith(...)` / `toHaveBeenNthCalledWith(n, ...)` | 1-based. |
@@ -3947,13 +3968,109 @@ wherever a value goes — including several levels inside an expected object,
 which is the case that cannot be written as an assertion of its own:
 `expect.anything()`, `expect.any(C)`, `expect.stringContaining(s)`,
 `expect.stringMatching(s|re)`, `expect.arrayContaining(xs)`,
-`expect.objectContaining(o)`.
+`expect.objectContaining(o)`, `expect.closeTo(n, digits?)`. `expect.not`
+holds the inverted `stringContaining`, `stringMatching`, `arrayContaining` and
+`objectContaining`.
 
 ```js
 expect(row).toEqual({ id: expect.any(Number), name: expect.stringContaining("ada") });
 await expect(load()).resolves.toMatchObject({ ok: true });
 await expect(load()).rejects.toThrow(/timed out/);
 ```
+
+### DOM matchers
+
+For DOM nodes, under `--dom` or `--browser`. Each fails with a `TypeError`
+naming the matcher when given something that is not a node.
+
+| Matcher | Passes when |
+| --- | --- |
+| `toBeInTheDocument()` | The node is connected. Accepts `null`, for `.not` after a query that found nothing. |
+| `toBeVisible()` | Connected, and neither it nor an ancestor has `hidden`, `display: none` or `opacity: 0`; itself not `visibility: hidden`. |
+| `toBeEmptyDOMElement()` | No child nodes other than comments. |
+| `toContainElement(el)` | `el` is the node or a descendant of it. |
+| `toContainHTML(html)` | Its `outerHTML` contains `html`, as the parser writes it. |
+| `toHaveTextContent(text, { normalizeWhitespace? })` | `textContent` contains the string, or matches the `RegExp`. Whitespace is collapsed unless `normalizeWhitespace: false`. |
+| `toHaveAttribute(name, value?)` | The attribute is present, and equals `value` when given. |
+| `toHaveClass(...names, { exact? })` | Every class is present; `exact` forbids others. With no names, it has any class. |
+| `toHaveValue(value)` | The control's value: a number for number and range inputs (`null` when empty), an array for `<select multiple>`. Checkboxes and radios use `toBeChecked`. |
+| `toBeChecked()` | A checked checkbox or radio, or a checkable `role` with `aria-checked="true"`. |
+| `toBeDisabled()` / `toBeEnabled()` | Disabled itself, by a disabled `<optgroup>`, or by a disabled `<fieldset>` outside its first `<legend>`. |
+| `toBeRequired()` | `required`, or `aria-required="true"`. |
+| `toHaveFocus()` | It is the active element of its document or shadow root. |
+| `toHaveStyle(css)` | Each declaration, from a CSS string or an object of properties, equals the node's computed value. Colours compute to `rgb()`. |
+
+### `expect.extend`
+
+Adds matchers. Each receives the value and the matcher's arguments and returns
+`{ pass, message }`, or a promise of one. `this.isNot` says whether it was
+called through `.not`, and `this.equals` is the structural equality `toEqual`
+uses.
+
+```js
+expect.extend({
+  toBeWithin(received, lo, hi) {
+    return {
+      pass: received >= lo && received <= hi,
+      message: () => `expected ${received} to be within ${lo}..${hi}`,
+    };
+  },
+});
+
+expect(5).toBeWithin(1, 10);
+expect({ n: 3 }).toEqual({ n: expect.toBeWithin(1, 5) });
+```
+
+An added matcher works with `.not`, `.resolves`, `.rejects`, `expect.soft` and
+`expect.poll`, and as an asymmetric matcher: `expect.name(...)` and
+`expect.not.name(...)`. An async matcher returns a promise to `await`, and
+cannot be used asymmetrically. A matcher with a built-in name replaces it for
+the file.
+
+In TypeScript, declare added matchers by augmenting `Matchers` (and
+`AsymmetricMatchers` for the asymmetric form) in `"runtime:test"`.
+
+### Counting and soft assertions
+
+| | |
+| --- | --- |
+| `expect.assertions(n)` | The running test fails unless exactly `n` assertions ran in it. |
+| `expect.hasAssertions()` | The running test fails unless at least one ran. |
+| `expect.soft(value)` | A failed matcher is recorded and the test continues. The test fails at the end, listing every soft failure. |
+| `expect.unreachable(message?)` | Fails where it is reached. |
+
+Every matcher call counts as one assertion, as do `assert`, `assertEquals`,
+`assertThrows`, `assertRejects` and `assertSnapshot`.
+
+### `expect.poll` and `waitFor`
+
+For state that settles on its own schedule.
+
+```js
+await expect.poll(() => list.children.length).toBe(3);
+const row = await waitFor(() => {
+  const loaded = table.querySelector("tr.loaded");
+  if (!loaded) throw new Error("no loaded row yet");
+  return loaded;
+});
+```
+
+`expect.poll(fn, options?)` calls `fn` until the matcher holds for what it
+returns. `waitFor(fn, options?)` calls `fn` until it returns without throwing,
+or its promise resolves, and returns the result. Both take
+`{ timeout, interval }` (1000ms and 50ms by default), throw the last failure
+when the time runs out, and wait on real time, so a frozen `clock` does not
+stop them.
+
+### `onTestFinished` and `onTestFailed`
+
+Callbacks that belong to the running test. Call them in the test or in its
+`beforeEach`.
+
+| | |
+| --- | --- |
+| `onTestFinished(fn)` | Runs after the test's `afterEach` hooks, newest first. An error it throws fails the test. |
+| `onTestFailed(fn)` | Runs only if the test failed, and receives the failure. |
 
 ### `mock`
 

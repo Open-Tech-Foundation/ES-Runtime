@@ -1,4 +1,26 @@
 declare module "runtime:test" {
+  /** A test's body. */
+  export type TestBody = () => void | Promise<void>;
+
+  /**
+   * What a single test may ask for: `{ timeout, retry }`, or a bare number of
+   * milliseconds for the timeout. Written after the body or before it.
+   */
+  export type TestOptions =
+    | number
+    | {
+        /** Fail the test if its body has not settled within this many milliseconds. */
+        timeout?: number;
+        /** Run it again, up to this many more times, until it passes. */
+        retry?: number;
+      };
+
+  /** The ways a test is registered: name, body, and optional options. */
+  export type Register = {
+    (name: string, fn: TestBody, options?: TestOptions): void;
+    (name: string, options: TestOptions, fn: TestBody): void;
+  };
+
   /**
    * Registers a test. It runs when the ones before it have finished.
    *
@@ -19,21 +41,27 @@ declare module "runtime:test" {
    * finished" — rather than being left out of a green run, and the cases behind
    * it are reported as never having started.
    */
-  export const test: {
-    (name: string, fn: () => void | Promise<void>): void;
+  export const test: Register & {
     /**
      * Registers the case and reports it as **skipped** without running it —
      * counted in the tally rather than left out of it, because a green run
      * that quietly ran fewer tests than it printed is the failure this runner
      * is arranged against. The body may be left out.
      */
-    skip(name: string, fn?: () => void | Promise<void>): void;
+    skip: Register & ((name: string) => void);
     /**
      * Runs this case and skips the rest — the one you are working on. The
      * cases held back are counted and named in the report, so a `.only` left
      * in a commit is visible rather than being a suite that got faster.
      */
-    only(name: string, fn: () => void | Promise<void>): void;
+    only: Register;
+    /**
+     * A test that is known to fail. It passes while it fails, and fails once
+     * it passes, so a fixed bug is noticed.
+     */
+    fails: Register & {
+      each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
+    };
     /**
      * A name with no body yet. Reported as **skipped**, never silently absent
      * — a to-do that vanished from the tally is the one missing case nobody
@@ -65,8 +93,7 @@ declare module "runtime:test" {
   };
 
   /** What `test` is, for the conditional forms that hand it back. */
-  export type TestFn = {
-    (name: string, fn: () => void | Promise<void>): void;
+  export type TestFn = Register & {
     each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
   };
 
@@ -249,6 +276,42 @@ declare module "runtime:test" {
     toThrow(want?: ErrorExpectation): void;
     /** {@link Matchers.toThrow}, under the name jest gave it. */
     toThrowError(want?: ErrorExpectation): void;
+    /** The predicate returns something truthy for the value. */
+    toSatisfy(predicate: (value: T) => unknown, message?: string): void;
+    /** Structurally equal to one of the options. */
+    toBeOneOf(options: readonly unknown[]): void;
+
+    /**
+     * DOM matchers. Each needs a DOM node and fails with a `TypeError` naming
+     * the matcher otherwise — except `toBeInTheDocument`, which accepts `null`
+     * so a query that found nothing can be asserted with `.not`.
+     */
+    toBeInTheDocument(): void;
+    /** Connected, and neither it nor an ancestor is hidden, `display: none` or transparent. */
+    toBeVisible(): void;
+    /** No child nodes other than comments. */
+    toBeEmptyDOMElement(): void;
+    toContainElement(element: Node | null | undefined): void;
+    /** The node's `outerHTML` contains this markup, as the parser would write it. */
+    toContainHTML(html: string): void;
+    /** `textContent`, with whitespace collapsed unless `normalizeWhitespace: false`. */
+    toHaveTextContent(text: string | RegExp, options?: { normalizeWhitespace?: boolean }): void;
+    /** With a value, the attribute must also equal it. */
+    toHaveAttribute(name: string, value?: unknown): void;
+    /** Every class named; `{ exact: true }` also forbids others. No names: any class. */
+    toHaveClass(...names: Array<string | { exact?: boolean }>): void;
+    /** A form control's value: a number for number and range inputs, an array for `<select multiple>`. */
+    toHaveValue(value: unknown): void;
+    /** A checkbox or radio, or an element with a checkable `role` and `aria-checked`. */
+    toBeChecked(): void;
+    /** Disabled itself, or inside a disabled `<fieldset>`. */
+    toBeDisabled(): void;
+    toBeEnabled(): void;
+    /** `required`, or `aria-required="true"`. */
+    toBeRequired(): void;
+    toHaveFocus(): void;
+    /** Each property as the node's computed style has it. Colours compute to `rgb()`. */
+    toHaveStyle(css: string | Record<string, string | number>): void;
 
     /** Needs a {@link Mock}: `mock.fn()` or `mock.spyOn()`. */
     toHaveBeenCalled(): void;
@@ -330,7 +393,102 @@ declare module "runtime:test" {
     arrayContaining(wanted: unknown[]): any;
     /** An object matching at least these keys. */
     objectContaining(wanted: object): any;
-  };
+    /** A number within `digits` decimal places of `n`. Two by default. */
+    closeTo(n: number, digits?: number): any;
+    /** The asymmetric matchers, inverted. */
+    not: {
+      stringContaining(part: string): any;
+      stringMatching(pattern: string | RegExp): any;
+      arrayContaining(wanted: unknown[]): any;
+      objectContaining(wanted: object): any;
+    } & AsymmetricMatchers;
+    /**
+     * A failed matcher is recorded and the test continues. It fails at the
+     * end, listing every soft failure.
+     */
+    soft<T>(actual: T): Assertion<T>;
+    /** The running test fails unless exactly `n` assertions ran in it. */
+    assertions(n: number): void;
+    /** The running test fails unless at least one assertion ran in it. */
+    hasAssertions(): void;
+    /** Fails where it is reached. */
+    unreachable(message?: string): never;
+    /**
+     * Adds matchers. Each is called with the received value and its arguments,
+     * and returns `{ pass, message }` (or a promise of one). Declare them for
+     * TypeScript by augmenting {@link Matchers}, and {@link AsymmetricMatchers}
+     * for use inside an expected value.
+     */
+    extend(matchers: Record<string, CustomMatcher>): void;
+    /**
+     * Calls `fn` until the matcher holds for what it returns, or `timeout`
+     * passes (1000ms, checked every 50ms). Always `await` it.
+     */
+    poll<T>(fn: () => T | Promise<T>, options?: WaitOptions): AwaitedMatchers<Awaited<T>>;
+  } & AsymmetricMatchers;
+
+  /** How long `expect.poll` and {@link waitFor} keep trying, in milliseconds. */
+  export interface WaitOptions {
+    /** Give up after this long. 1000 by default. */
+    timeout?: number;
+    /** Wait this long between tries. 50 by default. */
+    interval?: number;
+  }
+
+  /** What a custom matcher returns. */
+  export interface MatcherResult {
+    pass: boolean;
+    message?: string | (() => string);
+  }
+
+  /** `this` inside a custom matcher. */
+  export interface MatcherContext {
+    /** Whether it was called through `.not`. */
+    isNot: boolean;
+    /** The structural equality `toEqual` uses. */
+    equals(a: unknown, b: unknown): boolean;
+    utils: {
+      stringify(value: unknown): string;
+      printReceived(value: unknown): string;
+      printExpected(value: unknown): string;
+    };
+  }
+
+  export type CustomMatcher = (
+    this: MatcherContext,
+    received: any,
+    ...args: any[]
+  ) => MatcherResult | Promise<MatcherResult>;
+
+  /**
+   * The asymmetric forms of matchers added with `expect.extend`. Augment it to
+   * type them:
+   *
+   * ```ts
+   * declare module "runtime:test" {
+   *   interface Matchers<T> { toBeWithin(lo: number, hi: number): void }
+   *   interface AsymmetricMatchers { toBeWithin(lo: number, hi: number): any }
+   * }
+   * ```
+   */
+  // biome-ignore lint/suspicious/noEmptyInterface: augmented by users
+  export interface AsymmetricMatchers {}
+
+  /**
+   * Registers cleanup for the running test. Runs after its `afterEach` hooks,
+   * newest first. Call it inside a test or its `beforeEach`.
+   */
+  export function onTestFinished(fn: () => void | Promise<void>): void;
+
+  /** Runs only if the running test fails, and is given the failure. */
+  export function onTestFailed(fn: (error: unknown) => void | Promise<void>): void;
+
+  /**
+   * Calls `fn` until it returns without throwing, or its promise resolves, and
+   * returns what it returned. Gives up after `timeout` (1000ms, checked every
+   * 50ms), throwing the last failure.
+   */
+  export function waitFor<T>(fn: () => T | Promise<T>, options?: WaitOptions): Promise<T>;
 
   /** What a {@link Mock} remembers. */
   export interface MockRecord<A extends unknown[], R> {

@@ -13,6 +13,16 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:test`'s new utilities** — test options (`timeout`, `retry`) and
+  `test.fails`; `expect.extend` with the `MatcherResult`, `MatcherContext`
+  and `CustomMatcher` types, and an `AsymmetricMatchers` interface to augment;
+  `expect.soft`, `expect.assertions`, `expect.hasAssertions`,
+  `expect.unreachable`, `expect.poll`, `expect.closeTo` and `expect.not`;
+  `onTestFinished`, `onTestFailed` and `waitFor`; `toSatisfy`, `toBeOneOf` and
+  the DOM matchers.
+
 ## [0.7.0] - 2026-09-23
 
 ### Added

@@ -70,6 +70,10 @@
 const ops = globalThis.__ops;
 let activeCase = null;
 let snapshotNumber = 0;
+// What the running attempt of a case has asked for and done: its assertion
+// count, what `expect.assertions` wants of it, its soft failures, and the
+// callbacks it registered for when it ends. `null` between cases.
+let attempt = null;
 
 // Cases waiting to run, in the order they were written.
 const queue = [];
@@ -118,6 +122,10 @@ let exclusive = false;
 // `setTimeout` for a frozen clock: a file that stops time must not stop the
 // runner with it.
 const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+// The real clock, for the same reason: `expect.poll` and `waitFor` measure how
+// long they have waited, and a frozen `Date` would never let them stop.
+const realNow = Date.now;
 
 // An unhandled rejection is the running test's failure, not the file's death.
 // Without this the process is torn down where the rejection surfaced, and a
@@ -247,13 +255,13 @@ function describe(name, body, mode) {
   }
 }
 
-// Registers a test. It runs when the ones before it have finished.
+// Queues a case. It runs when the ones before it have finished.
 //
 // The id comes back now, at registration, and that is what keeps the report
 // complete: a case that never got to start because an earlier one never settled
 // is a case the host already knows about, and it is reported as a failure
 // rather than silently missing from a green run.
-function test(name, fn, mode) {
+function enqueue(name, fn, mode, options) {
   const skip = mode === "skip" || current.skip;
   if (!skip && typeof fn !== "function") {
     throw new TypeError(`test(${JSON.stringify(String(name))}): needs a function to run`);
@@ -269,13 +277,59 @@ function test(name, fn, mode) {
   const only = mode === "only" || scope.only;
   if (only) exclusive = true;
   for (let at = scope; at; at = at.parent) at.left += 1;
-  queue.push({ id, fn, scope, only });
+  queue.push({ id, fn, scope, only, options });
   schedule();
 }
 
+// What a case may say about itself: `{ timeout, retry }`, or a bare number of
+// milliseconds. Written after the body or before it — `test(name, fn, 5000)`
+// and `test(name, { retry: 2 }, fn)` are both everyday spellings, and a runner
+// that took one would read the other as a test with no body.
+function caseArgs(name, a, b) {
+  if (typeof a !== "function" && typeof b === "function") return [b, optionsOf(name, a)];
+  return [a, optionsOf(name, b)];
+}
+
+function optionsOf(name, value) {
+  const where = `test(${JSON.stringify(String(name))})`;
+  if (value === undefined) return {};
+  if (typeof value === "number") value = { timeout: value };
+  if (value === null || typeof value !== "object") {
+    throw new TypeError(`${where}: options are { timeout, retry }, or a number of milliseconds`);
+  }
+  const { timeout, retry } = value;
+  if (timeout !== undefined && !(Number.isFinite(timeout) && timeout > 0)) {
+    throw new TypeError(`${where}: timeout is a number of milliseconds above zero`);
+  }
+  if (retry !== undefined && !(Number.isInteger(retry) && retry >= 0)) {
+    throw new TypeError(`${where}: retry is how many more times to try, a whole number`);
+  }
+  return { timeout, retry };
+}
+
+// Registers a test. It runs when the ones before it have finished.
+function test(name, a, b) {
+  const [fn, options] = caseArgs(name, a, b);
+  enqueue(name, fn, undefined, options);
+}
+
 // `test.skip(...)` and `test.only(...)`, and the same pair on `describe`.
-test.skip = (name, fn) => test(name, fn, "skip");
-test.only = (name, fn) => test(name, fn, "only");
+test.skip = (name, a, b) => {
+  const [fn, options] = caseArgs(name, a, b);
+  enqueue(name, fn, "skip", options);
+};
+test.only = (name, a, b) => {
+  const [fn, options] = caseArgs(name, a, b);
+  enqueue(name, fn, "only", options);
+};
+
+// A case that is known to fail, and passes for as long as it does. The day it
+// starts passing it fails, saying so — which is the point: a fixed bug whose
+// test is still marked as broken is a regression test nobody is running.
+test.fails = (name, a, b) => {
+  const [fn, options] = caseArgs(name, a, b);
+  enqueue(name, fn, undefined, { ...options, fails: true });
+};
 describe.skip = (name, body) => describe(name, body, "skip");
 describe.only = (name, body) => describe(name, body, "only");
 
@@ -284,7 +338,7 @@ describe.only = (name, body) => describe(name, body, "only");
 // **Counted as skipped, and never silently absent.** The whole runner is
 // arranged so a report says what did not run, and a to-do that vanished from
 // the tally would be the one kind of missing case nobody notices.
-test.todo = (name, fn) => test(name, fn ?? (() => {}), "skip");
+test.todo = (name, fn) => enqueue(name, fn ?? (() => {}), "skip", {});
 describe.todo = (name, body) => describe(name, body ?? (() => {}), "skip");
 
 // `test.skipIf(cond)(...)` / `test.runIf(cond)(...)` — a case that depends on
@@ -355,6 +409,7 @@ test.each = each(test);
 test.skip.each = each(test.skip);
 test.only.each = each(test.only);
 test.todo.each = each(test.todo);
+test.fails.each = each(test.fails);
 describe.each = each(describe);
 describe.skip.each = each(describe.skip);
 describe.only.each = each(describe.only);
@@ -450,7 +505,7 @@ async function settled(scope) {
   }
 }
 
-async function runCase({ id, fn, scope }) {
+async function runCase({ id, fn, scope, options }) {
   ops.test_running(id);
   await open(scope);
   const failed = broken(scope);
@@ -459,17 +514,53 @@ async function runCase({ id, fn, scope }) {
     await settled(scope);
     return;
   }
+  // `retry` more attempts after the first, each a whole run of the case — its
+  // `beforeEach`, its body and its `afterEach` — so a retry starts from the
+  // same state the first attempt did. Only the last attempt is reported.
+  const attempts = 1 + (options.retry ?? 0);
   let failure = null;
+  for (let tried = 1; tried <= attempts; tried++) {
+    failure = await runAttempt(id, fn, scope, options);
+    if (options.fails) {
+      failure =
+        failure === null
+          ? new Error("expected this test to fail, and it passed — remove test.fails if it is fixed")
+          : null;
+    }
+    if (failure === null) break;
+  }
+  const reported =
+    failure === null ? "" : attempts > 1 ? `failed ${attempts} attempts; the last:\n${detail(failure)}` : detail(failure);
+  ops.test_finished(id, failure === null, reported);
+  await settled(scope);
+}
+
+// One attempt at a case, and what it failed with, or `null`.
+async function runAttempt(id, fn, scope, options) {
+  let failure = null;
+  const state = { assertions: 0, expected: null, atLeastOne: false, soft: [], finished: [], failed: [] };
+  attempt = state;
   try {
     activeCase = id;
     snapshotNumber = 0;
     pendingRejection = null;
     armRejectionListener();
     for (const before of around(scope, "beforeEach")) await before();
-    await fn();
+    await (options.timeout === undefined ? fn() : within(fn, options.timeout));
+    if (state.expected !== null && state.assertions !== state.expected) {
+      throw new Error(
+        `expected ${state.expected} assertion${state.expected === 1 ? "" : "s"}, and ${state.assertions} ran`,
+      );
+    }
+    if (state.atLeastOne && state.assertions === 0) {
+      throw new Error("expected at least one assertion, and none ran");
+    }
   } catch (err) {
     failure = err;
   }
+  // Soft failures are the case's failures too, reported together — with a
+  // hard one that ended the case, if there was one.
+  if (state.soft.length > 0) failure = gathered(failure === null ? state.soft : [...state.soft, failure]);
   // Whatever the case left queued runs before its cleanup does. Crossing a task
   // boundary is the only way to know the microtask queue is empty, and a
   // teardown that runs while the case's own promise chain is still settling is
@@ -485,16 +576,98 @@ async function runCase({ id, fn, scope }) {
       failure ??= err;
     }
   }
-  activeCase = null;
   // A promise this case left rejected fails it, like a thrown error — unless
   // something already did, since the first failure explains the rest.
   if (failure === null && pendingRejection !== null) failure = pendingRejection;
   pendingRejection = null;
-  ops.test_finished(id, failure === null, failure === null ? "" : detail(failure));
-  await settled(scope);
+  // The case's own cleanup, after the hooks and newest first, as a stack of
+  // things to undo is unwound.
+  if (failure !== null) {
+    for (const callback of state.failed) {
+      try {
+        await callback(failure);
+      } catch {
+        // The case has already failed, and with a better reason.
+      }
+    }
+  }
+  for (const callback of state.finished.reverse()) {
+    try {
+      await callback();
+    } catch (err) {
+      failure ??= err;
+    }
+  }
+  activeCase = null;
+  attempt = null;
+  return failure;
+}
+
+// A case's body, failed if it has not settled within `ms`. The body is not
+// stopped — nothing in JavaScript can stop it — so it may still be running
+// while the next case starts; the timeout says which case to look at.
+function within(fn, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = Reflect.apply(realSetTimeout, globalThis, [
+      () => reject(new Error(`the test did not finish within ${ms}ms`)),
+      ms,
+    ]);
+    Promise.resolve()
+      .then(fn)
+      .then(resolve, reject)
+      .finally(() => Reflect.apply(realClearTimeout, globalThis, [timer]));
+  });
+}
+
+// Several failures as one: each one's message, numbered, then the first one's
+// stack for where to start looking.
+function gathered(failures) {
+  if (failures.length === 1) return failures[0];
+  const lines = failures.map((err, index) => `  ${index + 1}. ${showError(err)}`);
+  return restated(`${failures.length} assertions failed:\n${lines.join("\n")}`, failures[0]);
+}
+
+// A new error saying `message`, at the frames `from` was thrown at. Its stack
+// is written with the message rather than edited afterwards: an engine that
+// captured the stack text when the error was made keeps the old message in it.
+function restated(message, from) {
+  const error = new Error(message);
+  if (from !== null && typeof from === "object") {
+    if (typeof from.name === "string") error.name = from.name;
+    if (typeof from.stack === "string") {
+      // V8 frames read `    at …`, SpiderMonkey and JavaScriptCore `name@url`.
+      const frames = from.stack.split("\n").filter((line) => /^\s+at |@\S+:\d+:\d+$/.test(line));
+      error.stack = [String(error), ...frames].join("\n");
+    }
+  }
+  return error;
+}
+
+// `onTestFinished(fn)` — cleanup that belongs to the running test, registered
+// where the thing it cleans up was made rather than in a hook far from it.
+function onTestFinished(fn) {
+  duringTest("onTestFinished", fn).finished.push(fn);
+}
+
+// `onTestFailed(fn)` — runs only if the running test failed, and is given why:
+// the place to dump the state a failure needs explaining.
+function onTestFailed(fn) {
+  duringTest("onTestFailed", fn).failed.push(fn);
+}
+
+function duringTest(name, fn) {
+  if (typeof fn !== "function") throw new TypeError(`${name}(): needs a function to run`);
+  if (attempt === null) throw new Error(`${name}() must be called inside a test or its beforeEach`);
+  return attempt;
+}
+
+// One assertion made by the running case, for `expect.assertions`.
+function counted() {
+  if (attempt !== null) attempt.assertions += 1;
 }
 
 function assert(condition, message) {
+  counted();
   if (!condition) throw new Error(message || "assertion failed");
 }
 
@@ -606,6 +779,9 @@ function equal(a, b, seen) {
 // assertion is most often about.
 function show(v) {
   if (typeof v === "bigint") return `${v}n`;
+  if (v !== null && typeof v === "object" && typeof v.nodeType === "number" && typeof v.nodeName === "string") {
+    return describeNode(v);
+  }
   if (v === undefined || typeof v === "symbol" || typeof v === "function") return String(v);
   try {
     const s = JSON.stringify(v, (_key, x) => {
@@ -715,6 +891,7 @@ function snapshot(actual, nameOrMatchers, kind = "value") {
 // The assert spelling is useful to helpers that deliberately avoid constructing
 // an expectation chain. It shares the same active-case key and host store.
 function assertSnapshot(actual, name) {
+  counted();
   snapshot(actual, name);
 }
 
@@ -753,6 +930,7 @@ function neverThrew(want, message, verb, connective) {
 }
 
 function assertEquals(actual, expected, message) {
+  counted();
   if (equal(actual, expected, [])) return;
   throw new Error(
     `${message ? `${message}: ` : ""}expected ${show(expected)}, got ${show(actual)}`,
@@ -763,6 +941,7 @@ function assertEquals(actual, expected, message) {
 // message printed on failure, which made the natural thing to write —
 // `assertThrows(fn, "TypeError")` — assert nothing at all: any throw passed.
 function assertThrows(fn, want, message) {
+  counted();
   let threw;
   let caught = false;
   try {
@@ -776,6 +955,7 @@ function assertThrows(fn, want, message) {
 }
 
 async function assertRejects(fn, want, message) {
+  counted();
   let threw;
   let caught = false;
   try {
@@ -924,7 +1104,104 @@ function throwsSync(fn) {
   return { caught: false };
 }
 
-function expectation(actual, negated) {
+// The node a DOM matcher was given, or a `TypeError` naming the matcher.
+// `toBeInTheDocument` alone accepts `null`, which is how a query that found
+// nothing is asserted to have found nothing.
+function nodeOf(actual, name, nullable = false) {
+  if (nullable && actual === null) return null;
+  if (actual === null || typeof actual !== "object" || typeof actual.nodeType !== "number") {
+    throw new TypeError(`expect(...).${name} needs a DOM node, and ${show(actual)} is not one`);
+  }
+  return actual;
+}
+
+// `<button id="save" class="primary">` — a node as a failure names it.
+function describeNode(node) {
+  if (node === null || node === undefined) return String(node);
+  if (typeof node !== "object" || typeof node.nodeType !== "number") return show(node);
+  if (node.nodeType !== 1) return node.nodeName;
+  const id = node.id ? ` id="${node.id}"` : "";
+  const className = node.getAttribute("class") ? ` class="${node.getAttribute("class")}"` : "";
+  return `<${node.localName}${id}${className}>`;
+}
+
+function dom(node, negated, what, found) {
+  throw new Error(
+    `expected ${describeNode(node)} ${negated ? "not " : ""}to ${what}${found === undefined ? "" : ` — found ${found}`}`,
+  );
+}
+
+// Visible: in the document, and neither it nor anything it is inside is
+// `display: none`, `hidden`, zero opacity, or — for itself, since it
+// inherits — `visibility: hidden`/`collapse`.
+function visible(node) {
+  if (!node.isConnected) return false;
+  const view = node.ownerDocument.defaultView ?? globalThis;
+  const style = view.getComputedStyle(node);
+  if (style.visibility === "hidden" || style.visibility === "collapse") return false;
+  for (let at = node; at; at = at.parentNode ?? at.host ?? null) {
+    if (at.nodeType !== 1) continue;
+    if (at.hasAttribute("hidden")) return false;
+    const own = view.getComputedStyle(at);
+    if (own.display === "none" || own.opacity === "0") return false;
+  }
+  return true;
+}
+
+// What a form control's value is, in the type a test would write it in.
+function valueOf(node) {
+  const name = node.localName;
+  if (name === "input") {
+    const type = (node.type ?? "text").toLowerCase();
+    if (type === "checkbox" || type === "radio") {
+      throw new TypeError("expect(...).toHaveValue: a checkbox or radio's state is toBeChecked()");
+    }
+    if (type === "number" || type === "range") return node.value === "" ? null : Number(node.value);
+    return node.value;
+  }
+  if (name === "select" && node.multiple) {
+    return Array.from(node.options).filter((option) => option.selected).map((option) => option.value);
+  }
+  if (name === "select" || name === "textarea" || name === "button" || name === "output") return node.value;
+  if ("value" in node) return node.value;
+  throw new TypeError(`expect(...).toHaveValue needs a form control, and ${describeNode(node)} is not one`);
+}
+
+function checked(node) {
+  if (node.localName === "input" && (node.type === "checkbox" || node.type === "radio")) return node.checked;
+  const role = node.getAttribute("role");
+  if (role === "checkbox" || role === "radio" || role === "switch" || role === "menuitemcheckbox" || role === "menuitemradio") {
+    return node.getAttribute("aria-checked") === "true";
+  }
+  throw new TypeError(
+    `expect(...).toBeChecked needs a checkbox, a radio, or an element with a checkable role, and ${describeNode(node)} is none of them`,
+  );
+}
+
+// Disabled as the HTML specification decides it: the control's own
+// attribute, or a disabled `<fieldset>` around it — except inside that
+// fieldset's first `<legend>`, which stays usable.
+const DISABLEABLE = new Set(["button", "input", "select", "textarea", "optgroup", "option", "fieldset"]);
+function disabled(node) {
+  if (!DISABLEABLE.has(node.localName)) return false;
+  if (node.hasAttribute("disabled")) return true;
+  if (node.localName === "option" && node.parentElement?.localName === "optgroup" && node.parentElement.hasAttribute("disabled")) {
+    return true;
+  }
+  let inside = node;
+  for (let at = node.parentElement; at; inside = at, at = at.parentElement) {
+    if (at.localName !== "fieldset" || !at.hasAttribute("disabled")) continue;
+    const legend = Array.from(at.children).find((child) => child.localName === "legend");
+    if (legend !== inside) return true;
+  }
+  return false;
+}
+
+// `mode` is how a failed matcher is handled: `"hard"` throws, `"soft"` records
+// it against the running case and carries on, and `"quiet"` throws without
+// counting an assertion — for `expect.poll`, which retries a matcher and counts
+// the assertion once.
+function expectation(actual, negated, mode = "hard") {
   const it = {
     toBe(expected) {
       check(Object.is(actual, expected), negated, () => fail(actual, expected, negated, "be"));
@@ -1127,6 +1404,148 @@ function expectation(actual, negated) {
       if (!outcome.caught) neverThrew(want, "", "throw", "");
       checkThrew(outcome.err, want, "", "throw", "");
     },
+    toSatisfy(predicate, message) {
+      if (typeof predicate !== "function") throw new TypeError("expect(...).toSatisfy needs a predicate");
+      check(Boolean(predicate(actual)), negated, () => {
+        throw new Error(message ?? `expected ${show(actual)} ${negated ? "not " : ""}to satisfy ${predicate.name || "the predicate"}`);
+      });
+    },
+    toBeOneOf(options) {
+      if (!Array.isArray(options)) throw new TypeError("expect(...).toBeOneOf needs an array");
+      check(options.some((option) => equal(actual, option, [])), negated, () =>
+        fail(actual, options, negated, "be one of"),
+      );
+    },
+    // --- the DOM ---
+    //
+    // The questions a component test asks of a node, answered from the DOM
+    // alone, so they mean the same under `--dom` and in a browser. Each needs a
+    // node and says so, rather than reporting that `null` lacks a class — a
+    // query that found nothing is the likeliest cause, and the message should
+    // point at it.
+    toBeInTheDocument() {
+      const node = nodeOf(actual, "toBeInTheDocument", true);
+      check(node !== null && node.isConnected, negated, () =>
+        dom(node, negated, "be in the document"),
+      );
+    },
+    toBeVisible() {
+      const node = nodeOf(actual, "toBeVisible");
+      check(visible(node), negated, () => dom(node, negated, "be visible"));
+    },
+    toBeEmptyDOMElement() {
+      const node = nodeOf(actual, "toBeEmptyDOMElement");
+      const empty = Array.prototype.every.call(node.childNodes, (child) => child.nodeType === 8);
+      check(empty, negated, () => dom(node, negated, "be empty", node.innerHTML));
+    },
+    toContainElement(element) {
+      const node = nodeOf(actual, "toContainElement");
+      const held = element !== null && element !== undefined && node.contains(element);
+      check(held, negated, () => dom(node, negated, `contain ${describeNode(element)}`));
+    },
+    toContainHTML(html) {
+      const node = nodeOf(actual, "toContainHTML");
+      const probe = node.ownerDocument.createElement("div");
+      probe.innerHTML = String(html);
+      check(node.outerHTML.includes(probe.innerHTML), negated, () =>
+        dom(node, negated, `contain the HTML ${JSON.stringify(String(html))}`, node.outerHTML),
+      );
+    },
+    toHaveTextContent(text, { normalizeWhitespace = true } = {}) {
+      const node = nodeOf(actual, "toHaveTextContent");
+      const raw = node.textContent ?? "";
+      const content = normalizeWhitespace ? raw.replace(/\s+/g, " ").trim() : raw;
+      const held = text instanceof RegExp ? text.test(content) : content.includes(String(text));
+      check(held, negated, () =>
+        dom(node, negated, `have the text ${text instanceof RegExp ? text : JSON.stringify(String(text))}`, JSON.stringify(content)),
+      );
+    },
+    toHaveAttribute(name, ...value) {
+      const node = nodeOf(actual, "toHaveAttribute");
+      const present = node.hasAttribute(name);
+      const held = value.length === 0 ? present : present && equal(node.getAttribute(name), value[0], []);
+      const what = value.length === 0 ? `have the attribute ${name}` : `have ${name}=${show(value[0])}`;
+      check(held, negated, () =>
+        dom(node, negated, what, present ? `${name}=${show(node.getAttribute(name))}` : `no ${name}`),
+      );
+    },
+    toHaveClass(...names) {
+      const node = nodeOf(actual, "toHaveClass");
+      const last = names.at(-1);
+      const exact = last !== null && typeof last === "object" && last.exact === true;
+      if (last !== null && typeof last === "object") names = names.slice(0, -1);
+      const wanted = names.flatMap((name) => String(name).split(/\s+/)).filter(Boolean);
+      const have = Array.from(node.classList);
+      const held =
+        wanted.length === 0
+          ? have.length > 0
+          : exact
+            ? have.length === wanted.length && wanted.every((name) => have.includes(name))
+            : wanted.every((name) => have.includes(name));
+      const what = wanted.length === 0 ? "have a class" : `have the class${wanted.length > 1 ? "es" : ""} ${wanted.join(" ")}${exact ? " and no others" : ""}`;
+      check(held, negated, () => dom(node, negated, what, `class="${have.join(" ")}"`));
+    },
+    toHaveValue(value) {
+      const node = nodeOf(actual, "toHaveValue");
+      const have = valueOf(node);
+      check(equal(have, value, []), negated, () => dom(node, negated, `have the value ${show(value)}`, show(have)));
+    },
+    toBeChecked() {
+      const node = nodeOf(actual, "toBeChecked");
+      check(checked(node), negated, () => dom(node, negated, "be checked"));
+    },
+    toBeDisabled() {
+      const node = nodeOf(actual, "toBeDisabled");
+      check(disabled(node), negated, () => dom(node, negated, "be disabled"));
+    },
+    toBeEnabled() {
+      const node = nodeOf(actual, "toBeEnabled");
+      check(!disabled(node), negated, () => dom(node, negated, "be enabled"));
+    },
+    toBeRequired() {
+      const node = nodeOf(actual, "toBeRequired");
+      const held = node.required === true || node.getAttribute("aria-required") === "true";
+      check(held, negated, () => dom(node, negated, "be required"));
+    },
+    toHaveFocus() {
+      const node = nodeOf(actual, "toHaveFocus");
+      const root = node.getRootNode();
+      const held = root.activeElement === node || node.ownerDocument.activeElement === node;
+      check(held, negated, () =>
+        dom(node, negated, "have focus", `focus is on ${describeNode(node.ownerDocument.activeElement)}`),
+      );
+    },
+    // Each property as the node's computed style has it, against the value
+    // written — itself put through the browser's own parser first, so `0` and
+    // `0px` are one value. Computed values are what is compared: a colour
+    // computes to `rgb()`, and is written that way here.
+    toHaveStyle(css) {
+      const node = nodeOf(actual, "toHaveStyle");
+      const view = node.ownerDocument.defaultView ?? globalThis;
+      const computed = view.getComputedStyle(node);
+      const probe = node.ownerDocument.createElement("div");
+      if (typeof css === "string") {
+        probe.style.cssText = css;
+      } else if (css !== null && typeof css === "object") {
+        for (const [key, value] of Object.entries(css)) {
+          const property = key.startsWith("--") ? key : key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+          probe.style.setProperty(property, String(value));
+        }
+      } else {
+        throw new TypeError("expect(...).toHaveStyle needs a CSS string or an object of properties");
+      }
+      const wanted = Array.from(probe.style, (property) => [property, probe.style.getPropertyValue(property)]);
+      if (wanted.length === 0) throw new TypeError(`expect(...).toHaveStyle: no valid declarations in ${show(css)}`);
+      const differing = wanted.filter(([property, value]) => computed.getPropertyValue(property) !== value);
+      check(differing.length === 0, negated, () =>
+        dom(
+          node,
+          negated,
+          `have the style ${wanted.map(([p, v]) => `${p}: ${v}`).join("; ")}`,
+          (negated ? wanted : differing).map(([p]) => `${p}: ${computed.getPropertyValue(p)}`).join("; "),
+        ),
+      );
+    },
   };
   it.toThrowError = it.toThrow;
   // The shorter spellings, which are the same matchers under the names jest
@@ -1142,20 +1561,71 @@ function expectation(actual, negated) {
   it.toReturnWith = it.toHaveReturnedWith;
   it.lastReturnedWith = it.toHaveLastReturnedWith;
   it.nthReturnedWith = it.toHaveNthReturnedWith;
-  return it;
+  for (const [name, fn] of custom) it[name] = (...args) => extended(name, fn, actual, negated, args);
+  // Wrapped once, here, rather than in each matcher: every matcher counts as
+  // an assertion and fails the same way, built in or added by `expect.extend`.
+  // The wrappers go on a new object so a matcher that calls another through
+  // `it` (`toStrictEqual`) counts as the one assertion it is.
+  const out = {};
+  for (const [name, run] of Object.entries(it)) {
+    out[name] = (...args) => {
+      if (mode !== "quiet") counted();
+      if (mode !== "soft") return run(...args);
+      try {
+        const result = run(...args);
+        return result && typeof result.then === "function" ? result.catch(softly) : result;
+      } catch (err) {
+        softly(err);
+      }
+    };
+  }
+  return out;
+}
+
+// A soft failure: recorded against the running case, which fails when it ends.
+function softly(err) {
+  if (attempt === null) throw err;
+  attempt.soft.push(err);
+}
+
+// Matchers added by `expect.extend`, by name.
+const custom = new Map();
+
+// The object a custom matcher is called with as `this`, as the ecosystem's
+// matchers expect to find it.
+const matcherContext = (negated) => ({
+  isNot: negated,
+  equals: (a, b) => equal(a, b, []),
+  utils: { stringify: show, printReceived: show, printExpected: show },
+});
+
+// Runs a custom matcher and applies its verdict. One that returns a promise is
+// awaited, so an async matcher works — and has to be awaited by the test.
+function extended(name, fn, actual, negated, args) {
+  const verdict = (result) => {
+    if (result === null || typeof result !== "object" || typeof result.pass !== "boolean") {
+      throw new TypeError(`expect.extend: ${name} must return { pass: boolean, message: () => string }`);
+    }
+    if (result.pass !== negated) return;
+    const message = typeof result.message === "function" ? result.message() : result.message;
+    throw new Error(message || `expected ${show(actual)} ${negated ? "not " : ""}to pass ${name}`);
+  };
+  const result = fn.call(matcherContext(negated), actual, ...args);
+  if (result && typeof result.then === "function") return result.then(verdict);
+  verdict(result);
 }
 
 // `await expect(promise).resolves.toEqual(x)` — the promise is settled first and
 // the matcher runs on what came out of it, so a rejection is reported as one
 // rather than as a mismatched Promise object.
-function awaited(promise, negated, wantResolved) {
+function awaited(promise, negated, wantResolved, mode = "hard") {
   const handler = {
     get(_target, name) {
       // `.resolves.not.toBe(x)` — negation reached through the proxy, which
       // otherwise answers every name with a matcher and would hand back an
       // async function called `not`.
-      if (name === "not") return awaited(promise, !negated, wantResolved);
-      return async (...args) => {
+      if (name === "not") return awaited(promise, !negated, wantResolved, mode);
+      const run = async (...args) => {
         const outcome = await threw(promise);
         if (wantResolved && outcome.caught) {
           throw new Error(`expected it to resolve, and it rejected: ${showError(outcome.err)}`);
@@ -1180,26 +1650,130 @@ function awaited(promise, negated, wantResolved) {
             checkThrew(err, args[0], "", "reject", "with ");
             return;
           }
-          expectation(err, negated)[name](...args);
+          await expectation(err, negated, "quiet")[name](...args);
           return;
         }
         const value = await promise;
-        expectation(value, negated)[name](...args);
+        await expectation(value, negated, "quiet")[name](...args);
+      };
+      // Counted and softened here, once, rather than by the matcher it ends
+      // up calling — which is quiet for that reason.
+      return (...args) => {
+        if (mode !== "quiet") counted();
+        const result = run(...args);
+        return mode === "soft" ? result.catch(softly) : result;
       };
     },
   };
   return new Proxy({}, handler);
 }
 
-function expect(actual) {
-  const it = expectation(actual, false);
-  it.not = expectation(actual, true);
-  it.resolves = awaited(actual, false, true);
-  it.rejects = awaited(actual, false, false);
-  it.not.resolves = awaited(actual, true, true);
-  it.not.rejects = awaited(actual, true, false);
+function assertion(actual, mode) {
+  const it = expectation(actual, false, mode);
+  it.not = expectation(actual, true, mode);
+  it.resolves = awaited(actual, false, true, mode);
+  it.rejects = awaited(actual, false, false, mode);
+  it.not.resolves = awaited(actual, true, true, mode);
+  it.not.rejects = awaited(actual, true, false, mode);
   return it;
 }
+
+function expect(actual) {
+  return assertion(actual, "hard");
+}
+
+// `expect.soft(value)` — a failed matcher is recorded and the test carries on,
+// failing at the end with every one of them. For checking several properties of
+// one result and seeing all that are wrong in one run.
+expect.soft = (actual) => {
+  if (attempt === null) throw new Error("expect.soft must be called inside a test");
+  return assertion(actual, "soft");
+};
+
+// `expect.assertions(n)` — the running test fails unless exactly `n`
+// assertions ran in it. For a test whose assertions sit in callbacks, where a
+// callback that never ran would otherwise be a test that passed by asserting
+// nothing.
+expect.assertions = (n) => {
+  if (!Number.isInteger(n) || n < 0) throw new TypeError("expect.assertions(n) needs a whole number");
+  duringTest("expect.assertions", () => {}).expected = n;
+};
+
+// `expect.hasAssertions()` — at least one.
+expect.hasAssertions = () => {
+  duringTest("expect.hasAssertions", () => {}).atLeastOne = true;
+};
+
+// `expect.unreachable(message?)` — fails where it is reached.
+expect.unreachable = (message) => {
+  throw new Error(message ?? "expected this line not to be reached");
+};
+
+// `expect.extend({ name(received, ...args) { return { pass, message } } })` —
+// matchers of your own, used like the built-in ones: negated with `.not`, on
+// `.resolves`/`.rejects`, in `expect.soft`, and as asymmetric matchers inside
+// an expected value (`expect.name(...args)`). A name the built-ins use is
+// replaced for this file.
+expect.extend = (matchers) => {
+  if (matchers === null || typeof matchers !== "object") {
+    throw new TypeError("expect.extend needs an object of matcher functions");
+  }
+  for (const [name, fn] of Object.entries(matchers)) {
+    if (typeof fn !== "function") throw new TypeError(`expect.extend: ${name} is not a function`);
+    custom.set(name, fn);
+    // An asymmetric form, unless the name is already one of expect's own.
+    if (!Object.hasOwn(builtinStatics, name)) {
+      const asymmetric = (negated) => (...args) =>
+        matcher(`${negated ? "not." : ""}${name}(${args.map(show).join(", ")})`, (value) => {
+          const result = fn.call(matcherContext(negated), value, ...args);
+          if (result && typeof result.then === "function") {
+            throw new TypeError(`expect.${name}: an async matcher cannot be used inside a value`);
+          }
+          return result?.pass === !negated;
+        });
+      expect[name] = asymmetric(false);
+      expect.not[name] = asymmetric(true);
+    }
+  }
+};
+
+// `expect.poll(fn, { timeout, interval })` — calls `fn` until the matcher
+// holds for what it returns, or the time runs out. For state that settles on
+// its own schedule: a DOM an update has not reached yet, a queue being drained.
+// Always awaited. Waits on the real clock, so a frozen one does not stop it.
+expect.poll = (fn, options = {}) => {
+  if (typeof fn !== "function") throw new TypeError("expect.poll needs a function to call");
+  const { timeout, interval } = waitOptions("expect.poll", options);
+  const polled = (negated) =>
+    new Proxy(
+      {},
+      {
+        get(_target, name) {
+          if (name === "not") return polled(!negated);
+          if (name === "then") return undefined;
+          return async (...args) => {
+            counted();
+            const deadline = realNow() + timeout;
+            for (;;) {
+              try {
+                await expectation(await fn(), negated, "quiet")[name](...args);
+                return;
+              } catch (err) {
+                if (realNow() >= deadline) {
+                  throw restated(`${showError(err).replace(/^\w*Error: /, "")} (still failing after ${timeout}ms of polling)`, err);
+                }
+              }
+              await pause(interval);
+            }
+          };
+        },
+      },
+    );
+  return polled(false);
+};
+
+// The asymmetric matchers, negated: `expect.not.objectContaining({...})`.
+expect.not = {};
 
 // The asymmetric matchers: a value that says what it will accept, usable
 // wherever a value goes — including several levels inside an expected object,
@@ -1228,6 +1802,58 @@ expect.arrayContaining = (wanted) =>
   );
 expect.objectContaining = (wanted) =>
   matcher("objectContaining", (v) => matchesObject(v, wanted, []));
+// A number within `digits` decimal places of `n` — `toBeCloseTo`, inside a value.
+expect.closeTo = (n, digits = 2) =>
+  matcher(`closeTo(${n}, ${digits})`, (v) => typeof v === "number" && Math.abs(v - n) < 10 ** -digits / 2);
+for (const name of ["stringContaining", "stringMatching", "arrayContaining", "objectContaining"]) {
+  const positive = expect[name];
+  expect.not[name] = (...args) => {
+    const inner = positive(...args);
+    return matcher(`not.${inner.label}`, (v) => !inner.matches(v));
+  };
+}
+// `expect`'s own members, which `expect.extend` does not shadow with an
+// asymmetric form of the same name.
+const builtinStatics = Object.fromEntries(Object.keys(expect).map((key) => [key, true]));
+
+// `waitFor(fn, { timeout, interval })` — calls `fn` until it returns without
+// throwing (or its promise resolves), and returns what it returned. For the
+// same unsettled state `expect.poll` is for, when the check is more than one
+// matcher. Waits on the real clock.
+async function waitFor(fn, options = {}) {
+  if (typeof fn !== "function") throw new TypeError("waitFor needs a function to call");
+  const { timeout, interval } = waitOptions("waitFor", options);
+  const deadline = realNow() + timeout;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (realNow() >= deadline) {
+        if (err === null || typeof err !== "object" || typeof err.message !== "string") throw err;
+        throw restated(`${err.message} (still failing after ${timeout}ms of waiting)`, err);
+      }
+    }
+    await pause(interval);
+  }
+}
+
+// One second, checked every 50ms: long enough for a render or a microtask
+// chain, short enough that a wait for something that will never happen fails
+// quickly.
+function waitOptions(name, options) {
+  if (options === null || typeof options !== "object") {
+    throw new TypeError(`${name}: options are { timeout, interval } in milliseconds`);
+  }
+  const timeout = options.timeout ?? 1000;
+  const interval = options.interval ?? 50;
+  if (!(Number.isFinite(timeout) && timeout >= 0) || !(Number.isFinite(interval) && interval >= 0)) {
+    throw new TypeError(`${name}: timeout and interval are numbers of milliseconds`);
+  }
+  return { timeout, interval };
+}
+
+const pause = (ms) =>
+  new Promise((resolve) => Reflect.apply(realSetTimeout, globalThis, [resolve, ms]));
 
 
 // ---------------------------------------------------------------------------
@@ -1701,6 +2327,9 @@ export {
   expect,
   mock,
   clock,
+  onTestFinished,
+  onTestFailed,
+  waitFor,
   __setTestFile,
 };
 export default {
@@ -1720,4 +2349,7 @@ export default {
   expect,
   mock,
   clock,
+  onTestFinished,
+  onTestFailed,
+  waitFor,
 };
