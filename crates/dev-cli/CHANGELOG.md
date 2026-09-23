@@ -25,6 +25,13 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **Custom element names follow HTML's current rule.** A name only needs to be
+  a valid element local name that starts with a lowercase ASCII letter, has no
+  uppercase ASCII and has a hyphen, and isn't one of the eight names SVG and
+  MathML reserve. So `a-🅱` defines, where the old `[a-z0-9._-]` pattern refused
+  it, and `annotation-xml` is refused. `define()` checks in the specification's
+  order and asks only that the class is a constructor. Whether it extends
+  `HTMLElement` is checked when an element is constructed, as in Chrome.
 - **Constants read from instances, and every node has a `nodeValue`.**
   `doc.DOCUMENT_NODE`, `event.AT_TARGET` and the other Web IDL constants were on
   the constructor only. They are on the prototype too now, non-writable, as in

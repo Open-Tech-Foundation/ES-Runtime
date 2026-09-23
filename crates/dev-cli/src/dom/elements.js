@@ -1,12 +1,20 @@
 // Custom-element registration and reactions. The registry owns the reaction
 // wiring while the tree retains ownership of node identity and mutation.
 
-function validName(name) {
-  return /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/.test(name);
+// IsConstructor, without calling it: `Reflect.construct` checks its new
+// target before running anything.
+function isConstructor(value) {
+  if (typeof value !== "function") return false;
+  try {
+    Reflect.construct(Object, [], value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function createElements(tree) {
-  const { Node, Document, Element, HTMLElement, isValueOf, upgradeCustom } = tree;
+  const { Node, Document, Element, HTMLElement, isValueOf, upgradeCustom, isValidCustomElementName: validName } = tree;
   // Per registry, not per module: the specification's duplicate checks are
   // "does *this* registry already have it", and a second `new
   // CustomElementRegistry()` that wrote into the document's definitions would
@@ -245,10 +253,11 @@ export function createElements(tree) {
     define(name, constructor, options = undefined) {
       const own = registryOf(this);
       name = String(name);
-      if (!validName(name)) throw new DOMException("Custom element names must contain a hyphen.", "SyntaxError");
+      // In the specification's order. Whether the class extends `HTMLElement`
+      // is not asked here: constructing an element is where that fails.
+      if (!isConstructor(constructor)) throw new TypeError("Custom element constructor must be a constructor");
+      if (!validName(name)) throw new DOMException(`"${name}" is not a valid custom element name.`, "SyntaxError");
       if (own.definitions.has(name)) throw new DOMException(`${name} is already defined.`, "NotSupportedError");
-      if (typeof constructor !== "function") throw new TypeError("Custom element constructor must be a function");
-      if (!(constructor.prototype instanceof HTMLElement)) throw new TypeError("Custom element constructors must extend HTMLElement");
       // `{ extends: "button" }`: the definition customizes that built-in rather
       // than naming a new element. It has to be a built-in that exists — a
       // custom name, or a name no HTML element has, would customize nothing.
@@ -293,7 +302,7 @@ export function createElements(tree) {
     whenDefined(name) {
       const own = registryOf(this);
       name = String(name);
-      if (!validName(name)) return Promise.reject(new DOMException("Custom element names must contain a hyphen.", "SyntaxError"));
+      if (!validName(name)) return Promise.reject(new DOMException(`"${name}" is not a valid custom element name.`, "SyntaxError"));
       const existing = own.definitions.get(name);
       if (existing) return Promise.resolve(existing.constructor);
       return new Promise((resolve) => {

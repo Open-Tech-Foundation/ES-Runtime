@@ -6271,7 +6271,7 @@ fn test_dom_custom_element_registry_validates_and_settles_waiters() {
            assertEquals(customElements.get('x-later'), undefined);\n\
            assertRejects(() => customElements.whenDefined('plain'), DOMException);\n\
            assertThrows(() => customElements.define('plain', class Plain extends HTMLElement {}), DOMException);\n\
-           assertThrows(() => customElements.define('x-invalid', class Invalid {}), TypeError);\n\
+           assertThrows(() => customElements.define('x-invalid', () => {}), TypeError);\n\
            const waiting = customElements.whenDefined('x-later');\n\
            class Later extends HTMLElement {}\n\
            customElements.define('x-later', Later);\n\

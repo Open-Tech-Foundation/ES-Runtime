@@ -2385,7 +2385,7 @@ export function createTree(events = {}) {
       // party the same element's private surface.
       const state = slots(this);
       const custom = state.customDefined === true || state.customPrecustomized === true;
-      if (!custom || !CUSTOM_NAME.test(this.localName)) {
+      if (!custom || !isValidCustomElementName(this.localName)) {
         throw domError("NotSupportedError", "Only a defined custom element has internals.");
       }
       if (this[INTERNALS]) throw domError("NotSupportedError", "This element already has internals attached.");
@@ -2621,7 +2621,7 @@ export function createTree(events = {}) {
       // The specification's list, plus any valid custom element name. An
       // `<input>` cannot host a root, and a component that tries deserves to
       // hear so rather than to end up with a root nothing renders.
-      if (!SHADOW_HOSTS.has(this.localName) && !(this.namespaceURI === HTML_NAMESPACE && CUSTOM_NAME.test(this.localName))) {
+      if (!SHADOW_HOSTS.has(this.localName) && !(this.namespaceURI === HTML_NAMESPACE && isValidCustomElementName(this.localName))) {
         throw domError("NotSupportedError", `<${this.localName}> cannot host a shadow root.`);
       }
       if (this[SHADOW_ROOT]) throw domError("NotSupportedError", "This element already hosts a shadow root.");
@@ -3080,8 +3080,16 @@ export function createTree(events = {}) {
   defineTokenList(HTML_INTERFACES.HTMLIFrameElement, "sandbox", "sandbox", SANDBOX_FLAGS);
 
   // A valid custom element name, which is the only kind of element that can be
-  // undefined: everything else is defined by being built in.
-  const CUSTOM_NAME = /^[a-z][a-z0-9._-]*-[a-z0-9._-]*$/;
+  // undefined: everything else is defined by being built in. HTML's rule since
+  // it followed the DOM's relaxed names: a valid element local name that starts
+  // with a lowercase ASCII letter, has no uppercase ASCII letter and a hyphen,
+  // and is not one of the names SVG and MathML already took.
+  const RESERVED_CUSTOM_NAMES = new Set(["annotation-xml", "color-profile", "font-face", "font-face-src",
+    "font-face-uri", "font-face-format", "font-face-name", "missing-glyph"]);
+  function isValidCustomElementName(name) {
+    return /^[a-z]/.test(name) && !/[A-Z]/.test(name) && name.includes("-")
+      && isValidElementLocalName(name) && !RESERVED_CUSTOM_NAMES.has(name);
+  }
 
   // Which class an HTML name makes. A name the language has gets its interface;
   // a hyphenated one gets `HTMLElement`, because it could still be defined; any
@@ -3089,7 +3097,7 @@ export function createTree(events = {}) {
   function elementClass(name) {
     const found = ELEMENT_CLASSES[name];
     if (found !== undefined) return found;
-    if (CUSTOM_NAME.test(name) || HTML_ELEMENT_NAMES.has(name)) return HTMLElement;
+    if (isValidCustomElementName(name) || HTML_ELEMENT_NAMES.has(name)) return HTMLElement;
     return HTML_INTERFACES.HTMLUnknownElement;
   }
 
@@ -3142,7 +3150,7 @@ export function createTree(events = {}) {
     if (element.namespaceURI === HTML_NAMESPACE && isValueOf(element) !== null) {
       return slots(element).customDefined === true;
     }
-    if (element.namespaceURI !== HTML_NAMESPACE || !CUSTOM_NAME.test(element.localName)) return true;
+    if (element.namespaceURI !== HTML_NAMESPACE || !isValidCustomElementName(element.localName)) return true;
     if (element.getRootNode()?.[INERT]) return false;
     if (slots(element).customFailed) return false;
     return slots(element).customDefined === true;
@@ -3203,5 +3211,5 @@ export function createTree(events = {}) {
     return result;
   }
 
-  return { Node, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
+  return { Node, isValidCustomElementName, staticNodeList, HTMLDocument, XMLDocument, isHTMLDocument, isValueOf, isKnownHtmlElement, ...HTML_INTERFACES, ...SVG_INTERFACES, NodeList, HTMLCollection, DOMTokenList, NodeFilter, TreeWalker, NodeIterator, Document, DocumentFragment, ShadowRoot, Element, HTMLElement, HTMLTemplateElement, HTMLSlotElement, MathMLElement, HTMLInputElement, HTMLButtonElement, HTMLDialogElement, HTMLDivElement, HTMLCanvasElement, HTMLAnchorElement, HTMLProgressElement, HTMLStyleElement, HTMLTableElement, HTMLTableSectionElement, HTMLTableRowElement, HTMLTableCellElement, HTMLTableCaptionElement, HTMLTableColElement, HTMLFormElement, HTMLLabelElement, HTMLFieldSetElement, HTMLOptGroupElement, HTMLOptionElement, HTMLSelectElement, HTMLTextAreaElement, CharacterData, Text, CDATASection, Comment, ProcessingInstruction, DocumentType, DOMImplementation, DOMStringMap, Attr, NamedNodeMap, ValidityState, ElementInternals, CustomStateSet, DOMRect, DOMRectReadOnly, VOID, HTML_NAMESPACE, SVG_NAMESPACE, MATHML_NAMESPACE, ownAttributes, setCurrentDocument, setCustomLookup, hasFailedUpgrade, isDefined, isDisabled, controlStates: customStates, customStates, controlValidity, formSubmissionValue, upgradeCustom };
 }
