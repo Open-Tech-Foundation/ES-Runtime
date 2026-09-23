@@ -25,6 +25,30 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Added
+- **A declaration block holds longhands, and serializes shorthands back out of
+  them** — the CSS OM's own model, which is what `style.length`, `style.item()`,
+  `cssText` and the `style` attribute all read from. `el.style.border = "1px
+  solid red"` now stores seventeen longhands, enumerates them in the order a
+  browser does, and prints `border: 1px solid red;`; overriding one of them drops
+  to `border-width: 9px 1px 1px; border-style: solid; border-color: red;
+  border-image: initial;`, exactly as Chrome does. Setting the four margins one
+  at a time prints each until the family is whole, and then `margin: 1px 2px;`.
+  Removing one longhand of a shorthand leaves the other three.
+
+  Each family prints in its own order, read off Chrome family by family, because
+  the order is not the one the longhands expand in: `border` prints width, style,
+  colour while `outline` prints colour, style, width; `list-style` prints
+  position, image, type; `text-decoration` prints line, thickness, style, colour;
+  `font` and `background` and `border-image` place their slashes; `animation`
+  prints all eight parts with the name last while `transition` omits a part at
+  its default; `grid-template` interleaves its area strings with its row sizes.
+  Normal declarations print before important ones. `box-shadow` and `text-shadow`
+  print their colour first and `inset` last, whatever order they were written in.
+
+  Two more differences went with it: a shorthand is now validated through its
+  longhands, so `border-image: url(b.png) 30 fill / 10px / 2px round` is kept (a
+  length is legal there only after a slash, which no probe of the shorthand alone
+  can see), and `background-position` is the pair of axes a browser stores.
 - **A computed shorthand is serialized from its longhands.** `getComputedStyle(el).border`
   answered the text that was written — `1px solid red` — where a browser answers
   `1px solid rgb(255, 0, 0)`, because a computed style holds no shorthands at all:

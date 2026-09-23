@@ -166,6 +166,14 @@ export function validDeclaration(types, name, value) {
   // A custom property's value is an arbitrary token sequence, by design.
   if (property.startsWith("--")) return String(value).trim() !== "";
   const lower = property === "cssFloat" ? "float" : property.toLowerCase();
+  // A shorthand is checked through its longhands, because a kind may only be
+  // legal in one position — `border-image` takes a length only as its width, and
+  // `offset` an angle only as its rotation. An invalid part invalidates the
+  // whole declaration, as it does in a browser.
+  if (isShorthand(lower)) {
+    const parts = expandShorthand(lower, value);
+    return parts.length === 0 || parts.every(([longhand, part]) => validDeclaration(types, longhand, part));
+  }
   const declared = types?.get(lower);
   for (const component of components(String(value), /\s/)) {
     const found = componentKind(component);
@@ -212,7 +220,29 @@ function canonical(realm, name, value) {
   const { colors = null, types = null } = realm ?? {};
   const property = String(name).toLowerCase();
   if (colors?.COLOR_PROPERTIES.has(property)) return colors.specifiedColor(value);
+  if (property === "box-shadow" || property === "text-shadow") {
+    return canonicalShadow(normalizeZeros(types, property, quoteArguments(value)));
+  }
   return normalizeZeros(types, property, quoteArguments(value));
+}
+
+// `box-shadow` and `text-shadow` print the colour first, then the offsets, then
+// `inset` — whatever order they were written in.
+function canonicalShadow(value) {
+  return layers(String(value))
+    .map((layer) => {
+      const tokens = components(layer, /\s/);
+      const lengths = [];
+      const colours = [];
+      let inset = null;
+      for (const token of tokens) {
+        if (token.toLowerCase() === "inset") inset = token;
+        else if (isLength(token)) lengths.push(token);
+        else colours.push(token);
+      }
+      return [...colours, ...lengths, ...(inset === null ? [] : [inset])].join(" ");
+    })
+    .join(", ");
 }
 
 // `url(x.svg)` is stored as `url("x.svg")`, and so is a `path()`'s string: a
@@ -222,6 +252,19 @@ function quoteArguments(value) {
     const inner = /^["']/.test(argument) ? argument.slice(1, -1) : argument;
     return `${name.toLowerCase()}("${inner}")`;
   });
+}
+
+// Storing one declaration: a shorthand becomes its longhands, in the order the
+// family expands, and replaces whatever they held. A property with no expansion
+// — a longhand, a custom property — is stored as itself.
+function setLonghands(values, realm, name, value, priority) {
+  const parts = expandShorthand(name, value);
+  if (parts.length === 0) {
+    values.set(name, { value, priority });
+    return;
+  }
+  for (const [longhand] of parts) values.delete(longhand);
+  for (const [longhand, part] of parts) values.set(longhand, { value: part, priority });
 }
 
 // A name script can ask a declaration about: a known property, a custom
@@ -278,11 +321,13 @@ function parse(text, realm) {
     // cannot parse and keeps the rest of the list, which is what makes one bad
     // line in a style attribute harmless.
     if (!validDeclaration(types, name, value)) continue;
-    values.set(name, { value: canonical(realm, name, value), priority: important ? "important" : "" });
+    setLonghands(values, realm, name, canonical(realm, name, value), important ? "important" : "");
   }
   return values;
 }
 
+// Kept for the read-only declaration a computed style hands out, which holds
+// longhands and prints them one by one.
 function serialize(values) {
   return Array.from(values, ([name, entry]) => `${name}: ${entry.value}${entry.priority ? " !important" : ""};`).join(" ");
 }
@@ -313,7 +358,45 @@ const OMITTED = new Map(Object.entries({
   "text-decoration-style": "solid", "text-decoration-color": "currentcolor",
   "text-decoration-thickness": "auto", "list-style-position": "outside",
   "list-style-image": "none", "list-style-type": "disc",
+  "background-image": "none", "background-position-x": "0%", "background-position-y": "0%",
+  "background-size": "auto", "background-repeat": "repeat", "background-attachment": "scroll",
+  "background-origin": "padding-box", "background-clip": "border-box",
+  "background-color": "rgba(0, 0, 0, 0)",
+  "border-image-source": "none", "border-image-slice": "100%", "border-image-width": "1",
+  "border-image-outset": "0", "border-image-repeat": "stretch",
+  "font-style": "normal", "font-variant": "normal", "font-weight": "normal", "font-stretch": "normal",
+  "line-height": "normal",
+  "mask-image": "none", "mask-position": "0% 0%", "mask-size": "auto", "mask-repeat": "repeat",
+  "mask-origin": "border-box", "mask-clip": "border-box", "mask-composite": "add",
+  "mask-mode": "match-source",
+  "offset-position": "normal", "offset-path": "none", "offset-distance": "0", "offset-rotate": "auto",
+  "offset-anchor": "auto",
 }));
+
+// The order each family prints in, which is the family's own and not the order
+// its longhands expand in — `outline` prints colour, style, width where `border`
+// prints width, style, colour. Read off Chrome, family by family. A `/` is
+// printed where the grammar has one.
+const PRINT_ORDER = {
+  outline: ["outline-color", "outline-style", "outline-width"],
+  "list-style": ["list-style-position", "list-style-image", "list-style-type"],
+  "text-decoration": ["text-decoration-line", "text-decoration-thickness", "text-decoration-style", "text-decoration-color"],
+  font: ["font-style", "font-variant", "font-weight", "font-stretch", "font-size", ["/", "line-height"], "font-family"],
+  background: [
+    "background-image", "background-position-x", "background-position-y", ["/", "background-size"],
+    "background-repeat", "background-attachment", "background-origin", "background-clip",
+    "background-color",
+  ],
+  "border-image": [
+    "border-image-source", "border-image-slice", ["/", "border-image-width"],
+    ["/", "border-image-outset"], "border-image-repeat",
+  ],
+  mask: [
+    "mask-image", "mask-position", ["/", "mask-size"], "mask-repeat", "mask-origin", "mask-clip",
+    "mask-composite", "mask-mode",
+  ],
+  offset: ["offset-position", "offset-path", "offset-distance", "offset-rotate", ["/", "offset-anchor"]],
+};
 
 // A run of equal values collapses, the way the 1-to-4 value pattern does.
 function collapse(values) {
@@ -341,18 +424,79 @@ function serializeShorthandFrom(shorthand, read) {
     }
     return serializeShorthandFrom("border-top", read);
   }
-  if (/^(border-(top|right|bottom|left)|outline|text-decoration|list-style|columns|flex-flow)$/.test(property)) {
+  const order = PRINT_ORDER[property];
+  if (order !== undefined) {
+    // Every part at the CSS-wide `initial` prints as that one word, which is how
+    // a declaration that can no longer say `border` still says
+    // `border-image: initial`.
+    if (values.every((value) => value === "initial")) return "initial";
+    const printed = [];
+    for (const item of order) {
+      const slash = Array.isArray(item);
+      const name = slash ? item[1] : item;
+      const value = read(name);
+      if (value === "" || value === "initial" || value === OMITTED.get(name)) continue;
+      printed.push(slash ? `/ ${value}` : value);
+    }
+    if (printed.length === 0) return OMITTED.get(Array.isArray(order[0]) ? order[0][1] : order[0]) ?? "";
+    return printed.join(" ");
+  }
+  if (/^(border-(top|right|bottom|left)|columns|flex-flow)$/.test(property)) {
     const printed = names
       .map((name) => [name, read(name)])
       .filter(([name, value]) => value !== OMITTED.get(name))
       .map(([, value]) => value);
     return printed.length === 0 ? OMITTED.get(names[0]) ?? "" : printed.join(" ");
   }
+  // The layered families: each layer serialized on its own and joined with
+  // commas, the way a browser prints them. `animation` prints every part, in
+  // that order, with the name last; `transition` omits a part at its default.
+  if (property === "transition" || property === "animation") {
+    const names = shorthandLonghands(property);
+    const parts = names.map((name) => read(name).split(",").map((piece) => piece.trim()));
+    const count = Math.max(...parts.map((list) => list.length));
+    const defaults = property === "transition"
+      ? { "transition-property": "all", "transition-timing-function": "ease", "transition-delay": "0s", "transition-behavior": "normal" }
+      : {};
+    const printed = [];
+    for (let layer = 0; layer < count; layer += 1) {
+      const pieces = [];
+      const order = property === "animation"
+        ? ["animation-duration", "animation-timing-function", "animation-delay", "animation-iteration-count",
+           "animation-direction", "animation-fill-mode", "animation-play-state", "animation-name"]
+        : names;
+      for (const name of order) {
+        const value = parts[names.indexOf(name)]?.[layer] ?? parts[names.indexOf(name)]?.[0];
+        if (value === undefined || value === "") continue;
+        if (defaults[name] === value) continue;
+        pieces.push(value);
+      }
+      printed.push(pieces.join(" "));
+    }
+    return printed.join(", ");
+  }
+  // `grid-template`: the area strings interleaved with their row sizes, then the
+  // columns after a slash.
+  if (property === "grid-template") {
+    const rows = read("grid-template-rows");
+    const columns = read("grid-template-columns");
+    const areas = read("grid-template-areas");
+    if (areas === "none" || areas === "") {
+      if (rows === "none" && columns === "none") return "none";
+      return `${rows} / ${columns}`;
+    }
+    const strings = areas.match(/"[^"]*"/g) ?? [];
+    const sizes = components(rows, /\s/);
+    const interleaved = strings.map((string, at) => `${string} ${sizes[at] ?? "auto"}`).join(" ");
+    return `${interleaved} / ${columns}`;
+  }
   if (property === "flex") return values.join(" ");
   if (property === "gap" || property === "overflow" || property.startsWith("place-")
       || property === "overscroll-behavior" || /^(margin|padding|inset)-(block|inline)$/.test(property)) {
     return values[0] === values[1] ? values[0] : values.join(" ");
   }
+  // The axes always print as a pair, even when they agree: `0px center`.
+  if (property === "background-position") return values.join(" ");
   if (/^grid-(row|column)$/.test(property)) {
     return values[0] === values[1] ? values[0] : values.join(" / ");
   }
@@ -363,6 +507,63 @@ function serializeShorthandFrom(shorthand, read) {
       : `${rowStart} / ${columnStart} / ${rowEnd} / ${columnEnd}`;
   }
   return "";
+}
+
+// Which shorthands cover a longhand, largest first — the order a declaration
+// block is serialized in, so `border` is tried before `border-width` and
+// `border-width` before `border-top`.
+// Built on first use: the shorthand table is declared further down the file, and
+// this index is over it.
+let covering = null;
+function coveringShorthands(longhand) {
+  if (covering === null) {
+    covering = new Map();
+    for (const shorthand of SHORTHANDS.keys()) {
+      const names = shorthandLonghands(shorthand);
+      for (const name of names) {
+        if (!covering.has(name)) covering.set(name, []);
+        covering.get(name).push([shorthand, names]);
+      }
+    }
+    for (const list of covering.values()) list.sort(([, left], [, right]) => right.length - left.length);
+  }
+  return covering.get(longhand) ?? [];
+}
+
+// "Serialize a CSS declaration block": walk the longhands in order and print the
+// largest shorthand each one belongs to whose whole family is present at the same
+// importance, falling back to the longhand itself. This is why setting all four
+// margins prints `margin: 1px 2px;` and why overriding one border width prints
+// `border-width: 9px 1px 1px; border-style: solid; …` instead of `border`.
+function serializeBlock(values) {
+  const consumed = new Set();
+  const out = [];
+  // Normal declarations first, then the important ones, each group in the order
+  // it was written — which is the order a browser prints a block in.
+  const ordered = [
+    ...Array.from(values).filter(([, entry]) => entry.priority !== "important"),
+    ...Array.from(values).filter(([, entry]) => entry.priority === "important"),
+  ];
+  for (const [name, entry] of ordered) {
+    if (consumed.has(name)) continue;
+    let printed = false;
+    for (const [shorthand, names] of coveringShorthands(name)) {
+      if (names.some((longhand) => {
+        const part = values.get(longhand);
+        return part === undefined || part.priority !== entry.priority;
+      })) continue;
+      const text = serializeShorthandFrom(shorthand, (longhand) => values.get(longhand)?.value ?? "");
+      if (text === "") continue;
+      out.push(`${shorthand}: ${text}${entry.priority ? " !important" : ""};`);
+      for (const longhand of names) consumed.add(longhand);
+      printed = true;
+      break;
+    }
+    if (printed) continue;
+    out.push(`${name}: ${entry.value}${entry.priority ? " !important" : ""};`);
+    consumed.add(name);
+  }
+  return out.join(" ");
 }
 
 export function createCss({ Element, colors = null, valueTable = null }) {
@@ -383,7 +584,9 @@ export function createCss({ Element, colors = null, valueTable = null }) {
   }
 
   function write(element, state) {
-    const raw = serialize(state.values);
+    // The attribute gets the block serialization, so a shorthand written through
+    // the object comes back out of the attribute as a shorthand.
+    const raw = serializeBlock(state.values);
     state.raw = raw;
     if (raw) element.setAttribute("style", raw);
     else element.removeAttribute("style");
@@ -419,52 +622,22 @@ export function createCss({ Element, colors = null, valueTable = null }) {
     item(index) { return Array.from(this._state().values.keys())[index] ?? ""; }
     getPropertyValue(name) {
       const property = String(name);
-      const own = this._state().values.get(property);
+      const values = this._state().values;
+      const own = values.get(property);
       if (own) return own.value;
-      return this._fromShorthand(property)?.value ?? "";
+      // The declaration holds longhands; a shorthand is assembled from them, and
+      // answers `""` when the family is incomplete — as a browser answers one it
+      // cannot represent.
+      return serializeShorthandFrom(property, (longhand) => values.get(longhand)?.value ?? "");
     }
     getPropertyPriority(name) {
       const property = String(name);
-      const own = this._state().values.get(property);
+      const values = this._state().values;
+      const own = values.get(property);
       if (own) return own.priority;
-      return this._fromShorthand(property)?.priority ?? "";
-    }
-    // What a shorthand in this declaration says about a property it covers.
-    // `style.border = "1px solid red"` answers `borderTopWidth` with `1px` and
-    // `borderBottom` with `1px solid red`, because in a browser the declaration
-    // holds the longhands and serializes the shorthands back out of them. This
-    // does the same reading, without rewriting what the author wrote — so
-    // `cssText` stays the `border: 1px solid red;` it was given.
-    _fromShorthand(property) {
-      const parts = this._longhands();
-      const direct = parts.get(property);
-      if (direct) return direct;
-      // A shorthand of a shorthand: `border-bottom` out of `border`. Its own
-      // longhands are joined, with a run of equal values collapsed the way the
-      // box-edge and line families serialize.
       const names = shorthandLonghands(property);
-      if (names.length === 0) return undefined;
-      const values = [];
-      let priority = "important";
-      for (const name of names) {
-        const part = parts.get(name);
-        if (!part) return undefined;
-        values.push(part.value);
-        if (part.priority !== "important") priority = "";
-      }
-      const collapsed = values.filter((value, at) => value !== values[at - 1]);
-      return { value: collapsed.join(" "), priority };
-    }
-    // Every longhand this declaration's shorthands set, last declaration
-    // winning — which is the order they were written in.
-    _longhands() {
-      const parts = new Map();
-      for (const [name, entry] of this._state().values) {
-        for (const [longhand, value] of expandShorthand(name, entry.value)) {
-          parts.set(longhand, { value, priority: entry.priority });
-        }
-      }
-      return parts;
+      if (names.length === 0) return "";
+      return names.every((longhand) => values.get(longhand)?.priority === "important") ? "important" : "";
     }
     setProperty(name, value, priority = "") {
       name = String(name).trim();
@@ -477,23 +650,25 @@ export function createCss({ Element, colors = null, valueTable = null }) {
       // was there stays: `el.style.width = "23"` changes nothing, as in a
       // browser in standards mode.
       if (!knownProperty(name) || !validDeclaration(types, name, value)) return;
-      value = canonical(realm, name, value);
       const current = this._state();
-      current.values.set(name, { value, priority });
+      setLonghands(current.values, realm, name, canonical(realm, name, value), priority);
       write(this.element, current);
     }
     removeProperty(name) {
       const current = this._state();
       name = String(name);
-      const previous = current.values.get(name)?.value ?? "";
-      current.values.delete(name);
+      const previous = this.getPropertyValue(name);
+      // A shorthand takes its whole family with it.
+      const names = shorthandLonghands(name);
+      if (names.length > 0) for (const longhand of names) current.values.delete(longhand);
+      else current.values.delete(name);
       write(this.element, current);
       return previous;
     }
-    get cssText() { return serialize(this._state().values); }
+    get cssText() { return serializeBlock(this._state().values); }
     set cssText(value) {
       const current = this._state();
-      current.values = parse(String(value));
+      current.values = parse(String(value), realm);
       write(this.element, current);
     }
   }
@@ -544,7 +719,7 @@ export function createCss({ Element, colors = null, valueTable = null }) {
   function supportsDeclaration(name, value) {
     if (!knownProperty(name)) return false;
     try {
-      return parse(`${name}: ${value}`, realm).size === 1;
+      return parse(`${name}: ${value}`, realm).size >= 1;
     } catch {
       return false;
     }
@@ -597,6 +772,10 @@ export function createCss({ Element, colors = null, valueTable = null }) {
 // ---------------------------------------------------------------------------
 
 const SIDES = ["top", "right", "bottom", "left"];
+const BORDER_IMAGE = [
+  "border-image-source", "border-image-slice", "border-image-width", "border-image-outset",
+  "border-image-repeat",
+];
 const CORNERS = ["top-left", "top-right", "bottom-right", "bottom-left"];
 const BORDER_STYLES = new Set([
   "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
@@ -706,10 +885,12 @@ function background(values) {
   const size = [];
   const boxes = [];
   let afterSlash = false;
+  const isSize = (token) => ["auto", "cover", "contain"].includes(token.toLowerCase()) || isLength(token);
   for (const token of values) {
     if (token === "/") { afterSlash = true; continue; }
     const lower = token.toLowerCase();
-    if (afterSlash) { size.push(token); continue; }
+    if (afterSlash && isSize(token)) { size.push(token); continue; }
+    afterSlash = false;
     if (isImage(lower)) found["background-image"] = token;
     else if (BACKGROUND_REPEATS.has(lower)) found["background-repeat"] = token;
     else if (BACKGROUND_ATTACHMENTS.has(lower)) found["background-attachment"] = token;
@@ -717,13 +898,24 @@ function background(values) {
     else if (POSITIONS.has(lower) || isLength(token)) position.push(token);
     else found["background-color"] = token;
   }
-  if (position.length) found["background-position"] = position.join(" ");
+  if (position.length) found["background-position"] = position.length === 1 ? `${position[0]} center` : position.join(" ");
+  // A browser's declaration holds the two axes, not the pair.
+  const [positionX, positionY] = components(found["background-position"], /\s/);
+  delete found["background-position"];
+  found["background-position-x"] = positionX;
+  found["background-position-y"] = positionY ?? "center";
   if (size.length) found["background-size"] = size.join(" ");
   if (boxes.length) {
     found["background-origin"] = boxes[0];
     found["background-clip"] = boxes[1] ?? boxes[0];
   }
-  return Object.entries(found);
+  // In the order a browser enumerates them, which is the family's grammar order
+  // rather than the order this code fills them in.
+  return [
+    "background-image", "background-position-x", "background-position-y", "background-size",
+    "background-repeat", "background-attachment", "background-origin", "background-clip",
+    "background-color",
+  ].map((name) => [name, found[name]]);
 }
 
 // `flex: 1` is `1 1 0%`, `flex: auto` is `1 1 auto`, `flex: none` is `0 0 auto`
@@ -894,7 +1086,12 @@ function mask(parts) {
     found["mask-origin"] = boxes[0];
     found["mask-clip"] = boxes[1] ?? boxes[0];
   }
-  return Object.entries(found);
+  // In the order a browser enumerates them, which is the family's grammar order
+  // rather than the order this code fills them in.
+  return [
+    "mask-image", "mask-position", "mask-size", "mask-repeat", "mask-origin", "mask-clip",
+    "mask-composite", "mask-mode",
+  ].map((name) => [name, found[name]]);
 }
 
 // `offset`: a path, how far along it, which way round, and — after a slash — the
@@ -929,7 +1126,17 @@ const SHORTHANDS = new Map(Object.entries({
   "border-style": (v) => SIDES.map((side, i) => [`border-${side}-style`, edges(v)[i]]),
   "border-color": (v) => SIDES.map((side, i) => [`border-${side}-color`, edges(v)[i]]),
   "border-radius": radii,
-  border: (v) => SIDES.flatMap((side) => line(`border-${side}`, v)),
+  border: (v) => {
+    const { width, style, color } = lineParts(v);
+    return [
+      ...SIDES.map((side) => [`border-${side}-width`, width ?? "medium"]),
+      ...SIDES.map((side) => [`border-${side}-style`, style ?? "none"]),
+      ...SIDES.map((side) => [`border-${side}-color`, color ?? "currentcolor"]),
+      // The shorthand resets the border image, which is why a declaration that
+      // can no longer be written as `border` still says `border-image: initial`.
+      ...BORDER_IMAGE.map((name) => [name, "initial"]),
+    ];
+  },
   "border-top": (v) => line("border-top", v),
   "border-right": (v) => line("border-right", v),
   "border-bottom": (v) => line("border-bottom", v),
@@ -941,6 +1148,29 @@ const SHORTHANDS = new Map(Object.entries({
   "padding-inline": (v) => [["padding-inline-start", v[0]], ["padding-inline-end", v[1] ?? v[0]]],
   "inset-block": (v) => [["inset-block-start", v[0]], ["inset-block-end", v[1] ?? v[0]]],
   "inset-inline": (v) => [["inset-inline-start", v[0]], ["inset-inline-end", v[1] ?? v[0]]],
+  "border-image": (v, text) => {
+    const groups = text.split("/").map((group) => components(group.trim(), /\s/));
+    const found = {
+      "border-image-source": "none", "border-image-slice": "100%",
+      "border-image-width": "1", "border-image-outset": "0", "border-image-repeat": "stretch",
+    };
+    const repeats = new Set(["stretch", "repeat", "round", "space"]);
+    const slice = [];
+    for (const token of groups[0] ?? []) {
+      const lower = token.toLowerCase();
+      if (isImage(lower) || lower === "none") found["border-image-source"] = token;
+      else if (repeats.has(lower)) found["border-image-repeat"] = token;
+      else slice.push(token);
+    }
+    if (slice.length) found["border-image-slice"] = slice.join(" ");
+    if (groups[1]?.length) found["border-image-width"] = groups[1].join(" ");
+    if (groups[2]?.length) found["border-image-outset"] = groups[2].join(" ");
+    return Object.entries(found);
+  },
+  "background-position": (v) => [
+    ["background-position-x", v[0]],
+    ["background-position-y", v[1] ?? "center"],
+  ],
   gap: (v) => [["row-gap", v[0]], ["column-gap", v[1] ?? v[0]]],
   overflow: (v) => [["overflow-x", v[0]], ["overflow-y", v[1] ?? v[0]]],
   "overscroll-behavior": (v) => [["overscroll-behavior-x", v[0]], ["overscroll-behavior-y", v[1] ?? v[0]]],
@@ -1010,6 +1240,7 @@ export const isShorthand = (name) => SHORTHANDS.has(name);
 // `var()` needs, since its parts are not known until the custom property is
 // substituted at computed-value time.
 const SAMPLES = {
+  "border-image": "url(b.png) 30 / 10px / 2px round",
   transition: "opacity 2s",
   animation: "spin 2s",
   "grid-template": "1fr / 1fr",

@@ -56,11 +56,21 @@ const table = await (async () => {
     (properties, kinds) => {
       const element = document.createElement("div");
       const found = {};
-      // Three shapes per kind, because a property may not take one value on its
-      // own: `box-shadow` needs two lengths before it accepts any, and
-      // `counter-reset` wants a name in front of its number. A kind counts as
+      // Five shapes per kind, because a property may not take a value in the
+      // first position it is offered: `box-shadow` needs two lengths before it
+      // accepts any, `counter-reset` wants a name in front of its number, and
+      // `border-image` takes a length only after a slash. A kind counts as
       // accepted if any shape is.
-      const shapes = (value) => [value, `${value} ${value}`, `probe ${value}`];
+      const shapes = (value) => [
+        value,
+        `${value} ${value}`,
+        `probe ${value}`,
+        `probe / ${value}`,
+        `${value} / ${value}`,
+        // A number before the slash, which is the only shape `border-image`
+        // accepts a length in.
+        `1 / ${value}`,
+      ];
       const accepted = (property, value) => shapes(value).some((shape) => CSS.supports(property, shape));
       for (const property of properties) {
         const accepts = [];

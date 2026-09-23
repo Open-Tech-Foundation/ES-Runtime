@@ -2315,6 +2315,65 @@ export const cases = [
       ];
     },
   },
+  {
+    group: "cascade",
+    name: "a-declaration-block-holds-longhands",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      const style = document.createElement("div").style;
+      const after = (steps) => {
+        style.cssText = "";
+        const seen = [];
+        for (const step of steps) {
+          step(style);
+          seen.push([style.cssText, style.length]);
+        }
+        style.cssText = "";
+        return seen;
+      };
+      const items = (declaration) => {
+        style.cssText = declaration;
+        const names = Array.from({ length: style.length }, (_, index) => style.item(index));
+        style.cssText = "";
+        return names;
+      };
+      const text = (declaration) => {
+        style.cssText = declaration;
+        const serialized = style.cssText;
+        style.cssText = "";
+        return serialized;
+      };
+      return [
+        // A shorthand is stored as its longhands, and serialized back out of
+        // them — so overriding one part drops to the sub-shorthands.
+        after([(s) => { s.border = "1px solid red"; }, (s) => { s.borderTopWidth = "9px"; }]),
+        // A family completed one longhand at a time collapses once it is whole.
+        after([(s) => { s.marginTop = "1px"; }, (s) => { s.marginRight = "2px"; }, (s) => { s.marginBottom = "1px"; }, (s) => { s.marginLeft = "2px"; }]),
+        after([(s) => { s.margin = "1px"; }, (s) => { s.removeProperty("margin-top"); }]),
+        items("border: 1px solid red"),
+        items("background: red url(x.png) no-repeat"),
+        // Each family prints in its own order, which is not the order it expands
+        // in: `outline` prints colour, style, width where `border` prints width,
+        // style, colour.
+        [
+          text("color: red; margin: 1px !important; padding: 2px"),
+          text("box-shadow: inset 0 0 2px red"),
+          text("background: red url(x.png) no-repeat fixed left top / cover content-box padding-box"),
+          text("border-image: url(b.png) 30 fill / 10px / 2px round"),
+          text("outline: 2px dashed red"),
+          text("list-style: square inside url(b.png)"),
+          text("text-decoration: underline wavy red 2px"),
+          text("font: italic small-caps bold 12px/1.5 serif"),
+          text("animation: spin 2s linear 1s infinite alternate both running"),
+          text("transition: opacity 2s 1s"),
+          text("grid-template: 'a b' 50px 'c d' 1fr / 100px auto"),
+          text("mask: url(m.svg) center / cover no-repeat"),
+          text("offset: path('M 0 0 L 10 10') 50% 90deg / auto"),
+        ],
+      ];
+    },
+  },
 ];
 
 // Async, because several of these behaviours are: a `slotchange` is delivered at
