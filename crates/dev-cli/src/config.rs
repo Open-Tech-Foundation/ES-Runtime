@@ -690,15 +690,27 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
     };
     let reporter = match map.get("reporter") {
         None => None,
-        Some(Value::String(name)) if matches!(name.as_str(), "human" | "json") => {
+        Some(Value::String(name))
+            if crate::report::REPORTERS
+                .iter()
+                .any(|(known, _)| *known == name.as_str()) =>
+        {
             Some(name.clone())
         }
         Some(other) => {
+            let known: String = crate::report::REPORTERS
+                .iter()
+                .map(|(known, what)| {
+                    format!(
+                        "\n  \"{known}\"{:<pad$} — {what}",
+                        "",
+                        pad = 6 - known.len()
+                    )
+                })
+                .collect();
             return Err(format!(
                 "{file}: `test`'s `reporter` is {}, and it says how the run reports \
-                 itself.\n\n  \
-                 \"human\"  — what a person reads, the default\n  \
-                 \"json\"   — one JSON object per line, for a machine",
+                 itself.\n{known}",
                 kind(other)
             ));
         }

@@ -65,6 +65,7 @@ mod jsx;
 mod plugins;
 mod preview;
 mod prompt;
+mod report;
 mod resolve;
 mod staging;
 mod start;
@@ -217,7 +218,10 @@ OPTIONS:
                                 none
     --setup=<path>              Import this before each test file. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
-    --reporter=<fmt>            human (default) or json — one object per line
+    --reporter=<fmt>            human (default), json (one object per line),
+                                junit, tap or dots
+    --reporter-outfile=<path>   Write that report to a file; the terminal keeps
+                                the human one
     -u, --update-snapshots       Write new and changed snapshots
     --ci                         Require every snapshot to be pre-existing
     --full-diff                  Do not truncate a large snapshot diff
@@ -1435,6 +1439,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut seed = None;
     let mut repeats = None;
     let mut list = false;
+    let mut reporter_outfile = None;
+    let mut quiet = false;
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut permission_args = Vec::new();
     for arg in args {
@@ -1561,14 +1567,21 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             }
             "--reporter" => {
                 let name = require_value(flag, value)?;
-                if !matches!(name, "human" | "json") {
-                    return Err(format!(
-                        "{flag}={name} is not a reporter.\n\n  \
-                         human  — what a person reads, the default\n  \
-                         json   — one JSON object per line, for a machine"
-                    ));
+                if !report::REPORTERS.iter().any(|(known, _)| *known == name) {
+                    let known: String = report::REPORTERS
+                        .iter()
+                        .map(|(known, what)| format!("\n  {known:<6} — {what}"))
+                        .collect();
+                    return Err(format!("{flag}={name} is not a reporter.\n{known}"));
                 }
                 reporter = Some(name.to_string());
+            }
+            "--reporter-outfile" => {
+                reporter_outfile = Some(std::path::PathBuf::from(require_value(flag, value)?));
+            }
+            "--_quiet" => {
+                reject_value(flag, value)?;
+                quiet = true;
             }
             "-u" | "--update-snapshots" => {
                 reject_value(flag, value)?;
@@ -1600,6 +1613,13 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     if list && watch {
         return Err("--list names the tests once; there is nothing to watch.".to_string());
     }
+    if list && matches!(reporter.as_deref(), Some("junit" | "tap" | "dots")) {
+        return Err(format!(
+            "--list names tests, and a {} report is of tests that ran.\n\n\
+             Use the default report, or --reporter=json for one listed test per line.",
+            reporter.as_deref().unwrap_or_default()
+        ));
+    }
     if file.is_some() && (watch || jobs.is_some()) {
         return Err("--file runs one file, so there is nothing to schedule or \
              re-run.\n\n\
@@ -1623,6 +1643,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         seed,
         repeats,
         list,
+        reporter_outfile,
+        quiet,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
         file,
@@ -1813,9 +1835,10 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The run's closing line, for the terminal a person reads; a machine
+    // reporter wrote its own ending.
     let report = |total: usize, failed: usize| {
-        if config.reporter.as_deref() == Some("json") {
-            test::report_as_json(total, failed);
+        if !config.terminal_human() {
         } else if config.list {
             test::report_listed(total, failed);
         } else {
@@ -1901,6 +1924,36 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// How one file's run ends: the report a person reads, nothing (the parent
+/// reports it), or — run directly with a machine reporter — that report.
+fn finish_test_file(config: &TestConfig, file: &str) -> ExitCode {
+    if config.quiet {
+        return guest::test::finish_quiet();
+    }
+    match config.reporter.as_deref() {
+        None | Some("human") => guest::test::finish(),
+        Some(format) => {
+            let code = guest::test::finish_quiet();
+            let result = guest::test::file_result(file, file);
+            let text = match format {
+                "json" => report::json_file(&result),
+                "junit" => report::junit(std::slice::from_ref(&result)),
+                "tap" => report::tap(std::slice::from_ref(&result)),
+                _ => format!(
+                    "{}{}",
+                    report::dots(&result),
+                    report::dots_end(std::slice::from_ref(&result))
+                ),
+            };
+            if let Err(err) = test::write_report(config, &text) {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+            code
+        }
+    }
+}
+
 async fn run_tests(mut config: TestConfig) -> ExitCode {
     // The file's `test` section, where a flag did not already answer. Read here
     // rather than in the parser because the parser has no project: a `--file`
@@ -1929,7 +1982,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     }
 
     let run_options = config.run_options();
-    if let Some(file) = config.file {
+    if let Some(file) = config.file.clone() {
         guest::test::reset();
         guest::test::configure_run(run_options);
         guest::test::configure_snapshots(
@@ -1980,26 +2033,20 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             inspector: None,
         };
         let code = match es_runtime_cli_common::run("esdev", run).await {
-            Ok(()) => match config.reporter.as_deref() {
-                Some("json") => guest::test::finish_as_json(&file),
-                _ => guest::test::finish(),
-            },
+            Ok(()) => finish_test_file(&config, &file),
             Err(err) => {
                 print_error(&err);
                 // The run died, but the cases that already finished are still
                 // results. Losing a hundred of them to one stray promise is
                 // precisely the report a suite most needs to see, so it is
                 // printed; the exit stays a failure either way.
-                match config.reporter.as_deref() {
-                    Some("json") => guest::test::finish_as_json(&file),
-                    _ => guest::test::finish(),
-                };
+                finish_test_file(&config, &file);
                 ExitCode::FAILURE
             }
         };
-        // What the parent adds up for `--bail`.
+        // The results, for the parent to report and to count for `--bail`.
         if let Some(summary) = &config.summary {
-            guest::test::write_summary(summary);
+            guest::test::write_summary(summary, &file);
         }
         return code;
     }
@@ -2052,8 +2099,8 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         .max(1);
     let failed = test::run_all(&exe, &root, &files, jobs, &config).await;
     let total = files.len();
-    if config.reporter.as_deref() == Some("json") {
-        test::report_as_json(total, failed);
+    if !config.terminal_human() {
+        // The reporter wrote its own ending.
     } else if config.list {
         test::report_listed(total, failed);
     } else {
@@ -2076,8 +2123,10 @@ fn validate_unisolated_test_config(config: &TestConfig) -> Result<(), &'static s
     if config.timeout.is_some() {
         return Err("--isolation=none has no per-file boundary, so --timeout is unavailable");
     }
-    if config.reporter.as_deref() == Some("json") {
-        return Err("--isolation=none cannot emit a per-file JSON report");
+    if !matches!(config.reporter.as_deref(), None | Some("human")) {
+        return Err(
+            "--isolation=none runs every file in one process, so it has no per-file results for a machine reporter",
+        );
     }
     Ok(())
 }

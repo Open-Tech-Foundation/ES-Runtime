@@ -13825,3 +13825,106 @@ fn list_names_the_tests_and_runs_none() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The machine reporters: stdout holds the report and nothing else — what a
+/// test prints goes to stderr — and `--reporter-outfile` writes the report to a
+/// file while the terminal keeps the human one.
+#[test]
+fn reporters_write_json_junit_tap_and_dots() {
+    let dir = build_dir("t_reporters");
+    write_in(
+        &dir,
+        "a.test.js",
+        "import { test, describe } from \"runtime:test\";\n\
+         describe(\"math\", () => {\n\
+           test(\"adds\", () => { console.log(\"noise from a test\"); });\n\
+           test(\"fails <b>\", () => { throw new TypeError(\"bad & worse\"); });\n\
+           test.skip(\"later\", () => {});\n\
+         });\n",
+    );
+    let run = |args: &[&str]| {
+        esdev_in(&dir)
+            .arg("test")
+            .args(args)
+            .output()
+            .expect("spawn esdev test")
+    };
+
+    let json = run(&["--reporter=json"]);
+    let out = stdout(&json);
+    for line in out.lines() {
+        let _: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|err| panic!("not JSON ({err}): {line}\n{out}"));
+    }
+    assert!(
+        out.contains(r#""passed":1,"failed":1,"skipped":1"#),
+        "{out}"
+    );
+    assert!(
+        out.ends_with("{\"type\":\"summary\",\"files\":1,\"failed\":1}\n"),
+        "{out}"
+    );
+    assert!(
+        stderr(&json).contains("noise from a test"),
+        "{}",
+        stderr(&json)
+    );
+
+    let junit = stdout(&run(&["--reporter=junit"]));
+    assert!(
+        junit.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n"),
+        "{junit}"
+    );
+    assert!(
+        junit.contains(
+            "<testsuites name=\"esdev test\" tests=\"3\" failures=\"1\" errors=\"0\" skipped=\"1\""
+        ),
+        "{junit}"
+    );
+    assert!(
+        junit.contains("<testcase classname=\"a.test.js\" name=\"math &gt; fails &lt;b&gt;\""),
+        "{junit}"
+    );
+    assert!(
+        junit.contains("<failure message=\"TypeError: bad &amp; worse\" type=\"TypeError\">"),
+        "{junit}"
+    );
+    assert!(!junit.contains("noise"), "{junit}");
+
+    let tap = stdout(&run(&["--reporter=tap"]));
+    assert!(tap.starts_with("TAP version 13\n1..3\nok 1 - a.test.js > math > adds\nnot ok 2 - a.test.js > math > fails <b>\n  ---\n  error: |-\n    TypeError: bad & worse\n"), "{tap}");
+    assert!(
+        tap.contains("ok 3 - a.test.js > math > later # SKIP"),
+        "{tap}"
+    );
+
+    let dots = stdout(&run(&["--reporter=dots"]));
+    assert!(dots.starts_with(".x-\n"), "{dots}");
+    assert!(dots.ends_with("1 passed, 1 failed, 1 skipped\n"), "{dots}");
+
+    let file = run(&["--reporter=junit", "--reporter-outfile=reports/junit.xml"]);
+    let terminal = stdout(&file);
+    assert!(
+        terminal.contains("  1 passed, 1 failed, 1 skipped"),
+        "{terminal}"
+    );
+    assert!(terminal.contains("noise from a test"), "{terminal}");
+    let written = std::fs::read_to_string(dir.join("reports/junit.xml")).expect("junit written");
+    assert!(written.contains("tests=\"3\" failures=\"1\""), "{written}");
+
+    let refused = run(&["--reporter=junit", "--isolation=none"]);
+    assert!(
+        stderr(&refused).contains("no per-file results for a machine reporter"),
+        "{}",
+        stderr(&refused)
+    );
+    let refused = run(&["--reporter=tap", "--list"]);
+    assert!(
+        stderr(&refused).contains("--list names tests"),
+        "{}",
+        stderr(&refused)
+    );
+    let refused = run(&["--reporter=xml"]);
+    assert!(stderr(&refused).contains("junit"), "{}", stderr(&refused));
+    let _ = std::fs::remove_dir_all(&dir);
+}

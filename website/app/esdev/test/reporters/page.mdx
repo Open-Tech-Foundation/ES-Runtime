@@ -1,0 +1,75 @@
+---
+title: Reporters
+description: Test results as JSON, JUnit XML, TAP or dots, for CI systems and other tools.
+---
+
+# Reporters
+
+`--reporter` chooses how results are written:
+
+| Reporter | Writes |
+| --- | --- |
+| `human` | The report a person reads. The default. |
+| `json` | One JSON object per line. |
+| `junit` | JUnit XML, which most CI systems read. |
+| `tap` | TAP version 13. |
+| `dots` | A character per test — `.` passed, `x` failed, `-` skipped — then every failure. |
+
+```sh
+esdev test --reporter=junit > junit.xml
+esdev test --reporter=junit --reporter-outfile=reports/junit.xml
+```
+
+With a machine reporter, stdout holds the report and nothing else. What the
+tests print, and any errors, go to stderr.
+
+`--reporter-outfile` writes the report to a file instead, and the terminal keeps
+the `human` report. That is usually what a CI job wants: a readable log, and a
+file for the CI system.
+
+The reporter can also be set in `esdev.json`; the flag takes precedence:
+
+```json
+{ "test": { "reporter": "junit" } }
+```
+
+## json
+
+A `case` line for each failed test, a `file` line for each file as it finishes,
+and a `summary` at the end. A CI job can read results as they arrive.
+
+```json
+{"type":"case","file":"/p/src/a.test.ts","name":"math > divides","status":"failed","detail":"Error: …"}
+{"type":"file","file":"/p/src/a.test.ts","passed":4,"failed":1,"skipped":0}
+{"type":"summary","files":2,"failed":1}
+```
+
+With `--list`, each test is a `case` line with `"status":"listed"`.
+
+## junit
+
+One `<testsuite>` per file, one `<testcase>` per test. The file is the
+`classname`, the full test name (groups included) is the `name`, and `time` is in
+seconds. A failure carries its message, its error type, and the full detail.
+
+```xml
+<testsuite name="src/a.test.ts" tests="5" failures="1" errors="0" skipped="0" time="0.012">
+  <testcase classname="src/a.test.ts" name="math &gt; divides" time="0.003">
+    <failure message="Error: expected 2 to be 3" type="Error">Error: expected 2 to be 3
+    at …</failure>
+  </testcase>
+</testsuite>
+```
+
+## tap
+
+TAP version 13: the plan, then `ok` or `not ok` per test. A failure's detail is
+in a YAML block, and a skipped test is marked `# SKIP`.
+
+## Limits
+
+- A machine reporter needs per-file results, so it cannot be combined with
+  `--isolation=none`.
+- `--list` can only be reported as `human` or `json`.
+- A file that times out or crashes is reported as one failed case, `(file)`,
+  saying why.

@@ -66,6 +66,10 @@ struct Case {
     /// `None` while it is still running — and still `None` at the end if it
     /// never settled, which is a failure with a name of its own.
     outcome: Option<Outcome>,
+    /// When it first started, and how long it took once it finished — every
+    /// attempt and repeat included, since that is how long the run spent on it.
+    began: Option<std::time::Instant>,
+    duration_ms: f64,
 }
 
 enum Outcome {
@@ -1174,7 +1178,7 @@ impl HostExtension for TestExtension {
 /// one that did not has nothing to print. That is what makes
 /// `esdev app.test.ts` work on its own, with the same output the runner gives.
 pub fn finish() -> ExitCode {
-    let code = report(None);
+    let code = report();
     if let Err(err) = reconcile_snapshots() {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
@@ -1187,27 +1191,28 @@ pub fn finish() -> ExitCode {
     code
 }
 
-/// The same tally, as one JSON object per line.
-///
-/// **For a machine, and shaped for one that reads a stream.** A CI job wants
-/// each case as it lands rather than a document it can only parse once the run
-/// is over — and a run that dies half way through then still leaves behind
-/// everything that had happened, which a single trailing object would not.
-///
-/// `file` is the path the child was given, repeated on every line: the parent
-/// runs a process per file and their output interleaves, so a line that does
-/// not say which file it belongs to cannot be attributed to one.
-pub fn finish_as_json(file: &str) -> ExitCode {
-    let code = report(Some(file));
-    if let Err(err) = flush_snapshots() {
+/// Settles the run's snapshots and prints nothing — for a run whose report a
+/// machine reporter writes, from [`file_result`], instead.
+pub fn finish_quiet() -> ExitCode {
+    let passed = CASES.with_borrow(|cases| counts(cases).1 == 0);
+    if let Err(err) = reconcile_snapshots().and_then(|()| flush_snapshots()) {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
     }
-    code
+    if passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
-fn report(as_json: Option<&str>) -> ExitCode {
-    let (text, passed) = CASES.with_borrow(|cases| render(cases, as_json));
+/// This process's cases as one file's result.
+pub fn file_result(file: &str, name: &str) -> crate::report::FileResult {
+    CASES.with_borrow(|cases| result(cases, file, name))
+}
+
+fn report() -> ExitCode {
+    let (text, passed) = CASES.with_borrow(|cases| render(cases));
     print!("{text}");
     if passed {
         ExitCode::SUCCESS
@@ -1223,6 +1228,8 @@ fn register(cases: &mut Vec<Case>, name: String, file: Option<PathBuf>) -> usize
         file,
         started: false,
         outcome: None,
+        began: None,
+        duration_ms: 0.0,
     });
     cases.len() - 1
 }
@@ -1230,6 +1237,7 @@ fn register(cases: &mut Vec<Case>, name: String, file: Option<PathBuf>) -> usize
 fn mark_running(cases: &mut [Case], id: usize) {
     if let Some(case) = cases.get_mut(id) {
         case.started = true;
+        case.began.get_or_insert_with(std::time::Instant::now);
     }
 }
 
@@ -1246,13 +1254,50 @@ fn mark_finished(cases: &mut [Case], id: usize, passed: bool, detail: String) {
         } else {
             Outcome::Failed(detail)
         });
+        if let Some(began) = case.began {
+            case.duration_ms = began.elapsed().as_secs_f64() * 1000.0;
+        }
+    }
+}
+
+/// A set of cases as one file's result, for the reporters in
+/// [`crate::report`].
+fn result(cases: &[Case], file: &str, name: &str) -> crate::report::FileResult {
+    let never = |started: bool| {
+        if started {
+            "the test never finished — it is waiting on something that never happened"
+        } else {
+            "the test never started — a test before it never finished"
+        }
+    };
+    crate::report::FileResult {
+        file: file.to_string(),
+        name: name.to_string(),
+        cases: cases
+            .iter()
+            .map(|case| {
+                let (status, detail) = match &case.outcome {
+                    Some(Outcome::Passed) => ("passed", String::new()),
+                    Some(Outcome::Skipped(Skip::Listed)) => ("listed", String::new()),
+                    Some(Outcome::Skipped(_)) => ("skipped", String::new()),
+                    Some(Outcome::Failed(detail)) => ("failed", detail.clone()),
+                    None => ("failed", never(case.started).to_string()),
+                };
+                crate::report::CaseResult {
+                    name: case.name.clone(),
+                    status: status.to_string(),
+                    detail,
+                    duration_ms: case.duration_ms,
+                }
+            })
+            .collect(),
     }
 }
 
 /// The report for a set of cases — what a person reads, or the JSON lines
 /// for `file` — and whether it passed. Rendered rather than printed, so a run
 /// holding several files at once can print each one's whole.
-fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
+fn render(cases: &[Case]) -> (String, bool) {
     use std::fmt::Write as _;
     let mut out = String::new();
     // `--list`: the tests by name, and how many — nothing ran to report on.
@@ -1262,28 +1307,14 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
         .collect();
     if !listed.is_empty() {
         for case in &listed {
-            match as_json {
-                Some(file) => {
-                    let _ = writeln!(
-                        out,
-                        r#"{{"type":"case","file":{},"name":{},"status":"listed"}}"#,
-                        serde_json::Value::String(file.to_string()),
-                        serde_json::Value::String(case.name.clone())
-                    );
-                }
-                None => {
-                    let _ = writeln!(out, "  {}", case.name);
-                }
-            }
+            let _ = writeln!(out, "  {}", case.name);
         }
-        if as_json.is_none() {
-            let _ = writeln!(
-                out,
-                "  {} test{}",
-                listed.len(),
-                if listed.len() == 1 { "" } else { "s" }
-            );
-        }
+        let _ = writeln!(
+            out,
+            "  {} test{}",
+            listed.len(),
+            if listed.len() == 1 { "" } else { "s" }
+        );
         return (out, true);
     }
     let (passed, skipped, held, filtered, bailed, failures) = {
@@ -1330,11 +1361,6 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
         return (out, true);
     }
 
-    if let Some(file) = as_json {
-        json(&mut out, file, passed, skipped + held + filtered, &failures);
-        return (out, failures.is_empty());
-    }
-
     for (name, detail) in &failures {
         let _ = writeln!(out, "  FAIL {name}");
         for line in detail.lines() {
@@ -1373,38 +1399,6 @@ fn render(cases: &[Case], as_json: Option<&str>) -> (String, bool) {
     (out, failures.is_empty())
 }
 
-/// One object per case, then one for the file.
-///
-/// Written by hand rather than through a serializer: the only values that need
-/// escaping are a test's name and an error's text, `serde_json` is already in
-/// the graph for exactly that, and a schema this small is easier to read as the
-/// lines it produces.
-fn json(
-    out: &mut String,
-    file: &str,
-    passed: usize,
-    skipped: usize,
-    failures: &[(String, String)],
-) {
-    use std::fmt::Write as _;
-    let string = |text: &str| serde_json::Value::String(text.to_string()).to_string();
-    for (name, detail) in failures {
-        let _ = writeln!(
-            out,
-            r#"{{"type":"case","file":{},"name":{},"status":"failed","detail":{}}}"#,
-            string(file),
-            string(name),
-            string(detail)
-        );
-    }
-    let _ = writeln!(
-        out,
-        r#"{{"type":"file","file":{},"passed":{passed},"failed":{},"skipped":{skipped}}}"#,
-        string(file),
-        failures.len()
-    );
-}
-
 /// How many cases passed and failed — a case that never settled counts as
 /// failed, as the report counts it.
 fn counts(cases: &[Case]) -> (usize, usize) {
@@ -1419,23 +1413,25 @@ fn counts(cases: &[Case]) -> (usize, usize) {
 
 /// Writes this process's pass and fail counts for the parent that ran it,
 /// which adds them up — what `--bail` counts across files.
-pub fn write_summary(path: &std::path::Path) {
+pub fn write_summary(path: &std::path::Path, file: &str) {
     let (passed, failed) = CASES.with_borrow(|cases| counts(cases));
     let _ = std::fs::write(
         path,
-        serde_json::json!({ "passed": passed, "failed": failed }).to_string(),
+        serde_json::json!({
+            "passed": passed,
+            "failed": failed,
+            "result": file_result(file, file),
+        })
+        .to_string(),
     );
 }
 
-/// The failed count a child wrote with [`write_summary`], or `None` if it
-/// wrote none — it died before it could.
-pub fn read_summary(path: &std::path::Path) -> Option<usize> {
+/// The results a child wrote with [`write_summary`], or `None` if it wrote
+/// none — it died before it could.
+pub fn read_result(path: &std::path::Path) -> Option<crate::report::FileResult> {
     let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value
-        .get("failed")?
-        .as_u64()
-        .and_then(|n| usize::try_from(n).ok())
+    let mut value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    serde_json::from_value(value.get_mut("result")?.take()).ok()
 }
 
 /// A tally kept outside the host thread's own — for a run whose tests execute
@@ -1491,6 +1487,11 @@ impl Tally {
         mark_finished(&mut self.cases, id, passed, detail);
     }
 
+    /// The cases as one file's result.
+    pub fn result(&self, file: &str, name: &str) -> crate::report::FileResult {
+        result(&self.cases, file, name)
+    }
+
     /// How many cases failed, those that never settled included.
     pub fn failed(&self) -> usize {
         counts(&self.cases).1
@@ -1502,8 +1503,8 @@ impl Tally {
     }
 
     /// The report, and whether the file passed.
-    pub fn render(&self, as_json: Option<&str>) -> (String, bool) {
-        render(&self.cases, as_json)
+    pub fn render(&self) -> (String, bool) {
+        render(&self.cases)
     }
 }
 
@@ -1681,6 +1682,8 @@ mod tests {
                 file: None,
                 started: true,
                 outcome: None,
+                began: None,
+                duration_ms: 0.0,
             });
         });
         let unfinished = CASES.with_borrow(|cases| cases.iter().all(|c| c.outcome.is_none()));

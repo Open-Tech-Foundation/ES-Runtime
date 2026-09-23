@@ -60,6 +60,11 @@ pub struct TestConfig {
     pub repeats: Option<u32>,
     /// Name the tests instead of running them, from `--list`.
     pub list: bool,
+    /// Where a machine reporter writes, from `--reporter-outfile`. With it, the
+    /// terminal keeps the report a person reads.
+    pub reporter_outfile: Option<PathBuf>,
+    /// Internal parent-to-child: print no report; the parent writes it.
+    pub quiet: bool,
     /// Shuffle the run's order, from `--randomize`.
     pub randomize: bool,
     /// The seed the order is shuffled from, from `--seed` or chosen for a
@@ -114,6 +119,12 @@ pub struct TestConfig {
 }
 
 impl TestConfig {
+    /// Whether the terminal shows the report a person reads: the default, or a
+    /// machine reporter that writes to a file.
+    pub fn terminal_human(&self) -> bool {
+        matches!(self.reporter.as_deref(), None | Some("human")) || self.reporter_outfile.is_some()
+    }
+
     /// What each file's `runtime:test` is told.
     pub fn run_options(&self) -> crate::guest::test::RunOptions {
         crate::guest::test::RunOptions {
@@ -256,7 +267,7 @@ pub async fn run_all(
                 .setup
                 .iter()
                 .map(|module| format!("--setup={module}"))
-                .chain(config.reporter.iter().map(|r| format!("--reporter={r}")))
+                .chain((!config.terminal_human()).then(|| "--_quiet".to_string()))
                 .chain(
                     config
                         .update_snapshots
@@ -293,50 +304,100 @@ pub async fn run_all(
             .display()
             .to_string()
     };
-    // In JSON the child's lines are the report; a filename printed above them
-    // is chrome that would have to be skipped by whatever is parsing.
-    let quiet = config.reporter.as_deref() == Some("json");
+    // With a machine reporter writing to stdout, the report is the only thing
+    // there: a filename above it, or what a test printed, would be something a
+    // parser has to step over. What the tests print goes to stderr instead.
+    let quiet = !config.terminal_human();
+    let mut reporter = Reporter::new(config);
 
-    // `--bail`: tests failed so far, added up from each child's summary. A file
+    // `--bail`: tests failed so far, added up from each child's results. A file
     // is not started once the limit is reached, and each one started is told
     // how many more may fail.
     let failed_tests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let not_run = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let bail = config.bail;
-    let command =
-        |file: &Path, index: usize| -> Option<(tokio::process::Command, Option<PathBuf>)> {
-            let failed = failed_tests.load(std::sync::atomic::Ordering::SeqCst);
-            let remaining = match bail {
-                Some(limit) if failed >= limit => {
-                    not_run.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    return None;
-                }
-                Some(limit) => Some(limit - failed),
-                None => None,
-            };
-            let mut child = tokio::process::Command::new(exe);
-            child
-                .arg("test")
-                .arg(format!("--file={}", file.display()))
-                .args(&flags);
-            let summary = remaining.map(|remaining| {
-                let path = std::env::temp_dir().join(format!(
-                    "esdev-test-summary-{}-{index}.json",
-                    std::process::id()
-                ));
-                let _ = std::fs::remove_file(&path);
-                child.arg(format!("--bail={remaining}"));
-                child.arg(format!("--_summary={}", path.display()));
-                path
-            });
-            Some((child, summary))
+    let command = |file: &Path, index: usize| -> Option<(tokio::process::Command, PathBuf)> {
+        let failed = failed_tests.load(std::sync::atomic::Ordering::SeqCst);
+        let remaining = match bail {
+            Some(limit) if failed >= limit => {
+                not_run.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return None;
+            }
+            Some(limit) => Some(limit - failed),
+            None => None,
         };
-    let count_summary = |summary: Option<PathBuf>| {
-        if let Some(path) = summary {
-            // A child that died before writing one failed at least once.
-            let failed = crate::guest::test::read_summary(&path).unwrap_or(1);
-            let _ = std::fs::remove_file(&path);
-            failed_tests.fetch_add(failed, std::sync::atomic::Ordering::SeqCst);
+        let mut child = tokio::process::Command::new(exe);
+        child
+            .arg("test")
+            .arg(format!("--file={}", file.display()))
+            .args(&flags);
+        if let Some(remaining) = remaining {
+            child.arg(format!("--bail={remaining}"));
+        }
+        // Every child reports its results to the parent in a file: what a
+        // machine reporter is written from, and what `--bail` counts.
+        let summary = std::env::temp_dir().join(format!(
+            "esdev-test-summary-{}-{index}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&summary);
+        child.arg(format!("--_summary={}", summary.display()));
+        Some((child, summary))
+    };
+    // A file's results, from its summary — or, when it wrote none because it
+    // timed out or died, one failure saying so.
+    let take_result = |summary: PathBuf, file: &Path, why: Option<String>| {
+        let written = crate::guest::test::read_result(&summary);
+        let _ = std::fs::remove_file(&summary);
+        let mut result = written.unwrap_or_else(|| {
+            crate::report::FileResult::broken(
+                file.display().to_string(),
+                String::new(),
+                why.as_deref()
+                    .unwrap_or("the file ended before it reported its results"),
+            )
+        });
+        result.name = named(file);
+        if let Some(why) = why.filter(|_| result.failed() == 0) {
+            result = crate::report::FileResult::broken(result.file, result.name, &why);
+        }
+        failed_tests.fetch_add(result.failed(), std::sync::atomic::Ordering::SeqCst);
+        result
+    };
+    // What a finished child printed, and whether it failed and why.
+    let settle = |output: std::io::Result<Finished>, failed: &mut usize, echo: bool| {
+        match output {
+            Ok(done) => {
+                if echo {
+                    let out = String::from_utf8_lossy(&done.output.stdout);
+                    // With a machine reporter on stdout, what the tests printed
+                    // goes to stderr.
+                    if quiet {
+                        eprint!("{out}");
+                    } else {
+                        print!("{out}");
+                    }
+                    eprint!("{}", String::from_utf8_lossy(&done.output.stderr));
+                }
+                if done.expired {
+                    // What it managed to print came first: a file that hangs
+                    // on its ninth test has eight results worth reading.
+                    let message = timed_out(config.timeout);
+                    eprintln!("{message}");
+                    *failed += 1;
+                    Some(message.trim().to_string())
+                } else {
+                    if !done.output.status.success() {
+                        *failed += 1;
+                    }
+                    None
+                }
+            }
+            Err(e) => {
+                eprintln!("  cannot run it: {e}");
+                *failed += 1;
+                Some(format!("cannot run it: {e}"))
+            }
         }
     };
 
@@ -350,20 +411,12 @@ pub async fn run_all(
                 println!("{}", named(file));
             }
             // Not captured: with one job the child writes straight through,
-            // which is the run to reach for when a test is hanging.
-            match supervise(child, config.timeout, false).await {
-                Ok(done) if done.expired => {
-                    eprintln!("{}", timed_out(config.timeout));
-                    failed += 1;
-                }
-                Ok(done) if done.output.status.success() => {}
-                Ok(_) => failed += 1,
-                Err(e) => {
-                    eprintln!("  cannot run it: {e}");
-                    failed += 1;
-                }
-            }
-            count_summary(summary);
+            // which is the run to reach for when a test is hanging — unless a
+            // machine reporter owns stdout.
+            let output = supervise(child, config.timeout, quiet).await;
+            let why = settle(output, &mut failed, quiet);
+            let result = take_result(summary, file, why);
+            reporter.file(&result);
         }
     } else {
         let runs = files.iter().enumerate().map(|(index, file)| {
@@ -372,47 +425,104 @@ pub async fn run_all(
             let command = &command;
             async move {
                 let (child, summary) = command(file, index)?;
-                Some((name, supervise(child, timeout, true).await, summary))
+                Some((name, supervise(child, timeout, true).await, summary, file))
             }
         });
         let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
         while let Some(result) = results.next().await {
-            let Some((name, output, summary)) = result else {
+            let Some((name, output, summary, file)) = result else {
                 continue;
             };
-            count_summary(summary);
             if !quiet {
                 println!("{name}");
             }
-            match output {
-                Ok(done) if done.expired => {
-                    // What it managed to print before it was ended: a file that
-                    // hangs on its ninth test has eight results worth reading.
-                    print!("{}", String::from_utf8_lossy(&done.output.stdout));
-                    eprint!("{}", String::from_utf8_lossy(&done.output.stderr));
-                    eprintln!("{}", timed_out(config.timeout));
-                    failed += 1;
-                }
-                Ok(done) => {
-                    let output = done.output;
-                    // The child's two streams, in the order a reader expects them:
-                    // what the test printed, then what went wrong. Written through
-                    // rather than re-formatted — a harness's output is its own.
-                    print!("{}", String::from_utf8_lossy(&output.stdout));
-                    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-                    if !output.status.success() {
-                        failed += 1;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("  cannot run it: {e}");
-                    failed += 1;
-                }
-            }
+            let why = settle(output, &mut failed, true);
+            let result = take_result(summary, file, why);
+            reporter.file(&result);
         }
     }
     report_not_run(not_run.load(std::sync::atomic::Ordering::SeqCst), quiet);
+    reporter.finish(files.len(), failed);
     failed
+}
+
+/// A machine reporter, written as files finish or at the end of the run, to
+/// `--reporter-outfile` or stdout. The `human` report is each file's own and
+/// needs nothing here.
+pub struct Reporter<'a> {
+    config: &'a TestConfig,
+    format: &'a str,
+    /// Everything reported, for the formats written at the end.
+    files: Vec<crate::report::FileResult>,
+    /// Written so far — the whole report goes to the outfile at the end.
+    written: String,
+}
+
+impl<'a> Reporter<'a> {
+    pub fn new(config: &'a TestConfig) -> Reporter<'a> {
+        Reporter {
+            config,
+            format: config.reporter.as_deref().unwrap_or("human"),
+            files: Vec::new(),
+            written: String::new(),
+        }
+    }
+
+    /// One file finished.
+    pub fn file(&mut self, result: &crate::report::FileResult) {
+        let text = match self.format {
+            "json" => crate::report::json_file(result),
+            "dots" => crate::report::dots(result),
+            _ => String::new(),
+        };
+        self.emit(&text);
+        self.files.push(result.clone());
+    }
+
+    /// The run is over.
+    pub fn finish(&mut self, total: usize, failed: usize) {
+        let text = match self.format {
+            "json" => crate::report::json_summary(total, failed),
+            "dots" => crate::report::dots_end(&self.files),
+            "junit" => crate::report::junit(&self.files),
+            "tap" => crate::report::tap(&self.files),
+            _ => return,
+        };
+        self.emit(&text);
+        if self.config.reporter_outfile.is_some()
+            && let Err(err) = write_report(self.config, &self.written)
+        {
+            eprintln!("error: {err}");
+        }
+    }
+
+    fn emit(&mut self, text: &str) {
+        if self.config.reporter_outfile.is_some() {
+            self.written.push_str(text);
+        } else {
+            use std::io::Write as _;
+            print!("{text}");
+            let _ = std::io::stdout().flush();
+        }
+    }
+}
+
+/// Writes a machine report where the run was asked to: the outfile, or stdout.
+pub fn write_report(config: &TestConfig, text: &str) -> Result<(), String> {
+    match &config.reporter_outfile {
+        Some(path) => {
+            if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir)
+                    .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+            }
+            std::fs::write(path, text)
+                .map_err(|err| format!("cannot write {}: {err}", path.display()))
+        }
+        None => {
+            print!("{text}");
+            Ok(())
+        }
+    }
 }
 
 /// Says how many files `--bail` kept from starting.
@@ -519,9 +629,8 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
             } else {
                 let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
                 let failed = run_all(exe, root, &files, jobs, config).await;
-                if config.reporter.as_deref() == Some("json") {
-                    report_as_json(files.len(), failed);
-                } else {
+                // A machine reporter wrote its own ending.
+                if config.terminal_human() {
                     report(files.len(), failed);
                 }
             }
@@ -572,11 +681,6 @@ pub fn change_watcher(
         .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
 
     Ok((watcher, rx))
-}
-
-/// The tally a run ends with, as one more JSON object.
-pub fn report_as_json(total: usize, failed: usize) {
-    println!(r#"{{"type":"summary","files":{total},"failed":{failed}}}"#);
 }
 
 /// The line a `--list` run ends with: nothing passed, because nothing ran.

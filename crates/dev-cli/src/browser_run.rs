@@ -207,7 +207,9 @@ async fn run(
     );
     let server = tokio::spawn(serve(listener, stage.clone()));
 
-    let quiet = config.reporter.as_deref() == Some("json");
+    // With a machine reporter on stdout, what the pages printed goes to stderr.
+    let quiet = !config.terminal_human();
+    let mut reporter = crate::test::Reporter::new(config);
     let jobs = config
         .jobs
         .unwrap_or_else(crate::test::jobs)
@@ -259,17 +261,21 @@ async fn run(
         let Some(ran) = ran else {
             continue;
         };
-        if !quiet {
+        if quiet {
+            eprint!("{}", ran.output);
+        } else {
             println!("{}", ran.name);
+            print!("{}", ran.output);
         }
-        print!("{}", ran.output);
         if !ran.passed {
             failed += 1;
         }
+        reporter.file(&ran.result);
     }
 
     server.abort();
     crate::test::report_not_run(not_run.load(std::sync::atomic::Ordering::SeqCst), quiet);
+    reporter.finish(files.len(), failed);
     Ok(failed)
 }
 
@@ -348,19 +354,31 @@ struct Ran {
     passed: bool,
     /// How many of its tests failed, for `--bail`.
     failed_tests: usize,
+    /// Its results, for a machine reporter.
+    result: crate::report::FileResult,
 }
 
 impl Job {
     async fn run(self, config: &TestConfig, options: RunOptions) -> Ran {
-        let (output, passed, failed_tests) = match self.attempt(config, &options).await {
+        let (output, passed, failed_tests, result) = match self.attempt(config, &options).await {
             Ok(done) => done,
-            Err(err) => (format!("  FAIL {err}\n"), false, 1),
+            Err(err) => (
+                format!("  FAIL {err}\n"),
+                false,
+                1,
+                crate::report::FileResult::broken(
+                    self.file.display().to_string(),
+                    self.name.clone(),
+                    &err,
+                ),
+            ),
         };
         Ran {
             name: self.name,
             output,
             passed,
             failed_tests,
+            result,
         }
     }
 
@@ -368,7 +386,7 @@ impl Job {
         &self,
         config: &TestConfig,
         options: &RunOptions,
-    ) -> Result<(String, bool, usize), String> {
+    ) -> Result<(String, bool, usize, crate::report::FileResult), String> {
         let page = self.bundle(config).await?;
         let user_context = self
             .client
@@ -463,7 +481,7 @@ impl Job {
         page: &str,
         config: &TestConfig,
         options: &RunOptions,
-    ) -> Result<(String, bool, usize), String> {
+    ) -> Result<(String, bool, usize, crate::report::FileResult), String> {
         let context = self
             .client
             .command(
@@ -555,16 +573,21 @@ impl Job {
 
         // The path a process run's JSON names its file by: the one the child
         // was given, which is absolute.
+        // The path a machine report names its file by: the one it was run
+        // from, which is absolute, as in a process run.
         let file = self.file.display().to_string();
-        let as_json = (config.reporter.as_deref() == Some("json")).then_some(file.as_str());
-        let (report, passed) = state.tally.render(as_json);
+        let human = config.terminal_human();
+        let (report, passed) = state.tally.render();
         let mut output = state.console;
-        output.push_str(&report);
+        if human {
+            output.push_str(&report);
+        }
+        let mut result = state.tally.result(&file, &self.name);
         // Written after the page is done with them, as a process run writes
         // them when it exits.
         let mut snapshots_written = true;
         if let Some(snapshots) = &mut state.snapshots {
-            match snapshots.finish(&state.tally, as_json.is_none()) {
+            match snapshots.finish(&state.tally, human) {
                 Ok(summary) => output.push_str(&summary),
                 Err(err) => {
                     output.push_str(&format!("error: {err}\n"));
@@ -572,20 +595,30 @@ impl Job {
                 }
             }
         }
-        match ended {
-            Ended::Finished => {}
-            Ended::TimedOut => {
-                output.push_str(&crate::test::timed_out(config.timeout));
-                output.push('\n');
-            }
-            Ended::Closed => output.push_str(
+        let why = match ended {
+            Ended::Finished => None,
+            Ended::TimedOut => Some(crate::test::timed_out(config.timeout)),
+            Ended::Closed => Some(
                 "  FAIL the browser closed before the file finished\n    \
-                 It exited or crashed; the results above are what it reported first.\n",
+                 It exited or crashed; the results above are what it reported first."
+                    .to_string(),
             ),
+        };
+        if let Some(why) = &why {
+            output.push_str(why);
+            output.push('\n');
+            // A file that stopped without a failure of its own still failed.
+            if result.failed() == 0 {
+                result = crate::report::FileResult::broken(
+                    result.file,
+                    result.name,
+                    why.trim().trim_start_matches("FAIL ").trim(),
+                );
+            }
         }
         let finished = ended == Ended::Finished && snapshots_written;
-        let failed_tests = state.tally.failed();
-        Ok((output, passed && finished, failed_tests))
+        let failed_tests = state.tally.failed().max(result.failed());
+        Ok((output, passed && finished, failed_tests, result))
     }
 }
 
@@ -934,7 +967,7 @@ mod tests {
         assert!(!state.done());
         state.apply(&message(json!(["drained"])));
         assert!(state.done());
-        let (report, passed) = state.tally.render(None);
+        let (report, passed) = state.tally.render();
         assert!(!passed);
         assert!(
             report.contains("  FAIL subtracts\n    Error: 2 !== 3"),
@@ -959,7 +992,7 @@ mod tests {
         assert!(!state.done());
         state.apply(&message(json!(["loaded", null])));
         assert!(state.done());
-        assert_eq!(state.tally.render(None), (String::new(), true));
+        assert_eq!(state.tally.render(), (String::new(), true));
     }
 
     #[test]
@@ -974,7 +1007,7 @@ mod tests {
         state.apply(&message(json!(["finished", 0, true, ""])));
         state.apply(&message(json!(["drained"])));
         assert!(state.done());
-        let (report, passed) = state.tally.render(None);
+        let (report, passed) = state.tally.render();
         assert!(!passed);
         assert!(report.contains("FAIL the file failed to load"), "{report}");
         assert!(report.contains("1 passed, 1 failed"), "{report}");
@@ -1011,7 +1044,7 @@ mod tests {
             }),
         });
         assert_eq!(state.console, "hello from the page\n");
-        let (report, passed) = state.tally.render(None);
+        let (report, passed) = state.tally.render();
         assert!(!passed);
         assert!(report.contains("FAIL uncaught error"), "{report}");
         assert!(

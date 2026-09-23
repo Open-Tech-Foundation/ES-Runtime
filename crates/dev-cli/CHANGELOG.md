@@ -40,6 +40,9 @@ is the point, since none of the three has any business in a deployment.
   records a source map and failures are mapped back through it.
 - **Snapshot keys stay stable.**
   - A test name containing a line break no longer corrupts the `.snap` file:
+- **`--reporter=json` output is JSON and nothing else.** What a test printed
+  used to land on stdout between the JSON lines; it now goes to stderr, with
+  every machine reporter.
     it is stored as `\n` in the entry's heading.
   - Named snapshots are numbered per name. Adding a snapshot before a named
     one no longer renames it. A test that mixes named and unnamed snapshots
@@ -76,6 +79,12 @@ is the point, since none of the three has any business in a deployment.
   `beforeAll` and `afterAll` still wrap its own tests. A browser run of the
   same seed runs the same order.
 - **`esdev test --bail[=<n>]`** stops after `n` failed tests (1 by default), as
+- **More reporters: `--reporter=junit`, `tap` and `dots`**, alongside `human`
+  and `json`, and **`--reporter-outfile=<path>`**, which writes the report to a
+  file while the terminal keeps the human one. JUnit follows the shape Vitest
+  writes: a `<testsuite>` per file, the file as `classname`, the full test name
+  as `name`, and per-test `time`. Works in normal and browser runs, and in
+  `esdev.json`'s `reporter`.
   in Vitest and Bun. Failures add up across files, the tests left in a file are
   counted as skipped with a `bail:` line, and the files not started are named.
   Works in normal, `--isolation=none` and browser runs.
