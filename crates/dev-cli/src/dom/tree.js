@@ -173,6 +173,31 @@ function isHostIncludingInclusiveAncestor(ancestor, node) {
   return false;
 }
 
+// A stable number per node, given on first use, for orders the specification
+// leaves to the implementation as long as they are consistent.
+const identities = new WeakMap();
+let nextIdentity = 0;
+function identity(node) {
+  let id = identities.get(node);
+  if (id === undefined) identities.set(node, id = nextIdentity++);
+  return id;
+}
+
+// Whether `a` comes before `b` in tree order, for two nodes in the same tree.
+function precedes(a, b) {
+  const chain = (node) => { const nodes = []; for (; node; node = node.parentNode) nodes.unshift(node); return nodes; };
+  const left = chain(a);
+  const right = chain(b);
+  let depth = 0;
+  while (depth < left.length && depth < right.length && left[depth] === right[depth]) depth += 1;
+  if (depth === left.length) return true;
+  if (depth === right.length) return false;
+  for (let sibling = left[depth].nextSibling; sibling; sibling = sibling.nextSibling) {
+    if (sibling === right[depth]) return true;
+  }
+  return false;
+}
+
 function isInclusiveAncestor(ancestor, node) {
   for (let current = node; current; current = current.parentNode) {
     if (current === ancestor) return true;
@@ -902,26 +927,41 @@ export function createTree(events = {}) {
     // Tree order, as the specification defines it: the comparison is made
     // against the common inclusive ancestor, so a node reports its own
     // descendants as CONTAINED_BY and FOLLOWING, not merely as later.
+    // The specification's algorithm: attributes are placed by their owner
+    // element, trees are node trees (a shadow root is a root, not a way up to
+    // its host), and two nodes in different trees are ordered by their roots —
+    // arbitrarily, but the same way from either side.
     compareDocumentPosition(other) {
       if (!(other instanceof Node)) throw new TypeError("compareDocumentPosition expects a Node");
       if (other === this) return 0;
-      const ancestry = (node) => { const chain = []; for (let step = node; step; step = step.parentNode ?? step.host ?? null) chain.unshift(step); return chain; };
-      const ours = ancestry(this);
-      const theirs = ancestry(other);
-      if (ours[0] !== theirs[0]) {
-        // Disconnected trees still order consistently for a given pair, which
-        // is all the specification asks of an implementation-specific answer.
-        return Node.DOCUMENT_POSITION_DISCONNECTED | Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
-          | Node.DOCUMENT_POSITION_PRECEDING;
+      let node1 = other;
+      let node2 = this;
+      let attr1 = null;
+      let attr2 = null;
+      if (node1 instanceof Attr) { attr1 = node1; node1 = attr1.ownerElement; }
+      if (node2 instanceof Attr) {
+        attr2 = node2;
+        node2 = attr2.ownerElement;
+        if (attr1 !== null && node1 !== null && node2 === node1) {
+          for (const attribute of slots(node2).attributes) {
+            if (attribute === attr1) return Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC | Node.DOCUMENT_POSITION_PRECEDING;
+            if (attribute === attr2) return Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC | Node.DOCUMENT_POSITION_FOLLOWING;
+          }
+        }
       }
-      let depth = 0;
-      while (ours[depth] === theirs[depth] && depth < ours.length && depth < theirs.length) depth += 1;
-      if (depth === ours.length) return Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING;
-      if (depth === theirs.length) return Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING;
-      const siblings = Array.from(ours[depth - 1]._esdevChildren());
-      return siblings.indexOf(ours[depth]) < siblings.indexOf(theirs[depth])
-        ? Node.DOCUMENT_POSITION_FOLLOWING
-        : Node.DOCUMENT_POSITION_PRECEDING;
+      const rootOf = (node) => { while (node.parentNode) node = node.parentNode; return node; };
+      if (node1 === null || node2 === null || rootOf(node1) !== rootOf(node2)) {
+        const first = identity(rootOf(node1 ?? attr1)) < identity(rootOf(node2 ?? attr2));
+        return Node.DOCUMENT_POSITION_DISCONNECTED | Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
+          | (first ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING);
+      }
+      if ((attr1 === null && node1 !== node2 && isInclusiveAncestor(node1, node2)) || (node1 === node2 && attr2 !== null)) {
+        return Node.DOCUMENT_POSITION_CONTAINS | Node.DOCUMENT_POSITION_PRECEDING;
+      }
+      if ((attr2 === null && node1 !== node2 && isInclusiveAncestor(node2, node1)) || (node1 === node2 && attr1 !== null)) {
+        return Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING;
+      }
+      return precedes(node1, node2) ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING;
     }
 
     // Contiguous text nodes become one and empty ones go, which is what a

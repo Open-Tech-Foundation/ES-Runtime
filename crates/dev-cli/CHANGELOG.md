@@ -25,6 +25,12 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **`compareDocumentPosition` is the specification's.** It climbed from a
+  shadow root to its host, where a shadow tree is its own tree. It answered
+  `PRECEDING` for two disconnected nodes in both directions, where the answer
+  must be consistent either way. And it didn't place attributes by their owner
+  element. All three follow the specification now; disconnected trees are
+  ordered by a stable identity of their roots.
 - **TreeWalker, NodeIterator and Range are complete.** TreeWalker had only
   `nextNode`. It now has `parentNode`, `firstChild`, `lastChild`,
   `previousSibling`, `nextSibling`, `previousNode` and a settable
