@@ -222,6 +222,7 @@ deno run --allow-read --allow-run --allow-write wpt/dom-run.js
 # --verbose              one line per file, to stderr, as it goes
 # --json=<path>          write the report as well as printing it
 # --timeout=<ms>         per file, default 10000
+# --grace=<ms>           idle time before testharness's own timeout() ends a page, default 3000
 # --esdev=<path>         default target/debug/esdev
 # --jobs=<n>             files at once, default up to 8
 # --keep                 leave each generated test file in place

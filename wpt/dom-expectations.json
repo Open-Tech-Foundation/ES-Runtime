@@ -3341,8 +3341,42 @@
     }
   },
   "dom/events/Event-dispatch-click.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "basic with click()": "PASS",
+      "basic with dispatchEvent()": "PASS",
+      "basic with wrong event class": "PASS",
+      "look at parents only when event bubbles": "PASS",
+      "look at parents when event bubbles": "PASS",
+      "pick the first with activation behavior <input type=checkbox>": "PASS",
+      "pick the first with activation behavior <a href>": "TIMEOUT",
+      "pick the first with activation behavior <input type=radio>": "PASS",
+      "event state during post-click handling": "PASS",
+      "redispatch during post-click handling": "PASS",
+      "disabled checkbox still has activation behavior": "PASS",
+      "disabled checkbox still has activation behavior, part 2": "PASS",
+      "disabled radio still has activation behavior": "PASS",
+      "disconnected checkbox should be checked": "PASS",
+      "disconnected radio should be checked": "PASS",
+      "disconnected checkbox should be checked from dispatchEvent(new MouseEvent('click'))": "PASS",
+      "disconnected radio should be checked from dispatchEvent(new MouseEvent('click'))": "PASS",
+      "disabled checkbox should be checked from dispatchEvent(new MouseEvent(\"click\"))": "PASS",
+      "disabled radio should be checked from dispatchEvent(new MouseEvent(\"click\"))": "PASS",
+      "disabled checkbox should fire onclick": "PASS",
+      "disabled radio should fire onclick": "PASS",
+      "disabled checkbox should get legacy-canceled-activation behavior": "PASS",
+      "disabled radio should get legacy-canceled-activation behavior": "PASS",
+      "disabled checkbox should get legacy-canceled-activation behavior 2": "PASS",
+      "disabled radio should get legacy-canceled-activation behavior 2": "PASS",
+      "disabling checkbox in onclick listener shouldn't suppress oninput": "PASS",
+      "disabling checkbox in onclick listener shouldn't suppress onchange": "PASS",
+      "disabling radio in onclick listener shouldn't suppress oninput": "PASS",
+      "disabling radio in onclick listener shouldn't suppress onchange": "PASS",
+      "disconnected form should not submit": "PASS",
+      "disabled submit button should not activate": "PASS",
+      "submit button should not activate if the event listener disables it": "PASS",
+      "submit button that morphed from checkbox should not activate": "PASS"
+    }
   },
   "dom/events/Event-dispatch-detached-click.html": {
     "harness": "OK",
@@ -3405,8 +3439,10 @@
     }
   },
   "dom/events/Event-dispatch-order.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Event phases order": "TIMEOUT"
+    }
   },
   "dom/events/Event-dispatch-other-document.html": {
     "harness": "OK",
@@ -11757,36 +11793,52 @@
     }
   },
   "dom/nodes/moveBefore/continue-css-animation-left.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Node.moveBefore should preserve CSS animation state (left)": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/continue-css-animation-transform.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Node.moveBefore should preserve CSS animation state (transform)": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/continue-css-transition-left-pseudo.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Node.moveBefore should preserve CSS transition state on pseudo-elements (left)": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/continue-css-transition-left.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Node.moveBefore should preserve CSS transition state (left)": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/continue-css-transition-transform-pseudo.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Node.moveBefore should preserve CSS transition state on pseudo-elements (transform)": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/css-transition-cross-shadow.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Moving an element with a transition across shadow boundaries preserves the transition": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/css-transition-to-disconnected-document.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Moving an element with a transition to a disconnected document should reset the transitionm state": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/css-transition-trigger.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "Node.moveBefore should trigger CSS transition state (left) if needed": "TIMEOUT"
+    }
   },
   "dom/nodes/moveBefore/custom-element-move-reactions.html": {
     "harness": "OK",
@@ -11807,7 +11859,7 @@
     }
   },
   "dom/nodes/moveBefore/live-range-updates.html": {
-    "harness": "INCOMPLETE",
+    "harness": "TIMEOUT",
     "subtests": {}
   },
   "dom/nodes/moveBefore/moveBefore-dir.html": {
@@ -11887,7 +11939,7 @@
     }
   },
   "dom/nodes/moveBefore/style-applies.html": {
-    "harness": "INCOMPLETE",
+    "harness": "TIMEOUT",
     "subtests": {}
   },
   "dom/nodes/name-validation.html": {
@@ -54579,12 +54631,15 @@
     }
   },
   "shadow-dom/focus/focus-pseudo-matches-on-shadow-host.html": {
-    "harness": "INCOMPLETE",
+    "harness": "TIMEOUT",
     "subtests": {}
   },
   "shadow-dom/focus/focus-shadowhost-display-none.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "when shadow host itself is focused, it should match display:none, lose focus then becomes display:block again.": "TIMEOUT",
+      "when shadow host with delegatesFocus=true has focused element inside the shadow, it should also match display:none, then lose focus and become display:block again.": "NOTRUN"
+    }
   },
   "shadow-dom/form-control-form-attribute.html": {
     "harness": "OK",
@@ -54617,8 +54672,22 @@
     }
   },
   "shadow-dom/imperative-slot-api-slotchange.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "slotchange event must not fire synchronously.": "TIMEOUT",
+      "slotchange event should not fire when assignments do not change assignedNodes.": "FAIL",
+      "slotchange event should not fire when same node is assigned.": "TIMEOUT",
+      "Fire slotchange event when slot's assigned nodes changes.": "TIMEOUT",
+      "Fire slotchange event on previous slot and new slot when node is reassigned.": "TIMEOUT",
+      "Fire slotchange event on node assignment and when assigned node is removed.": "TIMEOUT",
+      "Fire slotchange event when order of assigned nodes changes.": "TIMEOUT",
+      "Fire slotchange event when assigned node is removed.": "TIMEOUT",
+      "Fire slotchange event when removing a slot from Shadows Root that changes its assigned nodes.": "NOTRUN",
+      "No slotchange event when adding or removing an empty slot.": "PASS",
+      "No slotchange event when adding another slotable.": "FAIL",
+      "Fire slotchange event when assign node to nested slot, ensure event bubbles ups.": "TIMEOUT",
+      "Signal a slot change should be done in tree order.": "NOTRUN"
+    }
   },
   "shadow-dom/imperative-slot-api.html": {
     "harness": "OK",
@@ -54675,7 +54744,7 @@
     }
   },
   "shadow-dom/leaktests/get-elements.html": {
-    "harness": "INCOMPLETE",
+    "harness": "TIMEOUT",
     "subtests": {}
   },
   "shadow-dom/slot-reconciliation-at-node-removal.html": {
@@ -54728,8 +54797,26 @@
     }
   },
   "shadow-dom/slotchange.html": {
-    "harness": "INCOMPLETE",
-    "subtests": {}
+    "harness": "TIMEOUT",
+    "subtests": {
+      "slotchange event: Append a child to a host (onslotchange).": "PASS",
+      "slotchange event: Append a child to a host.": "PASS",
+      "slotchange event: Remove a child from a host.": "PASS",
+      "slotchange event: Remove a child before adding an event listener.": "PASS",
+      "slotchange event: Change slot= attribute to make it un-assigned.": "PASS",
+      "slotchange event: Change slot's name= attribute so that none is assigned.": "PASS",
+      "slotchange event: Change slot= attribute to make it assigned.": "PASS",
+      "slotchange event: Change slot's name= attribute so that a node is assigned to the slot.": "PASS",
+      "slotchange event: Change fallback content - assignedNodes still empty.": "PASS",
+      "slotchange event: Remove a fallback content - assignedNodes still empty.": "PASS",
+      "slotchange event: Add a fallback content to nested slots - assignedNodes still empty.": "PASS",
+      "slotchange event: Remove a fallback content from nested slots - assignedNodes still empty.": "PASS",
+      "slotchange event: Insert a slot before an existing slot.": "TIMEOUT",
+      "slotchange event: Remove a preceding slot.": "PASS",
+      "slotchange event: A slot is assigned to another slot.": "PASS",
+      "slotchange event: Slotchange should be fired if assigned nodes are changed.": "PASS",
+      "slotchange event: Child content is added to nested slots.": "PASS"
+    }
   },
   "shadow-dom/slots-fallback-in-document.html": {
     "harness": "OK",

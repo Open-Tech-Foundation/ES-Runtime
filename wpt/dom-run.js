@@ -9,7 +9,7 @@ const expectationsPath = new URL("./dom-expectations.json", import.meta.url);
 // testharness.js subtest statuses, by their numeric value.
 const statusNames = ["PASS", "FAIL", "TIMEOUT", "NOTRUN", "PRECONDITION_FAILED"];
 
-const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, update: false, verbose: false, keep: false, jobs: Math.min(navigator.hardwareConcurrency ?? 4, 8) };
+const flags = { esdev: defaultEsdev, filter: "", json: "", timeout: 10_000, grace: 3_000, update: false, verbose: false, keep: false, jobs: Math.min(navigator.hardwareConcurrency ?? 4, 8) };
 for (const argument of Deno.args) {
   if (argument === "--verbose") flags.verbose = true;
   else if (argument === "--keep") flags.keep = true;
@@ -20,6 +20,7 @@ for (const argument of Deno.args) {
   else if (argument.startsWith("--filter=")) flags.filter = argument.slice("--filter=".length);
   else if (argument.startsWith("--json=")) flags.json = argument.slice("--json=".length);
   else if (argument.startsWith("--timeout=")) flags.timeout = Number(argument.slice("--timeout=".length));
+  else if (argument.startsWith("--grace=")) flags.grace = Number(argument.slice("--grace=".length));
   else throw new Error(`unknown argument: ${argument}`);
 }
 if (!Number.isFinite(flags.timeout) || flags.timeout <= 0) throw new Error("--timeout wants milliseconds");
@@ -122,7 +123,7 @@ if (globalThis.__esdevPageScripts) {
   for (const script of globalThis.__esdevPageScripts) {
     try { (0,eval)(";" + script); } catch (error) { reportError(error); }
   }
-  setTimeout(() => window.dispatchEvent(new Event("load")), 0);
+  setTimeout(() => { window.dispatchEvent(new Event("load")); globalThis.__esdevArm(); }, 0);
 }
 `;
 }
@@ -133,7 +134,19 @@ async function run(testPath) {
   const trace = flags.trace
     ? `add_result_callback((test) => console.error("TRACE", ${JSON.stringify(testPath)}, test.status, test.name, test.message || ""));`
     : "";
-  const collector = trace + `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, harnessMessage: status.message || "", tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
+  // A page with one subtest that can never finish would otherwise report
+  // nothing at all: testharness's explicit timeout() ends it once no subtest
+  // has finished for a grace period, with the finished subtests counted and
+  // the rest TIMEOUT. Re-armed by every result, so a long page that is making
+  // progress is never cut short.
+  // Armed only once the page's scripts have run, since a long synchronous
+  // script is progress the timer cannot see.
+  const guard = `let __esdevGuard = null;
+let __esdevDone = false;
+globalThis.__esdevArm = () => { if (__esdevDone) return; clearTimeout(__esdevGuard); __esdevGuard = setTimeout(() => timeout(), ${flags.grace}); };
+add_result_callback(() => { if (__esdevGuard !== null) globalThis.__esdevArm(); });
+add_completion_callback(() => { __esdevDone = true; clearTimeout(__esdevGuard); });`;
+  const collector = guard + trace + `add_completion_callback((tests, status) => console.log(${JSON.stringify(marker)} + JSON.stringify({ status: status.status, harnessMessage: status.message || "", tests: tests.map((test) => ({ name: test.name, status: test.status, message: test.message || "" })) })));`;
   const generated = testPath.replace(/\.(js|html)$/, ".__esdev-dom-wpt.test.mjs");
   let body;
   try {
@@ -141,7 +154,7 @@ async function run(testPath) {
     else {
       const source = await Deno.readTextFile(new URL(testPath, root));
       const dependencies = await Promise.all(metaScripts(source).map((specifier) => Deno.readTextFile(scriptPath(specifier, testPath))));
-      body = `(0,eval)(${JSON.stringify([harness, collector, ...dependencies, source].join("\n;\n"))});\n`;
+      body = `(0,eval)(${JSON.stringify([harness, collector, ...dependencies, source].join("\n;\n"))});\nsetTimeout(() => globalThis.__esdevArm(), 0);\n`;
     }
   } catch (error) {
     return { harness: "ERROR", tests: [], message: `could not assemble the test: ${error.message}` };
@@ -182,6 +195,9 @@ async function run(testPath) {
     // testharness's own verdict on the page: a setup that threw, or an
     // uncaught error, is not "OK" just because the harness finished — a file
     // that died before registering a test would otherwise pass with nothing.
+    // A harness timeout — the grace period ending a page that could not
+    // finish — keeps its subtests: what finished counts, the rest are TIMEOUT.
+    if (parsed.status === 2) return { ...parsed, harness: "TIMEOUT", partial: true, message: "the harness timed out; unfinished subtests are TIMEOUT" };
     if (parsed.status !== 0) return { ...parsed, harness: "ERROR", message: `harness ${statusNames[parsed.status] ?? parsed.status}: ${parsed.harnessMessage}` };
     return { harness: "OK", ...parsed };
   } finally {
@@ -233,12 +249,13 @@ for (const [index, path] of runnable.entries()) {
   }
   const subtests = {};
   results[path] = { harness: result.harness, subtests };
-  if (result.harness !== "OK") {
+  if (result.harness !== "OK" && !result.partial) {
     if (result.harness === "TIMEOUT" || result.harness === "INCOMPLETE") totals.timeout++;
     else totals.errored++;
     failures.push({ path, harness: result.harness, message: result.message });
     continue;
   }
+  if (result.partial) totals.timeout++;
   for (const test of result.tests) {
     subtests[test.name] = statusNames[test.status] ?? `STATUS_${test.status}`;
     if (test.status === 0) totals.passed++;
