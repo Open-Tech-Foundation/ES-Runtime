@@ -458,6 +458,9 @@ function scheduleMutationDelivery() {
     mutationDeliveryQueued = false;
     for (const observer of mutationObservers) {
       const records = observer.takeRecords();
+      // A transient registration lives until the next delivery, whether or not
+      // it produced anything.
+      observer.transients.clear();
       if (records.length) observer.callback(records, observer);
     }
   });
@@ -469,6 +472,11 @@ class MutationObserver {
     this.callback = callback;
     this.records = [];
     this.registrations = new Map();
+    // Node → the options of each subtree registration it was removed from
+    // under: its "transient registered observers". Without them, a subtree
+    // taken out of an observed tree goes silent at once, and whatever is done
+    // to it before the records are delivered is never reported.
+    this.transients = new Map();
     mutationObservers.add(this);
   }
   observe(target, options = {}) {
@@ -482,18 +490,42 @@ class MutationObserver {
     if (settings.attributeFilter && !settings.attributes) throw new TypeError("attributeFilter requires attributes");
     if (settings.characterDataOldValue && !settings.characterData) throw new TypeError("characterDataOldValue requires characterData");
     if (settings.attributeFilter) settings.attributeFilter = Array.from(settings.attributeFilter, String);
+    // Observing a node again replaces its options, and drops the transient
+    // registrations the old ones left behind.
+    const previous = this.registrations.get(target);
+    if (previous) {
+      for (const [node, list] of this.transients) {
+        const kept = list.filter((options) => options !== previous);
+        if (kept.length) this.transients.set(node, kept);
+        else this.transients.delete(node);
+      }
+    }
     this.registrations.set(target, settings);
   }
-  disconnect() { this.registrations.clear(); this.records.length = 0; }
+  disconnect() { this.registrations.clear(); this.transients.clear(); this.records.length = 0; }
   takeRecords() { const records = this.records; this.records = []; return records; }
+  _registrationsOn(node) {
+    const own = this.registrations.get(node);
+    const transient = this.transients.get(node) ?? [];
+    return own ? [own, ...transient] : transient;
+  }
+  // "Queue a mutation record": every registration on the target and its
+  // ancestors is consulted, not just the nearest, and one record is queued if
+  // any of them is interested — carrying the old value if any of those asked.
   _enqueue(change) {
-    let settings;
-    for (let current = change.target; current; current = current.parentNode) {
-      const candidate = this.registrations.get(current);
-      if (candidate && (current === change.target || candidate.subtree)) { settings = candidate; break; }
+    let interested = false;
+    let wantsOldValue = false;
+    for (let node = change.target; node; node = node.parentNode) {
+      for (const options of this._registrationsOn(node)) {
+        if (node !== change.target && !options.subtree) continue;
+        if (!options[change.type]) continue;
+        if (change.type === "attributes" && options.attributeFilter && !options.attributeFilter.includes(change.attributeName)) continue;
+        interested = true;
+        if (change.type === "attributes" && options.attributeOldValue) wantsOldValue = true;
+        if (change.type === "characterData" && options.characterDataOldValue) wantsOldValue = true;
+      }
     }
-    if (!settings || !settings[change.type]) return;
-    if (change.type === "attributes" && settings.attributeFilter && !settings.attributeFilter.includes(change.attributeName)) return;
+    if (!interested) return;
     this.records.push({
       type: change.type,
       target: change.target,
@@ -503,14 +535,33 @@ class MutationObserver {
       nextSibling: change.nextSibling ?? null,
       attributeName: change.attributeName ?? null,
       attributeNamespace: null,
-      oldValue: change.type === "attributes" ? settings.attributeOldValue ? change.oldValue : null : change.type === "characterData" && settings.characterDataOldValue ? change.oldValue : null,
+      oldValue: wantsOldValue ? change.oldValue ?? null : null,
     });
     scheduleMutationDelivery();
   }
+  // The removal step: every subtree registration on the old parent or above
+  // follows the removed node until the next delivery.
+  _keepObserving(parent, node) {
+    for (let ancestor = parent; ancestor; ancestor = ancestor.parentNode) {
+      for (const options of this._registrationsOn(ancestor)) {
+        if (!options.subtree) continue;
+        const list = this.transients.get(node) ?? [];
+        list.push(options);
+        this.transients.set(node, list);
+      }
+    }
+  }
 }
 
-Object.defineProperty(document, "_queueMutation", {
+// On every document, not only this one: a tree built by `DOMParser` or
+// `createHTMLDocument` is observable too.
+Object.defineProperty(tree.Document.prototype, "_queueMutation", {
   value(change) { for (const observer of mutationObservers) observer._enqueue(change); },
+  configurable: true,
+});
+Object.defineProperty(tree.Document.prototype, "_keepObserving", {
+  value(parent, node) { for (const observer of mutationObservers) observer._keepObserving(parent, node); },
+  configurable: true,
 });
 
 let nextAnimationFrame = 1;

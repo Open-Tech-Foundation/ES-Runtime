@@ -211,6 +211,61 @@ export const cases = [
   },
   {
     group: "events",
+    name: "a-removed-subtree-stays-observed-until-delivery",
+    async run(window) {
+      const { document } = window;
+      reset(document);
+      const tick = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+      const describe = (records) => records.map((record) => [
+        record.type, record.target.id || record.target.nodeName,
+        Array.from(record.addedNodes, (node) => node.id || node.nodeName),
+        Array.from(record.removedNodes, (node) => node.id || node.nodeName),
+        record.attributeName, record.oldValue,
+      ]);
+      const deliveries = [];
+      const observer = new window.MutationObserver((records) => deliveries.push(describe(records)));
+      const fixture = document.createElement("div");
+      fixture.id = "fixture";
+      fixture.innerHTML = "<section id=container><p id=first></p><p id=second></p></section>";
+      document.body.append(fixture);
+      observer.observe(fixture, { childList: true, subtree: true, attributes: true });
+      const container = fixture.firstElementChild;
+      // Taken out, then changed inside before the records are delivered.
+      container.remove();
+      container.firstElementChild.remove();
+      container.lastElementChild.setAttribute("title", "x");
+      await tick();
+      // After a delivery the transient registration is gone.
+      container.lastElementChild.remove();
+      await tick();
+
+      // One registration on the node itself does not hide a subtree one above.
+      const outer = document.createElement("div");
+      outer.id = "outer";
+      outer.innerHTML = "<span id=inner></span>";
+      document.body.append(outer);
+      const inner = outer.firstElementChild;
+      const layered = new window.MutationObserver(() => {});
+      layered.observe(inner, { attributes: true });
+      layered.observe(outer, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
+      inner.append("t");
+      inner.firstChild.data = "u";
+      const layeredRecords = describe(layered.takeRecords());
+
+      // A tree in another document is observable too.
+      const parsed = new window.DOMParser().parseFromString("<p id=parsed></p>", "text/html");
+      const elsewhere = new window.MutationObserver(() => {});
+      elsewhere.observe(parsed.body, { childList: true, subtree: true });
+      parsed.getElementById("parsed").append(parsed.createElement("b"));
+      const elsewhereRecords = describe(elsewhere.takeRecords());
+      observer.disconnect();
+      fixture.remove();
+      outer.remove();
+      return [deliveries, layeredRecords, elsewhereRecords];
+    },
+  },
+  {
+    group: "events",
     name: "keyboard-and-mouse-events-carry-their-modifiers",
     run(window) {
       const read = (event) => [

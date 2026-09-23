@@ -25,6 +25,16 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Fixed
+- **A removed subtree stays observed until delivery.** Taking a node out of an
+  observed tree silenced it at once, so anything done inside it before the
+  records were delivered — removing its children, changing their attributes —
+  was never reported, and code that tracks removal lost the notifications it
+  needed. Removal now leaves the specification's transient registrations on the
+  node until the next delivery. Two more gaps went with it: a registration on
+  the node itself no longer hides a subtree registration further up (every
+  registration is consulted, and the old value is kept if any asked for it), and
+  trees in other documents — `DOMParser`, `createHTMLDocument` — are observable,
+  where before only the main document was.
 - **`<details>` and `<dialog>` fire `toggle`.** A `<details>` fires it whenever
   its `open` attribute appears or goes — by property, by attribute, attached or
   not — and a `name` group closes its other members as one opens. A dialog's

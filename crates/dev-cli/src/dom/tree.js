@@ -617,6 +617,7 @@ export function createTree(events = {}) {
       state.previous = null;
       state.next = null;
       this._touch();
+      (this.ownerDocument ?? this)._keepObserving?.(this, child);
       (this.ownerDocument ?? this)._queueMutation?.({ type: "childList", target: this, addedNodes: [], removedNodes: [child], previousSibling, nextSibling });
       signalSlotChange(this instanceof Element ? this : null);
     }
