@@ -24,6 +24,21 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+- **A tie between two sheets is decided by sheet order.** The order counter that
+  breaks a tie between two declarations of equal specificity restarted at zero
+  for every sheet, so the first sheet's rule and the second's carried the same
+  number and the winner came down to which was examined last. It now runs once
+  across every sheet an element sees — a document's `<style>` elements in tree
+  order, then its adopted sheets, which is the order the specification gives.
+  Lit computed a 4px border where Chrome computes 3px, because the styles it
+  adopts must beat the markup its render writes.
+- **Flattening a slot recurses.** `assignedNodes({ flatten: true })` replaced a
+  slotted element with nothing when that element was itself a `<slot>` in another
+  component's light tree, which is what nesting two components produces; it now
+  substitutes what the inner slot assigns, or its fallback content, however deep
+  the nesting goes.
+
 ### Added
 - `tsr test:dom-wpt-chrome -- <file>` runs one upstream WPT file in headless
   Chrome and reports each subtest. Triage rather than a gate: a subtest Chrome

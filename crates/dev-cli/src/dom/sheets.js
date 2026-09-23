@@ -429,16 +429,21 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
 
   // Rules that could apply to an element, flattened out of their groups, with
   // the specificity and order the cascade sorts by.
-  function* applicable(rules, origin, start) {
-    let order = start;
+  // The counter is shared across every sheet an element sees, not restarted per
+  // sheet: order is what breaks a tie between two rules of equal specificity, and
+  // a per-sheet counter gave the first sheet's rule the same order as the
+  // second's — so which won depended on the order they happened to be examined
+  // in. A document's `<style>` elements come before its adopted sheets, which is
+  // why Lit's static styles beat the markup its render writes.
+  function* applicable(rules, origin, counter) {
     for (const rule of rules) {
       if (rule instanceof CSSGroupingRule) {
-        if (conditionHolds(rule)) yield* applicable(Array.from(rule.cssRules), origin, order);
+        if (conditionHolds(rule)) yield* applicable(Array.from(rule.cssRules), origin, counter);
         continue;
       }
       if (!(rule instanceof CSSStyleRule)) continue;
-      order += 1;
-      yield { rule, origin, order };
+      counter.next += 1;
+      yield { rule, origin, order: counter.next };
     }
   }
 
@@ -546,8 +551,10 @@ export function createSheets({ tree, parse, selectors, css, mediaMatches, colors
     const document = element.ownerDocument;
     const root = element.getRootNode();
     const entries = [];
+    // One counter for the whole cascade this element sees.
+    const counter = { next: 0 };
     const collect = (rules, origin, scope = null) => {
-      for (const { rule, order } of applicable(rules, origin, 0)) {
+      for (const { rule, order } of applicable(rules, origin, counter)) {
         if (!matchesRule(element, rule, scope)) continue;
         const specificity = specificityOf(rule);
         for (const [name, value, important] of rule[RULES]) {

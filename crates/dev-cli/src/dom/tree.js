@@ -2177,11 +2177,21 @@ export function createTree(events = {}) {
     }
     assignedNodes(options = {}) {
       const assigned = this._assignedNodes();
-      if (!options.flatten || assigned.length) return assigned;
+      if (!options.flatten) return assigned;
+      // "Find flattened slottables": the assigned nodes, or this slot's own
+      // children when nothing is assigned — and then every one of *those* that is
+      // itself a slot in a shadow tree dissolves into what it would show. A slot
+      // forwarded into another component's slot is the ordinary case, and
+      // returning it verbatim is what made `queryAssignedElements` answer with a
+      // `<slot>` instead of the nodes behind it.
+      const slottables = assigned.length > 0 ? assigned : Array.from(this._esdevChildren());
       const flattened = [];
-      for (const child of this._esdevChildren()) {
-        if (child instanceof HTMLSlotElement) flattened.push(...child.assignedNodes({ flatten: true }));
-        else flattened.push(child);
+      for (const node of slottables) {
+        if (node instanceof HTMLSlotElement && node.getRootNode() instanceof ShadowRoot) {
+          flattened.push(...node.assignedNodes({ flatten: true }));
+        } else {
+          flattened.push(node);
+        }
       }
       return flattened;
     }

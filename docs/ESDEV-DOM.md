@@ -271,7 +271,7 @@ same thing to `esdev build` and to `esdev test --dom`.
 | --- | --- |
 | Origin and importance | normal user-agent, normal author, the `style` attribute, important author, an important `style` attribute, important user-agent |
 | Specificity | `[ids, classes, types]`, with `:is()`/`:not()`/`:has()` taking their most specific argument and `:where()` taking none |
-| Order | the later declaration in the sheet wins a tie |
+| Order | the later declaration wins a tie, counted across every sheet the element sees rather than within one: a document's `<style>` elements in tree order, then its adopted sheets |
 | Shorthands | expanded to longhands before any of this, so a longhand written after a shorthand wins; a shorthand asked of the result is serialized back out of the parts |
 | Inheritance | the inherited properties, and any explicit `inherit`, come from the **flat tree**: a shadow root's child inherits from the host, and a slotted element through its slot |
 | `var()` | substituted here, with a missing or cyclic name falling back after the comma and an unresolvable one leaving the property unset |

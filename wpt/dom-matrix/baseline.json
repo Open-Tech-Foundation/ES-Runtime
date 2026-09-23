@@ -1334,6 +1334,45 @@
     },
     {
       "group": "cascade",
+      "name": "an-equal-specificity-tie-goes-to-the-later-sheet",
+      "chrome": {
+        "result": [
+          "5px",
+          "3px",
+          "4px",
+          "3px"
+        ]
+      },
+      "esdev": {
+        "result": [
+          "5px",
+          "3px",
+          "4px",
+          "3px"
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          "5px",
+          "5px",
+          "4px",
+          "4px"
+        ]
+      },
+      "jsdom": {
+        "result": [
+          "5px",
+          "5px",
+          "5px",
+          "5px"
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "cascade",
       "name": "nesting-resolves-against-its-parent-rule",
       "chrome": {
         "result": [
@@ -2275,6 +2314,109 @@
           [
             "H",
             "H2"
+          ]
+        ]
+      },
+      "emulatorDisagreement": true,
+      "status": "match",
+      "drift": false
+    },
+    {
+      "group": "components",
+      "name": "flattening-recurses-through-a-slotted-slot",
+      "chrome": {
+        "result": [
+          [
+            "slot"
+          ],
+          [
+            "em"
+          ],
+          [
+            "em"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ]
+        ]
+      },
+      "esdev": {
+        "result": [
+          [
+            "slot"
+          ],
+          [
+            "em"
+          ],
+          [
+            "em"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ]
+        ]
+      },
+      "happy-dom": {
+        "result": [
+          [
+            "slot"
+          ],
+          [],
+          [],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ]
+        ]
+      },
+      "jsdom": {
+        "result": [
+          [
+            "slot"
+          ],
+          [
+            "em"
+          ],
+          [
+            "em"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
+          ],
+          [
+            "i",
+            "b"
           ]
         ]
       },
@@ -7264,7 +7406,7 @@
     }
   ],
   "summary": {
-    "match": 103,
+    "match": 105,
     "intentional-limit": 2,
     "drift": 0
   }

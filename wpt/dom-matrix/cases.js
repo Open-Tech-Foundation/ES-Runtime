@@ -650,6 +650,48 @@ export const cases = [
   },
   {
     group: "cascade",
+    name: "an-equal-specificity-tie-goes-to-the-later-sheet",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      // Two rules of equal specificity, in different sheets. The winner is the
+      // one the document sees last: its `<style>` elements in tree order, then
+      // its adopted sheets.
+      const first = document.createElement("style");
+      first.textContent = "span { border-top-width: 4px; border-top-style: solid }";
+      document.head.append(first);
+      const second = document.createElement("style");
+      second.textContent = "span { border-top-width: 5px }";
+      document.head.append(second);
+      const adopted = new window.CSSStyleSheet();
+      adopted.replaceSync("span { border-top-width: 3px }");
+
+      const span = document.createElement("span");
+      document.body.append(span);
+      const width = () => window.getComputedStyle(span).borderTopWidth;
+      const styleElementsOnly = width();
+      document.adoptedStyleSheets = [adopted];
+      const adoptedWins = width();
+
+      // A shadow tree's own sheets are ordered the same way: this is the shape
+      // Lit renders, where the static styles it adopts must beat the markup.
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<style>span { border-top-width: 4px; border-top-style: solid }</style><span></span>";
+      const inner = root.lastElementChild;
+      const scoped = new window.CSSStyleSheet();
+      scoped.replaceSync("span { border-top-width: 3px }");
+      const scopedBefore = window.getComputedStyle(inner).borderTopWidth;
+      root.adoptedStyleSheets = [scoped];
+      const scopedAfter = window.getComputedStyle(inner).borderTopWidth;
+
+      document.adoptedStyleSheets = [];
+      return [styleElementsOnly, adoptedWins, scopedBefore, scopedAfter];
+    },
+  },
+  {
+    group: "cascade",
     name: "nesting-resolves-against-its-parent-rule",
     run(window) {
       const { document } = window;
@@ -971,6 +1013,40 @@ export const cases = [
         host.firstElementChild.assignedSlot === named,
         Array.from(unnamed.assignedNodes({ flatten: true }), (node) => node.localName ?? node.nodeName),
         Array.from(root.querySelector("slot[name=head]").assignedElements(), (node) => node.textContent),
+      ];
+    },
+  },
+  {
+    group: "components",
+    name: "flattening-recurses-through-a-slotted-slot",
+    run(window) {
+      const { document } = window;
+      reset(document);
+      // Two components nested: the outer one's slot is a light child of the
+      // inner one, so it is itself a slottable. Flattening has to replace it
+      // with what it assigns, however deep that goes.
+      const host = document.createElement("div");
+      document.body.append(host);
+      const outer = host.attachShadow({ mode: "open" });
+      outer.innerHTML = "<div id=inner><slot id=outer-slot><em>outer fallback</em></slot></div>";
+      const inner = outer.getElementById("inner").attachShadow({ mode: "open" });
+      inner.innerHTML = "<slot id=inner-slot><em>inner fallback</em></slot>";
+      const innerSlot = inner.querySelector("slot");
+      const outerSlot = outer.querySelector("slot");
+      const names = (slot, options) =>
+        Array.from(slot.assignedNodes(options), (node) => node.localName ?? node.nodeName);
+
+      const assignedToInner = names(innerSlot);
+      const emptyFlatten = names(innerSlot, { flatten: true });
+      const outerEmptyFlatten = names(outerSlot, { flatten: true });
+      host.append(document.createElement("i"), document.createElement("b"));
+      return [
+        assignedToInner,
+        emptyFlatten,
+        outerEmptyFlatten,
+        names(innerSlot, { flatten: true }),
+        names(outerSlot, { flatten: true }),
+        names(outerSlot),
       ];
     },
   },
