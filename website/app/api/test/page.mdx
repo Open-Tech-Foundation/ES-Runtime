@@ -45,7 +45,8 @@ module it imported.
 ## test(name, fn)
 
 Registers a test. `fn` may be `async`. Cases run **one at a time**, in the order
-the file wrote them, and a test that awaits holds up the next; `esdev` prints
+the file wrote them, unless marked [concurrent](#concurrent-tests), and a test
+that awaits holds up the next; `esdev` prints
 the tally once the program is done and exits non-zero if anything failed.
 
 That is deliberate, and it is a change. Tests used to *start* where they were
@@ -98,6 +99,13 @@ test("flaky upstream", { retry: 2 }, async () => { … });
 `test.fails(name, fn, options?)` registers a test that is expected to fail. It
 passes while it fails, and fails once it passes. `test.skip` and `test.only`
 take the same options.
+
+## Concurrent tests
+
+`test.concurrent`, `describe.concurrent` and `{ concurrent: true }` run tests
+alongside each other, at most `maxConcurrency` (5) at once;
+`test.sequential`, `describe.sequential` and `{ concurrent: false }` opt out.
+See [Running concurrently](/esdev/test/running#concurrent-tests).
 
 ## `expectTypeOf` and `assertType`
 

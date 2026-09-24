@@ -128,6 +128,8 @@ pub struct RunOptions {
     pub strict_tags: bool,
     /// The `@module-tag`s of the file being run.
     pub module_tags: Vec<String>,
+    /// How many concurrent cases may run at once.
+    pub max_concurrency: Option<u64>,
 }
 
 impl RunOptions {
@@ -145,6 +147,7 @@ impl RunOptions {
             "tags": self.tags,
             "strictTags": self.strict_tags,
             "moduleTags": self.module_tags,
+            "maxConcurrency": self.max_concurrency,
         })
     }
 }

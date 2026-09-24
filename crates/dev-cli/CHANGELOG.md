@@ -104,6 +104,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Concurrent tests**: `test.concurrent`, `describe.concurrent`,
+  `{ concurrent }` on tests and groups, `test.sequential`/`describe.sequential`,
+  and `--max-concurrency` / `test.maxConcurrency` (5 by default). Each test's
+  assertions, snapshots and `expect.assertions` stay its own, even through the
+  global `expect` after an await (DECISIONS D115).
 - **`expectTypeOf` and `assertType`** in `runtime:test`, Vitest's type
   assertions, checked by TypeScript and no-ops at run time, and
   **`esdev test --typecheck`**, which runs the project's `tsc --noEmit` before

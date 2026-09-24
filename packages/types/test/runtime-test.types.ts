@@ -401,6 +401,21 @@ test("type assertions", () => {
   assertType<string>(1);
 });
 
+// --- concurrency --------------------------------------------------------------
+
+test.concurrent("runs alongside", async ({ expect: check }) => {
+  check(1).toBe(1);
+});
+test.concurrent.skip("skipped", async () => {});
+test.skip.concurrent("skipped too", async () => {});
+test.concurrent.each([[1], [2]])("row %d", async (n) => void n);
+test.sequential("alone", () => {});
+test("an option", { concurrent: true }, async () => {});
+describe.concurrent("a concurrent group", () => {});
+describe("a group", { concurrent: false }, () => {});
+describe.sequential("a sequential group", () => {});
+dbTest.concurrent("fixtures and concurrency", async ({ user }) => void user.id);
+
 // --- clock ------------------------------------------------------------------
 
 test("the clock can be told what to fake", () => {

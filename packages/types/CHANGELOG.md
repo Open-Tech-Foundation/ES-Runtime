@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **`test.concurrent`, `test.sequential`, `describe.concurrent`,
+  `describe.sequential`** and `concurrent` in `TestOptions`/`DescribeOptions`.
 - **`expectTypeOf` and `assertType`**, with `ExpectTypeOf`, `TypeMismatch` and
   `TypeCheckFailed`.
 - **Tags** — `tags` in `TestOptions`, `DescribeOptions`, the augmentable

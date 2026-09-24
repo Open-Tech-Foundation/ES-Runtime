@@ -35,6 +35,11 @@ declare module "runtime:test" {
          * `test.tags` gives it. Its own options win over a tag's.
          */
         tags?: TagName | TagName[];
+        /**
+         * Run alongside the concurrent tests next to it, or — `false` — not,
+         * whatever its group says.
+         */
+        concurrent?: boolean;
       };
 
   /**
@@ -101,15 +106,28 @@ declare module "runtime:test" {
      * counted in the tally rather than left out of it. The body may be left
      * out.
      */
-    skip: Register<Fixtures> & ((name: string) => void);
+    skip: Register<Fixtures> & ((name: string) => void) & { concurrent: Register<Fixtures> };
     /** Runs this case and skips the rest — the one you are working on. */
-    only: Register<Fixtures>;
+    only: Register<Fixtures> & { concurrent: Register<Fixtures> };
     /** A test known to fail: it passes while it fails, and fails once it passes. */
     fails: Register<Fixtures> & {
       each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
     };
     /** A name with no body yet, reported as skipped. */
     todo(name: string, fn?: () => void | Promise<void>): void;
+    /**
+     * Runs alongside the concurrent tests next to it — at most
+     * `maxConcurrency` (5) at once. Hooks, fixtures, `expect.assertions`
+     * and snapshots each still belong to their own test, through its awaits.
+     */
+    concurrent: Register<Fixtures> & {
+      skip: Register<Fixtures> & ((name: string) => void);
+      only: Register<Fixtures>;
+      todo(name: string, fn?: () => void | Promise<void>): void;
+      each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
+    };
+    /** Runs on its own, whatever its group says. */
+    sequential: Register<Fixtures>;
     /** Registers the case only when the condition is false, and skips it otherwise. */
     skipIf(condition: unknown): TestFn<Fixtures>;
     /** The mirror: registers it only when the condition holds. */
@@ -163,8 +181,9 @@ declare module "runtime:test" {
   /**
    * Registers a test. It runs when the ones before it have finished.
    *
-   * Cases run **one at a time**, in the order the file wrote them. A test that
-   * awaits holds up the next, deliberately: two tests sharing a database, a
+   * Cases run **one at a time**, in the order the file wrote them, unless
+   * marked concurrent (`test.concurrent`). A test that awaits holds up the
+   * next, deliberately: two tests sharing a database, a
    * temp directory, a port or a module global cannot interleave, and there is a
    * "before" for {@link beforeEach} to happen in. `esdev` reports the tally
    * once the program is done.
@@ -223,6 +242,8 @@ declare module "runtime:test" {
   export interface DescribeOptions {
     /** Tags every test in the group carries. */
     tags?: TagName | TagName[];
+    /** Whether the group's tests run concurrently, unless one says otherwise. */
+    concurrent?: boolean;
   }
 
   export const describe: {
@@ -236,6 +257,18 @@ declare module "runtime:test" {
     only(name: string, options: DescribeOptions, body: () => void): void;
     /** A group planned and not written. Its name is reported as skipped. */
     todo(name: string, body?: () => void): void;
+    /** Every test in the group runs concurrently, unless one says otherwise. */
+    concurrent: {
+      (name: string, body: () => void): void;
+      (name: string, options: DescribeOptions, body: () => void): void;
+      skip(name: string, body: () => void): void;
+      only(name: string, body: () => void): void;
+    };
+    /** No test in the group runs concurrently, whatever encloses it. */
+    sequential: {
+      (name: string, body: () => void): void;
+      (name: string, options: DescribeOptions, body: () => void): void;
+    };
     /** Registers the group only when the condition is false. */
     skipIf(condition: unknown): (name: string, body: () => void) => void;
     /** …and only when it holds. */

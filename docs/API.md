@@ -3751,7 +3751,8 @@ report, because what makes a run a test run is the module it imported.
 ### `test(name, fn)`
 
 Registers a test; `fn` may be `async`. Cases run **one at a time**, in the order
-the file wrote them, and a test that awaits holds up the next. `esdev` prints
+the file wrote them, unless marked concurrent (below), and a test that awaits
+holds up the next. `esdev` prints
 the tally once the program reaches quiescence and exits non-zero if anything
 failed.
 
@@ -3885,6 +3886,22 @@ table's header; any other row is passed whole.
 
 A name that does not vary per row gets its index appended, because six cases
 sharing one identity is a report in which a failure names none of them.
+
+### Concurrent tests
+
+`test.concurrent(name, fn)`, or `{ concurrent: true }` on a test, runs it
+alongside the concurrent tests next to it in the file; `describe.concurrent`,
+or `{ concurrent: true }` on a `describe`, makes every test in the group
+concurrent, and `{ concurrent: false }`, `test.sequential` and
+`describe.sequential` opt back out. `.skip`, `.only`, `.todo` and `.each`
+combine with `concurrent` in either order. At most `maxConcurrency` run at once:
+5, or `--max-concurrency=<n>`, or `test.maxConcurrency` in esdev.json.
+
+Each concurrent test runs its own `beforeEach`, fixtures and `afterEach`, and a
+group's `beforeAll` runs once before any of them. Assertions,
+`expect.assertions`, soft failures, snapshots and `onTestFinished` belong to
+the test that made them, through its awaits, whether made with the global
+`expect` or the context's. In browser runs, concurrent tests run one at a time.
 
 ### `expectTypeOf` and `assertType`
 

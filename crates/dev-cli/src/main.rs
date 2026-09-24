@@ -216,6 +216,8 @@ OPTIONS:
                                 with and/&&, or/||, not/!, parentheses and *.
                                 Repeatable; a test must match every one
     --list-tags[=json]          Print the tags test.tags defines, and exit
+    --max-concurrency=<n>       How many test.concurrent cases in a file run at
+                                once (5 by default)
     --typecheck                 Also run the project's tsc --noEmit, which is
                                 where expectTypeOf and assertType fail
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
@@ -263,9 +265,9 @@ OPTIONS:
                                 imports, net, listen, env, run, signals, workers
 
 `setup`, `globalSetup`, `timeout`, `jobs`, `isolation`, `reporter`, `browser`,
-`coverage`, `tags` and `strictTags` are also esdev.json keys, under \"test\" — the rest (`--update-snapshots`,
-`--ci`, `--full-diff` and the permission flags) are flags only: they decide a
-single run, not the project:
+`coverage`, `tags`, `strictTags` and `maxConcurrency` are also esdev.json keys,
+under \"test\" — the rest (`--update-snapshots`, `--ci`, `--full-diff` and the
+permission flags) are flags only: they decide a single run, not the project:
 
     { \"test\": { \"setup\": [\"./test/setup.ts\"], \"timeout\": 5000,
                 \"jobs\": 4, \"isolation\": \"process\", \"reporter\": \"json\" } }
@@ -1462,6 +1464,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut detect_leaks = false;
     let mut tags_filter = Vec::new();
     let mut typecheck = false;
+    let mut max_concurrency = None;
     let mut list_tags = None;
     let mut timeout = None;
     let mut reporter = None;
@@ -1564,6 +1567,15 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     address: inspect::parse_address(value)?,
                     wait: flag == "--inspect-brk",
                 });
+            }
+            "--max-concurrency" => {
+                let text = require_value(flag, value)?;
+                max_concurrency =
+                    Some(text.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| {
+                        format!(
+                            "{flag}={text} is not a number of tests: a whole number above zero."
+                        )
+                    })?);
             }
             "--typecheck" => {
                 reject_value(flag, value)?;
@@ -1790,6 +1802,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         detect_leaks,
         tags_filter,
         typecheck,
+        max_concurrency,
         list_tags,
         // Filled in by `test_settings`, which reads the project.
         tag_definitions: Vec::new(),
@@ -1901,6 +1914,9 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
             .collect::<Result<_, _>>()?;
     }
     config.tag_definitions.clone_from(&project.test.tags);
+    if config.max_concurrency.is_none() {
+        config.max_concurrency = project.test.max_concurrency;
+    }
     config.strict_tags = project.test.strict_tags.unwrap_or(true);
     if config.global_setup.is_empty() {
         config.global_setup = project

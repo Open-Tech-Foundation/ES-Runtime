@@ -198,14 +198,39 @@ function matchesTags(tags) {
 
 const selected = (title) =>
   (namePattern === null || namePattern.test(title)) && (skipPattern === null || !skipPattern.test(title));
-let activeCase = null;
-// How many snapshots of each name the running attempt has taken. Counted per
-// name, so a named snapshot keeps its key when another is added before it.
-let snapshotCounts = new Map();
-// What the running attempt of a case has asked for and done: its assertion
-// count, what `expect.assertions` wants of it, its soft failures, and the
-// callbacks it registered for when it ends. `null` between cases.
-let attempt = null;
+// The attempt running now, or `null` between cases:
+//   { id, state, snapshotCounts, pendingRejection }
+// `state` is what it has asked for and done — its assertion count, what
+// `expect.assertions` wants of it, its soft failures, and the callbacks it
+// registered for when it ends. `snapshotCounts` counts its snapshots per name,
+// so a named snapshot keeps its key when another is added before it.
+//
+// One test at a time, it is `running`. Tests running concurrently are held in
+// a `runtime:context` context instead, which follows each test's own awaits —
+// so even the global `expect` knows which test it is in.
+let running = null;
+let runContext = null;
+let contextLoading = null;
+const currentRun = () => runContext?.get() ?? running;
+
+// How many cases may run at once in a concurrent run of them, as Vitest's
+// `maxConcurrency` counts them.
+const maxConcurrency = runOptions.maxConcurrency ?? 5;
+
+/// Starts loading `runtime:context`, which concurrent cases run inside. Only
+/// once a file asks for concurrency: its promise hook costs every promise.
+/// A page has no `runtime:context`, and runs its concurrent cases one at a time.
+function loadRunContext() {
+  if (contextLoading !== null) return;
+  if (typeof ops.module_resolve_sync !== "function") {
+    contextLoading = Promise.resolve();
+    return;
+  }
+  const specifier = ["runtime", "context"].join(":");
+  contextLoading = import(specifier).then((module) => {
+    runContext = module.createContext({ name: "runtime:test run" });
+  });
+}
 
 // Cases waiting to run, in the order they were written.
 const queue = [];
@@ -224,6 +249,8 @@ function group(name, parent) {
     hooks: { beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] },
     // Its tags and its enclosing groups', which every case in it carries.
     tags: parent?.tags ?? [],
+    // Whether its cases run concurrently, unless one says otherwise.
+    concurrent: parent?.concurrent ?? false,
     // Cases registered in it or in a group inside it, still to finish. What
     // decides when its `afterAll` runs.
     left: 0,
@@ -269,7 +296,6 @@ const realNow = Date.now;
 // suite of a hundred passing tests reports nothing at all — the one thing this
 // runner is most careful never to do. One that surfaces between cases has no
 // test to belong to, so it is reported as a case of its own.
-let pendingRejection = null;
 const strayRejections = [];
 
 function claimRejection(event) {
@@ -281,7 +307,8 @@ function claimRejection(event) {
   // the runtime's to report, and swallowing it would hide a real error.
   if (!draining) return;
   event.preventDefault();
-  if (activeCase !== null) pendingRejection ??= event.reason;
+  const run = currentRun();
+  if (run !== null) run.pendingRejection ??= event.reason;
   else strayRejections.push(event.reason);
 }
 
@@ -366,9 +393,10 @@ function describe(name, a, b) {
   return describeWith(name, a, b, undefined);
 }
 
-// `describe(name, body)` or `describe(name, { tags }, body)`.
-function describeWith(name, a, b, mode) {
-  const [body, options] = typeof a === "function" || a === undefined ? [a, b] : [b, a];
+// `describe(name, body)` or `describe(name, { tags, concurrent }, body)`.
+function describeWith(name, a, b, mode, defaults = {}) {
+  const [body, given] = typeof a === "function" || a === undefined ? [a, b] : [b, a];
+  const options = { ...defaults, ...given };
   const tags = tagsOf(`describe(${JSON.stringify(String(name))})`, options?.tags);
   if (typeof body !== "function") {
     throw new TypeError(
@@ -377,6 +405,7 @@ function describeWith(name, a, b, mode) {
   }
   const made = group(String(name), current);
   made.tags = unique([...current.tags, ...tags]);
+  if (options.concurrent !== undefined) made.concurrent = options.concurrent === true;
   // A group that is skipped skips everything in it, and one marked `only`
   // makes every case in it an `only` — which is what makes `describe.only`
   // mean the group rather than nothing.
@@ -453,7 +482,9 @@ function enqueue(name, fn, mode, options, fixtures = null) {
   const only = mode === "only" || scope.only;
   if (only) exclusive = true;
   for (let at = scope; at; at = at.parent) at.left += 1;
-  queue.push({ id, title, fn, scope, only, options, fixtures });
+  const concurrent = options.concurrent ?? scope.concurrent;
+  if (concurrent) loadRunContext();
+  queue.push({ id, title, fn, scope, only, options, fixtures, concurrent });
   schedule();
 }
 
@@ -475,6 +506,9 @@ function optionsOf(name, value) {
   }
   const { timeout, retry, repeats } = value;
   const tags = tagsOf(where, value.tags);
+  if (value.concurrent !== undefined && typeof value.concurrent !== "boolean") {
+    throw new TypeError(`${where}: concurrent is true or false`);
+  }
   if (timeout !== undefined && !(Number.isFinite(timeout) && timeout > 0)) {
     throw new TypeError(`${where}: timeout is a number of milliseconds above zero`);
   }
@@ -484,7 +518,7 @@ function optionsOf(name, value) {
   if (repeats !== undefined && !(Number.isInteger(repeats) && repeats >= 0)) {
     throw new TypeError(`${where}: repeats is how many more times to run it, a whole number`);
   }
-  return { timeout, retry, repeats, tags };
+  return { timeout, retry, repeats, tags, concurrent: value.concurrent };
 }
 
 // --- fixtures ----------------------------------------------------------------
@@ -705,6 +739,15 @@ function testApi(fixtures) {
   api.skip = make("skip");
   api.only = make("only");
   api.fails = make(undefined, { fails: true });
+  // Runs alongside the concurrent cases next to it — or, `sequential`, not.
+  api.concurrent = make(undefined, { concurrent: true });
+  api.concurrent.skip = make("skip", { concurrent: true });
+  api.concurrent.only = make("only", { concurrent: true });
+  api.concurrent.todo = (name, fn) => enqueue(name, fn ?? (() => {}), "skip", {}, fixtures);
+  api.concurrent.each = each(api.concurrent);
+  api.skip.concurrent = api.concurrent.skip;
+  api.only.concurrent = api.concurrent.only;
+  api.sequential = make(undefined, { concurrent: false });
   api.todo = (name, fn) => enqueue(name, fn ?? (() => {}), "skip", {}, fixtures);
   api.skipIf = (condition) => (condition ? api.skip : api);
   api.runIf = (condition) => (condition ? api : api.skip);
@@ -746,6 +789,13 @@ describe.only = (name, a, b) => describeWith(name, a, b, "only");
 // arranged so a report says what did not run, and a to-do that vanished from
 // the tally would be the one kind of missing case nobody notices.
 describe.todo = (name, body) => describeWith(name, body ?? (() => {}), undefined, "skip");
+// Every case in the group runs concurrently, or — `sequential` — none does.
+describe.concurrent = (name, a, b) => describeWith(name, a, b, undefined, { concurrent: true });
+describe.concurrent.skip = (name, a, b) => describeWith(name, a, b, "skip", { concurrent: true });
+describe.concurrent.only = (name, a, b) => describeWith(name, a, b, "only", { concurrent: true });
+describe.skip.concurrent = describe.concurrent.skip;
+describe.only.concurrent = describe.concurrent.only;
+describe.sequential = (name, a, b) => describeWith(name, a, b, undefined, { concurrent: false });
 
 // `test.skipIf(cond)(...)` / `test.runIf(cond)(...)` — a case that depends on
 // where it is running. A suite that needs a Postgres to be up has to say so
@@ -874,21 +924,21 @@ async function drain() {
     if (nextRandom !== null) shuffleQueue();
     while (queue.length > 0) {
       const next = queue.shift();
-      // Something asked to be the only thing that runs, and this is not it.
-      // Decided here rather than at registration, because whether a case is
-      // the exception is not known until the file has finished registering.
-      if (exclusive && !next.only) {
-        ops.test_skipped(next.id, "only");
-        await settled(next.scope);
+      // A run of concurrent cases next to each other goes together, at most
+      // `maxConcurrency` at once.
+      if (next.concurrent) {
+        const batch = [next];
+        while (queue[0]?.concurrent) batch.push(queue.shift());
+        await contextLoading;
+        const width = runContext === null ? 1 : maxConcurrency;
+        let at = 0;
+        const worker = async () => {
+          while (at < batch.length) await caseOrSkip(batch[at++]);
+        };
+        await Promise.all(Array.from({ length: Math.min(width, batch.length) }, worker));
         continue;
       }
-      // The failure limit was reached: what is left is counted, not run.
-      if (bailAt !== null && failedTests >= bailAt) {
-        ops.test_skipped(next.id, "bail");
-        await settled(next.scope);
-        continue;
-      }
-      await runCase(next);
+      await caseOrSkip(next);
     }
     // Whatever is still open — a group whose last case has run leaves through
     // `settled` below, so this is the file's own scope, and any group a case
@@ -929,16 +979,23 @@ async function drain() {
 // Runs a group's `beforeAll`, and its enclosing groups' first. Once each.
 async function open(scope) {
   if (scope.parent) await open(scope.parent);
-  if (scope.opened) return;
-  scope.opened = true;
-  // An outer `beforeAll` failed, so this one does not run: it would be setting
-  // up on top of something that was never built.
-  if (broken(scope.parent) !== null) return;
-  try {
-    for (const fn of scope.hooks.beforeAll) await fn();
-  } catch (err) {
-    scope.failure = err;
+  // Once, and awaited by every case that needs it: concurrent cases in a
+  // group all wait for the one `beforeAll`, rather than the second starting
+  // while the first is still setting up.
+  if (!scope.opened) {
+    scope.opened = true;
+    scope.opening = (async () => {
+      // An outer `beforeAll` failed, so this one does not run: it would be
+      // setting up on top of something that was never built.
+      if (broken(scope.parent) !== null) return;
+      try {
+        for (const fn of scope.hooks.beforeAll) await fn();
+      } catch (err) {
+        scope.failure = err;
+      }
+    })();
   }
+  await scope.opening;
 }
 
 // Runs a group's `afterAll`, if its `beforeAll` ran.
@@ -966,7 +1023,26 @@ async function settled(scope) {
   }
 }
 
-async function runCase({ id, title, fn, scope, options, fixtures }) {
+// Runs a case — unless something else decided it does not run.
+async function caseOrSkip(next) {
+  // Something asked to be the only thing that runs, and this is not it.
+  // Decided here rather than at registration, because whether a case is the
+  // exception is not known until the file has finished registering.
+  if (exclusive && !next.only) {
+    ops.test_skipped(next.id, "only");
+    await settled(next.scope);
+    return;
+  }
+  // The failure limit was reached: what is left is counted, not run.
+  if (bailAt !== null && failedTests >= bailAt) {
+    ops.test_skipped(next.id, "bail");
+    await settled(next.scope);
+    return;
+  }
+  await runCase(next);
+}
+
+async function runCase({ id, title, fn, scope, options, fixtures, concurrent }) {
   ops.test_running(id);
   await open(scope);
   const failed = broken(scope);
@@ -992,7 +1068,7 @@ async function runCase({ id, title, fn, scope, options, fixtures }) {
       // snapshot results, and only the last attempt's are the case's.
       if (started) ops.test_running(id);
       started = true;
-      failure = await runAttempt(id, fn, scope, options, { title, fixtures });
+      failure = await runAttempt(id, fn, scope, options, { title, fixtures, concurrent });
       // `context.skip()`: skipped, however far it got.
       if (failure?.[SKIPPED]) {
         ops.test_skipped(id, "");
@@ -1039,17 +1115,28 @@ function testContext(title) {
   };
 }
 
-async function runAttempt(id, fn, scope, options, { title = "", fixtures = null } = {}) {
-  let failure = null;
+async function runAttempt(id, fn, scope, options, extras = {}) {
   const state = { assertions: 0, expected: null, atLeastOne: false, soft: [], finished: [], failed: [] };
-  attempt = state;
+  const run = { id, state, snapshotCounts: new Map(), pendingRejection: null };
+  // Concurrently: in a context of its own, which its awaits carry with them.
+  if (extras.concurrent && runContext !== null) {
+    return runContext.run(run, () => attemptIn(run, fn, scope, options, extras));
+  }
+  running = run;
+  try {
+    return await attemptIn(run, fn, scope, options, extras);
+  } finally {
+    running = null;
+  }
+}
+
+async function attemptIn(run, fn, scope, options, { title = "", fixtures = null } = {}) {
+  let failure = null;
+  const { state } = run;
   const context = testContext(title);
   // Test-scoped fixtures' teardowns, run after `afterEach`, newest first.
   const cleanups = [];
   try {
-    activeCase = id;
-    snapshotCounts = new Map();
-    pendingRejection = null;
     armRejectionListener();
     if (fixtures !== null) await setUpFixtures(fixtures, fn, context, cleanups);
     for (const before of around(scope, "beforeEach")) await before(context);
@@ -1093,8 +1180,7 @@ async function runAttempt(id, fn, scope, options, { title = "", fixtures = null 
   }
   // A promise this case left rejected fails it, like a thrown error — unless
   // something already did, since the first failure explains the rest.
-  if (failure === null && pendingRejection !== null) failure = pendingRejection;
-  pendingRejection = null;
+  if (failure === null && run.pendingRejection !== null) failure = run.pendingRejection;
   // The case's own cleanup, after the hooks and newest first, as a stack of
   // things to undo is unwound.
   if (failure !== null) {
@@ -1113,8 +1199,6 @@ async function runAttempt(id, fn, scope, options, { title = "", fixtures = null 
       failure ??= err;
     }
   }
-  activeCase = null;
-  attempt = null;
   return failure;
 }
 
@@ -1172,13 +1256,15 @@ function onTestFailed(fn) {
 
 function duringTest(name, fn) {
   if (typeof fn !== "function") throw new TypeError(`${name}(): needs a function to run`);
-  if (attempt === null) throw new Error(`${name}() must be called inside a test or its beforeEach`);
-  return attempt;
+  const run = currentRun();
+  if (run === null) throw new Error(`${name}() must be called inside a test or its beforeEach`);
+  return run.state;
 }
 
 // One assertion made by the running case, for `expect.assertions`.
 function counted() {
-  if (attempt !== null) attempt.assertions += 1;
+  const run = currentRun();
+  if (run !== null) run.state.assertions += 1;
 }
 
 function assert(condition, message) {
@@ -1446,7 +1532,8 @@ function maskSnapshot(value, pattern) {
 }
 
 function snapshot(actual, nameOrMatchers, kind = "value") {
-  if (activeCase === null) throw new Error("toMatchSnapshot must run inside a test");
+  const run = currentRun();
+  if (run === null) throw new Error("toMatchSnapshot must run inside a test");
   let name = nameOrMatchers;
   if (nameOrMatchers !== undefined && typeof nameOrMatchers !== "string") {
     if (nameOrMatchers === null || typeof nameOrMatchers !== "object") throw new TypeError("toMatchSnapshot(nameOrMatchers) needs a string name or object matchers");
@@ -1455,10 +1542,10 @@ function snapshot(actual, nameOrMatchers, kind = "value") {
     name = undefined;
   }
   const base = name === undefined ? "snapshot" : String(name);
-  const count = (snapshotCounts.get(base) ?? 0) + 1;
-  snapshotCounts.set(base, count);
+  const count = (run.snapshotCounts.get(base) ?? 0) + 1;
+  run.snapshotCounts.set(base, count);
   const key = `${base} ${count}`;
-  const message = ops.test_snapshot(activeCase, key, snapshotValue(actual), kind);
+  const message = ops.test_snapshot(run.id, key, snapshotValue(actual), kind);
   if (message !== undefined) throw message;
 }
 
@@ -1467,12 +1554,13 @@ function snapshot(actual, nameOrMatchers, kind = "value") {
 // goes to the host, which finds the call in the source from its first frame
 // outside `runtime:test` — to write the value there when there is none yet.
 function inlineSnapshot(serialized, inline) {
-  if (activeCase === null) throw new Error("toMatchInlineSnapshot must run inside a test");
+  const run = currentRun();
+  if (run === null) throw new Error("toMatchInlineSnapshot must run inside a test");
   if (inline !== undefined && typeof inline !== "string") {
     throw new TypeError("an inline snapshot is a string");
   }
   const existing = inline === undefined ? null : stripIndentation(inline);
-  const message = ops.test_inline_snapshot(activeCase, String(new Error().stack), serialized, existing);
+  const message = ops.test_inline_snapshot(run.id, String(new Error().stack), serialized, existing);
   if (message !== undefined) throw message;
 }
 
@@ -1844,9 +1932,10 @@ function expectation(actual, negated, mode = "hard") {
     },
     toMatchFileSnapshot(name) {
       if (negated) throw new TypeError("expect(...).not.toMatchFileSnapshot is not meaningful");
-      if (activeCase === null) throw new Error("toMatchFileSnapshot must run inside a test");
+      const run = currentRun();
+      if (run === null) throw new Error("toMatchFileSnapshot must run inside a test");
       if (typeof name !== "string") throw new TypeError("toMatchFileSnapshot(name) needs a filename");
-      const message = ops.test_file_snapshot(activeCase, name, actual);
+      const message = ops.test_file_snapshot(run.id, name, actual);
       if (message !== undefined) throw message;
     },
     toThrowErrorMatchingSnapshot(name) {
@@ -2306,8 +2395,9 @@ function expectation(actual, negated, mode = "hard") {
 
 // A soft failure: recorded against the running case, which fails when it ends.
 function softly(err) {
-  if (attempt === null) throw err;
-  attempt.soft.push(err);
+  const run = currentRun();
+  if (run === null) throw err;
+  run.state.soft.push(err);
 }
 
 // Matchers added by `expect.extend`, by name.
@@ -2408,7 +2498,7 @@ function expect(actual) {
 // failing at the end with every one of them. For checking several properties of
 // one result and seeing all that are wrong in one run.
 expect.soft = (actual) => {
-  if (attempt === null) throw new Error("expect.soft must be called inside a test");
+  if (currentRun() === null) throw new Error("expect.soft must be called inside a test");
   return assertion(actual, "soft");
 };
 

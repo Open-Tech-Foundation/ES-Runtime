@@ -14099,6 +14099,114 @@ fn test_typecheck_fails_a_run_whose_types_do_not_check() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `test.concurrent`: consecutive concurrent cases overlap, at most
+/// `maxConcurrency` at once, and each keeps its own assertions, snapshots and
+/// `beforeAll` — even through the global `expect` after an await.
+#[test]
+fn test_concurrent_cases_overlap_and_keep_their_own_state() {
+    let dir = build_dir("t_concurrent");
+    write_in(
+        &dir,
+        "conc.test.ts",
+        r#"import { beforeAll, describe, expect, test } from "runtime:test";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let inFlight = 0;
+let most = 0;
+const track = async (ms: number) => {
+  inFlight += 1;
+  most = Math.max(most, inFlight);
+  await sleep(ms);
+  inFlight -= 1;
+};
+
+describe.concurrent("overlapping", () => {
+  let opened = 0;
+  beforeAll(async () => { await sleep(20); opened += 1; });
+  for (let i = 0; i < 8; i++) {
+    test(`case ${i}`, async () => {
+      expect(opened).toBe(1);
+      expect.assertions(3);
+      await track(50);
+      // Global expect, after an await, still counts for this test.
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(i).toMatchSnapshot();
+    });
+  }
+});
+test("at most five ran at once, and more than one did", () => {
+  expect(most).toBe(5);
+});
+let order: string[] = [];
+test("sequential one", async () => { order.push("a start"); await sleep(10); order.push("a end"); });
+test("sequential two", async () => { order.push("b start"); order.push("b end"); });
+test("sequential cases still do not overlap", () => {
+  expect(order).toEqual(["a start", "a end", "b start", "b end"]);
+});
+test.concurrent("a lone concurrent case fails on its own", async () => {
+  await sleep(5);
+  expect.assertions(2);
+  expect(1).toBe(1);
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "most.test.ts",
+        r#"import { expect, test } from "runtime:test";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let inFlight = 0, most = 0;
+for (let i = 0; i < 6; i++) test.concurrent(`c${i}`, async () => { inFlight++; most = Math.max(most, inFlight); await sleep(30); inFlight--; });
+test("limit", () => { console.log("most at once:", most); });
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "conc"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("12 passed, 1 failed"), "{text}");
+    assert!(
+        text.contains("FAIL a lone concurrent case fails on its own\n    Error: expected 2 assertions, and 1 ran"),
+        "{text}"
+    );
+    let snap =
+        std::fs::read_to_string(dir.join("__snapshots__/conc.test.ts.snap")).expect("snapshots");
+    for i in 0..8 {
+        assert!(
+            snap.contains(&format!(
+                "=== overlapping > case {i}: snapshot 1 [value]\n{i}\n"
+            )),
+            "{snap}"
+        );
+    }
+
+    let most = |args: &[&str]| {
+        let out = esdev_in(&dir)
+            .args(["test", "most"])
+            .args(args)
+            .output()
+            .expect("spawn");
+        assert!(out.status.success(), "{}", stdout(&out));
+        stdout(&out)
+    };
+    assert!(most(&[]).contains("most at once: 5"));
+    assert!(most(&["--max-concurrency=2"]).contains("most at once: 2"));
+    write_in(&dir, "esdev.json", r#"{ "test": { "maxConcurrency": 3 } }"#);
+    assert!(most(&[]).contains("most at once: 3"));
+    let out = esdev_in(&dir)
+        .args(["test", "--max-concurrency=0"])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("a whole number above zero"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

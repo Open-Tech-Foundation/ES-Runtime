@@ -153,6 +153,32 @@ A shard with no files, because there are more shards than files, passes and
 still writes its report. `--shard` cannot be combined with `--file` or
 `--watch`.
 
+## Concurrent tests
+
+Tests in a file run one at a time by default. Tests that only wait, on the
+network or a timer, can run alongside each other instead:
+
+```ts
+describe.concurrent("fetches", () => {
+  test("users", async () => { … });
+  test("orders", async () => { … });
+  test("invoices", async () => { … });
+});
+
+test.concurrent("also alongside", async () => { … });
+```
+
+Concurrent tests next to each other run together, at most five at once.
+`--max-concurrency=<n>`, or `maxConcurrency` under `test` in esdev.json, sets
+the limit. `test.sequential`, `describe.sequential` and `{ concurrent: false }`
+opt out.
+
+Each test keeps its own `beforeEach`, fixtures and `afterEach`, and a group's
+`beforeAll` runs once before any of them. The global `expect` knows which test
+it is in, even after an `await`, so assertion counts and snapshots stay with the
+right test. Tests that share state, such as a module variable or a database
+table, should stay sequential. Browser runs run concurrent tests one at a time.
+
 ## Flaky tests
 
 `--repeats=<n>` runs every test `n` more times after the first; a test that

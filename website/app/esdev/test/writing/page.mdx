@@ -37,7 +37,7 @@ export const assertSorted = (xs: number[]) => assertEquals(xs, [...xs].sort());
 
 | | |
 | --- | --- |
-| `test(name, fn)` | `fn` may be async; cases run one at a time |
+| `test(name, fn)` | `fn` may be async; cases run one at a time unless [concurrent](/esdev/test/running#concurrent-tests) |
 | `it`, `suite` | The same two functions, under the ecosystem's names |
 | `test.skip(name, fn?)` | Registered and reported as skipped, never run |
 | `test.only(name, fn)` | Runs this one; the rest are counted as skipped |

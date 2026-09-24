@@ -188,6 +188,8 @@ pub struct TestSettings {
     /// What `--coverage` measures and writes, and whether it is on without
     /// the flag.
     pub coverage: Option<CoverageSection>,
+    /// How many concurrent cases in a file may run at once.
+    pub max_concurrency: Option<u64>,
     /// The tags tests may carry, and the options each gives them.
     pub tags: Vec<TagDefinition>,
     /// Whether a test naming a tag not defined here is an error. `None` is
@@ -406,6 +408,7 @@ const TEST_KEYS: &[&str] = &[
     "coverage",
     "tags",
     "strictTags",
+    "maxConcurrency",
 ];
 
 /// The keys a `test.tags` entry may carry.
@@ -828,7 +831,20 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
             ));
         }
     };
+    let max_concurrency = match map.get("maxConcurrency") {
+        None => None,
+        Some(Value::Number(n)) if n.as_u64().is_some_and(|n| n > 0) => n.as_u64(),
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `maxConcurrency` is {}, and it is how many concurrent tests \
+                 in a file run at once.\n\n\
+                 A whole number above zero: \"maxConcurrency\": 10.",
+                kind(other)
+            ));
+        }
+    };
     Ok(TestSettings {
+        max_concurrency,
         tags,
         strict_tags,
         coverage,
@@ -2570,6 +2586,16 @@ mod tests {
             let err = read(json).expect_err("refused");
             assert!(err.contains(says), "{json}: {err}");
         }
+    }
+
+    #[test]
+    fn max_concurrency_is_a_whole_number_above_zero() {
+        let settings = read(r#"{ "test": { "maxConcurrency": 8 } }"#)
+            .expect("read")
+            .test;
+        assert_eq!(settings.max_concurrency, Some(8));
+        let err = read(r#"{ "test": { "maxConcurrency": 0 } }"#).expect_err("refused");
+        assert!(err.contains("above zero"), "{err}");
     }
 
     #[test]

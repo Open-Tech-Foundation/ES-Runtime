@@ -114,6 +114,9 @@ pub struct TestConfig {
     pub coverage_out: Option<PathBuf>,
     /// Where each child of a coverage run writes, set by the parent.
     pub coverage_dir: Option<PathBuf>,
+    /// `--max-concurrency` or `test.maxConcurrency`: how many concurrent cases
+    /// in a file may run at once. `None` is 5.
+    pub max_concurrency: Option<u64>,
     /// `--typecheck`: run the project's `tsc --noEmit` too, and fail with it.
     pub typecheck: bool,
     /// `--tags-filter`, as given: each an expression a test's tags must match.
@@ -184,6 +187,7 @@ impl TestConfig {
             tags: serde_json::to_value(&self.tag_definitions).unwrap_or_default(),
             strict_tags: self.strict_tags,
             module_tags: Vec::new(),
+            max_concurrency: self.max_concurrency,
         }
     }
 }
@@ -423,6 +427,11 @@ pub async fn run_all(
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
                 .chain(config.list.then(|| "--list".to_string()))
+                .chain(
+                    config
+                        .max_concurrency
+                        .map(|n| format!("--max-concurrency={n}")),
+                )
                 .chain(
                     config
                         .tags_filter

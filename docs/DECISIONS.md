@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D115 — Concurrent tests, attributed by `runtime:context` · *Accepted (2026-09-24)* · *amends the one-at-a-time rule for opted-in tests*
+
+**Context:** Vitest's `test.concurrent`/`describe.concurrent` run consecutive concurrent tests together, at most `maxConcurrency` (5) at once, with `{ concurrent: false }` and `.sequential` to opt out. Because its global `expect` cannot tell which of several running tests an assertion belongs to, Vitest requires the context's `expect` for snapshots and assertion counts. This runner kept "the running test" in module variables, which concurrency would mix up.
+
+**Decision:**
+- **Vitest's API**: `test.concurrent`, `describe.concurrent`, `{ concurrent }` on tests and groups (inherited), `.sequential`, `.skip`/`.only`/`.todo`/`.each` in either order, and `maxConcurrency` (flag and esdev.json key).
+- **The running test is a `runtime:context` value** (D88) while concurrent tests run, and a plain variable otherwise. Each attempt runs inside its own context, which follows its awaits, so the global `expect`, `expect.assertions`, `expect.soft`, snapshots and `onTestFinished` are attributed to the right test. That is correct where Vitest asks the author to use the context's `expect`.
+- **The context module is loaded only when a file registers a concurrent test**, because its promise hook costs every promise in the process. A file without concurrency is unchanged.
+- **A group's `beforeAll` is one shared promise**, so concurrent tests wait for the same set-up rather than racing past a half-run hook.
+- **Browser runs run concurrent tests one at a time**: a page has no `runtime:context`, and running them together without it would misattribute assertions.
+
+**Consequences:** an unhandled rejection during a concurrent batch is attributed to the test whose context it surfaces in when there is one, and otherwise reported as an unhandled rejection of the file.
+
+---
+
 ### D114 — `expectTypeOf` typed here, checked by the project's `tsc` · *Accepted (2026-09-24)*
 
 **Context:** Vitest's `expectTypeOf` is the `expect-type` library: assertions that are only types, with a runtime that does nothing. Vitest's `--typecheck` runs `tsc` and reports the errors. expect-type fails an assertion through a type parameter whose constraint refers to itself (`Expected extends Equal<Actual, Expected> extends true ? unknown : Mismatch`). Under TypeScript 7, which this repository's types build with, that pattern and a recursive object matcher both made `tsc` spin at full CPU without finishing. The declarations alone were enough, before any assertion used them.
