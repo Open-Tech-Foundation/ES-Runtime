@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.dev/
+target/
+.cache/
+.esdev-build-*/
+.durable/
+screenshots/
