@@ -2663,6 +2663,20 @@ const mock = {
   },
 };
 
+// --- what global setup provided ---
+
+/// What global setup passed to `provide`, read once.
+let providedValues;
+
+/// `inject(key)` — a value global setup provided, or `undefined`.
+function inject(key) {
+  if (providedValues === undefined) {
+    const text = typeof ops.test_provided === "function" ? ops.test_provided() : undefined;
+    providedValues = text === undefined ? {} : JSON.parse(text);
+  }
+  return Object.hasOwn(providedValues, key) ? providedValues[key] : undefined;
+}
+
 // --- the clock ---
 
 /// The installed fake clock, or `null` while time is real.
@@ -3111,6 +3125,7 @@ export {
   expect,
   mock,
   clock,
+  inject,
   onTestFinished,
   onTestFailed,
   waitFor,
@@ -3133,6 +3148,7 @@ export default {
   expect,
   mock,
   clock,
+  inject,
   onTestFinished,
   onTestFailed,
   waitFor,

@@ -4114,6 +4114,24 @@ Callbacks that belong to the running test. Call them in the test or in its
 | `onTestFinished(fn)` | Runs after the test's `afterEach` hooks, newest first. An error it throws fails the test. |
 | `onTestFailed(fn)` | Runs only if the test failed, and receives the failure. |
 
+### `inject` and global setup
+
+`inject(key)` returns a value global setup provided, or `undefined`.
+
+A global setup module, named by `--global-setup=<path>` (repeatable) or
+`test.globalSetup` in esdev.json (a path or an array of them), exports
+`setup(context)` and `teardown()`, or a default function that is the setup and
+may return the teardown. Both may be async. `context.provide(key, value)` hands
+`value` to every test file as JSON; a value `JSON.stringify` cannot represent
+(a function, a symbol, `undefined`) is a `TypeError`. Declare the keys on the
+`ProvidedContext` interface to type `provide` and `inject`.
+
+The modules run once per run that has test files, in a process of their own,
+with esdev's full grant rather than a rehearsed one; setups in order, teardowns
+in reverse. A setup that throws fails the run before any file starts, and a
+teardown that throws fails the run; either way the other teardowns run. `--list`
+does not run it; `--watch` runs it once for the session.
+
 ### `mock`
 
 Functions that stand in for real ones.

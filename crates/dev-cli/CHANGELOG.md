@@ -101,6 +101,12 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Global setup**: `test.globalSetup` in esdev.json, or `--global-setup`,
+  names modules whose `setup` runs once before any test file and whose
+  `teardown` runs after the last, in a process of their own. `provide(key,
+  value)` hands JSON to the tests, which read it with `inject(key)` from
+  `runtime:test`. Works with every isolation mode, `--watch` (torn down on ^C),
+  `--file` and browser runs (DECISIONS D106).
 - **`esdev test --shard=<index>/<count>`** runs one part of the test files, to
   split a suite across CI jobs. Files are assigned by a SHA-1 of their path, as
   Jest and Vitest assign them, in shards that differ by at most one file. A

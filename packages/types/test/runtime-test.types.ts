@@ -17,6 +17,8 @@ import {
   clock,
   describe,
   expect,
+  type GlobalSetupContext,
+  inject,
   it,
   mock,
   onTestFailed,
@@ -243,6 +245,25 @@ test("equality testers and snapshot serializers", () => {
   // @ts-expect-error — a tester is a function.
   expect.addEqualityTesters([1]);
   if (Math.random() > 2) expect.fail("never");
+});
+
+declare module "runtime:test" {
+  interface ProvidedContext {
+    port: number;
+  }
+}
+
+test("inject reads what global setup provided", () => {
+  const port: number = inject("port");
+  // @ts-expect-error — only a declared key can be injected.
+  inject("anything");
+  const setup = (context: GlobalSetupContext) => {
+    context.provide("port", 4321);
+    // @ts-expect-error — a provided key has its declared type.
+    context.provide("port", "4321");
+  };
+  setup({ provide() {} });
+  port satisfies number;
 });
 
 // --- clock ------------------------------------------------------------------

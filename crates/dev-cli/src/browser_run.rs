@@ -126,6 +126,7 @@ const INSTALL: &str = r#"(send, config) => {
       return undefined;
     },
     test_options() { return JSON.stringify(store.options); },
+    test_provided() { return store.provided ?? undefined; },
     test_drained() { post("drained"); },
   };
   Object.defineProperty(globalThis, "__ops", { value: Object.freeze(ops) });
@@ -526,6 +527,11 @@ impl Job {
                 .collect::<serde_json::Map<_, _>>(),
             // `\0` stands for the name, which no file name contains.
             "filePath": snapshots.file_path("\0").unwrap_or_default(),
+            // What global setup provided, as the JSON `inject` reads.
+            "provided": config
+                .provided
+                .as_ref()
+                .and_then(|path| std::fs::read_to_string(path).ok()),
         })
         .to_string();
         self.client

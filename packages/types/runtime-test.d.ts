@@ -545,6 +545,32 @@ declare module "runtime:test" {
    */
   export function waitFor<T>(fn: () => T | Promise<T>, options?: WaitOptions): Promise<T>;
 
+  /**
+   * What global setup provides, by key. Declare each key here to provide and
+   * inject it:
+   *
+   * ```ts
+   * declare module "runtime:test" {
+   *   interface ProvidedContext { dbUrl: string }
+   * }
+   * ```
+   */
+  export interface ProvidedContext {}
+
+  /** The argument a global setup's `setup` function receives. */
+  export interface GlobalSetupContext {
+    /** Hands `value`, as JSON, to every test file, which reads it with {@link inject}. */
+    provide<K extends keyof ProvidedContext & string>(key: K, value: ProvidedContext[K]): void;
+  }
+
+  /**
+   * A value global setup provided, or `undefined`. Global setup is a module
+   * named by `--global-setup` or `test.globalSetup` in esdev.json, exporting
+   * `setup(context)` and `teardown()`, or a default function that returns its
+   * teardown.
+   */
+  export function inject<K extends keyof ProvidedContext & string>(key: K): ProvidedContext[K];
+
   /** What a {@link Mock} remembers. */
   /**
    * The validation half of a [Standard Schema](https://standardschema.dev),

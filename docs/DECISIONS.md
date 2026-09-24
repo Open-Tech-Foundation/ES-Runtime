@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D106 — Global setup in a process of its own, ended by closing its stdin · *Accepted (2026-09-24)*
+
+**Context:** a suite that needs a database or a server starts it once, not per file. Vitest's `globalSetup` modules export `setup`/`teardown` (or a default returning the teardown), run before any worker in a separate scope, and pass serializable values to tests with `provide`/`inject`. Jest's `globalSetup`/`globalTeardown` are two modules whose globals the tests cannot see. Here the runner is a Rust process supervising a process per file, so there is no JavaScript scope in the parent to run it in.
+
+**Decision:**
+- **Vitest's module shape and `provide`/`inject`**, under an esdev.json `test.globalSetup` key and a repeatable `--global-setup` flag. Values cross as JSON, and a value JSON cannot hold is a `TypeError` at `provide`, not an `undefined` in a test.
+- **A long-lived child process runs the modules.** It writes what was provided to a file, and the file appearing is the parent's signal that setup finished. Test children get the file's path; a page gets its contents in the install script.
+- **Teardown starts when the parent closes the child's stdin.** A parent that exits, crashes, or is killed closes it too, so a server is not left behind. The child is in its own process group, so ^C at the terminal reaches esdev alone, which then tears down in order. That is the `--watch` case, where ^C is the normal way to end.
+- **It runs with esdev's full grant.** Global setup is infrastructure, and rehearsing the production grant (`--deny-all`) is about the code under test.
+- Rejected: running it in-process in each child (that is `setup`, per file), and Jest's two-module form. A default export covers Jest's setup function, and `teardown` its teardown module.
+
+**Consequences:** environment variables a setup sets do not reach the tests, as in Vitest; `provide` is the channel. A run with no files to run, and `--list`, skip it.
+
+---
+
 ### D105 — `--shard` splits files by the hash Jest and Vitest use · *Accepted (2026-09-24)*
 
 **Context:** a suite too slow for one CI job is split across several. Jest and Vitest both take `--shard=<index>/<count>`, order the files by a SHA-1 of their project-relative path, and cut that order into runs of near-equal length. Both split files, not tests.

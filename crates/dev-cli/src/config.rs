@@ -172,6 +172,9 @@ pub struct TestSettings {
     /// Modules imported before each test file runs — a polyfill, a global stub,
     /// a fixture registry. In the order written.
     pub setup: Vec<String>,
+    /// Modules run once, in a process of their own, before any test file and
+    /// torn down after the last. In the order written.
+    pub global_setup: Vec<String>,
     /// How long a single file may take, in milliseconds. `None` is no limit.
     pub timeout: Option<u64>,
     /// How many files run at once. `None` is the machine's parallelism.
@@ -360,6 +363,7 @@ const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "devdir"];
 /// The keys `test` may carry.
 const TEST_KEYS: &[&str] = &[
     "setup",
+    "globalSetup",
     "timeout",
     "jobs",
     "isolation",
@@ -648,6 +652,10 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
         Some(Value::String(one)) => vec![one.clone()],
         other => string_array(other, file, "`test`'s `setup`")?,
     };
+    let global_setup = match map.get("globalSetup") {
+        Some(Value::String(one)) => vec![one.clone()],
+        other => string_array(other, file, "`test`'s `globalSetup`")?,
+    };
     let timeout = match map.get("timeout") {
         None => None,
         Some(Value::Number(ms)) if ms.as_u64().is_some_and(|ms| ms > 0) => ms.as_u64(),
@@ -733,6 +741,7 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
     };
     Ok(TestSettings {
         setup,
+        global_setup,
         timeout,
         jobs,
         isolation,
@@ -2271,6 +2280,24 @@ mod tests {
 
         // Nothing said is nothing assumed.
         assert_eq!(read(r#"{ "test": {} }"#).expect("read").jsx.function, None);
+    }
+
+    #[test]
+    fn a_test_section_names_its_global_setup_as_one_module_or_several() {
+        let one = read(r#"{ "test": { "globalSetup": "./db.ts" } }"#).expect("read");
+        assert_eq!(one.test.global_setup, ["./db.ts"]);
+        let two =
+            read(r#"{ "test": { "globalSetup": ["./db.ts", "./server.ts"] } }"#).expect("read");
+        assert_eq!(two.test.global_setup, ["./db.ts", "./server.ts"]);
+        assert!(
+            read(r#"{ "test": {} }"#)
+                .expect("read")
+                .test
+                .global_setup
+                .is_empty()
+        );
+        let err = read(r#"{ "test": { "globalSetup": 1 } }"#).expect_err("refused");
+        assert!(err.contains("globalSetup"), "{err}");
     }
 
     #[test]

@@ -13036,6 +13036,253 @@ fn test_shard_splits_the_files_across_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A project whose global setup is two modules, each noting its teardown in
+/// `teardown-order.txt`, and two test files that inject what they provided.
+fn global_setup_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("test")).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "globalSetup": ["./test/first.ts", "./test/second.ts"] } }"#,
+    );
+    write_in(
+        &dir,
+        "test/first.ts",
+        r#"import { file, write } from "runtime:fs";
+const note = async (line: string) => { const f = file("teardown-order.txt"); const before = (await f.exists()) ? await f.text() : ""; await write("teardown-order.txt", before + line); };
+export async function setup({ provide }: { provide(k: string, v: unknown): void }) {
+  console.log("first setup");
+  provide("port", 4321);
+  provide("db", { name: "test", tables: ["a"] });
+}
+export async function teardown() {
+  console.log("first teardown");
+  await note("first\n");
+}
+"#,
+    );
+    write_in(
+        &dir,
+        "test/second.ts",
+        r#"import { file, write } from "runtime:fs";
+const note = async (line: string) => { const f = file("teardown-order.txt"); const before = (await f.exists()) ? await f.text() : ""; await write("teardown-order.txt", before + line); };
+export default function (context: { provide(k: string, v: unknown): void }) {
+  console.log("second setup");
+  context.provide("second", true);
+  return async () => {
+    console.log("second teardown");
+    await note("second\n");
+  };
+}
+"#,
+    );
+    for file in ["src/a.test.ts", "src/b.test.ts"] {
+        write_in(
+            &dir,
+            file,
+            r#"import { expect, inject, test } from "runtime:test";
+test("sees what global setup provided", () => {
+  expect(inject("port")).toBe(4321);
+  expect(inject("db")).toEqual({ name: "test", tables: ["a"] });
+  expect(inject("second")).toBe(true);
+  expect(inject("missing")).toBeUndefined();
+});
+"#,
+        );
+    }
+    dir
+}
+
+/// Global setup runs once, in order, before any file; every file injects what
+/// it provided; teardown runs after the last, in reverse — in each way a run
+/// can be made.
+#[test]
+fn test_global_setup_runs_once_around_the_files_and_provides_to_them() {
+    let dir = global_setup_project("t_global_setup");
+    let order = || {
+        let text = std::fs::read_to_string(dir.join("teardown-order.txt")).unwrap_or_default();
+        let _ = std::fs::remove_file(dir.join("teardown-order.txt"));
+        text
+    };
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert_eq!(text.matches("first setup").count(), 1, "{text}");
+    assert!(text.find("second setup") < text.find("1 passed"), "{text}");
+    assert!(text.contains("2 files passed"), "{text}");
+    assert_eq!(order(), "second\nfirst\n");
+
+    // What the setup prints stays off a machine reporter's stdout.
+    let out = esdev_in(&dir)
+        .args(["test", "--reporter=json"])
+        .output()
+        .expect("spawn esdev test --reporter=json");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stdout(&out).contains("first setup"), "{}", stdout(&out));
+    assert!(stderr(&out).contains("first setup"), "{}", stderr(&out));
+    assert_eq!(order(), "second\nfirst\n");
+
+    let out = esdev_in(&dir)
+        .args(["test", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test --isolation=none");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert_eq!(order(), "second\nfirst\n");
+
+    // A file run on its own gets the setup its suite would.
+    let out = esdev_in(&dir)
+        .args(["test", "--file=src/a.test.ts"])
+        .output()
+        .expect("spawn esdev test --file");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert_eq!(order(), "second\nfirst\n");
+
+    // Listing runs no test, so nothing needs setting up.
+    let out = esdev_in(&dir)
+        .args(["test", "--list"])
+        .output()
+        .expect("spawn esdev test --list");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stdout(&out).contains("first setup"), "{}", stdout(&out));
+    assert_eq!(order(), "");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A setup that throws runs no test and still tears down what came before it;
+/// a teardown that throws fails a run whose tests passed; a value that is not
+/// JSON is refused where it is provided.
+#[test]
+fn test_global_setup_failures_are_the_runs_failures() {
+    let dir = global_setup_project("t_global_setup_fails");
+    write_in(
+        &dir,
+        "test/port.ts",
+        "export function setup() { throw new Error(\"port in use\"); }\n",
+    );
+    write_in(
+        &dir,
+        "test/stop.ts",
+        "export function teardown() { throw new Error(\"could not stop\"); }\n",
+    );
+    write_in(
+        &dir,
+        "test/fn.ts",
+        "export function setup({ provide }) { provide(\"f\", () => 1); }\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args([
+            "test",
+            "--global-setup=test/first.ts",
+            "--global-setup=test/port.ts",
+        ])
+        .output()
+        .expect("spawn esdev test");
+    let (text, err) = (stdout(&out), stderr(&out));
+    assert!(!out.status.success());
+    assert!(err.contains("Error: port in use"), "{err}");
+    assert!(err.contains("global setup failed"), "{err}");
+    assert!(err.contains("so no test ran"), "{err}");
+    assert!(!text.contains("passed"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("teardown-order.txt")).unwrap_or_default(),
+        "first\n"
+    );
+    let _ = std::fs::remove_file(dir.join("teardown-order.txt"));
+
+    let out = esdev_in(&dir)
+        .args([
+            "test",
+            "--global-setup=test/first.ts",
+            "--global-setup=test/second.ts",
+            "--global-setup=test/stop.ts",
+        ])
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        !out.status.success(),
+        "a teardown that threw passed the run"
+    );
+    assert!(stdout(&out).contains("2 files passed"), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("Error: could not stop"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("global teardown failed"),
+        "{}",
+        stderr(&out)
+    );
+    // The other teardowns still ran.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("teardown-order.txt")).unwrap_or_default(),
+        "second\nfirst\n"
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--global-setup=test/fn.ts"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out)
+            .contains("TypeError: provide(\"f\"): a test file receives JSON, and function is not"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A watched run sets up once, and tears down when ^C ends the session — the
+/// interrupt reaches esdev, which ends the setup's process itself.
+#[cfg(unix)]
+#[test]
+fn test_global_setup_tears_down_when_a_watch_is_interrupted() {
+    use std::os::unix::process::CommandExt;
+    let dir = global_setup_project("t_global_setup_watch");
+    let log = dir.join("watch.log");
+    let mut command = esdev_in(&dir);
+    command
+        .args(["test", "--watch"])
+        .stdout(std::fs::File::create(&log).unwrap())
+        .stderr(std::fs::File::create(dir.join("watch.err")).unwrap())
+        .process_group(0);
+    let mut child = command.spawn().expect("spawn esdev test --watch");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !std::fs::read_to_string(dir.join("watch.err"))
+        .unwrap_or_default()
+        .contains("watching for changes")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the watch never finished its first run"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // As a terminal delivers ^C: to the whole foreground group.
+    let _ = Command::new("kill")
+        .arg("-INT")
+        .arg(format!("-{}", child.id()))
+        .status();
+    let status = child.wait().expect("wait for the watch");
+    assert!(status.success(), "{status}");
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(text.matches("first setup").count(), 1, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("teardown-order.txt")).unwrap_or_default(),
+        "second\nfirst\n",
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {
@@ -13302,7 +13549,8 @@ fn test_mock_module_says_what_is_wrong_with_a_call() {
 
 /// In a page: `mock.module` is refused by name — its modules are bundled before
 /// it loads, so there is no load to replace a module at — while `mock.when`
-/// and the clock work, the clock faking what only a page has.
+/// and the clock work, the clock faking what only a page has — and global
+/// setup runs beside the browser.
 #[test]
 fn test_mocks_and_the_clock_in_a_browser_run() {
     let dir = module_mock_project("t_mock_module_browser");
@@ -13327,6 +13575,23 @@ test("when in a page", () => {
   expect(() => mock.env("X", "1")).toThrow("mock.env is not available in browser runs");
 });
 "#,
+    );
+    // Global setup runs beside the browser, and a page injects what it gave.
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "globalSetup": "./src/provide.js" } }"#,
+    );
+    write_in(
+        &dir,
+        "src/provide.js",
+        "export function setup({ provide }) { provide(\"origin\", \"http://127.0.0.1:1\"); }\n",
+    );
+    write_in(
+        &dir,
+        "src/inject.test.js",
+        "import { expect, inject, test } from \"runtime:test\";\n\
+         test(\"injects\", () => expect(inject(\"origin\")).toBe(\"http://127.0.0.1:1\"));\n",
     );
     // The clock fakes what a page has and a process does not.
     write_in(
@@ -13371,6 +13636,10 @@ test("idle when nothing waits, else after 50ms or the timeout", () => {
     );
     assert!(
         text.contains("src/idle.test.js\n  1 passed, 0 failed"),
+        "{text}{err}"
+    );
+    assert!(
+        text.contains("src/inject.test.js\n  1 passed, 0 failed"),
         "{text}{err}"
     );
 }

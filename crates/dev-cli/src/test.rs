@@ -95,6 +95,15 @@ pub struct TestConfig {
     /// Modules imported before the file under test, from `--setup` or the
     /// project's `test.setup`. Absolute by the time they get here.
     pub setup: Vec<String>,
+    /// Modules run once before the files and torn down after, as file URLs,
+    /// from `--global-setup` or the project's `test.globalSetup`.
+    pub global_setup: Vec<String>,
+    /// Internal parent-to-child: the file holding what global setup provided,
+    /// for `inject`. Its presence also says the parent ran global setup.
+    pub provided: Option<PathBuf>,
+    /// Internal: this process is the global setup, and writes what it provides
+    /// here once its `setup` functions have run.
+    pub global_setup_out: Option<PathBuf>,
     /// How long one file may take before it is stopped and failed.
     pub timeout: Option<u64>,
     /// `"json"` for one object per line, or `None` for what a person reads.
@@ -347,6 +356,12 @@ pub async fn run_all(
                         .name_pattern
                         .iter()
                         .map(|p| format!("--test-name-pattern={p}")),
+                )
+                .chain(
+                    config
+                        .provided
+                        .iter()
+                        .map(|path| format!("--_provided={}", path.display())),
                 )
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))

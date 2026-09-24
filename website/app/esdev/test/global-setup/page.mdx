@@ -1,0 +1,103 @@
+---
+title: Global setup
+description: Start a database or server once for the whole run, and hand its address to the test files.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Global setup
+
+A global setup module runs once before any test file, and its teardown once
+after the last. Use it for what is slow to start and safe to share: a
+database, a server, a container.
+
+```json
+{
+  "test": {
+    "globalSetup": "./test/database.ts"
+  }
+}
+```
+
+The module exports `setup` and `teardown`:
+
+```ts
+// test/database.ts
+import type { GlobalSetupContext } from "runtime:test";
+
+let server;
+
+export async function setup({ provide }: GlobalSetupContext) {
+  server = await startDatabase({ port: 0 });
+  provide("dbUrl", server.url);
+}
+
+export async function teardown() {
+  await server.stop();
+}
+```
+
+It can instead export a default function that returns its teardown, as in
+Vitest:
+
+```ts
+export default async function ({ provide }: GlobalSetupContext) {
+  const server = await startDatabase({ port: 0 });
+  provide("dbUrl", server.url);
+  return () => server.stop();
+}
+```
+
+## Passing values to tests
+
+Global setup runs in a process of its own, so the test files cannot see its
+variables. `provide(key, value)` hands a value to every test file as JSON, and
+`inject(key)` reads it:
+
+```ts
+import { expect, inject, test } from "runtime:test";
+
+test("connects", async () => {
+  const db = await connect(inject("dbUrl"));
+  expect(await db.ping()).toBe(true);
+});
+```
+
+In TypeScript, declare what is provided once, and both calls are checked:
+
+```ts
+declare module "runtime:test" {
+  interface ProvidedContext {
+    dbUrl: string;
+  }
+}
+```
+
+## When it runs
+
+- Once per run, and only when there are test files to run. `--list` does not
+  run it.
+- Several modules run in the order written, and their teardowns in reverse.
+- In `--watch`, it sets up when the watch starts and tears down when you stop
+  it with ^C.
+- A file run on its own with `--file` gets it too.
+- In browser runs it runs beside the browser, and pages can `inject` what it
+  provided.
+
+The setup's console output appears with the run's. With a machine reporter it
+goes to stderr, so stdout keeps only the report.
+
+## When it fails
+
+If a setup throws, no test runs and the run fails. The teardowns of the modules
+set up before it still run. A teardown that throws fails the run even when every
+test passed, and the other teardowns still run.
+
+<Callout type="note" title="Permissions">
+  Global setup is the suite's infrastructure, not code under test, so it runs
+  with esdev's full grant. `--deny-all` and the other permission flags apply to
+  the test files only.
+</Callout>
+
+`--global-setup=<path>` names a module on the command line instead. It can be
+repeated, and replaces the esdev.json key for that run.

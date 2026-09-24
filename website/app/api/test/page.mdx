@@ -389,6 +389,12 @@ Callbacks that belong to the running test. Call them in the test or in its
 | `onTestFinished(fn)` | Runs after the test's `afterEach` hooks, newest first. An error it throws fails the test. |
 | `onTestFailed(fn)` | Runs only if the test failed, and receives the failure. |
 
+## `inject`
+
+`inject(key)` returns what a [global setup](/esdev/test/global-setup) module
+passed to `provide(key, value)`, or `undefined`. Values arrive as JSON. Declare
+the keys on `ProvidedContext` to type both calls.
+
 ## mock
 
 Functions that stand in for real ones. `mock.fn()` records; `mock.spyOn()`

@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **`inject`**, with the `ProvidedContext` interface to declare provided keys
+  and the `GlobalSetupContext` a global setup's `setup` receives.
 - **The new matchers and `expect` utilities** — `toHaveBeenCalledBefore`,
   `toHaveBeenCalledAfter`, `toHaveBeenCalledExactlyOnceWith`, the
   `toHaveResolved*` family, `toBeNullable`, `expect.arrayOf`,

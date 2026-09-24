@@ -55,6 +55,7 @@ mod declarations;
 mod devserver;
 mod dom;
 mod dts;
+mod global_setup;
 mod guest;
 mod html;
 mod init;
@@ -221,6 +222,8 @@ OPTIONS:
     --list                      Name the tests each file registers, running
                                 none
     --setup=<path>              Import this before each test file. Repeatable
+    --global-setup=<path>       Run this module's setup once before the files,
+                                and its teardown after. Repeatable
     --timeout=<ms>              Stop a file that takes longer, and fail it
     --reporter=<fmt>            human (default), json (one object per line),
                                 junit, tap or dots
@@ -237,10 +240,10 @@ OPTIONS:
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
 
-`setup`, `timeout`, `jobs`, `isolation`, `reporter` and `browser` are also esdev.json
-keys, under \"test\" — the rest (`--update-snapshots`, `--ci`, `--full-diff`
-and the permission flags) are flags only: they decide a single run, not the
-project:
+`setup`, `globalSetup`, `timeout`, `jobs`, `isolation`, `reporter` and `browser`
+are also esdev.json keys, under \"test\" — the rest (`--update-snapshots`,
+`--ci`, `--full-diff` and the permission flags) are flags only: they decide a
+single run, not the project:
 
     { \"test\": { \"setup\": [\"./test/setup.ts\"], \"timeout\": 5000,
                 \"jobs\": 4, \"isolation\": \"process\", \"reporter\": \"json\" } }
@@ -1427,6 +1430,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut isolation = None;
     let mut watch = false;
     let mut setup: Vec<String> = Vec::new();
+    let mut global_setup: Vec<String> = Vec::new();
+    let mut provided = None;
+    let mut global_setup_out = None;
     let mut timeout = None;
     let mut reporter = None;
     let mut update_snapshots = false;
@@ -1515,6 +1521,11 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 headed = true;
             }
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
+            "--global-setup" => global_setup.push(require_value(flag, value)?.to_string()),
+            "--_provided" => provided = Some(std::path::PathBuf::from(require_value(flag, value)?)),
+            "--_global-setup-out" => {
+                global_setup_out = Some(std::path::PathBuf::from(require_value(flag, value)?));
+            }
             "-t" | "--test-name-pattern" => {
                 name_pattern = Some(require_value(flag, value)?.to_string());
             }
@@ -1661,6 +1672,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         skip_pattern,
         bail,
         summary,
+        global_setup,
+        provided,
+        global_setup_out,
         shard,
         randomize,
         seed,
@@ -1712,6 +1726,20 @@ fn test_capabilities(
     Ok((permissions.resolve()?, permissions.scopes()?))
 }
 
+/// A module named relative to `dir`, as the file URL a child imports it by. A
+/// name that is not a file there is left as written: a bare specifier names a
+/// package, and where that lives is the resolver's question.
+fn module_url(dir: &std::path::Path, module: &str) -> Result<String, String> {
+    let path = dir.join(module);
+    if path.exists() {
+        url::Url::from_file_path(&path)
+            .map(|url| url.to_string())
+            .map_err(|()| format!("cannot name module {module} as a file URL"))
+    } else {
+        Ok(module.to_string())
+    }
+}
+
 /// Fills in what `esdev.json`'s `test` section says and the flags did not.
 ///
 /// **A flag beats the file**, the same rule the build uses. Setup modules are
@@ -1720,6 +1748,14 @@ fn test_capabilities(
 /// otherwise mean two different files. A raw absolute Windows path would be
 /// parsed as a `d:` module specifier rather than a local file.
 fn test_settings(config: &mut TestConfig) -> Result<(), String> {
+    // A flag's global setup is named from where the run was started: the
+    // process that runs it is started from here too, but imports by URL.
+    let here = std::env::current_dir().unwrap_or_default();
+    config.global_setup = config
+        .global_setup
+        .iter()
+        .map(|module| module_url(&here, module))
+        .collect::<Result<_, _>>()?;
     let Some(project) = crate::config::load(None)? else {
         return Ok(());
     };
@@ -1742,6 +1778,14 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
                     Ok(module.clone())
                 }
             })
+            .collect::<Result<_, _>>()?;
+    }
+    if config.global_setup.is_empty() {
+        config.global_setup = project
+            .test
+            .global_setup
+            .iter()
+            .map(|module| module_url(&project.dir, module))
             .collect::<Result<_, _>>()?;
     }
     if config.timeout.is_none() {
@@ -1990,6 +2034,11 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         }
     }
 
+    // The process a run starts to hold its global setup.
+    if let Some(out) = config.global_setup_out.clone() {
+        return global_setup::run(&config, &out).await;
+    }
+
     // A shuffled run says its seed, so the order that failed can be run again.
     // A child is handed the seed alone and says nothing.
     if config.randomize || config.seed.is_some() {
@@ -2001,77 +2050,63 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     }
 
     if config.browser.is_some() || config.headed {
-        return run_browser_tests(&config).await;
+        if let Err(err) = validate_browser_test_config(&config) {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+        let Ok(exe) = std::env::current_exe() else {
+            eprintln!("error: cannot find the esdev binary");
+            return ExitCode::FAILURE;
+        };
+        // Global setup runs here, not in the page, as it would for any run —
+        // and, as for any run, only when there is a file to run.
+        let root = std::env::current_dir().unwrap_or_default();
+        let has_files = config.file.is_some() || config.watch || {
+            let mut files = test::discover(&root, &config.filters);
+            if let Some(shard) = config.shard {
+                test::shard(&mut files, &root, shard);
+            }
+            !files.is_empty()
+        };
+        let setup = if has_files {
+            match global_setup::start_or_report(&exe, &config).await {
+                Ok(setup) => setup,
+                Err(code) => return code,
+            }
+        } else {
+            None
+        };
+        config.provided = setup
+            .as_ref()
+            .map(|running| running.provided().to_path_buf());
+        let code = run_browser_tests(&config).await;
+        return global_setup::stop_into(setup, code).await;
     }
 
-    let run_options = config.run_options();
     if let Some(file) = config.file.clone() {
-        guest::test::reset();
-        guest::test::configure_run(run_options);
-        guest::test::configure_snapshots(
-            Some(std::path::PathBuf::from(&file)),
-            config.update_snapshots,
-            config.ci,
-            config.full_diff,
-            config.snapshot_prune,
-        );
-        // Nothing is added to the file, unless `--setup` named something to
-        // import ahead of it. It is otherwise an ordinary run of an ordinary
-        // module — the same transform any `.ts` gets — and the test API comes
-        // from the `runtime:test` the file imported. What makes this a *test*
-        // run is what `finish()` finds afterwards, not anything done to the
-        // source.
-        let stripper = if config.setup.is_empty() && !config.dom {
-            TypeStripper::with_jsx(config.jsx.clone())
-        } else {
-            let entry = std::fs::canonicalize(&file)
-                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
-            TypeStripper::before_with(
-                &entry,
-                config.dom.then(|| "runtime:dom".to_string()),
-                config.setup.clone(),
-            )
-            .compiling_jsx(config.jsx.clone())
-        };
-        // A rehearsal still applies here: this is also how every child of a
-        // restricted parent executes, and the flags arrived on its command
-        // line for exactly this run.
-        let (capabilities, scopes) = match test_capabilities(&config.permission_args) {
-            Ok(resolved) => resolved,
-            Err(err) => {
-                print_error(&err);
+        // Run directly, rather than as a child of a run that did it already,
+        // a file gets the global setup its suite would.
+        let direct = config.summary.is_none() && config.provided.is_none();
+        let setup = if direct {
+            let Ok(exe) = std::env::current_exe() else {
+                eprintln!("error: cannot find the esdev binary");
                 return ExitCode::FAILURE;
+            };
+            match global_setup::start_or_report(&exe, &config).await {
+                Ok(setup) => setup,
+                Err(code) => return code,
             }
+        } else {
+            None
         };
-        let run = Config {
-            source: Source::File(file.clone()),
-            args: Vec::new(),
-            capabilities,
-            scopes,
-            options: RunOptions::default(),
-            transform: Some(std::sync::Arc::new(stripper)),
-            bundler_style_resolution: true,
-            extensions: guest::test_extensions(config.dom),
-            observer: None,
-            inspector: None,
+        let provided = match (&setup, &config.provided) {
+            (Some(running), _) => running.provided_json(),
+            (None, Some(path)) => std::fs::read_to_string(path).ok(),
+            (None, None) => None,
         };
-        let code = match es_runtime_cli_common::run("esdev", run).await {
-            Ok(()) => finish_test_file(&config, &file),
-            Err(err) => {
-                print_error(&err);
-                // The run died, but the cases that already finished are still
-                // results. Losing a hundred of them to one stray promise is
-                // precisely the report a suite most needs to see, so it is
-                // printed; the exit stays a failure either way.
-                finish_test_file(&config, &file);
-                ExitCode::FAILURE
-            }
-        };
-        // The results, for the parent to report and to count for `--bail`.
-        if let Some(summary) = &config.summary {
-            guest::test::write_summary(summary, &file);
-        }
-        return code;
+        guest::test::configure_provided(provided);
+        let code = run_test_file(&config, file).await;
+        return global_setup::stop_into(setup, code).await;
     }
 
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -2085,15 +2120,29 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             eprintln!("error: {message}");
             return ExitCode::FAILURE;
         }
+        // Once for the whole session, torn down when it ends, as Vitest does.
+        let setup = match global_setup::start_or_report(&exe, &config).await {
+            Ok(setup) => setup,
+            Err(code) => return code,
+        };
+        config.provided = setup
+            .as_ref()
+            .map(|running| running.provided().to_path_buf());
+        guest::test::configure_provided(
+            setup
+                .as_ref()
+                .and_then(global_setup::Running::provided_json),
+        );
         // A watched run ends when the developer ends it, so its status is the
         // watcher's rather than any pass's.
-        return match test::watch(&root, &config, &exe).await {
+        let code = match test::watch(&root, &config, &exe).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("error: {err}");
                 ExitCode::FAILURE
             }
         };
+        return global_setup::stop_into(setup, code).await;
     }
 
     let (files, discovered) = select_test_files(&root, &config);
@@ -2108,12 +2157,40 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    if config.isolation == Some(TestIsolation::None)
+        && let Err(message) = validate_unisolated_test_config(&config)
+    {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
+    // Once, before any file, and only for a run that has files to run.
+    let setup = match global_setup::start_or_report(&exe, &config).await {
+        Ok(setup) => setup,
+        Err(code) => return code,
+    };
+    config.provided = setup
+        .as_ref()
+        .map(|running| running.provided().to_path_buf());
+    let code = run_selected(&exe, &root, &files, &config).await;
+    global_setup::stop_into(setup, code).await
+}
+
+/// Runs the files a run selected, each in a process of its own unless the
+/// run shares one.
+async fn run_selected(
+    exe: &std::path::Path,
+    root: &std::path::Path,
+    files: &[std::path::PathBuf],
+    config: &TestConfig,
+) -> ExitCode {
     if config.isolation == Some(TestIsolation::None) {
-        if let Err(message) = validate_unisolated_test_config(&config) {
-            eprintln!("error: {message}");
-            return ExitCode::FAILURE;
-        }
-        return run_tests_unisolated(&files, &config).await;
+        guest::test::configure_provided(
+            config
+                .provided
+                .as_ref()
+                .and_then(|path| std::fs::read_to_string(path).ok()),
+        );
+        return run_tests_unisolated(files, config).await;
     }
 
     let jobs = config
@@ -2121,7 +2198,7 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         .unwrap_or_else(test::jobs)
         .min(files.len())
         .max(1);
-    let failed = test::run_all(&exe, &root, &files, jobs, &config).await;
+    let failed = test::run_all(exe, root, files, jobs, config).await;
     let total = files.len();
     if !config.terminal_human() {
         // The reporter wrote its own ending.
@@ -2135,6 +2212,78 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// Runs one test file in this process: what every child of a run does, and a
+/// supported way to run one file directly.
+async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
+    let run_options = config.run_options();
+    guest::test::reset();
+    guest::test::configure_run(run_options);
+    guest::test::configure_snapshots(
+        Some(std::path::PathBuf::from(&file)),
+        config.update_snapshots,
+        config.ci,
+        config.full_diff,
+        config.snapshot_prune,
+    );
+    // Nothing is added to the file, unless `--setup` named something to
+    // import ahead of it. It is otherwise an ordinary run of an ordinary
+    // module — the same transform any `.ts` gets — and the test API comes
+    // from the `runtime:test` the file imported. What makes this a *test*
+    // run is what `finish()` finds afterwards, not anything done to the
+    // source.
+    let stripper = if config.setup.is_empty() && !config.dom {
+        TypeStripper::with_jsx(config.jsx.clone())
+    } else {
+        let entry = std::fs::canonicalize(&file)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
+        TypeStripper::before_with(
+            &entry,
+            config.dom.then(|| "runtime:dom".to_string()),
+            config.setup.clone(),
+        )
+        .compiling_jsx(config.jsx.clone())
+    };
+    // A rehearsal still applies here: this is also how every child of a
+    // restricted parent executes, and the flags arrived on its command
+    // line for exactly this run.
+    let (capabilities, scopes) = match test_capabilities(&config.permission_args) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            print_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
+    let run = Config {
+        source: Source::File(file.clone()),
+        args: Vec::new(),
+        capabilities,
+        scopes,
+        options: RunOptions::default(),
+        transform: Some(std::sync::Arc::new(stripper)),
+        bundler_style_resolution: true,
+        extensions: guest::test_extensions(config.dom),
+        observer: None,
+        inspector: None,
+    };
+    let code = match es_runtime_cli_common::run("esdev", run).await {
+        Ok(()) => finish_test_file(config, &file),
+        Err(err) => {
+            print_error(&err);
+            // The run died, but the cases that already finished are still
+            // results. Losing a hundred of them to one stray promise is
+            // precisely the report a suite most needs to see, so it is
+            // printed; the exit stays a failure either way.
+            finish_test_file(config, &file);
+            ExitCode::FAILURE
+        }
+    };
+    // The results, for the parent to report and to count for `--bail`.
+    if let Some(summary) = &config.summary {
+        guest::test::write_summary(summary, &file);
+    }
+    code
 }
 
 /// The files this run takes, and how many were discovered: its shard of them,

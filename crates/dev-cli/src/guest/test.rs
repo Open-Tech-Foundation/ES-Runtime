@@ -144,6 +144,24 @@ pub fn configure_run(options: RunOptions) {
 }
 
 thread_local! {
+    /// What global setup provided, as the JSON text `inject` reads.
+    static PROVIDED: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Where the global setup process writes what it provides, when this is
+    /// that process.
+    static GLOBAL_SETUP_OUT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Sets what `inject` answers from: the JSON global setup provided.
+pub fn configure_provided(json: Option<String>) {
+    PROVIDED.with_borrow_mut(|held| *held = json);
+}
+
+/// Makes this the global setup process, writing what it provides to `out`.
+pub fn configure_global_setup(out: PathBuf) {
+    GLOBAL_SETUP_OUT.with_borrow_mut(|held| *held = Some(out));
+}
+
+thread_local! {
     /// Every case this agent registered, in the order `test()` was called.
     static CASES: RefCell<Vec<Case>> = const { RefCell::new(Vec::new()) };
     static SNAPSHOTS: RefCell<SnapshotState> = RefCell::new(SnapshotState::default());
@@ -1140,6 +1158,41 @@ impl HostExtension for TestExtension {
                     .unwrap_or_default();
                 crate::module_mocks::register(url.to_string(), names);
                 Ok(Value::Undefined)
+            }),
+            // provided() -> JSON | undefined — what global setup provided.
+            OpDecl::sync("test_provided", |_| {
+                Ok(PROVIDED
+                    .with_borrow(Clone::clone)
+                    .map_or(Value::Undefined, Value::String))
+            }),
+            // global_ready(json) — global setup ran; this is what it provided.
+            // Written whole, then renamed, so the parent never reads half.
+            OpDecl::sync("test_global_ready", |args| {
+                let json = args.first().and_then(Value::as_str).unwrap_or("{}");
+                let Some(out) = GLOBAL_SETUP_OUT.with_borrow(Clone::clone) else {
+                    return Ok(Value::Undefined);
+                };
+                let partial = out.with_extension("partial");
+                std::fs::write(&partial, json)
+                    .and_then(|()| std::fs::rename(&partial, &out))
+                    .map_err(|err| {
+                        es_runtime_cli_common::OpError::new(
+                            es_runtime_common::error::ExceptionClass::Error,
+                            format!("cannot hand global setup's values to the tests: {err}"),
+                        )
+                    })?;
+                Ok(Value::Undefined)
+            }),
+            // global_wait() — resolves when the tests are done: the parent
+            // closes this process's stdin, and so does a parent that died.
+            OpDecl::r#async("test_global_wait", |_| {
+                Box::pin(async {
+                    use tokio::io::AsyncReadExt;
+                    let mut stdin = tokio::io::stdin();
+                    let mut buffer = [0u8; 256];
+                    while matches!(stdin.read(&mut buffer).await, Ok(n) if n > 0) {}
+                    Ok(Value::Undefined)
+                })
             }),
             // options() -> JSON — what the command line asked of this file.
             OpDecl::sync("test_options", |_| {

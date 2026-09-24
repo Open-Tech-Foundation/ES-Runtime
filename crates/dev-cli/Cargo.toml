@@ -34,6 +34,9 @@ tokio = { workspace = true, features = [
     # `--inspect` serves the debugger endpoint on a thread of its own.
     "net",
     "io-util",
+    # The global setup process waits on its stdin, which the parent closes when
+    # the tests are done.
+    "io-std",
 ] }
 # `--inspect`. The WebSocket half of the Chrome DevTools Protocol endpoint —
 # the same crate `runtime:ws` already uses, in its server role. Confined here for

@@ -51,6 +51,7 @@ const NAV = [
       { title: "Snapshots", path: "/esdev/test/snapshots" },
       { title: "Mocks & fake timers", path: "/esdev/test/mocks" },
       { title: "Configuration", path: "/esdev/test/configuration" },
+      { title: "Global setup", path: "/esdev/test/global-setup" },
       { title: "Reporters", path: "/esdev/test/reporters" },
       { title: "Imports", path: "/esdev/test/imports" },
       { title: "DOM testing", path: "/esdev/test/dom" },

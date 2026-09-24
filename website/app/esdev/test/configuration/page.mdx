@@ -22,6 +22,7 @@ file.**
 {
   "test": {
     "setup": ["./test/setup.ts"],
+    "globalSetup": "./test/database.ts",
     "timeout": 5000,
     "jobs": 4,
     "isolation": "process",
@@ -33,6 +34,9 @@ file.**
 A setup module is imported **before** the file under test, so a global it stubs
 is in place before anything reads it — and it costs no line numbers: a failing
 assertion still names the line you wrote.
+
+`globalSetup` (or `--global-setup`) runs once for the whole run rather than
+before each file. See [Global setup](/esdev/test/global-setup).
 
 `--timeout` is enforced by the parent, which **ends** the process. The case it
 exists for is a file that wedges, and a budget the file kept for itself is one
