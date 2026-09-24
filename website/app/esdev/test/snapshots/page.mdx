@@ -94,6 +94,29 @@ error. An inline snapshot cannot be taken in a loop with different values; use
 [Browser runs](/esdev/test/browser) read and write the same snapshot files, and
 write inline snapshots into the source the same way.
 
+## Custom serializers
+
+A snapshot refuses a class instance, since its fields alone may not say what it
+is. `expect.addSnapshotSerializer` prints one the way you choose, in every
+snapshot for the rest of the file:
+
+```ts
+expect.addSnapshotSerializer({
+  test: (value) => value instanceof Money,
+  serialize: (money) => `Money(${money.amount} ${money.currency})`,
+});
+
+test("total", () => {
+  expect(cart.total()).toMatchInlineSnapshot(`Money(12.5 EUR)`);
+});
+```
+
+A serializer that prints values inside its own passes them to the `printer`
+argument, `serialize(value, config, indentation, depth, refs, printer)`, so
+they go through the other serializers too. Put serializers the whole suite
+needs in a [setup file](/esdev/test/configuration). The serializers written
+for Jest and Vitest use the same shape.
+
 ## Coming from Jest or Vitest
 
 The matchers, their arguments and the update workflow are the same. Plain

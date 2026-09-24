@@ -12748,6 +12748,207 @@ test("frames fall every 16ms", () => {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Call order, resolved values, exactly-once calls, `toBeNullable`,
+/// `expect.fail`, and the `arrayOf` and `schemaMatching` asymmetric matchers.
+#[test]
+fn test_matchers_for_call_order_resolved_values_and_schemas() {
+    let dir = build_dir("t_matchers_more");
+    write_in(
+        &dir,
+        "m.test.ts",
+        r#"import { expect, mock, test } from "runtime:test";
+
+test("call order", () => {
+  const a = mock.fn().mockName("a"), b = mock.fn().mockName("b"), never = mock.fn();
+  a(); b(); a();
+  expect(a).toHaveBeenCalledBefore(b);
+  expect(b).toHaveBeenCalledAfter(a);
+  expect(b).not.toHaveBeenCalledBefore(a);
+  expect(never).not.toHaveBeenCalledBefore(a);
+  expect(never).toHaveBeenCalledBefore(a, false);
+  expect(a).not.toHaveBeenCalledBefore(never);
+  expect(() => expect(b).toHaveBeenCalledBefore(a)).toThrow("expected b to have been called before a");
+  expect(() => expect(a).toHaveBeenCalledBefore(() => {})).toThrow("needs another mock");
+  expect(a.mock.invocationCallOrder[0]).toBeLessThan(b.mock.invocationCallOrder[0]);
+});
+test("exactly once with", () => {
+  const f = mock.fn();
+  f("apples", 10);
+  expect(f).toHaveBeenCalledExactlyOnceWith("apples", 10);
+  f("apples", 10);
+  expect(f).not.toHaveBeenCalledExactlyOnceWith("apples", 10);
+});
+test("contexts", () => {
+  const f = mock.fn();
+  const o = { f };
+  o.f();
+  expect(f.mock.contexts).toEqual([o]);
+});
+test("resolved", async () => {
+  const sell = mock.fn((p: string) => (p === "x" ? Promise.reject(new Error("no")) : Promise.resolve({ p })));
+  const pending = sell("apples");
+  expect(sell).not.toHaveResolved();
+  await pending;
+  await sell("bananas");
+  await sell("x").catch(() => {});
+  expect(sell).toHaveResolved();
+  expect(sell).toHaveResolvedTimes(2);
+  expect(sell).toHaveResolvedWith({ p: "apples" });
+  expect(sell).not.toHaveLastResolvedWith({ p: "bananas" });
+  expect(sell).toHaveNthResolvedWith(2, { p: "bananas" });
+  expect(sell.mock.settledResults.map((r) => r.type)).toEqual(["fulfilled", "fulfilled", "rejected"]);
+  const sync = mock.fn(() => 1);
+  sync();
+  expect(sync).toHaveResolvedWith(1);
+});
+test("nullable, fail, arrayOf", () => {
+  expect(null).toBeNullable();
+  expect(undefined).toBeNullable();
+  expect(0).not.toBeNullable();
+  expect(() => expect(0).toBeNullable()).toThrow("expected 0 to be null or undefined");
+  expect(() => expect.fail("boom")).toThrow("boom");
+  expect(["a", "b"]).toEqual(expect.arrayOf(expect.any(String)));
+  expect([{ id: 1 }]).toEqual(expect.arrayOf(expect.objectContaining({ id: expect.any(Number) })));
+  expect(["a", 1]).toEqual(expect.not.arrayOf(expect.any(String)));
+  expect("a").not.toEqual(expect.arrayOf("a"));
+});
+test("schemaMatching", () => {
+  const email = { "~standard": { version: 1, vendor: "mini", validate: (v: unknown) => (typeof v === "string" && v.includes("@") ? { value: v } : { issues: [{ message: "not an email" }] }) } };
+  expect({ email: "a@b.c" }).toEqual({ email: expect.schemaMatching(email) });
+  expect({ email: "nope" }).not.toEqual({ email: expect.schemaMatching(email) });
+  expect("nope").toEqual(expect.not.schemaMatching(email));
+  const slow = { "~standard": { version: 1, vendor: "slow", validate: async () => ({ value: 1 }) } };
+  expect(() => expect(1).toEqual(expect.schemaMatching(slow))).toThrow("validates asynchronously");
+  expect(() => expect.schemaMatching({})).toThrow("needs a Standard Schema");
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("6 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Equality testers apply at every depth and in every deep comparison, and a
+/// serializer prints a class instance a snapshot otherwise refuses.
+#[test]
+fn test_equality_testers_and_snapshot_serializers_extend_expect() {
+    let dir = build_dir("t_expect_extend_utils");
+    write_in(
+        &dir,
+        "x.test.ts",
+        r#"import { expect, mock, test } from "runtime:test";
+
+class Volume {
+  constructor(public amount: number, public unit: "L" | "mL") {}
+  ml() { return this.unit === "L" ? this.amount * 1000 : this.amount; }
+}
+class Shelf { constructor(public name: string, public volumes: Volume[]) {} }
+
+function areVolumesEqual(a: unknown, b: unknown) {
+  const isA = a instanceof Volume, isB = b instanceof Volume;
+  if (isA && isB) return a.ml() === b.ml();
+  if (isA === isB) return undefined;
+  return false;
+}
+function areShelvesEqual(this: { equals(a: unknown, b: unknown): boolean }, a: unknown, b: unknown) {
+  if (a instanceof Shelf && b instanceof Shelf) return a.name === b.name && this.equals(a.volumes, b.volumes);
+  return undefined;
+}
+expect.addEqualityTesters([areVolumesEqual, areShelvesEqual]);
+
+test("testers decide their pairs, at any depth", () => {
+  expect(new Volume(1, "L")).toEqual(new Volume(1000, "mL"));
+  expect({ v: [new Volume(2, "L")] }).toEqual({ v: [new Volume(2000, "mL")] });
+  expect(new Shelf("a", [new Volume(1, "L")])).toEqual(new Shelf("a", [new Volume(1000, "mL")]));
+  expect(new Volume(1, "L")).not.toEqual(new Volume(1, "mL"));
+  const f = mock.fn();
+  f(new Volume(1, "L"));
+  expect(f).toHaveBeenCalledWith(new Volume(1000, "mL"));
+  expect([new Volume(1, "L")]).toContainEqual(new Volume(1000, "mL"));
+});
+
+expect.addSnapshotSerializer({
+  test: (v) => v instanceof Volume,
+  serialize: (v: Volume) => `Volume<${v.ml()}mL>`,
+});
+expect.addSnapshotSerializer({
+  test: (v) => v instanceof Shelf,
+  serialize: (v: Shelf, config: any, indentation: string, depth: number, refs: any, printer: any) =>
+    `Shelf ${v.name} ${printer(v.volumes, config, indentation, depth, refs)}`,
+});
+test("serializers print what they take", () => {
+  expect(new Volume(1, "L")).toMatchInlineSnapshot(`Volume<1000mL>`);
+  expect({ shelf: new Shelf("top", [new Volume(5, "mL")]) }).toMatchInlineSnapshot(`
+    {
+      "shelf": Shelf top [
+        Volume<5mL>,
+      ],
+    }
+  `);
+});
+test("a class with no serializer names the fix", () => {
+  class Other {}
+  expect(() => expect(new Other()).toMatchInlineSnapshot(`x`)).toThrow("expect.addSnapshotSerializer can print one");
+});
+test("bad arguments", () => {
+  expect(() => expect.addEqualityTesters([1 as any])).toThrow("an array of functions");
+  expect(() => expect.addSnapshotSerializer({} as any)).toThrow("needs { test(value)");
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("4 passed, 0 failed"), "{text}");
+    assert!(
+        text.contains("snapshots: 2 matched, 0 failed, 0 written"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_to_strict_equal_checks_undefined_keys_holes_and_types() {
+    let dir = build_dir("t_strict_equal");
+    write_in(
+        &dir,
+        "s.test.ts",
+        r#"import { expect, test } from "runtime:test";
+class Stock { constructor(public type: string) {} }
+test("strict", () => {
+  expect(new Stock("apples")).toEqual({ type: "apples" });
+  expect(new Stock("apples")).not.toStrictEqual({ type: "apples" });
+  expect(new Stock("apples")).toStrictEqual(new Stock("apples"));
+  expect({ a: undefined, b: 2 }).toEqual({ b: 2 });
+  expect({ a: undefined, b: 2 }).not.toStrictEqual({ b: 2 });
+  // eslint-disable-next-line no-sparse-arrays
+  expect([, 1]).not.toStrictEqual([undefined, 1]);
+  expect([undefined, 1]).toStrictEqual([undefined, 1]);
+  expect({ deep: [{ x: undefined }] }).not.toStrictEqual({ deep: [{}] });
+  expect(new Map([[1, { a: undefined }]])).not.toStrictEqual(new Map([[1, {}]]));
+  expect({ n: 1, when: expect.any(Number) }).toStrictEqual({ n: 1, when: 5 });
+  expect(() => expect({ a: undefined }).toStrictEqual({})).toThrow("to strictly equal");
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("1 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

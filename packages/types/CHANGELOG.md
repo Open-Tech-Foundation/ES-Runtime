@@ -15,6 +15,13 @@ itself.
 
 ### Added
 
+- **The new matchers and `expect` utilities** — `toHaveBeenCalledBefore`,
+  `toHaveBeenCalledAfter`, `toHaveBeenCalledExactlyOnceWith`, the
+  `toHaveResolved*` family, `toBeNullable`, `expect.arrayOf`,
+  `expect.schemaMatching`, `expect.fail`, `expect.addEqualityTesters` and
+  `expect.addSnapshotSerializer` — with the `StandardSchemaV1`,
+  `EqualityTester`, `TesterContext` and `SnapshotSerializer` types, and
+  `settledResults`, `contexts` and `invocationCallOrder` on `MockRecord`.
 - **`clock.freeze(options)`** with the `FreezeOptions` and `Fakeable` types, and
   `clock.advanceToNextFrame` and `clock.runMicrotasks`.
 - **`mock.when`** with the `When`, `WhenOptions` and `AnswerOptions` types, and

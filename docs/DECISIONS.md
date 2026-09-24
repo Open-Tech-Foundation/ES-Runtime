@@ -661,6 +661,29 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D104 — The remaining matchers, and a `toStrictEqual` that is strict · *Accepted (2026-09-24)*
+
+**Context:** the parity review found these missing, each checked against Vitest's and Jest's `expect` references:
+- `toHaveBeenCalledBefore`/`After` and `toHaveBeenCalledExactlyOnceWith` (Vitest)
+- `toHaveResolved*` (Vitest)
+- `toBeNullable` and `expect.schemaMatching` (Vitest)
+- `expect.arrayOf` (Jest 30)
+- `expect.fail` (Vitest)
+- `expect.addEqualityTesters` and `expect.addSnapshotSerializer` (both)
+
+`toStrictEqual` was also `toEqual` under another name. It was documented as such, but a suite migrating from either runner relies on the difference.
+
+**Decision:**
+- **The matchers under their Vitest and Jest names and semantics.** Call order compares each mock's first call through a file-wide `invocationCallOrder`, and by default a mock never called fails (Vitest's `failIfNoFirstInvocation`, named `requireCall` here). `settledResults` records what each call's promise came to, starting as `"incomplete"`; a return that is not a promise is `"fulfilled"` at once, as in Vitest.
+- **`expect.schemaMatching` takes any Standard Schema**, so no validation library is a dependency. It refuses a schema that validates asynchronously with a `TypeError`: equality is synchronous, and a pending result silently treated as a match would pass anything.
+- **Testers run after asymmetric matchers and before the built-in comparison**, as in Jest, in every deep comparison.
+- **Serializers take pretty-format's plugin shape**, both `serialize` and the older `print`, so serializers written for Jest and Vitest work unchanged. They print into this runner's snapshot format. `printer(child, config, indentation)` derives the child's depth from `indentation`, the one argument every pretty-format plugin passes consistently.
+- **`toStrictEqual` checks what Jest and Vitest document:** `undefined` keys, array holes, and prototypes. Rejected: keeping the alias, since a test that expects the stricter check and gets the looser one passes wrongly.
+
+**Consequences:** a `toStrictEqual` that passed only because it was loose now fails. Such a test was asserting less than it said. Testers and serializers last for the file; a suite-wide one goes in a setup file.
+
+---
+
 ### D103 — The clock fakes all of time, and can be told what not to · *Accepted (2026-09-24)*
 
 **Context:** `clock.freeze()` replaced the timers and `Date`. Code also reads time through `performance.now`, `Temporal.Now` and `Intl.DateTimeFormat().format()`, and in a page schedules through `requestAnimationFrame`, `requestIdleCallback` and `setImmediate`. A test of any of these saw real time beside a frozen `Date`. Vitest (on `@sinonjs/fake-timers`) fakes everything available except `nextTick` and `queueMicrotask`, and takes `toFake` or `toNotFake` to choose.

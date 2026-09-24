@@ -202,6 +202,49 @@ test("mocks throw, answer for a while, and answer by argument", async () => {
   impl?.(1);
 });
 
+test("call order, resolved values and the new asymmetric matchers", async () => {
+  const load = mock.fn(async (id: number) => ({ id }));
+  const save = mock.fn();
+  await load(1);
+  save();
+  expect(load).toHaveBeenCalledBefore(save);
+  expect(save).toHaveBeenCalledAfter(load, false);
+  expect(load).toHaveBeenCalledExactlyOnceWith(1);
+  expect(load).toHaveResolvedWith({ id: 1 });
+  expect(load).toHaveNthResolvedWith(1, { id: 1 });
+  const order: number = load.mock.invocationCallOrder[0];
+  const settled = load.mock.settledResults[0];
+  if (settled.type === "fulfilled") settled.value.id satisfies number;
+  expect(null).toBeNullable();
+  expect(["a"]).toEqual(expect.arrayOf(expect.any(String)));
+  expect([1]).toEqual(expect.not.arrayOf(expect.any(String)));
+  const schema = { "~standard": { version: 1 as const, vendor: "x", validate: (v: unknown) => ({ value: v }) } };
+  expect("a").toEqual(expect.schemaMatching(schema));
+  // @ts-expect-error — a schema has a ~standard member.
+  expect.schemaMatching({});
+  // @ts-expect-error — the other has to be a mock.
+  expect(load).toHaveBeenCalledBefore(() => {});
+  order satisfies number;
+});
+
+test("equality testers and snapshot serializers", () => {
+  expect.addEqualityTesters([
+    function (a, b, testers) {
+      if (Array.isArray(a) && Array.isArray(b)) return this.equals(a.length, b.length, testers);
+      return undefined;
+    },
+  ]);
+  expect.addSnapshotSerializer({
+    test: (v) => v instanceof Date,
+    serialize: (v, config, indentation, depth, refs, printer) =>
+      `Date ${printer(v.toISOString(), config, indentation, depth, refs)}`,
+  });
+  expect.addSnapshotSerializer({ test: () => false, print: (v, serialize, indent) => indent(serialize(v)) });
+  // @ts-expect-error — a tester is a function.
+  expect.addEqualityTesters([1]);
+  if (Math.random() > 2) expect.fail("never");
+});
+
 // --- clock ------------------------------------------------------------------
 
 test("the clock can be told what to fake", () => {

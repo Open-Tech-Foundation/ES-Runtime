@@ -803,19 +803,27 @@ const sameBytes = (a, b) => {
 // assertion an int64 test most needs could not be written; a Uint8Array
 // stringified to `{"0":1,"1":2}` instead of comparing as bytes; and object key
 // order decided the result, which no equality test wants.
-function equal(a, b, seen) {
+function equal(a, b, seen, strict = false) {
   // An asymmetric matcher stands where a value would: `expect.any(Number)`
   // inside an expected object is a *predicate*, not something to compare with.
   // Checked before anything else so it works at any depth — which is the only
   // reason to have them, since a top-level one could be its own assertion.
   if (isMatcher(b)) return b.matches(a);
   if (isMatcher(a)) return a.matches(b);
+  // Then the testers `expect.addEqualityTesters` added: the first to answer
+  // true or false decides; `undefined` passes the pair on.
+  for (const tester of testers) {
+    const verdict = tester.call(testerContext, a, b, testers);
+    if (verdict !== undefined) return Boolean(verdict);
+  }
   if (Object.is(a, b)) return true;
   if (typeof a !== typeof b) return false;
   if (a === null || b === null || typeof a !== "object") return false;
 
   const tag = Object.prototype.toString.call(a);
   if (tag !== Object.prototype.toString.call(b)) return false;
+  // Strictly, a class instance is not a plain object with the same fields.
+  if (strict && Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
 
   // Compared by what identifies them, not by their fields.
   if (a instanceof Date) return a.getTime() === b.getTime();
@@ -841,12 +849,12 @@ function equal(a, b, seen) {
       // The fast path: an identical key. Otherwise every entry has to be tried,
       // because two structurally equal keys are not the same object.
       if (b.has(k)) {
-        if (!equal(v, b.get(k), seen)) return false;
+        if (!equal(v, b.get(k), seen, strict)) return false;
         continue;
       }
       let found = false;
       for (const [k2, v2] of b) {
-        if (equal(k, k2, seen) && equal(v, v2, seen)) {
+        if (equal(k, k2, seen, strict) && equal(v, v2, seen, strict)) {
           found = true;
           break;
         }
@@ -862,7 +870,7 @@ function equal(a, b, seen) {
       if (b.has(v)) continue;
       let found = false;
       for (const v2 of b) {
-        if (equal(v, v2, seen)) {
+        if (equal(v, v2, seen, strict)) {
           found = true;
           break;
         }
@@ -874,16 +882,21 @@ function equal(a, b, seen) {
 
   if (Array.isArray(a)) {
     if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!equal(a[i], b[i], seen)) return false;
+    for (let i = 0; i < a.length; i++) {
+      // Strictly, a hole is not an `undefined`.
+      if (strict && i in a !== i in b) return false;
+      if (!equal(a[i], b[i], seen, strict)) return false;
+    }
     return true;
   }
 
-  const ka = definedKeys(a);
-  const kb = definedKeys(b);
+  // Strictly, a key set to `undefined` is not a key left out.
+  const ka = strict ? Object.keys(a) : definedKeys(a);
+  const kb = strict ? Object.keys(b) : definedKeys(b);
   if (ka.length !== kb.length) return false;
   for (const k of ka) {
     if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
-    if (!equal(a[k], b[k], seen)) return false;
+    if (!equal(a[k], b[k], seen, strict)) return false;
   }
   return true;
 }
@@ -916,6 +929,33 @@ function show(v) {
 // sorting own string keys makes equivalent plain data produce the same bytes.
 // A reference gets an id before its contents so shared objects and cycles stay
 // visible instead of being silently duplicated or rejected.
+/// Testers `expect.addEqualityTesters` added, in the order they were added.
+const testers = [];
+/// `this` in a tester: `this.equals(a, b)` compares deeply, testers and all.
+const testerContext = Object.freeze({ equals: (a, b) => equal(a, b, []) });
+
+/// Serializers `expect.addSnapshotSerializer` added, newest first.
+const serializers = [];
+
+/// The formatting options a serializer's `serialize` is given, as
+/// pretty-format names them. Snapshots here are uncoloured and indented by two.
+const plain = { open: "", close: "" };
+const SERIALIZER_CONFIG = Object.freeze({
+  indent: "  ",
+  min: false,
+  maxDepth: Infinity,
+  maxWidth: Infinity,
+  spacingInner: "\n",
+  spacingOuter: "\n",
+  escapeRegex: false,
+  escapeString: true,
+  printBasicPrototype: true,
+  printFunctionName: true,
+  callToJSON: true,
+  plugins: [],
+  colors: { comment: plain, content: plain, prop: plain, tag: plain, value: plain },
+});
+
 function snapshotValue(value) {
   const seen = new Set();
   const pad = (depth) => "  ".repeat(depth);
@@ -926,6 +966,18 @@ function snapshotValue(value) {
   });
   const block = (open, lines, close, depth) => lines.length === 0 ? `${open}${close}` : `${open}\n${lines.join("\n")}\n${pad(depth - 1)}${close}`;
   const print = (v, depth) => {
+    // A serializer first, as in Jest and Vitest: the newest whose `test` takes
+    // the value. Its children print at the depth its indentation says.
+    for (const plugin of serializers) {
+      if (!plugin.test(v)) continue;
+      const printer = (child, _config, indentation) =>
+        print(child, typeof indentation === "string" ? Math.floor(indentation.length / 2) : depth + 1);
+      if (typeof plugin.serialize === "function") {
+        return String(plugin.serialize(v, SERIALIZER_CONFIG, pad(depth), depth, [], printer));
+      }
+      const indent = (text) => text.split("\n").map((line) => `  ${line}`).join("\n");
+      return String(plugin.print(v, (child) => print(child, depth), indent, SERIALIZER_CONFIG, SERIALIZER_CONFIG.colors));
+    }
     if (v === null) return "null";
     if (v === undefined) return "undefined";
     if (typeof v === "string") return JSON.stringify(v);
@@ -961,7 +1013,11 @@ function snapshotValue(value) {
     }
     if (v instanceof Promise || v instanceof WeakMap || v instanceof WeakSet) throw new TypeError("snapshots do not support asynchronous or weak collections");
     const prototype = Object.getPrototypeOf(v);
-    if (prototype !== Object.prototype && prototype !== null) throw new TypeError("snapshots support plain objects, not class or host instances");
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(
+        `snapshots support plain objects, not class or host instances (${v?.constructor?.name ?? "this one"}); expect.addSnapshotSerializer can print one`,
+      );
+    }
     return block("{", own(v, depth + 1), "}", depth + 1);
   };
   return print(value, 0);
@@ -1222,6 +1278,25 @@ function recordOf(value, matcher) {
 
 const callsOf = (value, matcher) => recordOf(value, matcher).calls;
 const resultsOf = (value, matcher) => recordOf(value, matcher).results;
+const settledOf = (value, matcher) => recordOf(value, matcher).settledResults;
+
+/// Whether `before`'s first call came before `after`'s. A `before` never called
+/// counts as first unless the test says it must have been.
+function calledFirst(before, after, requireCall) {
+  const first = before.mock.invocationCallOrder;
+  const second = after.mock.invocationCallOrder;
+  if (first.length === 0) return !requireCall;
+  if (second.length === 0) return false;
+  return first[0] < second[0];
+}
+
+/// The other mock a call-order matcher compares with, or a complaint.
+function otherMock(value, matcher) {
+  if (!isMock(value)) {
+    throw new TypeError(`expect(...).${matcher} needs another mock to compare with, and ${show(value)} is not one`);
+  }
+  return value;
+}
 
 /// The calls a mock has seen, short enough to read in a failure.
 const showCalls = (calls) =>
@@ -1354,11 +1429,13 @@ function expectation(actual, negated, mode = "hard") {
     toEqual(expected) {
       check(equal(actual, expected, []), negated, () => fail(actual, expected, negated, "equal"));
     },
-    // The same comparison. Jest's stricter variant also distinguishes a missing
-    // key from an undefined one and compares classes; saying so is better than
-    // implying a strictness this does not have.
+    // `toEqual`, and also: a key set to `undefined` is not a key left out, a
+    // hole in an array is not an `undefined`, and a class instance is not a
+    // plain object with the same fields.
     toStrictEqual(expected) {
-      it.toEqual(expected);
+      check(equal(actual, expected, [], true), negated, () =>
+        fail(actual, expected, negated, "strictly equal"),
+      );
     },
     toMatchSnapshot(name) {
       if (negated) throw new TypeError("expect(...).not.toMatchSnapshot is not meaningful");
@@ -1413,6 +1490,11 @@ function expectation(actual, negated, mode = "hard") {
     },
     toBeNull() {
       check(actual === null, negated, () => fail(actual, null, negated, "be"));
+    },
+    toBeNullable() {
+      check(actual === null || actual === undefined, negated, () =>
+        { throw new Error(`expected ${show(actual)} ${negated ? "not " : ""}to be null or undefined`); },
+      );
     },
     toBeUndefined() {
       check(actual === undefined, negated, () => fail(actual, undefined, negated, "be"));
@@ -1545,6 +1627,56 @@ function expectation(actual, negated, mode = "hard") {
                   .join(", ")}`,
         ),
       );
+    },
+    toHaveBeenCalledExactlyOnceWith(...args) {
+      const calls = callsOf(actual, "toHaveBeenCalledExactlyOnceWith");
+      check(calls.length === 1 && equal(calls[0], args, []), negated, () =>
+        called(actual, `called ${calls.length} time(s): ${showCalls(calls)}`, args, negated),
+      );
+    },
+    toHaveBeenCalledBefore(other, requireCall = true) {
+      recordOf(actual, "toHaveBeenCalledBefore");
+      const after = otherMock(other, "toHaveBeenCalledBefore");
+      check(calledFirst(actual, after, requireCall), negated, () =>
+        called(actual, `${negated ? "not " : ""}to have been called before ${after.getMockName()}`),
+      );
+    },
+    toHaveBeenCalledAfter(other, requireCall = true) {
+      recordOf(actual, "toHaveBeenCalledAfter");
+      const before = otherMock(other, "toHaveBeenCalledAfter");
+      check(calledFirst(before, actual, requireCall), negated, () =>
+        called(actual, `${negated ? "not " : ""}to have been called after ${before.getMockName()}`),
+      );
+    },
+    // What returned promises came to. One not settled yet has not resolved:
+    // await the call before asserting.
+    toHaveResolved() {
+      const settled = settledOf(actual, "toHaveResolved");
+      check(settled.some((r) => r.type === "fulfilled"), negated, () =>
+        called(actual, negated ? "not to have resolved" : "to have resolved at least once"),
+      );
+    },
+    toHaveResolvedTimes(n) {
+      const settled = settledOf(actual, "toHaveResolvedTimes");
+      const count = settled.filter((r) => r.type === "fulfilled").length;
+      check(count === n, negated, () => fail(count, n, negated, "have resolved this many times:"));
+    },
+    toHaveResolvedWith(value) {
+      const settled = settledOf(actual, "toHaveResolvedWith");
+      const values = settled.filter((r) => r.type === "fulfilled").map((r) => r.value);
+      check(values.some((v) => equal(v, value, [])), negated, () =>
+        called(actual, `${negated ? "not " : ""}to have resolved with ${show(value)}; it resolved with ${show(values)}`),
+      );
+    },
+    toHaveLastResolvedWith(value) {
+      const last = settledOf(actual, "toHaveLastResolvedWith").at(-1);
+      const held = last?.type === "fulfilled" && equal(last.value, value, []);
+      check(held, negated, () => fail(last?.value, value, negated, "have last resolved"));
+    },
+    toHaveNthResolvedWith(n, value) {
+      const at = settledOf(actual, "toHaveNthResolvedWith")[n - 1];
+      const held = at?.type === "fulfilled" && equal(at.value, value, []);
+      check(held, negated, () => fail(at?.value, value, negated, `have resolved on call ${n}:`));
     },
     toHaveReturned() {
       const results = resultsOf(actual, "toHaveReturned");
@@ -1898,6 +2030,34 @@ expect.unreachable = (message) => {
   throw new Error(message ?? "expected this line not to be reached");
 };
 
+// `expect.addEqualityTesters([tester])` — how `toEqual` and every other deep
+// comparison decides a pair it would otherwise compare field by field. For the
+// rest of the file.
+expect.addEqualityTesters = (added) => {
+  if (!Array.isArray(added) || added.some((tester) => typeof tester !== "function")) {
+    throw new TypeError("expect.addEqualityTesters needs an array of functions");
+  }
+  testers.push(...added);
+};
+
+// `expect.addSnapshotSerializer({ test, serialize })` — prints the values
+// `test` accepts in every snapshot for the rest of the file. The newest is
+// tried first. The older `print(value, serialize, indent)` form works too.
+expect.addSnapshotSerializer = (plugin) => {
+  if (
+    typeof plugin?.test !== "function" ||
+    (typeof plugin.serialize !== "function" && typeof plugin.print !== "function")
+  ) {
+    throw new TypeError("expect.addSnapshotSerializer needs { test(value), serialize(value, …) }");
+  }
+  serializers.unshift(plugin);
+};
+
+// `expect.fail(message?)` — fails the test here, as Vitest and Chai spell it.
+expect.fail = (message) => {
+  throw new Error(message ?? "expect.fail() was called");
+};
+
 // `expect.extend({ name(received, ...args) { return { pass, message } } })` —
 // matchers of your own, used like the built-in ones: negated with `.not`, on
 // `.resolves`/`.rejects`, in `expect.soft`, and as asymmetric matchers inside
@@ -1991,10 +2151,30 @@ expect.arrayContaining = (wanted) =>
   );
 expect.objectContaining = (wanted) =>
   matcher("objectContaining", (v) => matchesObject(v, wanted, []));
+// An array every element of which matches `item` — a value or a matcher.
+expect.arrayOf = (item) =>
+  matcher(`arrayOf(${isMatcher(item) ? item.label : show(item)})`, (v) =>
+    Array.isArray(v) && v.every((have) => equal(have, item, [])),
+  );
+// A value a Standard Schema (Zod, Valibot, ArkType, …) accepts. Only a schema
+// that validates synchronously can stand inside a value.
+expect.schemaMatching = (schema) => {
+  const standard = schema?.["~standard"];
+  if (typeof standard?.validate !== "function") {
+    throw new TypeError("expect.schemaMatching needs a Standard Schema: an object with ~standard.validate");
+  }
+  return matcher(`schemaMatching(${standard.vendor ?? "schema"})`, (v) => {
+    const result = standard.validate(v);
+    if (result !== null && typeof result?.then === "function") {
+      throw new TypeError("expect.schemaMatching: this schema validates asynchronously, and a value cannot wait for it");
+    }
+    return !result?.issues;
+  });
+};
 // A number within `digits` decimal places of `n` — `toBeCloseTo`, inside a value.
 expect.closeTo = (n, digits = 2) =>
   matcher(`closeTo(${n}, ${digits})`, (v) => typeof v === "number" && Math.abs(v - n) < 10 ** -digits / 2);
-for (const name of ["stringContaining", "stringMatching", "arrayContaining", "objectContaining"]) {
+for (const name of ["stringContaining", "stringMatching", "arrayContaining", "objectContaining", "arrayOf", "schemaMatching"]) {
   const positive = expect[name];
   expect.not[name] = (...args) => {
     const inner = positive(...args);
@@ -2087,6 +2267,9 @@ const isMock = (v) => typeof v === "function" && v[MOCK] === true;
 // references: the process is one test file, and it ends.
 const made = new Set();
 
+/// Calls to any mock so far, numbering each one's `invocationCallOrder`.
+let invocations = 0;
+
 /// A function that records what it was called with, and answers however it was
 /// told to.
 function mockFn(implementation) {
@@ -2095,26 +2278,44 @@ function mockFn(implementation) {
   let named = implementation?.name || "the mock";
   let restore = null;
 
-  const blank = () => ({ calls: [], results: [], instances: [], lastCall: undefined });
+  const blank = () => ({
+    calls: [],
+    results: [],
+    settledResults: [],
+    instances: [],
+    contexts: [],
+    invocationCallOrder: [],
+    lastCall: undefined,
+  });
 
   const fn = function (...args) {
     const record = fn.mock;
     record.calls.push(args);
     record.lastCall = args;
+    record.invocationCallOrder.push(++invocations);
+    record.contexts.push(new.target ? undefined : this);
     if (new.target) record.instances.push(this);
+    // What a returned promise came to, filled in when it settles.
+    const settled = { type: "incomplete", value: undefined };
+    record.settledResults.push(settled);
     const use = once.length > 0 ? once.shift() : impl;
-    if (!use) {
-      record.results.push({ type: "return", value: undefined });
-      return undefined;
-    }
     try {
-      const value = Reflect.apply(use, this, args);
+      const value = use ? Reflect.apply(use, this, args) : undefined;
       record.results.push({ type: "return", value });
+      if (value !== null && typeof value?.then === "function") {
+        value.then(
+          (result) => Object.assign(settled, { type: "fulfilled", value: result }),
+          (err) => Object.assign(settled, { type: "rejected", value: err }),
+        );
+      } else {
+        Object.assign(settled, { type: "fulfilled", value });
+      }
       return value;
     } catch (err) {
       // Recorded *and* rethrown: a mock that swallowed the throw would send the
       // code under test down a path it does not take in production.
-      fn.mock.results.push({ type: "throw", value: err });
+      record.results.push({ type: "throw", value: err });
+      Object.assign(settled, { type: "rejected", value: err });
       throw err;
     }
   };

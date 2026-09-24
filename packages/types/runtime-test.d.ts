@@ -242,7 +242,11 @@ declare module "runtime:test" {
     toBe(expected: T): void;
     /** Structural equality, the same one {@link assertEquals} uses. */
     toEqual(expected: unknown): void;
-    /** {@link Matchers.toEqual}. This runner draws no stricter distinction. */
+    /**
+     * {@link Matchers.toEqual}, and also: a key set to `undefined` is not a key
+     * left out, a hole in an array is not an `undefined`, and a class instance
+     * is not a plain object with the same fields.
+     */
     toStrictEqual(expected: unknown): void;
     /** Matches the versioned snapshot recorded for this test. */
     toMatchSnapshot(nameOrMatchers?: string | Record<string, unknown>): void;
@@ -261,6 +265,8 @@ declare module "runtime:test" {
     toBeTruthy(): void;
     toBeFalsy(): void;
     toBeNull(): void;
+    /** `null` or `undefined`. */
+    toBeNullable(): void;
     toBeUndefined(): void;
     toBeDefined(): void;
     toBeNaN(): void;
@@ -331,6 +337,15 @@ declare module "runtime:test" {
     toHaveBeenLastCalledWith(...args: unknown[]): void;
     /** 1-based: the first call is `1`. */
     toHaveBeenNthCalledWith(n: number, ...args: unknown[]): void;
+    /** Called once, and with these arguments. */
+    toHaveBeenCalledExactlyOnceWith(...args: unknown[]): void;
+    /**
+     * First called before `other` was first called. A mock never called fails,
+     * unless `requireCall` is `false`.
+     */
+    toHaveBeenCalledBefore(other: Mock, requireCall?: boolean): void;
+    /** First called after `other` was first called. */
+    toHaveBeenCalledAfter(other: Mock, requireCall?: boolean): void;
     /**
      * Needs a {@link When} chain: every answer used — `times` of them, or at
      * least once for one without a limit. A chain with no answers never is.
@@ -342,6 +357,15 @@ declare module "runtime:test" {
     toHaveReturnedWith(value: unknown): void;
     toHaveLastReturnedWith(value: unknown): void;
     toHaveNthReturnedWith(n: number, value: unknown): void;
+    /**
+     * Resolved at least once. A returned promise counts once it settles, so
+     * await the call first; a value that is not a promise counts at once.
+     */
+    toHaveResolved(): void;
+    toHaveResolvedTimes(n: number): void;
+    toHaveResolvedWith(value: unknown): void;
+    toHaveLastResolvedWith(value: unknown): void;
+    toHaveNthResolvedWith(n: number, value: unknown): void;
 
     /** The shorter spellings of the call matchers. Aliases, not variants. */
     toBeCalled(): void;
@@ -410,12 +434,18 @@ declare module "runtime:test" {
     objectContaining(wanted: object): any;
     /** A number within `digits` decimal places of `n`. Two by default. */
     closeTo(n: number, digits?: number): any;
+    /** An array every element of which equals `item`, a value or a matcher. */
+    arrayOf(item: unknown): any;
+    /** A value the schema accepts. Needs a schema that validates synchronously. */
+    schemaMatching(schema: StandardSchemaV1): any;
     /** The asymmetric matchers, inverted. */
     not: {
       stringContaining(part: string): any;
       stringMatching(pattern: string | RegExp): any;
       arrayContaining(wanted: unknown[]): any;
       objectContaining(wanted: object): any;
+      arrayOf(item: unknown): any;
+      schemaMatching(schema: StandardSchemaV1): any;
     } & AsymmetricMatchers;
     /**
      * A failed matcher is recorded and the test continues. It fails at the
@@ -428,6 +458,16 @@ declare module "runtime:test" {
     hasAssertions(): void;
     /** Fails where it is reached. */
     unreachable(message?: string): never;
+    /** Fails the test here. */
+    fail(message?: string): never;
+    /**
+     * Decides equality for the pairs a tester recognises, in `toEqual` and
+     * every other deep comparison, for the rest of the file. A tester returns
+     * `true` or `false`, or `undefined` to pass the pair on.
+     */
+    addEqualityTesters(testers: EqualityTester[]): void;
+    /** Prints the values `test` accepts in every snapshot for the rest of the file. */
+    addSnapshotSerializer(serializer: SnapshotSerializer): void;
     /**
      * Adds matchers. Each is called with the received value and its arguments,
      * and returns `{ pass, message }` (or a promise of one). Declare them for
@@ -506,11 +546,89 @@ declare module "runtime:test" {
   export function waitFor<T>(fn: () => T | Promise<T>, options?: WaitOptions): Promise<T>;
 
   /** What a {@link Mock} remembers. */
+  /**
+   * The validation half of a [Standard Schema](https://standardschema.dev),
+   * the interface Zod, Valibot, ArkType and others implement.
+   */
+  export interface StandardSchemaV1 {
+    readonly "~standard": {
+      readonly version: 1;
+      readonly vendor: string;
+      readonly validate: (value: unknown) => StandardSchemaResult | Promise<StandardSchemaResult>;
+    };
+  }
+
+  /** A validation's outcome: `issues` when it failed. */
+  export type StandardSchemaResult =
+    | { readonly value: unknown; readonly issues?: undefined }
+    | { readonly issues: ReadonlyArray<unknown> };
+
+  /** `this` inside an {@link EqualityTester}. */
+  export interface TesterContext {
+    /** Deep equality, testers included — for a tester comparing what it holds. */
+    equals(a: unknown, b: unknown, testers?: EqualityTester[]): boolean;
+  }
+
+  /** Whether `a` equals `b`, or `undefined` for a pair it does not know. */
+  export type EqualityTester = (
+    this: TesterContext,
+    a: unknown,
+    b: unknown,
+    testers: EqualityTester[],
+  ) => boolean | undefined;
+
+  /** The formatting options a {@link SnapshotSerializer} is given. */
+  export interface SnapshotSerializerConfig {
+    indent: string;
+    [option: string]: unknown;
+  }
+
+  /** Prints a child value, at `indentation` when it starts a line of its own. */
+  export type SnapshotPrinter = (
+    value: unknown,
+    config: SnapshotSerializerConfig,
+    indentation: string,
+    depth: number,
+    refs: unknown[],
+  ) => string;
+
+  /** How a snapshot prints the values `test` accepts, in pretty-format's shape. */
+  export type SnapshotSerializer =
+    | {
+        test(value: any): boolean;
+        serialize(
+          value: any,
+          config: SnapshotSerializerConfig,
+          indentation: string,
+          depth: number,
+          refs: unknown[],
+          printer: SnapshotPrinter,
+        ): string;
+      }
+    | {
+        test(value: any): boolean;
+        print(value: any, serialize: (value: unknown) => string, indent: (text: string) => string): string;
+      };
+
   export interface MockRecord<A extends unknown[], R> {
     /** The arguments of every call, in order. */
     calls: A[];
     /** What each call did — returned a value, or threw one. */
     results: Array<{ type: "return"; value: R } | { type: "throw"; value: unknown }>;
+    /**
+     * What each call's returned promise came to: `"incomplete"` until it
+     * settles. A value that is not a promise is `"fulfilled"` at once, and a
+     * throw is `"rejected"`.
+     */
+    settledResults: Array<
+      | { type: "fulfilled"; value: Awaited<R> }
+      | { type: "rejected"; value: unknown }
+      | { type: "incomplete"; value: undefined }
+    >;
+    /** `this` for each call — `undefined` for one made with `new`. */
+    contexts: unknown[];
+    /** Each call's place among the calls to every mock in the file, from 1. */
+    invocationCallOrder: number[];
     /** `this` for each call made with `new`. */
     instances: unknown[];
     /** The arguments of the most recent call, or `undefined`. */

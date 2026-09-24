@@ -3925,12 +3925,14 @@ mismatched `Promise`; `await` them.
 | Matcher | |
 | --- | --- |
 | `toBe(v)` | `Object.is` — identity, and `NaN` equals `NaN`. |
-| `toEqual(v)` / `toStrictEqual(v)` | Structural, the `assertEquals` walk. This runner draws no stricter distinction. |
+| `toEqual(v)` | Structural, the `assertEquals` walk. A key set to `undefined` counts as absent, and a class instance equals a plain object with the same fields. |
+| `toStrictEqual(v)` | `toEqual`, and also: a key set to `undefined` is not a key left out, a hole in an array is not an `undefined`, and the two values have the same prototype. |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test. `name` is optional; unnamed calls count from one. |
 | `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory. |
 | `toMatchInlineSnapshot(propertyMatchers?, snapshot?)` | Matches the snapshot written in the call. With none yet, a local run writes it into the source file; `--ci` fails instead. |
 | `toThrowErrorMatchingInlineSnapshot(snapshot?)` | Calls the function and matches the thrown error against the snapshot written in the call. |
 | `toBeTruthy()` / `toBeFalsy()` / `toBeNull()` / `toBeUndefined()` / `toBeDefined()` / `toBeNaN()` | |
+| `toBeNullable()` | `null` or `undefined`. |
 | `toBeInstanceOf(C)` / `toBeTypeOf(t)` | |
 | `toContain(v)` / `toContainEqual(v)` | A member, a substring, or a `Set`/`Map` key — by identity, then structurally. |
 | `toHaveLength(n)` / `toHaveProperty(path, v?)` | `toHaveProperty("a.b", 1)`. |
@@ -3942,9 +3944,12 @@ mismatched `Promise`; `await` them.
 | `toThrow(want?)` / `toThrowError(want?)` | Calls the function; `want` is the expectation `assertThrows` takes. |
 | `toHaveBeenCalled()` / `toHaveBeenCalledTimes(n)` / `toHaveBeenCalledOnce()` / `toHaveBeenCalledWith(...)` | Needs a mock; anything else is a `TypeError` naming the matcher. |
 | `toHaveBeenLastCalledWith(...)` / `toHaveBeenNthCalledWith(n, ...)` | 1-based. |
+| `toHaveBeenCalledExactlyOnceWith(...)` | Called once, with these arguments. |
+| `toHaveBeenCalledBefore(other, requireCall = true)` / `toHaveBeenCalledAfter(other, requireCall = true)` | Compares each mock's first call. A mock never called fails, unless `requireCall` is `false`; `other` must be a mock. |
 | `toHaveBeenExhausted()` | Needs a `mock.when` chain: every answer used. A chain with no answers never is. |
 | `toHaveReturned()` / `toHaveReturnedTimes(n)` / `toHaveReturnedWith(v)` | Returned **without throwing**. |
 | `toHaveLastReturnedWith(v)` / `toHaveNthReturnedWith(n, v)` | |
+| `toHaveResolved()` / `toHaveResolvedTimes(n)` / `toHaveResolvedWith(v)` / `toHaveLastResolvedWith(v)` / `toHaveNthResolvedWith(n, v)` | What returned promises resolved to. A promise counts once it settles, so await the call first; a return that is not a promise counts at once. |
 
 The shorter jest spellings — `toBeCalled`, `toBeCalledTimes`, `toBeCalledWith`,
 `lastCalledWith`, `nthCalledWith`, `toReturn`, `toReturnTimes`, `toReturnWith`,
@@ -3955,7 +3960,8 @@ than variants of them.
 `undefined`, `bigint`, `NaN` and `-0`), arrays and plain objects, `Date`,
 `RegExp`, `Map`, `Set`, byte buffers/views, `Error`, shared references and
 cycles. Functions, symbols, promises, weak collections, getters, class
-instances and host objects throw instead of producing an ambiguous snapshot.
+instances and host objects throw instead of producing an ambiguous snapshot,
+unless a serializer added with `expect.addSnapshotSerializer` prints them.
 It is not negatable and must run within a test.
 
 Pass an object of property matchers to `toMatchSnapshot` to mask volatile
@@ -3972,9 +3978,18 @@ wherever a value goes — including several levels inside an expected object,
 which is the case that cannot be written as an assertion of its own:
 `expect.anything()`, `expect.any(C)`, `expect.stringContaining(s)`,
 `expect.stringMatching(s|re)`, `expect.arrayContaining(xs)`,
-`expect.objectContaining(o)`, `expect.closeTo(n, digits?)`. `expect.not`
-holds the inverted `stringContaining`, `stringMatching`, `arrayContaining` and
-`objectContaining`.
+`expect.objectContaining(o)`, `expect.closeTo(n, digits?)`,
+`expect.arrayOf(item)` (an array whose every element equals `item`), and
+`expect.schemaMatching(schema)` (a value a [Standard
+Schema](https://standardschema.dev) such as Zod or Valibot accepts; a schema
+that validates asynchronously throws a `TypeError`). `expect.not` holds the
+inverted `stringContaining`, `stringMatching`, `arrayContaining`,
+`objectContaining`, `arrayOf` and `schemaMatching`.
+
+A mock's record also has `mock.settledResults` (`{ type: "fulfilled" |
+"rejected" | "incomplete", value }` per call), `mock.contexts` (`this` per
+call) and `mock.invocationCallOrder` (each call's place among calls to every
+mock in the file, from 1).
 
 ```js
 expect(row).toEqual({ id: expect.any(Number), name: expect.stringContaining("ada") });
@@ -4034,6 +4049,28 @@ the file.
 In TypeScript, declare added matchers by augmenting `Matchers` (and
 `AsymmetricMatchers` for the asymmetric form) in `"runtime:test"`.
 
+### `expect.addEqualityTesters` and `expect.addSnapshotSerializer`
+
+`expect.addEqualityTesters(testers)` changes how `toEqual`, `toStrictEqual`,
+`toContainEqual`, `toHaveBeenCalledWith` and every other deep comparison decide
+a pair. Each tester is called as `tester(a, b, testers)` with `this.equals(a, b)`
+for comparing what the pair holds, and returns `true`, `false`, or `undefined`
+to pass the pair on. Testers run after asymmetric matchers and before the
+built-in comparison, in the order added. They last until the file ends.
+
+`expect.addSnapshotSerializer(serializer)` prints the values
+`serializer.test(value)` accepts, in every snapshot for the rest of the file.
+The newest serializer is tried first, before the built-in printing, so it can
+print a class instance a snapshot otherwise refuses. It takes pretty-format's
+shape: `serialize(value, config, indentation, depth, refs, printer)`, where
+`printer(child, config, indentation, depth, refs)` prints a child through the
+same serializers, or the older `print(value, serialize, indent)`. `config` has
+`indent` (two spaces) and pretty-format's other option names; snapshots are
+not coloured.
+
+A `TypeError` is thrown for a tester that is not a function, or a serializer
+without `test` and `serialize` or `print`.
+
 ### Counting and soft assertions
 
 | | |
@@ -4042,6 +4079,7 @@ In TypeScript, declare added matchers by augmenting `Matchers` (and
 | `expect.hasAssertions()` | The running test fails unless at least one ran. |
 | `expect.soft(value)` | A failed matcher is recorded and the test continues. The test fails at the end, listing every soft failure. |
 | `expect.unreachable(message?)` | Fails where it is reached. |
+| `expect.fail(message?)` | Fails the test here. |
 
 Every matcher call counts as one assertion, as do `assert`, `assertEquals`,
 `assertThrows`, `assertRejects` and `assertSnapshot`.

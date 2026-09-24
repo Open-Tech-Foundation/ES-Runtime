@@ -25,6 +25,11 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Changed
+- **`toStrictEqual` is strict.** It was the same comparison as `toEqual`; it
+  now also fails on a key set to `undefined` against a missing one, a hole in
+  an array against an `undefined`, and a class instance against a plain object
+  with the same fields, as in Jest and Vitest. A test that relied on the looser
+  check fails and should use `toEqual`.
 - **Every `esdev create` template is a hello world.** Each writes the smallest
   project that runs, builds and tests: a `hello(name)` function, a test for it
   using `runtime:test`, and an entry that shows the greeting. What each
@@ -94,6 +99,15 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **More matchers**: `toHaveBeenCalledBefore`, `toHaveBeenCalledAfter`,
+  `toHaveBeenCalledExactlyOnceWith`, `toHaveResolved`, `toHaveResolvedTimes`,
+  `toHaveResolvedWith`, `toHaveLastResolvedWith`, `toHaveNthResolvedWith` and
+  `toBeNullable`; `expect.arrayOf`, `expect.schemaMatching` (any Standard
+  Schema) and `expect.fail`. A mock's record gains `settledResults`, `contexts`
+  and `invocationCallOrder`.
+- **`expect.addEqualityTesters` and `expect.addSnapshotSerializer`**, in the
+  shapes Jest and Vitest use. A serializer lets a snapshot print a class
+  instance (DECISIONS D104).
 - **`clock.freeze()` fakes all of time**: `performance.now`, `Temporal.Now`,
   `Intl.DateTimeFormat`'s "now", and — where the realm has them —
   `setImmediate`, `requestAnimationFrame` and `requestIdleCallback`, beside the
