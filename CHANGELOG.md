@@ -57,6 +57,11 @@ namespace) is unstable and may change between minor releases until the API freez
   real module beside its mock.
 
 ### Changed
+- **A module is its URL, query included.** `import("./m.js?v=2")` evaluates
+  the file afresh instead of returning the module loaded for `./m.js`, as in a
+  browser, Node, Deno and Bun; one query imported twice is still one module, and
+  `import.meta.url` carries it. A dev server re-reads a changed file this way
+  (DECISIONS D126).
 
 - **A new durable worker is opened in one commit.** Its tables, its id and its
   collections were a commit each — up to eight disk syncs before its first call

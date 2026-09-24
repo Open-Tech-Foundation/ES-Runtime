@@ -365,6 +365,18 @@ impl BundlerStyleLoader {
     /// Empty for anything this must not guess at — a bare name, a URL, a
     /// specifier that already carries an extension this runtime loads.
     fn candidates(specifier: &str) -> Vec<String> {
+        // A query or fragment belongs to the module, not the file: each
+        // spelling is tried on the path, with it put back after (a module is
+        // its URL, query included).
+        let split = specifier.find(['?', '#']).unwrap_or(specifier.len());
+        let (path, suffix) = specifier.split_at(split);
+        Self::path_candidates(path)
+            .into_iter()
+            .map(|candidate| format!("{candidate}{suffix}"))
+            .collect()
+    }
+
+    fn path_candidates(specifier: &str) -> Vec<String> {
         const SOURCE: &[&str] = &["ts", "tsx", "mts", "js", "jsx", "mjs"];
         const TYPESCRIPT: &[&str] = &["ts", "tsx", "mts"];
 
@@ -1291,6 +1303,19 @@ mod bundler_style {
         assert!(Loader::candidates("./util.tsx").is_empty());
         // A name with a dot in it is a name, not an extension to strip.
         assert!(Loader::candidates("./v1.2/thing.css").is_empty());
+    }
+
+    /// A query belongs to the module, not the file: the spellings are tried on
+    /// the path, and the query is put back on each.
+    #[test]
+    fn a_query_is_kept_through_the_spellings() {
+        let tried = Loader::candidates("./util?v=2");
+        assert_eq!(tried.first().map(String::as_str), Some("./util.ts?v=2"));
+        assert!(tried.contains(&"./util/index.ts?v=2".to_string()));
+        assert_eq!(
+            Loader::candidates("./util.js?v=2#x"),
+            vec!["./util.ts?v=2#x", "./util.tsx?v=2#x", "./util.mts?v=2#x"]
+        );
     }
 
     /// An absolute path is as relative as a relative one, for this purpose.

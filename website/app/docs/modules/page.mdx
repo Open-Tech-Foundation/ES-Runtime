@@ -45,6 +45,24 @@ const { default: plugin } = await import("./plugins/auth.js");
 await plugin.init();
 ```
 
+## A module is its URL
+
+A module is identified by its URL, query and fragment included, as in a browser
+and in Node, Deno and Bun. The same URL imported twice, statically or
+dynamically, is one module; a different query is a different module, evaluated
+afresh from what is on disk:
+
+```js
+const a = await import("./config.js?v=1");
+const b = await import("./config.js?v=1");   // a === b: one module
+const c = await import("./config.js?v=2");   // a new one, read from disk now
+```
+
+That is how a dev server re-reads a file that changed: it imports it under a new
+query. Every version stays in memory for the life of the run, as it does
+everywhere else, so it is a tool for development rather than a cache to cycle
+in production. `import.meta.url` carries the query.
+
 ## import.meta
 
 ```js

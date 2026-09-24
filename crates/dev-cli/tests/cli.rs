@@ -1241,6 +1241,32 @@ fn build_prints_what_the_bundler_warns_about() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A dev server re-reads a file that changed by importing it under a new
+/// query, as it would in a browser or Node: the module is its URL, so the new
+/// query evaluates what is on disk now.
+#[test]
+fn a_changed_file_is_read_afresh_under_a_new_query() {
+    let dir = build_dir("b_query_fresh");
+    write_in(
+        &dir,
+        "server.ts",
+        "import { write } from 'runtime:fs';\n\
+         await write('./data.ts', 'export default 1 as number;');\n\
+         const one = (await import('./data?v=1')).default;\n\
+         await write('./data.ts', 'export default 2 as number;');\n\
+         const two = (await import('./data?v=2')).default;\n\
+         const same = (await import('./data?v=1')).default;\n\
+         console.log(one, two, same);\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("server.ts")
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "1 2 1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_commonjs_dependency_is_converted_rather_than_refused() {
     let dir = build_dir("b_cjs");

@@ -661,6 +661,20 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D126 — A module is its URL, query included · *Proposed (2026-09-25)*
+
+**Context:** `import("./m.js?v=2")` returned the module already loaded for `./m.js`. The loader canonicalizes a path for the root jail and the import policy and rebuilt the id from the canonical path, which dropped the query, and the realm's module map is keyed by that id. No decision chose this; it fell out of canonicalization. The HTML module map is keyed by URL, and Node, Deno and Bun key theirs the same way, so `?v=2` means a fresh evaluation there. Web-App-Framework's dev server, which reads a project's `otfw.config.js` and each docs `_meta.js` again when they change, therefore bundled every version to a new file path to get a new module (its own comment: "the runtime's ESM cache is keyed by file path and ignores a `?v=` query"), and that workaround raced: two concurrent reads of one file cleared each other's output directory, and a sidebar fell back to its default order at random.
+
+**Decision (maintainer sign-off pending):**
+
+- **The query and fragment stay on the module id.** The path is still canonicalized for the root check and the policy; the query is put back on the canonical form, so two spellings of one file with one query are one module, and `import.meta.url` carries it. Both `esrun` and `esdev`, since this is the loader both use: it is the specified behaviour, and a program should not mean one thing in one binary.
+- **`esdev`'s bundler-style probing keeps it too.** `./util?v=2` is tried as `./util.ts?v=2`: the spellings are the path's, and the query is the module's.
+- **Rejected: a cache-busting API of the runtime's own** (`runtime:module` with an `invalidate()`), which would be a second way to say what the URL already says and would not be portable. **Rejected: re-evaluating in place**, which would change a module other modules already imported, under them.
+
+**Consequences:** a dev server re-reads a changed file with `import(url + "?v=" + version)` — no bundling, no scratch files, nothing two callers can race over. Every version stays in memory for the run, as everywhere else. `mock.module` replaces the URL it resolves, so a mock of `./m.js` does not apply to `./m.js?v=2`, which is a different module, as it would be to the page. Verified by a loader unit test (query kept, two spellings agree, `import.meta.resolve` and `import` agree, the file still loads), a probing unit test, an `esrun` end-to-end test over static and dynamic imports, and an `esdev` test re-reading a changed file under a new query. Documented per D27 (site `docs/modules`, `CHANGELOG`).
+
+---
+
 ### D125 — One resolved settings state per invocation · *Proposed (2026-09-24)* · *amends D85, D124*
 
 **Context:** `esdev.json` was read in five places, and each command combined it with its own flags in its own way. `esdev build` kept the raw `Project` beside three flag fields and merged at each use site. `esdev test` copied chosen file fields into its config when a flag was unset, then re-serialized about 25 of them as flags for every child, which re-read the file. `esdev start` wrote its flags into the loaded `Project`. `esdev <file>` read none of it, and the alias support added by D124 read the file a sixth time on its own. The run-time wiring (source transform, loader hooks, plugins) was assembled by hand in six separate places. Every bug found in one audit had the same shape, a setting present in one path and absent from another: `--sourcemap`, `--alias`, `--format`, `--no-types` and `--dts-bundle` accepted and ignored by a project build; `esdev <file>` ignoring the project's `jsx` and `plugins`; a `"lib": true` target given the project's `alias`, which `--lib` refuses; the test runner ignoring plugins until D123's week.

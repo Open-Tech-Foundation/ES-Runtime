@@ -39,6 +39,39 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// A module is its URL, query included, as in a browser and every other
+/// runtime: `?v=2` evaluates the file afresh, while one query imported twice,
+/// statically or not, is one module.
+#[test]
+fn a_query_makes_a_module_of_its_own() {
+    let dir = std::env::temp_dir().join(format!("esrun-query-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("m.js"),
+        "export const n = Math.random();\nexport const url = import.meta.url;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.js"),
+        "import { n as s1 } from './m.js?v=1';\n\
+         const a = await import('./m.js?v=1');\n\
+         const b = await import('./m.js?v=2');\n\
+         const c = await import('./m.js');\n\
+         console.log(s1 === a.n, a.n === b.n, a.n === c.n, a.url.endsWith('m.js?v=1'));\n",
+    )
+    .unwrap();
+    // Run from its own directory: the sandbox is the working directory.
+    let out = esrun()
+        .current_dir(&dir)
+        .arg("main.js")
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true false false true");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn runs_a_module_with_imports_meta_and_tla() {
     let out = run_file("main.mjs");
