@@ -468,6 +468,7 @@ class State {
   #chain = { tail: Promise.resolve() };
   #txChain = { tail: Promise.resolve() };
   #tx = false;
+  #txWrites = []; // the writes the open transaction has started, awaited or not
 
   constructor(db, { rows, alarm, attempt, index, collections, remote = false }) {
     this.#db = db;
@@ -733,28 +734,39 @@ class State {
     this.#open();
     return this.run(async () => {
       this.#tx = true;
+      this.#txWrites = [];
       try {
         return await this.#db.transaction(async () => {
           const value = await work();
           // Anything `set` left behind goes in before the commit, so a
           // transaction really does cover both halves of this worker's storage.
           await this.#flushWithin();
+          // And so does every write `work` started without awaiting it. Those
+          // are statements still queued on this connection: committing past
+          // them would run them after the COMMIT — outside the transaction,
+          // and after the gate had let the call's result go. One that failed
+          // rolls the whole transaction back, as an awaited one would have.
+          await Promise.all(this.#txWrites);
           return value;
         });
       } finally {
         this.#tx = false;
+        this.#txWrites = [];
       }
     });
   }
 
   // The dirty keys, written on the connection the transaction is already
-  // holding. Not a flush: no queue, no scheduling, and no promise of its own.
+  // holding. Not a flush: no queue and no scheduling. The transaction keeps the
+  // promise, so it cannot commit before the write has happened.
   #flushWithin() {
     const keys = [...this.#dirty];
     this.#dirty.clear();
     if (keys.length === 0) return Promise.resolve();
     const { puts, gone } = this.#pending(keys);
-    return retryBusy(() => this.run(() => this.#commit(puts, gone)));
+    const written = handled(retryBusy(() => this.run(() => this.#commit(puts, gone))));
+    this.#txWrites.push(written);
+    return written;
   }
 
   // The catalog is written *before* the worker's own file and again after, and
@@ -1552,9 +1564,15 @@ class LiveWorker {
     return this.enqueue(() => this.#invoke("call", { method, args }));
   }
 
-  /** Runs this worker's `alarm()`, wherever its code lives. */
-  fireAlarm() {
-    return this.enqueue(() => this.#invoke("alarm", {}));
+  /**
+   * Runs `body` as one entry in this worker's mailbox, handing it the way to
+   * call `alarm()` wherever the code lives. The scheduler's whole sequence —
+   * clear the alarm, run the handler, record a retry — is that one entry, so
+   * the worker is busy for all of it: an idle sweep cannot close it halfway,
+   * and no call can interleave with it.
+   */
+  alarmTurn(body) {
+    return this.enqueue(() => body(() => this.#invoke("alarm", {})));
   }
 
   /**
@@ -1803,27 +1821,34 @@ async function materialize(cls, id) {
     const store = await open(path);
     let worker;
     try {
-      for (const ddl of WORKER_SCHEMA) await retryBusy(() => store.execute(ddl));
-      const stored = await one(store, sql`SELECT value FROM _meta WHERE key = 'id'`);
-      if (stored === null) {
-        await retryBusy(() =>
-          store.execute(sql`INSERT INTO _meta (key, value) VALUES ('id', ${id})`),
-        );
-      } else if (stored.value !== id) {
-        fail(
-          DurableErrorCode.IdCollision,
-          `${JSON.stringify(id)} and ${JSON.stringify(stored.value)} both hash to ${file}`,
-        );
-      }
-      const rows = await (await store.query("SELECT key, value, codec FROM _state")).toArray();
-      const meta = new Map(
-        (await (await store.query("SELECT key, value FROM _meta")).toArray()).map((r) => {
-          const m = r.toObject();
-          return [m.key, m.value];
+      // Opening a worker for the first time is its tables, its id and its
+      // collections — one commit, not one per statement. On a disk where a
+      // commit is an fsync, that is most of what a new worker costs.
+      let rows;
+      let meta;
+      await retryBusy(() =>
+        store.transaction(async () => {
+          for (const ddl of WORKER_SCHEMA) await store.execute(ddl);
+          const stored = await one(store, sql`SELECT value FROM _meta WHERE key = 'id'`);
+          if (stored === null) {
+            await store.execute(sql`INSERT INTO _meta (key, value) VALUES ('id', ${id})`);
+          } else if (stored.value !== id) {
+            fail(
+              DurableErrorCode.IdCollision,
+              `${JSON.stringify(id)} and ${JSON.stringify(stored.value)} both hash to ${file}`,
+            );
+          }
+          rows = await (await store.query("SELECT key, value, codec FROM _state")).toArray();
+          meta = new Map(
+            (await (await store.query("SELECT key, value FROM _meta")).toArray()).map((r) => {
+              const m = r.toObject();
+              return [m.key, m.value];
+            }),
+          );
+          await ensureCollections(store, collections, meta.get("schema"));
         }),
       );
       const alarm = meta.has("alarm") ? Number(meta.get("alarm")) : null;
-      await ensureCollections(store, collections, meta.get("schema"));
       const state = new State(store, {
         rows: rows.map((r) => r.toObject()),
         alarm,
@@ -3154,45 +3179,50 @@ async function fire(state, cls, id) {
   try {
     await run(state, worker);
   } catch (e) {
+    // A worker that was closing when its turn came has not been touched: the
+    // alarm is still set and still due, and the next sweep opens it afresh.
+    if (e?.code === DurableErrorCode.Shutdown && !shuttingDown) return;
     report(state, e, `the alarm on ${describe(cls, id)} could not be run`);
   }
 }
 
-async function run(state, worker) {
-  const at = worker.state.alarm.get();
-  if (at === null || at.getTime() > Date.now()) {
-    // The catalog said due and the worker's own file disagrees. The file is the
-    // truth — this is the crash window the two-step write leaves — so the index
-    // is corrected and nothing runs.
-    await indexAlarm(storageName(worker.cls), worker.id, at === null ? null : at.getTime(), false);
-    return;
-  }
-  // Cleared before the handler runs, so an `alarm()` that sets the next one is
-  // the natural way to repeat, and a handler that sets nothing is not woken
-  // again. A failure puts one back.
-  await worker.state.alarm.delete();
-  try {
-    await worker.fireAlarm();
-    if (worker.state.alarmAttempt !== 0) await worker.state.setAlarmAttempt(0);
-  } catch (e) {
-    const attempt = worker.state.alarmAttempt + 1;
-    if (attempt > config.alarmRetries) {
-      await worker.state.setAlarmAttempt(0);
-      report(
-        state,
-        e,
-        `the alarm on ${describe(worker.cls, worker.id)} failed ${attempt} times and was given up on`,
-      );
+function run(state, worker) {
+  return worker.alarmTurn(async (invokeAlarm) => {
+    const at = worker.state.alarm.get();
+    if (at === null || at.getTime() > Date.now()) {
+      // The catalog said due and the worker's own file disagrees. The file is
+      // the truth — this is the crash window the two-step write leaves — so the
+      // index is corrected and nothing runs.
+      await indexAlarm(storageName(worker.cls), worker.id, at === null ? null : at.getTime(), false);
       return;
     }
-    await worker.state.setAlarmAttempt(attempt);
-    // Unless the handler scheduled the next one itself on its way out, in which
-    // case that is the time it asked for and a retry would overwrite it.
-    if (worker.state.alarm.get() === null) {
-      await worker.state.alarm.set(Date.now() + backoff(attempt));
-      worker.alarmChanged();
+    // Cleared before the handler runs, so an `alarm()` that sets the next one
+    // is the natural way to repeat, and a handler that sets nothing is not woken
+    // again. A failure puts one back.
+    await worker.state.alarm.delete();
+    try {
+      await invokeAlarm();
+      if (worker.state.alarmAttempt !== 0) await worker.state.setAlarmAttempt(0);
+    } catch (e) {
+      const attempt = worker.state.alarmAttempt + 1;
+      if (attempt > config.alarmRetries) {
+        await worker.state.setAlarmAttempt(0);
+        report(
+          state,
+          e,
+          `the alarm on ${describe(worker.cls, worker.id)} failed ${attempt} times and was given up on`,
+        );
+        return;
+      }
+      await worker.state.setAlarmAttempt(attempt);
+      // Unless the handler scheduled the next one itself on its way out, in
+      // which case that is the time it asked for and a retry would overwrite it.
+      if (worker.state.alarm.get() === null) {
+        await worker.state.alarm.set(Date.now() + backoff(attempt));
+        worker.alarmChanged();
+      }
     }
-  }
+  });
 }
 
 // 1s, 2s, 4s … capped at five minutes. Deliberately not configurable: the

@@ -56,8 +56,24 @@ namespace) is unstable and may change between minor releases until the API freez
   same file can load as two modules. `esdev`'s `mock.module` uses it to load a
   real module beside its mock.
 
+### Changed
+
+- **A new durable worker is opened in one commit.** Its tables, its id and its
+  collections were a commit each — up to eight disk syncs before its first call
+  ran. On a spinning disk the first call on a new worker drops from ~99 ms to
+  ~68 ms (`bench/durable-workers.js`).
+
 ### Fixed
 
+- **A `set` a durable-worker transaction did not await could run after its
+  COMMIT** — outside the transaction, after the call had returned, and on a
+  connection the engine then panicked over (`end_write_tx called while write
+  lock not held`). The commit now waits for every write the transaction
+  started, and one that fails rolls it back.
+- **A durable worker could be closed halfway through its alarm**, losing the
+  alarm: the scheduler cleared it outside the worker's mailbox, so an eviction
+  made by other traffic could close the worker in between. Clearing, running
+  and retrying an alarm are now one mailbox entry.
 - **`configure({ shards })` in `runtime:workers` no longer hangs the first
   call.** The option was accepted before the shard side of the protocol existed,
   so a sharded worker's first call never returned.

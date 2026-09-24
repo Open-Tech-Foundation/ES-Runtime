@@ -724,6 +724,57 @@ fn a_transaction_covers_the_keys_and_the_collections_together() {
     assert_eq!(ok(&out).trim(), "committed no\n1 true false");
 }
 
+/// A `set` inside a transaction that the body does not await is still part of
+/// the transaction: the commit waits for it. Committing past it ran the write
+/// after the COMMIT — outside the transaction, after the call had returned —
+/// and overlapping statements panicked the engine. Found by the shop example
+/// under load (`Inventory.commit`).
+#[test]
+fn a_transaction_waits_for_the_writes_it_did_not_await() {
+    let base = dir("collections-unawaited");
+    std::fs::write(
+        base.join("w.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class W extends DurableWorker {
+          static schema = { collections: { rows: {} } };
+          async go(i) {
+            await this.state.transaction(async () => {
+              await this.state.collection("rows").insert({ id: String(i) });
+              this.state.set("a", i);
+              this.state.set("b", i + 1);
+            });
+            return i;
+          }
+          async read() {
+            return [this.state.get("a"), this.state.get("b"), await this.state.collection("rows").count()].join(" ");
+          }
+        }
+    "#,
+    )
+    .expect("write class");
+    let first = run_in(
+        &base,
+        "write.mjs",
+        r#"import { W } from "./w.mjs";
+           import { shutdown } from "runtime:workers";
+           let failed = 0;
+           for (let i = 0; i < 100; i++) { try { await W.get("w").go(i); } catch { failed++; } }
+           console.log("failed", failed);
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "failed 0");
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { W } from "./w.mjs";
+           console.log(await W.get("w").read());"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "99 100 100");
+}
+
 /// Collections and keys share one connection, and a connection is one
 /// conversation. Interleaving them in a single call must not put two statements
 /// on it at once — and everything the call did is durable when it returns.
@@ -943,6 +994,48 @@ fn an_alarm_repeats_only_while_its_handler_asks_to() {
 /// A failing alarm is retried, and when it has failed for the last time it is
 /// *reported* rather than dropped: a scheduled job that fails silently is how a
 /// queue loses work. The retry count is stored, so it survives a restart too.
+/// An alarm runs as one entry in its worker's mailbox — clearing it, running
+/// the handler and recording a retry — so a worker under memory pressure is
+/// never closed halfway through one. It was: the scheduler cleared the alarm
+/// outside the mailbox, the worker looked idle, and an eviction made by
+/// somebody else's call closed its connection mid-alarm. Found by the shop
+/// example under load.
+#[test]
+fn an_alarm_is_not_cut_short_by_an_eviction() {
+    let out = run(
+        "alarm-eviction",
+        r#"
+        import { DurableWorker, configure, startAlarms, shutdown } from "runtime:workers";
+        configure({ maxLive: 2, evictAfter: 1 });
+        class Job extends DurableWorker {
+          async arm() { await this.state.alarm.set(Date.now()); }
+          async alarm() {
+            await new Promise((r) => setTimeout(r, 5));
+            this.state.set("ran", true);
+          }
+          async ran() { return this.state.get("ran") === true; }
+        }
+        class Other extends DurableWorker { async touch() { return 1; } }
+        for (let i = 0; i < 20; i++) await Job.get(`j${i}`).arm();
+        const errors = [];
+        const alarms = startAlarms({ classes: [Job], onError: (e, c) => errors.push(`${c}: ${e.message}`) });
+        // Somebody else's traffic, materializing workers — and so evicting —
+        // while the alarms run.
+        let ran = 0;
+        const deadline = Date.now() + 30_000;
+        for (let n = 0; ran < 20 && Date.now() < deadline; n++) {
+          for (let i = 0; i < 10; i++) await Other.get(`o${(n * 10 + i) % 40}`).touch();
+          ran = 0;
+          for (let i = 0; i < 20; i++) if (await Job.get(`j${i}`).ran()) ran++;
+        }
+        await alarms.stop();
+        console.log(ran, errors.length ? errors[0] : "no errors");
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "20 no errors");
+}
+
 #[test]
 fn a_failing_alarm_is_retried_and_then_reported() {
     let out = run(
