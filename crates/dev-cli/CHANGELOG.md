@@ -104,6 +104,12 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Fixtures with `test.extend`**, in Vitest's builder syntax
+  (`extend(name, options?, fn)` with `onCleanup`) and Playwright's object
+  syntax (`use`), with `test`, `file` and `worker` scopes and `auto`. A test
+  gets the fixtures it destructures. Every test body, `beforeEach` and
+  `afterEach` now receives a context: `task`, `expect`, `skip()`,
+  `onTestFinished` and `onTestFailed` (DECISIONS D112).
 - **`esdev test --detect-async-leaks`** fails a file whose tests leave a timer,
   server, socket or other work pending, naming each and the line of the test's
   code that started it. The file then ends instead of waiting on it until

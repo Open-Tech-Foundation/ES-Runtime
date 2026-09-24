@@ -3882,6 +3882,33 @@ table's header; any other row is passed whole.
 A name that does not vary per row gets its index appended, because six cases
 sharing one identity is a report in which a failure names none of them.
 
+### The test context and `test.extend`
+
+A test's body, and every `beforeEach` and `afterEach`, is called with a
+context: `task` (`{ name }`), `expect`, `skip(note?)` or
+`skip(condition, note?)` (stops the test and reports it skipped),
+`onTestFinished` and `onTestFailed`.
+
+`test.extend` returns a test API (`skip`, `only`, `fails`, `todo`,
+`skipIf`, `runIf`, `each`, `extend`) whose tests also get **fixtures**:
+
+| Form | |
+| --- | --- |
+| `extend(name, value)` | A value. |
+| `extend(name, fn)` | `fn(context, { onCleanup })` returns the value, or a promise of it. `onCleanup(fn)`, once per fixture, registers its teardown. |
+| `extend(name, options, value \| fn)` | …with `{ scope, auto }`. |
+| `extend({ name: value \| fn \| [value \| fn, options] })` | Playwright's syntax: `fn(context, use)` calls `await use(value)`, and what follows is its teardown. |
+
+A test gets the fixtures it destructures from its first parameter, and those
+they destructure in turn, and every `auto: true` fixture. One it does not
+destructure — `(context) => …` — gets them all. `scope` is `"test"` (the
+default: set up for each test, torn down after its `afterEach`, newest first),
+`"file"` (once, torn down when the file's tests are done) or `"worker"`, the
+same as `"file"`. A file-scoped fixture cannot use a test-scoped one that runs
+code, which would be gone by the next test; a plain value is usable from any
+scope. A fixture that needs itself, one that returns without calling `use`,
+and a second `onCleanup` each fail the test that needed it, saying which.
+
 ### `beforeAll` / `afterAll` / `beforeEach` / `afterEach`
 
 | Function | |

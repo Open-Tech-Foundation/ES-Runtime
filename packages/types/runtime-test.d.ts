@@ -1,6 +1,21 @@
 declare module "runtime:test" {
+  /**
+   * What a test's body, and its `beforeEach` and `afterEach`, are handed —
+   * with the fixtures a {@link TestAPI.extend | test.extend} test names.
+   */
+  export interface TestContext {
+    readonly task: { readonly name: string };
+    readonly expect: typeof expect;
+    /** Stops the test here and reports it skipped. */
+    skip(note?: string): never;
+    /** …only when `condition` holds. */
+    skip(condition: boolean, note?: string): void;
+    readonly onTestFinished: typeof onTestFinished;
+    readonly onTestFailed: typeof onTestFailed;
+  }
+
   /** A test's body. */
-  export type TestBody = () => void | Promise<void>;
+  export type TestBody<Fixtures = {}> = (context: TestContext & Fixtures) => void | Promise<void>;
 
   /**
    * What a single test may ask for: `{ timeout, retry }`, or a bare number of
@@ -18,9 +33,103 @@ declare module "runtime:test" {
       };
 
   /** The ways a test is registered: name, body, and optional options. */
-  export type Register = {
-    (name: string, fn: TestBody, options?: TestOptions): void;
-    (name: string, options: TestOptions, fn: TestBody): void;
+  export type Register<Fixtures = {}> = {
+    (name: string, fn: TestBody<Fixtures>, options?: TestOptions): void;
+    (name: string, options: TestOptions, fn: TestBody<Fixtures>): void;
+  };
+
+  /** How long a fixture lives, and whether every test gets it. */
+  export interface FixtureOptions {
+    /**
+     * `"test"` (the default) sets it up for each test that names it;
+     * `"file"` once for the file. `"worker"` is `"file"` here, where each
+     * file is its own process.
+     */
+    scope?: "test" | "file" | "worker";
+    /** Set up for every test, named or not. */
+    auto?: boolean;
+  }
+
+  /** What a builder fixture's function is handed beside the context. */
+  export interface FixtureHelpers {
+    /** Runs when the fixture's scope ends. Once per fixture. */
+    onCleanup(fn: () => void | Promise<void>): void;
+  }
+
+  /** A builder fixture: its value, or a function returning it. */
+  export type BuilderFixture<Fixtures, V> =
+    | ((context: TestContext & Fixtures, helpers: FixtureHelpers) => V)
+    | V;
+
+  /** An object-syntax fixture: a value, or a function that hands it to `use`. */
+  export type UseFixture<Context, V> =
+    | V
+    | ((context: Context, use: (value: V) => Promise<void>) => void | Promise<void>);
+
+  /** `test`, and what `test.extend` returns: the same API, with fixtures. */
+  export type TestAPI<Fixtures = {}> = Register<Fixtures> & {
+    /**
+     * Registers the case and reports it as **skipped** without running it —
+     * counted in the tally rather than left out of it. The body may be left
+     * out.
+     */
+    skip: Register<Fixtures> & ((name: string) => void);
+    /** Runs this case and skips the rest — the one you are working on. */
+    only: Register<Fixtures>;
+    /** A test known to fail: it passes while it fails, and fails once it passes. */
+    fails: Register<Fixtures> & {
+      each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
+    };
+    /** A name with no body yet, reported as skipped. */
+    todo(name: string, fn?: () => void | Promise<void>): void;
+    /** Registers the case only when the condition is false, and skips it otherwise. */
+    skipIf(condition: unknown): TestFn<Fixtures>;
+    /** The mirror: registers it only when the condition holds. */
+    runIf(condition: unknown): TestFn<Fixtures>;
+    /**
+     * One case per row, named by substituting the row into the name —
+     * `%s`/`%d`/`%i`/`%f`/`%j`/`%o`, `%#` for the index, `$key` for a property.
+     * An array row is spread into the body's parameters.
+     */
+    each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
+    /**
+     * A test with a fixture: a value its tests name in their first parameter,
+     * set up for them and torn down after. The function may return a promise,
+     * and registers its teardown with `onCleanup`. Chain it for more; a later
+     * fixture reaches the earlier ones through its own first parameter.
+     *
+     * ```ts
+     * const dbTest = test
+     *   .extend("db", { scope: "file" }, async ({}, { onCleanup }) => {
+     *     const db = await open();
+     *     onCleanup(() => db.close());
+     *     return db;
+     *   })
+     *   .extend("user", ({ db }) => db.createUser());
+     *
+     * dbTest("reads its user", ({ user }) => expect(user.id).toBeDefined());
+     * ```
+     */
+    extend<K extends string, V>(
+      name: K,
+      fixture: BuilderFixture<Fixtures, V>,
+    ): TestAPI<Fixtures & { [P in K]: Awaited<V> }>;
+    extend<K extends string, V>(
+      name: K,
+      options: FixtureOptions,
+      fixture: BuilderFixture<Fixtures, V>,
+    ): TestAPI<Fixtures & { [P in K]: Awaited<V> }>;
+    /**
+     * Playwright's object syntax: each fixture a value, a function that hands
+     * its value to `use` and tears down after `use` returns, or
+     * `[fixture, options]`. Name the types, which `use` cannot infer:
+     * `test.extend<{ page: Page }>({ page: async ({}, use) => … })`.
+     */
+    extend<T extends object>(fixtures: {
+      [P in keyof T]:
+        | UseFixture<TestContext & Fixtures & T, T[P]>
+        | [UseFixture<TestContext & Fixtures & T, T[P]>, FixtureOptions];
+    }): TestAPI<Fixtures & T>;
   };
 
   /**
@@ -43,59 +152,10 @@ declare module "runtime:test" {
    * finished" — rather than being left out of a green run, and the cases behind
    * it are reported as never having started.
    */
-  export const test: Register & {
-    /**
-     * Registers the case and reports it as **skipped** without running it —
-     * counted in the tally rather than left out of it, because a green run
-     * that quietly ran fewer tests than it printed is the failure this runner
-     * is arranged against. The body may be left out.
-     */
-    skip: Register & ((name: string) => void);
-    /**
-     * Runs this case and skips the rest — the one you are working on. The
-     * cases held back are counted and named in the report, so a `.only` left
-     * in a commit is visible rather than being a suite that got faster.
-     */
-    only: Register;
-    /**
-     * A test that is known to fail. It passes while it fails, and fails once
-     * it passes, so a fixed bug is noticed.
-     */
-    fails: Register & {
-      each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
-    };
-    /**
-     * A name with no body yet. Reported as **skipped**, never silently absent
-     * — a to-do that vanished from the tally is the one missing case nobody
-     * notices.
-     */
-    todo(name: string, fn?: () => void | Promise<void>): void;
-    /** Registers the case only when the condition is false, and skips it otherwise. */
-    skipIf(condition: unknown): TestFn;
-    /** The mirror: registers it only when the condition holds. */
-    runIf(condition: unknown): TestFn;
-    /**
-     * One case per row, named by substituting the row into the name.
-     *
-     * `%s`/`%d`/`%i`/`%f`/`%j`/`%o` take the next value positionally, `%#` is
-     * the row's index, and `$key` takes a named property when the row is an
-     * object. An array row is spread into the body's arguments, so the
-     * parameters read like the table's header. A name that does not vary per
-     * row gets an index appended, because six cases sharing one identity is a
-     * report where a failure names none of them.
-     *
-     * ```ts
-     * test.each([
-     *   [1, 1, 2],
-     *   [2, 3, 5],
-     * ])("adds %d + %d = %d", (a, b, want) => expect(a + b).toBe(want));
-     * ```
-     */
-    each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
-  };
+  export const test: TestAPI;
 
   /** What `test` is, for the conditional forms that hand it back. */
-  export type TestFn = Register & {
+  export type TestFn<Fixtures = {}> = Register<Fixtures> & {
     each: Each<(name: string, fn: (...row: never[]) => void | Promise<void>) => void>;
   };
 
@@ -160,6 +220,9 @@ declare module "runtime:test" {
   /** A lifecycle hook. Several of a kind may be registered; all of them run. */
   export type Hook = () => void | Promise<void>;
 
+  /** `beforeEach` and `afterEach` are handed the test's context. */
+  export type EachHook = (context: TestContext) => void | Promise<void>;
+
   /**
    * Runs once before the first test **of its scope** — the file, or the
    * {@link describe} it is written in. One that throws fails every test in
@@ -180,14 +243,14 @@ declare module "runtime:test" {
    * Runs before every test in scope, outermost group first. One that throws
    * fails that test.
    */
-  export function beforeEach(fn: Hook): void;
+  export function beforeEach(fn: EachHook): void;
 
   /**
    * Runs after every test in scope, innermost group first, including one that
    * failed — it is cleanup, so it runs whatever happened. One that throws fails
    * the test unless the test had already failed.
    */
-  export function afterEach(fn: Hook): void;
+  export function afterEach(fn: EachHook): void;
 
   /** Fails with `message` (or "assertion failed") unless `condition` is truthy. */
   export function assert(condition: unknown, message?: string): asserts condition;

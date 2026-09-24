@@ -99,6 +99,17 @@ test("flaky upstream", { retry: 2 }, async () => { … });
 passes while it fails, and fails once it passes. `test.skip` and `test.only`
 take the same options.
 
+## The test context and `test.extend`
+
+A test's body, and its `beforeEach` and `afterEach`, get a context: `task`,
+`expect`, `skip()`, `onTestFinished` and `onTestFailed`.
+
+`test.extend(name, options?, fixture)` and `test.extend({ ... })` return a
+test API whose tests also get **fixtures**, set up for the tests that
+destructure them and torn down after. `scope` is `"test"`, `"file"` or
+`"worker"` (the same as `"file"`), and `auto: true` sets one up for every test.
+See [Fixtures](/esdev/test/fixtures).
+
 ## describe(name, body)
 
 A group: a name that composes into its tests' — `"db > constraints > rejects a

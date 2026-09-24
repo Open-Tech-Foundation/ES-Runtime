@@ -13728,6 +13728,136 @@ test("starts a server and forgets it", () => {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `test.extend`: fixtures a test names are set up for it and torn down after
+/// its `afterEach`, in both Vitest's builder and Playwright's object syntax;
+/// file-scoped ones once, and torn down when the file's tests are done.
+#[test]
+fn test_fixtures_are_set_up_for_the_tests_that_name_them() {
+    let dir = build_dir("t_fixtures");
+    write_in(&dir, "fx.test.ts", r#"import { afterAll, afterEach, beforeEach, expect, test } from "runtime:test";
+
+const log: string[] = [];
+
+const withDb = test
+  .extend("config", { port: 3000 })
+  .extend("db", { scope: "file" }, async ({ config }, { onCleanup }) => {
+    log.push(`db up on ${config.port}`);
+    onCleanup(() => log.push("db down"));
+    return { rows: [] as number[] };
+  })
+  .extend("user", async ({ db }, { onCleanup }) => {
+    db.rows.push(1);
+    log.push("user up");
+    onCleanup(() => log.push("user down"));
+    return { name: "ada" };
+  });
+
+const withPage = withDb.extend({
+  page: async ({ user }: { user: { name: string } }, use: (v: string) => Promise<void>) => {
+    log.push("page up");
+    await use(`page for ${user.name}`);
+    log.push("page down");
+  },
+  untouched: async ({}, use: (v: number) => Promise<void>) => {
+    log.push("untouched up");
+    await use(1);
+  },
+});
+
+afterEach(() => log.push("afterEach"));
+
+withDb("a fixture is set up for a test that names it", ({ user, config }) => {
+  expect(user.name).toBe("ada");
+  expect(config.port).toBe(3000);
+});
+withDb("a test that names none sets none up", () => {
+  log.push("bare test");
+});
+withPage("object syntax hands its value to use, and tears down after", ({ page, task }) => {
+  expect(page).toBe("page for ada");
+  expect(task.name).toContain("object syntax");
+});
+withDb("a file fixture is set up once", ({ db }) => {
+  expect(db.rows).toEqual([1, 1]);
+});
+test("context.skip stops and skips", ({ skip }) => {
+  skip();
+  throw new Error("unreachable");
+});
+test("context.skip with a false condition runs", ({ skip }) => {
+  skip(false);
+});
+withDb.each([[1], [2]])("each still works with %d", (n) => {
+  expect(typeof n).toBe("number");
+});
+test("the order", () => {
+  expect(log).toEqual([
+    "db up on 3000", "user up", "afterEach", "user down",
+    "bare test", "afterEach",
+    "user up", "page up", "afterEach", "page down", "user down",
+    // Names only the file's db: no user is set up for it.
+    "afterEach",
+    "afterEach", "afterEach", "afterEach", "afterEach",
+  ]);
+});
+afterAll(() => {
+  // afterAll runs before the file's fixtures are torn down.
+  if (log.includes("db down")) throw new Error("db torn down too early");
+});
+"#);
+    write_in(&dir, "teardown.test.js", r#"import { test } from "runtime:test";
+import { write } from "runtime:fs";
+const fileTest = test.extend("shared", { scope: "file" }, ({}, { onCleanup }) => {
+  onCleanup(() => write("torn-down.txt", "yes"));
+  return 1;
+});
+fileTest("uses it", ({ shared }) => { if (shared !== 1) throw new Error("no"); });
+fileTest("uses it again", ({ shared }) => { if (shared !== 1) throw new Error("no"); });
+"#);
+    let out = esdev_in(&dir)
+        .args(["test", "fx", "teardown"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("fx.test.ts\n  8 passed, 0 failed, 1 skipped"), "{text}");
+    assert!(text.contains("teardown.test.js\n  2 passed, 0 failed"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("torn-down.txt")).unwrap_or_default(),
+        "yes",
+        "the file fixture was not torn down"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fixture that cannot be set up says why, in the test that needed it.
+#[test]
+fn test_fixture_mistakes_are_named() {
+    let dir = build_dir("t_fixture_mistakes");
+    write_in(&dir, "bad.test.js", r#"import { expect, test } from "runtime:test";
+const loop = test.extend("a", ({ b }) => b).extend("b", ({ a }) => a);
+loop("a cycle is named", ({ a }) => {});
+const forgot = test.extend({ x: async ({}, use) => {} });
+forgot("use() never called", ({ x }) => {});
+const twice = test.extend("y", ({}, { onCleanup }) => { onCleanup(() => {}); onCleanup(() => {}); });
+twice("onCleanup twice", ({ y }) => {});
+const cross = test.extend("perTest", () => 1).extend("shared", { scope: "file" }, ({ perTest }) => perTest);
+cross("file needs test", ({ shared }) => {});
+"#);
+    let out = esdev_in(&dir).arg("test").output().expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(!out.status.success());
+    for says in [
+        "FAIL a cycle is named\n    Error: fixture a needs itself: a → b → a",
+        "Error: fixture x returned without calling use(value)",
+        "Error: fixture y: onCleanup can be called once; split it into two fixtures",
+        "Error: the file-scoped fixture shared needs perTest, which is set up for each test",
+    ] {
+        assert!(text.contains(says), "{says} in\n{text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

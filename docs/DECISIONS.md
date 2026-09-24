@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D112 — Fixtures with `test.extend`, chosen by what a test destructures · *Accepted (2026-09-24)*
+
+**Context:** Vitest's `test.extend` (builder syntax since 4.1, with `onCleanup`) and Playwright's object syntax (`async ({}, use) => { … await use(value) … }`) are how suites share set-up. Both give a fixture a scope (`test`, `file`, `worker`) and set up only what a test uses, which they read from how the test destructures its first parameter. Here a test body was called with no arguments, so there was no context to carry fixtures.
+
+**Decision:**
+- **Every test, `beforeEach` and `afterEach` is called with a context**: `task`, `expect`, `skip()`, `onTestFinished`, `onTestFailed`, and the fixtures. `skip()` mid-test reports the case skipped, as in Vitest.
+- **Both of Vitest's syntaxes**, on an API that `extend` returns and that has every variant of `test` (`skip`, `only`, `fails`, `todo`, `skipIf`, `runIf`, `each`, `extend`).
+- **What a test gets is read from its first parameter**, as Vitest and Playwright do, and followed through what each fixture destructures, plus `auto` ones. One place differs, for correctness: a test that does not destructure (`(context) => …`) gets every fixture instead of none, since it may reach any of them.
+- **Set up before `beforeEach` and torn down after `afterEach`, newest first**, inside the attempt: a retry or a repeat gets fresh test-scoped fixtures. File-scoped ones are set up at first use and torn down once the file's tests are done, before coverage and leak checks read the file's state.
+- **`worker` is `file`**: a file is a process here.
+- **Scope checks count what runs:** a file-scoped fixture may not use a test-scoped one that runs code, but a plain value is usable from any scope, since it is the same for every test. A cycle, a `use` never called and a second `onCleanup` fail the test that needed the fixture, saying which.
+- Not taken yet: Vitest's `injected` fixtures and `test.override`/`test.scoped`, and the type-safe `test.beforeEach`.
+
+---
+
 ### D111 — `unrefTimer` and `refTimer`: a timer may be let go · *Accepted (2026-09-24)*
 
 **Context:** a timer holds the event loop open, so a heartbeat or periodic-flush `setInterval` keeps a program running for ever, and since D110 fails a test file under `--detect-async-leaks` with no remedy but clearing it. Node gives its timer objects `unref()`/`ref()`/`hasRef()`; Bun the same; Deno, whose `setTimeout` returns a number as the web's does, has `Deno.unrefTimer(id)`/`Deno.refTimer(id)`. Sockets and workers here already have `unref()`.

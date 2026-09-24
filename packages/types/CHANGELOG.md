@@ -15,6 +15,10 @@ itself.
 
 ### Added
 
+- **`test.extend` and the test context** — `TestAPI<Fixtures>`, `TestContext`,
+  `FixtureOptions`, `FixtureHelpers`; `TestBody`, `Register` and `TestFn` take
+  the fixtures as a type parameter, and `beforeEach`/`afterEach` take the
+  context (`EachHook`).
 - **`unrefTimer` and `refTimer`** in `runtime:process`.
 - **`inject`**, with the `ProvidedContext` interface to declare provided keys
   and the `GlobalSetupContext` a global setup's `setup` receives.

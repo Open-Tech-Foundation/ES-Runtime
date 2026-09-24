@@ -1,0 +1,98 @@
+---
+title: Fixtures
+description: Set up what tests need with test.extend, and tear it down after them.
+---
+
+# Fixtures
+
+A fixture is a value a test asks for by name, set up for it and torn down after
+it. `test.extend` adds one to a copy of `test`:
+
+```ts
+// test/db.ts
+import { test } from "runtime:test";
+
+export const dbTest = test
+  .extend("db", { scope: "file" }, async ({}, { onCleanup }) => {
+    const db = await openDatabase();
+    onCleanup(() => db.close());
+    return db;
+  })
+  .extend("user", async ({ db }, { onCleanup }) => {
+    const user = await db.createUser();
+    onCleanup(() => db.deleteUser(user.id));
+    return user;
+  });
+```
+
+```ts
+// src/profile.test.ts
+import { expect } from "runtime:test";
+import { dbTest } from "../test/db.ts";
+
+dbTest("shows the user's name", ({ user }) => {
+  expect(profile(user)).toContain(user.name);
+});
+```
+
+A test gets the fixtures it names in its first parameter, and the fixtures
+those name. The test above sets up `user`, and through it `db`. A test that
+names nothing sets up nothing. TypeScript infers each fixture's type from what
+it returns.
+
+## Setup and teardown
+
+The function returns the fixture's value, or a promise of it. `onCleanup`
+registers what undoes it, once per fixture. A fixture that holds two things is
+clearer as two fixtures.
+
+A test's fixtures are set up before its `beforeEach` hooks, which receive them
+too, and torn down after its `afterEach` hooks, newest first. A fixture that
+cannot be set up fails the test that needed it, with the reason.
+
+## Scopes
+
+| `scope` | |
+| --- | --- |
+| `"test"` | The default. Set up for each test that names it. |
+| `"file"` | Set up once, for the file's first test that names it, and torn down when the file's tests are done. |
+| `"worker"` | The same as `"file"`: each test file runs in a process of its own. |
+
+A file-scoped fixture cannot use a test-scoped one that runs code, since that
+one is gone by the next test. A plain value, such as `extend("config", { port: 3000 })`,
+is the same for every test and can be used from any scope.
+
+`{ auto: true }` sets a fixture up for every test, named or not, for something
+every test should have, such as a clean temporary directory.
+
+## Playwright's syntax
+
+`extend` also takes an object of fixtures, as Playwright and Vitest write them.
+The fixture hands its value to `use`, and whatever follows `use` is its
+teardown:
+
+```ts
+export const pageTest = test.extend<{ page: Page }>({
+  page: async ({}, use) => {
+    const page = await openPage();
+    await use(page);
+    await page.close();
+  },
+});
+```
+
+TypeScript cannot infer a type through `use`, so name the types as shown.
+`[fixture, { scope, auto }]` gives a fixture options in this form.
+
+## The test context
+
+Every test, fixtures or not, is called with a context: `task.name`, `expect`,
+`skip()`, `onTestFinished` and `onTestFailed`. `skip(condition, note?)` stops
+the test and reports it skipped when the condition holds:
+
+```ts
+test("reads the cache", ({ skip }) => {
+  skip(!hasRedis(), "needs a local Redis");
+  // …
+});
+```

@@ -14,6 +14,7 @@
 
 import {
   assertSnapshot,
+  beforeEach,
   clock,
   describe,
   expect,
@@ -265,6 +266,43 @@ test("inject reads what global setup provided", () => {
   setup({ provide() {} });
   port satisfies number;
 });
+
+// --- fixtures -----------------------------------------------------------------
+
+const dbTest = test
+  .extend("config", { port: 3000, host: "localhost" })
+  .extend("db", { scope: "file" }, async ({ config }, { onCleanup }) => {
+    const port: number = config.port;
+    onCleanup(() => {});
+    return { port, rows: [] as number[] };
+  })
+  .extend("user", ({ db }) => ({ id: db.rows.length, name: "ada" }));
+
+dbTest("fixtures arrive typed", ({ user, db, config, task, skip, expect: check }) => {
+  const id: number = user.id;
+  const name: string = task.name;
+  check(db.port).toBe(config.port);
+  skip(id > 1);
+  // @ts-expect-error — a fixture's type is what it returned.
+  const wrong: string = user.id;
+  return void [wrong, name];
+});
+
+// @ts-expect-error — only fixtures that were declared.
+dbTest("unknown fixture", ({ missing }) => missing);
+
+const pageTest = dbTest.extend<{ page: string }>({
+  page: async ({ user }, use) => {
+    await use(`page for ${user.name}`);
+  },
+});
+pageTest("object syntax", ({ page }) => {
+  const text: string = page;
+  return void text;
+});
+pageTest.skip("variants keep the fixtures", ({ page }) => void page);
+
+beforeEach(({ task }) => void task.name);
 
 // --- clock ------------------------------------------------------------------
 

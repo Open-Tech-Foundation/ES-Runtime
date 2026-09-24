@@ -335,7 +335,7 @@ function describe(name, body, mode) {
 // complete: a case that never got to start because an earlier one never settled
 // is a case the host already knows about, and it is reported as a failure
 // rather than silently missing from a green run.
-function enqueue(name, fn, mode, options) {
+function enqueue(name, fn, mode, options, fixtures = null) {
   const skip = mode === "skip" || current.skip;
   if (!skip && typeof fn !== "function") {
     throw new TypeError(`test(${JSON.stringify(String(name))}): needs a function to run`);
@@ -364,7 +364,7 @@ function enqueue(name, fn, mode, options) {
   const only = mode === "only" || scope.only;
   if (only) exclusive = true;
   for (let at = scope; at; at = at.parent) at.left += 1;
-  queue.push({ id, fn, scope, only, options });
+  queue.push({ id, title, fn, scope, only, options, fixtures });
   schedule();
 }
 
@@ -397,29 +397,256 @@ function optionsOf(name, value) {
   return { timeout, retry, repeats };
 }
 
-// Registers a test. It runs when the ones before it have finished.
-function test(name, a, b) {
-  const [fn, options] = caseArgs(name, a, b);
-  enqueue(name, fn, undefined, options);
+// --- fixtures ----------------------------------------------------------------
+//
+// `test.extend(...)`: values a test names in its first parameter, set up for
+// it and torn down after, as Vitest and Playwright spell them. Which ones a
+// test needs is read from how it destructures that parameter, so a fixture no
+// test names is never set up.
+
+/// The names a function destructures from its first parameter: a list, or
+/// `null` for "all of them" — a parameter it does not destructure, or a rest
+/// element, may reach any fixture.
+function destructured(fn) {
+  const source = Function.prototype.toString.call(fn);
+  const open = source.indexOf("(");
+  const arrow = source.indexOf("=>");
+  // `x => …`: one parameter, not destructured.
+  if (open === -1 || (arrow !== -1 && arrow < open)) {
+    return /^\s*(async\s+)?[\w$]+\s*=>/.test(source) ? null : [];
+  }
+  const params = balanced(source, open);
+  if (params === null) return null;
+  const first = topLevel(params.slice(1, -1))[0]?.trim() ?? "";
+  if (first === "") return [];
+  if (!first.startsWith("{")) return null;
+  const inner = balanced(first, 0);
+  if (inner === null) return null;
+  const names = [];
+  for (const entry of topLevel(inner.slice(1, -1))) {
+    const text = entry.trim();
+    if (text === "") continue;
+    if (text.startsWith("...") || text.startsWith("[")) return null;
+    const key = /^(["'])(.*?)\1|^[\w$]+/.exec(text);
+    if (!key) return null;
+    names.push(key[2] ?? key[0]);
+  }
+  return names;
 }
 
-// `test.skip(...)` and `test.only(...)`, and the same pair on `describe`.
-test.skip = (name, a, b) => {
-  const [fn, options] = caseArgs(name, a, b);
-  enqueue(name, fn, "skip", options);
-};
-test.only = (name, a, b) => {
-  const [fn, options] = caseArgs(name, a, b);
-  enqueue(name, fn, "only", options);
-};
+/// The bracketed text starting at `at`, with its brackets — skipping strings,
+/// template literals and comments — or `null` if it does not close.
+function balanced(text, at) {
+  const pairs = { "(": ")", "{": "}", "[": "]" };
+  const stack = [];
+  for (let i = at; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === "\\") i++;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      i = text.indexOf("\n", i);
+      if (i === -1) return null;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      i = text.indexOf("*/", i + 2) + 1;
+      if (i === 0) return null;
+      continue;
+    }
+    if (pairs[c]) stack.push(pairs[c]);
+    else if (c === stack.at(-1)) {
+      stack.pop();
+      if (stack.length === 0) return text.slice(at, i + 1);
+    }
+  }
+  return null;
+}
 
-// A case that is known to fail, and passes for as long as it does. The day it
-// starts passing it fails, saying so — which is the point: a fixed bug whose
-// test is still marked as broken is a regression test nobody is running.
-test.fails = (name, a, b) => {
-  const [fn, options] = caseArgs(name, a, b);
-  enqueue(name, fn, undefined, { ...options, fails: true });
-};
+/// `text` split at its top-level commas.
+function topLevel(text) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === "\\") i++;
+    } else if ("({[".includes(c)) depth++;
+    else if (")}]".includes(c)) depth--;
+    else if (c === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+const FIXTURE_SCOPES = ["test", "file", "worker"];
+
+/// A fixture as `extend` was given it: a value, a function returning the value
+/// (the builder's), or a function handing it to `use` (the object syntax's).
+function fixtureOf(name, value, options, style) {
+  const where = `test.extend(${JSON.stringify(name)})`;
+  const { scope = "test", auto = false } = options ?? {};
+  if (!FIXTURE_SCOPES.includes(scope)) {
+    throw new TypeError(`${where}: scope is "test", "file" or "worker"`);
+  }
+  const kind = typeof value !== "function" ? "value" : style;
+  return {
+    name,
+    kind,
+    value,
+    // A file is a process here, so a worker's lifetime is the file's.
+    scope: scope === "worker" ? "file" : scope,
+    auto: auto === true,
+    needs: kind === "value" ? [] : destructured(value),
+  };
+}
+
+/// Fixtures set up once for the file, by definition, and how to tear each down.
+const fileFixtures = new Map();
+const fileCleanups = [];
+
+/// Sets up what `fn` names — and what those name, and every `auto` fixture —
+/// into `context`, recording test-scoped teardowns in `cleanups`.
+async function setUpFixtures(fixtures, fn, context, cleanups) {
+  const wanted = destructured(fn);
+  const names = [
+    ...(wanted === null ? fixtures.keys() : wanted.filter((name) => fixtures.has(name))),
+    ...[...fixtures.values()].filter((fixture) => fixture.auto).map((fixture) => fixture.name),
+  ];
+  const resolving = [];
+  const resolve = async (name, fromFile) => {
+    if (Object.hasOwn(context, name) && !resolving.includes(name)) return;
+    const fixture = fixtures.get(name);
+    if (!fixture) return;
+    if (resolving.includes(name)) {
+      throw new Error(`fixture ${name} needs itself: ${[...resolving, name].join(" → ")}`);
+    }
+    // A plain value is the same for every test, so any scope may use it.
+    if (fromFile && fixture.scope === "test" && fixture.kind !== "value") {
+      throw new Error(
+        `the file-scoped fixture ${fromFile} needs ${name}, which is set up for each test and gone when the file's next test begins`,
+      );
+    }
+    resolving.push(name);
+    const needs = fixture.needs === null ? [...fixtures.keys()].filter((other) => other !== name) : fixture.needs;
+    for (const need of needs) {
+      await resolve(need, fixture.scope === "file" ? name : fromFile);
+    }
+    resolving.pop();
+    if (fixture.scope === "file") {
+      if (!fileFixtures.has(fixture)) {
+        fileFixtures.set(fixture, setUp(fixture, context, (cleanup) => fileCleanups.push(cleanup)));
+      }
+      context[name] = await fileFixtures.get(fixture);
+    } else {
+      context[name] = await setUp(fixture, context, (cleanup) => cleanups.push(cleanup));
+    }
+  };
+  for (const name of names) await resolve(name, null);
+}
+
+/// One fixture's value, handing `onTeardown` what undoes it.
+async function setUp(fixture, context, onTeardown) {
+  if (fixture.kind === "value") return fixture.value;
+  if (fixture.kind === "builder") {
+    let cleanup = null;
+    const onCleanup = (fn) => {
+      if (typeof fn !== "function") throw new TypeError(`fixture ${fixture.name}: onCleanup needs a function`);
+      if (cleanup !== null) {
+        throw new Error(`fixture ${fixture.name}: onCleanup can be called once; split it into two fixtures`);
+      }
+      cleanup = fn;
+      onTeardown(() => cleanup());
+    };
+    return fixture.value(context, { onCleanup });
+  }
+  // The object syntax: the fixture runs until it hands its value to `use`,
+  // and its remainder, after `use` returns, is its teardown.
+  let provide;
+  let release;
+  const provided = new Promise((resolve) => (provide = resolve));
+  const released = new Promise((resolve) => (release = resolve));
+  let used = false;
+  const running = Promise.resolve(
+    fixture.value(context, (value) => {
+      used = true;
+      provide(value);
+      return released;
+    }),
+  );
+  const value = await Promise.race([
+    provided,
+    running.then(() => {
+      if (!used) throw new Error(`fixture ${fixture.name} returned without calling use(value)`);
+      return provided;
+    }),
+  ]);
+  onTeardown(async () => {
+    release();
+    await running;
+  });
+  return value;
+}
+
+/// The file's fixtures, torn down once its tests are done, newest first.
+async function tearDownFileFixtures() {
+  for (const cleanup of fileCleanups.splice(0).reverse()) {
+    try {
+      await cleanup();
+    } catch (err) {
+      ops.test_finished(ops.test_registered("file fixture teardown"), false, detail(err));
+    }
+  }
+}
+
+/// A test API whose cases get `fixtures`: `test` itself, and each
+/// `test.extend(...)`.
+function testApi(fixtures) {
+  const make = (mode, extra = {}) => (name, a, b) => {
+    const [fn, options] = caseArgs(name, a, b);
+    enqueue(name, fn, mode, { ...options, ...extra }, fixtures);
+  };
+  const api = make(undefined);
+  api.skip = make("skip");
+  api.only = make("only");
+  api.fails = make(undefined, { fails: true });
+  api.todo = (name, fn) => enqueue(name, fn ?? (() => {}), "skip", {}, fixtures);
+  api.skipIf = (condition) => (condition ? api.skip : api);
+  api.runIf = (condition) => (condition ? api : api.skip);
+  api.each = each(api);
+  api.skip.each = each(api.skip);
+  api.only.each = each(api.only);
+  api.todo.each = each(api.todo);
+  api.fails.each = each(api.fails);
+  // `extend(name, options?, fixture)` — the builder — or `extend({ name:
+  // fixture | [fixture, options] })`, the object syntax Playwright uses.
+  api.extend = (first, second, third) => {
+    const next = new Map(fixtures ?? []);
+    if (typeof first === "string") {
+      const [options, value] = third === undefined ? [undefined, second] : [second, third];
+      next.set(first, fixtureOf(first, value, options, "builder"));
+    } else if (first !== null && typeof first === "object") {
+      for (const [name, entry] of Object.entries(first)) {
+        const [value, options] = Array.isArray(entry) ? entry : [entry, undefined];
+        next.set(name, fixtureOf(name, value, options, "use"));
+      }
+    } else {
+      throw new TypeError("test.extend takes a name and a fixture, or an object of fixtures");
+    }
+    return testApi(next);
+  };
+  return api;
+}
+
+// Registers a test. It runs when the ones before it have finished. `test.skip`,
+// `.only`, `.fails` (a case known to fail, which fails the day it passes),
+// `.todo`, `.skipIf`/`.runIf`, `.each` and `.extend` are built in `testApi`.
+const test = testApi(null);
 describe.skip = (name, body) => describe(name, body, "skip");
 describe.only = (name, body) => describe(name, body, "only");
 
@@ -428,15 +655,12 @@ describe.only = (name, body) => describe(name, body, "only");
 // **Counted as skipped, and never silently absent.** The whole runner is
 // arranged so a report says what did not run, and a to-do that vanished from
 // the tally would be the one kind of missing case nobody notices.
-test.todo = (name, fn) => enqueue(name, fn ?? (() => {}), "skip", {});
 describe.todo = (name, body) => describe(name, body ?? (() => {}), "skip");
 
 // `test.skipIf(cond)(...)` / `test.runIf(cond)(...)` — a case that depends on
 // where it is running. A suite that needs a Postgres to be up has to say so
 // somehow, and the alternative is an `if` around the registration, which
 // removes the case from the report entirely rather than reporting it skipped.
-test.skipIf = (condition) => (condition ? test.skip : test);
-test.runIf = (condition) => (condition ? test : test.skip);
 describe.skipIf = (condition) => (condition ? describe.skip : describe);
 describe.runIf = (condition) => (condition ? describe : describe.skip);
 
@@ -495,11 +719,6 @@ function format(name, args, index) {
   return out;
 }
 
-test.each = each(test);
-test.skip.each = each(test.skip);
-test.only.each = each(test.only);
-test.todo.each = each(test.todo);
-test.fails.each = each(test.fails);
 describe.each = each(describe);
 describe.skip.each = each(describe.skip);
 describe.only.each = each(describe.only);
@@ -587,6 +806,8 @@ async function drain() {
     }
   } finally {
     draining = false;
+    // File-scoped fixtures last as long as the file's tests do.
+    await tearDownFileFixtures();
     // Under `--coverage`, the counts while the modules are all still loaded.
     await ops.test_coverage_take?.();
     // Under `--detect-async-leaks`, what the file left running is a failure —
@@ -652,7 +873,7 @@ async function settled(scope) {
   }
 }
 
-async function runCase({ id, fn, scope, options }) {
+async function runCase({ id, title, fn, scope, options, fixtures }) {
   ops.test_running(id);
   await open(scope);
   const failed = broken(scope);
@@ -678,7 +899,13 @@ async function runCase({ id, fn, scope, options }) {
       // snapshot results, and only the last attempt's are the case's.
       if (started) ops.test_running(id);
       started = true;
-      failure = await runAttempt(id, fn, scope, options);
+      failure = await runAttempt(id, fn, scope, options, { title, fixtures });
+      // `context.skip()`: skipped, however far it got.
+      if (failure?.[SKIPPED]) {
+        ops.test_skipped(id, "");
+        await settled(scope);
+        return;
+      }
       if (options.fails) {
         failure =
           failure === null
@@ -698,17 +925,43 @@ async function runCase({ id, fn, scope, options }) {
 }
 
 // One attempt at a case, and what it failed with, or `null`.
-async function runAttempt(id, fn, scope, options) {
+/// Thrown by `context.skip()`: not a failure, and the case is reported skipped.
+const SKIPPED = Symbol("skipped");
+
+/// What a test body, and its `beforeEach` and `afterEach`, are handed.
+function testContext(title) {
+  return {
+    task: { name: title },
+    expect,
+    // `skip()`, or `skip(condition, note?)`: stops the test and reports it
+    // skipped — only when the condition holds, given one.
+    skip(condition, note) {
+      if (typeof condition === "boolean" && !condition) return;
+      throw Object.assign(new Error(typeof condition === "string" ? condition : (note ?? "skipped")), {
+        [SKIPPED]: true,
+      });
+    },
+    onTestFinished,
+    onTestFailed,
+  };
+}
+
+async function runAttempt(id, fn, scope, options, { title = "", fixtures = null } = {}) {
   let failure = null;
   const state = { assertions: 0, expected: null, atLeastOne: false, soft: [], finished: [], failed: [] };
   attempt = state;
+  const context = testContext(title);
+  // Test-scoped fixtures' teardowns, run after `afterEach`, newest first.
+  const cleanups = [];
   try {
     activeCase = id;
     snapshotCounts = new Map();
     pendingRejection = null;
     armRejectionListener();
-    for (const before of around(scope, "beforeEach")) await before();
-    await (options.timeout === undefined ? fn() : within(fn, options.timeout));
+    if (fixtures !== null) await setUpFixtures(fixtures, fn, context, cleanups);
+    for (const before of around(scope, "beforeEach")) await before(context);
+    const body = () => fn(context);
+    await (options.timeout === undefined ? body() : within(body, options.timeout));
     if (state.expected !== null && state.assertions !== state.expected) {
       throw new Error(
         `expected ${state.expected} assertion${state.expected === 1 ? "" : "s"}, and ${state.assertions} ran`,
@@ -731,10 +984,17 @@ async function runAttempt(id, fn, scope, options) {
   await new Promise((resolve) => Reflect.apply(realSetTimeout, globalThis, [resolve, 0]));
   for (const after of around(scope, "afterEach").reverse()) {
     try {
-      await after();
+      await after(context);
     } catch (err) {
       // A cleanup that threw fails the case, unless the case had already
       // failed — the first failure is the one that explains the rest.
+      failure ??= err;
+    }
+  }
+  for (const cleanup of cleanups.reverse()) {
+    try {
+      await cleanup();
+    } catch (err) {
       failure ??= err;
     }
   }
