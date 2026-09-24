@@ -661,6 +661,18 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D109 — `esdev test --inspect` debugs one file at a time · *Accepted (2026-09-24)*
+
+**Context:** a debugger attaches to one process, and each test file is a process (one per file by default). Vitest's guide asks for `--inspect-brk --no-file-parallelism`, and suggests raising test timeouts, which a paused breakpoint would otherwise trip.
+
+**Decision:**
+- **`--inspect[=<addr>]` and `--inspect-brk[=<addr>]` imply one file at a time.** Nothing else makes sense for a single debugger, so there is no second flag to remember. `--jobs` above 1 is refused. Each file's process serves the debugger on the same address in turn; the listener reuses the address, so each file can rebind as soon as the last exits.
+- **The per-file `--timeout` is turned off, and the run says so.** Test code's own `timeout` options are left alone: they are the test's statement, not the runner's.
+- **Refused with `--coverage`**, which takes the same inspector, and **with `--browser`**, where the browser's own devtools debug the page. With `--isolation=none` the shared process serves one session for every file.
+- The child's stderr streams through even under a machine reporter, so the endpoint appears while the file waits for its debugger rather than after it ends.
+
+---
+
 ### D108 — Coverage from V8's counts, measured on the files as written; esdev ships with the inspector · *Accepted (2026-09-24)* · *amends D59*
 
 **Context:** Vitest's default coverage provider reads V8's precise coverage through the inspector, with no instrumentation, and since Vitest 3.2 remaps it onto the source's syntax tree so the result matches Istanbul's. Istanbul itself instruments the source with counters. V8 exposes coverage only through the inspector protocol (`Profiler.startPreciseCoverage`), and D59 compiles the inspector into esdev only on request (`ES_RUNTIME_INSPECTOR=1`). The release workflow did not set that variable, so released esdev binaries had no inspector: no `--inspect`, and no way to read V8's counts.

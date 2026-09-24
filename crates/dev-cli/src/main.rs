@@ -213,6 +213,9 @@ OPTIONS:
     --test-skip-pattern=<re>    Skip the tests whose full name matches
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
+    --inspect[=<addr>]          Serve a debugger for each file in turn, one file
+                                at a time (default 127.0.0.1:9229)
+    --inspect-brk[=<addr>]      ...and stop before each file's first statement
     --coverage                  Measure which statements, branches, functions
                                 and lines the tests ran, and report it
     --changed[=<since>]         Run only the test files that reach what git
@@ -1444,6 +1447,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut global_setup_out = None;
     let mut coverage = None;
     let mut coverage_out = None;
+    let mut inspect = None;
     let mut timeout = None;
     let mut reporter = None;
     let mut update_snapshots = false;
@@ -1539,6 +1543,12 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--coverage" => {
                 reject_value(flag, value)?;
                 coverage = Some(crate::coverage::Settings::default());
+            }
+            "--inspect" | "--inspect-brk" => {
+                inspect = Some(InspectConfig {
+                    address: inspect::parse_address(value)?,
+                    wait: flag == "--inspect-brk",
+                });
             }
             "--_coverage" => {
                 coverage_out = Some(std::path::PathBuf::from(require_value(flag, value)?));
@@ -1735,6 +1745,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         coverage,
         coverage_out,
         coverage_dir: None,
+        inspect,
         affected_by,
         shard,
         randomize,
@@ -2135,6 +2146,10 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     if config.list {
         config.coverage = None;
     }
+    if let Err(err) = prepare_inspect(&mut config) {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
 
     // A shuffled run says its seed, so the order that failed can be run again.
     // A child is handed the seed alone and says nothing.
@@ -2321,6 +2336,55 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     global_setup::stop_into(setup, code).await
 }
 
+/// Checks `--inspect` against the rest of the run, and shapes the run for a
+/// debugger: one file at a time, since one debugger follows one process, and
+/// no per-file time limit, which a paused breakpoint would trip.
+fn prepare_inspect(config: &mut TestConfig) -> Result<(), String> {
+    let Some(inspect) = &config.inspect else {
+        return Ok(());
+    };
+    let flag = if inspect.wait {
+        "--inspect-brk"
+    } else {
+        "--inspect"
+    };
+    if !es_runtime_cli_common::HAS_INSPECTOR {
+        return Err(es_runtime_cli_common::NO_INSPECTOR_MESSAGE.to_string());
+    }
+    if config.coverage_flag {
+        return Err(format!(
+            "{flag} and --coverage both use the file's inspector, and there is only one.\n\n\
+             Debug with {flag}, then measure with --coverage."
+        ));
+    }
+    // Coverage the project turns on is set aside while debugging.
+    config.coverage = None;
+    if config.browser.is_some() {
+        return Err(format!(
+            "{flag} debugs this runtime, and a browser run runs in the browser.\n\n\
+             Use --headed and the browser's own developer tools."
+        ));
+    }
+    if config.jobs.is_some_and(|jobs| jobs > 1) {
+        return Err(format!(
+            "{flag} debugs one file at a time, so --jobs cannot be more than 1."
+        ));
+    }
+    let parent = config.summary.is_none() && config.file.is_none();
+    if parent {
+        // One process already, with `--isolation=none`.
+        if config.isolation != Some(TestIsolation::None) {
+            config.jobs = Some(1);
+        }
+        if config.timeout.take().is_some() {
+            eprintln!(
+                "inspect: --timeout is off, since a breakpoint can hold a file as long as it likes"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Reports a run's coverage and folds its thresholds into the exit code.
 fn coverage_verdict(dir: &std::path::Path, config: &TestConfig, code: ExitCode) -> ExitCode {
     let root = std::env::current_dir().unwrap_or_default();
@@ -2416,7 +2480,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let run = Config {
+    let mut run = Config {
         source: Source::File(file.clone()),
         args: Vec::new(),
         capabilities,
@@ -2426,12 +2490,16 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
         bundler_style_resolution: true,
         extensions: guest::test_extensions(config.dom),
         observer: None,
-        // Under `--coverage`, V8's counts, collected by this process itself.
-        inspector: config
-            .coverage_out
-            .as_ref()
-            .map(|_| coverage::collect::inspector()),
+        inspector: None,
     };
+    // Under `--coverage`, V8's counts, collected by this process itself; under
+    // `--inspect`, a debugger's endpoint for this file.
+    if config.coverage_out.is_some() {
+        run.inspector = Some(coverage::collect::inspector());
+    } else if let Err(err) = attach_debugger(&mut run, config.inspect.as_ref()) {
+        print_error(&err);
+        return ExitCode::FAILURE;
+    }
     let code = match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => finish_test_file(config, &file),
         Err(err) => {
@@ -2582,7 +2650,7 @@ pub(crate) async fn run_tests_unisolated(
             return ExitCode::FAILURE;
         }
     };
-    let run = Config {
+    let mut run = Config {
         source: Source::Inline(source),
         args: Vec::new(),
         capabilities,
@@ -2594,6 +2662,11 @@ pub(crate) async fn run_tests_unisolated(
         observer: None,
         inspector: None,
     };
+    // Every file shares this process, so one debugger follows them all.
+    if let Err(err) = attach_debugger(&mut run, config.inspect.as_ref()) {
+        print_error(&err);
+        return ExitCode::FAILURE;
+    }
     match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => guest::test::finish(),
         Err(err) => {

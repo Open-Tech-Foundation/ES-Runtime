@@ -114,6 +114,9 @@ pub struct TestConfig {
     pub coverage_out: Option<PathBuf>,
     /// Where each child of a coverage run writes, set by the parent.
     pub coverage_dir: Option<PathBuf>,
+    /// `--inspect[=<addr>]` / `--inspect-brk[=<addr>]`: each file serves a
+    /// debugger in turn, one file at a time.
+    pub inspect: Option<crate::inspect::InspectConfig>,
     /// Internal: this process is the global setup, and writes what it provides
     /// here once its `setup` functions have run.
     pub global_setup_out: Option<PathBuf>,
@@ -386,6 +389,14 @@ pub async fn run_all(
                         .iter()
                         .map(|path| format!("--_provided={}", path.display())),
                 )
+                .chain(config.inspect.iter().map(|inspect| {
+                    let flag = if inspect.wait {
+                        "--inspect-brk"
+                    } else {
+                        "--inspect"
+                    };
+                    format!("{flag}={}", inspect.address)
+                }))
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
                 .chain(config.list.then(|| "--list".to_string()))
@@ -524,7 +535,14 @@ pub async fn run_all(
             // Not captured: with one job the child writes straight through,
             // which is the run to reach for when a test is hanging — unless a
             // machine reporter owns stdout.
-            let output = supervise(child, config.timeout, quiet).await;
+            // A child serving a debugger says where on stderr, which has to
+            // reach the terminal while it waits rather than after it ends.
+            let capture = match (quiet, config.inspect.is_some()) {
+                (false, _) => Capture::Nothing,
+                (true, true) => Capture::Stdout,
+                (true, false) => Capture::Both,
+            };
+            let output = supervise(child, config.timeout, capture).await;
             let why = settle(output, &mut failed, quiet);
             let result = take_result(summary, file, why);
             reporter.file(&result);
@@ -536,7 +554,12 @@ pub async fn run_all(
             let command = &command;
             async move {
                 let (child, summary) = command(file, index)?;
-                Some((name, supervise(child, timeout, true).await, summary, file))
+                Some((
+                    name,
+                    supervise(child, timeout, Capture::Both).await,
+                    summary,
+                    file,
+                ))
             }
         });
         let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
@@ -662,14 +685,15 @@ pub fn report_not_run(not_run: usize, quiet: bool) {
 async fn supervise(
     mut command: tokio::process::Command,
     timeout: Option<u64>,
-    capture: bool,
+    capture: Capture,
 ) -> Result<Finished, std::io::Error> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    if capture {
-        command
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+    if capture != Capture::Nothing {
+        command.stdout(std::process::Stdio::piped());
+    }
+    if capture == Capture::Both {
+        command.stderr(std::process::Stdio::piped());
     }
     let child = command.spawn()?;
     let pid = child.id();
@@ -694,6 +718,14 @@ async fn supervise(
         expired: expired.load(Ordering::SeqCst),
         output,
     })
+}
+
+/// What of a child's output is held back, to print once it ends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    Nothing,
+    Stdout,
+    Both,
 }
 
 /// How a child ended.

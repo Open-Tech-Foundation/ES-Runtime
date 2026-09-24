@@ -170,9 +170,14 @@ struct Debugger {
 
 impl Debugger {
     async fn attach(program: &Program) -> Debugger {
+        Debugger::attach_to(&program.url("")).await
+    }
+
+    /// Attaches to whatever serves the debugger at `address`.
+    async fn attach_to(address: &str) -> Debugger {
         // The WebSocket URL is the one `/json/list` advertised, not a guess —
         // which is both what a real client does and what proves the two agree.
-        let listing = get(&program.url(""), "/json/list").await;
+        let listing = get(address, "/json/list").await;
         let url = listing
             .split("\"webSocketDebuggerUrl\":\"")
             .nth(1)
@@ -180,7 +185,7 @@ impl Debugger {
             .unwrap_or_else(|| panic!("no target in {listing}"))
             .to_string();
 
-        let stream = TcpStream::connect(program.url(""))
+        let stream = TcpStream::connect(address)
             .await
             .expect("connect to the debugger");
         let (socket, _) = tokio_tungstenite::client_async(url, stream)
@@ -384,6 +389,98 @@ async fn inspect_brk_holds_the_program_before_its_first_statement() {
     std::io::Read::read_to_string(&mut std::io::BufReader::new(out), &mut stdout)
         .expect("read stdout");
     assert_eq!(stdout.trim(), "ran");
+}
+
+/// `esdev test --inspect-brk`: each test file serves the debugger in turn, on
+/// the one address, and waits for it before its first statement — the next
+/// file does not start until the debugger has let the last one go.
+#[tokio::test]
+async fn test_inspect_brk_serves_each_file_in_turn() {
+    if !inspector_available() {
+        return;
+    }
+    let dir = temp("inspect-test-files");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the project");
+    for name in ["a.test.js", "b.test.js"] {
+        std::fs::write(
+            dir.join(name),
+            "import { test } from \"runtime:test\";\ntest(\"t\", () => {});\n",
+        )
+        .expect("write a test file");
+    }
+    let port = free_port();
+    let mut child = esdev()
+        .current_dir(&dir)
+        .args([
+            "test",
+            &format!("--inspect-brk=127.0.0.1:{port}"),
+            "--timeout=60000",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn esdev test --inspect-brk");
+    let mut lines = BufReader::new(child.stderr.take().expect("stderr")).lines();
+
+    // The per-file budget is set aside: a breakpoint would trip it.
+    let first = lines.next().and_then(Result::ok).unwrap_or_default();
+    assert!(first.contains("--timeout is off"), "{first}");
+    for _ in 0..2 {
+        // Past the "waiting" line the file before this one printed.
+        let endpoint = format!("ws://127.0.0.1:{port}/");
+        let announced = lines
+            .by_ref()
+            .map_while(Result::ok)
+            .find(|line| line.contains(&endpoint));
+        assert!(announced.is_some(), "no debugger address announced");
+        let mut debugger = Debugger::attach_to(&format!("127.0.0.1:{port}")).await;
+        debugger.call("Runtime.enable", "{}").await;
+        debugger.call("Debugger.enable", "{}").await;
+        debugger.call("Runtime.runIfWaitingForDebugger", "{}").await;
+        let paused = debugger.wait_for("Debugger.paused").await;
+        assert!(paused.contains("Break on start"), "{paused}");
+        debugger.call("Debugger.resume", "{}").await;
+    }
+    let mut stdout = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take().expect("stdout"), &mut stdout)
+        .expect("read stdout");
+    let status = child.wait().expect("wait");
+    assert!(status.success(), "{stdout}");
+    assert!(stdout.contains("2 files passed"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What `esdev test --inspect` cannot be combined with, each said by name —
+/// or, without an inspector, how to get one.
+#[test]
+fn test_inspect_refuses_what_it_cannot_debug() {
+    let dir = temp("inspect-test-refusals");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the project");
+    std::fs::write(
+        dir.join("a.test.js"),
+        "import { test } from \"runtime:test\";\ntest(\"t\", () => {});\n",
+    )
+    .expect("write a test file");
+    let refused = |args: &[&str]| {
+        let out = esdev()
+            .current_dir(&dir)
+            .arg("test")
+            .args(args)
+            .output()
+            .expect("spawn");
+        assert!(!out.status.success(), "{args:?}");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    if !inspector_available() {
+        assert!(refused(&["--inspect"]).contains("ES_RUNTIME_INSPECTOR=1"));
+        return;
+    }
+    assert!(refused(&["--inspect", "--coverage"]).contains("there is only one"));
+    assert!(refused(&["--inspect", "--jobs=2"]).contains("--jobs cannot be more than 1"));
+    assert!(refused(&["--inspect", "--browser"]).contains("--headed"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

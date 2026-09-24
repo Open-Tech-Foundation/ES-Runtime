@@ -32,6 +32,26 @@ debugger.
 Use `--inspect-brk` for a program that ends quickly — otherwise it can be over
 before a client finishes connecting.
 
+## Tests
+
+`esdev test` takes the same flags:
+
+```sh
+esdev test --inspect-brk src/cart.test.ts
+```
+
+Each test file runs in a process of its own, so the files run one at a time
+and each serves the debugger in turn on the same address. With
+`--inspect-brk`, every file stops before its first statement until a debugger
+releases it. Attach again for the next file. `chrome://inspect` lists each one
+as it starts.
+
+A paused breakpoint would trip `--timeout`, so it is off while debugging. A
+test's own `timeout` option still applies. `--inspect` cannot be combined with
+`--coverage`, which uses the same inspector, or with `--browser`: use
+`--headed` and the browser's developer tools instead. With `--isolation=none`
+all the files share one process and one debugger session.
+
 ## Binding
 
 <Callout type="warning" title="Loopback by default">

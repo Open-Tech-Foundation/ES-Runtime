@@ -104,6 +104,9 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --inspect[=<addr>]` and `--inspect-brk[=<addr>]`** debug the
+  tests: the files run one at a time, each serving the debugger in turn on the
+  one address, with the per-file `--timeout` off (DECISIONS D109).
 - **`esdev test --coverage`** measures which statements, branches, functions
   and lines the tests ran, from V8's own counts, on the files as written:
   TypeScript is measured on its own lines. It reports in Istanbul's formats
