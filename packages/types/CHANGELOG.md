@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **Tags** — `tags` in `TestOptions`, `DescribeOptions`, the augmentable
+  `TestTags` and `TagName`, and `matchesTags`.
 - **`test.extend` and the test context** — `TestAPI<Fixtures>`, `TestContext`,
   `FixtureOptions`, `FixtureHelpers`; `TestBody`, `Register` and `TestFn` take
   the fixtures as a type parameter, and `beforeEach`/`afterEach` take the

@@ -135,6 +135,67 @@ const defaultRepeats = Number.isInteger(runOptions.repeats) ? runOptions.repeats
 const bailAt = Number.isInteger(runOptions.bail) ? runOptions.bail : null;
 let failedTests = 0;
 
+// --- tags --------------------------------------------------------------------
+
+/// The project's tag definitions, by name.
+const tagDefinitions = new Map((runOptions.tags ?? []).map((tag) => [tag.name, tag]));
+/// Whether a tag not defined is an error. On unless the project says not.
+const strictTags = runOptions.strictTags ?? true;
+/// Each `--tags-filter`, parsed by the host; a test must match every one.
+const tagsFilter = runOptions.tagsFilter ?? [];
+/// The `@module-tag`s of the file registering tests now.
+let moduleTags = runOptions.moduleTags ?? [];
+
+const unique = (list) => [...new Set(list)];
+
+/// A test's or group's `tags` option: a name, or a list of them.
+function tagsOf(where, value) {
+  if (value === undefined) return [];
+  const list = Array.isArray(value) ? value : [value];
+  if (list.some((tag) => typeof tag !== "string" || tag === "")) {
+    throw new TypeError(`${where}: tags is a tag name or a list of them`);
+  }
+  return list;
+}
+
+/// The options a test's tags give it: tags without a priority first, in the
+/// order the test has them, then by priority, the lowest number last so it
+/// wins — as Vitest resolves them. The test's own options win over all.
+function optionsFromTags(tags) {
+  const merged = {};
+  const ordered = tags
+    .map((name, index) => ({ tag: tagDefinitions.get(name), index }))
+    .filter(({ tag }) => tag !== undefined)
+    .sort((a, b) => (b.tag.priority ?? Infinity) - (a.tag.priority ?? Infinity) || a.index - b.index);
+  for (const { tag } of ordered) {
+    for (const key of ["timeout", "retry", "repeats"]) {
+      if (tag[key] !== undefined) merged[key] = tag[key];
+    }
+  }
+  return merged;
+}
+
+/// The keys of `options` that were given.
+const defined = (options) =>
+  Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined));
+
+/// Whether a test with `tags` is one `--tags-filter` selects. Without one,
+/// every test is. The runtime form of Vitest's `TestRunner.matchesTags`.
+function matchesTags(tags) {
+  if (!Array.isArray(tags)) throw new TypeError("matchesTags needs a list of tag names");
+  const has = (pattern) => {
+    const shape = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
+    return tags.some((tag) => shape.test(tag));
+  };
+  const holds = (node) => {
+    if ("tag" in node) return has(node.tag);
+    if ("not" in node) return !holds(node.not);
+    if ("and" in node) return node.and.every(holds);
+    return node.or.some(holds);
+  };
+  return tagsFilter.every(holds);
+}
+
 const selected = (title) =>
   (namePattern === null || namePattern.test(title)) && (skipPattern === null || !skipPattern.test(title));
 let activeCase = null;
@@ -161,6 +222,8 @@ function group(name, parent) {
     // of them run: a helper module and the test file both have a right to a
     // `beforeEach`, and the one that loaded second is not the only one.
     hooks: { beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] },
+    // Its tags and its enclosing groups', which every case in it carries.
+    tags: parent?.tags ?? [],
     // Cases registered in it or in a group inside it, still to finish. What
     // decides when its `afterAll` runs.
     left: 0,
@@ -299,13 +362,21 @@ const beforeEach = hook("beforeEach");
 const afterEach = hook("afterEach");
 
 // A group of tests. The body registers and returns; it does not await.
-function describe(name, body, mode) {
+function describe(name, a, b) {
+  return describeWith(name, a, b, undefined);
+}
+
+// `describe(name, body)` or `describe(name, { tags }, body)`.
+function describeWith(name, a, b, mode) {
+  const [body, options] = typeof a === "function" || a === undefined ? [a, b] : [b, a];
+  const tags = tagsOf(`describe(${JSON.stringify(String(name))})`, options?.tags);
   if (typeof body !== "function") {
     throw new TypeError(
       `describe(${JSON.stringify(String(name))}): needs a function that registers the tests`,
     );
   }
   const made = group(String(name), current);
+  made.tags = unique([...current.tags, ...tags]);
   // A group that is skipped skips everything in it, and one marked `only`
   // makes every case in it an `only` — which is what makes `describe.only`
   // mean the group rather than nothing.
@@ -344,6 +415,23 @@ function enqueue(name, fn, mode, options, fixtures = null) {
   const title = label(scope, String(name));
   // A listing names what a filter selected, and nothing else.
   if (runOptions.list === true && !selected(title)) return;
+  if (runOptions.list === true && !matchesTags(unique([...moduleTags, ...scope.tags, ...(options.tags ?? [])]))) {
+    return;
+  }
+  // The file's, its groups', and its own — each once, in that order.
+  const tags = unique([...moduleTags, ...scope.tags, ...(options.tags ?? [])]);
+  if (strictTags) {
+    const unknown = tags.find((tag) => !tagDefinitions.has(tag));
+    if (unknown !== undefined) {
+      throw new TypeError(
+        `test(${JSON.stringify(String(name))}): the tag ${JSON.stringify(unknown)} is not defined — ` +
+          (tagDefinitions.size === 0
+            ? "define it under test.tags in esdev.json"
+            : `test.tags in esdev.json defines ${[...tagDefinitions.keys()].join(", ")}`),
+      );
+    }
+  }
+  options = { ...optionsFromTags(tags), ...defined(options) };
   const id = ops.test_registered(title);
   if (skip) {
     // Reported now and never queued: nothing about it runs, its group's
@@ -351,8 +439,9 @@ function enqueue(name, fn, mode, options, fixtures = null) {
     ops.test_skipped(id, "");
     return;
   }
-  // Left out by a name filter: counted, and said so, like a `.only`'s others.
-  if (!selected(title)) {
+  // Left out by a name or tag filter: counted, and said so, like a `.only`'s
+  // others.
+  if (!selected(title) || !matchesTags(tags)) {
     ops.test_skipped(id, "filter");
     return;
   }
@@ -385,6 +474,7 @@ function optionsOf(name, value) {
     throw new TypeError(`${where}: options are { timeout, retry }, or a number of milliseconds`);
   }
   const { timeout, retry, repeats } = value;
+  const tags = tagsOf(where, value.tags);
   if (timeout !== undefined && !(Number.isFinite(timeout) && timeout > 0)) {
     throw new TypeError(`${where}: timeout is a number of milliseconds above zero`);
   }
@@ -394,7 +484,7 @@ function optionsOf(name, value) {
   if (repeats !== undefined && !(Number.isInteger(repeats) && repeats >= 0)) {
     throw new TypeError(`${where}: repeats is how many more times to run it, a whole number`);
   }
-  return { timeout, retry, repeats };
+  return { timeout, retry, repeats, tags };
 }
 
 // --- fixtures ----------------------------------------------------------------
@@ -647,15 +737,15 @@ function testApi(fixtures) {
 // `.only`, `.fails` (a case known to fail, which fails the day it passes),
 // `.todo`, `.skipIf`/`.runIf`, `.each` and `.extend` are built in `testApi`.
 const test = testApi(null);
-describe.skip = (name, body) => describe(name, body, "skip");
-describe.only = (name, body) => describe(name, body, "only");
+describe.skip = (name, a, b) => describeWith(name, a, b, "skip");
+describe.only = (name, a, b) => describeWith(name, a, b, "only");
 
 // A case with a name and no body: work that is planned and not written.
 //
 // **Counted as skipped, and never silently absent.** The whole runner is
 // arranged so a report says what did not run, and a to-do that vanished from
 // the tally would be the one kind of missing case nobody notices.
-describe.todo = (name, body) => describe(name, body ?? (() => {}), "skip");
+describe.todo = (name, body) => describeWith(name, body ?? (() => {}), undefined, "skip");
 
 // `test.skipIf(cond)(...)` / `test.runIf(cond)(...)` — a case that depends on
 // where it is running. A suite that needs a Postgres to be up has to say so
@@ -731,7 +821,10 @@ const suite = describe;
 
 // Used only by esdev's generated unisolated entry so registrations retain the
 // test file they came from. Test authors never need to call it.
-const __setTestFile = (file) => ops.test_set_file(String(file));
+const __setTestFile = (file, tags) => {
+  ops.test_set_file(String(file));
+  moduleTags = Array.isArray(tags) ? tags.map(String) : [];
+};
 
 function schedule() {
   if (draining) return;
@@ -3434,6 +3527,7 @@ export {
   mock,
   clock,
   inject,
+  matchesTags,
   onTestFinished,
   onTestFailed,
   waitFor,
@@ -3457,6 +3551,7 @@ export default {
   mock,
   clock,
   inject,
+  matchesTags,
   onTestFinished,
   onTestFailed,
   waitFor,

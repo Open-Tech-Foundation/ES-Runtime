@@ -1,0 +1,94 @@
+---
+title: Tags
+description: Label tests, run the ones a tag expression selects, and give a category of tests its options.
+---
+
+# Tags
+
+A tag labels a test with a category that does not follow the files: `db`,
+`slow`, `flaky`. You can run tests by tag, and give every test with a tag the
+same options.
+
+Tags are defined in `esdev.json`:
+
+```json
+{
+  "test": {
+    "tags": [
+      { "name": "frontend", "description": "Tests written for frontend." },
+      { "name": "db", "description": "Database queries.", "timeout": 60000 },
+      { "name": "flaky", "retry": 2, "timeout": 30000, "priority": 1 }
+    ]
+  }
+}
+```
+
+A test names its tags in its options, and a group's tags apply to every test
+in it:
+
+```ts
+test("renders the menu", { tags: "frontend" }, () => { … });
+
+describe("orders", { tags: ["db"] }, () => {
+  test("lists them", () => { … });                         // db
+  test("retries a lock", { tags: ["flaky"] }, () => { … }); // db, flaky
+});
+```
+
+`@module-tag` in a `/** … */` comment tags every test in the file:
+
+```ts
+/**
+ * @module-tag acceptance
+ */
+```
+
+## Running by tag
+
+```sh
+esdev test --tags-filter=db
+esdev test --tags-filter="db && !flaky"
+esdev test --tags-filter="(unit/* || frontend) and not slow"
+```
+
+An expression combines tag names with `and`/`&&`, `or`/`||` and `not`/`!`.
+`not` binds tighter than `and`, and `and` tighter than `or`; parentheses group.
+`*` matches any run of characters, so `unit/*` matches `unit/components`.
+Several `--tags-filter` flags must all match. Tests left out are counted as
+skipped, as with `-t`.
+
+`--list` shows what a filter selects without running anything, and
+`--list-tags` prints the defined tags (`--list-tags=json` for a program).
+
+`matchesTags(tags)` from `runtime:test` says whether the run's filter would
+select a test with those tags, which is useful for set-up only some tags need:
+
+```ts
+beforeAll(async () => {
+  if (matchesTags(["db"])) await seedDatabase();
+});
+```
+
+## Options from tags
+
+A tag's `timeout`, `retry` and `repeats` apply to every test that has it. When
+two of a test's tags set the same option, the one with the lower `priority`
+wins; tags without a priority give way to those with one, and otherwise the
+later tag wins. The test's own options win over all of its tags.
+
+## Names
+
+A test that names a tag not in `test.tags` is an error, so a misspelt tag
+cannot quietly select nothing. Set `"strictTags": false` to allow undefined
+tags. A tag name cannot be `and`, `or` or `not`, or contain spaces or
+`( ) & | ! *`.
+
+In TypeScript, declare the names once to have them checked:
+
+```ts
+declare module "runtime:test" {
+  interface TestTags {
+    tags: "frontend" | "db" | "flaky";
+  }
+}
+```

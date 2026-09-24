@@ -74,6 +74,7 @@ mod resolve;
 mod staging;
 mod start;
 mod style;
+mod tags;
 mod test;
 mod trace;
 mod transform;
@@ -211,6 +212,10 @@ OPTIONS:
                                 Run only the tests whose full name matches;
                                 the rest are counted as skipped
     --test-skip-pattern=<re>    Skip the tests whose full name matches
+    --tags-filter=<expr>        Run only the tests whose tags match: tag names
+                                with and/&&, or/||, not/!, parentheses and *.
+                                Repeatable; a test must match every one
+    --list-tags[=json]          Print the tags test.tags defines, and exit
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
     --inspect[=<addr>]          Serve a debugger for each file in turn, one file
@@ -255,8 +260,8 @@ OPTIONS:
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
 
-`setup`, `globalSetup`, `timeout`, `jobs`, `isolation`, `reporter`, `browser`
-and `coverage` are also esdev.json keys, under \"test\" — the rest (`--update-snapshots`,
+`setup`, `globalSetup`, `timeout`, `jobs`, `isolation`, `reporter`, `browser`,
+`coverage`, `tags` and `strictTags` are also esdev.json keys, under \"test\" — the rest (`--update-snapshots`,
 `--ci`, `--full-diff` and the permission flags) are flags only: they decide a
 single run, not the project:
 
@@ -1453,6 +1458,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut coverage_out = None;
     let mut inspect = None;
     let mut detect_leaks = false;
+    let mut tags_filter = Vec::new();
+    let mut list_tags = None;
     let mut timeout = None;
     let mut reporter = None;
     let mut update_snapshots = false;
@@ -1553,6 +1560,24 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 inspect = Some(InspectConfig {
                     address: inspect::parse_address(value)?,
                     wait: flag == "--inspect-brk",
+                });
+            }
+            "--tags-filter" => {
+                let text = require_value(flag, value)?;
+                // Parsed now, so a mistake is said once rather than per file.
+                tags::parse(text)?;
+                tags_filter.push(text.to_string());
+            }
+            "--list-tags" => {
+                list_tags = Some(match value {
+                    None => false,
+                    Some("json") => true,
+                    Some(other) => {
+                        return Err(format!(
+                            "--list-tags={other} is not a format: --list-tags prints them for \
+                             a person, --list-tags=json for a program."
+                        ));
+                    }
                 });
             }
             "--detect-async-leaks" => {
@@ -1756,6 +1781,11 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         coverage_dir: None,
         inspect,
         detect_leaks,
+        tags_filter,
+        list_tags,
+        // Filled in by `test_settings`, which reads the project.
+        tag_definitions: Vec::new(),
+        strict_tags: true,
         affected_by,
         shard,
         randomize,
@@ -1862,6 +1892,8 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
             })
             .collect::<Result<_, _>>()?;
     }
+    config.tag_definitions.clone_from(&project.test.tags);
+    config.strict_tags = project.test.strict_tags.unwrap_or(true);
     if config.global_setup.is_empty() {
         config.global_setup = project
             .test
@@ -2134,6 +2166,10 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         }
     }
 
+    if let Some(json) = config.list_tags {
+        print!("{}", list_tags(&config.tag_definitions, json));
+        return ExitCode::SUCCESS;
+    }
     // The process a run starts to hold its global setup.
     if let Some(out) = config.global_setup_out.clone() {
         return global_setup::run(&config, &out).await;
@@ -2361,6 +2397,23 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     global_setup::stop_into(setup, code).await
 }
 
+/// `--list-tags`: each tag with what it says about itself, or all of it as
+/// JSON.
+fn list_tags(tags: &[crate::config::TagDefinition], json: bool) -> String {
+    if json {
+        return format!("{}\n", serde_json::json!({ "tags": tags }));
+    }
+    if tags.is_empty() {
+        return "no tags are defined (test.tags in esdev.json)\n".to_string();
+    }
+    tags.iter()
+        .map(|tag| match &tag.description {
+            Some(description) => format!("{}: {description}\n", tag.name),
+            None => format!("{}\n", tag.name),
+        })
+        .collect()
+}
+
 /// Checks `--inspect` against the rest of the run, and shapes the run for a
 /// debugger: one file at a time, since one debugger follows one process, and
 /// no per-file time limit, which a paused breakpoint would trip.
@@ -2467,7 +2520,11 @@ async fn run_selected(
 /// Runs one test file in this process: what every child of a run does, and a
 /// supported way to run one file directly.
 async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
-    let run_options = config.run_options();
+    let mut run_options = config.run_options();
+    // `@module-tag`s tag every test in the file.
+    run_options.module_tags = std::fs::read_to_string(&file)
+        .map(|source| tags::module_tags(&source))
+        .unwrap_or_default();
     guest::test::reset();
     guest::test::configure_run(run_options);
     guest::test::configure_snapshots(
@@ -2663,8 +2720,14 @@ pub(crate) async fn run_tests_unisolated(
         let url = url::Url::from_file_path(file)
             .map(|url| url.to_string())
             .unwrap_or_else(|()| file.display().to_string());
+        // With the file's `@module-tag`s, which tag the tests it registers.
+        let module_tags = std::fs::read_to_string(file)
+            .map(|source| tags::module_tags(&source))
+            .unwrap_or_default();
         source.push_str("__setTestFile(");
         source.push_str(&serde_json::to_string(&url).expect("a URL always serializes as JSON"));
+        source.push(',');
+        source.push_str(&serde_json::to_string(&module_tags).expect("strings serialize as JSON"));
         source.push_str(");await import(");
         source.push_str(&serde_json::to_string(&url).expect("a URL always serializes as JSON"));
         source.push_str(");");

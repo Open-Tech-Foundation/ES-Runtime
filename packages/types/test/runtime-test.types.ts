@@ -21,6 +21,7 @@ import {
   type GlobalSetupContext,
   inject,
   it,
+  matchesTags,
   mock,
   onTestFailed,
   onTestFinished,
@@ -303,6 +304,25 @@ pageTest("object syntax", ({ page }) => {
 pageTest.skip("variants keep the fixtures", ({ page }) => void page);
 
 beforeEach(({ task }) => void task.name);
+
+// --- tags ---------------------------------------------------------------------
+
+declare module "runtime:test" {
+  interface TestTags {
+    tags: "db" | "flaky" | "unit/components";
+  }
+}
+
+test("tagged", { tags: ["db", "flaky"], timeout: 1000 }, () => {});
+test("one tag", { tags: "unit/components" }, () => {});
+describe("a tagged group", { tags: "db" }, () => {});
+describe.skip("a skipped tagged group", { tags: ["flaky"] }, () => {});
+const needsDb: boolean = matchesTags(["db"]);
+// @ts-expect-error — a tag that was not declared.
+test("misspelt", { tags: "dbb" }, () => {});
+// @ts-expect-error — nor in matchesTags.
+matchesTags(["frontend"]);
+void needsDb;
 
 // --- clock ------------------------------------------------------------------
 

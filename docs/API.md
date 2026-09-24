@@ -3886,6 +3886,25 @@ table's header; any other row is passed whole.
 A name that does not vary per row gets its index appended, because six cases
 sharing one identity is a report in which a failure names none of them.
 
+### Tags
+
+`test(name, { tags }, fn)` and `describe(name, { tags }, body)` take a tag name
+or a list of them; a test carries its own, its groups', and the file's
+`@module-tag`s (from `/** … */` comments). `esdev.json`'s `test.tags` defines
+them, each `{ name, description?, timeout?, retry?, repeats?, priority? }`, and
+a tag's options apply to its tests: of two tags setting one option, the lower
+`priority` wins, tags without one giving way, then the later tag; the test's
+own options win over all. A tag not defined is a `TypeError` at registration
+unless `test.strictTags` is `false`. A name cannot be `and`, `or` or `not`, or
+contain whitespace or `( ) & | ! *`.
+
+`--tags-filter=<expr>` runs the tests whose tags match: names combined with
+`and`/`&&`, `or`/`||`, `not`/`!` (tightest), parentheses, and `*` for any run
+of characters. Repeated, every one must match; a malformed one is refused
+before any file runs. `--list-tags[=json]` prints the definitions.
+`matchesTags(tags)` returns whether the run's filters select a test with those
+tags — `true` with none.
+
 ### The test context and `test.extend`
 
 A test's body, and every `beforeEach` and `afterEach`, is called with a

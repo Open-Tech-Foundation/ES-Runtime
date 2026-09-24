@@ -120,6 +120,14 @@ pub struct RunOptions {
     pub list: bool,
     /// Report what is still pending once the tests have finished.
     pub detect_leaks: bool,
+    /// Each `--tags-filter`, parsed; a test must match them all.
+    pub tags_filter: Vec<serde_json::Value>,
+    /// The project's tag definitions, as `test.tags` wrote them.
+    pub tags: serde_json::Value,
+    /// Whether a tag not defined is an error.
+    pub strict_tags: bool,
+    /// The `@module-tag`s of the file being run.
+    pub module_tags: Vec<String>,
 }
 
 impl RunOptions {
@@ -133,6 +141,10 @@ impl RunOptions {
             "repeats": self.repeats,
             "list": self.list,
             "detectLeaks": self.detect_leaks,
+            "tagsFilter": self.tags_filter,
+            "tags": self.tags,
+            "strictTags": self.strict_tags,
+            "moduleTags": self.module_tags,
         })
     }
 }

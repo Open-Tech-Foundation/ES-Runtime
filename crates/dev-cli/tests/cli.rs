@@ -13699,7 +13699,10 @@ test("starts a server and forgets it", () => {
         text.contains("clean.test.js\n  1 passed, 0 failed"),
         "{text}"
     );
-    assert!(text.contains("beat.test.js\n  1 passed, 0 failed"), "{text}");
+    assert!(
+        text.contains("beat.test.js\n  1 passed, 0 failed"),
+        "{text}"
+    );
     assert!(text.contains("2 of 4 files failed"), "{text}");
 
     // Without it, the same file waits on what it left, until the budget ends
@@ -13734,7 +13737,10 @@ test("starts a server and forgets it", () => {
 #[test]
 fn test_fixtures_are_set_up_for_the_tests_that_name_them() {
     let dir = build_dir("t_fixtures");
-    write_in(&dir, "fx.test.ts", r#"import { afterAll, afterEach, beforeEach, expect, test } from "runtime:test";
+    write_in(
+        &dir,
+        "fx.test.ts",
+        r#"import { afterAll, afterEach, beforeEach, expect, test } from "runtime:test";
 
 const log: string[] = [];
 
@@ -13804,8 +13810,12 @@ afterAll(() => {
   // afterAll runs before the file's fixtures are torn down.
   if (log.includes("db down")) throw new Error("db torn down too early");
 });
-"#);
-    write_in(&dir, "teardown.test.js", r#"import { test } from "runtime:test";
+"#,
+    );
+    write_in(
+        &dir,
+        "teardown.test.js",
+        r#"import { test } from "runtime:test";
 import { write } from "runtime:fs";
 const fileTest = test.extend("shared", { scope: "file" }, ({}, { onCleanup }) => {
   onCleanup(() => write("torn-down.txt", "yes"));
@@ -13813,15 +13823,22 @@ const fileTest = test.extend("shared", { scope: "file" }, ({}, { onCleanup }) =>
 });
 fileTest("uses it", ({ shared }) => { if (shared !== 1) throw new Error("no"); });
 fileTest("uses it again", ({ shared }) => { if (shared !== 1) throw new Error("no"); });
-"#);
+"#,
+    );
     let out = esdev_in(&dir)
         .args(["test", "fx", "teardown"])
         .output()
         .expect("spawn esdev test");
     let text = stdout(&out);
     assert!(out.status.success(), "{text}{}", stderr(&out));
-    assert!(text.contains("fx.test.ts\n  8 passed, 0 failed, 1 skipped"), "{text}");
-    assert!(text.contains("teardown.test.js\n  2 passed, 0 failed"), "{text}");
+    assert!(
+        text.contains("fx.test.ts\n  8 passed, 0 failed, 1 skipped"),
+        "{text}"
+    );
+    assert!(
+        text.contains("teardown.test.js\n  2 passed, 0 failed"),
+        "{text}"
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("torn-down.txt")).unwrap_or_default(),
         "yes",
@@ -13834,7 +13851,10 @@ fileTest("uses it again", ({ shared }) => { if (shared !== 1) throw new Error("n
 #[test]
 fn test_fixture_mistakes_are_named() {
     let dir = build_dir("t_fixture_mistakes");
-    write_in(&dir, "bad.test.js", r#"import { expect, test } from "runtime:test";
+    write_in(
+        &dir,
+        "bad.test.js",
+        r#"import { expect, test } from "runtime:test";
 const loop = test.extend("a", ({ b }) => b).extend("b", ({ a }) => a);
 loop("a cycle is named", ({ a }) => {});
 const forgot = test.extend({ x: async ({}, use) => {} });
@@ -13843,8 +13863,12 @@ const twice = test.extend("y", ({}, { onCleanup }) => { onCleanup(() => {}); onC
 twice("onCleanup twice", ({ y }) => {});
 const cross = test.extend("perTest", () => 1).extend("shared", { scope: "file" }, ({ perTest }) => perTest);
 cross("file needs test", ({ shared }) => {});
-"#);
-    let out = esdev_in(&dir).arg("test").output().expect("spawn esdev test");
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
     let text = stdout(&out);
     assert!(!out.status.success());
     for says in [
@@ -13855,6 +13879,147 @@ cross("file needs test", ({ shared }) => {});
     ] {
         assert!(text.contains(says), "{says} in\n{text}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Tags: from `test.tags`, a `describe`, a test's options and `@module-tag`;
+/// selected by `--tags-filter`, giving their options, strict about names.
+#[test]
+fn test_tags_select_tests_and_give_them_options() {
+    let dir = build_dir("t_tags");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "tags": [
+            { "name": "frontend", "description": "Tests written for frontend." },
+            { "name": "db", "timeout": 5000 },
+            { "name": "flaky", "retry": 2, "timeout": 30, "priority": 1 },
+            { "name": "unit/components" },
+            { "name": "acceptance" }
+        ] } }"#,
+    );
+    write_in(
+        &dir,
+        "tagged.test.ts",
+        r#"/**
+ * @module-tag acceptance
+ */
+import { describe, expect, matchesTags, test } from "runtime:test";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+test("renders", { tags: "frontend" }, () => {});
+describe("queries", { tags: ["db"] }, () => {
+  test("reads", () => {});
+  // flaky's priority gives it flaky's 30ms, not db's 5000.
+  test("flaky read", { tags: ["flaky"] }, async () => { await sleep(100); });
+});
+test("component", { tags: "unit/components" }, () => {});
+let tries = 0;
+test("retried by its tag", { tags: "flaky", timeout: 1000 }, () => { tries += 1; expect(tries).toBe(3); });
+test("untagged", () => { console.log(`flaky selected: ${matchesTags(["flaky"])}`); });
+"#,
+    );
+    let listed = |filter: &str| {
+        let out = esdev_in(&dir)
+            .args(["test", "--list", &format!("--tags-filter={filter}")])
+            .output()
+            .expect("spawn esdev test --list");
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+            .lines()
+            .filter(|line| {
+                line.starts_with("  ") && !line.ends_with(" tests") && !line.ends_with(" test")
+            })
+            .map(|line| line.trim().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(listed("db"), ["queries > reads", "queries > flaky read"]);
+    assert_eq!(listed("db && !flaky"), ["queries > reads"]);
+    assert_eq!(listed("unit/*"), ["component"]);
+    assert_eq!(
+        listed("(frontend or unit/*) and acceptance"),
+        ["renders", "component"]
+    );
+    assert!(
+        listed("!acceptance").is_empty(),
+        "the module tag is every test's"
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        // flaky's retries too: three attempts, each held to its 30ms.
+        text.contains("FAIL queries > flaky read\n    failed 3 attempts; the last:\n    Error: the test did not finish within 30ms"),
+        "{text}"
+    );
+    assert!(text.contains("flaky selected: true"), "{text}");
+    assert!(text.contains("5 passed, 1 failed"), "{text}");
+
+    let out = esdev_in(&dir)
+        .args(["test", "--tags-filter=!flaky"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("flaky selected: false"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("filter: 2 other tests did not match"),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--list-tags"])
+        .output()
+        .expect("spawn");
+    assert_eq!(
+        stdout(&out),
+        "frontend: Tests written for frontend.\ndb\nflaky\nunit/components\nacceptance\n"
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--list-tags=json"])
+        .output()
+        .expect("spawn");
+    assert!(
+        stdout(&out).starts_with(r#"{"tags":[{"name":"frontend""#),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--tags-filter=db flaky"])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("two tags need `and` or `or` between them"),
+        "{}",
+        stderr(&out)
+    );
+
+    write_in(
+        &dir,
+        "typo.test.ts",
+        "import { test } from \"runtime:test\";\ntest(\"typo\", { tags: \"fronted\" }, () => {});\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "typo"])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains(
+            r#"the tag "fronted" is not defined — test.tags in esdev.json defines frontend, db"#
+        ),
+        "{}",
+        stderr(&out)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

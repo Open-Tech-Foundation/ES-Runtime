@@ -104,6 +104,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Test tags**: `{ tags }` on tests and `describe`, `@module-tag` in a file,
+  definitions with `timeout`/`retry`/`repeats`/`priority` under `test.tags` in
+  esdev.json (`strictTags` on by default), `--tags-filter=<expr>` with
+  `and`/`or`/`not`, `*` and parentheses, `--list-tags[=json]`, and
+  `matchesTags` from `runtime:test` (DECISIONS D113).
 - **Fixtures with `test.extend`**, in Vitest's builder syntax
   (`extend(name, options?, fn)` with `onCleanup`) and Playwright's object
   syntax (`use`), with `test`, `file` and `worker` scopes and `auto`. A test

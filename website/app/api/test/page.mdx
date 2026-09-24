@@ -99,6 +99,13 @@ test("flaky upstream", { retry: 2 }, async () => { … });
 passes while it fails, and fails once it passes. `test.skip` and `test.only`
 take the same options.
 
+## Tags
+
+`{ tags }` on a test or a `describe` labels it; `@module-tag` in a JSDoc
+comment labels the file. `test.tags` in esdev.json defines them and the
+options each gives, `--tags-filter` selects by expression, and
+`matchesTags(tags)` asks the same at run time. See [Tags](/esdev/test/tags).
+
 ## The test context and `test.extend`
 
 A test's body, and its `beforeEach` and `afterEach`, get a context: `task`,

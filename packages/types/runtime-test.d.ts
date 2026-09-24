@@ -30,7 +30,35 @@ declare module "runtime:test" {
         retry?: number;
         /** Run it this many more times after the first; it fails if any run fails. */
         repeats?: number;
+        /**
+         * Its tags, for `--tags-filter` and for the options each tag in
+         * `test.tags` gives it. Its own options win over a tag's.
+         */
+        tags?: TagName | TagName[];
       };
+
+  /**
+   * Which tags exist, for TypeScript: declare them once and a misspelt one is
+   * a type error, as it is a run error with `strictTags`.
+   *
+   * ```ts
+   * declare module "runtime:test" {
+   *   interface TestTags {
+   *     tags: "frontend" | "db" | "flaky";
+   *   }
+   * }
+   * ```
+   */
+  export interface TestTags {}
+
+  /** A tag name: one of {@link TestTags}' when declared, any string otherwise. */
+  export type TagName = TestTags extends { tags: infer T extends string } ? T : string;
+
+  /**
+   * Whether a test with these tags is one the run's `--tags-filter` selects;
+   * `true` when there is no filter. For set-up that only some tags need.
+   */
+  export function matchesTags(tags: TagName[]): boolean;
 
   /** The ways a test is registered: name, body, and optional options. */
   export type Register<Fixtures = {}> = {
@@ -191,12 +219,21 @@ declare module "runtime:test" {
    * an `async` one is refused rather than half-run, because only the part
    * before its first `await` would register in time.
    */
+  /** What a group may say about itself. */
+  export interface DescribeOptions {
+    /** Tags every test in the group carries. */
+    tags?: TagName | TagName[];
+  }
+
   export const describe: {
     (name: string, body: () => void): void;
+    (name: string, options: DescribeOptions, body: () => void): void;
     /** Skips every test in the group, and reports each as skipped. */
     skip(name: string, body: () => void): void;
+    skip(name: string, options: DescribeOptions, body: () => void): void;
     /** Runs this group and skips everything outside it. */
     only(name: string, body: () => void): void;
+    only(name: string, options: DescribeOptions, body: () => void): void;
     /** A group planned and not written. Its name is reported as skipped. */
     todo(name: string, body?: () => void): void;
     /** Registers the group only when the condition is false. */

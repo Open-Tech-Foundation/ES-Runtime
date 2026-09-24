@@ -188,6 +188,29 @@ pub struct TestSettings {
     /// What `--coverage` measures and writes, and whether it is on without
     /// the flag.
     pub coverage: Option<CoverageSection>,
+    /// The tags tests may carry, and the options each gives them.
+    pub tags: Vec<TagDefinition>,
+    /// Whether a test naming a tag not defined here is an error. `None` is
+    /// on: a misspelt tag is otherwise a test no filter ever selects.
+    pub strict_tags: Option<bool>,
+}
+
+/// One entry of `test.tags`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TagDefinition {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeats: Option<u64>,
+    /// Which tag's options win when two set the same one: the lower number.
+    /// Tags without one give way to those with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<f64>,
 }
 
 /// `test.coverage`.
@@ -381,6 +404,18 @@ const TEST_KEYS: &[&str] = &[
     "reporter",
     "browser",
     "coverage",
+    "tags",
+    "strictTags",
+];
+
+/// The keys a `test.tags` entry may carry.
+const TAG_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "timeout",
+    "retry",
+    "repeats",
+    "priority",
 ];
 
 /// The keys `test.coverage` may carry.
@@ -768,7 +803,34 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
         .get("coverage")
         .map(|value| read_coverage(value, file))
         .transpose()?;
+    let tags = match map.get("tags") {
+        None => Vec::new(),
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .map(|entry| read_tag(entry, file))
+            .collect::<Result<_, _>>()?,
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `tags` is {}, and it lists the tags tests may carry.\n\n\
+                 An array: \"tags\": [{{ \"name\": \"db\", \"timeout\": 60000 }}].",
+                kind(other)
+            ));
+        }
+    };
+    let strict_tags = match map.get("strictTags") {
+        None => None,
+        Some(Value::Bool(on)) => Some(*on),
+        Some(other) => {
+            return Err(format!(
+                "{file}: `test`'s `strictTags` is {}, and it says whether an undefined tag is an error.\n\n\
+                 true (the default) or false.",
+                kind(other)
+            ));
+        }
+    };
     Ok(TestSettings {
+        tags,
+        strict_tags,
         coverage,
         setup,
         global_setup,
@@ -777,6 +839,63 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
         isolation,
         reporter,
         browser,
+    })
+}
+
+/// Parses one entry of `test.tags`.
+fn read_tag(value: &Value, file: &str) -> Result<TagDefinition, String> {
+    let map = object(value, file, "a `tags` entry")?;
+    known_keys(map, file, "a `tags` entry", TAG_KEYS)?;
+    let name = match map.get("name") {
+        Some(Value::String(name)) => name.clone(),
+        _ => return Err(format!("{file}: a `tags` entry needs a \"name\".")),
+    };
+    crate::tags::check_name(&name).map_err(|err| format!("{file}: {err}."))?;
+    let count = |key: &str| -> Result<Option<u64>, String> {
+        match map.get(key) {
+            None => Ok(None),
+            Some(Value::Number(n)) if n.as_u64().is_some() => Ok(n.as_u64()),
+            Some(other) => Err(format!(
+                "{file}: tag `{name}`'s `{key}` is {}, and should be a whole number.",
+                kind(other)
+            )),
+        }
+    };
+    let timeout = count("timeout")?;
+    let retry = count("retry")?;
+    let repeats = count("repeats")?;
+    if timeout == Some(0) {
+        return Err(format!(
+            "{file}: tag `{name}`'s `timeout` is milliseconds above zero."
+        ));
+    }
+    let description = match map.get("description") {
+        None => None,
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(other) => {
+            return Err(format!(
+                "{file}: tag `{name}`'s `description` is {}, and should be a string.",
+                kind(other)
+            ));
+        }
+    };
+    let priority = match map.get("priority") {
+        None => None,
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(other) => {
+            return Err(format!(
+                "{file}: tag `{name}`'s `priority` is {}, and should be a number.",
+                kind(other)
+            ));
+        }
+    };
+    Ok(TagDefinition {
+        name,
+        description,
+        timeout,
+        retry,
+        repeats,
+        priority,
     })
 }
 
@@ -2447,6 +2566,49 @@ mod tests {
                 r#"{ "test": { "coverage": { "enabled": "yes" } } }"#,
                 "true or false",
             ),
+        ] {
+            let err = read(json).expect_err("refused");
+            assert!(err.contains(says), "{json}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_tags_section_defines_names_and_options() {
+        let settings = read(
+            r#"{ "test": { "strictTags": false, "tags": [
+                { "name": "db", "description": "Database.", "timeout": 60000 },
+                { "name": "flaky", "retry": 3, "priority": 1 } ] } }"#,
+        )
+        .expect("read")
+        .test;
+        assert_eq!(settings.strict_tags, Some(false));
+        assert_eq!(settings.tags[0].name, "db");
+        assert_eq!(settings.tags[0].timeout, Some(60000));
+        assert_eq!(settings.tags[1].retry, Some(3));
+        assert_eq!(settings.tags[1].priority, Some(1.0));
+        assert_eq!(
+            read(r#"{ "test": {} }"#).expect("read").test.strict_tags,
+            None
+        );
+        for (json, says) in [
+            (
+                r#"{ "test": { "tags": [{ "name": "and" }] } }"#,
+                "combines tags",
+            ),
+            (r#"{ "test": { "tags": [{ "name": "a b" }] } }"#, "spaces"),
+            (
+                r#"{ "test": { "tags": [{ "timeout": 1 }] } }"#,
+                "needs a \"name\"",
+            ),
+            (
+                r#"{ "test": { "tags": [{ "name": "x", "timeout": 0 }] } }"#,
+                "above zero",
+            ),
+            (
+                r#"{ "test": { "tags": [{ "name": "x", "skip": true }] } }"#,
+                "unknown key `skip`",
+            ),
+            (r#"{ "test": { "tags": "db" } }"#, "An array"),
         ] {
             let err = read(json).expect_err("refused");
             assert!(err.contains(says), "{json}: {err}");

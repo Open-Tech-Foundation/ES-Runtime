@@ -230,6 +230,9 @@ async fn run(
     let not_run = &not_run;
     let runs = files.iter().enumerate().map(|(index, file)| {
         let mut options = config.run_options();
+        options.module_tags = std::fs::read_to_string(file)
+            .map(|source| crate::tags::module_tags(&source))
+            .unwrap_or_default();
         let job = Job {
             client: Arc::clone(client),
             routes: Arc::clone(routes),

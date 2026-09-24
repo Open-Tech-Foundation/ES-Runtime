@@ -50,6 +50,7 @@ const NAV = [
       { title: "Running & isolating", path: "/esdev/test/running" },
       { title: "Snapshots", path: "/esdev/test/snapshots" },
       { title: "Fixtures", path: "/esdev/test/fixtures" },
+      { title: "Tags", path: "/esdev/test/tags" },
       { title: "Mocks & fake timers", path: "/esdev/test/mocks" },
       { title: "Configuration", path: "/esdev/test/configuration" },
       { title: "Global setup", path: "/esdev/test/global-setup" },

@@ -661,6 +661,19 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D113 — Test tags, defined in esdev.json and filtered by expression · *Accepted (2026-09-24)*
+
+**Context:** Vitest 4.1's tags label tests across files (`{ tags }` on a test or suite, `@module-tag` in a file) and give a category its options. Definitions in config carry `timeout`/`retry` and a `priority`, `--tags-filter` takes a boolean expression, `strictTags` refuses undefined names, and `TestRunner.matchesTags` asks the filter at runtime.
+
+**Decision:**
+- **Vitest's model and syntax**: `test.tags` in esdev.json, `{ tags }` on tests and `describe`, `@module-tag` in `/** */` comments, `--tags-filter` with `and`/`or`/`not` (and `&&`/`||`/`!`), `*` and parentheses, `--list-tags[=json]`, strict names by default, and `matchesTags` exported from `runtime:test`.
+- **The expression is parsed by the process that receives the flag** and sent to each file as a tree. A malformed filter is one error before anything runs, not one per file, and `runtime:test` only evaluates.
+- **Options by priority, as Vitest resolves them**: tags without a priority first, then the lowest number last so it wins; among equals, the later tag. The test's own options override every tag.
+- **Module tags are read by the host** from the file's source, for process, `--isolation=none` and browser runs alike, since a module cannot see its own comments.
+- A tag gives `timeout`, `retry` and `repeats`, the options this runner has. Not taken: Vitest's per-tag `skip`/`only`/`fails`/`concurrent`, and tags in the UI.
+
+---
+
 ### D112 — Fixtures with `test.extend`, chosen by what a test destructures · *Accepted (2026-09-24)*
 
 **Context:** Vitest's `test.extend` (builder syntax since 4.1, with `onCleanup`) and Playwright's object syntax (`async ({}, use) => { … await use(value) … }`) are how suites share set-up. Both give a fixture a scope (`test`, `file`, `worker`) and set up only what a test uses, which they read from how the test destructures its first parameter. Here a test body was called with no arguments, so there was no context to carry fixtures.

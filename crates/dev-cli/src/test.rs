@@ -114,6 +114,14 @@ pub struct TestConfig {
     pub coverage_out: Option<PathBuf>,
     /// Where each child of a coverage run writes, set by the parent.
     pub coverage_dir: Option<PathBuf>,
+    /// `--tags-filter`, as given: each an expression a test's tags must match.
+    pub tags_filter: Vec<String>,
+    /// `--list-tags[=json]`: print the project's tags and run nothing.
+    pub list_tags: Option<bool>,
+    /// The project's `test.tags`.
+    pub tag_definitions: Vec<crate::config::TagDefinition>,
+    /// The project's `test.strictTags`; on unless it says otherwise.
+    pub strict_tags: bool,
     /// `--detect-async-leaks`: what a file leaves pending after its tests is a
     /// failure, named with where it was started.
     pub detect_leaks: bool,
@@ -165,6 +173,15 @@ impl TestConfig {
             repeats: self.repeats,
             list: self.list,
             detect_leaks: self.detect_leaks,
+            tags_filter: self
+                .tags_filter
+                .iter()
+                .filter_map(|text| crate::tags::parse(text).ok())
+                .map(|expr| expr.to_json())
+                .collect(),
+            tags: serde_json::to_value(&self.tag_definitions).unwrap_or_default(),
+            strict_tags: self.strict_tags,
+            module_tags: Vec::new(),
         }
     }
 }
@@ -404,6 +421,12 @@ pub async fn run_all(
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
                 .chain(config.list.then(|| "--list".to_string()))
+                .chain(
+                    config
+                        .tags_filter
+                        .iter()
+                        .map(|filter| format!("--tags-filter={filter}")),
+                )
                 .chain(
                     config
                         .detect_leaks
