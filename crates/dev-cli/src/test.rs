@@ -41,31 +41,26 @@ use std::path::{Path, PathBuf};
 
 use crate::config::TestIsolation;
 
-/// What `esdev test` was asked to do.
+/// What `esdev test` was asked to do: the whole run, as the parent sees it.
+///
+/// What one file's run reads is [`FileRun`], and it is all a child receives
+/// (DECISIONS D125). Everything here outside it — the reporter, the watch,
+/// which files — is the parent's, and cannot reach a child, because a child is
+/// not given it.
 #[derive(Clone)]
 pub struct TestConfig {
-    /// Install the esdev-only DOM realm before the test module evaluates.
-    pub dom: bool,
+    /// What each file's run reads, resolved once and handed to every child.
+    pub run: FileRun,
     /// Run the files in a real browser over WebDriver BiDi instead, from
     /// `--browser` or the project's `test.browser`.
     pub browser: Option<crate::browser::Choice>,
     /// Show the browser's window rather than running it headless.
     pub headed: bool,
-    /// Run only the tests whose full name matches, from `-t`.
-    pub name_pattern: Option<String>,
-    /// Skip the tests whose full name matches.
-    pub skip_pattern: Option<String>,
     /// Stop after this many tests have failed, from `--bail`.
     pub bail: Option<usize>,
-    /// How many more times every test runs, from `--repeats`.
-    pub repeats: Option<u32>,
-    /// Name the tests instead of running them, from `--list`.
-    pub list: bool,
     /// Where a machine reporter writes, from `--reporter-outfile`. With it, the
     /// terminal keeps the report a person reads.
     pub reporter_outfile: Option<PathBuf>,
-    /// Internal parent-to-child: print no report; the parent writes it.
-    pub quiet: bool,
     /// Run only this part of the discovered files, from `--shard`.
     pub shard: Option<Shard>,
     /// Run only the test files these changes reach, from `--changed` or
@@ -73,22 +68,9 @@ pub struct TestConfig {
     pub affected_by: Option<AffectedBy>,
     /// Shuffle the run's order, from `--randomize`.
     pub randomize: bool,
-    /// The seed the order is shuffled from, from `--seed` or chosen for a
-    /// `--randomize` run. Passed to every file, so the whole run can be
-    /// repeated.
-    pub seed: Option<u32>,
     /// Internal parent-to-child: where a child writes its pass and fail
     /// counts, for the parent to add up.
     pub summary: Option<PathBuf>,
-    /// How JSX in a test file compiles, from the project's `jsx` section. Read
-    /// by the parent and by every `--file` child, so a test means the same
-    /// thing however it was started.
-    pub jsx: crate::transform::JsxSettings,
-    /// The project's top-level `plugins`, whose hooks compile every module a
-    /// test loads the way `esdev build` would, and the directory they are
-    /// named from. Read, like `jsx`, by the parent and by every child.
-    pub plugins: Vec<crate::config::PluginSpec>,
-    pub plugin_dir: PathBuf,
     /// Run exactly this file, harness installed. This is what the parent
     /// invokes for each child, and it is a supported way to run one file
     /// directly.
@@ -104,15 +86,9 @@ pub struct TestConfig {
     /// `--_watch-keys`: read watch keys from stdin even when it is not a
     /// terminal, as the end-to-end tests do.
     pub watch_keys: bool,
-    /// Modules imported before the file under test, from `--setup` or the
-    /// project's `test.setup`. Absolute by the time they get here.
-    pub setup: Vec<String>,
     /// Modules run once before the files and torn down after, as file URLs,
     /// from `--global-setup` or the project's `test.globalSetup`.
     pub global_setup: Vec<String>,
-    /// Internal parent-to-child: the file holding what global setup provided,
-    /// for `inject`. Its presence also says the parent ran global setup.
-    pub provided: Option<PathBuf>,
     /// `--coverage`, and the project's `test.coverage` settings.
     pub coverage: Option<crate::coverage::Settings>,
     /// Whether `--coverage` itself was given, rather than `enabled` in the
@@ -123,17 +99,62 @@ pub struct TestConfig {
     pub coverage_out: Option<PathBuf>,
     /// Where each child of a coverage run writes, set by the parent.
     pub coverage_dir: Option<PathBuf>,
+    /// `--typecheck`: run the project's `tsc --noEmit` too, and fail with it.
+    pub typecheck: bool,
+    /// `--list-tags[=json]`: print the project's tags and run nothing.
+    pub list_tags: Option<bool>,
+    /// Internal: this process is the global setup, and writes what it provides
+    /// here once its `setup` functions have run.
+    pub global_setup_out: Option<PathBuf>,
+    /// How long one file may take before it is stopped and failed.
+    pub timeout: Option<u64>,
+    /// `"json"` for one object per line, or `None` for what a person reads.
+    pub reporter: Option<String>,
+    /// Internal parent-to-child: the [`FileRun`] to run with, written by the
+    /// parent, in place of resolving the project again.
+    pub settings_file: Option<PathBuf>,
+}
+
+/// What running one test file reads: the parent's settings a child needs, and
+/// nothing a child must not have.
+///
+/// Written once by the parent and read by each child (`--_settings`), so a
+/// child runs exactly as the parent resolved — the project read once, the
+/// flags applied once.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FileRun {
+    /// How source is read: the project's `jsx`, aliases and plugins.
+    pub source: crate::settings::Source,
+
+    /// Install the esdev-only DOM realm before the test module evaluates.
+    pub dom: bool,
+    /// Run only the tests whose full name matches, from `-t`.
+    pub name_pattern: Option<String>,
+    /// Skip the tests whose full name matches.
+    pub skip_pattern: Option<String>,
+    /// How many more times every test runs, from `--repeats`.
+    pub repeats: Option<u32>,
+    /// Name the tests instead of running them, from `--list`.
+    pub list: bool,
+    /// Internal parent-to-child: print no report; the parent writes it.
+    pub quiet: bool,
+    /// The seed the order is shuffled from, from `--seed` or chosen for a
+    /// `--randomize` run. Passed to every file, so the whole run can be
+    /// repeated.
+    pub seed: Option<u32>,
+    /// Modules imported before the file under test, from `--setup` or the
+    /// project's `test.setup`. Absolute by the time they get here.
+    pub setup: Vec<String>,
+    /// Internal parent-to-child: the file holding what global setup provided,
+    /// for `inject`. Its presence also says the parent ran global setup.
+    pub provided: Option<PathBuf>,
     /// `--max-concurrency` or `test.maxConcurrency`: how many concurrent cases
     /// in a file may run at once. `None` is 5.
     pub max_concurrency: Option<u64>,
     /// `esdev bench`: the benchmark files, with `bench` in the test context.
     pub bench: bool,
-    /// `--typecheck`: run the project's `tsc --noEmit` too, and fail with it.
-    pub typecheck: bool,
     /// `--tags-filter`, as given: each an expression a test's tags must match.
     pub tags_filter: Vec<String>,
-    /// `--list-tags[=json]`: print the project's tags and run nothing.
-    pub list_tags: Option<bool>,
     /// The project's `test.tags`.
     pub tag_definitions: Vec<crate::config::TagDefinition>,
     /// The project's `test.strictTags`; on unless it says otherwise.
@@ -144,13 +165,6 @@ pub struct TestConfig {
     /// `--inspect[=<addr>]` / `--inspect-brk[=<addr>]`: each file serves a
     /// debugger in turn, one file at a time.
     pub inspect: Option<crate::inspect::InspectConfig>,
-    /// Internal: this process is the global setup, and writes what it provides
-    /// here once its `setup` functions have run.
-    pub global_setup_out: Option<PathBuf>,
-    /// How long one file may take before it is stopped and failed.
-    pub timeout: Option<u64>,
-    /// `"json"` for one object per line, or `None` for what a person reads.
-    pub reporter: Option<String>,
     /// Rewrite snapshots whose value changed, and create snapshots that do not
     /// exist yet. This is deliberately a command action, not project config:
     /// committing a config that rewrites assertions would be a foot-gun.
@@ -172,7 +186,38 @@ pub struct TestConfig {
     pub permission_args: Vec<String>,
 }
 
+impl FileRun {
+    /// Writes this for the children of a run to read with `--_settings`.
+    pub fn write(&self, path: &Path) -> Result<(), String> {
+        let text = serde_json::to_string(self)
+            .map_err(|e| format!("cannot write the test settings: {e}"))?;
+        std::fs::write(path, text)
+            .map_err(|e| format!("cannot write the test settings to {}: {e}", path.display()))
+    }
+
+    /// What a parent wrote with [`FileRun::write`].
+    pub fn read(path: &Path) -> Result<FileRun, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read the test settings {}: {e}", path.display()))?;
+        serde_json::from_str(&text)
+            .map_err(|e| format!("the test settings {} are not readable: {e}", path.display()))
+    }
+}
+
 impl TestConfig {
+    /// Writes [`FileRun`] where this run's children read it, and returns the
+    /// flag that names it: what every process a run starts is given in place
+    /// of its own reading of the project.
+    pub fn settings_flag(&self) -> Result<String, String> {
+        let path =
+            std::env::temp_dir().join(format!("esdev-test-settings-{}.json", std::process::id()));
+        // A child prints no report while the parent writes a machine one.
+        let mut run = self.run.clone();
+        run.quiet = !self.terminal_human();
+        run.write(&path)?;
+        Ok(format!("--_settings={}", path.display()))
+    }
+
     /// Whether the terminal shows the report a person reads: the default, or a
     /// machine reporter that writes to a file.
     pub fn terminal_human(&self) -> bool {
@@ -182,24 +227,25 @@ impl TestConfig {
     /// What each file's `runtime:test` is told.
     pub fn run_options(&self) -> crate::guest::test::RunOptions {
         crate::guest::test::RunOptions {
-            name_pattern: self.name_pattern.clone(),
-            skip_pattern: self.skip_pattern.clone(),
+            name_pattern: self.run.name_pattern.clone(),
+            skip_pattern: self.run.skip_pattern.clone(),
             bail: self.bail,
-            seed: self.seed,
-            repeats: self.repeats,
-            list: self.list,
-            detect_leaks: self.detect_leaks,
+            seed: self.run.seed,
+            repeats: self.run.repeats,
+            list: self.run.list,
+            detect_leaks: self.run.detect_leaks,
             tags_filter: self
+                .run
                 .tags_filter
                 .iter()
                 .filter_map(|text| crate::tags::parse(text).ok())
                 .map(|expr| expr.to_json())
                 .collect(),
-            tags: serde_json::to_value(&self.tag_definitions).unwrap_or_default(),
-            strict_tags: self.strict_tags,
+            tags: serde_json::to_value(&self.run.tag_definitions).unwrap_or_default(),
+            strict_tags: self.run.strict_tags,
             module_tags: Vec::new(),
-            max_concurrency: self.max_concurrency,
-            bench: self.bench,
+            max_concurrency: self.run.max_concurrency,
+            bench: self.run.bench,
         }
     }
 }
@@ -431,78 +477,19 @@ pub async fn run_all(
 ) -> Outcome {
     use futures_util::StreamExt;
 
-    // What the parent hands down. A child runs one file and must run it the way
-    // the parent was asked to, or the run reports something nobody configured.
-    let flags: Vec<String> = config
-        .dom
-        .then(|| "--dom".to_string())
-        .into_iter()
-        .chain(
-            config
-                .setup
-                .iter()
-                .map(|module| format!("--setup={module}"))
-                .chain((!config.terminal_human()).then(|| "--_quiet".to_string()))
-                .chain(
-                    config
-                        .update_snapshots
-                        .then(|| "--update-snapshots".to_string()),
-                )
-                .chain(config.ci.then(|| "--ci".to_string()))
-                .chain(config.full_diff.then(|| "--full-diff".to_string()))
-                .chain(
-                    config
-                        .name_pattern
-                        .iter()
-                        .map(|p| format!("--test-name-pattern={p}")),
-                )
-                .chain(
-                    config
-                        .provided
-                        .iter()
-                        .map(|path| format!("--_provided={}", path.display())),
-                )
-                .chain(config.inspect.iter().map(|inspect| {
-                    let flag = if inspect.wait {
-                        "--inspect-brk"
-                    } else {
-                        "--inspect"
-                    };
-                    format!("{flag}={}", inspect.address)
-                }))
-                .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
-                .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
-                .chain(config.list.then(|| "--list".to_string()))
-                .chain(config.bench.then(|| "--_bench".to_string()))
-                .chain(
-                    config
-                        .max_concurrency
-                        .map(|n| format!("--max-concurrency={n}")),
-                )
-                .chain(
-                    config
-                        .tags_filter
-                        .iter()
-                        .map(|filter| format!("--tags-filter={filter}")),
-                )
-                .chain(
-                    config
-                        .detect_leaks
-                        .then(|| "--detect-async-leaks".to_string()),
-                )
-                .chain(
-                    config
-                        .skip_pattern
-                        .iter()
-                        .map(|p| format!("--test-skip-pattern={p}")),
-                )
-                .chain(config.permission_args.iter().cloned())
-                .chain(std::iter::once(format!(
-                    "--_snapshot-prune={}",
-                    u8::from(config.snapshot_prune)
-                ))),
-        )
-        .collect();
+    // What the parent hands down: what running a file reads, resolved once
+    // here. A child runs one file and must run it the way the parent was asked
+    // to, or the run reports something nobody configured.
+    let settings = match config.settings_flag() {
+        Ok(flag) => flag,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return Outcome {
+                failed: files.len(),
+                failing: files.to_vec(),
+            };
+        }
+    };
 
     let named = |file: &Path| {
         file.strip_prefix(root)
@@ -536,7 +523,7 @@ pub async fn run_all(
         child
             .arg("test")
             .arg(format!("--file={}", file.display()))
-            .args(&flags);
+            .arg(&settings);
         if let Some(remaining) = remaining {
             child.arg(format!("--bail={remaining}"));
         }
@@ -629,7 +616,7 @@ pub async fn run_all(
             // machine reporter owns stdout.
             // A child serving a debugger says where on stderr, which has to
             // reach the terminal while it waits rather than after it ends.
-            let capture = match (quiet, config.inspect.is_some()) {
+            let capture = match (quiet, config.run.inspect.is_some()) {
                 (false, _) => Capture::Nothing,
                 (true, true) => Capture::Stdout,
                 (true, false) => Capture::Both,
@@ -884,7 +871,7 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
     tokio::pin!(stop);
     let mut resumed = resumed();
     let mut filters = config.filters.clone();
-    let mut name_pattern = config.name_pattern.clone();
+    let mut name_pattern = config.run.name_pattern.clone();
     let mut failing: Vec<PathBuf> = Vec::new();
     let mut next = Pass::Filtered;
 
@@ -1023,11 +1010,11 @@ impl Pass {
                 .collect(),
             Pass::Filtered | Pass::Update => discover(root, filters),
         };
-        shuffle(&mut files, config.seed);
+        shuffle(&mut files, config.run.seed);
         let mut pass = config.clone();
         pass.filters = filters.to_vec();
-        pass.name_pattern = name_pattern.clone();
-        pass.update_snapshots |= self == Pass::Update;
+        pass.run.name_pattern = name_pattern.clone();
+        pass.run.update_snapshots |= self == Pass::Update;
         (files, pass)
     }
 }
@@ -1275,6 +1262,59 @@ fn is_run_file(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a child reads is what the parent resolved: the project's source
+    /// settings and the flags, whole.
+    #[test]
+    fn a_file_run_reads_back_as_it_was_written() {
+        let run = FileRun {
+            source: crate::settings::Source {
+                root: PathBuf::from("/p"),
+                jsx: crate::transform::JsxSettings {
+                    function: Some(crate::transform::JsxFunction::InScope {
+                        factory: "h".to_string(),
+                        fragment: None,
+                    }),
+                    development: false,
+                },
+                alias: vec![("@".to_string(), "/p/src".to_string())],
+                plugins: vec![crate::config::PluginSpec {
+                    module: "./framework.mjs".to_string(),
+                    export: None,
+                    options: Some(serde_json::json!({ "greeting": "hi" })),
+                }],
+            },
+            dom: true,
+            setup: vec!["file:///p/setup.ts".to_string()],
+            provided: Some(PathBuf::from("/tmp/provided.json")),
+            quiet: true,
+            update_snapshots: false,
+            ci: true,
+            full_diff: false,
+            snapshot_prune: true,
+            name_pattern: Some("adds".to_string()),
+            skip_pattern: None,
+            seed: Some(7),
+            repeats: Some(2),
+            list: false,
+            bench: false,
+            max_concurrency: Some(3),
+            tags_filter: vec!["db".to_string()],
+            detect_leaks: true,
+            tag_definitions: Vec::new(),
+            strict_tags: false,
+            inspect: None,
+            permission_args: vec!["--deny-all".to_string()],
+        };
+        let path = std::env::temp_dir().join(format!("esdev-file-run-{}.json", std::process::id()));
+        run.write(&path).expect("written");
+        let read = FileRun::read(&path).expect("read");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            serde_json::to_value(&read).unwrap(),
+            serde_json::to_value(&run).unwrap()
+        );
+    }
 
     /// What each watch key runs, and which filters it clears.
     #[test]

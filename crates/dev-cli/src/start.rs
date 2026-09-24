@@ -66,8 +66,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::build::{BuildRequest, Dev, ProjectBuild};
-use crate::config::{Output, Project};
+use crate::config::Output;
 use crate::devserver::{DevServer, HMR_PATH, Update};
+use crate::settings::Settings;
 
 /// The port the endpoint binds when the config does not say.
 ///
@@ -249,8 +250,8 @@ fn any_free() -> std::io::Result<u16> {
 
 /// What `esdev start` was asked to do.
 pub struct StartConfig {
-    /// The project, and everything it builds.
-    pub project: Project,
+    /// The project, and everything it builds, with the flags applied.
+    pub project: Settings,
     /// Whether a change is patched into the running page rather than reloading
     /// it. On unless `--no-hot`.
     pub hot: bool,
@@ -301,7 +302,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         }),
     ));
 
-    let root = project.dir.clone();
+    let root = project.source.root.clone();
     let ignored = output_dirs(&project);
     let gitignore = load_gitignore(&root)?;
     let watch_roots = watch_roots(&project);
@@ -564,18 +565,15 @@ impl From<Option<Vec<PathBuf>>> for Woken {
 /// The error is printed rather than returned, because in a loop a failed build
 /// is a message and not an exit: the developer is mid-edit, and the tool's job
 /// is to still be there when they finish.
-async fn rebuild(project: &Arc<Project>, watched: &[String], port: u16, hot: bool) -> bool {
+async fn rebuild(project: &Arc<Settings>, watched: &[String], port: u16, hot: bool) -> bool {
     let targets = if watched.is_empty() {
         None
     } else {
         Some(watched.to_vec())
     };
     let request = BuildRequest::Project(Box::new(ProjectBuild {
-        project: Arc::clone(project),
+        settings: Arc::clone(project),
         targets,
-        minify: false,
-        defines: Vec::new(),
-        conditions: Vec::new(),
         dev: Some(Dev {
             reload_port: port,
             hot,
@@ -749,7 +747,7 @@ fn collect(dir: &Path, into: &mut Vec<(PathBuf, Vec<u8>)>) {
     }
 }
 
-fn running_output(project: &Project, name: &str) -> Result<PathBuf, String> {
+fn running_output(project: &Settings, name: &str) -> Result<PathBuf, String> {
     let target = project
         .targets
         .iter()
@@ -765,7 +763,8 @@ fn running_output(project: &Project, name: &str) -> Result<PathBuf, String> {
     // Under the dev directory: the loop runs the development build, which is
     // what the last rebuild wrote — never the deployment in `dist/`.
     Ok(project
-        .dir
+        .source
+        .root
         .join(project.start.devdir())
         .join(crate::build::output_path(target)))
 }
@@ -776,12 +775,12 @@ fn running_output(project: &Project, name: &str) -> Result<PathBuf, String> {
 /// and there is nothing else it could sensibly mean. Two of them is a
 /// multi-page app, where the directory is shared and either answer is the same
 /// one — but nothing is guessed if the config already said.
-fn serve_dir(project: &Project) -> Result<Option<PathBuf>, String> {
+fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
     if project.start.run.is_some() {
         return Ok(None);
     }
     if let Some(serve) = &project.start.serve {
-        return Ok(Some(project.dir.join(serve)));
+        return Ok(Some(project.source.root.join(serve)));
     }
     let mut html = project.targets.iter().filter(|target| target.is_html());
     let Some(first) = html.next() else {
@@ -801,7 +800,9 @@ fn serve_dir(project: &Project) -> Result<Option<PathBuf>, String> {
     };
     // The development build, like everything else the loop reads: a `serve`
     // directory names somewhere as it stands and is left alone.
-    Ok(Some(project.dir.join(project.start.devdir()).join(dir)))
+    Ok(Some(
+        project.source.root.join(project.start.devdir()).join(dir),
+    ))
 }
 
 /// Every directory the build writes into.
@@ -813,8 +814,8 @@ fn serve_dir(project: &Project) -> Result<Option<PathBuf>, String> {
 ///
 /// The watcher has to ignore these or it never settles: a rebuild writes files,
 /// the watcher sees them, and it rebuilds.
-fn output_dirs(project: &Project) -> Vec<PathBuf> {
-    vec![project.dir.join(project.start.devdir())]
+fn output_dirs(project: &Settings) -> Vec<PathBuf> {
+    vec![project.source.root.join(project.start.devdir())]
 }
 
 /// Whether a changed path is one to rebuild for.
@@ -860,8 +861,8 @@ fn load_gitignore(root: &Path) -> Result<Option<Gitignore>, String> {
 /// certificate or data file in the same development loop as source under the
 /// project root. Only scoped `--allow-read=...` entries add roots; an unscoped
 /// grant has no finite path to register.
-fn watch_roots(project: &Project) -> Vec<PathBuf> {
-    let mut roots = vec![project.dir.clone()];
+fn watch_roots(project: &Settings) -> Vec<PathBuf> {
+    let mut roots = vec![project.source.root.clone()];
     for permission in &project.permissions {
         let Some(paths) = permission.strip_prefix("--allow-read=") else {
             continue;
@@ -875,7 +876,7 @@ fn watch_roots(project: &Project) -> Vec<PathBuf> {
             let path = if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                project.dir.join(path)
+                project.source.root.join(path)
             };
             if !roots.contains(&path) {
                 roots.push(path);
@@ -1121,15 +1122,17 @@ mod tests {
     /// save can never rebuild into the deployment.
     #[test]
     fn the_dev_directory_is_what_the_watcher_ignores() {
-        let project = crate::config::parse(
-            r#"{ "targets": {
+        let project = crate::settings::Settings::from_project(
+            crate::config::parse(
+                r#"{ "targets": {
                    "server": { "entry": "src/s.ts", "out": "build/server.js" },
                    "web": { "entry": "index.html", "outdir": "public_html" } } }"#,
-            PathBuf::from("/p"),
-            "esdev.json",
-        )
-        .expect("parsed")
-        .expect("a config");
+                PathBuf::from("/p"),
+                "esdev.json",
+            )
+            .expect("parsed")
+            .expect("a config"),
+        );
 
         assert_eq!(output_dirs(&project), vec![PathBuf::from("/p/.dev")]);
     }
@@ -1138,16 +1141,18 @@ mod tests {
     /// watcher and for everything the loop runs or serves.
     #[test]
     fn a_named_dev_directory_is_used_everywhere() {
-        let project = crate::config::parse(
-            r#"{ "targets": {
+        let project = crate::settings::Settings::from_project(
+            crate::config::parse(
+                r#"{ "targets": {
                    "server": { "entry": "src/s.ts", "out": "dist/server.js" },
                    "web": { "entry": "index.html", "outdir": "dist" } },
                  "start": { "run": "server", "devdir": "tmp-dev" } }"#,
-            PathBuf::from("/p"),
-            "esdev.json",
-        )
-        .expect("parsed")
-        .expect("a config");
+                PathBuf::from("/p"),
+                "esdev.json",
+            )
+            .expect("parsed")
+            .expect("a config"),
+        );
 
         assert_eq!(output_dirs(&project), vec![PathBuf::from("/p/tmp-dev")]);
         assert_eq!(
@@ -1161,27 +1166,31 @@ mod tests {
     /// mirrored under the dev directory rather than read from the deployment.
     #[test]
     fn the_loop_runs_and_serves_the_development_builds() {
-        let backend = crate::config::parse(
-            r#"{ "targets": { "server": { "entry": "src/s.ts", "out": "dist/server.js" } },
+        let backend = crate::settings::Settings::from_project(
+            crate::config::parse(
+                r#"{ "targets": { "server": { "entry": "src/s.ts", "out": "dist/server.js" } },
                  "start": { "run": "server" } }"#,
-            PathBuf::from("/p"),
-            "esdev.json",
-        )
-        .expect("parsed")
-        .expect("a config");
+                PathBuf::from("/p"),
+                "esdev.json",
+            )
+            .expect("parsed")
+            .expect("a config"),
+        );
         assert_eq!(
             running_output(&backend, "server").expect("output"),
             PathBuf::from("/p/.dev/dist/server.js")
         );
         assert!(serve_dir(&backend).expect("served").is_none());
 
-        let frontend = crate::config::parse(
-            r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
-            PathBuf::from("/p"),
-            "esdev.json",
-        )
-        .expect("parsed")
-        .expect("a config");
+        let frontend = crate::settings::Settings::from_project(
+            crate::config::parse(
+                r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+                PathBuf::from("/p"),
+                "esdev.json",
+            )
+            .expect("parsed")
+            .expect("a config"),
+        );
         assert_eq!(
             serve_dir(&frontend).expect("served"),
             Some(PathBuf::from("/p/.dev/dist"))
@@ -1190,14 +1199,16 @@ mod tests {
 
     #[test]
     fn scoped_read_permissions_are_additional_watch_roots() {
-        let project = crate::config::parse(
-            r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } },
+        let project = crate::settings::Settings::from_project(
+            crate::config::parse(
+                r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } },
                 "permissions": { "allow": { "read": ["./config", "/etc/example"] } } }"#,
-            PathBuf::from("/p"),
-            "esdev.json",
-        )
-        .expect("config")
-        .expect("project");
+                PathBuf::from("/p"),
+                "esdev.json",
+            )
+            .expect("config")
+            .expect("project"),
+        );
         assert_eq!(
             watch_roots(&project),
             vec![

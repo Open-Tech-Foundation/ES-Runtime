@@ -14,8 +14,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 
+use es_runtime_cli_common::Source;
 use es_runtime_cli_common::args::RunOptions;
-use es_runtime_cli_common::{Config, Source};
 
 use crate::test::TestConfig;
 use crate::transform::TypeStripper;
@@ -31,7 +31,7 @@ pub struct Running {
 /// Starts the global setup and waits for its `setup` functions to finish —
 /// or `None` when the project has none, or the run starts no test.
 pub async fn start(exe: &Path, config: &TestConfig) -> Result<Option<Running>, String> {
-    if config.global_setup.is_empty() || config.list {
+    if config.global_setup.is_empty() || config.run.list {
         return Ok(None);
     }
     let provided =
@@ -41,6 +41,7 @@ pub async fn start(exe: &Path, config: &TestConfig) -> Result<Option<Running>, S
     command
         .arg("test")
         .arg(format!("--_global-setup-out={}", provided.display()))
+        .arg(config.settings_flag()?)
         .args(
             config
                 .global_setup
@@ -155,31 +156,26 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let transform = match crate::plugins::transform(
-        &config.plugin_dir,
-        &config.plugins,
-        std::sync::Arc::new(TypeStripper::with_jsx(config.jsx.clone())),
-    )
-    .await
-    {
-        Ok(transform) => transform,
+    let run = config
+        .run
+        .source
+        .run_config(crate::settings::Run {
+            source: Source::Inline(entry(&config.global_setup)),
+            args: Vec::new(),
+            capabilities,
+            scopes,
+            options: RunOptions::default(),
+            stripper: TypeStripper::new(),
+            extensions: crate::guest::test_extensions(false),
+            observer: None,
+        })
+        .await;
+    let run = match run {
+        Ok(run) => run,
         Err(err) => {
             es_runtime_cli_common::diagnostics::print_error(&err);
             return ExitCode::FAILURE;
         }
-    };
-    let run = Config {
-        source: Source::Inline(entry(&config.global_setup)),
-        args: Vec::new(),
-        capabilities,
-        scopes,
-        options: RunOptions::default(),
-        transform: Some(transform),
-        bundler_style_resolution: true,
-        package_converter: Some(crate::commonjs::converter()),
-        extensions: crate::guest::test_extensions(false),
-        observer: None,
-        inspector: None,
     };
     match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => ExitCode::SUCCESS,

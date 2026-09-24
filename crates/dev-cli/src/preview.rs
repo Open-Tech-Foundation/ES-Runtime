@@ -29,7 +29,7 @@
 
 use std::path::PathBuf;
 
-use crate::config::{Output, Project};
+use crate::config::Output;
 
 /// What `esdev preview` was asked to do.
 pub struct PreviewConfig {
@@ -56,13 +56,14 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
     let dir = match &config.dir {
         Some(dir) => root.join(dir),
         None => {
-            let project = crate::config::load(config.config.as_deref())?.ok_or_else(|| {
-                format!(
+            let project = crate::settings::Settings::load(config.config.as_deref())?;
+            if !project.has_project {
+                return Err(format!(
                     "there is no {} here, so nothing says what was built.\n\n\
                      Name the directory: `esdev preview --dir=dist`.",
                     crate::config::FILE_NAME
-                )
-            })?;
+                ));
+            }
             directory(&project)?
         }
     };
@@ -121,9 +122,9 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
 /// server target is the case that differs — the dev loop runs that server, and
 /// a preview cannot, because what it would be running is a production artifact
 /// that belongs under `esrun`.
-fn directory(project: &Project) -> Result<PathBuf, String> {
+fn directory(project: &crate::settings::Settings) -> Result<PathBuf, String> {
     if let Some(serve) = &project.start.serve {
-        return Ok(project.dir.join(serve));
+        return Ok(project.source.root.join(serve));
     }
     let mut html = project.targets.iter().filter(|target| target.is_html());
     let Some(first) = html.next() else {
@@ -153,7 +154,7 @@ fn directory(project: &Project) -> Result<PathBuf, String> {
     let Output::Dir(dir) = &first.output else {
         return Err("an HTML target writes a directory".to_string());
     };
-    Ok(project.dir.join(dir))
+    Ok(project.source.root.join(dir))
 }
 
 /// Binds the port, or says which one it took instead.
@@ -188,10 +189,12 @@ fn bind(wanted: Option<u16>) -> Result<(std::net::TcpListener, u16), String> {
 mod tests {
     use super::*;
 
-    fn project(text: &str) -> Project {
-        crate::config::parse(text, PathBuf::from("/p"), "esdev.json")
-            .expect("parse")
-            .expect("a project")
+    fn project(text: &str) -> crate::settings::Settings {
+        crate::settings::Settings::from_project(
+            crate::config::parse(text, PathBuf::from("/p"), "esdev.json")
+                .expect("parse")
+                .expect("a project"),
+        )
     }
 
     #[test]

@@ -1622,6 +1622,365 @@ fn a_raw_suffix_is_refused_by_name() {
 // to say.
 // ---------------------------------------------------------------------------
 
+/// A project that makes every build flag visible in what it builds: an alias
+/// with two places to point, a define it prints, and a package whose export
+/// depends on a condition.
+fn flag_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    for sub in ["src/a", "src/b", "node_modules/pick"] {
+        std::fs::create_dir_all(dir.join(sub)).expect("mkdir");
+    }
+    write_in(&dir, "package.json", r#"{"name":"flags"}"#);
+    write_in(&dir, "src/a/x.ts", "export default 'from a';\n");
+    write_in(&dir, "src/b/x.ts", "export default 'from b';\n");
+    write_in(
+        &dir,
+        "node_modules/pick/package.json",
+        r#"{ "name": "pick", "type": "module",
+             "exports": { ".": { "custom": "./custom.js", "default": "./default.js" } } }"#,
+    );
+    write_in(
+        &dir,
+        "node_modules/pick/custom.js",
+        "export default 'custom';\n",
+    );
+    write_in(
+        &dir,
+        "node_modules/pick/default.js",
+        "export default 'default';\n",
+    );
+    write_in(
+        &dir,
+        "src/app.ts",
+        "import x from '@/x.ts';\nimport which from 'pick';\n\
+         declare const GIVEN: string;\n\
+         console.log(x, typeof GIVEN === 'undefined' ? 'no define' : GIVEN, which);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "alias": { "@": "./src/a" },
+             "targets": { "app": { "entry": "src/app.ts", "out": "dist/app.js" } } }"#,
+    );
+    dir
+}
+
+/// **Every flag `esdev build --help` lists is either applied to a project
+/// build or refused by it — never accepted and dropped** (DECISIONS D125).
+/// Five were, until a project build carried only three of them. The table is
+/// checked against the help text, so a flag added without a row fails here.
+#[test]
+fn every_build_flag_is_applied_or_refused_in_a_project_build() {
+    enum Expect {
+        /// Built, and running it prints this.
+        Prints(&'static str),
+        /// Built, and the bundle is checked by the function.
+        Bundle(fn(&Path) -> bool),
+        /// Refused, naming the flag.
+        Refused,
+        /// Not a build flag: the help text names it for another reason.
+        NotAFlag,
+    }
+    let table: Vec<(&str, Vec<&str>, Expect)> = vec![
+        (
+            "--alias",
+            vec!["--alias=@=./src/b"],
+            Expect::Prints("from b no define default"),
+        ),
+        (
+            "--define",
+            vec!["--define=GIVEN=\"yes\""],
+            Expect::Prints("from a yes default"),
+        ),
+        (
+            "--conditions",
+            vec!["--conditions=custom"],
+            Expect::Prints("from a no define custom"),
+        ),
+        (
+            "--target",
+            vec!["--target=app"],
+            Expect::Prints("from a no define default"),
+        ),
+        (
+            "--config",
+            vec!["--config=esdev.json"],
+            Expect::Prints("from a no define default"),
+        ),
+        (
+            "--minify",
+            vec!["--minify"],
+            Expect::Bundle(|dir| {
+                let text = std::fs::read_to_string(dir.join("dist/app.js")).unwrap_or_default();
+                text.trim_end().lines().count() <= 2
+            }),
+        ),
+        (
+            "--sourcemap",
+            vec!["--sourcemap"],
+            Expect::Bundle(|dir| dir.join("dist/app.js.map").is_file()),
+        ),
+        ("--out", vec!["--out=other.js"], Expect::Refused),
+        ("--lib", vec!["--lib"], Expect::Refused),
+        ("--format", vec!["--format=cjs"], Expect::Refused),
+        ("--no-types", vec!["--no-types"], Expect::Refused),
+        ("--dts-bundle", vec!["--dts-bundle"], Expect::Refused),
+        ("--help", Vec::new(), Expect::NotAFlag),
+        // Named in the help's deploy line, which is esrun's.
+        ("--allow-imports", Vec::new(), Expect::NotAFlag),
+    ];
+
+    let help = esdev()
+        .args(["build", "--help"])
+        .output()
+        .expect("spawn esdev");
+    let listed: std::collections::BTreeSet<String> = stdout(&help)
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|word| word.starts_with("--") && word.len() > 2)
+        .map(str::to_string)
+        .collect();
+    for flag in &listed {
+        assert!(
+            table.iter().any(|(name, _, _)| name == flag),
+            "{flag} is in `esdev build --help` and has no row: say what a project build does with it"
+        );
+    }
+
+    let dir = flag_project("b_flag_table");
+    for (flag, args, expect) in &table {
+        if matches!(expect, Expect::NotAFlag) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(dir.join("dist"));
+        let out = esdev_in(&dir)
+            .arg("build")
+            .args(args)
+            .output()
+            .expect("spawn esdev build");
+        match expect {
+            Expect::Refused => {
+                assert!(
+                    !out.status.success(),
+                    "{flag} was accepted by a project build"
+                );
+                assert!(stderr(&out).contains(flag), "{flag}: {}", stderr(&out));
+            }
+            Expect::Prints(text) => {
+                assert!(out.status.success(), "{flag}: {}", stderr(&out));
+                let ran = esdev_in(&dir)
+                    .arg("dist/app.js")
+                    .output()
+                    .expect("spawn esdev");
+                assert_eq!(stdout(&ran).trim(), *text, "{flag}: {}", stderr(&ran));
+            }
+            Expect::Bundle(check) => {
+                assert!(out.status.success(), "{flag}: {}", stderr(&out));
+                assert!(check(&dir), "{flag} was accepted and did nothing");
+            }
+            Expect::NotAFlag => unreachable!(),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A one-off `esdev build <entry>` is still in the project: its `alias`
+/// applies, and a flag replaces the one of the same name.
+#[test]
+fn a_one_off_build_reads_the_projects_aliases() {
+    let dir = flag_project("b_one_off_alias");
+    let out = esdev_in(&dir)
+        .args(["build", "src/app.ts", "--out=one/app.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ran = esdev_in(&dir)
+        .arg("one/app.js")
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(stdout(&ran).trim(), "from a no define default");
+
+    let out = esdev_in(&dir)
+        .args([
+            "build",
+            "src/app.ts",
+            "--out=two/app.js",
+            "--alias=@=./src/b",
+        ])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ran = esdev_in(&dir)
+        .arg("two/app.js")
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(stdout(&ran).trim(), "from b no define default");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A library target keeps the specifier its source wrote, whatever alias the
+/// project has — the rule `--lib` states, now held for a target too.
+#[test]
+fn a_library_target_is_built_without_the_projects_alias() {
+    let dir = flag_project("b_lib_target_alias");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "alias": { "@": "./src/a" },
+             "targets": { "pkg": { "entry": "src", "outdir": "libout", "lib": true, "types": false } } }"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    // Where the target said: a library target's `outdir` used to be dropped
+    // on the way to the bundler, which wrote `./dist` instead.
+    assert!(!dir.join("dist").exists());
+    let built = std::fs::read_to_string(dir.join("libout/app.js")).expect("the library's app.js");
+    assert!(built.contains("@/x"), "{built}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `esdev <file>` reads source the way the project says, as a test and a build
+/// of it do: its `jsx`, and its plugins.
+#[test]
+fn a_module_run_unbundled_reads_the_projects_jsx_and_plugins() {
+    let dir = framework_project("b_run_jsx_plugins");
+    write_in(
+        &dir,
+        "run.mjs",
+        "import { greeting } from './greeting.jsx';\nconsole.log(greeting);\n",
+    );
+    let out = esdev_in(&dir).arg("run.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "hi from the plugin");
+
+    let jsx = build_dir("b_run_jsx");
+    write_in(&jsx, "esdev.json", r#"{ "jsx": { "factory": "h" } }"#);
+    write_in(
+        &jsx,
+        "app.jsx",
+        "const h = (tag) => tag;\nconsole.log(<section />);\n",
+    );
+    let out = esdev_in(&jsx).arg("app.jsx").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "section");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&jsx);
+}
+
+/// A project whose imports go through both kinds of alias: `esdev.json`'s
+/// and `tsconfig.json`'s `paths`, the second one through `extends`.
+fn aliased_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src/lib")).expect("create src");
+    std::fs::create_dir_all(dir.join("src/db")).expect("create src");
+    write_in(&dir, "package.json", r#"{"name":"aliased"}"#);
+    write_in(
+        &dir,
+        "src/lib/util.ts",
+        "export const help = (): string => 'helped';\n",
+    );
+    write_in(
+        &dir,
+        "src/db/index.ts",
+        "export const db = (): string => 'the db';\n",
+    );
+    write_in(
+        &dir,
+        "tsconfig.base.json",
+        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "~/*": ["src/*"] } } }"#,
+    );
+    write_in(
+        &dir,
+        "tsconfig.json",
+        r#"{ "extends": "./tsconfig.base.json" }"#,
+    );
+    write_in(&dir, "esdev.json", r#"{ "alias": { "@db": "./src/db" } }"#);
+    dir
+}
+
+/// `esdev test` resolves an import the way the build does: through
+/// `tsconfig.json`'s `paths` and `esdev.json`'s `alias` — and so does
+/// `mock.module`, which has to replace the module the import reaches.
+#[test]
+fn test_resolves_the_projects_aliases() {
+    let dir = aliased_project("b_alias_test");
+    write_in(
+        &dir,
+        "src/app.test.ts",
+        "import { test, expect } from 'runtime:test';\n\
+         import { help } from '~/lib/util.js';\n\
+         import { db } from '@db';\n\
+         test('aliases', () => {\n\
+           expect(help()).toBe('helped');\n\
+           expect(db()).toBe('the db');\n\
+         });\n",
+    );
+    write_in(
+        &dir,
+        "src/mocked.test.ts",
+        "import { test, expect, mock } from 'runtime:test';\n\
+         mock.module('@db', () => ({ db: () => 'mocked' }));\n\
+         import { db } from '~/db/index.ts';\n\
+         test('the alias names the module the mock replaces', () => expect(db()).toBe('mocked'));\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("2 files passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `esdev <file>` too — and `esrun` still does not: what it runs is a bundle,
+/// whose specifiers the build already settled.
+#[test]
+fn a_module_run_unbundled_resolves_the_projects_aliases() {
+    let dir = aliased_project("b_alias_run");
+    write_in(
+        &dir,
+        "src/app.ts",
+        "import { help } from '~/lib/util';\nimport { db } from '@db';\n\
+         console.log(help(), db());\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("src/app.ts")
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "helped the db\n");
+
+    let built = esdev_in(&dir)
+        // A one-off build reads no project, so it is told the alias.
+        .args([
+            "build",
+            "src/app.ts",
+            "--out=dist/app.js",
+            "--alias=@db=./src/db",
+        ])
+        .output()
+        .expect("spawn esdev build");
+    assert!(built.status.success(), "{}", stderr(&built));
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let bundled = Command::new(&esrun)
+        .current_dir(&dir)
+        .arg("dist/app.js")
+        .output()
+        .expect("spawn esrun");
+    assert_eq!(stdout(&bundled), "helped the db\n", "{}", stderr(&bundled));
+    let unbundled = Command::new(&esrun)
+        .current_dir(&dir)
+        .args(["--allow-imports", "src/app.ts"])
+        .output()
+        .expect("spawn esrun");
+    assert!(!unbundled.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `@/db` is how most of the ecosystem's source is written, and without this it
 /// was an unresolved import.
 #[test]

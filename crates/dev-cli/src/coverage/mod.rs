@@ -160,6 +160,7 @@ fn selected(
     let include = globs(&settings.include)?;
     let exclude = globs(&settings.exclude)?;
     let setup: Vec<PathBuf> = config
+        .run
         .setup
         .iter()
         .chain(&config.global_setup)

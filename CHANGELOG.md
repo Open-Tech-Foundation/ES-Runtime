@@ -43,6 +43,9 @@ namespace) is unstable and may change between minor releases until the API freez
   the runtime's resolver refuses, through a `PackageConverter` it supplies.
   `esdev` converts CommonJS packages with it; `esrun` passes `None` and still
   loads ES module packages only (DECISIONS D123).
+- **`cli-common`'s `Config::specifier_alias`** rewrites a specifier through a
+  binary's `SpecifierAlias` before it is resolved. `esdev` applies a project's
+  aliases with it; `esrun` passes `None` (DECISIONS D124).
 - **Pending-work tracking for embedders**: `Engine::track_pending_work`,
   `Runtime::track_pending_work` and `RunOptions::track_pending_work` record where
   each timer and async op starts, and install `__esdev_pending_work(release)`,

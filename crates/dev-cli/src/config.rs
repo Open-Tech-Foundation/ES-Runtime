@@ -84,13 +84,13 @@ pub struct Project {
     /// Specifier rewrites applied to every target's build: `find` → what it is
     /// replaced with, longest prefix first.
     ///
-    /// **A bundling rule, and only a bundling rule.** `@/db` resolves because
-    /// the bundler was told what `@` is; a module run *unbundled* — `esdev
-    /// src/thing.ts`, or a file `esdev test` runs — resolves the way `esrun`
-    /// does and knows nothing about it. That boundary is why the paths are
-    /// resolved here, against the project rather than the working directory: an
-    /// alias that means something different depending on where the build was
-    /// started from would be worse than not having one.
+    /// Applied by the bundler in a build, and by [`crate::alias`] to a module
+    /// `esdev` runs unbundled, so `@/db` means the same file in a test as in
+    /// the bundle. `esrun` never sees it: what it runs is a bundle, whose
+    /// specifiers the build already settled. The paths are resolved here,
+    /// against the project rather than the working directory: an alias that
+    /// means something different depending on where esdev was started from
+    /// would be worse than not having one.
     pub alias: Vec<(String, String)>,
     /// What `esdev test` does here, if the file says.
     pub test: TestSettings,
@@ -119,7 +119,7 @@ impl Project {
 }
 
 /// One plugin, as the file names it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginSpec {
     /// The module to import — a path relative to the project, or a package.
     pub module: String,
@@ -135,7 +135,7 @@ pub struct PluginSpec {
 }
 
 /// What `esdev start` runs and watches.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Start {
     /// The target whose output is *the server* — run as a child process, and
     /// restarted when a rebuild finishes. Absent for a stack with no server of
@@ -179,7 +179,7 @@ impl Start {
 /// project's setup files and its per-test budget are properties *of the
 /// project*, and a flag that has to be repeated in every `package.json` script
 /// is one that will be repeated differently in two of them.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TestSettings {
     /// Modules imported before each test file runs — a polyfill, a global stub,
     /// a fixture registry. In the order written.
@@ -210,7 +210,7 @@ pub struct TestSettings {
 }
 
 /// One entry of `test.tags`.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TagDefinition {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -245,7 +245,7 @@ pub enum TestIsolation {
 }
 
 /// One thing a project builds.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Target {
     /// The key this target was written under, and the name `--target=` selects
     /// it by.
@@ -344,7 +344,7 @@ pub(crate) fn is_html_entry(entry: &str) -> bool {
 }
 
 /// What a target's output looks like on disk.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Output {
     /// `out` — one file. The directory it lands in may hold other things and is
     /// never cleaned, because the build does not own it.
@@ -450,6 +450,10 @@ const THRESHOLD_KEYS: &[&str] = &["lines", "functions", "branches", "statements"
 const JSX_KEYS: &[&str] = &["importSource", "factory", "fragment", "development"];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
+///
+/// Called by [`crate::settings::Settings::load`] and nothing else: the file is
+/// combined with the flags in one place, and a second reader is how a setting
+/// comes to reach one command and not another (DECISIONS D125).
 ///
 /// `Ok(None)` means there is no config and none was asked for — the ordinary
 /// state of a project that names its entry on the command line. A `--config`
@@ -1891,6 +1895,15 @@ fn kind(value: &Value) -> &'static str {
         Value::String(_) => "a string",
         Value::Array(_) => "a list",
         Value::Object(_) => "an object",
+    }
+}
+
+/// The parser, for tests elsewhere in the crate that need a project.
+#[cfg(test)]
+pub mod tests_support {
+    pub fn read(text: &str) -> Result<super::Project, String> {
+        super::parse(text, std::path::PathBuf::from("."), "esdev.json")
+            .map(|p| p.expect("a config"))
     }
 }
 

@@ -49,8 +49,22 @@ esdev build src/app.ts           # ignores the project file entirely
 | `plugins` | Plugins for this target, **added** to the project's |
 
 `define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
-string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
-takes a release build of a project whose day to day is unminified.
+string, `"PORT": 8080` with a number.
+
+### Flags on a project build
+
+A flag applies to every target built, and beats the file:
+
+| Flag | On each target |
+| --- | --- |
+| `--minify` | Turns `minify` on |
+| `--sourcemap[=<kind>]` | Replaces `sourcemap` |
+| `--define`, `--conditions` | Added after the target's own, so a `--define` wins a name both set |
+| `--alias` | Replaces the `alias` of the same name, or adds one |
+
+`--out`, `--lib`, `--format`, `--no-types` and `--dts-bundle` are refused: a
+project build writes where each target says, and a target says whether it is a
+library in the file.
 
 ## JSX
 
@@ -103,15 +117,16 @@ one output:
 ```
 
 A path is resolved against the project; anything else names a package. The
-longest match wins, so `@/ui` beats `@`. `--alias=@=./src` is the same thing for
-an entry with no project around it.
+longest match wins, so `@/ui` beats `@`. `--alias=@=./src` replaces the alias of
+the same name. `esdev build <entry>` reads the project's `alias`, `jsx` and
+`plugins` too, though not its targets: the entry is in the project's source tree.
 
-<Callout type="note" title="A bundling rule, and only that">
-  `@/db` resolves because the bundler was told what `@` is. A module run
-  unbundled — `esdev src/thing.ts`, or a file `esdev test` runs — resolves the
-  way `esrun` does and knows nothing about it. `--lib` refuses aliases outright:
-  a published module keeps the specifier its source wrote.
-</Callout>
+`esdev test` and `esdev <file>` apply the same aliases to what they run
+unbundled, and so does `tsconfig.json`'s `paths`, as the bundler reads it. See
+[Imports](/esdev/test/imports#aliases). `esrun` never applies them: it runs the
+bundle, where they are already resolved. A library, whether `--lib` or a target
+with `"lib": true`, is built without them: a published module keeps the
+specifier its source wrote, and `--lib` refuses `--alias`.
 
 ## `import.meta.env`
 

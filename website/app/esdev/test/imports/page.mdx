@@ -20,6 +20,23 @@ resolved all of it, so ship the build rather than the source.
 | `esdev`, Bun, a bundler | resolves `util.ts` |
 | `esrun`, Node | `ERR_MODULE_NOT_FOUND` |
 
+## Aliases
+
+A test resolves an import the way the build does. Two places can name an
+alias, and both apply, in this order:
+
+| | |
+| --- | --- |
+| **`esdev.json` `alias`** | `{ "alias": { "@": "./src" } }` — the longest name wins; a path or a package name. See [Aliases](/esdev/build/project#aliases) |
+| **`tsconfig.json` `paths`** | `"paths": { "~/*": ["src/*"] }`, with `baseUrl` and `extends`, from the tsconfig that owns the importing file. A mapping is used only when it names a file |
+
+`mock.module("@/db", …)` resolves through the same aliases, so it replaces the
+module an `import` reaches. A dependency in `node_modules` is not under the
+project's `tsconfig.json`, but `esdev.json`'s `alias` applies to it, as in a
+build: `"react": "preact/compat"` is for the dependencies too.
+
+`esdev <file>` resolves the same way.
+
 ## CommonJS packages
 
 `esdev` runs a CommonJS package without a build step. The first run that

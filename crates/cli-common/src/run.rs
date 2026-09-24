@@ -97,6 +97,13 @@ pub struct Config {
     /// conversion is a bundler's, and the bundler lives in `esdev`. See
     /// [`PackageConverter`].
     pub package_converter: Option<Arc<dyn PackageConverter>>,
+    /// Rewrites a specifier before it is resolved — how `esdev` applies a
+    /// project's `alias` and `tsconfig.json` `paths` to a module it runs
+    /// unbundled, as its build does.
+    ///
+    /// `esrun` passes `None`: what it runs is a bundle whose specifiers the
+    /// build already settled. See [`SpecifierAlias`].
+    pub specifier_alias: Option<Arc<dyn SpecifierAlias>>,
     /// Watches what the run actually reaches for — how `esdev` serves
     /// `--trace-permissions` (D59).
     ///
@@ -185,6 +192,61 @@ pub trait PackageConverter: Send + Sync {
     /// Makes `id` ready to read, if it is one [`resolve`](Self::resolve)
     /// named. `None` is an id that is not this converter's.
     fn prepare(&self, id: &str) -> Option<es_runtime_providers::BoxFuture<Result<(), String>>>;
+}
+
+/// Maps a specifier to the one to resolve instead, before anything else sees
+/// it.
+///
+/// `@/lib` meaning `src/lib` is a rule of the project, written in its
+/// `esdev.json` or its `tsconfig.json`, and a bundler applies it. A module run
+/// unbundled — a test file — went to the runtime's resolver, which has never
+/// heard of it, so the same import built and failed under `esdev test`.
+///
+/// Applied **first**, as a bundler applies an alias before looking in
+/// `node_modules`, and synchronously, so `import.meta.resolve` and
+/// `mock.module` agree with `import` (D41).
+pub trait SpecifierAlias: Send + Sync {
+    /// What to resolve in place of `specifier`, written in `referrer`, or
+    /// `None` to resolve it as written.
+    fn alias(&self, specifier: &str, referrer: &str) -> Option<String>;
+}
+
+/// Wraps a [`ModuleLoader`] so every specifier passes a [`SpecifierAlias`]
+/// first.
+struct AliasingLoader {
+    inner: Arc<dyn ModuleLoader>,
+    alias: Arc<dyn SpecifierAlias>,
+}
+
+impl ModuleLoader for AliasingLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<String, ProviderError>> {
+        match self.alias.alias(specifier, referrer) {
+            Some(aliased) => self.inner.resolve(&aliased, referrer),
+            None => self.inner.resolve(specifier, referrer),
+        }
+    }
+
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        match self.alias.alias(specifier, referrer) {
+            Some(aliased) => self.inner.resolve_sync(&aliased, referrer),
+            None => self.inner.resolve_sync(specifier, referrer),
+        }
+    }
+
+    fn load(
+        &self,
+        specifier: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<ModuleSource, ProviderError>> {
+        self.inner.load(specifier)
+    }
 }
 
 /// Wraps a [`ModuleLoader`] so a package it refuses is offered to a
@@ -744,6 +806,15 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         Some(converter) => Arc::new(ConvertingLoader {
             inner: resolved,
             converter: converter.clone(),
+        }),
+        None => resolved,
+    };
+    // Outside the converter, so a package an alias names — `react` written,
+    // `preact/compat` meant — is the one converted.
+    let resolved: Arc<dyn ModuleLoader> = match &config.specifier_alias {
+        Some(alias) => Arc::new(AliasingLoader {
+            inner: resolved,
+            alias: alias.clone(),
         }),
         None => resolved,
     };

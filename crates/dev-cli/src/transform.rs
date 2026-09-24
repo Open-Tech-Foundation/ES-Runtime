@@ -51,7 +51,7 @@ pub struct TypeStripper {
 /// either the compiler writes the import, or it calls what the module already
 /// has. Any library works as either — a package that exports `jsx`/`jsxs` from
 /// a `jsx-runtime` subpath, or a function you import yourself.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum JsxFunction {
     /// `<div/>` becomes `jsx("div", …)`, imported by the compiler from
     /// `<source>/jsx-runtime`.
@@ -69,7 +69,7 @@ pub enum JsxFunction {
 /// `function` is `None` until something says: a project has no default because
 /// choosing one would be choosing a framework. A file that contains JSX and has
 /// no answer is an error naming the file, not a guess.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JsxSettings {
     /// Where the element function comes from, or `None` if nothing has said.
     pub function: Option<JsxFunction>,

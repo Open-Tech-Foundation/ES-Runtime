@@ -131,8 +131,12 @@ static HOST: OnceLock<Mutex<Option<Arc<PluginHost>>>> = OnceLock::new();
 ///
 /// `Ok(None)` is a project with no plugins, which is most of them: nothing is
 /// started, no isolate exists, and a build costs exactly what it always did.
+///
+/// `specs` is what the host loads: a build's every plugin, a test's the
+/// project's own. `source` is the project they belong to — where their paths
+/// are relative to, and how the modules they import resolve.
 pub async fn host(
-    dir: &std::path::Path,
+    source: &crate::settings::Source,
     specs: &[PluginSpec],
 ) -> Result<Option<Arc<PluginHost>>, String> {
     if specs.is_empty() {
@@ -142,7 +146,7 @@ pub async fn host(
     if let Some(existing) = cell.lock().expect("plugin host").clone() {
         return Ok(Some(existing));
     }
-    let started = Arc::new(start(dir, specs).await?);
+    let started = Arc::new(start(source, specs).await?);
     let mut held = cell.lock().expect("plugin host");
     // Another build got there first while this one was starting. Keep theirs —
     // one isolate is the whole point — and let this one's drop.
@@ -150,11 +154,17 @@ pub async fn host(
 }
 
 /// Starts the isolate and waits for it to declare what it loaded.
-async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost, String> {
+async fn start(
+    project: &crate::settings::Source,
+    specs: &[PluginSpec],
+) -> Result<PluginHost, String> {
     let (bridge, hooks) = Bridge::new();
     let (declared, told) = tokio::sync::oneshot::channel();
     let (shutdown, ended) = tokio::sync::oneshot::channel();
-    let source = driver(dir, specs)?;
+    let source = driver(&project.root, specs)?;
+    // The project's resolution, without its plugin transform: a plugin module
+    // is compiled by the stripper alone, since the transform is this isolate.
+    let resolution = project.resolution();
     // Where the host thread leaves the reason its run failed. A program that
     // fails *before* declaring — a plugin module with no default export — closes
     // the declaration channel by ending, and then the only thing the waiting
@@ -196,7 +206,8 @@ async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost
                 // A plugin is source somebody is editing, like everything else
                 // this binary runs.
                 bundler_style_resolution: true,
-                package_converter: Some(crate::commonjs::converter()),
+                package_converter: Some(resolution.converter),
+                specifier_alias: Some(resolution.alias),
                 extensions: crate::guest::extensions_hosting(hosted),
                 observer: None,
                 inspector: None,
@@ -330,15 +341,21 @@ fn specifier(dir: &std::path::Path, module: &str) -> Result<String, String> {
         .map_err(|()| format!("cannot name the plugin {module} as a module"))
 }
 
-/// `then`, behind the project's plugins when it has any — what `esdev test`
-/// loads every module through.
+/// `then`, behind the project's own plugins when it has any — what a module
+/// `esdev` runs unbundled is loaded through ([`crate::settings::Source::run_config`]).
 pub async fn transform(
-    dir: &std::path::Path,
-    specs: &[PluginSpec],
+    source: &crate::settings::Source,
     then: Arc<dyn es_runtime_cli_common::run::SourceTransform>,
 ) -> Result<Arc<dyn es_runtime_cli_common::run::SourceTransform>, String> {
-    Ok(match host(dir, specs).await? {
-        Some(host) => Arc::new(PluginTransform::new(&host, dir, then)),
+    Ok(match host(source, &source.plugins).await? {
+        // The project's plugins are the first of however many the host
+        // loaded: a build in the same process loads its targets' after them.
+        Some(host) => Arc::new(PluginTransform::new(
+            &host,
+            source.plugins.len(),
+            &source.root,
+            then,
+        )),
         None => then,
     })
 }
@@ -375,14 +392,16 @@ pub struct PluginTransform {
 }
 
 impl PluginTransform {
-    /// Every one of `host`'s plugins, ahead of `then`.
+    /// The first `count` of `host`'s plugins — the project's own — ahead of
+    /// `then`.
     pub fn new(
         host: &PluginHost,
+        count: usize,
         dir: &std::path::Path,
         then: Arc<dyn es_runtime_cli_common::run::SourceTransform>,
     ) -> PluginTransform {
-        let every: Vec<usize> = (0..host.plugins.len()).collect();
-        let mut passes = host.passes(&every, None);
+        let own: Vec<usize> = (0..count).collect();
+        let mut passes = host.passes(&own, None);
         // Stable, so plugins of one order keep the order they were declared in.
         passes.sort_by_key(
             |pass| match pass.hooks().transform.as_ref().map(|h| h.order) {
@@ -628,7 +647,9 @@ mod tests {
     /// and a build that costs what it always did.
     #[tokio::test]
     async fn a_project_with_no_plugins_starts_nothing() {
-        let none = host(std::path::Path::new("."), &[]).await.unwrap();
+        let none = host(&crate::settings::Source::default(), &[])
+            .await
+            .unwrap();
         assert!(none.is_none());
     }
 

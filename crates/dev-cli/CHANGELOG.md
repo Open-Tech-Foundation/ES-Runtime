@@ -25,6 +25,10 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Changed
+- **`esdev build <entry>` reads the project's `jsx`, `alias` and `plugins`**
+  when there is an `esdev.json`, with flags winning, and still ignores its
+  targets. `esdev.json` is read in one place for every command now
+  (DECISIONS D125).
 - **Released esdev binaries include the V8 inspector**, so `esdev --inspect`
   and `esdev test --coverage` work in them. esrun is still never built with
   it (DECISIONS D108).
@@ -45,6 +49,17 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
+- **A project build no longer ignores flags.** `--sourcemap` and `--alias`
+  now apply to every target, and `--format`, `--no-types` and `--dts-bundle`
+  are refused with where the setting belongs. Each was accepted and silently
+  dropped before (DECISIONS D125).
+- **`esdev <file>` reads the project's `jsx` and `plugins`**, as `esdev test`
+  and `esdev build` do. A `.jsx` file run directly used to be refused in a
+  project whose `esdev.json` said how JSX compiles.
+- **A `"lib": true` target writes to its `outdir`.** It wrote `./dist` in the
+  working directory whatever the target said.
+- **A `"lib": true` target is built without the project's `alias`**, as
+  `--lib` is: a published module keeps the specifier its source wrote.
 - **`esdev test` runs the project's plugins.** A test file and everything it
   imports go through the `transform` hooks of the top-level `plugins` in
   `esdev.json` before they are compiled, as in `esdev build` — per-file runs,
@@ -111,6 +126,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Aliases in unbundled runs.** `esdev test` and `esdev <file>` resolve
+  imports through `esdev.json`'s `alias` and `tsconfig.json`'s `paths` and
+  `baseUrl`, as `esdev build` does, so `import { db } from "@/db"` works in a
+  test. `mock.module` resolves through them too, and a `--browser` run's
+  bundle gets the project's `alias` (DECISIONS D124).
 - **CommonJS packages run unbundled.** `esdev test`, `esdev <file>`, global
   setup and plugins convert a CommonJS dependency to an ES module the first
   time it is imported, caching it under `node_modules/.esdev/deps/`. Named

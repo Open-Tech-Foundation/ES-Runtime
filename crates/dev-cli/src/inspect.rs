@@ -42,7 +42,7 @@ use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
 /// What `--inspect[=<addr>]` / `--inspect-brk[=<addr>]` parsed to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InspectConfig {
     /// Where to listen. Defaults to `127.0.0.1:9229`, the port every CDP client
     /// probes first.

@@ -39,6 +39,7 @@ use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 
 mod adapter;
+mod alias;
 mod assets;
 mod bidi;
 mod browser;
@@ -73,6 +74,7 @@ mod related;
 mod report;
 mod resolve;
 mod screenshot;
+mod settings;
 mod staging;
 mod start;
 mod style;
@@ -97,12 +99,13 @@ use watch::WatchConfig;
 
 /// What the command line asked for.
 enum Command {
-    /// Run a module. `Config` is large, so it is boxed rather than making the
-    /// build variant carry its weight. The debugger endpoint travels beside it
-    /// rather than in it: parsing decides *what* was asked for, and binding a
-    /// port is something `main` does once, after the whole command line has been
-    /// found to make sense.
-    Run(Box<Config>, Option<InspectConfig>),
+    /// Run a module. Boxed rather than making the build variant carry its
+    /// weight. What the command line decided — what runs, under which grant —
+    /// and not yet the project's settings, which `main` applies once the
+    /// whole command line has been found to make sense. The debugger endpoint
+    /// travels beside it for the same reason: binding a port is something
+    /// `main` does, not the parser.
+    Run(Box<settings::Run>, Option<InspectConfig>),
     /// Bundle a module and its dependencies, or the targets a project describes.
     Build(BuildRequest),
     /// Run a module, restarting it when its source changes.
@@ -576,7 +579,7 @@ fn parse_args() -> Result<Command, String> {
         // one's processes are not the noise in another's numbers.
         if first == "bench" {
             return parse_test(argv).map(|mut config| {
-                config.bench = true;
+                config.run.bench = true;
                 config.jobs = Some(1);
                 Command::Test(Box::new(config))
             });
@@ -692,23 +695,18 @@ fn parse_args() -> Result<Command, String> {
                 let rest: Vec<String> = args.collect();
                 reject_esdev_flags_after_source(&rest, "the -e code")?;
                 return Ok(Command::Run(
-                    Box::new(Config {
+                    Box::new(settings::Run {
                         source: Source::Inline(code),
                         args: rest,
                         capabilities: permissions.resolve()?,
                         scopes: permissions.scopes()?,
                         options,
-                        transform: Some(std::sync::Arc::new(TypeStripper::new())),
-                        // The file being edited resolves the way the build
-                        // that bundles it does.
-                        bundler_style_resolution: true,
-                        package_converter: Some(crate::commonjs::converter()),
+                        stripper: TypeStripper::new(),
                         extensions: guest::extensions(),
                         // The deploy line is printed with the entry as it was
                         // named, so it is one a reader can copy. For `-e` there
                         // is nothing to name, and the placeholder says so.
                         observer: permission_trace(tracing_permissions, "-e=<code>"),
-                        inspector: None,
                     }),
                     inspect,
                 ));
@@ -751,20 +749,15 @@ fn parse_args() -> Result<Command, String> {
                     }));
                 }
                 return Ok(Command::Run(
-                    Box::new(Config {
+                    Box::new(settings::Run {
                         source: Source::File(path.to_string()),
                         args: rest,
                         capabilities: permissions.resolve()?,
                         scopes: permissions.scopes()?,
                         options,
-                        transform: Some(std::sync::Arc::new(TypeStripper::new())),
-                        // The file being edited resolves the way the build
-                        // that bundles it does.
-                        bundler_style_resolution: true,
-                        package_converter: Some(crate::commonjs::converter()),
+                        stripper: TypeStripper::new(),
                         extensions: guest::extensions(),
                         observer: permission_trace(tracing_permissions, path),
-                        inspector: None,
                     }),
                     inspect,
                 ));
@@ -1012,11 +1005,29 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         ));
     }
 
+    // What the flags do to a target, and the flags only a library build reads
+    // — which a project states per target, so on a project build they would
+    // mean nothing. Refused by name rather than accepted and dropped.
+    let target_flags = settings::TargetFlags {
+        minify,
+        sourcemap: sourcemap.clone(),
+        defines: defines.clone(),
+        conditions: conditions.clone(),
+    };
+    let library_flag = [
+        (!formats.is_empty(), "--format"),
+        (no_types, "--no-types"),
+        (dts_bundle.is_some(), "--dts-bundle"),
+    ]
+    .into_iter()
+    .find_map(|(given, flag)| given.then_some(flag));
+
     if sources.is_empty() && !lib {
-        // The config is only *looked* for when there is nothing to build
-        // otherwise, so a project that has one can still build a scratch entry
-        // by naming it.
-        if let Some(project) = config::load(config_path.as_deref())? {
+        // The targets are only *built* when there is nothing named to build
+        // otherwise, so a project that has them can still build a scratch
+        // entry by naming it.
+        let settings = settings::Settings::load(config_path.as_deref())?;
+        if settings.has_project {
             if let Some(path) = &out {
                 return Err(format!(
                     "--out={path} names one file, and a project build writes what each \
@@ -1025,12 +1036,20 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                     config::FILE_NAME
                 ));
             }
+            if let Some(flag) = library_flag {
+                return Err(format!(
+                    "{flag} shapes a library build, and a project build's targets say \
+                     whether they are libraries in {}.\n\n\
+                     Put it on the target: \"lib\": true, \"format\": [\"esm\", \"cjs\"], \
+                     \"types\": false, \"dts-bundle\": \"src/index.ts\".",
+                    config::FILE_NAME
+                ));
+            }
             return Ok(BuildRequest::Project(Box::new(ProjectBuild {
-                project: std::sync::Arc::new(project),
+                settings: std::sync::Arc::new(
+                    settings.with_alias(&alias).with_build(&target_flags),
+                ),
                 targets: target.map(|name| vec![name]),
-                minify,
-                defines,
-                conditions,
                 dev: None,
             })));
         }
@@ -1076,10 +1095,6 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             }
         ));
     }
-    // Longest first, so `@/ui` wins over `@`: the resolver takes the first
-    // match, and the order they were typed in is not that.
-    alias.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-
     let source = sources.remove(0);
     // The whole shape of a library build follows from its unit being a
     // directory, so a file here is not a small mistake to guess past: it would
@@ -1164,29 +1179,33 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
              --out=dist, not --out=dist/index.js."
         ));
     }
-    Ok(BuildRequest::Single(Box::new(BuildConfig {
-        // A one-off `esdev build <entry>` has no project to read, so the file's
-        // own pragmas are what say how its JSX compiles.
-        jsx: crate::transform::JsxSettings::default(),
-        source,
-        out,
-        out_dir: None,
-        dev: false,
-        platform: config::Platform::Server,
-        assets: Vec::new(),
-        root: None,
-        minify,
-        conditions,
-        defines,
-        alias,
-        sourcemap,
-        lib,
-        formats,
-        types: !no_types,
-        dts_bundle,
-        // A command line names an entry, not a project, so there is no
-        // esdev.json to have declared any.
-        plugins: Vec::new(),
+    // The project around the entry, when there is one: its `jsx`, `alias` and
+    // `plugins` describe the source tree the entry is in. Its targets do not
+    // apply — this build is the one the command line describes.
+    let settings = settings::Settings::load(None)?.with_alias(&alias);
+    Ok(BuildRequest::Single(Box::new(build::EntryBuild {
+        config: BuildConfig {
+            jsx: settings.source.jsx.clone(),
+            source,
+            out,
+            out_dir: None,
+            dev: false,
+            platform: config::Platform::Server,
+            assets: Vec::new(),
+            root: None,
+            minify,
+            conditions,
+            defines,
+            alias: settings.alias(lib),
+            sourcemap,
+            lib,
+            formats,
+            types: !no_types,
+            dts_bundle,
+            // Started with the build: see `build::run`.
+            plugins: Vec::new(),
+        },
+        settings: std::sync::Arc::new(settings),
     })))
 }
 
@@ -1430,12 +1449,13 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
         }
     }
-    let mut project = match config::load(config_path.as_deref())? {
-        Some(project) => project,
+    let settings = settings::Settings::load(config_path.as_deref())?;
+    let project = match settings.has_project {
+        true => settings.with_start(port, permission_args),
         // No esdev.json — but an OTF Web project was never going to have one.
         // Refusing with the missing file is a dead end there; name the
         // toolchain its scripts call instead.
-        None => match otfw_project_reason() {
+        false => match otfw_project_reason() {
             Some(reason) => {
                 return Err(format!(
                     "this project runs with otfw, not `esdev start`.\n\n\
@@ -1455,11 +1475,6 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
             }
         },
     };
-    // A flag beats the file, the same way it does for a build.
-    if let Some(port) = port {
-        project.start.port = Some(port);
-    }
-    project.permissions.extend(permission_args);
     Ok(StartConfig {
         project,
         hot,
@@ -1501,6 +1516,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut skip_pattern = None;
     let mut bail = None;
     let mut summary = None;
+    let mut settings_file = None;
     let mut shard = None;
     let mut changed = None;
     let mut related = false;
@@ -1688,6 +1704,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 list = true;
             }
             "--_summary" => summary = Some(std::path::PathBuf::from(require_value(flag, value)?)),
+            "--_settings" => {
+                settings_file = Some(std::path::PathBuf::from(require_value(flag, value)?));
+            }
             "--timeout" => {
                 let text = require_value(flag, value)?;
                 timeout = Some(
@@ -1814,56 +1833,57 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     // not once per file in every child.
     test_capabilities(&permission_args)?;
     Ok(TestConfig {
-        dom,
+        // Filled in from the project by `resolve_test`, or read whole from the
+        // parent's `--_settings`.
+        run: test::FileRun {
+            source: settings::Source::default(),
+            dom,
+            setup,
+            provided,
+            quiet,
+            update_snapshots,
+            ci,
+            full_diff,
+            snapshot_prune,
+            name_pattern,
+            skip_pattern,
+            seed,
+            repeats,
+            list,
+            bench,
+            max_concurrency,
+            tags_filter,
+            detect_leaks,
+            tag_definitions: Vec::new(),
+            strict_tags: true,
+            inspect,
+            permission_args,
+        },
         browser,
         headed,
-        name_pattern,
-        skip_pattern,
         bail,
         summary,
         global_setup,
-        provided,
         global_setup_out,
         coverage_flag: coverage.is_some(),
         coverage,
         coverage_out,
         coverage_dir: None,
-        inspect,
-        detect_leaks,
-        tags_filter,
         typecheck,
-        max_concurrency,
-        bench,
         list_tags,
-        // Filled in by `test_settings`, which reads the project.
-        tag_definitions: Vec::new(),
-        strict_tags: true,
         affected_by,
         shard,
         randomize,
-        seed,
-        repeats,
-        list,
         reporter_outfile,
-        quiet,
-        // Filled in by `test_settings`, which is where the project is read.
-        jsx: crate::transform::JsxSettings::default(),
-        plugins: Vec::new(),
-        plugin_dir: std::path::PathBuf::new(),
         file,
         filters,
         jobs,
         isolation,
         watch,
         watch_keys,
-        setup,
         timeout,
         reporter,
-        update_snapshots,
-        ci,
-        full_diff,
-        snapshot_prune,
-        permission_args,
+        settings_file,
     })
 }
 
@@ -1932,6 +1952,15 @@ fn file_capabilities(
     Ok(resolved)
 }
 
+/// `esdev <file>` and `esdev -e`: the module, read the way the project
+/// around it says source is read.
+async fn run_module(run: settings::Run, inspect: Option<&InspectConfig>) -> Result<(), String> {
+    let settings = settings::Settings::load(None)?;
+    let mut config = settings.source.run_config(run).await?;
+    attach_debugger(&mut config, inspect)?;
+    es_runtime_cli_common::run("esdev", config).await
+}
+
 /// A module named relative to `dir`, as the file URL a child imports it by. A
 /// name that is not a file there is left as written: a bare specifier names a
 /// package, and where that lives is the resolver's question.
@@ -1946,14 +1975,15 @@ fn module_url(dir: &std::path::Path, module: &str) -> Result<String, String> {
     }
 }
 
-/// Fills in what `esdev.json`'s `test` section says and the flags did not.
+/// The test flags, resolved against the project: what `esdev.json`'s `test`
+/// section says, where a flag did not already answer.
 ///
 /// **A flag beats the file**, the same rule the build uses. Setup modules are
 /// resolved against the project directory and made file URLs, because a child
 /// process is started from wherever the parent was and a relative path would
 /// otherwise mean two different files. A raw absolute Windows path would be
 /// parsed as a `d:` module specifier rather than a local file.
-fn test_settings(config: &mut TestConfig) -> Result<(), String> {
+fn resolve_test(config: &mut TestConfig, settings: &settings::Settings) -> Result<(), String> {
     // A flag's global setup is named from where the run was started: the
     // process that runs it is started from here too, but imports by URL.
     let here = std::env::current_dir().unwrap_or_default();
@@ -1962,19 +1992,15 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
         .iter()
         .map(|module| module_url(&here, module))
         .collect::<Result<_, _>>()?;
-    let Some(project) = crate::config::load(None)? else {
-        return Ok(());
-    };
-    config.jsx = project.jsx.clone();
-    config.plugins = project.project_plugins().to_vec();
-    config.plugin_dir.clone_from(&project.dir);
-    if config.setup.is_empty() {
-        config.setup = project
-            .test
+    config.run.source = settings.source.clone();
+    let root = &settings.source.root;
+    let file = &settings.test;
+    if config.run.setup.is_empty() {
+        config.run.setup = file
             .setup
             .iter()
             .map(|module| -> Result<_, String> {
-                let path = project.dir.join(module);
+                let path = root.join(module);
                 // A bare specifier stays one: `"setup": "my-preset/register"`
                 // names a package, and where that lives is the resolver's
                 // question rather than this file's.
@@ -1988,39 +2014,38 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
             })
             .collect::<Result<_, _>>()?;
     }
-    config.tag_definitions.clone_from(&project.test.tags);
-    if config.max_concurrency.is_none() {
-        config.max_concurrency = project.test.max_concurrency;
+    config.run.tag_definitions.clone_from(&file.tags);
+    if config.run.max_concurrency.is_none() {
+        config.run.max_concurrency = file.max_concurrency;
     }
-    config.strict_tags = project.test.strict_tags.unwrap_or(true);
+    config.run.strict_tags = file.strict_tags.unwrap_or(true);
     if config.global_setup.is_empty() {
-        config.global_setup = project
-            .test
+        config.global_setup = file
             .global_setup
             .iter()
-            .map(|module| module_url(&project.dir, module))
+            .map(|module| module_url(root, module))
             .collect::<Result<_, _>>()?;
     }
     // The project's coverage settings, when the flag or the project turns it on.
-    if let Some(section) = &project.test.coverage
+    if let Some(section) = &file.coverage
         && (config.coverage.is_some() || section.enabled)
     {
         config.coverage = Some(section.settings.clone());
     }
     if config.timeout.is_none() {
-        config.timeout = project.test.timeout;
+        config.timeout = file.timeout;
     }
     if config.jobs.is_none() {
-        config.jobs = project.test.jobs;
+        config.jobs = file.jobs;
     }
     if config.isolation.is_none() {
-        config.isolation = project.test.isolation;
+        config.isolation = file.isolation;
     }
     if config.reporter.is_none() {
-        config.reporter = project.test.reporter.clone();
+        config.reporter = file.reporter.clone();
     }
     if config.browser.is_none() {
-        config.browser = project.test.browser;
+        config.browser = file.browser.clone();
     }
     Ok(())
 }
@@ -2040,13 +2065,13 @@ fn validate_browser_test_config(config: &TestConfig) -> Result<(), String> {
         }
         return Ok(());
     }
-    if config.dom {
+    if config.run.dom {
         return Err("--dom and --browser are two answers to one question.\n\n\
              --dom installs esdev's own DOM in this runtime; --browser runs the file \
              in a browser, which has the real one. Pick one."
             .to_string());
     }
-    if !config.permission_args.is_empty() {
+    if !config.run.permission_args.is_empty() {
         return Err(
             "permission flags rehearse this runtime's grant, and a browser \
              run is not in this runtime.\n\n\
@@ -2110,7 +2135,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     // reporter wrote its own ending.
     let report = |total: usize, failed: usize| {
         if !config.terminal_human() {
-        } else if config.list {
+        } else if config.run.list {
             test::report_listed(total, failed);
         } else {
             test::report(total, failed);
@@ -2294,7 +2319,7 @@ impl OpenBrowser {
 /// How one file's run ends: the report a person reads, nothing (the parent
 /// reports it), or — run directly with a machine reporter — that report.
 fn finish_test_file(config: &TestConfig, file: &str) -> ExitCode {
-    if config.quiet {
+    if config.run.quiet {
         return guest::test::finish_quiet();
     }
     match config.reporter.as_deref() {
@@ -2324,7 +2349,7 @@ fn finish_test_file(config: &TestConfig, file: &str) -> ExitCode {
 /// Runs the tests — and, under `--typecheck`, the project's `tsc --noEmit`
 /// first, whose failure fails the run however the tests do.
 async fn run_tests(config: TestConfig) -> ExitCode {
-    let typechecked = if config.typecheck && !config.list {
+    let typechecked = if config.typecheck && !config.run.list {
         let root = std::env::current_dir().unwrap_or_default();
         eprintln!("typecheck: tsc --noEmit");
         match check::check_to(&root, &[], !config.terminal_human()).await {
@@ -2342,23 +2367,25 @@ async fn run_tests(config: TestConfig) -> ExitCode {
 }
 
 async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
-    if config.bench {
+    if config.run.bench {
         test::discover_benchmarks();
     }
-    // The file's `test` section, where a flag did not already answer. Read here
-    // rather than in the parser because the parser has no project: a `--file`
-    // child is invoked from wherever the parent was, and the settings have to
-    // mean the same thing in both.
-    match test_settings(&mut config) {
-        Ok(()) => {}
-        Err(err) => {
-            eprintln!("error: {err}");
-            return ExitCode::FAILURE;
+    // A child runs with what its parent resolved, read whole; anything else
+    // resolves the project itself, once. The two cannot disagree, because a
+    // child never reads the project.
+    let resolved = match config.settings_file.clone() {
+        Some(path) => test::FileRun::read(&path).map(|run| config.run = run),
+        None => {
+            settings::Settings::load(None).and_then(|project| resolve_test(&mut config, &project))
         }
+    };
+    if let Err(err) = resolved {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
     }
 
     if let Some(json) = config.list_tags {
-        print!("{}", list_tags(&config.tag_definitions, json));
+        print!("{}", list_tags(&config.run.tag_definitions, json));
         return ExitCode::SUCCESS;
     }
     // The process a run starts to hold its global setup.
@@ -2380,10 +2407,10 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
         config.coverage = None;
     }
     // Listing runs no code worth measuring.
-    if config.list {
+    if config.run.list {
         config.coverage = None;
     }
-    if config.detect_leaks {
+    if config.run.detect_leaks {
         let refusal = if config.browser.is_some() {
             Some("a browser run's pending work is the browser's, which this runtime cannot see")
         } else if config.isolation == Some(TestIsolation::None) {
@@ -2405,9 +2432,9 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
 
     // A shuffled run says its seed, so the order that failed can be run again.
     // A child is handed the seed alone and says nothing.
-    if config.randomize || config.seed.is_some() {
-        let seed = config.seed.unwrap_or_else(test::fresh_seed);
-        config.seed = Some(seed);
+    if config.randomize || config.run.seed.is_some() {
+        let seed = config.run.seed.unwrap_or_else(test::fresh_seed);
+        config.run.seed = Some(seed);
         if config.randomize || config.file.is_none() {
             eprintln!("randomize: seed={seed} (run this order again with --seed={seed})");
         }
@@ -2436,7 +2463,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
         } else {
             None
         };
-        config.provided = setup
+        config.run.provided = setup
             .as_ref()
             .map(|running| running.provided().to_path_buf());
         let code = run_browser_tests(&config).await;
@@ -2446,7 +2473,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
     if let Some(file) = config.file.clone() {
         // Run directly, rather than as a child of a run that did it already,
         // a file gets the global setup its suite would.
-        let direct = config.summary.is_none() && config.provided.is_none();
+        let direct = config.summary.is_none() && config.run.provided.is_none();
         let setup = if direct {
             let Ok(exe) = std::env::current_exe() else {
                 eprintln!("error: cannot find the esdev binary");
@@ -2459,7 +2486,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
         } else {
             None
         };
-        let provided = match (&setup, &config.provided) {
+        let provided = match (&setup, &config.run.provided) {
             (Some(running), _) => running.provided_json(),
             (None, Some(path)) => std::fs::read_to_string(path).ok(),
             (None, None) => None,
@@ -2503,7 +2530,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
             Ok(setup) => setup,
             Err(code) => return code,
         };
-        config.provided = setup
+        config.run.provided = setup
             .as_ref()
             .map(|running| running.provided().to_path_buf());
         guest::test::configure_provided(
@@ -2543,7 +2570,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    config.snapshot_prune = config.filters.is_empty();
+    config.run.snapshot_prune = config.filters.is_empty();
     // More shards than files leaves some with none: a shard that passed, with
     // its (empty) report written, rather than a suite that is missing.
     if files.is_empty() && discovered == 0 {
@@ -2569,7 +2596,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
             Err(code) => return code,
         }
     };
-    config.provided = setup
+    config.run.provided = setup
         .as_ref()
         .map(|running| running.provided().to_path_buf());
     let scratch = match config.coverage.as_ref().map(|_| coverage::scratch()) {
@@ -2609,7 +2636,7 @@ fn list_tags(tags: &[crate::config::TagDefinition], json: bool) -> String {
 /// debugger: one file at a time, since one debugger follows one process, and
 /// no per-file time limit, which a paused breakpoint would trip.
 fn prepare_inspect(config: &mut TestConfig) -> Result<(), String> {
-    let Some(inspect) = &config.inspect else {
+    let Some(inspect) = &config.run.inspect else {
         return Ok(());
     };
     let flag = if inspect.wait {
@@ -2680,6 +2707,7 @@ async fn run_selected(
     if config.isolation == Some(TestIsolation::None) {
         guest::test::configure_provided(
             config
+                .run
                 .provided
                 .as_ref()
                 .and_then(|path| std::fs::read_to_string(path).ok()),
@@ -2696,7 +2724,7 @@ async fn run_selected(
     let total = files.len();
     if !config.terminal_human() {
         // The reporter wrote its own ending.
-    } else if config.list {
+    } else if config.run.list {
         test::report_listed(total, failed);
     } else {
         test::report(total, failed);
@@ -2720,10 +2748,10 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     guest::test::configure_run(run_options);
     guest::test::configure_snapshots(
         Some(std::path::PathBuf::from(&file)),
-        config.update_snapshots,
-        config.ci,
-        config.full_diff,
-        config.snapshot_prune,
+        config.run.update_snapshots,
+        config.run.ci,
+        config.run.full_diff,
+        config.run.snapshot_prune,
     );
     // Nothing is added to the file, unless `--setup` named something to
     // import ahead of it. It is otherwise an ordinary run of an ordinary
@@ -2731,64 +2759,58 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     // from the `runtime:test` the file imported. What makes this a *test*
     // run is what `finish()` finds afterwards, not anything done to the
     // source.
-    let stripper = if config.setup.is_empty() && !config.dom {
-        TypeStripper::with_jsx(config.jsx.clone())
+    let stripper = if config.run.setup.is_empty() && !config.run.dom {
+        TypeStripper::new()
     } else {
         let entry = std::fs::canonicalize(&file)
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
         TypeStripper::before_with(
             &entry,
-            config.dom.then(|| "runtime:dom".to_string()),
-            config.setup.clone(),
+            config.run.dom.then(|| "runtime:dom".to_string()),
+            config.run.setup.clone(),
         )
-        .compiling_jsx(config.jsx.clone())
-    };
-    let transform = match plugins::transform(
-        &config.plugin_dir,
-        &config.plugins,
-        std::sync::Arc::new(stripper),
-    )
-    .await
-    {
-        Ok(transform) => transform,
-        Err(err) => {
-            print_error(&err);
-            return ExitCode::FAILURE;
-        }
     };
     // A rehearsal still applies here: this is also how every child of a
     // restricted parent executes, and the flags arrived on its command
     // line for exactly this run. A file that declares its own grant runs
     // under that instead.
     let (capabilities, scopes) =
-        match file_capabilities(std::path::Path::new(&file), &config.permission_args) {
+        match file_capabilities(std::path::Path::new(&file), &config.run.permission_args) {
             Ok(resolved) => resolved,
             Err(err) => {
                 print_error(&err);
                 return ExitCode::FAILURE;
             }
         };
-    let mut run = Config {
-        source: Source::File(file.clone()),
-        args: Vec::new(),
-        capabilities,
-        scopes,
-        options: RunOptions {
-            track_pending_work: config.detect_leaks,
-            ..RunOptions::default()
-        },
-        transform: Some(transform),
-        bundler_style_resolution: true,
-        package_converter: Some(crate::commonjs::converter()),
-        extensions: guest::test_extensions(config.dom),
-        observer: None,
-        inspector: None,
+    let run = config
+        .run
+        .source
+        .run_config(settings::Run {
+            source: Source::File(file.clone()),
+            args: Vec::new(),
+            capabilities,
+            scopes,
+            options: RunOptions {
+                track_pending_work: config.run.detect_leaks,
+                ..RunOptions::default()
+            },
+            stripper,
+            extensions: guest::test_extensions(config.run.dom),
+            observer: None,
+        })
+        .await;
+    let mut run = match run {
+        Ok(run) => run,
+        Err(err) => {
+            print_error(&err);
+            return ExitCode::FAILURE;
+        }
     };
     // Under `--coverage`, V8's counts, collected by this process itself; under
     // `--inspect`, a debugger's endpoint for this file.
     if config.coverage_out.is_some() {
         run.inspector = Some(coverage::collect::inspector());
-    } else if let Err(err) = attach_debugger(&mut run, config.inspect.as_ref()) {
+    } else if let Err(err) = attach_debugger(&mut run, config.run.inspect.as_ref()) {
         print_error(&err);
         return ExitCode::FAILURE;
     }
@@ -2842,6 +2864,7 @@ fn select_test_files(
         };
         // The modules every file runs with: a change they reach, reaches all.
         let setup: Vec<_> = config
+            .run
             .setup
             .iter()
             .chain(&config.global_setup)
@@ -2872,7 +2895,7 @@ fn select_test_files(
             eprintln!("shard {shard}: {} of {before} files", files.len());
         }
     }
-    test::shuffle(&mut files, config.seed);
+    test::shuffle(&mut files, config.run.seed);
     Ok((files, discovered))
 }
 
@@ -2910,13 +2933,13 @@ pub(crate) async fn run_tests_unisolated(
     guest::test::configure_run(config.run_options());
     guest::test::configure_snapshots(
         None,
-        config.update_snapshots,
-        config.ci,
-        config.full_diff,
-        config.snapshot_prune,
+        config.run.update_snapshots,
+        config.run.ci,
+        config.run.full_diff,
+        config.run.snapshot_prune,
     );
     let mut source = String::new();
-    if config.dom {
+    if config.run.dom {
         source.push_str("import \"runtime:dom\";");
     }
     source.push_str("import { __setTestFile } from \"runtime:test\";");
@@ -2936,7 +2959,7 @@ pub(crate) async fn run_tests_unisolated(
         return ExitCode::FAILURE;
     }
     for file in files {
-        for setup in &config.setup {
+        for setup in &config.run.setup {
             source.push_str(&module_import(setup));
         }
         let url = url::Url::from_file_path(file)
@@ -2956,43 +2979,37 @@ pub(crate) async fn run_tests_unisolated(
     }
     // A rehearsal resolved like any run: these files execute here rather than
     // in children, so there is no command line for them to re-parse.
-    let (capabilities, scopes) = match test_capabilities(&config.permission_args) {
+    let (capabilities, scopes) = match test_capabilities(&config.run.permission_args) {
         Ok(resolved) => resolved,
         Err(err) => {
             print_error(&err);
             return ExitCode::FAILURE;
         }
     };
-    // Compiled as each file would be in a child of its own: the project's
-    // plugins, then its `jsx`.
-    let transform = match plugins::transform(
-        &config.plugin_dir,
-        &config.plugins,
-        std::sync::Arc::new(TypeStripper::with_jsx(config.jsx.clone())),
-    )
-    .await
-    {
-        Ok(transform) => transform,
+    // Compiled as each file would be in a child of its own.
+    let run = config
+        .run
+        .source
+        .run_config(settings::Run {
+            source: Source::Inline(source),
+            args: Vec::new(),
+            capabilities,
+            scopes,
+            options: RunOptions::default(),
+            stripper: TypeStripper::new(),
+            extensions: guest::test_extensions(config.run.dom),
+            observer: None,
+        })
+        .await;
+    let mut run = match run {
+        Ok(run) => run,
         Err(err) => {
             print_error(&err);
             return ExitCode::FAILURE;
         }
     };
-    let mut run = Config {
-        source: Source::Inline(source),
-        args: Vec::new(),
-        capabilities,
-        scopes,
-        options: RunOptions::default(),
-        transform: Some(transform),
-        bundler_style_resolution: true,
-        package_converter: Some(crate::commonjs::converter()),
-        extensions: guest::test_extensions(config.dom),
-        observer: None,
-        inspector: None,
-    };
     // Every file shares this process, so one debugger follows them all.
-    if let Err(err) = attach_debugger(&mut run, config.inspect.as_ref()) {
+    if let Err(err) = attach_debugger(&mut run, config.run.inspect.as_ref()) {
         print_error(&err);
         return ExitCode::FAILURE;
     }
@@ -3040,12 +3057,7 @@ async fn main() -> ExitCode {
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.
     es_runtime_common::telemetry::init_tracing();
     let result = match parse_args() {
-        Ok(Command::Run(mut config, inspect)) => {
-            match attach_debugger(&mut config, inspect.as_ref()) {
-                Ok(()) => es_runtime_cli_common::run("esdev", *config).await,
-                Err(err) => Err(err),
-            }
-        }
+        Ok(Command::Run(run, inspect)) => run_module(*run, inspect.as_ref()).await,
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(*config).await,
         Ok(Command::Build(request)) => build::run(request).await,

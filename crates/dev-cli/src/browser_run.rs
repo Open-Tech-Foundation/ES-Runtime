@@ -470,7 +470,7 @@ impl Job {
         // share one `runtime:test` — a setup file's `beforeEach` is the test
         // file's.
         let mut entries = Vec::new();
-        for (index, module) in config.setup.iter().enumerate() {
+        for (index, module) in config.run.setup.iter().enumerate() {
             let import = match url::Url::parse(module) {
                 Ok(url) if url.scheme() == "file" => url
                     .to_file_path()
@@ -483,8 +483,9 @@ impl Job {
         }
         entries.push(("test".to_string(), self.file.display().to_string()));
         // Bundled with the project's plugins, as its browser build is.
-        let host = crate::plugins::host(&config.plugin_dir, &config.plugins).await?;
-        let every: Vec<usize> = (0..config.plugins.len()).collect();
+        let source = &config.run.source;
+        let host = crate::plugins::host(source, &source.plugins).await?;
+        let every: Vec<usize> = (0..source.plugins.len()).collect();
         let passes = host
             .as_ref()
             .map(|host| host.passes(&every, None))
@@ -497,16 +498,21 @@ impl Job {
             false,
             Vec::new(),
             Vec::new(),
-            vec![(
+            // The project's own aliases, as its browser build has them.
+            // `tsconfig.json`'s `paths` need nothing here: the bundler reads
+            // them itself.
+            std::iter::once((
                 "runtime:test".to_string(),
                 self.runtime_test.display().to_string(),
-            )],
+            ))
+            .chain(source.alias.iter().cloned())
+            .collect(),
             Some("external".to_string()),
             None,
             host.as_ref()
                 .map(|host| host.jsx(&every))
                 .unwrap_or_default(),
-            config.jsx.clone(),
+            source.jsx.clone(),
             &passes,
         )
         .await?;
@@ -582,17 +588,17 @@ impl Job {
             .insert(context.clone(), sender);
         let mut snapshots = FileSnapshots::new(
             self.file.clone(),
-            config.update_snapshots,
-            config.ci,
-            config.full_diff,
+            config.run.update_snapshots,
+            config.run.ci,
+            config.run.full_diff,
             // Pruning needs every file's tests to have run, which a filter
             // says they did not.
             config.filters.is_empty(),
         );
         let store = json!({
             "options": options.to_json(),
-            "update": config.update_snapshots,
-            "ci": config.ci,
+            "update": config.run.update_snapshots,
+            "ci": config.run.ci,
             "snapshots": snapshots
                 .stored()?
                 .into_iter()
@@ -607,7 +613,7 @@ impl Job {
             "filePath": snapshots.file_path("\0").unwrap_or_default(),
             // What global setup provided, as the JSON `inject` reads.
             "provided": config
-                .provided
+                .run.provided
                 .as_ref()
                 .and_then(|path| std::fs::read_to_string(path).ok()),
         })
@@ -826,8 +832,8 @@ impl Job {
         crate::screenshot::Check {
             root: &self.root,
             reference: &reference,
-            update: config.update_snapshots,
-            ci: config.ci,
+            update: config.run.update_snapshots,
+            ci: config.run.ci,
             tolerance,
         }
         .run(&png)

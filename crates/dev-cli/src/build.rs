@@ -624,17 +624,18 @@ fn owned_dirs(
         return Ok(Vec::new());
     }
     let root = project
-        .project
-        .dir
+        .settings
+        .source
+        .root
         .canonicalize()
-        .unwrap_or_else(|_| project.project.dir.clone());
+        .unwrap_or_else(|_| project.settings.source.root.clone());
 
     let mut owned = Vec::new();
     for target in selected {
         let crate::config::Output::Dir(dir) = &target.output else {
             continue;
         };
-        let out = project.project.dir.join(dir);
+        let out = project.settings.source.root.join(dir);
         // A directory that is not there yet is the first build, which has
         // nothing to replace and still owns where it is going.
         if let Ok(resolved) = out.canonicalize()
@@ -688,7 +689,13 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                 root.display()
             ));
         }
-        let out = config.out.clone().unwrap_or_else(|| "dist".to_string());
+        // A target's `outdir` (staged), or `--out`: a library's output is a
+        // directory whichever of the two named it.
+        let out = config
+            .out_dir
+            .clone()
+            .or_else(|| config.out.clone())
+            .unwrap_or_else(|| "dist".to_string());
         (
             PathBuf::from(out),
             "[name].js".to_string(),
@@ -1613,28 +1620,31 @@ fn copy_tree(from: &Path, into: &Path) -> Result<usize, String> {
 /// What `esdev build` was asked to build: one entry named on the command line,
 /// or the targets a project describes.
 pub enum BuildRequest {
-    /// `esdev build <entry>` — one bundle, configured entirely by flags.
-    Single(Box<BuildConfig>),
+    /// `esdev build <entry>` — one bundle, configured by flags, reading the
+    /// project's `jsx`, `alias` and `plugins` when there is one.
+    Single(Box<EntryBuild>),
     /// `esdev build` — every target in `esdev.json`, or the one `--target` named.
     Project(Box<ProjectBuild>),
 }
 
+/// `esdev build <entry>`: the bundle the flags describe, in the project the
+/// working directory is.
+pub struct EntryBuild {
+    pub settings: std::sync::Arc<crate::settings::Settings>,
+    /// Everything but the plugins, which start when the build does.
+    pub config: BuildConfig,
+}
+
 /// A build of the targets in a project's config.
 pub struct ProjectBuild {
-    /// The parsed config.
+    /// The project, with the build flags already applied to its targets.
     ///
     /// Shared rather than owned because `esdev start` builds the same project
     /// once a keystroke, and re-reading the file each time would mean a build
     /// that quietly changed shape under an edit the developer had not finished.
-    pub project: std::sync::Arc<crate::config::Project>,
+    pub settings: std::sync::Arc<crate::settings::Settings>,
     /// The targets to build; `None` is all of them.
     pub targets: Option<Vec<String>>,
-    /// `--minify`, which turns it on for every target built.
-    pub minify: bool,
-    /// `--define`s, added to every target's own.
-    pub defines: Vec<(String, String)>,
-    /// `--conditions`, added to every target's own.
-    pub conditions: Vec<String>,
     /// Set when this build is feeding the dev loop rather than a deployment.
     pub dev: Option<Dev>,
 }
@@ -1687,9 +1697,21 @@ pub fn output_path(target: &crate::config::Target) -> PathBuf {
 /// happened in while the others are still visibly pending.
 pub async fn run(request: BuildRequest) -> Result<(), String> {
     let project = match request {
-        BuildRequest::Single(config) => {
+        BuildRequest::Single(entry) => {
+            let EntryBuild {
+                settings,
+                mut config,
+            } = *entry;
             let verb = if config.lib { "built" } else { "bundled" };
-            let written = build_single(*config).await?;
+            // The project's own plugins: an entry named on the command line is
+            // still source in this project.
+            let host = crate::plugins::host(&settings.source, &settings.source.plugins).await?;
+            let own: Vec<usize> = (0..settings.source.plugins.len()).collect();
+            config.plugins = host
+                .as_ref()
+                .map(|host| host.passes(&own, None))
+                .unwrap_or_default();
+            let written = build_single(config).await?;
             let paint = crate::style::Palette::stdout();
             println!("{} {} {written}", paint.green(verb), paint.dim("→"));
             return Ok(());
@@ -1698,18 +1720,18 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
     };
 
     let names: Vec<&str> = project
-        .project
+        .settings
         .targets
         .iter()
         .map(|t| t.name.as_str())
         .collect();
     let selected: Vec<&crate::config::Target> = match &project.targets {
-        None => project.project.targets.iter().collect(),
+        None => project.settings.targets.iter().collect(),
         Some(wanted) => wanted
             .iter()
             .map(|name| {
                 project
-                    .project
+                    .settings
                     .targets
                     .iter()
                     .find(|target| &target.name == name)
@@ -1732,13 +1754,14 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
              A config may carry only `test` or `jsx` — which `esdev test` reads — and \
              a project that is bundled says so with a target:\n\n  \
              \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }}",
-            project.project.dir.join("esdev.json").display()
+            project.settings.source.root.join("esdev.json").display()
         ));
     }
 
     // Nothing is written where it is deployed until every target — and every
     // step that runs after them — has succeeded. See [`crate::staging`].
-    let mut staging = crate::staging::Staging::new(&project.project.dir, project.dev.is_none())?;
+    let mut staging =
+        crate::staging::Staging::new(&project.settings.source.root, project.dev.is_none())?;
     for dir in owned_dirs(&project, &selected)? {
         staging.own(dir);
     }
@@ -1771,7 +1794,8 @@ async fn build_targets(
     // a dev loop rebuilds on every save, and evaluating a plugin's module —
     // and whatever it initialises — per keystroke would be paying a startup
     // cost forty times a minute. A project with no `plugins` starts nothing.
-    let host = crate::plugins::host(&project.project.dir, &project.project.plugins).await?;
+    let settings = &project.settings;
+    let host = crate::plugins::host(&settings.source, &settings.plugins).await?;
 
     // Where a target writes. A release build writes its outputs — the
     // deployment. A dev-loop build writes them mirrored under its own
@@ -1799,11 +1823,10 @@ async fn build_targets(
             .unwrap_or_default();
         // The project's `.env` and the environment first, so a `define` in the
         // file or on the command line overrides one rather than fighting it.
-        let mut defines = env_defines(&project.project.dir, project.dev.is_some())?;
+        // The target's own already carry the command line's, after its own.
+        let mut defines = env_defines(&settings.source.root, project.dev.is_some())?;
         defines.extend(target.define.clone());
-        defines.extend(project.defines.iter().cloned());
-        let mut conditions = target.conditions.clone();
-        conditions.extend(project.conditions.iter().cloned());
+        let conditions = target.conditions.clone();
 
         // A document is its own kind of build: what it references is what gets
         // built, and what is written is the document pointing at the results.
@@ -1817,23 +1840,23 @@ async fn build_targets(
             let out_dir = staging.path(place(Path::new(dir)));
             let written = crate::html::build(
                 target,
-                &project.project.dir,
+                &settings.source.root,
                 &out_dir,
                 project.dev.as_ref(),
-                target.minify || project.minify,
+                target.minify,
                 defines,
                 conditions,
-                project.project.alias.clone(),
+                settings.alias(target.lib),
                 sourcemap_for(target, project.dev.is_some()),
                 &plugins,
                 host.as_ref()
                     .map(|host| host.jsx(&target.plugins))
                     .unwrap_or_default(),
-                project.project.jsx.clone(),
+                settings.source.jsx.clone(),
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
-            copy_assets(&target.assets, &project.project.dir, &out_dir)
+            copy_assets(&target.assets, &settings.source.root, &out_dir)
                 .map_err(|e| format!("target \"{}\": {e}", target.name))?;
             let paint = crate::style::Palette::stdout();
             println!(
@@ -1856,21 +1879,19 @@ async fn build_targets(
             }
         };
         let written = build(BuildConfig {
-            jsx: project.project.jsx.clone(),
+            jsx: settings.source.jsx.clone(),
             source: target.entry.clone(),
             out,
             out_dir,
             platform: target.platform,
             assets: target.assets.clone(),
-            root: Some(project.project.dir.clone()),
+            root: Some(settings.source.root.clone()),
             dev: project.dev.is_some(),
-            // A flag beats the file: `--minify` on a config that does not ask
-            // for it is how a release build is taken of a project whose day to
-            // day is unminified.
-            minify: target.minify || project.minify,
+            // `--minify` is already on the target: a flag beats the file.
+            minify: target.minify,
             conditions,
             defines,
-            alias: project.project.alias.clone(),
+            alias: settings.alias(target.lib),
             // A dev build maps itself, always: the whole point of the loop is
             // that what breaks is findable, and an unmapped bundle is a stack
             // trace pointing into generated code. A release build says whether
@@ -1915,7 +1936,7 @@ async fn build_targets(
     // points at a file and HTML that points at one that does not exist yet.
     for target in selected.iter().filter(|target| target.run_after_build) {
         let output = staging.path(place(&output_path(target)));
-        run_output(&project.project.dir, &output)
+        run_output(&settings.source.root, &output)
             .await
             .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
         let paint = crate::style::Palette::stdout();
