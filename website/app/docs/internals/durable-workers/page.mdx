@@ -1,6 +1,6 @@
 ---
 title: "Internals: Durable workers"
-description: Why a durable worker's result waits for its writes, why its state is resident and capped, which process owns a directory, and what each of those costs.
+description: Why a durable worker's result waits for its writes, why its state is resident and capped, which process owns a directory, how shards run the code elsewhere, and what each of those costs.
 ---
 
 # Internals: Durable workers
@@ -247,6 +247,85 @@ module holds a timer at all. Which is why it is not started for you: eviction
 deliberately has no timer so that a script exits, and an alarm scheduler that
 started itself would undo that for anyone who merely *set* a time.
 
+## Shards: the code moves, the storage does not
+
+A shard is a `Worker` that runs the classes' code. Every database handle stays
+on the agent that owns the directory, and a shard reaches its state by message.
+Two things follow from that, and both are the reason for it:
+
+- **One writer per file, still.** The single-writer rule above is the engine's
+  file lock, and it holds per process, not per thread. Opening a worker's file
+  from a shard would be a second connection in the same process, which the
+  lock does not stop. Keeping every handle on one agent is what keeps the rule.
+- **A shard needs no filesystem grant.** It holds `imports`, so it can load the
+  module its classes are in, and nothing else unless the program says so.
+
+What a shard costs is one message each way per call, and one per turn of
+writes. Next to a commit that is small.
+
+### What stays the same
+
+A shard keeps its own resident copy of each worker's keys, so `state.get` is
+still a map lookup. Writes are encoded and checked against the ceilings in the
+shard, sent to the host as encoded bytes, and resolved when the host has
+committed them. The host never decodes them: a flush, a size and the
+same-bytes comparison need only the bytes.
+
+The gate is unchanged. The shard waits for its writes to be committed before it
+answers a call, and the host's gate then finds nothing left to wait for.
+
+A transaction is held open by the host while its body runs in the shard.
+Everything the body sends in the meantime joins it, and the shard says at the
+end whether to commit or roll back. A function passed to `collection.update`
+cannot cross a thread, so it runs in the shard, between a read and a write.
+Nothing can come between those two, because the mailbox runs one call at a time.
+
+### Placement
+
+A worker's shard is a hash of its class and id. The answer has to be the same
+every time: a worker is one file, and two shards holding it would be two
+states. A queue or a least-loaded choice would be fairer and would break that.
+
+### Failure
+
+A shard is lost in one of three ways: an error nothing caught, running out of
+memory, or not returning to its event loop. The first two are the `Worker`'s
+own `error` event. The third needs a watchdog, because a synchronous loop never
+yields to anything that could report it.
+
+The watchdog sends a heartbeat every second to each shard that has work in
+flight, and ends a shard that misses three. A shard waiting on I/O, or on the
+host, still answers: its loop is free between awaits. So a miss means the
+isolate is not getting back to its loop at all, and no amount of waiting will
+fix that. `terminate()` can end it. Nothing can end a loop on the agent a
+server is running on, which is why this protection is only available on a
+shard.
+
+When a shard is lost:
+
+- the call in flight rejects with `ERR_DURABLE_SHARD_LOST`;
+- calls queued behind it were never sent, so they run again on a replacement;
+- a transaction it had open is rolled back.
+
+State is on disk, so its workers come back on their next call. The pool is
+refilled on its next use rather than straight away, so a module that fails every
+time it starts produces failing calls rather than a restart loop.
+
+### Lifetime
+
+A `Worker` keeps the process alive until it is terminated. A pool of them would
+make every sharded script hang after its last call, for the same reason
+eviction has no timer. So a shard is referenced only while something is waiting
+on it, and the watchdog runs only while some shard is busy.
+
+### A shard starts by saying so
+
+A message sent to a worker before it is listening reaches nobody. So a new
+shard speaks first: when its half of the protocol is installed it sends
+"ready", and only then is it told its module and ceilings. A module that never
+imports `runtime:workers`, or whose top-level code never finishes, fails the
+start after 30 seconds instead of leaving a call waiting for ever.
+
 ## What this is not
 
 Not an actor model. The [non-goal](/docs/scope) — no process model, scheduler,
@@ -262,14 +341,6 @@ them.
 
 ## Not yet
 
-**Shards.** Today a worker runs on the agent that addressed it. The next phase
-puts it on a `Worker` of its own — which brings a real memory ceiling, a
-watchdog that can `terminate()` a worker stuck in a loop, and a failure domain
-smaller than the process. Placement is a shard problem rather than a
-thread-per-worker one for a reason that is arithmetic rather than taste: an
-isolate costs **megabytes of heap and an OS thread**, so a thousand live workers
-would be gigabytes and a thousand threads.
-
-Durable *execution* — retries, a step journal, workflows — is deliberately not
-planned as a second subsystem. With alarms and workers in place it is a class on
-top of this primitive.
+Durable *execution* (retries, a step journal, workflows) is deliberately not
+planned as a second subsystem. With alarms and workers in place it is a class
+on top of this primitive.

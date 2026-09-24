@@ -102,8 +102,8 @@ instance holds is the runtime's to decide. A **minified build needs
 | `Cart.delete(id)` | Closes it if open, then deletes its state. Resolves to whether there was any. |
 | `Cart.list({ limit, after })` | `{ id, createdAt, lastActive, bytes, live }`, most recently active first. |
 
-Arguments and results cross by **structured clone**, so what may be passed is
-the same rule it will be when a worker runs on a shard of its own. Lifecycle
+Arguments and results cross by **structured clone**, sharded or not, so what may
+be passed does not change when a worker moves to a [shard](#shards). Lifecycle
 hooks are not callable through a reference, and neither is anything the class
 does not have — a `TypeError` from the call, not a promise that never settles.
 
@@ -269,6 +269,45 @@ is used, since these decide where state lives.
 | `stateLimit` / `valueLimit` | 1 MiB / 128 KiB | The ceilings above |
 | `alarmRetries` | `5` | How many times a failing `alarm()` is retried |
 | `alarmPoll` | `60000` | The longest the scheduler sleeps between looks |
+| `shards` | `0` | How many [shards](#shards) run the classes' code; `"auto"` sizes it from the machine |
+| `module` | `null` | The module the classes are exported from, as an absolute URL. Required with `shards` |
+| `permissions` | `[]` | What a shard is granted, beside the `imports` it always has |
+
+## Shards
+
+With `shards`, a worker's code runs on one of a fixed pool of `Worker`s. Its
+state stays with the agent that owns the directory.
+
+```js
+// classes.js
+import { DurableWorker } from "runtime:workers";
+export class Cart extends DurableWorker { /* … */ }
+
+// main.js
+import { configure } from "runtime:workers";
+import { Cart } from "./classes.js";
+
+configure({ shards: "auto", module: new URL("./classes.js", import.meta.url) });
+await Cart.get("c1").add("book");   // runs on a shard
+```
+
+- Each shard imports `module` and runs the classes it **exports**. Any other
+  class is refused at its first call with a `TypeError`. A shard also runs the
+  module's top-level code, so keep the classes in a module of their own.
+- A worker is placed by a hash of its class and id, so it always lands on the
+  same shard.
+- The API does not change. Reads stay synchronous, and the gate, ceilings,
+  mailbox, collections, transactions and alarms all behave as they do without
+  shards.
+- A shard holds `imports` and whatever `permissions` names. It needs no `read`
+  or `write` grant for its state.
+- A shard that throws uncaught, runs out of memory, or does not return to its
+  event loop for about 3 seconds is terminated. The call in flight rejects with
+  `ERR_DURABLE_SHARD_LOST`; the worker comes back on its next call.
+- An idle shard does not keep the process alive.
+
+Starting shards needs `--allow-workers` and `--allow-imports`. `startAlarms()`
+runs on the owning agent and throws inside a shard.
 
 ## `shutdown()`
 
@@ -300,9 +339,4 @@ onSignal("SIGTERM", async () => {
 | `ERR_DURABLE_STATE_TOO_LARGE` | A value, or a worker's whole state, is over the limit. |
 | `ERR_DURABLE_STATE_FORMAT` | State written by a newer runtime, in a format this build cannot read. |
 | `ERR_DURABLE_SHUTDOWN` | Shutting down, or that worker has been closed. |
-
-## Not yet
-
-Shards: a worker on a `Worker` of its own, with a watchdog and a memory
-ceiling. It arrives with its own phase rather than as an option that does
-nothing today.
+| `ERR_DURABLE_SHARD_LOST` | The shard running the worker ended while a call was in flight. |

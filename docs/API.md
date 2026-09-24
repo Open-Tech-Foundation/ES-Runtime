@@ -3165,9 +3165,8 @@ instance holds is the runtime's to decide. **A minified build needs
 | `Cart.list({ limit, after })` | What exists, most recently active first: `{ id, createdAt, lastActive, bytes, live }`. |
 
 A reference forwards method calls, and **arguments and results cross by
-structured clone** — even though nothing crosses a thread yet, so that what may
-be passed is the same rule it will be when a worker runs on a shard, rather than
-one that tightens later. Lifecycle hooks are not callable through a reference,
+structured clone** — sharded or not, so what may be passed does not change
+when a worker moves to a [shard](#shards). Lifecycle hooks are not callable through a reference,
 and neither is anything the class does not have (a `TypeError` from the call,
 not a promise that never settles).
 
@@ -3381,6 +3380,9 @@ used, since these decide where state lives.
 | `stateLimit` / `valueLimit` | 1 MiB / 128 KiB | The ceilings above |
 | `alarmRetries` | `5` | How many times a failing `alarm()` is retried |
 | `alarmPoll` | `60000` | The longest the scheduler sleeps between looks |
+| `shards` | `0` | How many [shards](#shards) run the classes' code; `"auto"` sizes it from the machine |
+| `module` | `null` | The module the classes are exported from, as an absolute URL. Required with `shards` |
+| `permissions` | `[]` | What a shard is granted, beside the `imports` it always has |
 
 Eviction is checked when work arrives rather than on a timer: a repeating timer
 is a reason a process can never exit, and a script that used one durable worker
@@ -3404,11 +3406,49 @@ onSignal("SIGTERM", async () => {
 });
 ```
 
-### Not yet
+### Shards
 
-One phase is still to come, and arrives rather than being a flag that does
-nothing today: **shards** — a worker running on a `Worker` of its own, with the
-watchdog and the memory ceiling that come with one.
+By default a worker's code runs on the agent that addressed it. With `shards`,
+it runs on one of a fixed pool of `Worker`s instead, while its state stays with
+the agent that owns the directory:
+
+```js
+// classes.js
+import { DurableWorker } from "runtime:workers";
+export class Cart extends DurableWorker { /* … */ }
+
+// main.js
+import { configure } from "runtime:workers";
+import { Cart } from "./classes.js";
+
+configure({ shards: "auto", module: new URL("./classes.js", import.meta.url) });
+await Cart.get("c1").add("book");   // runs on a shard
+```
+
+Each shard imports `module` and runs the durable-worker classes it
+**exports**. A class it does not export is refused at its first call with a
+`TypeError`. Put the classes in a module of their own: a shard evaluates the
+module's top-level code, too.
+
+A worker is placed on a shard by a hash of its class and id, so it lands on
+the same shard every time. Nothing about the class changes:
+
+- **The same API.** `state` reads are synchronous. The gate, the ceilings, the
+  mailbox, collections, transactions and alarms behave as they do without
+  shards. Calls to other workers, `get`, `list` and `delete` are made through
+  the owning agent.
+- **No filesystem grant.** A shard holds `imports` plus whatever `permissions`
+  names. It never needs `read` or `write` for its state.
+- **Failure ends one shard.** A shard that throws where nothing catches, runs
+  out of memory, or stops returning to its event loop for about 3 seconds is
+  terminated. The call in flight rejects with `ERR_DURABLE_SHARD_LOST`, and
+  calls still queued run again on a replacement. State is on disk, so the
+  worker comes back on its next call.
+- **An idle shard does not hold the process open.** A script that used one
+  still exits when its work is done.
+
+Starting shards needs `--allow-workers` and `--allow-imports`.
+`startAlarms()` runs on the owning agent; calling it inside a shard throws.
 
 ---
 
@@ -4524,6 +4564,7 @@ try {
 | `ERR_DURABLE_STATE_TOO_LARGE` | A stored value, or a worker's whole state, is over the limit. |
 | `ERR_DURABLE_STATE_FORMAT` | Stored state this build cannot read — written by a newer runtime. |
 | `ERR_DURABLE_SHUTDOWN` | The durable-worker runtime is shutting down, or that worker has been closed. |
+| `ERR_DURABLE_SHARD_LOST` | The shard running a durable worker ended while a call was in flight. The worker comes back on its next call. |
 | `ERR_INVALID_PATH` | The path names no valid target: it is empty, or it is the root jail itself and the operation would mutate it. |
 | `ERR_SAME_FILE` | Source and destination name the same file, for an operation that would have to read one while truncating the other. |
 | `ERR_CONNECTION_REFUSED` | The peer refused the connection. |

@@ -154,3 +154,18 @@ test("a declared schema is accepted", async () => {
   }
   assertEquals(Fine.get("room").id, "room");
 });
+
+// Shards (D122): a shard imports the module that defines its classes, so it
+// has to be told which — and as an absolute URL, since a relative one would
+// resolve differently from the host and from every shard.
+test("shards need a module, named by an absolute URL", async () => {
+  const { configure } = await import("runtime:workers");
+  assertThrows(() => configure({ shards: 2 }), "TypeError");
+  assertThrows(() => configure({ shards: 2, module: "./classes.js" }), "TypeError");
+  assertThrows(() => configure({ shards: -1, module: "file:///app/classes.js" }), "TypeError");
+  const set = configure({ shards: 2, module: new URL("file:///app/classes.js") });
+  assertEquals(set.shards, 2);
+  assertEquals(set.module, "file:///app/classes.js");
+  assert(configure({ shards: "auto" }).shards >= 1);
+  assertEquals(configure({ shards: 0, module: null }).shards, 0);
+});

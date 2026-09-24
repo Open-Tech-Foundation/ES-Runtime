@@ -22,6 +22,19 @@ declare module "runtime:workers" {
     alarmRetries?: number;
     /** The longest the alarm scheduler sleeps between looks. Default `60_000` ms. */
     alarmPoll?: number;
+    /**
+     * How many shards (`Worker`s) run the classes' code, while their state
+     * stays on this agent. `"auto"` sizes it from the machine. Default `0`: the
+     * code runs on the agent that addressed the worker. Needs `module`.
+     */
+    shards?: number | "auto";
+    /**
+     * The module the durable-worker classes are exported from, as an absolute
+     * URL — every shard imports it. `new URL("./classes.js", import.meta.url)`.
+     */
+    module?: string | URL | null;
+    /** What a shard is granted, beside the `imports` it always has. Default `[]`. */
+    permissions?: string[];
   }
 
   /** Narrows what {@link DurableState.keys} and {@link DurableState.list} return. */
@@ -246,6 +259,7 @@ declare module "runtime:workers" {
     StateFormat: "ERR_DURABLE_STATE_FORMAT";
     IdCollision: "ERR_DURABLE_ID_COLLISION";
     Shutdown: "ERR_DURABLE_SHUTDOWN";
+    ShardLost: "ERR_DURABLE_SHARD_LOST";
     Configured: "ERR_DURABLE_CONFIGURED";
   }>;
 
@@ -254,7 +268,9 @@ declare module "runtime:workers" {
     readonly code: string;
   }
 
-  export function configure(options?: DurableConfig): Required<DurableConfig>;
+  export function configure(
+    options?: DurableConfig,
+  ): Required<Omit<DurableConfig, "shards" | "module">> & { shards: number; module: string | null };
 
   /**
    * Starts servicing alarms: due workers are woken and their `alarm()` runs.

@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **Durable-worker shards** — `shards`, `module` and `permissions` on
+  `DurableConfig`, and `DurableErrorCode.ShardLost`.
 - **`toMatchScreenshot`** on `Matchers`, and `ScreenshotOptions`.
 - **Benchmarks** — `bench` in `TestContext`, `Bench` (with `from`),
   `BenchTask`, `BenchOptions`, `BenchTaskOptions` (with `writeResult`),

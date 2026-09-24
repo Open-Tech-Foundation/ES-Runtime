@@ -13,6 +13,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Shards for durable workers** in `runtime:workers`: the classes' code runs
+  on a fixed pool of `Worker`s while their state stays with the agent that owns
+  the directory (DECISIONS D122).
+
+  ```js
+  configure({ shards: "auto", module: new URL("./classes.js", import.meta.url) });
+  ```
+
+  A shard runs the classes `module` exports and needs no filesystem grant. The
+  API is unchanged: reads stay synchronous, and the gate, ceilings, mailbox,
+  collections, transactions and alarms behave as they do without shards. A
+  shard that throws uncaught, runs out of memory or stops returning to its
+  event loop is terminated. The call in flight rejects with
+  `ERR_DURABLE_SHARD_LOST`, and the worker comes back from disk on its next
+  call. An idle shard does not keep the process alive.
+
 - **`unrefTimer(id)` and `refTimer(id)` in `runtime:process`**: a timer let go
   still fires while anything else keeps the program running, but no longer
   keeps it alive on its own — for a heartbeat or a periodic flush. Deno's
@@ -32,6 +48,12 @@ namespace) is unstable and may change between minor releases until the API freez
   transforming loader keeps on module ids rather than resolving it away, so the
   same file can load as two modules. `esdev`'s `mock.module` uses it to load a
   real module beside its mock.
+
+### Fixed
+
+- **`configure({ shards })` in `runtime:workers` no longer hangs the first
+  call.** The option was accepted before the shard side of the protocol existed,
+  so a sharded worker's first call never returned.
 
 ## [0.31.0] - 2026-09-23
 

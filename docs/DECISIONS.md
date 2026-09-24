@@ -661,6 +661,51 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D122 — Shards: the code moves to a `Worker`, the storage stays where the lock is · *Proposed (2026-09-24)* · *delivers the phase D80 deferred*
+
+**Context:** D80 ran every durable worker on the agent that addressed it. That agent is usually the one serving HTTP, so one worker stuck in a loop stops the server, and one worker that grows its heap takes the process down with it. D80 named the answer and deferred it: run the code on a `Worker` of its own, where a memory ceiling and `terminate()` exist. A first cut of the host side was committed without the shard side, so `configure({ shards })` was accepted and then hung on the first call.
+
+**Decision (maintainer sign-off pending):**
+
+- **The code moves; the storage does not.** A shard runs the class and keeps a resident copy of each worker's keys, so reads stay synchronous. Every database handle stays on the agent that owns the directory, and writes, queries and transactions reach it by message. **Rejected: opening the worker's file in the shard.** D80's single-writer guarantee is the engine's file lock, which is per process. Two agents in one process would be two connections to one file that nothing stops. The same choice is why a shard needs no `read` or `write` grant.
+
+- **A fixed pool, placed by a hash of class and id.** A worker must land on the same shard every time, because it is one file and two shards holding it would be two states. **Rejected: a thread per worker.** An isolate costs megabytes and an OS thread (D80), so a thousand live workers would be a thousand threads. **Rejected: least-loaded placement.** It is fairer and it breaks the one rule placement has to keep.
+
+- **The classes come from a module the program names, and only its exports run.** `configure({ shards, module })` requires `module` as an absolute URL, because the host and every shard import it and a relative string would name a different file to each. **Rejected: finding the class from the host's module graph.** A class is a value in one isolate, and a shard cannot see it. The module is also where a shard's classes are looked up by storage name, which is why a class the module does not export is refused at its first call.
+
+- **A lost shard loses the call in flight and nothing else.** It fails in three ways: an uncaught error, running out of memory, or not returning to its event loop. The first two are the `Worker`'s `error` event. The third needs a heartbeat: sent every second to each shard with work in flight, and a shard that misses three is terminated. A shard waiting on I/O still answers, so a miss means a synchronous loop, which only `terminate()` can end. The call in flight rejects with `ERR_DURABLE_SHARD_LOST`; calls still queued were never sent, so they run again on a replacement; a transaction the shard had open is rolled back. The pool is refilled on its next use rather than immediately, so a module that fails on every start produces failing calls, not a restart loop. **Deliberately not configurable:** the heartbeat. A knob for "how long may a call block its thread" invites setting it high enough to hide the bug it exists to catch.
+
+- **An idle shard does not hold the process.** A `Worker` keeps the process alive until terminated, so a pool would make every sharded script hang after its last call, which is D80's reason for eviction having no timer. A shard is referenced only while something waits on it, and the watchdog runs only while a shard is busy.
+
+- **A shard speaks first.** A message sent before a worker is listening reaches nobody. A new shard sends `ready` once its half of the protocol is installed, and only then is told its module and ceilings. A module that never gets there fails the start after 30 seconds instead of leaving a call waiting for ever.
+
+- **A worker on a shard addresses other workers through the host.** `get`, `list` and `delete` inside a shard are requests to the agent that holds the workers, so the one named runs wherever it is placed, possibly the same shard.
+
+**Consequences:** three options on `configure` (`shards`, `module`, `permissions`) and one error code (`ERR_DURABLE_SHARD_LOST`). Still no change to `crates/` beyond the module's own JavaScript, which is D80's test for this work. `packages/types`, API.md, the site's API and internals pages and the CHANGELOG carry the surface (D27). Verified by 12 end-to-end tests against the real binary:
+
+- the code on a thread, with state and every value kind surviving into an unsharded process;
+- a shard denied the filesystem still storing state;
+- collections, a function `update`, a rollback and a commit;
+- acknowledged writes surviving a `SIGKILL`;
+- an idle shard letting the process exit;
+- a stuck loop ended by the watchdog, with the worker back from disk;
+- a crash losing only the call in flight;
+- a worker calling another, and `list`/`delete` from a shard;
+- the ceilings, a missing method, and `stop()` writing at shutdown;
+- a repeating alarm and a retried one, with the retry visible in the shard;
+- the `module` validation;
+- an unexported class refused.
+
+There is also 1 conformance case over the configuration.
+
+**Not solved here:**
+
+- A shard's memory ceiling is the one every agent inherits. Nothing sets it per pool yet, because the `Worker` option exists and nobody has yet had a number to choose.
+- A worker-to-worker cycle still deadlocks, as D80 said. It now spans threads, and nothing detects it.
+- A worker's resident keys are held twice when sharded: once in the shard and once, encoded, on the host.
+
+---
+
 ### D121 — A grant per test file, declared as its deployment's flags · *Accepted (2026-09-24)* · *extends the production-grant rehearsal*
 
 **Context:** `esdev test --deny-all --allow-…` rehearses one grant for the whole run. A project whose modules are deployed with different grants — a config loader that reads one directory, a client that only talks to one host — could not test each against its own. Vitest and Jest run on Node, which has no capability model, so there is nothing to follow. Deno's `Deno.test` takes a `permissions` option per test that can only deny: the command line is the ceiling, because Deno starts from nothing and the command line is what grants.
@@ -1409,7 +1454,7 @@ The runtime already had the three pieces this needs and had not put them togethe
 
 - **Rejected: an actor model.** SPEC §7's non-goal — *no process model, scheduler, preemption, mailboxes or supervisors* — was about the **runtime**, and it stands exactly as written: nothing in `crates/` gained a scheduler, nothing preempts, and no agent gained a mailbox. A durable worker is a value in guest JavaScript with a queue in front of it. The distinction is not a technicality — it is what keeps the boundary the non-goal was protecting, which is that the runtime does not decide when your code runs.
 
-- **Deliberately not shipped yet, each in its own phase rather than as a flag that does nothing:** shards (a worker on a `Worker` of its own, with the watchdog and the memory ceiling that come with one — measured at ~4 MB and one OS thread per isolate, which is why placement is a shard problem and not a thread-per-worker one), collections (declared, indexed, queryable state for what the resident ceiling will not hold), and alarms (a durable timer that survives a restart — **delivered by D81**). Durable *execution* — retries, a step journal, workflows — is explicitly **not** planned as a second subsystem: with alarms and workers in place it is a class on top of this primitive, and it will be argued on its own when there is a use case to argue it against.
+- **Deliberately not shipped yet, each in its own phase rather than as a flag that does nothing:** shards (a worker on a `Worker` of its own, with the watchdog and the memory ceiling that come with one — measured at ~4 MB and one OS thread per isolate, which is why placement is a shard problem and not a thread-per-worker one), collections (declared, indexed, queryable state for what the resident ceiling will not hold), and alarms (a durable timer that survives a restart — **delivered by D81**). Shards were **delivered by D122**, and collections by D82. Durable *execution* — retries, a step journal, workflows — is explicitly **not** planned as a second subsystem: with alarms and workers in place it is a class on top of this primitive, and it will be argued on its own when there is a use case to argue it against.
 
 **Two things the implementation found, and both are worth keeping.** A connection is *one conversation*, and the catalog is the one connection every worker shares — so twelve workers materializing at once put twelve statements on it at the same time. The embedded engine does not refuse that: it **panics** from its WAL (`end_write_tx called while write lock not held`, and a page cache that inserts two different pages under one key), which panic containment (D15) then turns into a JavaScript exception, so what a user would have seen is a call failing for no reason they could act on. Every catalog statement now goes through one queue. A worker's own database needs no such discipline, because it has exactly one writer — its own flush — which is an argument for the file-per-worker layout that was not the reason it was chosen. Second: **a write that stores what is already stored is skipped**, compared over the encoded bytes. It is worth a memcmp because the storing is the expensive half — a commit that changes a page costs milliseconds against one that changes none — and "read it, put it back" is what a handler written against resident state does all day.
 

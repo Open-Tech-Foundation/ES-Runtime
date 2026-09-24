@@ -1168,3 +1168,410 @@ fn without_a_filesystem_grant_the_first_call_is_denied() {
     );
     assert_eq!(ok(&out).trim(), "imported\nERR_CAPABILITY_DENIED");
 }
+
+// ---- shards (DECISIONS D122) -----------------------------------------------
+
+/// A sharded program needs `workers` to start its shards and `imports` for
+/// them to load the classes, beside the grants every durable program needs.
+const SHARD_GRANTS: &[&str] = &[
+    "--allow-read",
+    "--allow-write",
+    "--allow-imports",
+    "--allow-workers",
+];
+
+/// The classes every shard test runs, in the module the shards import.
+const SHARDED: &str = r#"
+    import { DurableWorker } from "runtime:workers";
+    export class Cart extends DurableWorker {
+      static schema = { collections: { lines: { index: ["qty"] } } };
+      async add(item) {
+        const items = this.state.get("items") ?? [];
+        items.push(item);
+        this.state.set("items", items);
+        return items.length;
+      }
+      async read() { return (this.state.get("items") ?? []).join(","); }
+      onThread() {
+        return typeof DedicatedWorkerGlobalScope === "function" &&
+          self instanceof DedicatedWorkerGlobalScope;
+      }
+      async kinds() {
+        await this.state.setMany({ d: new Date(5), m: new Map([[1, 2]]), b: 10n });
+        return [this.state.get("d") instanceof Date, this.state.get("m").get(1), typeof this.state.get("b")].join(" ");
+      }
+      async kindsBack() {
+        return [this.state.get("d").getTime(), this.state.get("m").get(1), this.state.get("b")].join(" ");
+      }
+      async lines() {
+        const lines = this.state.collection("lines");
+        await lines.insertMany([{ id: "a", qty: 1 }, { id: "b", qty: 2 }, { id: "c", qty: 3 }]);
+        await lines.update("a", (doc) => ({ ...doc, qty: 9 }));
+        await lines.update("b", { qty: 0 });
+        const big = await lines.find({ qty: { gte: 3 } }).sort({ qty: "desc" }).toArray();
+        return `${big.map((d) => d.id + d.qty).join(",")} ${await lines.count()}`;
+      }
+      async rollback() {
+        try {
+          await this.state.transaction(async () => {
+            await this.state.collection("lines").insert({ id: "gone", qty: 5 });
+            await this.state.set("goneKey", 1);
+            throw new RangeError("undone");
+          });
+        } catch (e) {
+          return `${e.name}:${e.message}`;
+        }
+      }
+      async committed() {
+        await this.state.transaction(async () => {
+          await this.state.collection("lines").insert({ id: "kept", qty: 4 });
+          await this.state.set("keptKey", 1);
+        });
+      }
+      async fsDenied() {
+        const fs = await import("runtime:fs");
+        try { await fs.stat("app.mjs"); return "read"; } catch (e) { return e.code ?? e.name; }
+      }
+      async big() { await this.state.set("big", new Uint8Array(200_000)); }
+      async callOther(id) { return Cart.get(id).add("from-" + this.id); }
+      async listed() { return (await Cart.list()).map((w) => w.id).sort().join(","); }
+      async remove(id) { return Cart.delete(id); }
+      spin() { for (;;) {} }
+      async crash() {
+        setTimeout(() => { throw new Error("boom"); });
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      async stop(reason) { this.state.set("stopped", reason); }
+      async stopped() { return this.state.get("stopped") ?? "never"; }
+      async signalled() { return this.ctx.signal.aborted; }
+    }
+    export class Ticker extends DurableWorker {
+      async alarm() {
+        const n = (this.state.get("n") ?? 0) + 1;
+        this.state.set("n", n);
+        if (n < 3) await this.state.alarm.set(Date.now());
+      }
+      async arm() { await this.state.alarm.set(Date.now()); }
+      async n() { return this.state.get("n") ?? 0; }
+      async pending() { return this.state.alarm.get() !== null; }
+    }
+    export class Flaky extends DurableWorker {
+      async alarm() {
+        this.state.set("tries", (this.state.get("tries") ?? 0) + 1);
+        throw new Error("not yet");
+      }
+      async arm() { await this.state.alarm.set(Date.now()); }
+      async seen() { return [this.state.get("tries"), this.state.alarm.get() instanceof Date].join(" "); }
+    }
+"#;
+
+/// A directory with the shared classes in it, and a program that configures
+/// `shards` shards over them before running `body`.
+fn sharded(test: &str) -> PathBuf {
+    let base = dir(test);
+    std::fs::write(base.join("classes.mjs"), SHARDED).expect("write classes");
+    base
+}
+
+fn run_sharded(base: &PathBuf, name: &str, shards: u32, body: &str) -> Output {
+    let source = format!(
+        r#"import {{ configure, startAlarms, shutdown }} from "runtime:workers";
+           import {{ Cart, Ticker, Flaky }} from "./classes.mjs";
+           configure({{ shards: {shards}, module: new URL("./classes.mjs", import.meta.url) }});
+           {body}"#
+    );
+    run_in(base, name, &source, SHARD_GRANTS)
+}
+
+/// The class's code runs on a thread of its own and the storage stays on the
+/// host: state written there is state the next process — sharded or not —
+/// reads back, with every value kind intact.
+#[test]
+fn a_sharded_worker_runs_on_its_own_thread_and_its_state_survives() {
+    let base = sharded("shard-restart");
+    let first = run_sharded(
+        &base,
+        "write.mjs",
+        2,
+        r#"const c = Cart.get("c1");
+           console.log(await c.onThread(), await c.add("x"), await c.add("y"), await c.kinds());
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&first).trim(), "true 1 2 true 2 bigint");
+
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Cart } from "./classes.mjs";
+           const c = Cart.get("c1");
+           console.log(await c.onThread(), await c.read(), await c.kindsBack());"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "false x,y 5 2 10");
+}
+
+/// A shard holds no filesystem grant — the file is the host's — and needs none.
+#[test]
+fn a_shard_needs_no_filesystem_grant() {
+    let base = sharded("shard-nofs");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        1,
+        r#"const c = Cart.get("c");
+           console.log(await c.fsDenied(), await c.add("x"));
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "ERR_CAPABILITY_DENIED 1");
+}
+
+/// Collections and transactions go to the host by message, so a shard's query,
+/// its function `update` and its rollback behave as they do unsharded.
+#[test]
+fn collections_and_transactions_work_from_a_shard() {
+    let base = sharded("shard-collections");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        1,
+        r#"const c = Cart.get("c");
+           console.log(await c.lines());
+           console.log(await c.rollback());
+           await c.committed();
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "a9,c3 3\nRangeError:undone");
+
+    // Read back unsharded, from the file: the rolled-back key and document are
+    // not there, the committed ones are.
+    let count = run_in(
+        &base,
+        "count.mjs",
+        r#"import { Cart } from "./classes.mjs";
+           Cart.prototype.probe = async function () {
+             return [await this.state.collection("lines").count(), this.state.has("goneKey"), this.state.has("keptKey")].join(" ");
+           };
+           console.log(await Cart.get("c").probe());"#,
+        &[],
+    );
+    assert_eq!(ok(&count).trim(), "4 false true");
+}
+
+/// The gate holds across the thread: what a sharded call acknowledged is on
+/// disk when the process is killed outright.
+#[test]
+fn acknowledged_writes_from_a_shard_survive_a_kill() {
+    let base = sharded("shard-kill");
+    std::fs::write(
+        base.join("write.mjs"),
+        r#"import { configure } from "runtime:workers";
+           import { Cart } from "./classes.mjs";
+           configure({ shards: 2, module: new URL("./classes.mjs", import.meta.url) });
+           const c = Cart.get("main");
+           for (let i = 1; i <= 5; i++) await c.add(`e${i}`);
+           console.log("ACKED");
+           await new Promise(() => {});"#,
+    )
+    .expect("write module");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .current_dir(&base)
+        .args(SHARD_GRANTS)
+        .arg("write.mjs")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn esrun");
+    let out = child.stdout.take().expect("piped stdout");
+    let marker = BufReader::new(out)
+        .lines()
+        .next()
+        .expect("a line before the kill")
+        .expect("read child stdout");
+    assert_eq!(marker, "ACKED");
+    child.kill().expect("kill esrun");
+    child.wait().expect("reap esrun");
+
+    let after = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Cart } from "./classes.mjs";
+           console.log(await Cart.get("main").read());"#,
+        &[],
+    );
+    assert_eq!(ok(&after).trim(), "e1,e2,e3,e4,e5");
+}
+
+/// An idle shard is not a reason to stay up: a script that used one exits
+/// without calling `shutdown()`, as an unsharded one does.
+#[test]
+fn an_idle_shard_does_not_keep_the_process_alive() {
+    let base = sharded("shard-exit");
+    std::fs::write(
+        base.join("app.mjs"),
+        r#"import { configure } from "runtime:workers";
+           import { Cart } from "./classes.mjs";
+           configure({ shards: 2, module: new URL("./classes.mjs", import.meta.url) });
+           console.log(await Cart.get("c").add("x"));"#,
+    )
+    .expect("write module");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .current_dir(&base)
+        .args(SHARD_GRANTS)
+        .arg("app.mjs")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn esrun");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll esrun") {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("the process did not exit with an idle shard");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(status.success());
+}
+
+/// A call that never returns to the event loop is ended by the watchdog. Only
+/// that shard goes; its workers come back, from disk, on the next call.
+#[test]
+fn a_shard_stuck_in_a_loop_is_ended_and_its_workers_come_back() {
+    let base = sharded("shard-stuck");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        1,
+        r#"const c = Cart.get("c");
+           await c.add("before");
+           try { await c.spin(); console.log("returned"); }
+           catch (e) { console.log(e.code, /event loop/.test(e.message)); }
+           console.log(await c.read(), await c.add("after"));
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "ERR_DURABLE_SHARD_LOST true\nbefore 2");
+}
+
+/// A shard that dies of an uncaught error loses the call in flight and nothing
+/// else — the next call is answered by a replacement.
+#[test]
+fn a_shard_that_crashes_loses_only_the_call_in_flight() {
+    let base = sharded("shard-crash");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        1,
+        r#"const c = Cart.get("c");
+           await c.add("kept");
+           try { await c.crash(); console.log("returned"); }
+           catch (e) { console.log(e.code, /boom/.test(e.message)); }
+           console.log(await c.read());
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "ERR_DURABLE_SHARD_LOST true\nkept");
+}
+
+/// A worker on a shard reaches other workers — and `list`/`delete` — through
+/// the host, where the workers are.
+#[test]
+fn a_sharded_worker_can_address_other_workers() {
+    let base = sharded("shard-ref");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        2,
+        r#"const a = Cart.get("a");
+           console.log(await a.callOther("b"), await a.callOther("c"), await Cart.get("b").read());
+           console.log(await a.listed(), await a.remove("c"), await a.listed());
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "1 1 from-a\na,b,c true a,b");
+}
+
+/// The rules that hold unsharded hold on a shard: the ceilings, a missing
+/// method, and `stop()` running — and writing — when the worker is closed.
+#[test]
+fn a_sharded_worker_keeps_the_same_rules() {
+    let base = sharded("shard-rules");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        1,
+        r#"const c = Cart.get("c");
+           try { await c.big(); } catch (e) { console.log(e.code); }
+           try { await c.nope(); } catch (e) { console.log(e.name, e.message); }
+           await shutdown();"#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "ERR_DURABLE_STATE_TOO_LARGE\nTypeError Cart(\"c\") has no method nope()"
+    );
+    let after = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Cart } from "./classes.mjs";
+           console.log(await Cart.get("c").stopped());"#,
+        &[],
+    );
+    assert_eq!(ok(&after).trim(), "shutdown");
+}
+
+/// Alarms fire on the shard a worker runs on. A handler that sets the next
+/// time repeats; one that fails is retried, and the retry the scheduler sets
+/// is what the shard's `alarm.get()` then reports.
+#[test]
+fn alarms_run_on_a_shard() {
+    let base = sharded("shard-alarms");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        2,
+        r#"const reported = [];
+           const alarms = startAlarms({ classes: [Ticker, Flaky], onError: (e, c) => reported.push(c) });
+           await Ticker.get("t").arm();
+           await Flaky.get("f").arm();
+           const until = Date.now() + 5000;
+           while (Date.now() < until && (await Ticker.get("t").n()) < 3) {
+             await new Promise((r) => setTimeout(r, 20));
+           }
+           await new Promise((r) => setTimeout(r, 200));
+           console.log(await Ticker.get("t").n(), await Ticker.get("t").pending());
+           console.log(await Flaky.get("f").seen(), reported.length);
+           await alarms.stop();
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "3 false\n1 true 0");
+}
+
+/// A shard has to be told which module defines its classes, as an absolute
+/// URL — every shard imports it, and a relative string would mean a different
+/// file to each of them.
+#[test]
+fn shards_are_configured_with_an_absolute_module() {
+    let out = run(
+        "shard-config",
+        r#"import { configure } from "runtime:workers";
+           try { configure({ shards: 2 }); } catch (e) { console.log(e.name); }
+           try { configure({ shards: 2, module: "./classes.mjs" }); } catch (e) { console.log(e.name); }
+           console.log(configure({ shards: 0 }).shards);"#,
+    );
+    assert_eq!(ok(&out).trim(), "TypeError\nTypeError\n0");
+}
+
+/// A shard runs only what its module exports; anything else is refused by
+/// name at the first call, rather than run somewhere it cannot be found.
+#[test]
+fn a_class_the_module_does_not_export_is_refused() {
+    let base = sharded("shard-unexported");
+    let out = run_sharded(
+        &base,
+        "app.mjs",
+        1,
+        r#"class Hidden extends Cart { static durableName = "Hidden"; }
+           try { await Hidden.get("h").read(); console.log("ran"); }
+           catch (e) { console.log(e.name, /does not export/.test(e.message)); }
+           await shutdown();"#,
+    );
+    assert_eq!(ok(&out).trim(), "TypeError true");
+}
