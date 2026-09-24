@@ -86,6 +86,33 @@ Tests are shuffled among their siblings inside each `describe`, and groups
 among theirs, so a group's `beforeAll` and `afterAll` still wrap exactly its
 own tests.
 
+## Splitting across machines
+
+`--shard=<index>/<count>` runs one part of the test files, so a suite can be
+split across CI jobs. `--shard=1/3` is the first of three:
+
+```yaml
+# GitHub Actions
+strategy:
+  matrix:
+    shard: [1, 2, 3]
+steps:
+  - run: esdev test --shard=${{ matrix.shard }}/3 --reporter=junit --reporter-outfile=junit-${{ matrix.shard }}.xml
+```
+
+Every file runs in exactly one shard, and the shards differ in size by at most
+one file. Files are assigned by a hash of their path, as Jest and Vitest do,
+so a shard mixes files from across the project. Sharding splits files, not the
+tests inside them. The run names its shard on stderr:
+
+```text
+shard 1/3: 14 of 41 files
+```
+
+A shard with no files, because there are more shards than files, passes and
+still writes its report. `--shard` cannot be combined with `--file` or
+`--watch`.
+
 ## Flaky tests
 
 `--repeats=<n>` runs every test `n` more times after the first; a test that

@@ -55,6 +55,8 @@ rolldown_sourcemap.workspace = true
 # The vocabulary a hot update is assembled in. See the workspace manifest.
 rolldown_utils.workspace = true
 rustc-hash.workspace = true
+# Which shard a test file falls in, by the hash Jest and Vitest shard with.
+sha1.workspace = true
 arcstr.workspace = true
 # Hook filters. A plugin declares which module ids its `transform` wants, and
 # the pattern is matched *here* — before the call crosses into the isolate,

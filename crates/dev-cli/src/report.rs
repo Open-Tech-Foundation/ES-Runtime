@@ -66,7 +66,11 @@ impl FileResult {
     }
 
     fn seconds(&self) -> f64 {
-        self.cases.iter().map(|case| case.duration_ms).sum::<f64>() / 1000.0
+        // A fold from 0, not `sum`: an empty float sum is -0, printed "-0.000".
+        self.cases
+            .iter()
+            .fold(0.0, |total, case| total + case.duration_ms)
+            / 1000.0
     }
 
     /// A file that did not report its own results — it timed out, crashed, or
@@ -137,7 +141,7 @@ pub fn junit(files: &[FileResult]) -> String {
     let tests: usize = files.iter().map(|file| file.cases.len()).sum();
     let failures: usize = files.iter().map(FileResult::failed).sum();
     let skipped: usize = files.iter().map(|file| file.count("skipped")).sum();
-    let time: f64 = files.iter().map(FileResult::seconds).sum();
+    let time = files.iter().fold(0.0, |total, file| total + file.seconds());
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n");
     let _ = writeln!(
         out,
@@ -396,5 +400,14 @@ mod tests {
         let broken = FileResult::broken("/p/x.test.js".into(), "x.test.js".into(), "timed out");
         assert_eq!(broken.failed(), 1);
         assert!(junit(&[broken]).contains("<failure message=\"timed out\""));
+    }
+
+    #[test]
+    fn an_empty_run_takes_no_time_rather_than_minus_none() {
+        let xml = junit(&[]);
+        assert!(
+            xml.contains("tests=\"0\"") && xml.contains("time=\"0.000\""),
+            "{xml}"
+        );
     }
 }

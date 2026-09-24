@@ -100,8 +100,8 @@ enum Command {
     Build(BuildRequest),
     /// Run a module, restarting it when its source changes.
     Watch(WatchConfig),
-    /// Discover and run test files.
-    Test(TestConfig),
+    /// Discover and run test files. Boxed, like `Run`, for its size.
+    Test(Box<TestConfig>),
     /// Build the project, run it, and keep both current.
     Start(Box<StartConfig>),
     /// Write a new project from a template.
@@ -210,6 +210,9 @@ OPTIONS:
     --test-skip-pattern=<re>    Skip the tests whose full name matches
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
+    --shard=<index>/<count>     Run one part of the files, to split a suite
+                                across machines: --shard=1/3 is the first of
+                                three
     --randomize                 Run files, and tests within their groups, in a
                                 shuffled order; the seed is printed
     --seed=<n>                  Shuffle with this seed, to repeat an order
@@ -530,7 +533,7 @@ fn parse_args() -> Result<Command, String> {
             return parse_build(argv).map(Command::Build);
         }
         if first == "test" {
-            return parse_test(argv).map(Command::Test);
+            return parse_test(argv).map(|config| Command::Test(Box::new(config)));
         }
         if first == "start" {
             return parse_start(argv).map(|config| Command::Start(Box::new(config)));
@@ -1437,6 +1440,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut skip_pattern = None;
     let mut bail = None;
     let mut summary = None;
+    let mut shard = None;
     let mut randomize = false;
     let mut seed = None;
     let mut repeats = None;
@@ -1527,6 +1531,9 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                         )
                     })?,
                 });
+            }
+            "--shard" => {
+                shard = Some(test::Shard::parse(require_value(flag, value)?)?);
             }
             "--randomize" => {
                 reject_value(flag, value)?;
@@ -1629,6 +1636,19 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
              which ones: `esdev test --watch db`."
             .to_string());
     }
+    if shard.is_some() && file.is_some() {
+        return Err("--file runs one file, so there is nothing to shard.\n\n\
+             Drop --file; --shard splits the files a run discovers."
+            .to_string());
+    }
+    if shard.is_some() && watch {
+        return Err(
+            "--shard splits a suite across machines, and --watch re-runs \
+             it on this one.\n\n\
+             Drop --shard to watch, or --watch to run a shard."
+                .to_string(),
+        );
+    }
     let snapshot_prune = snapshot_prune.unwrap_or(file.is_some());
     // A rehearsal of a grant that cannot exist fails before running anything,
     // not once per file in every child.
@@ -1641,6 +1661,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         skip_pattern,
         bail,
         summary,
+        shard,
         randomize,
         seed,
         repeats,
@@ -1799,14 +1820,14 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     };
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let discover = || match &config.file {
-        Some(file) => vec![root.join(file)],
-        None => {
-            let mut files = test::discover(&root, &config.filters);
-            test::shuffle(&mut files, config.seed);
-            files
-        }
+        Some(file) => (vec![root.join(file)], 1),
+        None => select_test_files(&root, config),
     };
-    let files = discover();
+    let (files, discovered) = discover();
+    // A shard left with none passed; see the process run.
+    if files.is_empty() && discovered > 0 {
+        return ExitCode::SUCCESS;
+    }
     if files.is_empty() && !config.watch {
         eprintln!(
             "no test files found (looked for {})",
@@ -1891,7 +1912,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     };
     let paint = style::Palette::stderr();
     loop {
-        let files = discover();
+        let (files, _) = discover();
         if files.is_empty() {
             eprintln!(
                 "no test files found (looked for {})",
@@ -2075,10 +2096,11 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         };
     }
 
-    let mut files = test::discover(&root, &config.filters);
-    test::shuffle(&mut files, config.seed);
+    let (files, discovered) = select_test_files(&root, &config);
     config.snapshot_prune = config.filters.is_empty();
-    if files.is_empty() {
+    // More shards than files leaves some with none: a shard that passed, with
+    // its (empty) report written, rather than a suite that is missing.
+    if files.is_empty() && discovered == 0 {
         eprintln!(
             "no test files found (looked for {})",
             test::sought_description()
@@ -2113,6 +2135,24 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// The files this run takes, and how many were discovered: its shard of them,
+/// if it is one, in the order it runs them. A shard says which it is on
+/// stderr, beside the seed, since the report alone does not say what was left
+/// to the other machines.
+fn select_test_files(
+    root: &std::path::Path,
+    config: &TestConfig,
+) -> (Vec<std::path::PathBuf>, usize) {
+    let mut files = test::discover(root, &config.filters);
+    let discovered = files.len();
+    if let Some(shard) = config.shard {
+        test::shard(&mut files, root, shard);
+        eprintln!("shard {shard}: {} of {discovered} files", files.len());
+    }
+    test::shuffle(&mut files, config.seed);
+    (files, discovered)
 }
 
 fn validate_unisolated_test_config(config: &TestConfig) -> Result<(), &'static str> {
@@ -2244,7 +2284,7 @@ async fn main() -> ExitCode {
             }
         }
         Ok(Command::Watch(config)) => watch::supervise(config).await,
-        Ok(Command::Test(config)) => return run_tests(config).await,
+        Ok(Command::Test(config)) => return run_tests(*config).await,
         Ok(Command::Build(request)) => build::run(request).await,
         Ok(Command::Start(config)) => start::start(*config).await,
         Ok(Command::Preview(config)) => preview::run(config).await,

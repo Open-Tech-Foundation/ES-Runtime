@@ -12949,6 +12949,93 @@ test("strict", () => {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--shard` splits the discovered files between runs: every file in exactly
+/// one shard, a shard with none still passing with its report, and the
+/// combinations that have no meaning refused.
+#[test]
+fn test_shard_splits_the_files_across_runs() {
+    let dir = build_dir("t_shard");
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    std::fs::create_dir_all(dir.join("b")).unwrap();
+    let body = "import { test } from \"runtime:test\";\ntest(\"t\", () => {});\n";
+    let names = [
+        "a/one.test.js",
+        "a/two.test.js",
+        "a/three.test.js",
+        "b/four.test.js",
+        "b/five.test.js",
+    ];
+    for name in names {
+        write_in(&dir, name, body);
+    }
+    let mut ran: Vec<&&str> = Vec::new();
+    for index in 1..=3 {
+        let out = esdev_in(&dir)
+            .args(["test", &format!("--shard={index}/3")])
+            .output()
+            .expect("spawn esdev test --shard");
+        let (text, err) = (slash_paths(&stdout(&out)), stderr(&out));
+        assert!(out.status.success(), "{text}{err}");
+        let mine: Vec<_> = names.iter().filter(|name| text.contains(*name)).collect();
+        assert!(
+            err.contains(&format!("shard {index}/3: {} of 5 files", mine.len())),
+            "{err}"
+        );
+        // Five over three: two, two, one.
+        assert_eq!(mine.len(), if index == 3 { 1 } else { 2 }, "{text}");
+        ran.extend(mine);
+    }
+    ran.sort();
+    let mut all: Vec<_> = names.iter().collect();
+    all.sort();
+    assert_eq!(ran, all, "each file runs in exactly one shard");
+
+    // More shards than files: an empty shard passes, and writes its report.
+    let out = esdev_in(&dir)
+        .args([
+            "test",
+            "--shard=6/6",
+            "--reporter=junit",
+            "--reporter-outfile=report.xml",
+        ])
+        .output()
+        .expect("spawn esdev test --shard=6/6");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(
+        stderr(&out).contains("shard 6/6: 0 of 5 files"),
+        "{}",
+        stderr(&out)
+    );
+    let xml = std::fs::read_to_string(dir.join("report.xml")).expect("report written");
+    assert!(
+        xml.contains("tests=\"0\"") && xml.contains("time=\"0.000\""),
+        "{xml}"
+    );
+
+    for (args, says) in [
+        (vec!["--shard=0/3"], "--shard=0/3 is not a shard"),
+        (vec!["--shard=4/3"], "counting from 1"),
+        (vec!["--shard=2"], "Write <index>/<count>"),
+        (
+            vec!["--shard=1/2", "--watch"],
+            "--watch re-runs it on this one",
+        ),
+        (
+            vec!["--shard=1/2", "--file=a/one.test.js"],
+            "nothing to shard",
+        ),
+    ] {
+        let out = esdev_in(&dir)
+            .arg("test")
+            .args(&args)
+            .output()
+            .expect("spawn esdev test");
+        assert!(!out.status.success(), "{args:?}");
+        assert!(stderr(&out).contains(says), "{args:?}: {}", stderr(&out));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

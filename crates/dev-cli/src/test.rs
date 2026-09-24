@@ -65,6 +65,8 @@ pub struct TestConfig {
     pub reporter_outfile: Option<PathBuf>,
     /// Internal parent-to-child: print no report; the parent writes it.
     pub quiet: bool,
+    /// Run only this part of the discovered files, from `--shard`.
+    pub shard: Option<Shard>,
     /// Shuffle the run's order, from `--randomize`.
     pub randomize: bool,
     /// The seed the order is shuffled from, from `--seed` or chosen for a
@@ -161,6 +163,71 @@ pub fn shuffle(files: &mut [PathBuf], seed: Option<u32>) {
         let j = (next() * (i + 1) as f64) as usize;
         files.swap(i, j);
     }
+}
+
+/// One part of a suite split across machines, from `--shard=<index>/<count>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shard {
+    /// 1-based.
+    pub index: usize,
+    pub count: usize,
+}
+
+impl Shard {
+    /// `<index>/<count>`, both whole numbers from 1, the index at most the
+    /// count.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let malformed = || {
+            format!(
+                "--shard={text} is not a shard.\n\n\
+                 Write <index>/<count>, counting from 1: --shard=1/3 runs the first of three."
+            )
+        };
+        let (index, count) = text.split_once('/').ok_or_else(malformed)?;
+        let index: usize = index.parse().map_err(|_| malformed())?;
+        let count: usize = count.parse().map_err(|_| malformed())?;
+        if index == 0 || count == 0 || index > count {
+            return Err(malformed());
+        }
+        Ok(Self { index, count })
+    }
+}
+
+impl std::fmt::Display for Shard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.index, self.count)
+    }
+}
+
+/// Keeps this shard's files: all of them ordered by the SHA-1 of their path
+/// inside the project, then cut into `count` runs of as near equal length as
+/// they divide into, the first ones a file longer. As Jest and Vitest shard: a
+/// hash rather than the path spreads one directory over every shard, and the
+/// order does not depend on anything but the paths.
+pub fn shard(files: &mut Vec<PathBuf>, root: &Path, shard: Shard) {
+    use sha1::{Digest, Sha1};
+    let mut keyed: Vec<_> = files
+        .drain(..)
+        .map(|path| {
+            let inside = path.strip_prefix(root).unwrap_or(&path);
+            let relative = inside
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            (Sha1::digest(relative.as_bytes()), path)
+        })
+        .collect();
+    keyed.sort_by_key(|(hash, _)| *hash);
+    let start = shard_start(keyed.len(), shard.count, shard.index - 1);
+    let end = shard_start(keyed.len(), shard.count, shard.index);
+    files.extend(keyed.drain(start..end).map(|(_, path)| path));
+}
+
+/// Where shard `index` (0-based) begins among `total` files.
+fn shard_start(total: usize, count: usize, index: usize) -> usize {
+    let (size, longer) = (total / count, total % count);
+    index * size + index.min(longer)
 }
 
 /// A seed for a `--randomize` run that did not name one.
@@ -747,6 +814,55 @@ pub fn is_test_file(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn files(n: usize) -> Vec<PathBuf> {
+        (0..n)
+            .map(|i| PathBuf::from(format!("/p/src/t{i}.test.ts")))
+            .collect()
+    }
+
+    fn shard_of(all: &[PathBuf], index: usize, count: usize) -> Vec<PathBuf> {
+        let mut files = all.to_vec();
+        shard(&mut files, Path::new("/p"), Shard { index, count });
+        files
+    }
+
+    #[test]
+    fn shards_cover_every_file_once_in_near_equal_parts() {
+        let all = files(10);
+        let parts: Vec<_> = (1..=3).map(|i| shard_of(&all, i, 3)).collect();
+        assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [4, 3, 3]);
+        let mut seen: Vec<_> = parts.concat();
+        seen.sort();
+        let mut want = all.clone();
+        want.sort();
+        assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn a_shard_depends_on_the_paths_not_their_order() {
+        let all = files(7);
+        let mut reversed = all.clone();
+        reversed.reverse();
+        assert_eq!(shard_of(&all, 2, 3), shard_of(&reversed, 2, 3));
+    }
+
+    #[test]
+    fn a_shard_beyond_the_files_is_empty() {
+        let all = files(2);
+        assert_eq!(shard_of(&all, 3, 3), Vec::<PathBuf>::new());
+        assert_eq!(shard_of(&all, 1, 3).len() + shard_of(&all, 2, 3).len(), 2);
+    }
+
+    #[test]
+    fn a_shard_is_index_over_count_from_one() {
+        assert_eq!(Shard::parse("2/3"), Ok(Shard { index: 2, count: 3 }));
+        assert_eq!(Shard::parse("1/1").unwrap().to_string(), "1/1");
+        for bad in ["0/3", "4/3", "1/0", "3", "a/b", "1/3/4", "-1/3", ""] {
+            let err = Shard::parse(bad).unwrap_err();
+            assert!(err.contains("counting from 1"), "{bad}: {err}");
+        }
+    }
 
     #[test]
     fn test_files_are_recognised_by_suffix() {

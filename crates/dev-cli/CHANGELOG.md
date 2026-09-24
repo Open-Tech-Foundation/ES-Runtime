@@ -42,6 +42,8 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
+- **The JUnit report of a run with no tests** says `time="0.000"`, not
+  `time="-0.000"`.
 - **`Date()` without `new` under a frozen clock** returns the time as a string
   instead of throwing.
 - **`--dom`'s `requestAnimationFrame` passes the frame's `performance.now()`**
@@ -99,6 +101,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --shard=<index>/<count>`** runs one part of the test files, to
+  split a suite across CI jobs. Files are assigned by a SHA-1 of their path, as
+  Jest and Vitest assign them, in shards that differ by at most one file. A
+  shard with no files passes and still writes its report.
 - **More matchers**: `toHaveBeenCalledBefore`, `toHaveBeenCalledAfter`,
   `toHaveBeenCalledExactlyOnceWith`, `toHaveResolved`, `toHaveResolvedTimes`,
   `toHaveResolvedWith`, `toHaveLastResolvedWith`, `toHaveNthResolvedWith` and

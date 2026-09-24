@@ -661,6 +661,20 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D105 — `--shard` splits files by the hash Jest and Vitest use · *Accepted (2026-09-24)*
+
+**Context:** a suite too slow for one CI job is split across several. Jest and Vitest both take `--shard=<index>/<count>`, order the files by a SHA-1 of their project-relative path, and cut that order into runs of near-equal length. Both split files, not tests.
+
+**Decision:**
+- **The same flag and the same scheme.** A hash spreads one directory across every shard, where a sorted path list would give a shard all of one slow directory. The assignment depends only on the paths, not on discovery order or `--seed`, which shuffles within the shard afterwards.
+- **A shard with no files passes and writes its report.** A matrix wider than the suite is a configuration that happens, and a failed or missing-report job for it would be noise in CI.
+- **Refused with `--file` and `--watch`**, where there is nothing to split or no machines to split across.
+- Rejected, for now: Vitest's blob reporter and `--merge-reports`. CI systems already merge JUnit files, which each shard can write with `--reporter-outfile`. Also rejected: balancing by past durations, which needs a timing cache the runner does not keep.
+
+**Consequences:** shards are balanced by file count, not by time, so one slow file makes its shard slow.
+
+---
+
 ### D104 — The remaining matchers, and a `toStrictEqual` that is strict · *Accepted (2026-09-24)*
 
 **Context:** the parity review found these missing, each checked against Vitest's and Jest's `expect` references:
