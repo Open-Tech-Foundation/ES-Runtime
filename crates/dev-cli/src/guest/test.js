@@ -2278,6 +2278,32 @@ function expectation(actual, negated, mode = "hard") {
       const message = ops.test_file_snapshot(run.id, name, actual);
       if (message !== undefined) throw message;
     },
+    // In a browser run: the element's pixels against a reference image kept
+    // beside the file. The page cannot take its own picture, so the host takes
+    // it and answers; the matcher is async and must be awaited.
+    async toMatchScreenshot(name, options) {
+      if (negated) throw new TypeError("expect(...).not.toMatchScreenshot is not meaningful");
+      if (name !== null && typeof name === "object") [name, options] = [undefined, name];
+      if (name !== undefined && typeof name !== "string") {
+        throw new TypeError("toMatchScreenshot(name?, options?) takes a name, then options");
+      }
+      if (typeof ops.test_screenshot !== "function") {
+        throw new Error("toMatchScreenshot needs a real browser: run the file with --browser");
+      }
+      if (typeof Element === "undefined" || !(actual instanceof Element)) {
+        throw new TypeError("expect(...).toMatchScreenshot needs an element");
+      }
+      const run = currentRun();
+      if (run === null) throw new Error("toMatchScreenshot must run inside a test");
+      actual.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const box = actual.getBoundingClientRect();
+      if (!(box.width > 0 && box.height > 0)) {
+        throw new Error("toMatchScreenshot: the element has no size to take a picture of");
+      }
+      const rect = { x: box.left + scrollX, y: box.top + scrollY, width: box.width, height: box.height };
+      const message = await ops.test_screenshot(run.id, name ?? null, rect, JSON.stringify(options ?? {}));
+      if (message !== null && message !== undefined) throw new Error(message);
+    },
     toThrowErrorMatchingSnapshot(name) {
       if (negated) throw new TypeError("expect(...).not.toThrowErrorMatchingSnapshot is not meaningful");
       if (typeof actual !== "function") throw new TypeError("expect(...).toThrowErrorMatchingSnapshot needs a function");

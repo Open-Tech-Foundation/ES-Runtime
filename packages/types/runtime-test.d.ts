@@ -19,6 +19,20 @@ declare module "runtime:test" {
     readonly bench: Bench;
   }
 
+  /** How `toMatchScreenshot` compares, as Vitest's pixelmatch options say it. */
+  export interface ScreenshotOptions {
+    comparatorOptions?: {
+      /** How different two colours may be and still match, 0 to 1. 0.1 by default. */
+      threshold?: number;
+      /** How many pixels may differ. */
+      allowedMismatchedPixels?: number;
+      /** What share of the pixels may differ, 0 to 1. */
+      allowedMismatchedPixelRatio?: number;
+    };
+    /** How long to wait for the element to stop changing, in ms. 5000 by default. */
+    timeout?: number;
+  }
+
   /** How long a benchmark is measured for. */
   export interface BenchOptions {
     /** Milliseconds of samples, at least. 500 by default. */
@@ -480,6 +494,12 @@ declare module "runtime:test" {
     toMatchSnapshot(nameOrMatchers?: string | Record<string, unknown>): void;
     /** Matches exact text or bytes in this test's snapshot directory. */
     toMatchFileSnapshot(name: string): void;
+    /**
+     * In a browser run, the element's pixels match its reference image in
+     * `__screenshots__/`. Must be awaited.
+     */
+    toMatchScreenshot(name?: string, options?: ScreenshotOptions): Promise<void>;
+    toMatchScreenshot(options?: ScreenshotOptions): Promise<void>;
     /** Calls the function and snapshots the error it throws. */
     toThrowErrorMatchingSnapshot(name?: string): void;
     /**

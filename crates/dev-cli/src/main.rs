@@ -71,6 +71,7 @@ mod prompt;
 mod related;
 mod report;
 mod resolve;
+mod screenshot;
 mod staging;
 mod start;
 mod style;
@@ -2223,7 +2224,8 @@ impl OpenBrowser {
         let selected = browser::select(choice, &browser::System)?;
         eprintln!("{}", selected.describe());
         let session = bidi::Session::start(&selected.launch, !config.headed).await?;
-        let runner = match browser_run::Runner::new(&session).await {
+        let runner = match browser_run::Runner::new(&session, selected.launch.browser.name()).await
+        {
             Ok(runner) => runner,
             Err(err) => {
                 session.end().await;

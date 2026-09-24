@@ -73,7 +73,23 @@ const INSTALL: &str = r#"(send, config) => {
     }
     return btoa(binary);
   };
+  // What the host answers: a screenshot's verdict, by request.
+  const replies = new Map();
+  let nextReply = 0;
+  Object.defineProperty(globalThis, "__esdev_reply", {
+    value: (request, message) => {
+      const done = replies.get(request);
+      replies.delete(request);
+      done?.(message);
+    },
+  });
   const ops = {
+    test_screenshot(id, name, rect, options) {
+      const request = nextReply++;
+      const reply = new Promise((resolve) => replies.set(request, resolve));
+      post("screenshot", id, request, name, rect, String(options));
+      return reply;
+    },
     test_registered(name) {
       const id = next++;
       names.set(id, String(name));
@@ -143,10 +159,12 @@ pub struct Runner {
     client: Arc<Client>,
     routes: Routes,
     router: tokio::task::JoinHandle<()>,
+    /// The browser's name, as a reference screenshot's file names it.
+    browser: String,
 }
 
 impl Runner {
-    pub async fn new(session: &Session) -> Result<Runner, String> {
+    pub async fn new(session: &Session, browser: &str) -> Result<Runner, String> {
         let client = Arc::clone(&session.client);
         client
             .command(
@@ -165,6 +183,7 @@ impl Runner {
             client,
             routes,
             router,
+            browser: browser.to_string(),
         })
     }
 
@@ -179,16 +198,7 @@ impl Runner {
         browser: Option<&str>,
         reporter: &mut crate::test::Reporter<'_>,
     ) -> Result<usize, String> {
-        run(
-            &self.client,
-            &self.routes,
-            root,
-            files,
-            config,
-            browser,
-            reporter,
-        )
-        .await
+        run(self, root, files, config, browser, reporter).await
     }
 }
 
@@ -199,8 +209,7 @@ impl Drop for Runner {
 }
 
 async fn run(
-    client: &Arc<Client>,
-    routes: &Routes,
+    runner: &Runner,
     root: &Path,
     files: &[PathBuf],
     config: &TestConfig,
@@ -257,13 +266,14 @@ async fn run(
             .map(|source| crate::tags::module_tags(&source))
             .unwrap_or_default();
         let job = Job {
-            client: Arc::clone(client),
-            routes: Arc::clone(routes),
+            client: Arc::clone(&runner.client),
+            routes: Arc::clone(&runner.routes),
             root: root.to_path_buf(),
             dir: stage.join(format!("f{index}")),
             path: format!("f{index}"),
             origin: origin.clone(),
             runtime_test: runtime_test.clone(),
+            browser: runner.browser.clone(),
             stage: stage.clone(),
             file: file.clone(),
             name: named(file),
@@ -373,6 +383,8 @@ struct Job {
     file: PathBuf,
     /// The file as the report names it.
     name: String,
+    /// The browser it runs in.
+    browser: String,
 }
 
 /// What one file's run printed, and whether it passed.
@@ -605,8 +617,23 @@ impl Job {
             snapshots: Some(snapshots),
             ..FileState::default()
         };
+        // How many screenshots each case has taken under each name, for the
+        // names made from the test's. A case that runs again starts over.
+        let mut shots: HashMap<(u64, String), u32> = HashMap::new();
         let waited = async {
             while let Some(event) = events.recv().await {
+                if let Some(message) = page_message(&event) {
+                    let id = message.get(1).and_then(Value::as_u64);
+                    match (message.first().and_then(Value::as_str), id) {
+                        (Some("screenshot"), _) => {
+                            self.screenshot(&context, &message, &state, &mut shots, config)
+                                .await;
+                            continue;
+                        }
+                        (Some("running"), Some(id)) => shots.retain(|(case, _), _| *case != id),
+                        _ => {}
+                    }
+                }
                 state.apply(&event);
                 if state.done() {
                     return Ended::Finished;
@@ -673,6 +700,168 @@ impl Job {
         let finished = ended == Ended::Finished && snapshots_written;
         let failed_tests = state.tally.failed().max(result.failed());
         Ok((output, passed && finished, failed_tests, result))
+    }
+}
+
+impl Job {
+    /// Takes the screenshot a page asked for, checks it against its reference,
+    /// and gives the page the verdict: nothing, or why it failed.
+    async fn screenshot(
+        &self,
+        context: &str,
+        message: &[Value],
+        state: &FileState,
+        shots: &mut HashMap<(u64, String), u32>,
+        config: &TestConfig,
+    ) {
+        let Some(request) = message.get(2).and_then(Value::as_u64) else {
+            return;
+        };
+        let verdict = self
+            .take_screenshot(context, message, state, shots, config)
+            .await;
+        let reply = match verdict {
+            None => json!({ "type": "null" }),
+            Some(why) => json!({ "type": "string", "value": why }),
+        };
+        let _ = self
+            .client
+            .command(
+                "script.callFunction",
+                json!({
+                    "functionDeclaration": "(request, message) => globalThis.__esdev_reply(request, message)",
+                    "arguments": [{ "type": "number", "value": request }, reply],
+                    "target": { "context": context },
+                    "awaitPromise": false,
+                }),
+            )
+            .await;
+    }
+
+    async fn take_screenshot(
+        &self,
+        context: &str,
+        message: &[Value],
+        state: &FileState,
+        shots: &mut HashMap<(u64, String), u32>,
+        config: &TestConfig,
+    ) -> Option<String> {
+        let case = message.get(1).and_then(Value::as_u64).unwrap_or(u64::MAX);
+        let options: Value = message
+            .get(5)
+            .and_then(Value::as_str)
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_default();
+        let name = match message.get(3).and_then(Value::as_str) {
+            Some(name) => name.to_string(),
+            // The test's full name, numbered, as its snapshots are.
+            None => {
+                let test = state
+                    .ids
+                    .get(&case)
+                    .and_then(|index| state.tally.name(*index))
+                    .unwrap_or("screenshot")
+                    .to_string();
+                let count = shots.entry((case, test.clone())).or_insert(0);
+                *count += 1;
+                format!("{test} {count}")
+            }
+        };
+        let rect = message.get(4)?;
+        let number = |key: &str| rect.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+        let clip = json!({
+            "type": "box",
+            "x": number("x"),
+            "y": number("y"),
+            "width": number("width"),
+            "height": number("height"),
+        });
+        let comparator = options
+            .get("comparatorOptions")
+            .cloned()
+            .unwrap_or_default();
+        let tolerance = crate::screenshot::Tolerance {
+            threshold: comparator
+                .get("threshold")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.1),
+            allowed_pixels: comparator
+                .get("allowedMismatchedPixels")
+                .and_then(Value::as_u64),
+            allowed_ratio: comparator
+                .get("allowedMismatchedPixelRatio")
+                .and_then(Value::as_f64),
+        };
+        let timeout = options
+            .get("timeout")
+            .and_then(Value::as_u64)
+            .unwrap_or(5000);
+        let png = match self.stable_screenshot(context, &clip, timeout).await {
+            Ok(png) => png,
+            Err(err) => return Some(err),
+        };
+        let reference = crate::screenshot::reference_path(&self.file, &name, &self.browser);
+        crate::screenshot::Check {
+            root: &self.root,
+            reference: &reference,
+            update: config.update_snapshots,
+            ci: config.ci,
+            tolerance,
+        }
+        .run(&png)
+    }
+
+    /// Screenshots of `clip` until two in a row are the same, so an animation
+    /// or a late load is not what is compared. Vitest waits the same way.
+    async fn stable_screenshot(
+        &self,
+        context: &str,
+        clip: &Value,
+        timeout: u64,
+    ) -> Result<Vec<u8>, String> {
+        use base64::Engine as _;
+        let capture = || async {
+            let answer = self
+                .client
+                .command(
+                    "browsingContext.captureScreenshot",
+                    json!({ "context": context, "origin": "document", "clip": clip }),
+                )
+                .await
+                .map_err(|err| format!("the browser did not take the screenshot: {err}"))?;
+            let data = answer["data"]
+                .as_str()
+                .ok_or("the browser's screenshot has no data")?;
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|err| format!("the browser's screenshot is not base64: {err}"))
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout);
+        let mut last = capture().await?;
+        loop {
+            let next = capture().await?;
+            if next == last {
+                return Ok(next);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "the element was still changing after {timeout}ms;                      wait for it to settle, or raise the screenshot's timeout"
+                ));
+            }
+            last = next;
+        }
+    }
+}
+
+/// The message a page posted, as the array it sent.
+fn page_message(event: &Event) -> Option<Vec<Value>> {
+    if event.method != "script.message" {
+        return None;
+    }
+    let text = event.params.pointer("/data/value")?.as_str()?;
+    match serde_json::from_str(text).ok()? {
+        Value::Array(message) => Some(message),
+        _ => None,
     }
 }
 

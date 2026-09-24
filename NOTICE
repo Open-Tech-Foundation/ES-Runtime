@@ -11,6 +11,10 @@ This software embeds the V8 JavaScript engine, Copyright the V8 project authors,
 licensed under the BSD-3-Clause license (https://github.com/v8/v8). V8 is
 statically linked via the `v8` crate.
 
+`esdev`'s screenshot comparison (crates/dev-cli/src/screenshot.rs) is a port
+of pixelmatch, Copyright (c) 2025, Mapbox, licensed under the ISC license
+(https://github.com/mapbox/pixelmatch). The notice is kept in that file.
+
 Rust dependencies are distributed under OSI-approved permissive licenses
 (Apache-2.0, MIT, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0, BSL-1.0); the set is
 enforced by cargo-deny (see deny.toml). See docs/LICENSING.md for details.

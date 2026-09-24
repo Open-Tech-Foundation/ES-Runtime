@@ -15,6 +15,7 @@ itself.
 
 ### Added
 
+- **`toMatchScreenshot`** on `Matchers`, and `ScreenshotOptions`.
 - **Benchmarks** — `bench` in `TestContext`, `Bench` (with `from`),
   `BenchTask`, `BenchOptions`, `BenchTaskOptions` (with `writeResult`),
   `BenchTimer`, `BenchResult` (with `warnings` and `stored`),

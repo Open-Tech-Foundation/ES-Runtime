@@ -582,3 +582,18 @@ test("benchmarks", async ({ bench }) => {
   // @ts-expect-error — writeResult is a path.
   bench("x", { writeResult: true }, () => {});
 });
+
+// --- screenshots -----------------------------------------------------------------
+
+test("screenshots", async () => {
+  const button = document.createElement("button");
+  await expect(button).toMatchScreenshot();
+  await expect(button).toMatchScreenshot("hover");
+  await expect(button).toMatchScreenshot({ comparatorOptions: { threshold: 0.2 } });
+  await expect(button).toMatchScreenshot("hover", {
+    comparatorOptions: { allowedMismatchedPixelRatio: 0.01 },
+    timeout: 1000,
+  });
+  // @ts-expect-error — the threshold is a number.
+  await expect(button).toMatchScreenshot({ comparatorOptions: { threshold: "low" } });
+});

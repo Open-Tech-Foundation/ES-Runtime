@@ -4082,6 +4082,7 @@ mismatched `Promise`; `await` them.
 | `toStrictEqual(v)` | `toEqual`, and also: a key set to `undefined` is not a key left out, a hole in an array is not an `undefined`, and the two values have the same prototype. |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test. `name` is optional; unnamed calls count from one. |
 | `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory. |
+| `await toMatchScreenshot(name?, options?)` | Browser runs only: the element's pixels match `__screenshots__/<file>/<name>-<browser>-<platform>.png`. `name` defaults to the test's full name and a count. Options: `comparatorOptions.threshold` (0.1), `allowedMismatchedPixels`, `allowedMismatchedPixelRatio`; `timeout` (5000 ms) for the element to stop changing. A missing reference is written and fails, unless `--update-snapshots`; `--ci` writes none. A mismatch writes the actual and diff images under `.esdev/screenshots/`. Outside a browser run it throws. |
 | `toMatchInlineSnapshot(propertyMatchers?, snapshot?)` | Matches the snapshot written in the call. With none yet, a local run writes it into the source file; `--ci` fails instead. |
 | `toThrowErrorMatchingInlineSnapshot(snapshot?)` | Calls the function and matches the thrown error against the snapshot written in the call. |
 | `toBeTruthy()` / `toBeFalsy()` / `toBeNull()` / `toBeUndefined()` / `toBeDefined()` / `toBeNaN()` | |

@@ -1,0 +1,77 @@
+---
+title: Screenshots
+description: Compare an element's pixels with a reference image in browser runs.
+---
+
+# Screenshots
+
+In a [browser run](/esdev/test/browser), `toMatchScreenshot` compares what an
+element looks like with a reference image committed beside the test:
+
+```ts
+import { expect, test } from "runtime:test";
+import { renderButton } from "./button.ts";
+
+test("the primary button", async () => {
+  const button = renderButton({ variant: "primary", label: "Save" });
+  document.body.append(button);
+  await expect(button).toMatchScreenshot();
+});
+```
+
+```sh
+esdev test --browser button
+```
+
+The matcher is async, so await it. It needs a real browser. Under `--dom`, or
+without `--browser`, it fails and says so.
+
+## References
+
+References are stored as
+`__screenshots__/<test file>/<name>-<browser>-<platform>.png`, beside the
+test file, the same layout Vitest uses. Commit them. A browser draws text and
+edges a little differently on each platform, so each browser and platform
+keeps its own reference.
+
+`name` is the test's full name and a count, `the-primary-button-1`, unless you
+pass one: `toMatchScreenshot("hover")`.
+
+- **The first run** writes the reference and fails, so that someone looks at
+  the image before it becomes what the element should look like. Run the tests
+  again once it is right.
+- **A mismatch** fails with the number of pixels that differ, and writes the
+  actual image and a diff under `.esdev/screenshots/`: red where the images
+  differ, yellow where only antialiasing does. `.esdev/` ignores itself in git.
+- **`--update-snapshots`** accepts the new image as the reference.
+- **`--ci`** writes no reference: a missing one fails.
+
+## Options
+
+```ts
+await expect(card).toMatchScreenshot("card", {
+  comparatorOptions: { threshold: 0.2, allowedMismatchedPixelRatio: 0.01 },
+  timeout: 2000,
+});
+```
+
+| Option | Default | |
+| --- | --- | --- |
+| `comparatorOptions.threshold` | `0.1` | How different two colours may be and still match, from 0 to 1. |
+| `comparatorOptions.allowedMismatchedPixels` | | How many pixels may differ. |
+| `comparatorOptions.allowedMismatchedPixelRatio` | | What share of the pixels may differ, from 0 to 1. |
+| `timeout` | `5000` | Milliseconds to wait for the element to stop changing. |
+
+Colours are compared as pixelmatch compares them, the comparator Vitest uses, so
+a threshold means the same in both.
+
+## A stable picture
+
+Before comparing, the element is scrolled into view and captured until two
+captures in a row are the same, so an animation or an image still loading is
+not what gets compared. An element still changing when `timeout` runs out
+fails the test.
+
+Compare elements, not whole pages. A screenshot does not replace an assertion
+about what the element says or does. It catches what those miss: a style that
+changed.

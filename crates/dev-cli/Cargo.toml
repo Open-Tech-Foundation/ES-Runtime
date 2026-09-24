@@ -96,6 +96,11 @@ dunce.workspace = true
 # A browser run's file snapshots, carried to and from the page as text. The
 # workspace's own pin, already in the graph for `esrun`'s `atob`/`btoa`.
 base64.workspace = true
+# `toMatchScreenshot`'s PNGs (DECISIONS D120): a browser's screenshots are
+# 8-bit RGB(A), which needs inflate, deflate and a CRC and nothing more. Both
+# are already in the tree through the runtime, so no image crate is added.
+flate2 = "1.1"
+crc32fast.workspace = true
 
 # Sending a child the signal that starts its graceful drain. The same crate and
 # the same reason `default-providers` uses it for `runtime:system` — a typed

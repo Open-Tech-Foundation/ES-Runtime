@@ -104,6 +104,12 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`toMatchScreenshot`** in browser runs, with Vitest's API. An element is
+  compared with `__screenshots__/<file>/<name>-<browser>-<platform>.png`,
+  using pixelmatch's comparison. A first run writes the reference and fails
+  for review, a mismatch leaves the actual and diff images under
+  `.esdev/screenshots/`, and `--update-snapshots` accepts changes
+  (DECISIONS D120).
 - **Several browsers in one run**: `--browser=firefox,chrome` or a list in
   `test.browser` runs every file in each. Each file's report names its
   browser, and `--reporter=json` adds `"browser"` to its line (DECISIONS D119).

@@ -259,6 +259,7 @@ mismatched `Promise` — `await` them.
 | `toStrictEqual` | …also telling an `undefined` key from a missing one, a hole from an `undefined`, and a class instance from a plain object |
 | `toMatchSnapshot(name?)` | Matches a versioned snapshot for this test; unnamed calls count from one |
 | `toMatchFileSnapshot(name)` | Matches exact text or bytes in this test file's snapshot directory |
+| `await toMatchScreenshot(name?, options?)` | In a browser run, the element's pixels match a reference image. See [Screenshots](/esdev/test/screenshots) |
 | `toMatchInlineSnapshot(matchers?, snapshot?)` / `toThrowErrorMatchingInlineSnapshot(snapshot?)` | Matches the snapshot written in the call; written into the source when missing, except under `--ci` |
 | `toBeTruthy` / `toBeFalsy` / `toBeNull` / `toBeUndefined` / `toBeDefined` / `toBeNaN` / `toBeNullable` | |
 | `toBeInstanceOf` / `toBeTypeOf` | |

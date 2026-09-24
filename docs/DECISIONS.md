@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D120 — `toMatchScreenshot`: Vitest's API, pixelmatch's comparison, no image crate · *Accepted (2026-09-24)*
+
+**Context:** Vitest's browser mode has `toMatchScreenshot`. It captures an element until two captures in a row agree, and compares the result with `__screenshots__/<file>/<name>-<browser>-<platform>.png` using pixelmatch, configured by `comparatorOptions`. The first run writes the reference and fails. A mismatch writes the actual and diff images elsewhere. A page cannot take its own picture; WebDriver BiDi's `browsingContext.captureScreenshot` can, clipped to a box.
+
+**Decision:**
+- **Vitest's API, reference layout and first-run failure.** A reference written unseen is not yet a statement of what the element should look like, and value snapshots pass on first write only because text is reviewed in the diff that adds it. `--update-snapshots` and `--ci` mean what they mean for snapshots.
+- **The page asks, the host answers.** The matcher sends the element's document box on the channel. The host captures that box, compares, and calls back into the page with the verdict. It is the one place the page waits on the host, and it only uses what the channel already carries.
+- **pixelmatch, ported**, with its ISC notice in the source: the YIQ colour distance, the threshold scale and the antialiasing check. A threshold then means what it means in Vitest, and references and settings move between the two. Only `pixelmatch` is offered as a comparator.
+- **No image crate.** Browsers return 8-bit RGB(A) PNGs. A decoder and encoder for that, on the `flate2` and `crc32fast` the runtime already carries, is about a hundred lines. A reference in another PNG form is refused by name.
+- **Mismatch images go under `.esdev/screenshots/`**, which writes its own `.gitignore`, so output to inspect is never committed by accident. Vitest writes to `.vitest/attachments/` for the same reason.
+
+**Not done:** masking regions, which is a Playwright provider option in Vitest; screenshots of the whole page, which Vitest advises against; pruning references whose tests are gone.
+
+---
+
 ### D119 — Browser runs: assets, `public/`, and several browsers · *Accepted (2026-09-24)* · *extends D99*
 
 **Context:** a browser run bundled each file and served only its bundle, as text. A stylesheet's `url()` was left as the bundler's placeholder, a binary file could not have been served whole, and a test could not fetch the fixtures an app keeps in `public/`. Vitest's browser mode serves Vite's `publicDir` and resolves CSS assets through Vite. It runs several browsers as `instances`, and each file runs in each one.

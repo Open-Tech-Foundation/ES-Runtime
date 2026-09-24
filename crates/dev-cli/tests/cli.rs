@@ -16647,3 +16647,87 @@ fn test_browser_runs_every_file_in_each_of_several() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `toMatchScreenshot` in a page: a first run writes the reference and fails
+/// for review; a match passes; a change fails and leaves the actual and diff
+/// images under `.esdev/`; `--update-snapshots` accepts it; `--ci` writes
+/// nothing. Outside a browser run it says it needs one.
+#[test]
+fn test_browser_screenshots_are_compared_with_a_reference() {
+    let browser = browser_flag();
+    let dir = build_dir("t_browser_screenshots");
+    let test = |colour: &str| {
+        format!(
+            r#"import {{ expect, test }} from "runtime:test";
+test("button", async () => {{
+  const b = document.createElement("button");
+  b.textContent = "Save";
+  b.style.cssText = "background: {colour}; color: white; padding: 8px 16px; border: 0; font: 16px sans-serif";
+  document.body.append(b);
+  await expect(b).toMatchScreenshot();
+}});
+"#
+        )
+    };
+    write_in(&dir, "button.test.ts", &test("rgb(0, 100, 200)"));
+    let run = |args: &[&str]| {
+        let out = esdev_in(&dir)
+            .args(["test", &browser, "--timeout=60000"])
+            .args(args)
+            .output()
+            .expect("spawn esdev test --browser");
+        (out.status.success(), stdout(&out), stderr(&out))
+    };
+
+    let (ok, out, err) = run(&["--ci"]);
+    if no_browser(&err) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(!ok, "{out}{err}");
+    assert!(out.contains("--ci does not write them"), "{out}");
+    assert!(!dir.join("__screenshots__").exists());
+
+    let (ok, out, _) = run(&[]);
+    assert!(!ok, "{out}");
+    assert!(out.contains("no reference screenshot was found"), "{out}");
+    let references: Vec<_> = std::fs::read_dir(dir.join("__screenshots__/button.test.ts"))
+        .expect("the reference's directory")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(references.len(), 1, "{references:?}");
+    assert!(references[0].starts_with("button-1-"), "{references:?}");
+    assert!(references[0].ends_with(".png"), "{references:?}");
+
+    let (ok, out, err) = run(&[]);
+    assert!(ok, "the reference matches itself:\n{out}{err}");
+
+    write_in(&dir, "button.test.ts", &test("rgb(200, 0, 0)"));
+    let (ok, out, _) = run(&[]);
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("screenshot differs from __screenshots__/button.test.ts/"),
+        "{out}"
+    );
+    assert!(out.contains("diff:   .esdev/screenshots/"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".esdev/.gitignore")).unwrap(),
+        "*\n"
+    );
+
+    let (ok, out, err) = run(&["--update-snapshots"]);
+    assert!(ok, "{out}{err}");
+    let (ok, out, err) = run(&[]);
+    assert!(ok, "the updated reference matches:\n{out}{err}");
+
+    let out = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom");
+    assert!(
+        stdout(&out).contains("toMatchScreenshot needs a real browser"),
+        "{}",
+        stdout(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
