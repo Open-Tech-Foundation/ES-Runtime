@@ -52,6 +52,7 @@ const NAV = [
       { title: "Fixtures", path: "/esdev/test/fixtures" },
       { title: "Tags", path: "/esdev/test/tags" },
       { title: "Type tests", path: "/esdev/test/type-tests" },
+      { title: "Benchmarks", path: "/esdev/test/bench" },
       { title: "Mocks & fake timers", path: "/esdev/test/mocks" },
       { title: "Configuration", path: "/esdev/test/configuration" },
       { title: "Global setup", path: "/esdev/test/global-setup" },

@@ -117,6 +117,8 @@ pub struct TestConfig {
     /// `--max-concurrency` or `test.maxConcurrency`: how many concurrent cases
     /// in a file may run at once. `None` is 5.
     pub max_concurrency: Option<u64>,
+    /// `esdev bench`: the benchmark files, with `bench` in the test context.
+    pub bench: bool,
     /// `--typecheck`: run the project's `tsc --noEmit` too, and fail with it.
     pub typecheck: bool,
     /// `--tags-filter`, as given: each an expression a test's tags must match.
@@ -188,6 +190,7 @@ impl TestConfig {
             strict_tags: self.strict_tags,
             module_tags: Vec::new(),
             max_concurrency: self.max_concurrency,
+            bench: self.bench,
         }
     }
 }
@@ -335,6 +338,40 @@ const TEST_SUFFIXES: &[&str] = &[
     ".spec.mts",
 ];
 
+/// What `esdev bench` runs instead: benchmark files, which `esdev test` leaves
+/// alone, as Vitest's `benchmark.include` does.
+const BENCH_SUFFIXES: &[&str] = &[
+    ".bench.js",
+    ".bench.mjs",
+    ".bench.ts",
+    ".bench.tsx",
+    ".bench.jsx",
+    ".bench.mts",
+    ".benchmark.js",
+    ".benchmark.mjs",
+    ".benchmark.ts",
+    ".benchmark.tsx",
+    ".benchmark.jsx",
+    ".benchmark.mts",
+];
+
+/// Whether this run is `esdev bench`: discovery then finds benchmark files.
+static BENCH_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Makes discovery find benchmark files, for `esdev bench`.
+pub fn discover_benchmarks() {
+    BENCH_RUN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The suffixes this run discovers.
+fn sought() -> &'static [&'static str] {
+    if BENCH_RUN.load(std::sync::atomic::Ordering::Relaxed) {
+        BENCH_SUFFIXES
+    } else {
+        TEST_SUFFIXES
+    }
+}
+
 /// Directories discovery never descends into.
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "target", ".cache"];
 
@@ -346,7 +383,7 @@ const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "target", ".cache"]
 pub(crate) fn sought_description() -> String {
     let mut stems: Vec<&str> = Vec::new();
     let mut exts: Vec<Vec<&str>> = Vec::new();
-    for suffix in TEST_SUFFIXES {
+    for suffix in sought() {
         // ".test.js" is the stem ".test" plus the extension "js".
         let rest = &suffix[1..];
         let dot = rest.find('.').expect("a test suffix names an extension");
@@ -427,6 +464,7 @@ pub async fn run_all(
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
                 .chain(config.list.then(|| "--list".to_string()))
+                .chain(config.bench.then(|| "--_bench".to_string()))
                 .chain(
                     config
                         .max_concurrency
@@ -926,7 +964,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
                 collect(&path, out);
             }
-        } else if is_test_file(&name) {
+        } else if is_run_file(&name) {
             out.push(path);
         }
     }
@@ -934,12 +972,33 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Whether a filename names a test.
 pub fn is_test_file(name: &str) -> bool {
-    TEST_SUFFIXES.iter().any(|s| name.ends_with(s))
+    TEST_SUFFIXES
+        .iter()
+        .chain(BENCH_SUFFIXES)
+        .any(|s| name.ends_with(s))
+}
+
+/// Whether discovery takes `name`: a test file, or under `esdev bench` a
+/// benchmark file.
+fn is_run_file(name: &str) -> bool {
+    sought().iter().any(|s| name.ends_with(s))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Benchmark files are not tests to `esdev test`, and are never measured
+    /// for coverage as though they were source.
+    #[test]
+    fn benchmark_files_are_their_own_kind() {
+        for name in ["parse.bench.ts", "parse.benchmark.mjs"] {
+            assert!(BENCH_SUFFIXES.iter().any(|s| name.ends_with(s)), "{name}");
+            assert!(!TEST_SUFFIXES.iter().any(|s| name.ends_with(s)), "{name}");
+            assert!(is_test_file(name), "{name}");
+        }
+        assert!(!BENCH_SUFFIXES.iter().any(|s| "a.test.ts".ends_with(s)));
+    }
 
     fn files(n: usize) -> Vec<PathBuf> {
         (0..n)

@@ -661,6 +661,20 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D116 — Benchmarks as a test-context fixture, run by `esdev bench` · *Accepted (2026-09-24)*
+
+**Context:** Vitest 5 moved benchmarks from a separate `bench()` global with its own reporter to a `bench` fixture on the test context, inside `*.bench.*` files run by `vitest bench`: a benchmark is an ordinary test that measures, compares, and asserts on the result. Deno's `Deno.bench` and Bun's use of mitata keep benchmarks outside tests, with no assertions.
+
+**Decision:**
+- **Vitest 5's shape**: `bench(name, options?, fn)` in the context, `.run()` for one, `bench.compare(...)` for several, and `toBeFasterThan`/`toBeSlowerThan` with a `delta` margin. Everything else about a test — hooks, fixtures, filters, tags, reporters — applies unchanged.
+- **Separate files and command.** `esdev test` never discovers `*.bench.*`, since measuring is slow and its numbers mean nothing under a parallel run. `esdev bench` runs one file at a time for the same reason. `bench` read outside `esdev bench` throws, naming where it belongs.
+- **Our own measurement, no dependency.** Each benchmark warms up, then is timed in samples of a loop of calls, sized in warm-up to about 0.5ms, so a function faster than the clock's resolution is measured by the loop and not by the clock. `compare` takes one sample of each in turn, so a slow stretch of the machine lands on all of them. The clock is the real `performance.now`, taken at load, so a test's frozen clock does not stop measurement.
+- **The result is latency and throughput**, each with mean, min, max, percentiles and relative margin of error, the fields tinybench reports and Vitest exposes.
+
+**Rejected:** a `bench()` global beside `test` (Vitest 4's API, which Vitest 5 left); vendoring tinybench, whose timing is the same idea and whose adaptive batching this needs anyway.
+
+---
+
 ### D115 — Concurrent tests, attributed by `runtime:context` · *Accepted (2026-09-24)* · *amends the one-at-a-time rule for opted-in tests*
 
 **Context:** Vitest's `test.concurrent`/`describe.concurrent` run consecutive concurrent tests together, at most `maxConcurrency` (5) at once, with `{ concurrent: false }` and `.sequential` to opt out. Because its global `expect` cannot tell which of several running tests an assertion belongs to, Vitest requires the context's `expect` for snapshots and assertion counts. This runner kept "the running test" in module variables, which concurrency would mix up.

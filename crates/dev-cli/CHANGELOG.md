@@ -104,6 +104,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev bench`** runs `*.bench.*` and `*.benchmark.*` files, one at a time,
+  with `bench` in the test context: `bench(name, options?, fn)` registers a
+  benchmark, `.run()` measures it, and `bench.compare(...)` measures several in
+  turns and prints them as a table. `toBeFasterThan` and `toBeSlowerThan`
+  compare results. `esdev test` does not run benchmark files (DECISIONS D116).
 - **Concurrent tests**: `test.concurrent`, `describe.concurrent`,
   `{ concurrent }` on tests and groups, `test.sequential`/`describe.sequential`,
   and `--max-concurrency` / `test.maxConcurrency` (5 by default). Each test's

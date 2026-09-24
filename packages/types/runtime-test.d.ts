@@ -12,6 +12,69 @@ declare module "runtime:test" {
     skip(condition: boolean, note?: string): void;
     readonly onTestFinished: typeof onTestFinished;
     readonly onTestFailed: typeof onTestFailed;
+    /**
+     * Registers a benchmark, in a `*.bench.*` file run by `esdev bench`.
+     * Elsewhere, reading it throws.
+     */
+    readonly bench: Bench;
+  }
+
+  /** How long a benchmark is measured for. */
+  export interface BenchOptions {
+    /** Milliseconds of samples, at least. 500 by default. */
+    time?: number;
+    /** Samples, at least. 10 by default. */
+    iterations?: number;
+    /** Milliseconds of warm-up before measuring. 100 by default. */
+    warmupTime?: number;
+    /** Warm-up samples, at least. 5 by default. */
+    warmupIterations?: number;
+  }
+
+  /** A benchmark's own options: when it is measured, and around each sample. */
+  export interface BenchTaskOptions extends BenchOptions {
+    /** Before each sample, outside the timing. */
+    beforeEach?(): unknown;
+    /** After each sample, outside the timing. */
+    afterEach?(): unknown;
+  }
+
+  /** A statistic's spread, in its own unit. */
+  export interface BenchStatistics {
+    mean: number;
+    min: number;
+    max: number;
+    p50: number;
+    /** The 95% margin of the mean, as a percentage of it. */
+    rme: number;
+  }
+
+  /** What measuring a benchmark found. */
+  export interface BenchResult {
+    readonly name: string;
+    /** Samples taken. */
+    readonly samples: number;
+    /** Milliseconds a call took. */
+    readonly latency: BenchStatistics & { p75: number; p99: number; p999: number; sd: number };
+    /** Calls a second. */
+    readonly throughput: BenchStatistics;
+  }
+
+  /** A registered benchmark. */
+  export interface BenchTask {
+    readonly name: string;
+    /** Measures it, prints its row, and resolves to its result. */
+    run(options?: BenchOptions): Promise<BenchResult>;
+  }
+
+  export interface Bench {
+    (name: string, fn: () => unknown): BenchTask;
+    (name: string, options: BenchTaskOptions, fn: () => unknown): BenchTask;
+    /**
+     * Measures benchmarks side by side, a sample of each in turn, prints them
+     * as a table, and resolves to their results by name.
+     */
+    compare(...tasks: [...BenchTask[], BenchOptions] | BenchTask[]): Promise<Map<string, BenchResult>>;
   }
 
   /** A test's body. */
@@ -400,6 +463,13 @@ declare module "runtime:test" {
     toBeNull(): void;
     /** `null` or `undefined`. */
     toBeNullable(): void;
+    /**
+     * A benchmark result's throughput is higher than `other`'s, by at least
+     * `delta` (0.1 is 10%).
+     */
+    toBeFasterThan(other: BenchResult, options?: { delta?: number }): void;
+    /** …lower than `other`'s, by at least `delta`. */
+    toBeSlowerThan(other: BenchResult, options?: { delta?: number }): void;
     toBeUndefined(): void;
     toBeDefined(): void;
     toBeNaN(): void;

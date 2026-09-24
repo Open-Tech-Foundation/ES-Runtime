@@ -1094,6 +1094,135 @@ async function runCase({ id, title, fn, scope, options, fixtures, concurrent }) 
 }
 
 // One attempt at a case, and what it failed with, or `null`.
+// --- benchmarks ----------------------------------------------------------------
+//
+// `bench` in the test context, under `esdev bench`: Vitest 5's shape. A
+// benchmark is registered with `bench(name, options?, fn)` and measured by
+// `.run()`, or several side by side by `bench.compare(...)`.
+
+/// The real clock, taken before a test can freeze one.
+const benchNow = globalThis.performance.now.bind(globalThis.performance);
+
+/// How long a sample should take, in milliseconds: a function faster than the
+/// clock can resolve is timed as a loop of calls, and each call's latency is
+/// the loop's time over its count.
+const SAMPLE_MS = 0.5;
+
+const BENCH = Symbol("bench");
+
+function benchTask(name, a, b) {
+  const [fn, options] = typeof a === "function" ? [a, b ?? {}] : [b, a ?? {}];
+  if (typeof name !== "string" || typeof fn !== "function") {
+    throw new TypeError("bench(name, options?, fn) needs a name and a function to measure");
+  }
+  const task = {
+    [BENCH]: true,
+    name,
+    fn,
+    options,
+    run: async (runOptions) => (await measure([task], runOptions)).get(name),
+  };
+  return task;
+}
+
+function benchFixture() {
+  const bench = (name, a, b) => benchTask(name, a, b);
+  // Measured in turns, one sample of each in each turn, so a slower stretch of
+  // the machine lands on all of them rather than one.
+  bench.compare = (...args) => {
+    const last = args.at(-1);
+    const options = last !== undefined && !last?.[BENCH] ? args.pop() : {};
+    if (args.length === 0 || !args.every((task) => task?.[BENCH])) {
+      throw new TypeError("bench.compare(...benchmarks, options?) needs benchmarks made with bench()");
+    }
+    return measure(args, options);
+  };
+  return bench;
+}
+
+/// One timed sample of `task`: `calls` calls, and how long they took.
+async function sample(task, calls) {
+  await task.options.beforeEach?.();
+  const start = benchNow();
+  for (let i = 0; i < calls; i++) {
+    const value = task.fn();
+    if (value !== null && typeof value?.then === "function") await value;
+  }
+  const elapsed = benchNow() - start;
+  await task.options.afterEach?.();
+  return elapsed;
+}
+
+/// Measures `tasks` side by side: warm each up, size its samples, then take
+/// samples in turns until each has `iterations` and `time` has passed.
+async function measure(tasks, { time = 500, iterations = 10, warmupTime = 100, warmupIterations = 5 } = {}) {
+  const runs = [];
+  for (const task of tasks) {
+    let calls = 1;
+    const warmStart = benchNow();
+    for (let done = 0; done < warmupIterations || benchNow() - warmStart < warmupTime; done++) {
+      const elapsed = await sample(task, calls);
+      if (elapsed < SAMPLE_MS && calls < 1_000_000) calls *= 2;
+    }
+    runs.push({ task, calls, latencies: [] });
+  }
+  const start = benchNow();
+  while (runs.some((run) => run.latencies.length < iterations) || benchNow() - start < time * runs.length) {
+    for (const run of runs) run.latencies.push((await sample(run.task, run.calls)) / run.calls);
+  }
+  const results = new Map(runs.map((run) => [run.task.name, summarise(run.task.name, run.latencies)]));
+  report(results);
+  return results;
+}
+
+/// A benchmark's result: latency in milliseconds, throughput in operations a
+/// second, each with its spread.
+function summarise(name, latencies) {
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const n = sorted.length;
+  const mean = sorted.reduce((sum, x) => sum + x, 0) / n;
+  const variance = sorted.reduce((sum, x) => sum + (x - mean) ** 2, 0) / Math.max(1, n - 1);
+  const sd = Math.sqrt(variance);
+  // The 95% margin of the mean, as a share of it.
+  const rme = mean === 0 ? 0 : ((1.96 * sd) / Math.sqrt(n) / mean) * 100;
+  const at = (p) => sorted[Math.min(n - 1, Math.floor(p * n))];
+  const perSecond = (ms) => (ms === 0 ? Infinity : 1000 / ms);
+  return {
+    name,
+    samples: n,
+    latency: { mean, min: sorted[0], max: sorted[n - 1], p50: at(0.5), p75: at(0.75), p99: at(0.99), p999: at(0.999), sd, rme },
+    throughput: {
+      mean: perSecond(mean),
+      min: perSecond(sorted[n - 1]),
+      max: perSecond(sorted[0]),
+      p50: perSecond(at(0.5)),
+      rme,
+    },
+  };
+}
+
+/// The results, as a table the test's output carries.
+function report(results) {
+  const all = [...results.values()];
+  const fastest = Math.max(...all.map((r) => r.throughput.mean));
+  const number = (x) => (Number.isFinite(x) ? Math.round(x).toLocaleString("en-US") : "∞");
+  const ms = (x) => (x < 0.001 ? `${(x * 1e6).toFixed(0)}ns` : x < 1 ? `${(x * 1000).toFixed(2)}µs` : `${x.toFixed(2)}ms`);
+  const rows = all.map((r) => [
+    r.name,
+    number(r.throughput.mean),
+    ms(r.latency.mean),
+    ms(r.latency.p75),
+    ms(r.latency.p99),
+    `±${r.latency.rme.toFixed(2)}%`,
+    String(r.samples),
+    all.length === 1 ? "" : r.throughput.mean === fastest ? "fastest" : `${(fastest / r.throughput.mean).toFixed(2)}× slower`,
+  ]);
+  const head = ["name", "ops/sec", "mean", "p75", "p99", "rme", "samples", ""];
+  const widths = head.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
+  const line = (cells) => `  ${cells.map((cell, i) => (i === 0 ? cell.padEnd(widths[i]) : cell.padStart(widths[i]))).join("  ")}`.trimEnd();
+  console.log([line(head), ...rows.map(line)].join("\n"));
+}
+
 /// Thrown by `context.skip()`: not a failure, and the case is reported skipped.
 const SKIPPED = Symbol("skipped");
 
@@ -1112,6 +1241,13 @@ function testContext(title) {
     },
     onTestFinished,
     onTestFailed,
+    // Only in benchmark files, run by `esdev bench`.
+    get bench() {
+      if (runOptions.bench !== true) {
+        throw new Error("bench is in the test context of *.bench.* files, which esdev bench runs");
+      }
+      return benchFixture();
+    },
   };
 }
 
@@ -1769,6 +1905,15 @@ const callsOf = (value, matcher) => recordOf(value, matcher).calls;
 const resultsOf = (value, matcher) => recordOf(value, matcher).results;
 const settledOf = (value, matcher) => recordOf(value, matcher).settledResults;
 
+/// Two benchmark results' throughput, or a complaint that they are not results.
+function throughputs(matcher, a, b) {
+  const rate = (r) => r?.throughput?.mean;
+  if (typeof rate(a) !== "number" || typeof rate(b) !== "number") {
+    throw new TypeError(`expect(...).${matcher} compares two benchmark results, from bench().run() or bench.compare()`);
+  }
+  return [rate(a), rate(b)];
+}
+
 /// Whether `before`'s first call came before `after`'s. A `before` never called
 /// counts as first unless the test says it must have been.
 function calledFirst(before, after, requireCall) {
@@ -1980,6 +2125,24 @@ function expectation(actual, negated, mode = "hard") {
     },
     toBeNull() {
       check(actual === null, negated, () => fail(actual, null, negated, "be"));
+    },
+    // A benchmark result's throughput against another's, by a margin `delta`
+    // (0.1 is 10%) so noise does not decide it.
+    toBeFasterThan(other, { delta = 0 } = {}) {
+      const [mine, theirs] = throughputs("toBeFasterThan", actual, other);
+      check(mine >= theirs * (1 + delta), negated, () => {
+        throw new Error(
+          `expected ${actual.name} (${Math.round(mine)} ops/sec) ${negated ? "not " : ""}to be faster than ${other.name} (${Math.round(theirs)} ops/sec)${delta ? ` by ${delta * 100}%` : ""}`,
+        );
+      });
+    },
+    toBeSlowerThan(other, { delta = 0 } = {}) {
+      const [mine, theirs] = throughputs("toBeSlowerThan", actual, other);
+      check(mine * (1 + delta) <= theirs, negated, () => {
+        throw new Error(
+          `expected ${actual.name} (${Math.round(mine)} ops/sec) ${negated ? "not " : ""}to be slower than ${other.name} (${Math.round(theirs)} ops/sec)${delta ? ` by ${delta * 100}%` : ""}`,
+        );
+      });
     },
     toBeNullable() {
       check(actual === null || actual === undefined, negated, () =>

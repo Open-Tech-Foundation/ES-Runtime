@@ -15927,3 +15927,92 @@ fn reporters_write_json_junit_tap_and_dots() {
     assert!(stderr(&refused).contains("junit"), "{}", stderr(&refused));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `esdev bench` runs `*.bench.*` files, which `esdev test` leaves alone;
+/// `bench` in the test context measures and compares, and prints a table.
+#[test]
+fn esdev_bench_measures_and_compares_in_bench_files_only() {
+    let dir = build_dir("t_bench");
+    write_in(
+        &dir,
+        "parse.bench.ts",
+        r#"import { clock, expect, test } from "runtime:test";
+const input = JSON.stringify({ a: [1, 2, 3] });
+const slow = () => { let x = 0; for (let i = 0; i < 5000; i++) x += i; return x; };
+
+test("compare", async ({ bench }) => {
+  const results = await bench.compare(
+    bench("fast", () => { JSON.parse(input); }),
+    bench("slow", () => { slow(); }),
+    { time: 100 },
+  );
+  expect(results.get("fast")).toBeFasterThan(results.get("slow"), { delta: 0.5 });
+  expect(results.get("slow")).toBeSlowerThan(results.get("fast"));
+  expect(() => expect(results.get("slow")).toBeFasterThan(results.get("fast"))).toThrow(
+    /expected slow \(.* ops\/sec\) to be faster than fast/,
+  );
+});
+test("run, with hooks, under a frozen clock", async ({ bench }) => {
+  clock.freeze();
+  let hooks = 0;
+  const result = await bench("async", { beforeEach: () => { hooks++; } }, async () => { await null; })
+    .run({ time: 20, iterations: 4 });
+  expect(result.samples).toBeGreaterThanOrEqual(4);
+  expect(hooks).toBeGreaterThan(4);
+  expect(result.throughput.mean).toBeCloseTo(1000 / result.latency.mean, 0);
+});
+test("misuse", ({ bench }) => {
+  expect(() => (bench as any)("x")).toThrow("needs a name and a function");
+  expect(() => (bench.compare as any)(1)).toThrow("made with bench()");
+  expect(() => expect(1).toBeFasterThan(2 as any)).toThrow("two benchmark results");
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "plain.test.ts",
+        r#"import { expect, test } from "runtime:test";
+test("no bench here", ({ bench }) => { bench; });
+test("ordinary", () => { expect(1).toBe(1); });
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("bench")
+        .output()
+        .expect("spawn esdev bench");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("parse.bench.ts"), "{text}");
+    assert!(!text.contains("plain.test.ts"), "{text}");
+    assert!(text.contains("3 passed, 0 failed"), "{text}");
+    assert!(text.contains("ops/sec"), "{text}");
+    assert!(text.contains("fastest"), "{text}");
+    assert!(text.contains("× slower"), "{text}");
+
+    // `esdev test` runs the test file, not the benchmark, and `bench` there
+    // says where it belongs.
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(!text.contains("parse.bench.ts"), "{text}");
+    assert!(text.contains("1 passed, 1 failed"), "{text}");
+    assert!(
+        text.contains("bench is in the test context of *.bench.* files, which esdev bench runs"),
+        "{text}"
+    );
+
+    std::fs::remove_file(dir.join("parse.bench.ts")).expect("remove");
+    let out = esdev_in(&dir)
+        .arg("bench")
+        .output()
+        .expect("spawn esdev bench");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("*.bench.js/") && stderr(&out).contains("*.benchmark.js/"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

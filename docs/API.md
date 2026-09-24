@@ -3926,6 +3926,30 @@ or `TypeCheckFailed<Wanted, Actual>`.
 does) before the tests; its failure fails the run. Under a machine reporter its
 output goes to stderr.
 
+### Benchmarks
+
+`esdev bench [filter...]` runs `*.bench.*` and `*.benchmark.*` files (js, mjs,
+ts, tsx, jsx, mts) one at a time, with `esdev test`'s flags; `esdev test` does
+not run them. In those files the test context has `bench`; elsewhere reading it
+throws.
+
+`bench(name, options?, fn)` returns a benchmark `{ name, run(options?) }`.
+`run` resolves to its `BenchResult`; `bench.compare(...benchmarks, options?)`
+measures several, one sample of each in turn, and resolves to a
+`Map<string, BenchResult>`. Both print a table. Options: `time` (500 ms of
+samples, at least), `iterations` (10), `warmupTime` (100 ms), `warmupIterations`
+(5); a benchmark's own options also take `beforeEach` and `afterEach`, run
+untimed around each sample. `fn` is awaited when it returns a promise.
+
+A `BenchResult` is `{ name, samples, latency, throughput }`: `latency` in
+milliseconds per call (`mean`, `min`, `max`, `p50`, `p75`, `p99`, `p999`, `sd`,
+`rme`), `throughput` in calls per second (`mean`, `min`, `max`, `p50`, `rme`).
+`rme` is the 95% margin of the mean as a percentage.
+
+`expect(result).toBeFasterThan(other, { delta? })` passes when `result`'s mean
+throughput is at least `(1 + delta)` times `other`'s; `toBeSlowerThan` the
+reverse. Anything but two results is a `TypeError`.
+
 ### Tags
 
 `test(name, { tags }, fn)` and `describe(name, { tags }, body)` take a tag name

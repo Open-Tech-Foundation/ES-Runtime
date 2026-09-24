@@ -113,6 +113,13 @@ Type assertions that TypeScript checks and that do nothing at run time. They
 fail under `esdev check` or `esdev test --typecheck`. See
 [Type tests](/esdev/test/type-tests).
 
+## Benchmarks
+
+In `*.bench.*` files run by `esdev bench`, the context's `bench(name, options?, fn)`
+registers a benchmark; `.run()` measures it and `bench.compare(...)` measures
+several, resolving to results by name. `toBeFasterThan(other, { delta })` and
+`toBeSlowerThan` compare results. See [Benchmarks](/esdev/test/bench).
+
 ## Tags
 
 `{ tags }` on a test or a `describe` labels it; `@module-tag` in a JSDoc

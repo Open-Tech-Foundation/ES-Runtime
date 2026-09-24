@@ -1,0 +1,76 @@
+---
+title: Benchmarks
+description: Measure and compare how fast code runs with esdev bench.
+---
+
+# Benchmarks
+
+A benchmark is a test that measures. It lives in a `*.bench.*` or
+`*.benchmark.*` file and gets `bench` from its context:
+
+```ts
+// src/parse.bench.ts
+import { expect, test } from "runtime:test";
+import { parse, parseFast } from "./parse.ts";
+
+test("parseFast is faster", async ({ bench }) => {
+  const results = await bench.compare(
+    bench("parse", () => parse(input)),
+    bench("parseFast", () => parseFast(input)),
+  );
+  expect(results.get("parseFast")).toBeFasterThan(results.get("parse"), { delta: 0.1 });
+});
+```
+
+```sh
+esdev bench
+esdev bench parse
+```
+
+`esdev bench` takes the same flags and filters as `esdev test`, and runs one
+file at a time so that files do not slow each other down. `esdev test` does not
+run benchmark files.
+
+The results are printed as a table:
+
+```text
+  name           ops/sec    mean     p75     p99     rme  samples
+  parse          901,228  1.11µs  1.13µs  1.44µs  ±0.75%      299  2.97× slower
+  parseFast    2,675,276   374ns   377ns   546ns  ±1.00%      299       fastest
+```
+
+## Measuring
+
+`bench(name, options?, fn)` registers a benchmark. `fn` may be async; each
+call is awaited.
+
+- `.run(options?)` measures one benchmark and resolves to its result.
+- `bench.compare(...benchmarks, options?)` measures several, a sample of each
+  in turn, and resolves to a `Map` of results by name.
+
+| Option | Default | |
+| --- | --- | --- |
+| `time` | `500` | Milliseconds of samples, at least. |
+| `iterations` | `10` | Samples, at least. |
+| `warmupTime` | `100` | Milliseconds of warm-up before measuring. |
+| `warmupIterations` | `5` | Warm-up samples, at least. |
+
+A benchmark's own options may also have `beforeEach` and `afterEach`, which
+run around each sample and are not timed.
+
+A function too fast for the clock is timed in loops of calls, and each call's
+time is the loop's time divided by its count. `clock.freeze()` does not affect
+measurement.
+
+## Results
+
+| | |
+| --- | --- |
+| `name` | The benchmark's name. |
+| `samples` | How many samples were taken. |
+| `latency` | Milliseconds per call: `mean`, `min`, `max`, `p50`, `p75`, `p99`, `p999`, `sd`, and `rme`, the 95% margin of the mean as a percentage. |
+| `throughput` | Calls per second: `mean`, `min`, `max`, `p50` and `rme`. |
+
+`expect(a).toBeFasterThan(b, { delta })` and `toBeSlowerThan` compare two
+results' throughput. `delta` is the margin required, `0.1` being 10%, so that
+noise alone cannot pass or fail the test.

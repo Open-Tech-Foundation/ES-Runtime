@@ -16,6 +16,7 @@ import {
   assertSnapshot,
   assertType,
   beforeEach,
+  type BenchResult,
   clock,
   describe,
   expect,
@@ -551,4 +552,20 @@ test("inline snapshots", () => {
   }).toThrowErrorMatchingInlineSnapshot(`Error("x")`);
   // @ts-expect-error — the snapshot is a string.
   expect(1).toMatchInlineSnapshot(1);
+});
+
+// --- benchmarks ------------------------------------------------------------------
+
+test("benchmarks", async ({ bench }) => {
+  const one = bench("parse", () => JSON.parse("{}"));
+  const two = bench("async", { beforeEach: () => {}, time: 100 }, async () => {});
+  const alone: BenchResult = await one.run({ iterations: 20 });
+  const results: Map<string, BenchResult> = await bench.compare(one, two, { time: 200 });
+  await bench.compare(one, two);
+  const mean: number = alone.latency.p99 + alone.throughput.mean;
+  void mean;
+  expect(results.get("parse")!).toBeFasterThan(alone, { delta: 0.1 });
+  expect(alone).toBeSlowerThan(results.get("async")!);
+  // @ts-expect-error — a benchmark needs a function to measure.
+  bench("nothing");
 });

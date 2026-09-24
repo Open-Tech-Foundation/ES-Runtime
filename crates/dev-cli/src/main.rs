@@ -135,6 +135,7 @@ COMMANDS:
     start                       Build, run, and keep both current
     build [entry]               Bundle to deploy, or --lib to publish
     test [filter...]            Run the test files
+    bench [filter...]           Run the benchmark files (*.bench.*)
     check [args...]             Typecheck the project with its own tsc
     preview                     Serve the built output before deploying it
     upgrade [--dry-run]         Update esdev to the latest release
@@ -191,6 +192,8 @@ USAGE:
     esdev test [filter...]      Run every *.test.* / *.spec.* whose path
                                 contains a filter — or all of them, given none
     esdev test --file=<path>    Run exactly one file
+    esdev bench [filter...]     Run the *.bench.* / *.benchmark.* files the same
+                                way, one at a time, with `bench` in the context
     esdev test -h, --help       Show this help
 
 OPTIONS:
@@ -562,6 +565,15 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "test" {
             return parse_test(argv).map(|config| Command::Test(Box::new(config)));
+        }
+        // The same runner over the benchmark files, one file at a time so
+        // one's processes are not the noise in another's numbers.
+        if first == "bench" {
+            return parse_test(argv).map(|mut config| {
+                config.bench = true;
+                config.jobs = Some(1);
+                Command::Test(Box::new(config))
+            });
         }
         if first == "start" {
             return parse_start(argv).map(|config| Command::Start(Box::new(config)));
@@ -1465,6 +1477,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut tags_filter = Vec::new();
     let mut typecheck = false;
     let mut max_concurrency = None;
+    let mut bench = false;
     let mut list_tags = None;
     let mut timeout = None;
     let mut reporter = None;
@@ -1567,6 +1580,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     address: inspect::parse_address(value)?,
                     wait: flag == "--inspect-brk",
                 });
+            }
+            "--_bench" => {
+                reject_value(flag, value)?;
+                bench = true;
             }
             "--max-concurrency" => {
                 let text = require_value(flag, value)?;
@@ -1803,6 +1820,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         tags_filter,
         typecheck,
         max_concurrency,
+        bench,
         list_tags,
         // Filled in by `test_settings`, which reads the project.
         tag_definitions: Vec::new(),
@@ -2198,6 +2216,9 @@ async fn run_tests(config: TestConfig) -> ExitCode {
 }
 
 async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
+    if config.bench {
+        test::discover_benchmarks();
+    }
     // The file's `test` section, where a flag did not already answer. Read here
     // rather than in the parser because the parser has no project: a `--file`
     // child is invoked from wherever the parent was, and the settings have to

@@ -130,6 +130,8 @@ pub struct RunOptions {
     pub module_tags: Vec<String>,
     /// How many concurrent cases may run at once.
     pub max_concurrency: Option<u64>,
+    /// `esdev bench`: `bench` is in the test context.
+    pub bench: bool,
 }
 
 impl RunOptions {
@@ -148,6 +150,7 @@ impl RunOptions {
             "strictTags": self.strict_tags,
             "moduleTags": self.module_tags,
             "maxConcurrency": self.max_concurrency,
+            "bench": self.bench,
         })
     }
 }
