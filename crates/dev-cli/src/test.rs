@@ -114,6 +114,8 @@ pub struct TestConfig {
     pub coverage_out: Option<PathBuf>,
     /// Where each child of a coverage run writes, set by the parent.
     pub coverage_dir: Option<PathBuf>,
+    /// `--typecheck`: run the project's `tsc --noEmit` too, and fail with it.
+    pub typecheck: bool,
     /// `--tags-filter`, as given: each an expression a test's tags must match.
     pub tags_filter: Vec<String>,
     /// `--list-tags[=json]`: print the project's tags and run nothing.

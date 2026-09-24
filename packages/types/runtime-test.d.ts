@@ -671,6 +671,193 @@ declare module "runtime:test" {
    */
   export function inject<K extends keyof ProvidedContext & string>(key: K): ProvidedContext[K];
 
+  // --- type assertions -------------------------------------------------------
+
+  /** @internal */ type IsAny<T> = 0 extends 1 & T ? true : false;
+  /** @internal */ type IsNever<T> = [T] extends [never] ? true : false;
+  /** @internal */ type IsUnknown<T> = IsAny<T> extends true ? false : unknown extends T ? true : false;
+  /** @internal Identity, as TypeScript decides it: `any` is not `unknown`, and `readonly` counts. */
+  type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+  /** @internal */ type Extends<A, B> = IsNever<A> extends true ? IsNever<B> : [A] extends [B] ? true : false;
+  /** @internal Whether a check came out as the chain wants: as it is, or under `.not`. */
+  type Holds<Check extends boolean, Positive extends boolean> = Check extends Positive ? true : false;
+  /** @internal Intersections and representation flattened, for `.branded`. */
+  type DeepBrand<T> = T extends (...args: never[]) => unknown
+    ? T
+    : T extends object
+      ? { [K in keyof T]: DeepBrand<T[K]> }
+      : T;
+  /**
+   * @internal `A` narrowed to `E`'s keys, nested plain objects likewise, keeping
+   * `A`'s own `readonly` and optional — so comparing it with `E` checks exactly
+   * the properties `E` names.
+   */
+  type PickLike<A, E> = {
+    [K in keyof A as K extends keyof E ? K : never]: A[K] extends (...args: never[]) => unknown
+      ? A[K]
+      : A[K] extends readonly unknown[]
+        ? A[K]
+        : A[K] extends object
+          ? K extends keyof E
+            ? E[K] extends object
+              ? PickLike<A[K], E[K]>
+              : A[K]
+            : A[K]
+          : A[K];
+  };
+  /** @internal */ type MatchesObject<A, E> = [A] extends [object]
+    ? keyof E extends keyof A
+      ? Equal<PickLike<A, E>, DeepBrand<E>> extends true
+        ? true
+        : Equal<DeepBrand<PickLike<A, E>>, DeepBrand<E>>
+      : false
+    : false;
+
+  /**
+   * Why a type assertion failed: what it expected, and what there was. It
+   * shows up as the constraint the expected type does not satisfy.
+   */
+  export interface TypeMismatch<Expected, Actual> {
+    readonly "✗ expected": Expected;
+    readonly "✗ actual": Actual;
+  }
+
+  /**
+   * Why a `toBe…` assertion failed. It has no call signature, so the call is
+   * the error, and this is the type it names.
+   */
+  export interface TypeCheckFailed<Wanted extends string, Actual> {
+    readonly "✗ wanted": Wanted;
+    readonly "✗ actual": Actual;
+  }
+
+  /** @internal A `toBe…` assertion: callable when it holds. */
+  type Is<Check extends boolean, Positive extends boolean, Wanted extends string, Actual> =
+    Holds<Check, Positive> extends true
+      ? () => true
+      : TypeCheckFailed<Positive extends true ? Wanted : `not ${Wanted}`, Actual>;
+
+  /**
+   * Assertions about a type, checked by TypeScript and nothing at run time —
+   * so `esdev check`, or `esdev test --typecheck`, is where they fail.
+   */
+  export interface ExpectTypeOf<Actual, Positive extends boolean = true> {
+    /** The same assertions, each the other way round. */
+    not: ExpectTypeOf<Actual, Positive extends true ? false : true>;
+    /** Exactly this type: the same properties, `readonly` and optional included. */
+    toEqualTypeOf<Expected>(
+      this: Holds<Equal<Actual, Expected>, Positive> extends true ? unknown : TypeMismatch<Expected, Actual>,
+      ...expected: [] | [Expected]
+    ): true;
+    /** Assignable to this type. */
+    toExtend<Expected>(
+      this: Holds<Extends<Actual, Expected>, Positive> extends true ? unknown : TypeMismatch<Expected, Actual>,
+      ...expected: [] | [Expected]
+    ): true;
+    /** @deprecated {@link ExpectTypeOf.toExtend}, as expect-type renamed it. */
+    toMatchTypeOf<Expected>(
+      this: Holds<Extends<Actual, Expected>, Positive> extends true ? unknown : TypeMismatch<Expected, Actual>,
+      ...expected: [] | [Expected]
+    ): true;
+    /**
+     * An object type with at least these properties, each exactly as given —
+     * stricter than {@link ExpectTypeOf.toExtend} about `readonly` and
+     * optional, and checking nested objects the same way.
+     */
+    toMatchObjectType<Expected extends object>(
+      this: Holds<MatchesObject<Actual, Expected>, Positive> extends true ? unknown : TypeMismatch<Expected, Actual>,
+      ...expected: [] | [Expected]
+    ): true;
+    /** The members of a union that are assignable to `V`. */
+    extract<V>(): ExpectTypeOf<Extract<Actual, V>, Positive>;
+    /** The members of a union that are not. */
+    exclude<V>(): ExpectTypeOf<Exclude<Actual, V>, Positive>;
+    /** A function's return type. */
+    returns: Actual extends (...args: never[]) => infer R ? ExpectTypeOf<R, Positive> : never;
+    /** A function's parameters, as a tuple. */
+    parameters: Actual extends (...args: infer P) => unknown ? ExpectTypeOf<P, Positive> : never;
+    /** One parameter's type. */
+    parameter<N extends number>(
+      index: N,
+    ): Actual extends (...args: infer P) => unknown ? ExpectTypeOf<P[N], Positive> : never;
+    /** A class's constructor parameters, as a tuple. */
+    constructorParameters: Actual extends abstract new (...args: infer P) => unknown
+      ? ExpectTypeOf<P, Positive>
+      : never;
+    /** What `new` makes. */
+    instance: Actual extends abstract new (...args: never[]) => infer I ? ExpectTypeOf<I, Positive> : never;
+    /** An array's element type. */
+    items: Actual extends readonly (infer I)[] ? ExpectTypeOf<I, Positive> : never;
+    /** What a promise resolves to. */
+    resolves: Actual extends PromiseLike<infer R> ? ExpectTypeOf<R, Positive> : never;
+    /** What a type guard (`v is T`) narrows to. */
+    // `any` where it would be `never`: a predicate's type must fit its parameter.
+    guards: Actual extends (value: any, ...rest: any[]) => value is infer G ? ExpectTypeOf<G, Positive> : never;
+    /** What an assertion function (`asserts v is T`) narrows to. */
+    asserts: Actual extends (value: any, ...rest: any[]) => asserts value is infer A
+      ? ExpectTypeOf<A, Positive>
+      : never;
+    /** Callable with these arguments. */
+    toBeCallableWith: Actual extends (...args: infer P) => unknown ? (...args: P) => true : never;
+    /** Constructible with these arguments. */
+    toBeConstructibleWith: Actual extends abstract new (...args: infer P) => unknown
+      ? (...args: P) => true
+      : never;
+    /** Has this property; the chain continues with its type. */
+    toHaveProperty<K extends Positive extends true ? keyof Actual : PropertyKey>(
+      this: Positive extends true
+        ? unknown
+        : K extends keyof Actual
+          ? TypeMismatch<"no such property", K>
+          : unknown,
+      key: K,
+    ): K extends keyof Actual ? ExpectTypeOf<Actual[K], Positive> : true;
+    /** Equality that looks past how a type is written — `{ a: 1 } & { b: 1 }` is `{ a: 1; b: 1 }`. */
+    branded: {
+      toEqualTypeOf<Expected>(
+        this: Holds<Equal<DeepBrand<Actual>, DeepBrand<Expected>>, Positive> extends true
+          ? unknown
+          : TypeMismatch<Expected, Actual>,
+        ...expected: [] | [Expected]
+      ): true;
+    };
+    toBeAny: Is<IsAny<Actual>, Positive, "any", Actual>;
+    toBeUnknown: Is<IsUnknown<Actual>, Positive, "unknown", Actual>;
+    toBeNever: Is<IsNever<Actual>, Positive, "never", Actual>;
+    toBeFunction: Is<Extends<Actual, (...args: never[]) => unknown>, Positive, "a function", Actual>;
+    toBeObject: Is<Extends<Actual, object>, Positive, "an object", Actual>;
+    toBeArray: Is<Extends<Actual, readonly unknown[]>, Positive, "an array", Actual>;
+    toBeString: Is<Extends<Actual, string>, Positive, "a string", Actual>;
+    toBeNumber: Is<Extends<Actual, number>, Positive, "a number", Actual>;
+    toBeBigInt: Is<Extends<Actual, bigint>, Positive, "a bigint", Actual>;
+    toBeBoolean: Is<Extends<Actual, boolean>, Positive, "a boolean", Actual>;
+    toBeSymbol: Is<Extends<Actual, symbol>, Positive, "a symbol", Actual>;
+    toBeVoid: Is<Extends<Actual, void>, Positive, "void", Actual>;
+    toBeNull: Is<Extends<Actual, null>, Positive, "null", Actual>;
+    toBeUndefined: Is<Extends<Actual, undefined>, Positive, "undefined", Actual>;
+    toBeNullable: Is<
+      Equal<Actual, NonNullable<Actual>> extends true ? false : true,
+      Positive,
+      "nullable",
+      Actual
+    >;
+  }
+
+  /**
+   * Assertions about the type of `actual`, or of `Actual` given alone —
+   * checked by TypeScript, and nothing at run time.
+   *
+   * ```ts
+   * expectTypeOf(parse).parameter(0).toBeString();
+   * expectTypeOf(parse).returns.toEqualTypeOf<Result>();
+   * expectTypeOf<Config>().toHaveProperty("port").toBeNumber();
+   * ```
+   */
+  export function expectTypeOf<Actual>(actual?: Actual): ExpectTypeOf<Actual>;
+
+  /** Checks, as a call would, that `value` is a `T`. Nothing at run time. */
+  export function assertType<T>(value: T): void;
+
   /** What a {@link Mock} remembers. */
   /**
    * The validation half of a [Standard Schema](https://standardschema.dev),

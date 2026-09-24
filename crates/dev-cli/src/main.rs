@@ -216,6 +216,8 @@ OPTIONS:
                                 with and/&&, or/||, not/!, parentheses and *.
                                 Repeatable; a test must match every one
     --list-tags[=json]          Print the tags test.tags defines, and exit
+    --typecheck                 Also run the project's tsc --noEmit, which is
+                                where expectTypeOf and assertType fail
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
     --inspect[=<addr>]          Serve a debugger for each file in turn, one file
@@ -1459,6 +1461,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut inspect = None;
     let mut detect_leaks = false;
     let mut tags_filter = Vec::new();
+    let mut typecheck = false;
     let mut list_tags = None;
     let mut timeout = None;
     let mut reporter = None;
@@ -1561,6 +1564,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     address: inspect::parse_address(value)?,
                     wait: flag == "--inspect-brk",
                 });
+            }
+            "--typecheck" => {
+                reject_value(flag, value)?;
+                typecheck = true;
             }
             "--tags-filter" => {
                 let text = require_value(flag, value)?;
@@ -1782,6 +1789,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         inspect,
         detect_leaks,
         tags_filter,
+        typecheck,
         list_tags,
         // Filled in by `test_settings`, which reads the project.
         tag_definitions: Vec::new(),
@@ -2153,7 +2161,27 @@ fn finish_test_file(config: &TestConfig, file: &str) -> ExitCode {
     }
 }
 
-async fn run_tests(mut config: TestConfig) -> ExitCode {
+/// Runs the tests — and, under `--typecheck`, the project's `tsc --noEmit`
+/// first, whose failure fails the run however the tests do.
+async fn run_tests(config: TestConfig) -> ExitCode {
+    let typechecked = if config.typecheck && !config.list {
+        let root = std::env::current_dir().unwrap_or_default();
+        eprintln!("typecheck: tsc --noEmit");
+        match check::check_to(&root, &[], !config.terminal_human()).await {
+            Ok(()) => true,
+            Err(err) => {
+                eprintln!("typecheck: {err}");
+                false
+            }
+        }
+    } else {
+        true
+    };
+    let code = run_tests_inner(config).await;
+    if typechecked { code } else { ExitCode::FAILURE }
+}
+
+async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
     // The file's `test` section, where a flag did not already answer. Read here
     // rather than in the parser because the parser has no project: a `--file`
     // child is invoked from wherever the parent was, and the settings have to

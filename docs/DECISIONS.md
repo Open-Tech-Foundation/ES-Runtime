@@ -661,6 +661,19 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D114 — `expectTypeOf` typed here, checked by the project's `tsc` · *Accepted (2026-09-24)*
+
+**Context:** Vitest's `expectTypeOf` is the `expect-type` library: assertions that are only types, with a runtime that does nothing. Vitest's `--typecheck` runs `tsc` and reports the errors. expect-type fails an assertion through a type parameter whose constraint refers to itself (`Expected extends Equal<Actual, Expected> extends true ? unknown : Mismatch`). Under TypeScript 7, which this repository's types build with, that pattern and a recursive object matcher both made `tsc` spin at full CPU without finishing. The declarations alone were enough, before any assertion used them.
+
+**Decision:**
+- **Our own declarations of Vitest's API** (`toEqualTypeOf`, `toExtend`, `toMatchObjectType`, the `toBe…` family, `.not`, `.returns` and the other projections, `.branded`), rather than depending on or vendoring expect-type.
+- **Failure through the method's `this` parameter**, typed `unknown` when the assertion holds and `TypeMismatch<Expected, Actual>` when it does not. TypeScript names both types in the error, and there is no circular constraint. The `toBe…` checks become a non-callable `TypeCheckFailed<Wanted, Actual>`. `toMatchObjectType` is one recursive homomorphic mapped type, `A` filtered to `E`'s keys, compared once. It keeps `readonly` and optional as `A` has them.
+- **Identity is TypeScript's own:** `(<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)`, so `any` is not `unknown` and modifiers count.
+- **`esdev test --typecheck` runs `esdev check`'s `tsc --noEmit` before the tests**, and fails the run if it fails. It does not parse `tsc` into per-test results as Vitest's typecheck mode does; `tsc`'s own output already names file and line.
+- A type-test file needs no separate suffix: `expectTypeOf` in an ordinary test file is checked by `tsc` and costs nothing at run time.
+
+---
+
 ### D113 — Test tags, defined in esdev.json and filtered by expression · *Accepted (2026-09-24)*
 
 **Context:** Vitest 4.1's tags label tests across files (`{ tags }` on a test or suite, `@module-tag` in a file) and give a category its options. Definitions in config carry `timeout`/`retry` and a `priority`, `--tags-filter` takes a boolean expression, `strictTags` refuses undefined names, and `TestRunner.matchesTags` asks the filter at runtime.

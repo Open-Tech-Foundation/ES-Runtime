@@ -104,6 +104,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`expectTypeOf` and `assertType`** in `runtime:test`, Vitest's type
+  assertions, checked by TypeScript and no-ops at run time, and
+  **`esdev test --typecheck`**, which runs the project's `tsc --noEmit` before
+  the tests and fails the run with it (DECISIONS D114).
 - **Test tags**: `{ tags }` on tests and `describe`, `@module-tag` in a file,
   definitions with `timeout`/`retry`/`repeats`/`priority` under `test.tags` in
   esdev.json (`strictTags` on by default), `--tags-filter=<expr>` with

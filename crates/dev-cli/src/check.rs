@@ -22,6 +22,12 @@ use crate::types::PackageManager;
 /// Runs `tsc --noEmit` through the project's package manager, passing `args`
 /// through untouched.
 pub async fn check(dir: &Path, args: &[String]) -> Result<(), String> {
+    check_to(dir, args, false).await
+}
+
+/// [`check`], with what `tsc` prints sent to stderr when `to_stderr` — for
+/// `esdev test --typecheck` under a machine reporter, which owns stdout.
+pub async fn check_to(dir: &Path, args: &[String], to_stderr: bool) -> Result<(), String> {
     let manager = PackageManager::detect();
     // Before anything runs: the managers fetch a missing binary from the
     // registry when asked (`pnpm exec` just demonstrated it on this
@@ -32,26 +38,28 @@ pub async fn check(dir: &Path, args: &[String]) -> Result<(), String> {
         return Err(err);
     }
     let (program, prefix) = exec_command(manager, yarn_is_berry());
-    let status = tokio::process::Command::new(&program)
+    let mut command = tokio::process::Command::new(&program);
+    command
         .args(&prefix)
         .arg("--noEmit")
         .args(args)
-        .current_dir(dir)
-        .status()
-        .await
-        .map_err(|e| {
-            // A declared manager that is not installed is the project's answer
-            // anyway: say that rather than leaking the spawn failure.
-            if e.kind() == std::io::ErrorKind::NotFound {
-                format!(
-                    "this project uses {name}, which is not installed here.\n\n\
+        .current_dir(dir);
+    if to_stderr {
+        command.stdout(std::process::Stdio::from(std::io::stderr()));
+    }
+    let status = command.status().await.map_err(|e| {
+        // A declared manager that is not installed is the project's answer
+        // anyway: say that rather than leaking the spawn failure.
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "this project uses {name}, which is not installed here.\n\n\
                      Install it and run `esdev check` again.",
-                    name = manager.name(),
-                )
-            } else {
-                format!("cannot run {program}: {e}")
-            }
-        })?;
+                name = manager.name(),
+            )
+        } else {
+            format!("cannot run {program}: {e}")
+        }
+    })?;
     if status.success() {
         return Ok(());
     }

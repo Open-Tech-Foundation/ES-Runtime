@@ -99,6 +99,12 @@ test("flaky upstream", { retry: 2 }, async () => { … });
 passes while it fails, and fails once it passes. `test.skip` and `test.only`
 take the same options.
 
+## `expectTypeOf` and `assertType`
+
+Type assertions that TypeScript checks and that do nothing at run time. They
+fail under `esdev check` or `esdev test --typecheck`. See
+[Type tests](/esdev/test/type-tests).
+
 ## Tags
 
 `{ tags }` on a test or a `describe` labels it; `@module-tag` in a JSDoc

@@ -3064,6 +3064,28 @@ const mock = {
   },
 };
 
+// --- type assertions --------------------------------------------------------
+//
+// `expectTypeOf` and `assertType` are checked by TypeScript and do nothing at
+// run time; the chain accepts any property and any call so a file that uses
+// them runs as written.
+
+/// A chain that answers every property and call with itself, and `true` where
+/// an assertion ends.
+function typeChain() {
+  const chain = new Proxy(() => true, {
+    get: (_target, key) => (key === "then" ? undefined : chain),
+    apply: () => chain,
+  });
+  return chain;
+}
+
+function expectTypeOf(_actual) {
+  return typeChain();
+}
+
+function assertType(_value) {}
+
 // --- what global setup provided ---
 
 /// What global setup passed to `provide`, read once.
@@ -3528,6 +3550,8 @@ export {
   clock,
   inject,
   matchesTags,
+  expectTypeOf,
+  assertType,
   onTestFinished,
   onTestFailed,
   waitFor,
@@ -3552,6 +3576,8 @@ export default {
   clock,
   inject,
   matchesTags,
+  expectTypeOf,
+  assertType,
   onTestFinished,
   onTestFailed,
   waitFor,

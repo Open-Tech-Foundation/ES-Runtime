@@ -1,0 +1,54 @@
+---
+title: Type tests
+description: Assert what your types are with expectTypeOf, checked by TypeScript.
+---
+
+# Type tests
+
+`expectTypeOf` asserts what a value's type is, and `assertType` that a value
+fits a type:
+
+```ts
+import { assertType, expectTypeOf, test } from "runtime:test";
+import { parse } from "./parse.ts";
+
+test("parse's types", () => {
+  expectTypeOf(parse).parameter(0).toBeString();
+  expectTypeOf(parse).returns.toEqualTypeOf<{ ok: boolean }>();
+  expectTypeOf<Config>().toHaveProperty("port").toBeNumber();
+  assertType<Config>({ port: 8080 });
+});
+```
+
+TypeScript checks these assertions; at run time they do nothing. So they fail
+where TypeScript runs: `esdev check`, or `esdev test --typecheck`, which runs
+the project's `tsc --noEmit` before the tests and fails the run when it fails.
+A failing assertion names what it expected and what it found:
+
+```text
+error TS2739: Type 'ExpectTypeOf<{ a: number; }, true>' is missing the following
+  properties from type 'TypeMismatch<{ a: string; }, { a: number; }>'
+error TS2349: This expression is not callable.
+  Type 'TypeCheckFailed<"a string", number>' has no call signatures.
+```
+
+## Assertions
+
+| | |
+| --- | --- |
+| `toEqualTypeOf<T>()` | Exactly `T`. `any` is not `unknown`, and `readonly` and optional properties count. |
+| `toExtend<T>()` | Assignable to `T`. (`toMatchTypeOf` is its older name.) |
+| `toMatchObjectType<T>()` | An object with at least `T`'s properties, each exactly as `T` has it, nested objects likewise. |
+| `toBeString()`, `toBeNumber()`, `toBeBoolean()`, `toBeBigInt()`, `toBeSymbol()`, `toBeFunction()`, `toBeObject()`, `toBeArray()`, `toBeNull()`, `toBeUndefined()`, `toBeNullable()`, `toBeVoid()`, `toBeAny()`, `toBeUnknown()`, `toBeNever()` | |
+| `toBeCallableWith(...args)` / `toBeConstructibleWith(...args)` | |
+| `toHaveProperty(key)` | …and continues with the property's type. |
+| `.not` | Each of them the other way round. |
+
+Each of these continues with a part of the type: `.returns`, `.parameters`,
+`.parameter(n)`, `.constructorParameters`, `.instance`, `.items`, `.resolves`,
+`.guards`, `.asserts`, `.extract<T>()` and `.exclude<T>()`. `.branded.toEqualTypeOf<T>()`
+compares types that differ only in how they are written, such as
+`{ a: 1 } & { b: 1 }` and `{ a: 1; b: 1 }`.
+
+The names follow Vitest's `expectTypeOf`, so type tests move over with the
+import changed.

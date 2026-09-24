@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **`expectTypeOf` and `assertType`**, with `ExpectTypeOf`, `TypeMismatch` and
+  `TypeCheckFailed`.
 - **Tags** — `tags` in `TestOptions`, `DescribeOptions`, the augmentable
   `TestTags` and `TagName`, and `matchesTags`.
 - **`test.extend` and the test context** — `TestAPI<Fixtures>`, `TestContext`,

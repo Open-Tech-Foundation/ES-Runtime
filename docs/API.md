@@ -3886,6 +3886,29 @@ table's header; any other row is passed whole.
 A name that does not vary per row gets its index appended, because six cases
 sharing one identity is a report in which a failure names none of them.
 
+### `expectTypeOf` and `assertType`
+
+`expectTypeOf(value)` or `expectTypeOf<T>()` returns type assertions that
+TypeScript checks and that do nothing at run time: `toEqualTypeOf<T>()` (exact
+identity: `any` is not `unknown`, modifiers count), `toExtend<T>()`
+(`toMatchTypeOf` is deprecated for it), `toMatchObjectType<T>()` (at least
+`T`'s properties, each exactly, nested objects likewise), `toBeString()`,
+`toBeNumber()`, `toBeBoolean()`, `toBeBigInt()`, `toBeSymbol()`,
+`toBeFunction()`, `toBeObject()`, `toBeArray()`, `toBeNull()`,
+`toBeUndefined()`, `toBeNullable()`, `toBeVoid()`, `toBeAny()`,
+`toBeUnknown()`, `toBeNever()`, `toBeCallableWith(...args)`,
+`toBeConstructibleWith(...args)`, and `toHaveProperty(key)`; `.not` inverts
+each. `.returns`, `.parameters`, `.parameter(n)`, `.constructorParameters`,
+`.instance`, `.items`, `.resolves`, `.guards`, `.asserts`, `.extract<T>()` and
+`.exclude<T>()` continue with part of the type, and `.branded.toEqualTypeOf<T>()`
+compares after flattening intersections. `assertType<T>(value)` checks `value`
+is a `T`. A failure is a TypeScript error naming `TypeMismatch<Expected, Actual>`
+or `TypeCheckFailed<Wanted, Actual>`.
+
+`esdev test --typecheck` runs the project's `tsc --noEmit` (as `esdev check`
+does) before the tests; its failure fails the run. Under a machine reporter its
+output goes to stderr.
+
 ### Tags
 
 `test(name, { tags }, fn)` and `describe(name, { tags }, body)` take a tag name

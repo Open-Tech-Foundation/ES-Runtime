@@ -14023,6 +14023,82 @@ test("untagged", () => { console.log(`flaky selected: ${matchesTags(["flaky"])}`
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `esdev test --typecheck` runs the project's `tsc --noEmit` before the
+/// tests, and its failure fails a run whose tests pass. A fake `npm` stands in
+/// for the package manager, as in `esdev check`'s own test.
+#[cfg(unix)]
+#[test]
+fn test_typecheck_fails_a_run_whose_types_do_not_check() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = build_dir("t_typecheck");
+    write_in(
+        &dir,
+        "package.json",
+        r#"{ "packageManager": "npm@1.0.0", "devDependencies": { "typescript": "^5" } }"#,
+    );
+    std::fs::create_dir_all(dir.join("node_modules/typescript")).expect("create ts");
+    write_in(&dir, "node_modules/typescript/package.json", "{}");
+    write_in(
+        &dir,
+        "types.test.ts",
+        "import { expectTypeOf, test } from \"runtime:test\";\n\
+         test(\"runs\", () => { expectTypeOf(1).toBeNumber(); });\n",
+    );
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let npm = bin.join("npm");
+    std::fs::write(
+        &npm,
+        "#!/bin/sh\necho \"types.test.ts(2,1): error TS2349\"\nexit \"${ESDEV_CHECK_EXIT:-0}\"\n",
+    )
+    .expect("write fake npm");
+    std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |exit: &str, args: &[&str]| {
+        esdev_in(&dir)
+            .arg("test")
+            .arg("--typecheck")
+            .args(args)
+            .env("PATH", &path)
+            .env("ESDEV_CHECK_EXIT", exit)
+            .output()
+            .expect("spawn esdev test --typecheck")
+    };
+
+    let out = run("0", &[]);
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(
+        stderr(&out).contains("typecheck: tsc --noEmit"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = run("2", &[]);
+    assert!(!out.status.success(), "a type error passed the run");
+    assert!(
+        stdout(&out).contains("1 passed, 0 failed"),
+        "the tests ran too: {}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("typecheck: tsc failed (exit code 2)"),
+        "{}",
+        stderr(&out)
+    );
+
+    // Under a machine reporter, what tsc prints stays off stdout.
+    let out = run("2", &["--reporter=json"]);
+    assert!(!out.status.success());
+    assert!(!stdout(&out).contains("TS2349"), "{}", stdout(&out));
+    assert!(stderr(&out).contains("TS2349"), "{}", stderr(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

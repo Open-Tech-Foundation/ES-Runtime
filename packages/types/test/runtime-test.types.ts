@@ -14,10 +14,12 @@
 
 import {
   assertSnapshot,
+  assertType,
   beforeEach,
   clock,
   describe,
   expect,
+  expectTypeOf,
   type GlobalSetupContext,
   inject,
   it,
@@ -323,6 +325,81 @@ test("misspelt", { tags: "dbb" }, () => {});
 // @ts-expect-error — nor in matchesTags.
 matchesTags(["frontend"]);
 void needsDb;
+
+// --- expectTypeOf -------------------------------------------------------------
+
+declare function parse(text: string, strict?: boolean): { ok: boolean };
+declare function isString(v: unknown): v is string;
+declare function assertNumber(v: unknown): asserts v is number;
+
+test("type assertions", () => {
+  class Box { constructor(public size: number) {} }
+
+  expectTypeOf({ a: 1 }).toEqualTypeOf<{ a: number }>();
+  expectTypeOf({ a: 1 }).toEqualTypeOf({ a: 2 });
+  expectTypeOf({ a: 1, b: 1 }).not.toEqualTypeOf<{ a: number }>();
+  expectTypeOf({ a: 1, b: 1 }).toExtend<{ a: number }>();
+  expectTypeOf<number>().toExtend<string | number>();
+  expectTypeOf<string | number>().not.toExtend<number>();
+  expectTypeOf({ a: 1, b: 2 }).toMatchObjectType<{ a: number }>();
+  expectTypeOf({ name: "J", address: { city: "NY", zip: "1" } }).toMatchObjectType<{ name: string; address: { city: string } }>();
+  expectTypeOf(parse).parameter(0).toBeString();
+  expectTypeOf(parse).parameters.toEqualTypeOf<[text: string, strict?: boolean]>();
+  expectTypeOf(parse).returns.toEqualTypeOf<{ ok: boolean }>();
+  expectTypeOf(parse).toBeCallableWith("x");
+  expectTypeOf(parse).toBeCallableWith("x", true);
+  expectTypeOf(Box).toBeConstructibleWith(3);
+  expectTypeOf(Box).instance.toHaveProperty("size").toBeNumber();
+  expectTypeOf(Box).constructorParameters.toEqualTypeOf<[size: number]>();
+  expectTypeOf([1, 2]).items.toBeNumber();
+  expectTypeOf(Promise.resolve("x")).resolves.toBeString();
+  expectTypeOf(isString).guards.toBeString();
+  expectTypeOf(assertNumber).asserts.toBeNumber();
+  expectTypeOf<"a" | 1>().extract<string>().toEqualTypeOf<"a">();
+  expectTypeOf<"a" | 1>().exclude<string>().toEqualTypeOf<1>();
+  expectTypeOf({ a: 1 }).toHaveProperty("a");
+  expectTypeOf({ a: 1 }).not.toHaveProperty("c");
+  expectTypeOf<{ a: { b: 1 } & { c: 1 } }>().branded.toEqualTypeOf<{ a: { b: 1; c: 1 } }>();
+  expectTypeOf<any>().toBeAny();
+  expectTypeOf<unknown>().toBeUnknown();
+  expectTypeOf<never>().toBeNever();
+  expectTypeOf(1).not.toBeString();
+  expectTypeOf<string | null>().toBeNullable();
+  expectTypeOf<string>().not.toBeNullable();
+  expectTypeOf(() => {}).toBeFunction();
+  expectTypeOf(null).toBeNull();
+  expectTypeOf(undefined).toBeUndefined();
+  expectTypeOf(1n).toBeBigInt();
+  expectTypeOf(Symbol()).toBeSymbol();
+  expectTypeOf([1]).toBeArray();
+  expectTypeOf({}).toBeObject();
+  expectTypeOf(true).toBeBoolean();
+  assertType<number>(1);
+
+  // The failures, each an error.
+  // @ts-expect-error — a property of the wrong type.
+  expectTypeOf({ a: 1 }).toEqualTypeOf<{ a: string }>();
+  // @ts-expect-error — any is not unknown.
+  expectTypeOf<any>().toEqualTypeOf<unknown>();
+  // @ts-expect-error — readonly counts.
+  expectTypeOf<{ readonly a: number }>().toEqualTypeOf<{ a: number }>();
+  // @ts-expect-error — not a string.
+  expectTypeOf(1).toBeString();
+  // @ts-expect-error — does extend.
+  expectTypeOf<number>().not.toExtend<string | number>();
+  // @ts-expect-error — readonly under toMatchObjectType.
+  expectTypeOf<{ readonly a: number; b: 1 }>().toMatchObjectType<{ a: number }>();
+  // @ts-expect-error — no such property.
+  expectTypeOf({ a: 1 }).toHaveProperty("c");
+  // @ts-expect-error — it has it.
+  expectTypeOf({ a: 1 }).not.toHaveProperty("a");
+  // @ts-expect-error — the wrong argument.
+  expectTypeOf(parse).toBeCallableWith(1);
+  // @ts-expect-error — representation differs without branded.
+  expectTypeOf<{ a: { b: 1 } & { c: 1 } }>().toEqualTypeOf<{ a: { b: 1; c: 1 } }>();
+  // @ts-expect-error — assertType checks its argument.
+  assertType<string>(1);
+});
 
 // --- clock ------------------------------------------------------------------
 
