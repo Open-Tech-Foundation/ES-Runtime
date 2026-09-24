@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build --minify",
-    "start": "esrun --allow-read --allow-write --allow-listen=8080 --allow-net --allow-env=PORT,SHARDS,FAIL_RATE --allow-signals --allow-workers --allow-imports dist/server.js",
+    "start": "esrun --allow-read --allow-write --allow-listen=8080 --allow-net --allow-env=PORT,SHARDS,FAIL_RATE,ADMIN_TOKEN --allow-signals --allow-workers --allow-imports dist/server.js",
     "test": "esdev test"
   },
   "dependencies": {

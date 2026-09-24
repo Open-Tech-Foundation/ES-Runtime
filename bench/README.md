@@ -38,6 +38,27 @@ RSS and the user/sys CPU split of that run. Measurement is
 `resource.getrusage(RUSAGE_CHILDREN)` via `bench/db/measure.py` — the same
 mechanism `run.sh` falls back to when GNU `time` is absent.
 
+## The durable-worker shop benchmark
+
+`bench/durable-shop.js` runs the [shop example](../examples/shop) as a customer
+base would use it: concurrent customers, each a new one, browsing, adding two
+products, checking out and reading their orders. Then it kills the server with
+`SIGKILL` mid-load and looks for every order a customer was told about, and
+races forty customers for a product with five in stock.
+
+```sh
+cargo build --release -p es-runtime-dev-cli
+ESDEV=target/release/esdev target/release/esdev bench/durable-shop.js
+WORKDIR=/tmp/shop ESDEV=target/release/esdev target/release/esdev bench/durable-shop.js
+CUSTOMERS=64 SECONDS=20 SHARDS="0 2" …
+```
+
+**Say which disk.** Every durable write is a commit and every commit is a disk
+sync, so the shop's latency is a count of syncs. The same run on a spinning disk
+and on tmpfs differs by two orders of magnitude; `WORKDIR` moves the server and
+its state to compare. The script exits non-zero if an acknowledged order is lost
+or stock is oversold.
+
 ## The PostgreSQL driver benchmark
 
 `bench/db/pg/run.sh` compares esrun with `@opentf/esrun-postgres` against

@@ -15,10 +15,16 @@ const port = Number(setting("PORT", "8080"));
 const shards = setting("SHARDS", "2");
 // How often the fake partner refuses a webhook, so retries are visible.
 const failRate = Number(setting("FAIL_RATE", "0.3"));
+// The admin API is off unless a token is set, and then needs it as a bearer.
+const adminToken = setting("ADMIN_TOKEN", "");
 
 // The classes' code runs on shards; their state stays in this process. A shard
 // imports the workers bundle, and needs `net` for the webhooks it sends.
 configure({
+  // Beside the build, not in it: a relative path resolves against this file,
+  // so the default `./.durable` would sit inside `dist/` — and a deploy that
+  // replaces `dist/` would take every cart and order with it.
+  dir: "../.durable",
   shards: shards === "auto" ? "auto" : Number(shards),
   module: new URL("./workers.js", import.meta.url),
   permissions: ["net"],
@@ -90,6 +96,14 @@ async function api(request, url, sid) {
       return Response.json(await customer.checkout(new URL("/fulfillment", url).href));
     case "GET /api/orders":
       return Response.json(await customer.orders());
+    case "POST /api/admin/restock": {
+      if (!adminToken || request.headers.get("authorization") !== `Bearer ${adminToken}`) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      const { id, qty } = await request.json();
+      if (!PRODUCTS.some((p) => p.id === id)) return Response.json({ error: "no such product" }, { status: 400 });
+      return Response.json({ id, available: await Inventory.get(id).restock(Number(qty)) });
+    }
     default:
       return Response.json({ error: "not found" }, { status: 404 });
   }

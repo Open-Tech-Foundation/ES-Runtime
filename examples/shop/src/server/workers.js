@@ -31,7 +31,14 @@ export class Inventory extends DurableWorker {
   /** What can still be put in a cart. */
   available() {
     const held = [...this.#holds().values()].reduce((a, b) => a + b, 0);
-    return (product(this.id)?.stock ?? 0) - (this.state.get("sold") ?? 0) - held;
+    const stock = (product(this.id)?.stock ?? 0) + (this.state.get("restocked") ?? 0);
+    return stock - (this.state.get("sold") ?? 0) - held;
+  }
+
+  /** Adds `qty` to the shelf. Answers what is now available. */
+  restock(qty) {
+    this.state.set("restocked", (this.state.get("restocked") ?? 0) + Math.max(0, Math.floor(qty)));
+    return this.available();
   }
 
   /**

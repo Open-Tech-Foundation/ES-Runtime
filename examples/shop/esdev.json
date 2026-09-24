@@ -20,9 +20,16 @@
     "allow": {
       "read": true,
       "write": true,
-      "listen": ["8080"],
+      "listen": [
+        "8080"
+      ],
       "net": true,
-      "env": ["PORT", "SHARDS", "FAIL_RATE"],
+      "env": [
+        "PORT",
+        "SHARDS",
+        "FAIL_RATE",
+        "ADMIN_TOKEN"
+      ],
       "signals": true,
       "workers": true,
       "imports": true
