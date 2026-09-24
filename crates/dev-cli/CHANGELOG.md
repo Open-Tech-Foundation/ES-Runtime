@@ -25,6 +25,9 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Changed
+- **Released esdev binaries include the V8 inspector**, so `esdev --inspect`
+  and `esdev test --coverage` work in them. esrun is still never built with
+  it (DECISIONS D108).
 - **`toStrictEqual` is strict.** It was the same comparison as `toEqual`; it
   now also fails on a key set to `undefined` against a missing one, a hole in
   an array against an `undefined`, and a class instance against a plain object
@@ -101,6 +104,13 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --coverage`** measures which statements, branches, functions
+  and lines the tests ran, from V8's own counts, on the files as written:
+  TypeScript is measured on its own lines. It reports in Istanbul's formats
+  (`text`, `lcov`, `json`, `json-summary`). `test.coverage` in esdev.json sets
+  `enabled`, `include`, `exclude`, `reporter`, `reportsDirectory` and
+  `thresholds`, and a run below a threshold fails. `v8 ignore` comments are
+  honoured (DECISIONS D108).
 - **`esdev test --changed[=<since>]` and `--related <file>…`** run only the
   test files that reach, through their imports, what git says changed (or the
   files named). A change to esdev.json, package.json, tsconfig.json, a lockfile

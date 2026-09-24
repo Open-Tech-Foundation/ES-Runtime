@@ -149,7 +149,9 @@ adapter = "crates.io"
 setup = []
 mode = "build-only"
 matrix = true
-command = "cargo build --release --target {triple}"
+# `-p`, so that the inspector switch this build carries (release.yml) can only
+# ever reach esdev, wherever the command is run from.
+command = "cargo build --release -p es-runtime-dev-cli --target {triple}"
 artifacts = "target/{triple}/release/{bin}{ext}"
 bin_name = "esdev"
 manifest = "crates/dev-cli/Cargo.toml"

@@ -1183,6 +1183,14 @@ impl HostExtension for TestExtension {
                     })?;
                 Ok(Value::Undefined)
             }),
+            // coverage_take() — V8's counts so far, kept for the parent. Nothing
+            // when coverage is not being collected.
+            OpDecl::r#async("test_coverage_take", |_| {
+                Box::pin(async {
+                    crate::coverage::collect::take().await;
+                    Ok(Value::Undefined)
+                })
+            }),
             // global_wait() — resolves when the tests are done: the parent
             // closes this process's stdin, and so does a parent that died.
             OpDecl::r#async("test_global_wait", |_| {

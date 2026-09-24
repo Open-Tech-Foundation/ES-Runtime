@@ -13,7 +13,8 @@ esdev --inspect-brk app.ts    # ...and stop before the first statement
 esdev --inspect=9300 app.ts   # a port, an address, or both
 ```
 
-The debugger is compiled in only by an explicit build: `tsr build:esdev`, or
+Released `esdev` binaries include the debugger. A build from source compiles
+it in only when asked: `tsr build:esdev`, or
 `ES_RUNTIME_INSPECTOR=1 cargo build-dev`. A build without it accepts
 `--inspect` and fails with the line telling you how to get one. It is never
 in `esrun`: a debugger port would undo every `--deny-*` the deployment was

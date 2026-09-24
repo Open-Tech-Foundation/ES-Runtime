@@ -104,6 +104,16 @@ pub struct TestConfig {
     /// Internal parent-to-child: the file holding what global setup provided,
     /// for `inject`. Its presence also says the parent ran global setup.
     pub provided: Option<PathBuf>,
+    /// `--coverage`, and the project's `test.coverage` settings.
+    pub coverage: Option<crate::coverage::Settings>,
+    /// Whether `--coverage` itself was given, rather than `enabled` in the
+    /// project: a run that cannot collect it refuses the flag, and quietly goes
+    /// without what the project asks for every run.
+    pub coverage_flag: bool,
+    /// Internal parent-to-child: collect coverage, and write it here.
+    pub coverage_out: Option<PathBuf>,
+    /// Where each child of a coverage run writes, set by the parent.
+    pub coverage_dir: Option<PathBuf>,
     /// Internal: this process is the global setup, and writes what it provides
     /// here once its `setup` functions have run.
     pub global_setup_out: Option<PathBuf>,
@@ -437,6 +447,12 @@ pub async fn run_all(
         ));
         let _ = std::fs::remove_file(&summary);
         child.arg(format!("--_summary={}", summary.display()));
+        if let Some(dir) = &config.coverage_dir {
+            child.arg(format!(
+                "--_coverage={}",
+                dir.join(format!("{index}.json")).display()
+            ));
+        }
         Some((child, summary))
     };
     // A file's results, from its summary — or, when it wrote none because it
@@ -727,6 +743,12 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
                 // A machine reporter wrote its own ending.
                 if config.terminal_human() {
                     report(files.len(), failed);
+                }
+                // Coverage for each pass, as Vitest's watch reports it.
+                if let Some(dir) = &config.coverage_dir
+                    && let Err(err) = crate::coverage::finish(dir, root, config)
+                {
+                    eprintln!("error: {err}");
                 }
             }
         }

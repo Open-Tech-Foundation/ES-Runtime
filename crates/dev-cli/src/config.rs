@@ -185,6 +185,17 @@ pub struct TestSettings {
     pub reporter: Option<String>,
     /// Run the files in a real browser rather than this runtime, and which.
     pub browser: Option<crate::browser::Choice>,
+    /// What `--coverage` measures and writes, and whether it is on without
+    /// the flag.
+    pub coverage: Option<CoverageSection>,
+}
+
+/// `test.coverage`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverageSection {
+    /// `"enabled": true` collects coverage on every run, flag or not.
+    pub enabled: bool,
+    pub settings: crate::coverage::Settings,
 }
 
 /// The boundary between files selected by `esdev test`.
@@ -369,7 +380,21 @@ const TEST_KEYS: &[&str] = &[
     "isolation",
     "reporter",
     "browser",
+    "coverage",
 ];
+
+/// The keys `test.coverage` may carry.
+const COVERAGE_KEYS: &[&str] = &[
+    "enabled",
+    "include",
+    "exclude",
+    "reporter",
+    "reportsDirectory",
+    "thresholds",
+];
+
+/// The keys `test.coverage.thresholds` may carry.
+const THRESHOLD_KEYS: &[&str] = &["lines", "functions", "branches", "statements"];
 
 /// The keys `jsx` may carry.
 const JSX_KEYS: &[&str] = &["importSource", "factory", "fragment", "development"];
@@ -739,7 +764,12 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
             ));
         }
     };
+    let coverage = map
+        .get("coverage")
+        .map(|value| read_coverage(value, file))
+        .transpose()?;
     Ok(TestSettings {
+        coverage,
         setup,
         global_setup,
         timeout,
@@ -748,6 +778,77 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
         reporter,
         browser,
     })
+}
+
+/// Parses `test.coverage`.
+fn read_coverage(value: &Value, file: &str) -> Result<CoverageSection, String> {
+    let map = object(value, file, "`test`'s `coverage`")?;
+    known_keys(map, file, "`test`'s `coverage`", COVERAGE_KEYS)?;
+    let mut settings = crate::coverage::Settings::default();
+    let enabled = match map.get("enabled") {
+        None => false,
+        Some(Value::Bool(on)) => *on,
+        Some(other) => {
+            return Err(format!(
+                "{file}: `coverage`'s `enabled` is {}, and it says whether every run collects coverage.\n\n\
+                 true or false.",
+                kind(other)
+            ));
+        }
+    };
+    settings.include = string_array(map.get("include"), file, "`coverage`'s `include`")?;
+    settings.exclude = string_array(map.get("exclude"), file, "`coverage`'s `exclude`")?;
+    if let Some(reporters) = map.get("reporter") {
+        settings.reporters = match reporters {
+            Value::String(one) => vec![one.clone()],
+            other => string_array(Some(other), file, "`coverage`'s `reporter`")?,
+        };
+        if let Some(unknown) = settings
+            .reporters
+            .iter()
+            .find(|name| !crate::coverage::REPORTERS.contains(&name.as_str()))
+        {
+            return Err(format!(
+                "{file}: `{unknown}` is not a coverage reporter.\n\n\
+                 One of: {}.",
+                crate::coverage::REPORTERS.join(", ")
+            ));
+        }
+    }
+    match map.get("reportsDirectory") {
+        None => {}
+        Some(Value::String(dir)) if !dir.is_empty() => settings.directory.clone_from(dir),
+        Some(other) => {
+            return Err(format!(
+                "{file}: `coverage`'s `reportsDirectory` is {}, and it names where the reports go.\n\n\
+                 A path in the project: \"reportsDirectory\": \"coverage\".",
+                kind(other)
+            ));
+        }
+    }
+    if let Some(thresholds) = map.get("thresholds") {
+        let limits = object(thresholds, file, "`coverage`'s `thresholds`")?;
+        known_keys(limits, file, "`coverage`'s `thresholds`", THRESHOLD_KEYS)?;
+        let read = |name: &str| -> Result<Option<f64>, String> {
+            match limits.get(name) {
+                None => Ok(None),
+                Some(Value::Number(n)) if n.as_f64().is_some_and(|n| n <= 100.0) => Ok(n.as_f64()),
+                Some(other) => Err(format!(
+                    "{file}: `thresholds`' `{name}` is {}, and it is the least coverage a run may have.\n\n\
+                     A percentage up to 100, or a negative number for how many may be uncovered: \
+                     \"{name}\": 80, or \"{name}\": -10.",
+                    kind(other)
+                )),
+            }
+        };
+        settings.thresholds = crate::coverage::Thresholds {
+            lines: read("lines")?,
+            functions: read("functions")?,
+            branches: read("branches")?,
+            statements: read("statements")?,
+        };
+    }
+    Ok(CoverageSection { enabled, settings })
 }
 
 /// Parses one entry of `targets`.
@@ -2298,6 +2399,58 @@ mod tests {
         );
         let err = read(r#"{ "test": { "globalSetup": 1 } }"#).expect_err("refused");
         assert!(err.contains("globalSetup"), "{err}");
+    }
+
+    #[test]
+    fn a_coverage_section_says_what_to_measure_and_how_much_is_enough() {
+        let section = read(
+            r#"{ "test": { "coverage": {
+                "enabled": true, "include": ["src"], "exclude": ["src/gen"],
+                "reporter": "json", "reportsDirectory": "out",
+                "thresholds": { "lines": 90, "functions": -3 } } } }"#,
+        )
+        .expect("read")
+        .test
+        .coverage
+        .expect("a coverage section");
+        assert!(section.enabled);
+        assert_eq!(section.settings.include, ["src"]);
+        assert_eq!(section.settings.exclude, ["src/gen"]);
+        assert_eq!(section.settings.reporters, ["json"]);
+        assert_eq!(section.settings.directory, "out");
+        assert_eq!(section.settings.thresholds.lines, Some(90.0));
+        assert_eq!(section.settings.thresholds.functions, Some(-3.0));
+        assert_eq!(section.settings.thresholds.branches, None);
+
+        let defaults = read(r#"{ "test": { "coverage": {} } }"#)
+            .expect("read")
+            .test
+            .coverage
+            .unwrap();
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.settings, crate::coverage::Settings::default());
+
+        for (json, says) in [
+            (
+                r#"{ "test": { "coverage": { "reporter": "html" } } }"#,
+                "`html` is not a coverage reporter",
+            ),
+            (
+                r#"{ "test": { "coverage": { "thresholds": { "lines": 120 } } } }"#,
+                "A percentage up to 100",
+            ),
+            (
+                r#"{ "test": { "coverage": { "thresholds": { "rows": 1 } } } }"#,
+                "unknown key `rows`",
+            ),
+            (
+                r#"{ "test": { "coverage": { "enabled": "yes" } } }"#,
+                "true or false",
+            ),
+        ] {
+            let err = read(json).expect_err("refused");
+            assert!(err.contains(says), "{json}: {err}");
+        }
     }
 
     #[test]

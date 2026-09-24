@@ -70,15 +70,16 @@ your platform — the same thing `esrun upgrade` does for the other one, and the
 same outcome as re-running the installer. Each resolves its own release: the
 two are versioned separately and tagged separately.
 
-From source, which is the only way to get the debugger:
+From source:
 
 ```sh
 cargo build-dev                          # → target/release/esdev
 ES_RUNTIME_INSPECTOR=1 cargo build-dev   # ...with the debugger
 ```
 
-`--inspect` needs the second line — it is compiled in only when the build asks
-for it, and a build without it says so instead of listening on nothing.
+Released binaries include the debugger, which `--inspect` and
+`esdev test --coverage` need. A source build has it only with the second line,
+and a build without it says so instead of listening on nothing.
 
 ## TypeScript & JSX
 

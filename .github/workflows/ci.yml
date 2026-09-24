@@ -83,6 +83,22 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         run: tsr conformance
 
+  # esdev as it is released, with the inspector compiled in: the only build in
+  # which `--inspect` and `--coverage` run, so the only one their tests fully
+  # check. A job of its own because the switch rebuilds the engine.
+  inspector:
+    name: test (esdev with the inspector)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: inspector
+          cache-directories: |
+            target/debug/gn_out
+      - uses: ./.github/actions/setup-tsr
+      - run: tsr test:inspector
+
   miri:
     name: miri
     runs-on: ubuntu-latest

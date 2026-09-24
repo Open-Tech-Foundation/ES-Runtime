@@ -1541,6 +1541,7 @@ dependencies = [
  "es-runtime-common",
  "es-runtime-providers",
  "futures-util",
+ "globset",
  "html5gum",
  "ignore",
  "notify",

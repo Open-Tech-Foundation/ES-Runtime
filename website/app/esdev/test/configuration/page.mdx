@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Setup modules, per-file time limits and the reporter, as flags or esdev.json keys.
+description: Setup modules, per-file time limits, the reporter and coverage, as flags or esdev.json keys.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -43,10 +43,12 @@ exists for is a file that wedges, and a budget the file kept for itself is one
 it never gets round to noticing. There is no default: a suite is not a place to
 guess how long a machine takes.
 
+`coverage` configures `--coverage`. See [Coverage](/esdev/test/coverage).
+
 `--reporter` writes results for a machine: `json`, `junit`, `tap` or `dots`. See
 [Reporters](/esdev/test/reporters).
 
 <Callout type="note" title="Not yet">
-  **Coverage**, and an `include` pattern for discovery: test files are found by
-  their `*.test.*` and `*.spec.*` names.
+  An `include` pattern for discovery: test files are found by their `*.test.*`
+  and `*.spec.*` names.
 </Callout>

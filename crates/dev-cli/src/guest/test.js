@@ -557,6 +557,8 @@ async function drain() {
     }
   } finally {
     draining = false;
+    // Under `--coverage`, the counts while the modules are all still loaded.
+    await ops.test_coverage_take?.();
     // The queue is empty and every group closed. A process run learns this by
     // reaching quiescence and does not listen; a page never goes quiet, so a
     // browser run is told instead.

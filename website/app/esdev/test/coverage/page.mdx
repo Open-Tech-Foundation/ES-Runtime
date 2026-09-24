@@ -1,0 +1,92 @@
+---
+title: Coverage
+description: Measure which statements, branches, functions and lines the tests ran.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Coverage
+
+```sh
+esdev test --coverage
+```
+
+```text
+---------------|---------|----------|---------|---------|-------------------
+ File          | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+---------------|---------|----------|---------|---------|-------------------
+ All files     |   66.66 |     37.5 |      80 |   69.23 |
+ src/labels.js |     100 |       50 |     100 |     100 |
+ src/math.ts   |      50 |       25 |   66.66 |   57.14 | 7-8,10
+---------------|---------|----------|---------|---------|-------------------
+```
+
+The run prints this table and writes `coverage/lcov.info`, which genhtml,
+Codecov and most CI services read. The measures are Istanbul's, so the numbers
+compare with what Vitest and Jest report.
+
+Coverage is measured on the files as you wrote them. TypeScript is counted on
+its own lines, not on the JavaScript it runs as. No code is instrumented: V8
+counts what runs, the same way Vitest's default `v8` provider works.
+
+## Configuration
+
+Settings live in `esdev.json`, under `test.coverage`:
+
+```json
+{
+  "test": {
+    "coverage": {
+      "enabled": true,
+      "include": ["src"],
+      "exclude": ["src/generated"],
+      "reporter": ["text", "lcov", "json-summary"],
+      "reportsDirectory": "coverage",
+      "thresholds": { "lines": 90, "branches": 80, "functions": -5 }
+    }
+  }
+}
+```
+
+| Key | |
+| --- | --- |
+| `enabled` | Collect on every run, without `--coverage`. Default `false`. |
+| `include` | Globs of the files to report, relative to the project. A pattern with no wildcard is a directory. By default, only files the tests loaded are reported; with `include`, a matching file no test loaded is reported at 0%. |
+| `exclude` | Globs of files to leave out. Test files, setup modules and `node_modules` are always left out. |
+| `reporter` | `text` (the table), `lcov` (`lcov.info`), `json` (Istanbul's `coverage-final.json`) and `json-summary` (`coverage-summary.json`). Default `["text", "lcov"]`. |
+| `reportsDirectory` | Where the report files go. Default `coverage`. |
+| `thresholds` | `lines`, `branches`, `functions`, `statements`. A positive number is the least percentage; a negative one is how many may be uncovered. A run below a threshold fails, even when every test passed. |
+
+With a machine reporter such as `--reporter=json`, the table goes to stderr so
+stdout keeps only the report.
+
+## Ignoring code
+
+A comment leaves code out of the measures. The spellings of V8, c8 and
+Istanbul all work:
+
+```ts
+/* v8 ignore next */
+function debugOnly() {}
+
+/* v8 ignore start */
+if (verbose) {
+  trace();
+}
+/* v8 ignore stop */
+```
+
+`next` leaves out the statement, function or branch that follows the comment.
+`start` and `stop` leave out everything between them.
+
+## Where it runs
+
+Coverage works with `--watch` (a report after each run), `--file`, `--shard`
+and `--changed`. It is not collected in `--browser` runs, which run in another
+engine, or with `--isolation=none`. Passing `--coverage` there is an error. When
+the project turns it on with `enabled`, those runs go without it and say so.
+
+<Callout type="note" title="What it cannot see">
+  Only code the tests import is measured. A file started as a separate process,
+  or read and evaluated at run time, is not.
+</Callout>

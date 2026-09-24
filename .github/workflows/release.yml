@@ -169,6 +169,11 @@ jobs:
           OTF_RELEASE_VERSION: v0.38.0
         run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.ps1 | iex
       - name: Build es-runtime-dev-cli
+        # With the V8 inspector, for `esdev --inspect` and `esdev test
+        # --coverage` (DECISIONS D59, D108). This job builds esdev alone;
+        # esrun's build script refuses the variable outright.
+        env:
+          ES_RUNTIME_INSPECTOR: "1"
         run: otf-release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:

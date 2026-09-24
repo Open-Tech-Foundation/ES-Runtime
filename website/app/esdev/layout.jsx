@@ -53,6 +53,7 @@ const NAV = [
       { title: "Configuration", path: "/esdev/test/configuration" },
       { title: "Global setup", path: "/esdev/test/global-setup" },
       { title: "Reporters", path: "/esdev/test/reporters" },
+      { title: "Coverage", path: "/esdev/test/coverage" },
       { title: "Imports", path: "/esdev/test/imports" },
       { title: "DOM testing", path: "/esdev/test/dom" },
       { title: "DOM parity", path: "/esdev/test/dom/parity" },

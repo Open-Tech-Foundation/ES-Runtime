@@ -595,6 +595,35 @@ impl SourceTransform for TypeStripper {
     }
 
     fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
+        let output = self.transform_source(specifier, source)?;
+        // Under coverage, what V8 is about to compile, and where it came from.
+        if crate::coverage::collect::recording() {
+            let path = specifier.strip_prefix("file://").map_or(specifier, |rest| {
+                rest.split(['?', '#']).next().unwrap_or(rest)
+            });
+            let prelude = self.prelude_for(specifier, path);
+            crate::coverage::collect::record(
+                specifier,
+                crate::coverage::collect::Executed {
+                    text: output.clone(),
+                    prelude: u32::try_from(prelude.encode_utf16().count()).unwrap_or(0),
+                    mappings: PRINTED.with_borrow_mut(Option::take),
+                },
+            );
+        }
+        Ok(output)
+    }
+}
+
+thread_local! {
+    /// The mappings of the program [`print`] last printed, for coverage.
+    static PRINTED: std::cell::RefCell<Option<Vec<[u32; 4]>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl TypeStripper {
+    fn transform_source(&self, specifier: &str, source: String) -> Result<String, String> {
+        PRINTED.with_borrow_mut(|printed| *printed = None);
         // A mocked module is replaced whole (D101); its real source is loaded
         // under the reserved query, which is a different id.
         if let Some(mocked) = crate::module_mocks::synthetic(specifier) {
@@ -734,6 +763,20 @@ fn print(program: &oxc::ast::ast::Program<'_>, path: &Path) -> String {
         .build(program);
     if let Some(map) = printed.map {
         es_runtime_cli_common::sourcemap::register(path, &map.to_json_string());
+        if crate::coverage::collect::recording() {
+            let mappings = map
+                .get_tokens()
+                .map(|token| {
+                    [
+                        token.get_dst_line(),
+                        token.get_dst_col(),
+                        token.get_src_line(),
+                        token.get_src_col(),
+                    ]
+                })
+                .collect();
+            PRINTED.with_borrow_mut(|printed| *printed = Some(mappings));
+        }
     }
     printed.code
 }

@@ -13439,6 +13439,194 @@ fn test_changed_and_related_run_the_files_a_change_reaches() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A project to measure: TypeScript the transform reprints, JavaScript it runs
+/// as written, a file no test loads, and code the tests do not reach.
+fn coverage_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    write_in(
+        &dir,
+        "src/math.ts",
+        "export function add(a: number, b: number): number {\n  return a + b;\n}\n\
+         export function sign(n: number): string {\n  if (n > 0) {\n    return \"positive\";\n  } else if (n < 0) {\n    return \"negative\";\n  }\n  return \"zero\";\n}\n\
+         export const never = (x: number) => x * 2;\n",
+    );
+    write_in(
+        &dir,
+        "src/labels.js",
+        "export function label(n) {\n  return n > 10 ? \"big\" : \"small\";\n}\n\
+         export const pick = (a, b) => a || b;\n\
+         /* v8 ignore next */\nexport function debugOnly() { return 1; }\n",
+    );
+    write_in(
+        &dir,
+        "src/untested.ts",
+        "export const untouched = () => 1;\n",
+    );
+    write_in(
+        &dir,
+        "src/math.test.ts",
+        "import { expect, test } from \"runtime:test\";\nimport { add, sign } from \"./math\";\nimport { label, pick } from \"./labels.js\";\n\
+         test(\"math\", () => { expect(add(1, 2)).toBe(3); expect(sign(5)).toBe(\"positive\"); });\n\
+         test(\"labels\", () => { expect(label(3)).toBe(\"small\"); expect(pick(1, 2)).toBe(1); });\n",
+    );
+    dir
+}
+
+/// Whether this esdev can collect coverage; when it cannot, that it says so.
+fn coverage_available(out: &Output) -> bool {
+    let err = stderr(out);
+    if err.contains("this build has no inspector") {
+        // Refused when asked for with `--coverage`; gone without, with a note,
+        // when the project turns it on.
+        assert!(err.contains("ES_RUNTIME_INSPECTOR=1"), "{err}");
+        eprintln!("this esdev has no inspector; the coverage run did not happen");
+        return false;
+    }
+    true
+}
+
+/// Statements, branches, functions and lines of the files as written — the
+/// TypeScript through its reprint — in the text table and in lcov.
+#[test]
+fn test_coverage_measures_the_files_as_written() {
+    let dir = coverage_project("t_coverage");
+    let out = esdev_in(&dir)
+        .args(["test", "--coverage"])
+        .output()
+        .expect("spawn esdev test --coverage");
+    if !coverage_available(&out) {
+        return;
+    }
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    let row = |file: &str| {
+        text.lines()
+            .find(|line| line.starts_with(&format!(" {file} ")))
+            .map(|line| line.split('|').map(str::trim).collect::<Vec<_>>())
+            .unwrap_or_else(|| panic!("no row for {file}:\n{text}"))
+    };
+    // add, sign's first branch and return; the else-if, its return and the
+    // last return not reached; `never` not called.
+    assert_eq!(
+        row("src/math.ts"),
+        ["src/math.ts", "50", "25", "66.66", "57.14", "7-8,10"]
+    );
+    // The ignored function is not counted at all.
+    assert_eq!(
+        row("src/labels.js"),
+        ["src/labels.js", "100", "50", "100", "100", ""]
+    );
+    // Loaded by no test, and not asked for: not reported.
+    assert!(!text.contains(" src/untested.ts "), "{text}");
+    // Nor are the tests themselves.
+    assert!(!text.contains(" src/math.test.ts "), "{text}");
+
+    let lcov = std::fs::read_to_string(dir.join("coverage/lcov.info")).expect("lcov.info written");
+    for line in [
+        "SF:src/math.ts",
+        "FNDA:1,add",
+        "FNDA:0,never",
+        "DA:8,0",
+        "BRDA:5,0,0,1",
+        "end_of_record",
+    ] {
+        assert!(lcov.lines().any(|l| l == line), "{line} in\n{lcov}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `test.coverage` in esdev.json: on without the flag, what to include and
+/// exclude, the reporters, and thresholds that fail a passing run.
+#[test]
+fn test_coverage_settings_come_from_esdev_json() {
+    let dir = coverage_project("t_coverage_settings");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "coverage": {
+            "enabled": true,
+            "include": ["src"],
+            "exclude": ["src/labels.js"],
+            "reporter": ["text", "json", "json-summary"],
+            "reportsDirectory": "reports/coverage",
+            "thresholds": { "lines": 90, "functions": -1 }
+        } } }"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    if !coverage_available(&out) {
+        return;
+    }
+    let (text, err) = (stdout(&out), stderr(&out));
+    assert!(
+        !out.status.success(),
+        "thresholds not met, and the run passed:\n{text}{err}"
+    );
+    assert!(
+        text.contains("2 files passed") || text.contains("1 file passed"),
+        "{text}"
+    );
+    // Included though no test loads it, at nothing covered.
+    assert!(text.contains(" src/untested.ts | "), "{text}");
+    assert!(!text.contains("src/labels.js"), "{text}");
+    assert!(
+        err.contains("coverage: lines coverage is 50%, below the 90% threshold"),
+        "{err}"
+    );
+    assert!(
+        err.contains("coverage: 2 functions are not covered, more than the 1 allowed"),
+        "{err}"
+    );
+    let summary = std::fs::read_to_string(dir.join("reports/coverage/coverage-summary.json"))
+        .expect("summary written");
+    assert!(summary.contains("\"total\":{"), "{summary}");
+    assert!(dir.join("reports/coverage/coverage-final.json").exists());
+    assert!(!dir.join("coverage/lcov.info").exists());
+
+    // A run that cannot collect it goes without, and says so.
+    let out = esdev_in(&dir)
+        .args(["test", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test --isolation=none");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("coverage: not collected"),
+        "{}",
+        stderr(&out)
+    );
+    // Asked for by name, it is refused.
+    let out = esdev_in(&dir)
+        .args(["test", "--isolation=none", "--coverage"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--isolation=none runs them together"),
+        "{}",
+        stderr(&out)
+    );
+
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "coverage": { "reporter": "html" } } }"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--coverage"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("`html` is not a coverage reporter"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

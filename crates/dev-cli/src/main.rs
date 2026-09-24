@@ -48,6 +48,7 @@ mod bundler;
 mod check;
 mod config;
 mod contract;
+mod coverage;
 mod create;
 mod css;
 mod cssmodules;
@@ -212,6 +213,8 @@ OPTIONS:
     --test-skip-pattern=<re>    Skip the tests whose full name matches
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
+    --coverage                  Measure which statements, branches, functions
+                                and lines the tests ran, and report it
     --changed[=<since>]         Run only the test files that reach what git
                                 says changed: uncommitted, or since a commit
                                 or branch
@@ -246,8 +249,8 @@ OPTIONS:
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
 
-`setup`, `globalSetup`, `timeout`, `jobs`, `isolation`, `reporter` and `browser`
-are also esdev.json keys, under \"test\" — the rest (`--update-snapshots`,
+`setup`, `globalSetup`, `timeout`, `jobs`, `isolation`, `reporter`, `browser`
+and `coverage` are also esdev.json keys, under \"test\" — the rest (`--update-snapshots`,
 `--ci`, `--full-diff` and the permission flags) are flags only: they decide a
 single run, not the project:
 
@@ -1439,6 +1442,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut global_setup: Vec<String> = Vec::new();
     let mut provided = None;
     let mut global_setup_out = None;
+    let mut coverage = None;
+    let mut coverage_out = None;
     let mut timeout = None;
     let mut reporter = None;
     let mut update_snapshots = false;
@@ -1531,6 +1536,13 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--setup" => setup.push(require_value(flag, value)?.to_string()),
             "--global-setup" => global_setup.push(require_value(flag, value)?.to_string()),
             "--_provided" => provided = Some(std::path::PathBuf::from(require_value(flag, value)?)),
+            "--coverage" => {
+                reject_value(flag, value)?;
+                coverage = Some(crate::coverage::Settings::default());
+            }
+            "--_coverage" => {
+                coverage_out = Some(std::path::PathBuf::from(require_value(flag, value)?));
+            }
             "--_global-setup-out" => {
                 global_setup_out = Some(std::path::PathBuf::from(require_value(flag, value)?));
             }
@@ -1719,6 +1731,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         global_setup,
         provided,
         global_setup_out,
+        coverage_flag: coverage.is_some(),
+        coverage,
+        coverage_out,
+        coverage_dir: None,
         affected_by,
         shard,
         randomize,
@@ -1832,6 +1848,12 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
             .iter()
             .map(|module| module_url(&project.dir, module))
             .collect::<Result<_, _>>()?;
+    }
+    // The project's coverage settings, when the flag or the project turns it on.
+    if let Some(section) = &project.test.coverage
+        && (config.coverage.is_some() || section.enabled)
+    {
+        config.coverage = Some(section.settings.clone());
     }
     if config.timeout.is_none() {
         config.timeout = project.test.timeout;
@@ -2095,6 +2117,24 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     if let Some(out) = config.global_setup_out.clone() {
         return global_setup::run(&config, &out).await;
     }
+    if let Some(refusal) = coverage::refused(&config) {
+        if config.coverage_flag {
+            eprintln!("error: {refusal}");
+            return ExitCode::FAILURE;
+        }
+        // Turned on by the project, and this run cannot: said, and skipped.
+        if config.file.is_none() || config.summary.is_none() {
+            eprintln!(
+                "coverage: not collected — {}",
+                refusal.lines().next().unwrap_or_default()
+            );
+        }
+        config.coverage = None;
+    }
+    // Listing runs no code worth measuring.
+    if config.list {
+        config.coverage = None;
+    }
 
     // A shuffled run says its seed, so the order that failed can be run again.
     // A child is handed the seed alone and says nothing.
@@ -2158,7 +2198,25 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
             (None, None) => None,
         };
         guest::test::configure_provided(provided);
-        let code = run_test_file(&config, file).await;
+        // Run on its own with `--coverage`, the file reports its own coverage.
+        let scratch = if direct && config.coverage.is_some() {
+            match coverage::scratch() {
+                Ok(dir) => {
+                    config.coverage_out = Some(dir.join("0.json"));
+                    Some(dir)
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return global_setup::stop_into(setup, ExitCode::FAILURE).await;
+                }
+            }
+        } else {
+            None
+        };
+        let mut code = run_test_file(&config, file).await;
+        if let Some(dir) = scratch {
+            code = coverage_verdict(&dir, &config, code);
+        }
         return global_setup::stop_into(setup, code).await;
     }
 
@@ -2188,6 +2246,16 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         );
         // A watched run ends when the developer ends it, so its status is the
         // watcher's rather than any pass's.
+        // One directory for every pass's coverage, reported after each.
+        if config.coverage.is_some() {
+            match coverage::scratch() {
+                Ok(dir) => config.coverage_dir = Some(dir),
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return global_setup::stop_into(setup, ExitCode::FAILURE).await;
+                }
+            }
+        }
         let code = match test::watch(&root, &config, &exe).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -2195,6 +2263,9 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+        if let Some(dir) = &config.coverage_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         return global_setup::stop_into(setup, code).await;
     }
 
@@ -2234,8 +2305,35 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     config.provided = setup
         .as_ref()
         .map(|running| running.provided().to_path_buf());
-    let code = run_selected(&exe, &root, &files, &config).await;
+    let scratch = match config.coverage.as_ref().map(|_| coverage::scratch()) {
+        Some(Ok(dir)) => Some(dir),
+        Some(Err(err)) => {
+            eprintln!("error: {err}");
+            return global_setup::stop_into(setup, ExitCode::FAILURE).await;
+        }
+        None => None,
+    };
+    config.coverage_dir.clone_from(&scratch);
+    let mut code = run_selected(&exe, &root, &files, &config).await;
+    if let Some(dir) = scratch {
+        code = coverage_verdict(&dir, &config, code);
+    }
     global_setup::stop_into(setup, code).await
+}
+
+/// Reports a run's coverage and folds its thresholds into the exit code.
+fn coverage_verdict(dir: &std::path::Path, config: &TestConfig, code: ExitCode) -> ExitCode {
+    let root = std::env::current_dir().unwrap_or_default();
+    let verdict = coverage::finish(dir, &root, config);
+    let _ = std::fs::remove_dir_all(dir);
+    match verdict {
+        Ok(true) => code,
+        Ok(false) => ExitCode::FAILURE,
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Runs the files a run selected, each in a process of its own unless the
@@ -2328,7 +2426,11 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
         bundler_style_resolution: true,
         extensions: guest::test_extensions(config.dom),
         observer: None,
-        inspector: None,
+        // Under `--coverage`, V8's counts, collected by this process itself.
+        inspector: config
+            .coverage_out
+            .as_ref()
+            .map(|_| coverage::collect::inspector()),
     };
     let code = match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => finish_test_file(config, &file),
@@ -2345,6 +2447,9 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     // The results, for the parent to report and to count for `--bail`.
     if let Some(summary) = &config.summary {
         guest::test::write_summary(summary, &file);
+    }
+    if let Some(out) = &config.coverage_out {
+        coverage::collect::write(out, &std::env::current_dir().unwrap_or_default());
     }
     code
 }

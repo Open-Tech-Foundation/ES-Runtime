@@ -31,6 +31,14 @@ run = "cargo build --workspace --all-features && cargo clippy --workspace --all-
 # others; this is that rule one level down.
 run = "cargo test --workspace --all-features --no-fail-fast"
 
+# esdev's suite again with the V8 inspector compiled in (DECISIONS D59), as the
+# released esdev is built: `--inspect` and `--coverage` only work there, and
+# their tests otherwise only check the refusal. `-p es-runtime-dev-cli` alone,
+# because the variable must never reach an esrun build.
+[tasks."test:inspector"]
+run = "cargo test -p es-runtime-dev-cli --no-fail-fast"
+env = { ES_RUNTIME_INSPECTOR = "1" }
+
 # The curated suite, driven by the real binary: a real event loop, a real
 # filesystem, real process exit. The grants are named rather than replaced by
 # --allow-all deliberately — this suite runs the way a deployment does, so a new

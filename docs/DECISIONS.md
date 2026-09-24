@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D108 — Coverage from V8's counts, measured on the files as written; esdev ships with the inspector · *Accepted (2026-09-24)* · *amends D59*
+
+**Context:** Vitest's default coverage provider reads V8's precise coverage through the inspector, with no instrumentation, and since Vitest 3.2 remaps it onto the source's syntax tree so the result matches Istanbul's. Istanbul itself instruments the source with counters. V8 exposes coverage only through the inspector protocol (`Profiler.startPreciseCoverage`), and D59 compiles the inspector into esdev only on request (`ES_RUNTIME_INSPECTOR=1`). The release workflow did not set that variable, so released esdev binaries had no inspector: no `--inspect`, and no way to read V8's counts.
+
+**Decision:**
+- **V8's counts, not instrumentation.** Each test process attaches an in-process inspector client before its entry module is compiled. It uses the same wait-for-debugger step as `--inspect-brk` to start precise coverage (`callCount`, `detailed`) before the first statement. When the test queue drains, `runtime:test` takes the counts. Test code runs unmodified and at full speed.
+- **Measured on the files as written, in Istanbul's terms.** The original source is parsed with oxc for statements, functions and branches (`if`, `cond-expr`, `binary-expr`, `switch`). Each node goes through the transform's mappings to where it sits in the code V8 ran, and takes the count of the innermost counted block there. An `if` with no `else` gets the times it was reached less the times its consequent ran. Lines are the lines statements start on. `v8`/`c8`/`istanbul` `ignore next|start|stop` comments are honoured.
+- **Istanbul's formats.** The reporters are `text`, `lcov`, `json` and `json-summary`, so CI services and genhtml read them unchanged. Thresholds follow Vitest: a positive number is a least percentage, a negative one a most-uncovered count.
+- **Released esdev is built with the inspector**, in a release job that builds esdev alone (`-p es-runtime-dev-cli`). esrun still never is, and its build script still refuses the variable. A CI job runs esdev's suite in that build, since it is the one users get. This amends D59, which left the release build without the inspector. The reasoning there holds for esrun, whose deployments must not carry a debugger port. esdev is not a deployment target, and `--inspect` has to be asked for.
+- Rejected: Istanbul-style instrumentation. It would work in any engine, including Firefox browser runs, but slows every covered run and adds a second, compiled form of each file. Also rejected for now: an `html` reporter (genhtml renders `lcov.info`), per-file thresholds, and coverage for `--browser` and `--isolation=none` runs.
+
+**Consequences:** `--coverage` with `--browser` or `--isolation=none` is refused; `test.coverage.enabled` skips those runs with a note. A build without the inspector refuses `--coverage` with how to get one. Code run in another process is not measured.
+
+---
+
 ### D107 — `--changed` and `--related` follow the import graph the runtime resolves · *Accepted (2026-09-24)*
 
 **Context:**
