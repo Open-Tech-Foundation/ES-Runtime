@@ -25,6 +25,9 @@ is the point, since none of the three has any business in a deployment.
 ## [Unreleased]
 
 ### Changed
+- **`esdev <file>` reads `esdev.json`**, like every other command: its
+  `jsx`, `alias` and `plugins` apply, and a file that does not parse is an
+  error rather than ignored.
 - **`esdev build <entry>` reads the project's `jsx`, `alias` and `plugins`**
   when there is an `esdev.json`, with flags winning, and still ignores its
   targets. `esdev.json` is read in one place for every command now
@@ -49,6 +52,19 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
+- **`--changed` and `--related` follow aliases.** A test that imports
+  `@/db` is selected by a change to `src/db.ts`, and a change to an extended
+  tsconfig (`tsconfig.base.json`) selects every test.
+- **`esdev build` prints the bundler's warnings.** They were dropped, and the
+  one that matters most was among them: an import the bundler could not
+  resolve, which it keeps as an import while the build reports success.
+- **Converted CommonJS packages no longer pile up.** Each install's
+  conversions live in a directory named for the lockfile, and a new install's
+  first conversion removes the previous one's.
+- **`esdev test` removes the settings file it hands its children** when the
+  run ends.
+- **The `--help` links point at the pages themselves** rather than at an old
+  path the site redirects.
 - **A project build no longer ignores flags.** `--sourcemap` and `--alias`
   now apply to every target, and `--format`, `--no-types` and `--dts-bundle`
   are refused with where the setting belongs. Each was accepted and silently
@@ -126,6 +142,13 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`--config=<path>` for `esdev test` and `esdev <file>`**, as `build`,
+  `start` and `preview` already took it.
+- **`esdev test --watch` restarts when `esdev.json` changes**, with global
+  setup torn down and every setting read again, as Vitest restarts on a config
+  change.
+- **`jsconfig.json` `paths`** are honoured by `esdev build`, `esdev test` and
+  `esdev <file>` in a JavaScript project with no `tsconfig.json`.
 - **Aliases in unbundled runs.** `esdev test` and `esdev <file>` resolve
   imports through `esdev.json`'s `alias` and `tsconfig.json`'s `paths` and
   `baseUrl`, as `esdev build` does, so `import { db } from "@/db"` works in a

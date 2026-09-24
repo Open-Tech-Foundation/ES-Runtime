@@ -32,6 +32,15 @@ const EVERYTHING: &[&str] = &[
     "bun.lockb",
 ];
 
+/// Whether a file of this name decides what every test means. A tsconfig
+/// another one `extends` — `tsconfig.base.json` — carries the `paths` an
+/// import resolves through as surely as `tsconfig.json` does.
+fn configures_every_test(name: &str) -> bool {
+    EVERYTHING.contains(&name)
+        || ((name.starts_with("tsconfig.") || name.starts_with("jsconfig."))
+            && name.ends_with(".json"))
+}
+
 /// The files git reports changed: uncommitted ones, or — given `since`, a
 /// commit or branch — everything that differs from where this branch left it,
 /// uncommitted changes included. Untracked files count: a new test is a change.
@@ -88,6 +97,7 @@ pub fn canonical(path: &Path) -> PathBuf {
 /// test file runs with, whose own imports affect every file too.
 pub fn affected(
     root: &Path,
+    source: &crate::settings::Source,
     tests: &[PathBuf],
     setup: &[PathBuf],
     changed: &[PathBuf],
@@ -96,14 +106,14 @@ pub fn affected(
     if changed.iter().any(|path| {
         path.file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| EVERYTHING.contains(&name))
+            .is_some_and(configures_every_test)
     }) {
         return Ok(tests.to_vec());
     }
     // A deleted file cannot be resolved to: a test that imports something that
     // no longer resolves is affected when a file was deleted.
     let deleted = changed.iter().any(|path| !path.exists());
-    let mut graph = Graph::new(root)?;
+    let mut graph = Graph::new(root, source)?;
     if setup
         .iter()
         .any(|module| graph.reaches(&canonical(module), &changed, deleted))
@@ -131,9 +141,11 @@ struct Imports {
 }
 
 impl Graph {
-    fn new(root: &Path) -> Result<Self, String> {
+    /// The graph as a run of the project resolves it: its aliases included,
+    /// or a test that imports `@/db` would never be reached by a change to it.
+    fn new(root: &Path, source: &crate::settings::Source) -> Result<Self, String> {
         Ok(Self {
-            resolver: SourceResolver::new(root)?,
+            resolver: SourceResolver::new(root)?.with_alias(source.resolution().alias),
             imports: HashMap::new(),
         })
     }
@@ -249,6 +261,7 @@ impl<'a> Visit<'a> for Specifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Source;
 
     /// A project on disk: `a.test.ts → lib/a.ts → lib/shared.ts`,
     /// `b.test.ts → lib/b.ts`, `types.test.ts` importing only a type.
@@ -296,7 +309,14 @@ mod tests {
         let hit = |changed: &str| {
             names(
                 &root,
-                &affected(&root, &tests(&root), &[], &[root.join(changed)]).unwrap(),
+                &affected(
+                    &root,
+                    &Source::default(),
+                    &tests(&root),
+                    &[],
+                    &[root.join(changed)],
+                )
+                .unwrap(),
             )
         };
         // Through a re-export, two levels down.
@@ -316,20 +336,78 @@ mod tests {
     fn config_lockfiles_and_setup_modules_affect_every_test() {
         let root = project("everything");
         for file in ["package.json", "esdev.json", "pnpm-lock.yaml"] {
-            let hit = affected(&root, &tests(&root), &[], &[root.join(file)]).unwrap();
+            let hit = affected(
+                &root,
+                &Source::default(),
+                &tests(&root),
+                &[],
+                &[root.join(file)],
+            )
+            .unwrap();
             assert_eq!(hit.len(), 3, "{file}");
         }
         let setup = [root.join("lib/a.ts")];
-        let hit = affected(&root, &tests(&root), &setup, &[root.join("lib/shared.ts")]).unwrap();
+        let hit = affected(
+            &root,
+            &Source::default(),
+            &tests(&root),
+            &setup,
+            &[root.join("lib/shared.ts")],
+        )
+        .unwrap();
         assert_eq!(hit.len(), 3);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A test that imports a module through the project's alias is reached
+    /// by a change to it — the graph resolves as the run does.
+    #[test]
+    fn a_change_reaches_a_test_through_an_alias() {
+        let root = project("alias");
+        std::fs::write(
+            root.join("aliased.test.ts"),
+            "import { shared } from \"@lib/shared\";\n",
+        )
+        .unwrap();
+        let source = Source {
+            root: root.clone(),
+            alias: vec![("@lib".to_string(), root.join("lib").display().to_string())],
+            ..Source::default()
+        };
+        let tests = [root.join("aliased.test.ts")];
+        let hit = affected(&root, &source, &tests, &[], &[root.join("lib/shared.ts")]).unwrap();
+        assert_eq!(names(&root, &hit), ["aliased.test.ts"]);
+        let unaliased = affected(
+            &root,
+            &Source::default(),
+            &tests,
+            &[],
+            &[root.join("lib/shared.ts")],
+        )
+        .unwrap();
+        assert!(unaliased.is_empty(), "the alias is what connects them");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_tsconfig_that_is_extended_affects_every_test() {
+        assert!(configures_every_test("tsconfig.base.json"));
+        assert!(configures_every_test("jsconfig.json"));
+        assert!(!configures_every_test("tsconfig.ts"));
     }
 
     #[test]
     fn a_deleted_import_affects_the_test_that_still_imports_it() {
         let root = project("deleted");
         std::fs::remove_file(root.join("lib/shared.ts")).unwrap();
-        let hit = affected(&root, &tests(&root), &[], &[root.join("lib/shared.ts")]).unwrap();
+        let hit = affected(
+            &root,
+            &Source::default(),
+            &tests(&root),
+            &[],
+            &[root.join("lib/shared.ts")],
+        )
+        .unwrap();
         assert_eq!(names(&root, &hit), ["a.test.ts"]);
         let _ = std::fs::remove_dir_all(&root);
     }

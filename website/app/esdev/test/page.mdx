@@ -29,12 +29,9 @@ about it is refused rather than compiled for a framework nobody named.
 The same setting compiles the bundle, so a component means the same thing in a
 test and in a build.
 
-When a framework's compiler is a [plugin](/esdev/build/project#plugins-in-a-project),
-the project's top-level `plugins` compile every module a test loads, before
-the `jsx` setting does — in a browser run too. Only their `transform` hooks
-run: a test is not bundled, so there is no graph for `resolve` or `load` to
-answer, and `ctx.emit()` fails. A target's own `plugins` describe that target's
-bundle and do not apply.
+When a framework's compiler is a plugin, the project's `plugins` compile every
+module a test loads, before the `jsx` setting does. See
+[Where plugins run](/esdev/build/project#where-plugins-run).
 
 ## DOM tests
 
@@ -76,7 +73,8 @@ same file with `--browser`. See [DOM testing](/esdev/test/dom) and
 - [Reporters](/esdev/test/reporters) — JSON, JUnit XML, TAP and dots, for CI.
 - [Coverage](/esdev/test/coverage) — which statements, branches, functions and
   lines the tests ran.
-- [Imports](/esdev/test/imports) — how test files resolve their imports.
+- [Imports](/esdev/test/imports) — extensions, aliases, `tsconfig.json`
+  paths and CommonJS packages, resolved as the build resolves them.
 - [DOM testing](/esdev/test/dom) — the in-memory DOM behind `--dom`.
 - [Browser testing](/esdev/test/browser) — the same files in a real browser.
 

@@ -31,13 +31,13 @@ esdev upgrade                 # update esdev to the latest release
   file watcher in it; `esrun` cannot be built with either.
 </Callout>
 
-## It never changes what the JS sees
+## It never changes what a program does
 
 Same prelude, same snapshot, same providers, same capability enforcement — all
 shared with `esrun`, in one crate both binaries sit on. A program cannot behave
 one way here and another in production. What `esdev` changes is everything
-*around* a run: watching, restarting, attaching, discovering, reporting,
-building.
+*around* a run: how source becomes modules, watching, restarting, attaching,
+discovering, reporting, building.
 
 The permission flags are the same ones and mean the same thing, with one
 deliberate difference: **`esdev` grants everything by default, `esrun` grants
@@ -81,14 +81,26 @@ Released binaries include the debugger, which `--inspect` and
 `esdev test --coverage` need. A source build has it only with the second line,
 and a build without it says so instead of listening on nothing.
 
-## TypeScript & JSX
+## Source, read the way the build reads it
 
-`esdev` runs `.ts`, `.tsx`, `.mts`, `.cts` and `.jsx` directly by stripping
-types and compiling JSX; `.js` passes through untouched. Types are erased, not
-checked, and import specifiers stay exactly as written so development and
-production resolve the same modules.
+`esdev` runs source the way `esdev build` would bundle it, so a module means one
+thing whether it is run, tested or built:
 
-See [TypeScript setup](/esdev/typescript) for editor types and configuration.
+| | |
+| --- | --- |
+| **TypeScript and JSX** | `.ts`, `.tsx`, `.mts`, `.cts` and `.jsx` run directly; types are erased, not checked. JSX compiles as the project's [`jsx`](/esdev/build/project#jsx) says |
+| **Imports** | `./util` finds `util.ts`, and `@/db` resolves through the project's aliases and `tsconfig.json` `paths` ([Imports](/esdev/test/imports)) |
+| **Plugins** | The project's [`plugins`](/esdev/build/project#plugins-in-a-project) compile what they claim — a framework's `.jsx`, an `.mdx` |
+| **CommonJS packages** | Converted to ES modules the first time they are imported ([CommonJS packages](/esdev/test/imports#commonjs-packages)) |
+
+`esrun` does none of this: it runs the bundle, where all of it is already
+settled. See [TypeScript setup](/esdev/typescript) for editor types.
+
+## The project
+
+`esdev.json` in the working directory is read once, by every command, and
+combined with that command's flags; a flag beats the file. `--config=<path>`
+names another file, for any command. See [Project config](/esdev/build/project).
 
 ## Watch
 
@@ -135,17 +147,21 @@ a value is never a separate argument — and they come **before** the script.
 | `--inspect[=<addr>]` | Serve the Chrome DevTools Protocol (default `127.0.0.1:9229`) |
 | `--inspect-brk[=<addr>]` | ...and stop before the first statement |
 | `--trace-permissions` | Print the permissions the run used |
+| `--config=<path>` | Read this project file instead of `./esdev.json` |
 | `--install-types` | Add `@opentf/esrun-types` and wire up `tsconfig.json` |
 
 | Subcommand | |
 | --- | --- |
 | `esdev create <dir>` | [Scaffold a project that already runs](/esdev/create) |
+| `esdev init [dir]` | [Start a bare project, or adopt existing code](/esdev/create#starting-from-existing-code-esdev-init) |
 | `esdev start` | [The dev loop: build, run, rebuild, reload](/esdev/start) |
 | `esdev test [filter...]` | [Run the test files](/esdev/test) |
 | `esdev build <entry>` | [Bundle into one ES module](/esdev/build) |
 | `esdev build --lib <srcdir>` | [Build a publishable library](/esdev/build/library) |
+| `esdev bench [filter...]` | [Run the benchmark files](/esdev/test/bench) |
+| `esdev check [args...]` | [Typecheck with the project's own `tsc`](/esdev/typescript) |
 | `esdev preview` | [Serve the release build before deploying it](/esdev/start/preview) |
-| `esdev upgrade` | Replace this binary with the latest `esdev` release |
+| `esdev upgrade [--dry-run]` | Replace this binary with the latest `esdev` release, or only say whether there is one |
 
 Each subcommand takes `--help`, and every `--help` is short on purpose: the
 grammar and the flags, then a link to the page that has the rest.

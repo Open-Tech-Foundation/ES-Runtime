@@ -113,6 +113,8 @@ pub struct TestConfig {
     /// Internal parent-to-child: the [`FileRun`] to run with, written by the
     /// parent, in place of resolving the project again.
     pub settings_file: Option<PathBuf>,
+    /// `--config`: the project file to read in place of `./esdev.json`.
+    pub config_path: Option<String>,
 }
 
 /// What running one test file reads: the parent's settings a child needs, and
@@ -186,6 +188,18 @@ pub struct FileRun {
     pub permission_args: Vec<String>,
 }
 
+/// Where a run leaves [`FileRun`] for its children: one file per parent,
+/// removed when the run ends ([`remove_settings`]).
+fn settings_path() -> PathBuf {
+    std::env::temp_dir().join(format!("esdev-test-settings-{}.json", std::process::id()))
+}
+
+/// Removes what [`TestConfig::settings_flag`] wrote, once no child is left to
+/// read it.
+pub fn remove_settings() {
+    let _ = std::fs::remove_file(settings_path());
+}
+
 impl FileRun {
     /// Writes this for the children of a run to read with `--_settings`.
     pub fn write(&self, path: &Path) -> Result<(), String> {
@@ -209,8 +223,7 @@ impl TestConfig {
     /// flag that names it: what every process a run starts is given in place
     /// of its own reading of the project.
     pub fn settings_flag(&self) -> Result<String, String> {
-        let path =
-            std::env::temp_dir().join(format!("esdev-test-settings-{}.json", std::process::id()));
+        let path = settings_path();
         // A child prints no report while the parent writes a machine one.
         let mut run = self.run.clone();
         run.quiet = !self.terminal_human();
@@ -861,10 +874,10 @@ pub(crate) fn timed_out(timeout: Option<u64>) -> String {
 ///
 /// The exit status of a watched run is nobody's: it ends when the developer ends
 /// it, and what they read is the tally printed after each pass.
-pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), String> {
+pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<WatchEnd, String> {
     use crate::watch_keys::Action;
 
-    let (_watcher, mut rx) = change_watcher(root)?;
+    let (_watcher, mut rx) = change_watcher(root, &config.project_file(root))?;
     let paint = crate::style::Palette::stderr();
     let mut keys = crate::watch_keys::start(config.watch_keys);
     let stop = crate::watch::stopped();
@@ -890,9 +903,9 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
             let outcome = loop {
                 tokio::select! {
                     outcome = &mut run => break Some(outcome),
-                    () = &mut stop => return Ok(()),
+                    () = &mut stop => return Ok(WatchEnd::Stopped),
                     key = next_key(&mut keys), if cancellable => match key.and_then(Action::of) {
-                        Some(Action::Quit) => return Ok(()),
+                        Some(Action::Quit) => return Ok(WatchEnd::Stopped),
                         Some(action) if action.runs() => {
                             interrupted = Some(action);
                             break None;
@@ -921,11 +934,14 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
             loop {
                 tokio::select! {
                     change = rx.recv() => {
-                        let Some(first) = change else { return Ok(()) };
-                        crate::watch::coalesce_from(first, &mut rx).await;
+                        let Some(first) = change else { return Ok(WatchEnd::Stopped) };
+                        let burst = crate::watch::coalesce_from(first, &mut rx).await;
+                        if burst.contains(&Change::Project) {
+                            return Ok(WatchEnd::Restart);
+                        }
                         break 'idle Pass::Filtered;
                     }
-                    () = &mut stop => return Ok(()),
+                    () = &mut stop => return Ok(WatchEnd::Stopped),
                     () = next_resume(&mut resumed) => {
                         if let Some(terminal) = keys.as_ref().and_then(|keys| keys.terminal.as_ref()) {
                             let _ = terminal.apply();
@@ -934,7 +950,7 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), S
                     key = next_key(&mut keys) => {
                         let Some(action) = key.and_then(Action::of) else { continue };
                         match action {
-                            Action::Quit => return Ok(()),
+                            Action::Quit => return Ok(WatchEnd::Stopped),
                             Action::Help => {
                                 eprint!("{}", crate::watch_keys::help(&paint));
                                 continue;
@@ -1155,30 +1171,72 @@ async fn next_resume(_: &mut Option<()>) {
     std::future::pending().await
 }
 
-/// Watches `root` for the changes a test run cares about. The watcher must be
-/// kept alive for as long as changes are wanted; each change arrives as `()`.
+/// What changed, as far as a watching run is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    /// A source file: run the tests again.
+    Source,
+    /// The project file itself: what every setting was resolved from, so the
+    /// session starts again rather than running on with what it read before.
+    Project,
+}
+
+/// How a watch session ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchEnd {
+    /// The developer stopped it.
+    Stopped,
+    /// The project file changed: start the session again.
+    Restart,
+}
+
+impl TestConfig {
+    /// The project file a watching run restarts for: `--config`, or
+    /// `./esdev.json`.
+    pub fn project_file(&self, root: &Path) -> PathBuf {
+        root.join(
+            self.config_path
+                .as_deref()
+                .unwrap_or(crate::config::FILE_NAME),
+        )
+    }
+}
+
+/// Watches `root` for the changes a test run cares about, telling a change to
+/// `project_file` from any other. The watcher must be kept alive for as long as
+/// changes are wanted.
 pub fn change_watcher(
     root: &Path,
+    project_file: &Path,
 ) -> Result<
     (
         notify::RecommendedWatcher,
-        tokio::sync::mpsc::UnboundedReceiver<()>,
+        tokio::sync::mpsc::UnboundedReceiver<Change>,
     ),
     String,
 > {
     use notify::{RecursiveMode, Watcher};
 
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Change>();
     let scope = root.to_path_buf();
+    let same = |a: &Path, b: &Path| {
+        dunce::canonicalize(a).unwrap_or_else(|_| a.to_path_buf())
+            == dunce::canonicalize(b).unwrap_or_else(|_| b.to_path_buf())
+    };
+    let project_file = project_file.to_path_buf();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res
-            && crate::watch::is_change(&event.kind)
-            && event
-                .paths
-                .iter()
-                .any(|path| crate::watch::is_interesting(path, &scope))
+        let Ok(event) = res else { return };
+        if !crate::watch::is_change(&event.kind) {
+            return;
+        }
+        if event.paths.iter().any(|path| same(path, &project_file)) {
+            let _ = tx.send(Change::Project);
+        } else if event
+            .paths
+            .iter()
+            .any(|path| crate::watch::is_interesting(path, &scope))
         {
-            let _ = tx.send(());
+            let _ = tx.send(Change::Source);
         }
     })
     .map_err(|e| format!("cannot start the file watcher: {e}"))?;
@@ -1283,6 +1341,7 @@ mod tests {
                     export: None,
                     options: Some(serde_json::json!({ "greeting": "hi" })),
                 }],
+                tsconfig: Some(PathBuf::from("/p/jsconfig.json")),
             },
             dom: true,
             setup: vec!["file:///p/setup.ts".to_string()],

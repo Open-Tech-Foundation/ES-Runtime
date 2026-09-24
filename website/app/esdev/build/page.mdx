@@ -57,6 +57,14 @@ The build is a security step, not only a packaging one.
 | `--define=<name>=<value>` | Replace a name at build time; `process.env.NODE_ENV` defaults to `"production"` |
 | `--alias=<name>=<to>` | Rewrite a specifier before it resolves; repeatable |
 | `--sourcemap[=<kind>]` | A `.map` beside the output, or `=inline`, or `=hidden` |
+| `--target=<name>` | Build one target of the project's `esdev.json` |
+| `--config=<path>` | Read this project file instead of `./esdev.json` |
+| `--lib`, `--format`, `--no-types`, `--dts-bundle` | A library build ([Library builds](/esdev/build/library)) |
+
+`esdev build` with no entry builds the targets `esdev.json` describes, each flag
+applied to every one of them ([Flags on a project build](/esdev/build/project#flags-on-a-project-build)).
+Naming an entry builds that one, with the project's `jsx`, `alias` and
+`plugins`.
 
 ## What the application build guarantees
 
@@ -70,6 +78,11 @@ The build is a security step, not only a packaging one.
 `--conditions` adds rather than replaces, so asking for one more cannot silently
 cost the `worker` condition. A dynamic `import()` emits a content-hashed chunk
 beside the entry.
+
+The bundler's warnings are printed as the build runs. The one to act on is an
+import it could not resolve: the bundle keeps it as an import and the build
+succeeds, but the program fails where it is deployed, so the warning names the
+file and the line.
 
 ## Source maps
 

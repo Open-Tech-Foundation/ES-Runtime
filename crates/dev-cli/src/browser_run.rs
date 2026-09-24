@@ -513,6 +513,7 @@ impl Job {
                 .map(|host| host.jsx(&every))
                 .unwrap_or_default(),
             source.jsx.clone(),
+            source.tsconfig.clone(),
             &passes,
         )
         .await?;

@@ -1125,6 +1125,19 @@ impl SourceResolver {
         })
     }
 
+    /// The same resolver, with `alias` applied first — as a run that has one
+    /// applies it, so a tool mapping imports agrees with the run about what
+    /// `@/db` is.
+    #[must_use]
+    pub fn with_alias(self, alias: Arc<dyn SpecifierAlias>) -> Self {
+        Self {
+            loader: Arc::new(AliasingLoader {
+                inner: self.loader,
+                alias,
+            }),
+        }
+    }
+
     /// The URL `specifier` names when imported from the module at `referrer`
     /// (a URL), or `None` when it names nothing that resolves.
     pub fn resolve(&self, specifier: &str, referrer: &str) -> Option<String> {

@@ -1098,9 +1098,16 @@ fn test_imports_commonjs_packages_unbundled() {
         .expect("spawn esdev test");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
     assert!(stdout(&out).contains("3 passed"), "{}", stdout(&out));
-    // Converted once, into the project's own node_modules, and reused.
-    let converted = std::fs::read_dir(dir.join("node_modules/.esdev/deps"))
+    // Converted once, into the project's own node_modules — one directory
+    // for the install — and reused.
+    let install = std::fs::read_dir(dir.join("node_modules/.esdev/deps"))
         .expect("the conversions")
+        .flatten()
+        .next()
+        .expect("an install's directory")
+        .path();
+    let converted = std::fs::read_dir(&install)
+        .expect("the install's conversions")
         .count();
     assert!(converted >= 4, "{converted}");
     let again = esdev_in(&dir)
@@ -1113,6 +1120,59 @@ fn test_imports_commonjs_packages_unbundled() {
         stdout(&again),
         stderr(&again)
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An install replaces the conversions: they live in a directory named for
+/// the lockfile, and the first conversion of a new install removes the old
+/// install's, so the cache holds one install's worth and no more.
+#[test]
+fn a_new_install_replaces_the_previous_conversions() {
+    let dir = commonjs_packages("b_cjs_prune");
+    write_in(
+        &dir,
+        "package-lock.json",
+        r#"{ "lockfileVersion": 3, "v": 1 }"#,
+    );
+    write_in(
+        &dir,
+        "one.test.js",
+        "import { test, expect } from 'runtime:test';\nimport { greet } from 'greeter';\n\
+         test('greets', () => expect(greet('Ada')).toBe('hi Ada'));\n",
+    );
+    let installs = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("node_modules/.esdev/deps"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let first = installs();
+    assert_eq!(first.len(), 1, "{first:?}");
+
+    write_in(
+        &dir,
+        "package-lock.json",
+        r#"{ "lockfileVersion": 3, "v": 2 }"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let second = installs();
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert_ne!(first, second);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1156,6 +1216,28 @@ fn a_module_run_unbundled_imports_a_commonjs_package() {
     let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "hi Ada\ntrue\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The bundler's own warnings reach the terminal. It leaves an import it
+/// cannot resolve as an import and reports success, and the bundle then fails
+/// where it is deployed — so the build says so, where it was written.
+#[test]
+fn build_prints_what_the_bundler_warns_about() {
+    let dir = build_dir("b_warnings");
+    write_in(&dir, "package.json", r#"{"name":"w"}"#);
+    write_in(
+        &dir,
+        "app.js",
+        "import x from 'not-installed';\nconsole.log(x);\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["build", "app.js", "--out=dist/app.js"])
+        .output()
+        .expect("spawn esdev build");
+    let err = stderr(&out);
+    assert!(err.contains("warning:"), "{err}");
+    assert!(err.contains("not-installed"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1783,6 +1865,65 @@ fn every_build_flag_is_applied_or_refused_in_a_project_build() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Every flag `esdev test --help` and `esdev start --help` advertise is one
+/// the command's parser takes. Each is given, then a flag nothing takes, so
+/// the parser stops before anything runs: the refusal names the second flag
+/// when the first was understood. What the file's `test` section says is held
+/// by the compiler instead — `resolve_test` names every key it has.
+#[test]
+fn every_advertised_test_and_start_flag_is_understood() {
+    // An option row: indented, the flag (after a short alias, if any), then a
+    // gap of two or more spaces before its description. Prose that merely
+    // starts with a flag has no such gap.
+    let row = regex::Regex::new(r"^ {4}(?:-\w, )?(--[^\s]+) {2,}\S").expect("pattern");
+    for command in ["test", "start"] {
+        let help = esdev()
+            .args([command, "--help"])
+            .output()
+            .expect("spawn esdev");
+        let text = stdout(&help);
+        let mut checked = 0;
+        for line in text.lines() {
+            let Some(found) = row.captures(line) else {
+                continue;
+            };
+            let flag = found.get(1).map_or("", |m| m.as_str());
+            if flag == "--help" {
+                continue;
+            }
+            let (name, rest) = match flag.find(['=', '[']) {
+                Some(at) => flag.split_at(at),
+                None => (flag, ""),
+            };
+            // A family written as a placeholder — `--allow-<name>` — is the
+            // permission grammar's, checked by its own tests.
+            if name.contains('<') {
+                continue;
+            }
+            // A required value is given one; an optional one is left out.
+            let given = if rest.starts_with('=') {
+                format!("{name}=1")
+            } else {
+                name.to_string()
+            };
+            let out = esdev()
+                .args([command, &given, "--no-such-flag-at-all"])
+                .output()
+                .expect("spawn esdev");
+            let err = stderr(&out);
+            assert!(
+                !err.contains(&format!("unknown option: {name}")),
+                "esdev {command} --help lists {name}, and the parser does not take it:\n{err}"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "no flags found in esdev {command} --help:\n{text}"
+        );
+    }
+}
+
 /// A one-off `esdev build <entry>` is still in the project: its `alias`
 /// applies, and a flag replaces the one of the same name.
 #[test]
@@ -1898,6 +2039,60 @@ fn aliased_project(name: &str) -> PathBuf {
     );
     write_in(&dir, "esdev.json", r#"{ "alias": { "@db": "./src/db" } }"#);
     dir
+}
+
+/// A JavaScript project states its `paths` in `jsconfig.json`, as
+/// TypeScript's own tools read it: honoured by the build, a run and a test
+/// alike, when there is no `tsconfig.json` beside it.
+#[test]
+fn a_jsconfig_names_the_paths_of_a_javascript_project() {
+    let dir = build_dir("b_jsconfig");
+    std::fs::create_dir_all(dir.join("src/lib")).expect("mkdir");
+    write_in(&dir, "package.json", r#"{"name":"js"}"#);
+    write_in(
+        &dir,
+        "jsconfig.json",
+        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "~/*": ["src/*"] } } }"#,
+    );
+    write_in(&dir, "src/lib/two.js", "export const two = () => 2;\n");
+    write_in(
+        &dir,
+        "src/app.js",
+        "import { two } from '~/lib/two.js';\nconsole.log(two());\n",
+    );
+    write_in(
+        &dir,
+        "src/two.test.js",
+        "import { test, expect } from 'runtime:test';\nimport { two } from '~/lib/two.js';\n\
+         test('two', () => expect(two()).toBe(2));\n",
+    );
+
+    let ran = esdev_in(&dir)
+        .arg("src/app.js")
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(stdout(&ran).trim(), "2", "{}", stderr(&ran));
+    let tested = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        tested.status.success(),
+        "{}{}",
+        stdout(&tested),
+        stderr(&tested)
+    );
+    let built = esdev_in(&dir)
+        .args(["build", "src/app.js", "--out=dist/app.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(built.status.success(), "{}", stderr(&built));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("the bundle");
+    assert!(
+        !bundle.contains("~/lib"),
+        "the alias was left for the runtime: {bundle}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `esdev test` resolves an import the way the build does: through
@@ -16879,6 +17074,40 @@ impl KeyedWatch {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+/// A watching run restarts when `esdev.json` changes, as Vitest does on its
+/// config: every setting was resolved from the file, so a run that went on
+/// with what it read first would be testing a project that no longer exists.
+#[test]
+fn test_watch_restarts_when_the_project_file_changes() {
+    let dir = build_dir("t_watch_restart");
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    std::fs::create_dir_all(dir.join("b")).unwrap();
+    write_in(&dir, "a/x.ts", "export default 'from a';\n");
+    write_in(&dir, "b/x.ts", "export default 'from b';\n");
+    write_in(&dir, "esdev.json", r#"{ "alias": { "@": "./a" } }"#);
+    write_in(
+        &dir,
+        "which.test.ts",
+        "import { test } from \"runtime:test\";\nimport x from \"@/x.ts\";\n\
+         test(\"which\", () => console.log(\"VALUE\", x));\n",
+    );
+    let mut watch = KeyedWatch::start(&dir, "restart");
+    let run = watch.next_run();
+    assert!(run.contains("VALUE from a"), "{run}");
+
+    write_in(&dir, "esdev.json", r#"{ "alias": { "@": "./b" } }"#);
+    let err = wait_for_file(&watch.err, Duration::from_secs(30), |text| {
+        text.contains("esdev.json changed — restarting")
+            && text.matches("watching for changes").count() >= 2
+    });
+    assert!(err.contains("esdev.json changed — restarting"), "{err}");
+    let out = std::fs::read_to_string(&watch.out).unwrap_or_default();
+    assert!(out.contains("VALUE from b"), "{out}");
+    watch.passes = 2;
+    watch.quit();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Vitest's watch keys: `f` reruns what failed, `t` and `p` filter, `a`

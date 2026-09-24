@@ -83,6 +83,27 @@ import { file } from "runtime:fs";
 const data = await file("./config.json").text();
 ```
 
+## Typechecking
+
+`esdev` never checks types while it runs; your editor does, and so does:
+
+```sh
+esdev check                  # tsc --noEmit, with the project's own TypeScript
+esdev check --pretty false   # arguments go to tsc untouched
+esdev test --typecheck       # the tests, and the check, in one run
+```
+
+`esdev check` runs the `tsc` the project installed, through its package manager
+(found as `--install-types` finds it), so the version that checks is the version
+the project uses. Its output is `tsc`'s own.
+
+## Path aliases
+
+`compilerOptions.paths` and `baseUrl` resolve the same way in `esdev build`,
+`esdev test` and `esdev <file>`. A JavaScript project states them in
+`jsconfig.json`, which is read when there is no `tsconfig.json` beside it. See
+[Imports](/esdev/test/imports#aliases) for the rules.
+
 ## Class syntax ahead of the engine
 
 | | |

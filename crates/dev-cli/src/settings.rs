@@ -54,6 +54,18 @@ pub struct Source {
     pub alias: Vec<(String, String)>,
     /// The project's top-level `plugins` — every target's, and a test's.
     pub plugins: Vec<PluginSpec>,
+    /// The tsconfig whose `paths` and `baseUrl` resolution reads when it
+    /// cannot be found by looking: a JavaScript project's `jsconfig.json`, at
+    /// the root, when there is no `tsconfig.json` beside it. `None` is the
+    /// resolver's own search for the `tsconfig.json` that owns each file.
+    pub tsconfig: Option<PathBuf>,
+}
+
+/// A root `jsconfig.json` with no `tsconfig.json` beside it: what TypeScript's
+/// own tools read for a JavaScript project, and so what its `paths` mean.
+fn jsconfig(root: &std::path::Path) -> Option<PathBuf> {
+    let jsconfig = root.join("jsconfig.json");
+    (jsconfig.is_file() && !root.join("tsconfig.json").is_file()).then_some(jsconfig)
 }
 
 /// One `esdev` invocation's settings.
@@ -98,6 +110,7 @@ impl Settings {
         Settings {
             has_project: true,
             source: Source {
+                tsconfig: jsconfig(&project.dir),
                 root: project.dir.clone(),
                 jsx: project.jsx,
                 alias: project.alias,
@@ -115,6 +128,7 @@ impl Settings {
         Settings {
             has_project: false,
             source: Source {
+                tsconfig: jsconfig(&root),
                 root,
                 ..Source::default()
             },
@@ -218,7 +232,10 @@ impl Source {
     /// project's aliases, and CommonJS packages converted as they load.
     pub fn resolution(&self) -> Resolution {
         Resolution {
-            alias: Arc::new(crate::alias::Aliases::new(self.alias.clone())),
+            alias: Arc::new(crate::alias::Aliases::new(
+                self.alias.clone(),
+                self.tsconfig.clone(),
+            )),
             converter: crate::commonjs::converter(),
         }
     }

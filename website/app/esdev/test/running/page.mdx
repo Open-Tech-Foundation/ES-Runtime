@@ -21,7 +21,8 @@ failure as a case that quietly never ran.
 
 ## Filtering by name
 
-`-t` runs only the tests whose full name matches a regular expression. The full
+`-t` (`--test-name-pattern`) runs only the tests whose full name matches a
+regular expression. The full
 name includes the `describe` groups, joined with ` > `. `--test-skip-pattern`
 leaves out the tests that match:
 
@@ -107,10 +108,12 @@ esdev test --related src/cart.ts src/price.ts
 ```
 
 A test file reaches a file when it imports it, or imports something that does,
-at any depth. Static imports, re-exports and `import()` of a string count.
-Type-only imports do not, since they are gone at run time. A change to
-`esdev.json`, `package.json`, `tsconfig.json`, a lockfile, or a setup module
-runs every test file.
+at any depth. Static imports, re-exports and `import()` of a string count, each
+resolved as a run resolves it — through the project's
+[aliases](/esdev/test/imports#aliases) too. Type-only imports do not, since they
+are gone at run time. A change to `esdev.json`, `package.json`, a
+`tsconfig.*.json` or `jsconfig.*.json`, a lockfile, or a setup module runs every
+test file.
 
 The run says what it chose on stderr:
 
@@ -242,6 +245,11 @@ starts its own; `q` quits, ending the files being run. With
 The keys need a terminal on stdin, and are read on Linux and macOS. Elsewhere,
 and when stdin is not a terminal, the watch reruns on changes and ^C stops it.
 
+A change to `esdev.json` (or the `--config` file) restarts the watch: global
+setup is torn down and every setting is read again, so an edited `alias`, `jsx`
+or `test` section applies from the next run. A change to `tsconfig.json`
+applies on the next run without a restart.
+
 ## Sharing one runtime
 
 For a suite whose startup and repeated imports cost more than its tests, opt
@@ -318,10 +326,11 @@ such a file, since a page has no grant to rehearse.
 
 ## The file is the entry, unaltered
 
-It keeps its own path, its module resolution, its relative imports and its
-TypeScript — and nothing is added to it. What runs is byte for byte the file on
-disk, so a failing assertion names the line you wrote because it *is* the line
-you wrote.
+It keeps its own path, its module resolution and its relative imports, and is
+compiled as any module the project runs is: types erased, JSX and the project's
+[plugins](/esdev/build/project#plugins-in-a-project) applied. Nothing wraps it,
+and line numbers are kept, so a failing assertion names the line you wrote. A
+`--setup` module is imported on the file's first line, without moving it.
 
 A test file is an ordinary module, so running one directly works and reports
 the same way:

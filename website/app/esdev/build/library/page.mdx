@@ -143,5 +143,6 @@ constructs such as module augmentations stop the build and name themselves.
 ```
 
 Library keys mean nothing on an application target and are refused rather than
-ignored. Types are derived, not checked; use your editor and `tsc --noEmit` for
-type checking.
+ignored, and a library is built without the project's
+[aliases](/esdev/build/project#aliases). Types are derived, not checked;
+[`esdev check`](/esdev/typescript#typechecking) checks them.

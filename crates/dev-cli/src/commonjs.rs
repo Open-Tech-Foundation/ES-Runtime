@@ -8,7 +8,8 @@
 //!
 //! # What is made
 //!
-//! Three files per package, under the project's `node_modules/.esdev/deps/`:
+//! Three files per package, under the project's `node_modules/.esdev/deps/`,
+//! in a directory for the install ([`deps_dir`]):
 //!
 //! ```text
 //!   intl-messageformat-3f2a….mjs        the module an import gets
@@ -38,9 +39,10 @@
 //! `mock.module("pkg", …)` and `import.meta.resolve` resolve synchronously and
 //! have to reach the id an `import` does. So [`resolve`](PackageConverter::resolve)
 //! only names the file, deterministically, and [`prepare`](PackageConverter::prepare)
-//! makes it the first time it is loaded. The name carries a hash of the package
-//! and the project's lockfile, so an install is a new name rather than a stale
-//! file, and every process — each test file is one — agrees on it.
+//! makes it the first time it is loaded. The name carries a hash of the package,
+//! and the directory one of the project's lockfile, so an install is a new name
+//! rather than a stale file, and every process — each test file is one — agrees
+//! on it. The first conversion of a new install removes the old install's.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -151,9 +153,14 @@ impl Converter {
             return None;
         }
         let deps = deps_dir(&entry)?;
+        // The first conversion of a new install clears the previous ones.
+        let fresh = !deps.exists();
         std::fs::create_dir_all(&deps).ok()?;
+        if fresh {
+            prune_other_installs(&deps);
+        }
         let deps = dunce::canonicalize(&deps).ok()?;
-        let name = format!("{}-{}.mjs", slug(specifier), fingerprint(&entry, &deps));
+        let name = format!("{}-{}.mjs", slug(specifier), fingerprint(&entry));
         Some(Plan {
             specifier: specifier.to_string(),
             entry,
@@ -553,9 +560,17 @@ fn nearest_manifest(path: &Path) -> Option<PathBuf> {
         .find(|manifest| manifest.is_file())
 }
 
-/// `node_modules/.esdev/deps` of the project that installed the package: the
-/// outermost `node_modules` above it, so every package a project has — pnpm's
-/// store included — converts into one place.
+/// Where `entry`'s package is converted: `node_modules/.esdev/deps/<install>/`
+/// of the project that installed it — the outermost `node_modules` above it,
+/// so every package a project has, pnpm's store included, converts into one
+/// place.
+///
+/// `<install>` is a hash of the project's lockfile. An install is what makes
+/// a conversion stale — a package's `.deps.mjs` names the packages it requires,
+/// by where they were installed — so one directory holds exactly one install's
+/// conversions, and [`prune_other_installs`] removes the rest when a new one
+/// starts. Pruning by package instead would be wrong: a project can hold two
+/// copies of one package, both converted, both in use.
 fn deps_dir(entry: &Path) -> Option<PathBuf> {
     let outermost = entry
         .ancestors()
@@ -567,7 +582,54 @@ fn deps_dir(entry: &Path) -> Option<PathBuf> {
         // A linked workspace package, outside any `node_modules`.
         None => nearest_manifest(entry)?.parent()?.join("node_modules"),
     };
-    Some(modules.join(".esdev").join("deps"))
+    let install = install_hash(modules.parent()?);
+    Some(modules.join(".esdev").join("deps").join(install))
+}
+
+/// The lockfile beside a project's `node_modules`, hashed: what names one
+/// install. A project with none has one install as far as this can tell.
+fn install_hash(project: &Path) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hash = Sha1::new();
+    hash.update(FORMAT.as_bytes());
+    for lockfile in [
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+        "bun.lock",
+        "bun.lockb",
+    ] {
+        if let Ok(bytes) = std::fs::read(project.join(lockfile)) {
+            hash.update(lockfile.as_bytes());
+            hash.update(&bytes);
+        }
+    }
+    hash.finalize()
+        .iter()
+        .take(6)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Removes the conversions of every install but `current`'s: they name
+/// packages where an earlier install put them, and nothing will load them
+/// again.
+fn prune_other_installs(current: &Path) {
+    let (Some(deps), Some(mine)) = (current.parent(), current.file_name()) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(deps) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_name() != mine && path.is_dir() {
+            let _ = std::fs::remove_dir_all(&path);
+        } else if path.is_file() {
+            // A conversion from before installs had directories of their own.
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 /// A file name for a specifier: `@scope/pkg/sub` → `scope__pkg__sub`.
@@ -586,9 +648,9 @@ fn slug(specifier: &str) -> String {
         .replace('_', "__")
 }
 
-/// What decides whether a conversion is still the right one: the file, its
-/// package's manifest, the project's lockfile, and this `esdev`.
-fn fingerprint(entry: &Path, deps: &Path) -> String {
+/// What decides whether a conversion is still the right one within one
+/// install: the file, its package's manifest, and this `esdev`.
+fn fingerprint(entry: &Path) -> String {
     use sha1::{Digest, Sha1};
     let mut hash = Sha1::new();
     hash.update(FORMAT.as_bytes());
@@ -605,21 +667,6 @@ fn fingerprint(entry: &Path, deps: &Path) -> String {
         && let Ok(bytes) = std::fs::read(manifest)
     {
         hash.update(&bytes);
-    }
-    // The lockfile beside the `node_modules` the conversions live in: an
-    // install that moved another package moves every name, since a package's
-    // `.deps.mjs` names the others it requires.
-    let project = deps.ancestors().nth(3);
-    for lockfile in [
-        "pnpm-lock.yaml",
-        "package-lock.json",
-        "yarn.lock",
-        "bun.lock",
-        "bun.lockb",
-    ] {
-        if let Some(bytes) = project.and_then(|dir| std::fs::read(dir.join(lockfile)).ok()) {
-            hash.update(&bytes);
-        }
     }
     hash.finalize()
         .iter()

@@ -153,8 +153,8 @@ if (import.meta.env.DEV) { /* development-only code */ }
 
 ## Plugins in a project
 
-A project can name plugins in data, so `esdev build` and `esdev start` load them
-for every target:
+A project can name plugins in data, and every command that reads its source
+loads them:
 
 ```json
 {
@@ -169,10 +169,25 @@ for every target:
 }
 ```
 
-Top-level plugins apply to every target, and to what
-[`esdev test`](/esdev/test#jsx-in-tests) runs; a target's `plugins` are added
-rather than replacing them. See [Writing a plugin](/esdev/plugins) for the hook
-contract.
+Top-level plugins are the project's; a target's `plugins` are added to them for
+that target rather than replacing them. See [Writing a plugin](/esdev/plugins)
+for the hook contract.
+
+### Where plugins run
+
+| Command | Which plugins | Which hooks |
+| --- | --- | --- |
+| `esdev build`, `esdev start` | The project's, and each target's own | All six |
+| `esdev build <entry>` | The project's | All six |
+| `esdev test`, `esdev <file>` | The project's | `transform` only |
+| `esdev test --browser` | The project's | All six: the test is bundled |
+
+A module run unbundled is not in a bundle, so there is no graph for `resolve` or
+`load` to answer, and `ctx.emit()` fails. `ctx.resolve()` finds a relative or
+absolute path, with the extensions and `index` files a bundler tries, and
+answers `null` for a package. A `transform` runs on every module
+the run loads, before the project's `jsx` compiles what is left — which is what
+a framework whose JSX compiler is a plugin needs.
 
 | Key | |
 | --- | --- |

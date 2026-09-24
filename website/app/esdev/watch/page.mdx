@@ -33,10 +33,16 @@ The watcher starts at the project root (the nearest directory with a
 `package.json`) or, without one, the entry file's directory. It walks that
 directory recursively and watches source extensions.
 
-The generic watcher excludes esdev's staging directories. It does not read
-`esdev.json` or `.gitignore`, and it does not add build assets or explicit
-permission paths. Those project-aware rules belong to [`esdev start`](/esdev/start),
-which watches its configured build inputs and allowed read paths as well.
+The generic watcher excludes esdev's own output: its staging directories and
+any `.esdev` directory, which holds converted CommonJS packages and screenshot
+diffs. It takes no rules from `esdev.json` or `.gitignore`, and it does not add
+build assets or explicit permission paths. Those project-aware rules belong to
+[`esdev start`](/esdev/start), which watches its configured build inputs and
+allowed read paths as well.
+
+Each run is a fresh `esdev <file>`, so the program reads the project's settings
+— `jsx`, `alias`, `plugins`, `tsconfig.json` paths — as they are at that run: an
+edit to `esdev.json` or `tsconfig.json` reruns it with the new ones.
 
 ## When to use `esdev start`
 

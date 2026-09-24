@@ -238,6 +238,27 @@ same as having no cache, and is exactly the regression this API exists to avoid.
 discovered: a page compiled from frontmatter depends on files it never imports,
 and only the plugin knows.
 
+## The same plugins outside a build
+
+`esdev test` and `esdev <file>` run modules unbundled, and a project's plugins
+compile them there too ([where plugins run](/esdev/build/project#where-plugins-run)).
+The bridge is the same one; what differs is who asks. A run's module loader asks
+for a module's source **synchronously** — a load has nowhere to await — while a
+hook's answer comes from the plugin isolate's thread. So the load **waits**: it
+posts the `transform`, parks its thread, and is woken by the reply.
+
+That is safe because the two never wait on each other. The plugin isolate
+answers hooks and never asks the running program for anything; `ctx.resolve()`
+there is answered by a plain file lookup on the waiting side's behalf, not by
+the program's loader. Only `transform` crosses: there is no graph for `resolve`
+or `load` to answer, and `ctx.emit()` has no output to add to, so it fails.
+
+**The cost** is one round trip per module the filter admits, paid on the
+loading thread — the same crossing a build pays, serialised with the load
+instead of overlapping other modules' work. A test file importing a hundred
+modules with a plugin that claims `.jsx` pays for its `.jsx` files and nothing
+else, because the filter is matched before anything crosses.
+
 ## Costs
 
 **A thread and a runtime.** One OS thread plus a multi-threaded tokio runtime,

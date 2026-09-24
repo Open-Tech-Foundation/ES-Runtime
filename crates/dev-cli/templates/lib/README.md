@@ -1,6 +1,6 @@
 # {{name}}
 
-A TypeScript package built with [esdev](https://esrun.opentechf.org/docs/esdev).
+A TypeScript package built with [esdev](https://esrun.opentechf.org/esdev).
 
 ```sh
 npm install

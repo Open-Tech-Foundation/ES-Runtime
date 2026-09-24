@@ -9,8 +9,9 @@ import { Callout } from "@opentf/web-docs";
 
 A plugin puts your own code inside an esdev build: it can invent a module, rewrite
 one that exists, or tell the watcher about a file the graph cannot discover.
-Project plugins are declared in `esdev.json`; programmatic builds pass them to
-[`build()`](/api/build).
+Project plugins are declared in `esdev.json` and apply to builds, tests and
+runs alike ([where plugins run](/esdev/build/project#where-plugins-run));
+programmatic builds pass them to [`build()`](/api/build).
 
 <Callout type="info" title="Read only the part you need">
   Plugins run in the build process and are esdev-only. The detailed guide is

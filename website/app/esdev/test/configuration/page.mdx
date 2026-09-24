@@ -31,24 +31,31 @@ file.**
 }
 ```
 
+| Key | Flag | |
+| --- | --- | --- |
+| `setup` | `--setup` | Modules imported before every test file |
+| `globalSetup` | `--global-setup` | Modules run once for the whole run ([Global setup](/esdev/test/global-setup)) |
+| `timeout` | `--timeout` | Milliseconds one file may take before it is stopped |
+| `jobs` | `--jobs` | How many files run at once |
+| `isolation` | `--isolation` | `process` (default) or `none` ([Sharing one runtime](/esdev/test/running#sharing-one-runtime)) |
+| `reporter` | `--reporter` | `human` (default), `json`, `junit`, `tap` or `dots` ([Reporters](/esdev/test/reporters)) |
+| `browser` | `--browser` | Run in a real browser ([Browser testing](/esdev/test/browser)) |
+| `maxConcurrency` | `--max-concurrency` | How many concurrent cases in one file run at once; 5 by default |
+| `coverage` | `--coverage` | What coverage measures and writes ([Coverage](/esdev/test/coverage)) |
+| `tags`, `strictTags` | — | The tags tests may carry ([Tags](/esdev/test/tags)) |
+
+The project's top-level settings apply to tests as to every command: [`jsx`](/esdev/build/project#jsx),
+[`alias`](/esdev/test/imports#aliases) and [`plugins`](/esdev/build/project#plugins-in-a-project).
+`--config=<path>` reads another file in place of `./esdev.json`.
+
 A setup module is imported **before** the file under test, so a global it stubs
 is in place before anything reads it — and it costs no line numbers: a failing
 assertion still names the line you wrote.
-
-`globalSetup` (or `--global-setup`) runs once for the whole run rather than
-before each file. See [Global setup](/esdev/test/global-setup).
 
 `--timeout` is enforced by the parent, which **ends** the process. The case it
 exists for is a file that wedges, and a budget the file kept for itself is one
 it never gets round to noticing. There is no default: a suite is not a place to
 guess how long a machine takes.
-
-`coverage` configures `--coverage`. See [Coverage](/esdev/test/coverage).
-`tags` and `strictTags` define the tags tests may carry. See
-[Tags](/esdev/test/tags).
-
-`--reporter` writes results for a machine: `json`, `junit`, `tap` or `dots`. See
-[Reporters](/esdev/test/reporters).
 
 <Callout type="note" title="Not yet">
   An `include` pattern for discovery: test files are found by their `*.test.*`

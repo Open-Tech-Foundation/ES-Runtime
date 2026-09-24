@@ -52,6 +52,48 @@ pub type ExternalFn = Arc<
 /// them into the result it hands back to the program that asked for the build.
 pub type LogSink = Arc<dyn Fn(String) + Send + Sync>;
 
+/// The subcommand's sink: each warning printed to stderr as the build runs,
+/// once per run — a dev loop's held bundler reports the same warning every
+/// rebuild, and a warning repeated forty times a minute is one nobody reads.
+///
+/// An unresolved import is the warning this exists for: the bundler leaves it
+/// as an import and reports success, and the bundle then fails where it is
+/// deployed. Said here, it is found where it was written.
+pub fn printed() -> LogSink {
+    Arc::new(warn)
+}
+
+/// Prints one warning, unless this run has printed it already. What a plugin
+/// says (the bundler's log) and what the bundler found (its output's warnings)
+/// arrive by two routes, and may say the same thing.
+pub fn warn(message: String) {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let first = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .map_or(true, |mut seen| seen.insert(message.clone()));
+    if first {
+        eprintln!(
+            "{} {}",
+            crate::style::Palette::stderr().bold("warning:"),
+            message.trim_end()
+        );
+    }
+}
+
+/// Prints the warnings a finished build carries — the bundler's own, which it
+/// hands back with the output rather than through its log. A macro for the
+/// reason [`failures!`] is one: the diagnostic type is rolldown's.
+#[macro_export]
+macro_rules! print_warnings {
+    ($output:expr) => {{
+        for diagnostic in &$output.warnings {
+            $crate::bundler::warn(diagnostic.to_diagnostic().convert_to_string(false));
+        }
+    }};
+}
+
 /// One thing that went wrong in a build, **with where it went wrong**.
 ///
 /// A build error used to be a string: the module id, a colon, and the summary.
@@ -247,6 +289,10 @@ pub struct Options {
     /// How the project's JSX compiles, so a bundle and a test agree about what
     /// `<div/>` means.
     pub jsx_settings: crate::transform::JsxSettings,
+    /// The tsconfig to read `paths` from, when the resolver's own search would
+    /// find none: a JavaScript project's `jsconfig.json`
+    /// ([`crate::settings::Source::tsconfig`]).
+    pub tsconfig: Option<PathBuf>,
     /// One file out per module in, rather than one chunk per entry — what a
     /// published library needs, so that a subpath in an `exports` map names a
     /// real file.
@@ -499,6 +545,10 @@ pub fn translate(
             _ => TreeshakeOptions::default(),
         },
         transform: jsx_transform(&options.jsx_settings, options.jsx.refresh),
+        tsconfig: options
+            .tsconfig
+            .clone()
+            .map(rolldown_common::TsConfig::Manual),
         experimental: options.hmr_runtime.as_ref().map(|implement| {
             rolldown_common::ExperimentalOptions {
                 dev_mode: Some(rolldown_common::DevModeOptions {

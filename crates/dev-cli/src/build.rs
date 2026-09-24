@@ -222,6 +222,9 @@ pub struct BuildConfig {
     /// How the project's JSX compiles, so a bundle means what a test of the
     /// same source meant.
     pub jsx: crate::transform::JsxSettings,
+    /// The project's `jsconfig.json`, when it has one and no `tsconfig.json`
+    /// ([`crate::settings::Source::tsconfig`]).
+    pub tsconfig: Option<PathBuf>,
 }
 
 /// A bundler failure, in the shape a person reads.
@@ -848,6 +851,7 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         };
         let options = crate::bundler::Options {
             jsx_settings: config.jsx.clone(),
+            tsconfig: config.tsconfig.clone(),
             input: inputs
                 .iter()
                 .map(|i| (i.name.clone(), i.import.clone()))
@@ -914,7 +918,11 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         // path relative to the project root, so both builds arrive at it
         // independently and neither has to tell the other. What the browser build
         // writes is the one copy.
-        let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
+        let translated = crate::bundler::translate(
+            &options,
+            options.output.clone(),
+            Some(crate::bundler::printed()),
+        )?;
         let mut bundler = rolldown::BundlerBuilder::default()
             .with_options(translated)
             .with_plugins(installed(
@@ -969,7 +977,8 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                  --format and lands none of them unless every one succeeds.",
                     format.name()
                 )
-            })?;
+            })
+            .map(|output| crate::print_warnings!(output))?;
     }
 
     // Beside the bundle that imports them, under `assets/`, which is where the
@@ -1131,6 +1140,7 @@ pub async fn bundle_browser_entries(
     hmr: Option<String>,
     jsx: crate::contract::Jsx,
     jsx_settings: crate::transform::JsxSettings,
+    tsconfig: Option<PathBuf>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>, usize), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
@@ -1148,7 +1158,7 @@ pub async fn bundle_browser_entries(
     // bundler, and reusing it would apply the first run's options to the
     // second's inputs.
     let key = format!(
-        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{define:?}|{conditions:?}|{alias:?}|{sourcemap:?}|{}",
+        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{jsx_settings:?}|{tsconfig:?}|{define:?}|{conditions:?}|{alias:?}|{sourcemap:?}|{}",
         root.display(),
         out_dir.display(),
         // A plugin list that changed is a different build, and a warm bundler
@@ -1161,6 +1171,7 @@ pub async fn bundle_browser_entries(
     );
     let options = crate::bundler::Options {
         jsx_settings,
+        tsconfig,
         input: entries
             .into_iter()
             .map(|(name, import)| (Some(name), import))
@@ -1213,12 +1224,13 @@ pub async fn bundle_browser_entries(
             .with_options(crate::bundler::translate(
                 &options,
                 options.output.clone(),
-                None,
+                Some(crate::bundler::printed()),
             )?)
             .with_plugins(browser_plugins(root, &styles, &assets, minify, plugins))
             .build()
             .map_err(reported!())?;
-        bundler.write().await.map_err(reported!())?;
+        let output = bundler.write().await.map_err(reported!())?;
+        crate::print_warnings!(output);
         (styles.take(), assets)
     };
     // Into the same directory the bundle and its chunks go: a document's build
@@ -1521,7 +1533,7 @@ async fn build_warm(
             .with_options(crate::bundler::translate(
                 options,
                 options.output.clone(),
-                None,
+                Some(crate::bundler::printed()),
             )?)
             .with_plugins(browser_plugins(root, &styles, &assets, minify, plugins))
             .build()
@@ -1544,7 +1556,8 @@ async fn build_warm(
     // A failed build must not leave the next one reading half a graph, and
     // rolldown keeps its own cache coherent across a failure — so the handle
     // stays held either way and the error is simply reported.
-    warm.bundler.write().await.map_err(reported!())?;
+    let output = warm.bundler.write().await.map_err(reported!())?;
+    crate::print_warnings!(output);
     // Drained, not read: the same collector serves every rebuild, and sheets
     // left in it would be emitted again next time. The assets collector is the
     // other way round — see [`Warm::assets`].
@@ -1853,6 +1866,7 @@ async fn build_targets(
                     .map(|host| host.jsx(&target.plugins))
                     .unwrap_or_default(),
                 settings.source.jsx.clone(),
+                settings.source.tsconfig.clone(),
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
@@ -1880,6 +1894,7 @@ async fn build_targets(
         };
         let written = build(BuildConfig {
             jsx: settings.source.jsx.clone(),
+            tsconfig: settings.source.tsconfig.clone(),
             source: target.entry.clone(),
             out,
             out_dir,
@@ -2175,6 +2190,7 @@ mod tests {
 
         let config = BuildConfig {
             jsx: crate::transform::JsxSettings::default(),
+            tsconfig: None,
             source: "index.html".to_string(),
             out: None,
             out_dir: None,

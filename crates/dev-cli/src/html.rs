@@ -501,6 +501,7 @@ pub async fn build(
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
     jsx: crate::contract::Jsx,
     jsx_settings: crate::transform::JsxSettings,
+    tsconfig: Option<std::path::PathBuf>,
 ) -> Result<String, String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
@@ -625,6 +626,7 @@ pub async fn build(
                 crate::contract::Jsx::default()
             },
             jsx_settings.clone(),
+            tsconfig.clone(),
             plugins,
         )
         .await?

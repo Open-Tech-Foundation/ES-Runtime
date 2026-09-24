@@ -109,7 +109,8 @@ and Edge are started by their driver. Either way:
   own cookies, storage and cache, the browser's equivalent of the process each
   file gets in a normal run.
 - **One bundle per file.** A file is bundled for the browser, `--setup` modules
-  first. An import that does not resolve fails that file alone, and a `runtime:`
+  first, the way the project's browser build is: its `jsx`, aliases,
+  `tsconfig.json` paths and [plugins](/esdev/build/project#where-plugins-run). An import that does not resolve fails that file alone, and a `runtime:`
   module other than `runtime:test` is refused when the file is bundled, naming
   the module.
 - **`--jobs` files at once**, each printed whole when it finishes. The browser

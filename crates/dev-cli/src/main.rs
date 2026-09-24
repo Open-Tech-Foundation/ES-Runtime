@@ -104,8 +104,8 @@ enum Command {
     /// and not yet the project's settings, which `main` applies once the
     /// whole command line has been found to make sense. The debugger endpoint
     /// travels beside it for the same reason: binding a port is something
-    /// `main` does, not the parser.
-    Run(Box<settings::Run>, Option<InspectConfig>),
+    /// `main` does, not the parser. Last, the `--config` naming the project.
+    Run(Box<settings::Run>, Option<InspectConfig>, Option<String>),
     /// Bundle a module and its dependencies, or the targets a project describes.
     Build(BuildRequest),
     /// Run a module, restarting it when its source changes.
@@ -153,6 +153,7 @@ OPTIONS:
     --inspect[=<addr>]          Serve the Chrome DevTools Protocol (127.0.0.1:9229)
     --inspect-brk[=<addr>]      ...and stop before the first statement
     --trace-permissions         Run it, then print the esrun line it needs
+    --config=<path>             Read this instead of ./esdev.json
     --install-types             Add the runtime: TypeScript definitions to this
                                 project and wire up tsconfig.json
     -h, --help                  Show this help
@@ -185,10 +186,10 @@ only what the module spec says, so ship a build rather than the source.
 esdev is for your machine. It is not a deployment target: ship the artifact and
 run it under esrun, which has no development surface to attack.
 
-    Everything esdev does:  https://esrun.opentechf.org/docs/esdev
+    Everything esdev does:  https://esrun.opentechf.org/esdev
     Capabilities:           https://esrun.opentechf.org/docs/security
-    The debugger:           https://esrun.opentechf.org/docs/esdev/debugging
-    TypeScript:             https://esrun.opentechf.org/docs/esdev/typescript
+    The debugger:           https://esrun.opentechf.org/esdev/debugging
+    TypeScript:             https://esrun.opentechf.org/esdev/typescript
 ";
 
 const TEST_USAGE: &str = "\
@@ -203,6 +204,7 @@ USAGE:
     esdev test -h, --help       Show this help
 
 OPTIONS:
+    --config=<path>             Read this instead of ./esdev.json
     --jobs=<n>                  How many files run at once. The default is the
                                 machine's parallelism, at most 8 — each file is
                                 a process holding a V8 heap
@@ -313,7 +315,7 @@ with a ReferenceError. Types come from @opentf/esrun-types
 (`esdev --install-types`). Exits non-zero if any file fails.
 
     The API:  https://esrun.opentechf.org/api/test
-    The how:  https://esrun.opentechf.org/docs/esdev/test
+    The how:  https://esrun.opentechf.org/esdev/test
 ";
 
 const PREVIEW_USAGE: &str = "\
@@ -339,7 +341,7 @@ Loopback only, like every endpoint esdev opens. A project whose output is a
 server bundle has nothing to serve: run it under esrun, which is what will run
 it in production.
 
-    Building:  https://esrun.opentechf.org/docs/esdev/build
+    Building:  https://esrun.opentechf.org/esdev/build
 ";
 
 const CHECK_USAGE: &str = "\
@@ -400,7 +402,7 @@ missing: a working esdev.json, plus its types installed. An esdev.json
 already there is refused outright; so are the other flow's flags, which name
 what to drop rather than being quietly ignored.
 
-    The templates:  https://esrun.opentechf.org/docs/esdev/create
+    The templates:  https://esrun.opentechf.org/esdev/create
 ";
 
 const CREATE_USAGE: &str = "\
@@ -441,7 +443,7 @@ that hangs. Every question has a flag:
     esdev create my-app --template=api --install=bun
     esdev create my-app --yes
 
-    The templates:  https://esrun.opentechf.org/docs/esdev/create
+    The templates:  https://esrun.opentechf.org/esdev/create
 ";
 
 const START_USAGE: &str = "\
@@ -473,7 +475,7 @@ restarts with a SIGTERM — the same graceful stop production gets. It is the
 same file production runs; nothing wraps it. A project with no server of its
 own is served from its output directory instead, with an index.html fallback.
 
-    The dev loop:  https://esrun.opentechf.org/docs/esdev/start
+    The dev loop:  https://esrun.opentechf.org/esdev/start
 ";
 
 const BUILD_USAGE: &str = "\
@@ -552,7 +554,7 @@ AN APPLICATION vs A LIBRARY
         }
 
     Targets, an HTML entry, --lib and --dts-bundle in full:
-        https://esrun.opentechf.org/docs/esdev/build
+        https://esrun.opentechf.org/esdev/build
     The plugin API (runtime:build):
         https://esrun.opentechf.org/api/build
 ";
@@ -638,6 +640,7 @@ fn parse_args() -> Result<Command, String> {
     let mut watching = false;
     let mut inspect: Option<InspectConfig> = None;
     let mut tracing_permissions = false;
+    let mut config_path: Option<String> = None;
     // The flag the previous argument was, so a bare word following it can be
     // diagnosed as an attempted value rather than silently becoming the script.
     let mut previous_flag: Option<String> = None;
@@ -669,6 +672,7 @@ fn parse_args() -> Result<Command, String> {
                 reject_value(flag, value)?;
                 tracing_permissions = true;
             }
+            "--config" => config_path = Some(require_value(flag, value)?.to_string()),
             "--inspect" | "--inspect-brk" => {
                 inspect = Some(InspectConfig {
                     address: inspect::parse_address(value)?,
@@ -709,6 +713,7 @@ fn parse_args() -> Result<Command, String> {
                         observer: permission_trace(tracing_permissions, "-e=<code>"),
                     }),
                     inspect,
+                    config_path,
                 ));
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -760,6 +765,7 @@ fn parse_args() -> Result<Command, String> {
                         observer: permission_trace(tracing_permissions, path),
                     }),
                     inspect,
+                    config_path,
                 ));
             }
         }
@@ -1186,6 +1192,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     Ok(BuildRequest::Single(Box::new(build::EntryBuild {
         config: BuildConfig {
             jsx: settings.source.jsx.clone(),
+            tsconfig: settings.source.tsconfig.clone(),
             source,
             out,
             out_dir: None,
@@ -1486,6 +1493,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
 fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> {
     let mut file = None;
     let mut filters = Vec::new();
+    let mut config_path = None;
     let mut jobs = None;
     let mut isolation = None;
     let mut watch = false;
@@ -1544,6 +1552,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 std::process::exit(0);
             }
             "--file" => file = Some(require_value(flag, value)?.to_string()),
+            "--config" => config_path = Some(require_value(flag, value)?.to_string()),
             "--jobs" => {
                 let text = require_value(flag, value)?;
                 let count = text
@@ -1884,6 +1893,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         timeout,
         reporter,
         settings_file,
+        config_path,
     })
 }
 
@@ -1954,8 +1964,12 @@ fn file_capabilities(
 
 /// `esdev <file>` and `esdev -e`: the module, read the way the project
 /// around it says source is read.
-async fn run_module(run: settings::Run, inspect: Option<&InspectConfig>) -> Result<(), String> {
-    let settings = settings::Settings::load(None)?;
+async fn run_module(
+    run: settings::Run,
+    inspect: Option<&InspectConfig>,
+    config: Option<&str>,
+) -> Result<(), String> {
+    let settings = settings::Settings::load(config)?;
     let mut config = settings.source.run_config(run).await?;
     attach_debugger(&mut config, inspect)?;
     es_runtime_cli_common::run("esdev", config).await
@@ -1994,10 +2008,24 @@ fn resolve_test(config: &mut TestConfig, settings: &settings::Settings) -> Resul
         .collect::<Result<_, _>>()?;
     config.run.source = settings.source.clone();
     let root = &settings.source.root;
-    let file = &settings.test;
+    // Every key of the file's `test` section, named: one added to the file
+    // without a rule here does not compile, rather than being read and dropped
+    // (DECISIONS D125).
+    let config::TestSettings {
+        setup,
+        global_setup,
+        timeout,
+        jobs,
+        isolation,
+        reporter,
+        browser,
+        coverage,
+        max_concurrency,
+        tags,
+        strict_tags,
+    } = &settings.test;
     if config.run.setup.is_empty() {
-        config.run.setup = file
-            .setup
+        config.run.setup = setup
             .iter()
             .map(|module| -> Result<_, String> {
                 let path = root.join(module);
@@ -2014,38 +2042,37 @@ fn resolve_test(config: &mut TestConfig, settings: &settings::Settings) -> Resul
             })
             .collect::<Result<_, _>>()?;
     }
-    config.run.tag_definitions.clone_from(&file.tags);
+    config.run.tag_definitions.clone_from(tags);
     if config.run.max_concurrency.is_none() {
-        config.run.max_concurrency = file.max_concurrency;
+        config.run.max_concurrency = *max_concurrency;
     }
-    config.run.strict_tags = file.strict_tags.unwrap_or(true);
+    config.run.strict_tags = strict_tags.unwrap_or(true);
     if config.global_setup.is_empty() {
-        config.global_setup = file
-            .global_setup
+        config.global_setup = global_setup
             .iter()
             .map(|module| module_url(root, module))
             .collect::<Result<_, _>>()?;
     }
     // The project's coverage settings, when the flag or the project turns it on.
-    if let Some(section) = &file.coverage
+    if let Some(section) = coverage
         && (config.coverage.is_some() || section.enabled)
     {
         config.coverage = Some(section.settings.clone());
     }
     if config.timeout.is_none() {
-        config.timeout = file.timeout;
+        config.timeout = *timeout;
     }
     if config.jobs.is_none() {
-        config.jobs = file.jobs;
+        config.jobs = *jobs;
     }
     if config.isolation.is_none() {
-        config.isolation = file.isolation;
+        config.isolation = *isolation;
     }
     if config.reporter.is_none() {
-        config.reporter = file.reporter.clone();
+        config.reporter.clone_from(reporter);
     }
     if config.browser.is_none() {
-        config.browser = file.browser.clone();
+        config.browser.clone_from(browser);
     }
     Ok(())
 }
@@ -2217,7 +2244,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
             browser.close().await;
         }
     };
-    let (_watcher, mut changes) = match test::change_watcher(&root) {
+    let (_watcher, mut changes) = match test::change_watcher(&root, &config.project_file(&root)) {
         Ok(watching) => watching,
         Err(err) => {
             close(open).await;
@@ -2263,17 +2290,70 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         }
         eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
         tokio::select! {
-            change = watch::coalesce(&mut changes) => {
-                if change.is_none() {
-                    break;
+            change = watch::coalesce(&mut changes) => match change {
+                None => break,
+                Some(burst) if burst.contains(&test::Change::Project) => {
+                    close(open).await;
+                    let Ok(exe) = std::env::current_exe() else {
+                        eprintln!("error: cannot find the esdev binary");
+                        return ExitCode::FAILURE;
+                    };
+                    return restart_watch(&exe, config).await;
                 }
-            }
+                Some(_) => {}
+            },
             () = watch::stopped() => break,
         }
         println!();
     }
     close(open).await;
     ExitCode::SUCCESS
+}
+
+/// Starts a watching run again, from scratch, after its project file changed:
+/// every setting was resolved from that file, so the session that read the old
+/// one ends and a new one reads the new one — as Vitest restarts on a change to
+/// its config.
+async fn restart_watch(exe: &std::path::Path, config: &TestConfig) -> ExitCode {
+    let paint = style::Palette::stderr();
+    eprintln!(
+        "\n{}",
+        paint.dim(format!(
+            "{} changed — restarting",
+            config.config_path.as_deref().unwrap_or(config::FILE_NAME)
+        ))
+    );
+    relaunch(exe).await
+}
+
+/// Runs `esdev` again with the same arguments, replacing this process: a
+/// session restarted ten times is one process, not ten waiting on each other.
+#[cfg(unix)]
+async fn relaunch(exe: &std::path::Path) -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    eprintln!("error: cannot restart esdev: {err}");
+    ExitCode::FAILURE
+}
+
+/// Where a process cannot replace itself, the new session runs as a child and
+/// this one waits for it.
+#[cfg(not(unix))]
+async fn relaunch(exe: &std::path::Path) -> ExitCode {
+    let status = tokio::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .status()
+        .await;
+    match status {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(err) => {
+            eprintln!("error: cannot restart esdev: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// A browser started for a run, and the runner driving it.
@@ -2362,7 +2442,12 @@ async fn run_tests(config: TestConfig) -> ExitCode {
     } else {
         true
     };
+    let parent = config.settings_file.is_none();
     let code = run_tests_inner(config).await;
+    // The settings this run wrote for its children, which have all ended.
+    if parent {
+        test::remove_settings();
+    }
     if typechecked { code } else { ExitCode::FAILURE }
 }
 
@@ -2550,9 +2635,10 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
                 }
             }
         }
-        let code = match test::watch(&root, &config, &exe).await {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
+        let ended = test::watch(&root, &config, &exe).await;
+        let code = match ended {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(ref err) => {
                 eprintln!("error: {err}");
                 ExitCode::FAILURE
             }
@@ -2560,7 +2646,13 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
         if let Some(dir) = &config.coverage_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
-        return global_setup::stop_into(setup, code).await;
+        let code = global_setup::stop_into(setup, code).await;
+        // After the teardown, so the new session's global setup is the only
+        // one running.
+        if matches!(ended, Ok(test::WatchEnd::Restart)) {
+            return restart_watch(&exe, &config).await;
+        }
+        return code;
     }
 
     let (files, discovered) = match select_test_files(&root, &config, true) {
@@ -2873,7 +2965,7 @@ fn select_test_files(
                 Err(_) => Some(root.join(module)).filter(|path| path.exists()),
             })
             .collect();
-        files = related::affected(root, &files, &setup, &changed)?;
+        files = related::affected(root, &config.run.source, &files, &setup, &changed)?;
         if announce {
             let label = match by {
                 test::AffectedBy::Changed(_) => "changed",
@@ -3057,7 +3149,9 @@ async fn main() -> ExitCode {
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.
     es_runtime_common::telemetry::init_tracing();
     let result = match parse_args() {
-        Ok(Command::Run(run, inspect)) => run_module(*run, inspect.as_ref()).await,
+        Ok(Command::Run(run, inspect, config)) => {
+            run_module(*run, inspect.as_ref(), config.as_deref()).await
+        }
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(*config).await,
         Ok(Command::Build(request)) => build::run(request).await,

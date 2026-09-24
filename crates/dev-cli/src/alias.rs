@@ -37,11 +37,23 @@ pub struct Aliases {
 }
 
 impl Aliases {
-    pub fn new(project: Vec<(String, String)>) -> Aliases {
+    /// `tsconfig` names the one file to read, when looking would find none
+    /// ([`crate::settings::Source::tsconfig`]); `None` finds the tsconfig that
+    /// owns each importing file, as the build does.
+    pub fn new(project: Vec<(String, String)>, tsconfig: Option<PathBuf>) -> Aliases {
+        let discovery = match tsconfig {
+            Some(config_file) => {
+                oxc_resolver::TsconfigDiscovery::Manual(oxc_resolver::TsconfigOptions {
+                    config_file,
+                    references: oxc_resolver::TsconfigReferences::Auto,
+                })
+            }
+            None => oxc_resolver::TsconfigDiscovery::Auto,
+        };
         Aliases {
             project,
             resolver: oxc_resolver::Resolver::new(oxc_resolver::ResolveOptions {
-                tsconfig: Some(oxc_resolver::TsconfigDiscovery::Auto),
+                tsconfig: Some(discovery),
                 ..oxc_resolver::ResolveOptions::default()
             }),
         }
@@ -185,11 +197,14 @@ mod tests {
     #[test]
     fn a_project_alias_is_a_whole_name_or_a_path_prefix() {
         let dir = project(&[("src/ui/button.ts", ""), ("src/lib/index.ts", "")]);
-        let aliases = Aliases::new(vec![
-            ("@/ui".to_string(), dir.join("src/ui").display().to_string()),
-            ("@".to_string(), dir.join("src").display().to_string()),
-            ("react".to_string(), "preact/compat".to_string()),
-        ]);
+        let aliases = Aliases::new(
+            vec![
+                ("@/ui".to_string(), dir.join("src/ui").display().to_string()),
+                ("@".to_string(), dir.join("src").display().to_string()),
+                ("react".to_string(), "preact/compat".to_string()),
+            ],
+            None,
+        );
         let from = url_of(&dir.join("src/app.ts"));
         assert_eq!(
             aliases.alias("@/ui/button", &from),
@@ -213,10 +228,13 @@ mod tests {
     #[test]
     fn a_project_alias_may_be_a_hash_name() {
         let dir = project(&[("src/config.ts", "")]);
-        let aliases = Aliases::new(vec![(
-            "#config".to_string(),
-            dir.join("src/config.ts").display().to_string(),
-        )]);
+        let aliases = Aliases::new(
+            vec![(
+                "#config".to_string(),
+                dir.join("src/config.ts").display().to_string(),
+            )],
+            None,
+        );
         let from = url_of(&dir.join("src/app.ts"));
         assert_eq!(
             aliases.alias("#config", &from),
@@ -240,7 +258,7 @@ mod tests {
             ("src/db/index.ts", ""),
             ("src/app.ts", ""),
         ]);
-        let aliases = Aliases::new(Vec::new());
+        let aliases = Aliases::new(Vec::new(), None);
         let from = url_of(&dir.join("src/app.ts"));
         assert_eq!(
             aliases.alias("@/lib/two", &from),
@@ -272,7 +290,7 @@ mod tests {
             ("src/x.ts", ""),
             ("node_modules/dep/index.js", ""),
         ]);
-        let aliases = Aliases::new(Vec::new());
+        let aliases = Aliases::new(Vec::new(), None);
         let from = url_of(&dir.join("node_modules/dep/index.js"));
         assert_eq!(aliases.alias("@/x", &from), None);
         std::fs::remove_dir_all(&dir).ok();

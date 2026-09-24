@@ -528,6 +528,10 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
 
     Ok(Options {
         bundler: crate::bundler::Options {
+            // A program's build is described by the program: the resolver's
+            // own search for each file's tsconfig, as `esdev build` makes when
+            // a project has no `jsconfig.json` to name.
+            tsconfig: None,
             cwd: Some(cwd),
             input,
             external,

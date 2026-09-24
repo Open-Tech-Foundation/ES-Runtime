@@ -1,6 +1,6 @@
 ---
 title: Imports
-description: How esdev resolves imports in test files, and how that differs from esrun.
+description: How esdev resolves imports when it runs and tests source — extensions, aliases, tsconfig paths and CommonJS packages — and how that differs from esrun.
 ---
 
 # Imports
@@ -29,19 +29,24 @@ alias, and both apply, in this order:
 | --- | --- |
 | **`esdev.json` `alias`** | `{ "alias": { "@": "./src" } }` — the longest name wins; a path or a package name. See [Aliases](/esdev/build/project#aliases) |
 | **`tsconfig.json` `paths`** | `"paths": { "~/*": ["src/*"] }`, with `baseUrl` and `extends`, from the tsconfig that owns the importing file. A mapping is used only when it names a file |
+| **`jsconfig.json` `paths`** | A JavaScript project's, at the project root, read when there is no `tsconfig.json` beside it — by the build too |
 
 `mock.module("@/db", …)` resolves through the same aliases, so it replaces the
 module an `import` reaches. A dependency in `node_modules` is not under the
 project's `tsconfig.json`, but `esdev.json`'s `alias` applies to it, as in a
 build: `"react": "preact/compat"` is for the dependencies too.
 
-`esdev <file>` resolves the same way.
+`esdev <file>` resolves the same way, and so do
+[`--changed` and `--related`](/esdev/test/running), so a change to `src/db.ts`
+selects the test that imports it as `@/db`.
 
 ## CommonJS packages
 
 `esdev` runs a CommonJS package without a build step. The first run that
 imports one converts it to an ES module under `node_modules/.esdev/deps/`;
-later runs reuse the result until the package or the lockfile changes.
+later runs reuse the result until the package or the lockfile changes. A new
+install's first conversion removes the previous install's, so the directory
+holds one install's worth.
 
 ```js
 import IntlMessageFormat, { IntlMessageFormat as Named } from "intl-messageformat";
