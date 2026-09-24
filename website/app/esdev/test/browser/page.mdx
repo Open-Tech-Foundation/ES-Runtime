@@ -13,6 +13,7 @@ runs the **same file** in a real browser page:
 ```sh
 esdev test --browser                  # the first browser this machine can drive
 esdev test --browser=firefox          # this one, or fail
+esdev test --browser=firefox,chrome   # every file in each
 esdev test --browser --file=src/button.test.ts
 esdev test --browser --watch          # run again on every change, in the same browser
 esdev test --browser --headed         # show the window, to watch a test run
@@ -64,6 +65,39 @@ The key in `esdev.json` works the same way, and the flag wins over it:
 ```json
 { "test": { "browser": "auto" } }
 ```
+
+## Several browsers
+
+Name more than one, and every file runs in each, one browser after the other:
+
+```sh
+esdev test --browser=firefox,chrome,edge
+```
+
+```json
+{ "test": { "browser": ["firefox", "chrome", "edge"] } }
+```
+
+Each file's report names its browser, `src/button.test.ts [firefox]`, and the
+tally counts every file in every browser. With `--reporter=json`, each file
+line carries `"browser"`, and JUnit names each suite with the browser. A
+browser in the list that cannot be driven fails the run, after the others have
+run, and the run ends by saying how many could not. `auto` cannot be one of
+several.
+
+Snapshots are shared: every browser checks the same stored values.
+
+## Files a page loads
+
+A stylesheet imported by a test, or by what it imports, is in the page. The
+files its `url()`s name, such as images and fonts, are served beside it, as a
+build copies them.
+
+The project's `public/` directory is served at the root, as a build puts it:
+`fetch("/data/users.json")` in a test reads `public/data/users.json`. Refer to
+these files by that rooted path. A path relative to a module, such as
+`new URL("./logo.png", import.meta.url)`, is not rewritten when the file is
+bundled.
 
 ## How a run works
 

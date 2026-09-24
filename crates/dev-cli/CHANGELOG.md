@@ -104,6 +104,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Several browsers in one run**: `--browser=firefox,chrome` or a list in
+  `test.browser` runs every file in each. Each file's report names its
+  browser, and `--reporter=json` adds `"browser"` to its line (DECISIONS D119).
+- **Browser runs serve a test's assets**: the files a stylesheet's `url()`
+  names, and the project's `public/` at the root, binary files included.
 - **Watch-mode keys** for `esdev test --watch`, as Vitest has them: `a` or
   Enter reruns everything, `r` reruns, `f` reruns the files that failed, `u`
   updates snapshots, `p` and `t` filter by filename and test name, `h` shows

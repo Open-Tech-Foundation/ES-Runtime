@@ -1391,6 +1391,7 @@ fn result(cases: &[Case], file: &str, name: &str) -> crate::report::FileResult {
         }
     };
     crate::report::FileResult {
+        browser: None,
         file: file.to_string(),
         name: name.to_string(),
         cases: cases

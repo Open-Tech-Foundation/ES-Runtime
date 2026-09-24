@@ -55,6 +55,9 @@ pub struct FileResult {
     /// The path as a report names it, inside the project.
     pub name: String,
     pub cases: Vec<CaseResult>,
+    /// The browser it ran in, when a run used several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
 }
 
 impl FileResult {
@@ -82,6 +85,7 @@ impl FileResult {
     /// shows a file that failed as one that simply had no tests.
     pub fn broken(file: String, name: String, why: &str) -> FileResult {
         FileResult {
+            browser: None,
             file,
             name,
             cases: vec![CaseResult {
@@ -134,9 +138,14 @@ pub fn json_file(result: &FileResult) -> String {
     if result.cases.iter().any(|case| case.status == "listed") {
         return out;
     }
+    let browser = result
+        .browser
+        .as_deref()
+        .map(|browser| format!(r#","browser":{}"#, string(browser)))
+        .unwrap_or_default();
     let _ = writeln!(
         out,
-        r#"{{"type":"file","file":{},"passed":{},"failed":{},"skipped":{}}}"#,
+        r#"{{"type":"file","file":{}{browser},"passed":{},"failed":{},"skipped":{}}}"#,
         string(&result.file),
         result.count("passed"),
         result.failed(),
@@ -310,10 +319,25 @@ mod tests {
     }
 
     #[test]
+    fn json_names_the_browser_of_a_run_that_used_several() {
+        let result = FileResult {
+            browser: Some("firefox".to_string()),
+            file: "a.test.ts".to_string(),
+            name: "a.test.ts [firefox]".to_string(),
+            cases: vec![case("t", "passed", "", 1.0)],
+        };
+        assert_eq!(
+            json_file(&result),
+            "{\"type\":\"file\",\"file\":\"a.test.ts\",\"browser\":\"firefox\",\"passed\":1,\"failed\":0,\"skipped\":0}\n"
+        );
+    }
+
+    #[test]
     fn json_reports_each_benchmark_before_its_file() {
         let mut measured = case("parse", "passed", "", 12.0);
         measured.benchmarks = vec![serde_json::json!({ "name": "fast", "samples": 10 })];
         let result = FileResult {
+            browser: None,
             file: "a.bench.ts".to_string(),
             name: "a.bench.ts".to_string(),
             cases: vec![measured],
@@ -331,6 +355,7 @@ mod tests {
     fn run() -> Vec<FileResult> {
         vec![
             FileResult {
+                browser: None,
                 file: "/p/src/a.test.ts".to_string(),
                 name: "src/a.test.ts".to_string(),
                 cases: vec![
@@ -345,6 +370,7 @@ mod tests {
                 ],
             },
             FileResult {
+                browser: None,
                 file: "/p/b.test.js".to_string(),
                 name: "b.test.js".to_string(),
                 cases: vec![case("b # one", "passed", "", 0.5)],

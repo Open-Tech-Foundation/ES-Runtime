@@ -16490,3 +16490,160 @@ test("compare", async ({ bench }) => {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// In a page, a stylesheet's `url()` loads the file it names, and the
+/// project's `public/` is served at the root, as a build places both.
+#[test]
+fn test_browser_serves_stylesheet_assets_and_public() {
+    let browser = browser_flag();
+    let dir = build_dir("t_browser_assets");
+    std::fs::create_dir_all(dir.join("src/img")).unwrap();
+    std::fs::create_dir_all(dir.join("public/icons")).unwrap();
+    // A PNG, binary past its signature: served as text, it would not arrive whole.
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend((0u8..=255).collect::<Vec<_>>());
+    std::fs::write(dir.join("src/img/dot.png"), &png).unwrap();
+    std::fs::write(
+        dir.join("public/icons/logo.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+    )
+    .unwrap();
+    write_in(
+        &dir,
+        "src/box.css",
+        ".box { background-image: url(\"./img/dot.png\"); }\n",
+    );
+    write_in(
+        &dir,
+        "src/assets.test.ts",
+        r#"import { expect, test } from "runtime:test";
+import "./box.css";
+test("a stylesheet's url() is served", async () => {
+  const box = document.createElement("div");
+  box.className = "box";
+  document.body.append(box);
+  const url = getComputedStyle(box).backgroundImage.slice(5, -2);
+  const res = await fetch(url);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("image/png");
+  expect((await res.arrayBuffer()).byteLength).toBe(264);
+});
+test("public/ is at the root", async () => {
+  const res = await fetch("/icons/logo.svg");
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("image/svg+xml");
+  expect((await fetch("/icons/missing.svg")).status).toBe(404);
+  expect((await fetch("/../Cargo.toml")).status).toBe(404);
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", &browser, "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser");
+    let (text, err) = (stdout(&out), stderr(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+    if no_browser(&err) {
+        return;
+    }
+    assert!(out.status.success(), "{text}{err}");
+    assert!(text.contains("2 passed, 0 failed"), "{text}");
+}
+
+/// Several browsers, each named: one that cannot be driven fails the run and
+/// says so last, and the others are still tried.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_browser_several_that_cannot_be_driven_fail_the_run() {
+    let (dir, path) = browser_machine(
+        "t_browser_several_none",
+        &[("google-chrome", "Google Chrome 120.0")],
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--browser=chrome,edge"])
+        .env("PATH", &path)
+        .output()
+        .expect("spawn esdev test --browser=chrome,edge");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("cannot run the tests in chrome"), "{err}");
+    assert!(err.contains("cannot run the tests in edge"), "{err}");
+    assert!(
+        err.trim_end()
+            .ends_with("2 of 2 browsers could not run the tests"),
+        "{err}"
+    );
+
+    for (flag, says) in [
+        ("--browser=chrome,chrome", "chrome is named twice"),
+        ("--browser=auto,firefox", "cannot be one of several"),
+    ] {
+        let out = esdev_in(&dir)
+            .args(["test", flag])
+            .output()
+            .expect("spawn esdev test");
+        assert!(!out.status.success());
+        assert!(stderr(&out).contains(says), "{flag}: {}", stderr(&out));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every file in each of two real browsers, into one report: each file's
+/// report names its browser, and the tally counts every run. Where
+/// `ESDEV_TEST_BROWSER` names a browser, as in CI, whose machines have all
+/// three; elsewhere this machine may not have two.
+#[test]
+fn test_browser_runs_every_file_in_each_of_several() {
+    let Ok(named) = std::env::var("ESDEV_TEST_BROWSER") else {
+        eprintln!("ESDEV_TEST_BROWSER is not set; the two-browser run did not happen");
+        return;
+    };
+    let other = if named == "firefox" {
+        "chrome"
+    } else {
+        "firefox"
+    };
+    let dir = build_dir("t_browser_several");
+    write_in(
+        &dir,
+        "a.test.ts",
+        "import { expect, test } from \"runtime:test\";\n\
+         test(\"agent\", () => expect(navigator.userAgent.length).toBeGreaterThan(0));\n",
+    );
+    let out = esdev_in(&dir)
+        .args([
+            "test",
+            &format!("--browser={named},{other}"),
+            "--timeout=60000",
+        ])
+        .output()
+        .expect("spawn esdev test --browser=a,b");
+    let (text, err) = (stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}{err}");
+    assert!(text.contains(&format!("a.test.ts [{named}]")), "{text}");
+    assert!(text.contains(&format!("a.test.ts [{other}]")), "{text}");
+    assert!(text.contains("2 files passed"), "{text}");
+
+    let out = esdev_in(&dir)
+        .args([
+            "test",
+            &format!("--browser={named},{other}"),
+            "--reporter=json",
+            "--timeout=60000",
+        ])
+        .output()
+        .expect("spawn esdev test --reporter=json");
+    let text = stdout(&out);
+    for browser in [&named[..], other] {
+        assert!(
+            text.contains(&format!(r#""browser":"{browser}""#)),
+            "{text}"
+        );
+    }
+    assert_eq!(text.matches(r#""type":"summary""#).count(), 1, "{text}");
+    assert!(
+        text.contains(r#"{"type":"summary","files":2,"failed":0}"#),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

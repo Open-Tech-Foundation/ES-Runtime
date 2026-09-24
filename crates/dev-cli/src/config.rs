@@ -792,6 +792,11 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
             crate::browser::Choice::parse(name)
                 .map_err(|err| format!("{file}: `test`'s `browser`: {err}"))?,
         ),
+        // Several: every file runs in each.
+        Some(Value::Array(names)) if names.iter().all(Value::is_string) => Some(
+            crate::browser::Choice::list(names.iter().filter_map(Value::as_str))
+                .map_err(|err| format!("{file}: `test`'s `browser`: {err}"))?,
+        ),
         Some(other) => {
             return Err(format!(
                 "{file}: `test`'s `browser` is {}, and it names the browser the test \
@@ -2649,6 +2654,17 @@ mod tests {
         assert_eq!(auto.test.browser, Some(Choice::Auto));
         let firefox = read(r#"{ "test": { "browser": "firefox" } }"#).expect("read");
         assert_eq!(firefox.test.browser, Some(Choice::Named(Browser::Firefox)));
+        let several = read(r#"{ "test": { "browser": ["firefox", "edge"] } }"#).expect("read");
+        assert_eq!(
+            several.test.browser,
+            Some(Choice::Several(vec![Browser::Firefox, Browser::Edge]))
+        );
+        let listed_auto =
+            read(r#"{ "test": { "browser": ["auto", "edge"] } }"#).expect_err("refused");
+        assert!(
+            listed_auto.contains("cannot be one of several"),
+            "{listed_auto}"
+        );
 
         let unknown = read(r#"{ "test": { "browser": "opera" } }"#).expect_err("refused");
         assert!(unknown.contains("`test`'s `browser`"), "{unknown}");

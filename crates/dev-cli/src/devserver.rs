@@ -298,7 +298,7 @@ fn safe_path(path: &str) -> Option<PathBuf> {
 /// JavaScript, documents, stylesheets and whatever the author put in `public`.
 /// The default is `application/octet-stream`, which a browser downloads rather
 /// than guesses at — the safe direction to be wrong in.
-fn content_type(path: &Path) -> &'static str {
+pub(crate) fn content_type(path: &Path) -> &'static str {
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -326,7 +326,7 @@ fn content_type(path: &Path) -> &'static str {
 }
 
 /// [`respond`] for a body that is not text.
-async fn respond_bytes(
+pub(crate) async fn respond_bytes(
     stream: &mut TcpStream,
     content_type: &str,
     body: &[u8],

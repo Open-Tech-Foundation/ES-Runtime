@@ -140,18 +140,60 @@ impl fmt::Display for Browser {
 }
 
 /// What `--browser` or `test.browser` asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Choice {
     /// The first available, in [`ORDER`].
     Auto,
     /// This one, or a failure.
     Named(Browser),
+    /// Each of these, one after another, every file in each; any that cannot
+    /// be driven is a failure.
+    Several(Vec<Browser>),
 }
 
 impl Choice {
-    /// Parses a flag value or `esdev.json` string. The error lists what is
-    /// accepted; the caller says where the bad value came from.
+    /// Parses a flag value or `esdev.json` string: `auto`, a browser, or
+    /// browsers separated by commas. The error lists what is accepted; the
+    /// caller says where the bad value came from.
     pub fn parse(text: &str) -> Result<Choice, String> {
+        if text.contains(',') {
+            return Choice::list(text.split(',').map(str::trim));
+        }
+        Choice::one(text)
+    }
+
+    /// Several browsers by name. `auto` is not one: a list names what it runs in.
+    pub fn list<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Choice, String> {
+        let mut browsers = Vec::new();
+        for name in names {
+            match Choice::one(name)? {
+                Choice::Named(browser) if !browsers.contains(&browser) => browsers.push(browser),
+                Choice::Named(browser) => return Err(format!("{browser} is named twice.")),
+                _ => {
+                    return Err(
+                        "`auto` picks one browser, so it cannot be one of several.\n\n\
+                         Name each browser to run in: firefox,chrome."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        match browsers.len() {
+            0 => Err("no browser is named.".to_string()),
+            1 => Ok(Choice::Named(browsers[0])),
+            _ => Ok(Choice::Several(browsers)),
+        }
+    }
+
+    /// Each run this choice asks for: one, or one per browser named.
+    pub fn each(&self) -> Vec<Choice> {
+        match self {
+            Choice::Several(browsers) => browsers.iter().copied().map(Choice::Named).collect(),
+            one => vec![one.clone()],
+        }
+    }
+
+    fn one(text: &str) -> Result<Choice, String> {
         if text == "auto" {
             return Ok(Choice::Auto);
         }
@@ -351,8 +393,9 @@ pub fn find(browser: Browser, probe: &dyn Probe) -> Result<Launch, String> {
 }
 
 /// Resolves a choice to the browser the run will use.
-pub fn select(choice: Choice, probe: &dyn Probe) -> Result<Selected, String> {
-    match choice {
+pub fn select(choice: &Choice, probe: &dyn Probe) -> Result<Selected, String> {
+    match *choice {
+        Choice::Several(_) => Err("several browsers are selected one at a time".to_string()),
         Choice::Named(browser) => find(browser, probe)
             .map(|launch| Selected {
                 launch,
@@ -453,12 +496,50 @@ mod tests {
     }
 
     #[test]
+    fn several_browsers_are_a_list_of_names() {
+        assert_eq!(
+            Choice::parse("firefox,chrome"),
+            Ok(Choice::Several(vec![Browser::Firefox, Browser::Chrome]))
+        );
+        assert_eq!(
+            Choice::parse("firefox, "),
+            Err("`` is not a browser.\n\n  \
+             auto      — the first available of chrome, chromium, firefox, edge, safari\n  \
+             chrome    — Google Chrome; needs the matching chromedriver on PATH\n  \
+             chromium  — needs the matching chromedriver on PATH\n  \
+             firefox   — serves WebDriver BiDi itself\n  \
+             edge      — needs the matching msedgedriver on PATH\n  \
+             safari    — not supported yet"
+                .to_string())
+        );
+        assert_eq!(Choice::list(["edge"]), Ok(Choice::Named(Browser::Edge)));
+        assert!(
+            Choice::parse("firefox,auto")
+                .unwrap_err()
+                .contains("cannot be one of several")
+        );
+        assert!(
+            Choice::parse("firefox,firefox")
+                .unwrap_err()
+                .contains("named twice")
+        );
+        assert_eq!(
+            Choice::parse("edge,firefox").unwrap().each(),
+            [
+                Choice::Named(Browser::Edge),
+                Choice::Named(Browser::Firefox)
+            ]
+        );
+        assert_eq!(Choice::Auto.each(), [Choice::Auto]);
+    }
+
+    #[test]
     fn auto_prefers_chrome_when_it_can_be_driven() {
         let machine = Machine::default()
             .on_path("google-chrome", "/usr/bin/google-chrome")
             .on_path("chromedriver", "/usr/bin/chromedriver")
             .on_path("firefox", "/usr/bin/firefox");
-        let selected = select(Choice::Auto, &machine).unwrap();
+        let selected = select(&Choice::Auto, &machine).unwrap();
         assert_eq!(
             selected.launch,
             Launch {
@@ -476,7 +557,7 @@ mod tests {
         let machine = Machine::default()
             .on_path("google-chrome", "/usr/bin/google-chrome")
             .on_path("firefox", "/usr/bin/firefox");
-        let selected = select(Choice::Auto, &machine).unwrap();
+        let selected = select(&Choice::Auto, &machine).unwrap();
         assert_eq!(selected.launch.browser, Browser::Firefox);
         // Firefox serves BiDi itself.
         assert_eq!(selected.launch.driver, None);
@@ -499,7 +580,7 @@ mod tests {
         let machine = Machine::default()
             .on_path("microsoft-edge", "/usr/bin/microsoft-edge")
             .on_path("msedgedriver", "/usr/bin/msedgedriver");
-        let selected = select(Choice::Auto, &machine).unwrap();
+        let selected = select(&Choice::Auto, &machine).unwrap();
         assert_eq!(selected.launch.browser, Browser::Edge);
         assert_eq!(
             selected.launch.driver,
@@ -525,7 +606,7 @@ mod tests {
         );
         let launch = find(Browser::Chromium, &machine).unwrap();
         assert_eq!(launch.binary, PathBuf::from("/usr/bin/chromium"));
-        let selected = select(Choice::Auto, &machine).unwrap();
+        let selected = select(&Choice::Auto, &machine).unwrap();
         assert_eq!(selected.launch.browser, Browser::Chromium);
         assert_eq!(selected.skipped[0].0, Browser::Chrome);
     }
@@ -552,7 +633,7 @@ mod tests {
 
     #[test]
     fn auto_passes_over_a_browser_its_driver_does_not_match() {
-        let selected = select(Choice::Auto, &chrome_behind_chromium()).unwrap();
+        let selected = select(&Choice::Auto, &chrome_behind_chromium()).unwrap();
         assert_eq!(selected.launch.browser, Browser::Chromium);
         assert_eq!(selected.launch.version, Some(131));
         let described = selected.describe();
@@ -572,7 +653,7 @@ mod tests {
 
     #[test]
     fn a_named_browser_its_driver_does_not_match_is_refused() {
-        let err = select(Choice::Named(Browser::Chrome), &chrome_behind_chromium()).unwrap_err();
+        let err = select(&Choice::Named(Browser::Chrome), &chrome_behind_chromium()).unwrap_err();
         assert!(err.contains("cannot run the tests in chrome"), "{err}");
         assert!(err.contains("chromedriver 131"), "{err}");
         assert!(err.contains("does not match chrome 120"), "{err}");
@@ -657,7 +738,7 @@ mod tests {
 
     #[test]
     fn safari_is_never_available_yet() {
-        let err = select(Choice::Named(Browser::Safari), &Machine::default()).unwrap_err();
+        let err = select(&Choice::Named(Browser::Safari), &Machine::default()).unwrap_err();
         assert!(err.contains("cannot run the tests in safari"), "{err}");
         assert!(err.contains("not ready"), "{err}");
     }
@@ -667,14 +748,14 @@ mod tests {
         let machine = Machine::default()
             .on_path("google-chrome", "/usr/bin/google-chrome")
             .on_path("firefox", "/usr/bin/firefox");
-        let err = select(Choice::Named(Browser::Chrome), &machine).unwrap_err();
+        let err = select(&Choice::Named(Browser::Chrome), &machine).unwrap_err();
         assert!(err.contains("cannot run the tests in chrome"), "{err}");
         assert!(err.contains("chromedriver not found on PATH"), "{err}");
     }
 
     #[test]
     fn nothing_available_names_every_reason_and_downloads_nothing() {
-        let err = select(Choice::Auto, &Machine::default()).unwrap_err();
+        let err = select(&Choice::Auto, &Machine::default()).unwrap_err();
         for browser in ORDER {
             assert!(err.contains(&format!("\n  {browser}: ")), "{err}");
         }

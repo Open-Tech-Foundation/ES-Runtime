@@ -210,7 +210,9 @@ OPTIONS:
                                 BiDi: auto (the default) takes the first of
                                 chrome, chromium, firefox, edge that can be
                                 driven; all but firefox need their matching
-                                driver on PATH. Nothing is downloaded
+                                driver on PATH. Nothing is downloaded.
+                                --browser=firefox,chrome runs every file in
+                                each, one browser after the other
     --headed                    Show the browser window instead of running it
                                 headless, to watch a test run
     -t, --test-name-pattern=<re>
@@ -2029,7 +2031,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
     }
-    let Some(choice) = config.browser else {
+    let Some(choice) = config.browser.clone() else {
         return ExitCode::FAILURE;
     };
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -2055,29 +2057,8 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let selected = match browser::select(choice, &browser::System) {
-        Ok(selected) => selected,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    eprintln!("{}", selected.describe());
-    let session = match bidi::Session::start(&selected.launch, !config.headed).await {
-        Ok(session) => session,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let runner = match browser_run::Runner::new(&session).await {
-        Ok(runner) => runner,
-        Err(err) => {
-            session.end().await;
-            eprintln!("error: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let choices = choice.each();
+    let several = choices.len() > 1;
     // The run's closing line, for the terminal a person reads; a machine
     // reporter wrote its own ending.
     let report = |total: usize, failed: usize| {
@@ -2090,48 +2071,90 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     };
 
     if !config.watch {
-        // Stopped from outside — ^C, or a CI job cancelled — the browser is
-        // still closed: it is a separate process, and would otherwise outlive
-        // the run.
-        let ran = tokio::select! {
-            ran = runner.run(&root, &files, config) => ran,
-            () = watch::stopped() => {
-                drop(runner);
-                session.end().await;
-                return ExitCode::from(130);
-            }
-        };
-        drop(runner);
-        session.end().await;
-        return match ran {
-            Ok(failed) => {
-                report(files.len(), failed);
-                if failed == 0 {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::FAILURE
+        // Each browser in turn, every file in each, into one report. A browser
+        // that cannot be driven fails the run, and the others still run.
+        let mut reporter = test::Reporter::new(config);
+        let (mut total, mut failed, mut broken) = (0, 0, 0usize);
+        for choice in &choices {
+            let open = match OpenBrowser::start(choice, config, several).await {
+                Ok(open) => open,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    broken += 1;
+                    continue;
+                }
+            };
+            // Stopped from outside — ^C, or a CI job cancelled — the browser
+            // is still closed: it is a separate process, and would otherwise
+            // outlive the run.
+            let ran = tokio::select! {
+                ran = open.runner.run(&root, &files, config, open.label.as_deref(), &mut reporter) => ran,
+                () = watch::stopped() => {
+                    open.close().await;
+                    return ExitCode::from(130);
+                }
+            };
+            open.close().await;
+            match ran {
+                Ok(failed_here) => {
+                    total += files.len();
+                    failed += failed_here;
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    broken += 1;
                 }
             }
-            Err(err) => {
-                eprintln!("error: {err}");
-                ExitCode::FAILURE
-            }
+        }
+        if total > 0 {
+            reporter.finish(total, failed);
+            report(total, failed);
+        }
+        // Said last, where the tally is read: a run that passed in one browser
+        // and never ran in another has not passed.
+        if broken > 0 && several {
+            eprintln!(
+                "{broken} of {} browsers could not run the tests",
+                choices.len()
+            );
+        }
+        return if failed == 0 && broken == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
         };
     }
 
-    // `--watch`: the same browser for every pass, and the files discovered
+    // `--watch`: the same browsers for every pass, and the files discovered
     // afresh each time, so a test written after the watch began is found.
+    let mut open = Vec::new();
+    for choice in &choices {
+        match OpenBrowser::start(choice, config, several).await {
+            Ok(browser) => open.push(browser),
+            Err(err) => {
+                for browser in open {
+                    browser.close().await;
+                }
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let close = |open: Vec<OpenBrowser>| async move {
+        for browser in open {
+            browser.close().await;
+        }
+    };
     let (_watcher, mut changes) = match test::change_watcher(&root) {
         Ok(watching) => watching,
         Err(err) => {
-            drop(runner);
-            session.end().await;
+            close(open).await;
             eprintln!("error: {err}");
             return ExitCode::FAILURE;
         }
     };
     let paint = style::Palette::stderr();
-    loop {
+    'watching: loop {
         let (files, _) = match discover() {
             Ok(selected) => selected,
             Err(err) => {
@@ -2145,17 +2168,26 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
                 test::sought_description()
             );
         } else {
-            tokio::select! {
-                ran = runner.run(&root, &files, config) => match ran {
-                    Ok(failed) => report(files.len(), failed),
-                    Err(err) => {
-                        // The browser went away; nothing more can run in it.
-                        eprintln!("error: {err}");
-                        break;
-                    }
-                },
-                () = watch::stopped() => break,
+            let mut reporter = test::Reporter::new(config);
+            let (mut total, mut failed) = (0, 0);
+            for browser in &open {
+                tokio::select! {
+                    ran = browser.runner.run(&root, &files, config, browser.label.as_deref(), &mut reporter) => match ran {
+                        Ok(failed_here) => {
+                            total += files.len();
+                            failed += failed_here;
+                        }
+                        Err(err) => {
+                            // The browser went away; nothing more can run in it.
+                            eprintln!("error: {err}");
+                            break 'watching;
+                        }
+                    },
+                    () = watch::stopped() => break 'watching,
+                }
             }
+            reporter.finish(total, failed);
+            report(total, failed);
         }
         eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
         tokio::select! {
@@ -2168,9 +2200,47 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
         }
         println!();
     }
-    drop(runner);
-    session.end().await;
+    close(open).await;
     ExitCode::SUCCESS
+}
+
+/// A browser started for a run, and the runner driving it.
+struct OpenBrowser {
+    session: bidi::Session,
+    runner: browser_run::Runner,
+    /// Its name in each file's report, when the run uses several.
+    label: Option<String>,
+}
+
+impl OpenBrowser {
+    /// Finds and starts the browser `choice` names, saying on stderr what it
+    /// chose and what it passed over.
+    async fn start(
+        choice: &browser::Choice,
+        config: &TestConfig,
+        several: bool,
+    ) -> Result<OpenBrowser, String> {
+        let selected = browser::select(choice, &browser::System)?;
+        eprintln!("{}", selected.describe());
+        let session = bidi::Session::start(&selected.launch, !config.headed).await?;
+        let runner = match browser_run::Runner::new(&session).await {
+            Ok(runner) => runner,
+            Err(err) => {
+                session.end().await;
+                return Err(err);
+            }
+        };
+        Ok(OpenBrowser {
+            session,
+            runner,
+            label: several.then(|| selected.launch.browser.to_string()),
+        })
+    }
+
+    async fn close(self) {
+        drop(self.runner);
+        self.session.end().await;
+    }
 }
 
 /// How one file's run ends: the report a person reads, nothing (the parent

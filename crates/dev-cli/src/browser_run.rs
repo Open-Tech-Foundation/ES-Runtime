@@ -168,14 +168,27 @@ impl Runner {
         })
     }
 
-    /// Runs `files`, prints each file's report, and returns how many failed.
+    /// Runs `files`, prints each file's report, hands each result to
+    /// `reporter`, and returns how many failed. `browser` names the browser
+    /// in each file's report, for a run that uses several.
     pub async fn run(
         &self,
         root: &Path,
         files: &[PathBuf],
         config: &TestConfig,
+        browser: Option<&str>,
+        reporter: &mut crate::test::Reporter<'_>,
     ) -> Result<usize, String> {
-        run(&self.client, &self.routes, root, files, config).await
+        run(
+            &self.client,
+            &self.routes,
+            root,
+            files,
+            config,
+            browser,
+            reporter,
+        )
+        .await
     }
 }
 
@@ -191,6 +204,8 @@ async fn run(
     root: &Path,
     files: &[PathBuf],
     config: &TestConfig,
+    browser: Option<&str>,
+    reporter: &mut crate::test::Reporter<'_>,
 ) -> Result<usize, String> {
     let staged = Stage::create()?;
     let stage = staged.0.clone();
@@ -207,21 +222,28 @@ async fn run(
             .local_addr()
             .map_err(|err| format!("cannot serve the test pages: {err}"))?
     );
-    let server = tokio::spawn(serve(listener, stage.clone()));
+    // The project's `public/` at the root of the origin, as a build puts it and
+    // as Vite serves it, so `/logo.svg` in a test is the file it will be.
+    let public = Some(root.join("public")).filter(|dir| dir.is_dir());
+    let server = tokio::spawn(serve(listener, stage.clone(), public));
 
     // With a machine reporter on stdout, what the pages printed goes to stderr.
     let quiet = !config.terminal_human();
-    let mut reporter = crate::test::Reporter::new(config);
     let jobs = config
         .jobs
         .unwrap_or_else(crate::test::jobs)
         .min(files.len())
         .max(1);
     let named = |file: &Path| {
-        file.strip_prefix(root)
+        let name = file
+            .strip_prefix(root)
             .unwrap_or(file)
             .display()
-            .to_string()
+            .to_string();
+        match browser {
+            Some(browser) => format!("{name} [{browser}]"),
+            None => name,
+        }
     };
     // `--bail`: tests failed so far across files; a file is not started once
     // the limit is reached, and each one started is told how many more may fail.
@@ -275,12 +297,13 @@ async fn run(
         if !ran.passed {
             failed += 1;
         }
-        reporter.file(&ran.result);
+        let mut result = ran.result;
+        result.browser = browser.map(str::to_string);
+        reporter.file(&result);
     }
 
     server.abort();
     crate::test::report_not_run(not_run.load(std::sync::atomic::Ordering::SeqCst), quiet);
-    reporter.finish(files.len(), failed);
     Ok(failed)
 }
 
@@ -459,10 +482,27 @@ impl Job {
             .map(|(_, filename)| json!(format!("/{}/{filename}", self.path)).to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        let styles: String = sheets
-            .iter()
-            .map(|sheet| format!("<style>{}</style>", sheet.code))
-            .collect();
+        // A stylesheet's `url()`s are placeholders until the files they name
+        // are beside the page, as a build copies them into its assets.
+        let assets = self.dir.join("assets");
+        let mut styles = String::new();
+        for sheet in &sheets {
+            let mut code = sheet.code.clone();
+            for referenced in &sheet.referenced {
+                let bytes = std::fs::read(&referenced.path)
+                    .map_err(|e| format!("cannot read {}: {e}", referenced.path.display()))?;
+                let name = crate::html::hashed_name(&referenced.path, &bytes);
+                std::fs::create_dir_all(&assets)
+                    .map_err(|e| format!("cannot create {}: {e}", assets.display()))?;
+                std::fs::write(assets.join(&name), &bytes)
+                    .map_err(|e| format!("cannot write {name}: {e}"))?;
+                code = code.replace(
+                    &referenced.placeholder,
+                    &format!("/{}/assets/{name}", self.path),
+                );
+            }
+            styles.push_str(&format!("<style>{code}</style>"));
+        }
         let page = format!(
             "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>{title}</title>{styles}</head>\
              <body><script type=\"module\">\n\
@@ -914,48 +954,47 @@ fn escape_html(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Serves the staged pages and bundles, read-only, to the browser on
-/// loopback.
-async fn serve(listener: TcpListener, stage: PathBuf) {
+/// Serves the staged pages and bundles, and the project's `public/` beneath
+/// them, read-only, to the browser on loopback. The stage wins a name both
+/// have: it holds the pages themselves.
+async fn serve(listener: TcpListener, stage: PathBuf, public: Option<PathBuf>) {
     while let Ok((mut stream, _)) = listener.accept().await {
         let stage = stage.clone();
+        let public = public.clone();
         tokio::spawn(async move {
             let Some(head) = crate::inspect::read_head(&mut stream).await else {
                 return;
             };
             let path = crate::inspect::request_path(&head).unwrap_or_default();
-            let (status, content_type, body) = match file_for(&stage, &path) {
-                Some((file, content_type)) => match std::fs::read_to_string(&file) {
-                    Ok(body) => ("200 OK", content_type, body),
-                    Err(_) => ("404 Not Found", "text/plain", String::new()),
-                },
-                None => ("404 Not Found", "text/plain", String::new()),
+            let found = std::iter::once(&stage)
+                .chain(public.as_ref())
+                .filter_map(|dir| file_for(dir, &path))
+                .find_map(|file| std::fs::read(&file).ok().map(|body| (file, body)));
+            let _ = match found {
+                Some((file, body)) => {
+                    let content_type = crate::devserver::content_type(&file);
+                    crate::devserver::respond_bytes(&mut stream, content_type, &body).await
+                }
+                None => {
+                    crate::inspect::respond(&mut stream, "404 Not Found", "text/plain", "").await
+                }
             };
-            let _ = crate::inspect::respond(&mut stream, status, content_type, &body).await;
         });
     }
 }
 
-/// The staged file a request path names, and its type. Only plain names
-/// under the stage: nothing climbs out of it.
-fn file_for(stage: &Path, path: &str) -> Option<(PathBuf, &'static str)> {
+/// The file under `dir` a request path names. Only plain names under it:
+/// nothing climbs out.
+fn file_for(dir: &Path, path: &str) -> Option<PathBuf> {
     let path = path.split(['?', '#']).next()?;
-    let mut file = stage.to_path_buf();
+    let mut file = dir.to_path_buf();
     for part in path.split('/').filter(|part| !part.is_empty()) {
         if part == "." || part == ".." || part.contains('\\') {
             return None;
         }
         file.push(part);
     }
-    let content_type = match file.extension()?.to_str()? {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" | "map" => "application/json",
-        "svg" => "image/svg+xml",
-        _ => "application/octet-stream",
-    };
-    Some((file, content_type))
+    Some(file)
 }
 
 #[cfg(test)]
@@ -1119,13 +1158,9 @@ mod tests {
         let stage = Path::new("/stage");
         assert_eq!(
             file_for(stage, "/f0/index.html?x=1"),
-            Some((
-                PathBuf::from("/stage/f0/index.html"),
-                "text/html; charset=utf-8"
-            ))
+            Some(PathBuf::from("/stage/f0/index.html"))
         );
         assert_eq!(file_for(stage, "/f0/../../etc/passwd.js"), None);
         assert_eq!(file_for(stage, "/f0/..\\x.js"), None);
-        assert_eq!(file_for(stage, "/f0/noextension"), None);
     }
 }

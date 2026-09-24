@@ -661,6 +661,22 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D119 — Browser runs: assets, `public/`, and several browsers · *Accepted (2026-09-24)* · *extends D99*
+
+**Context:** a browser run bundled each file and served only its bundle, as text. A stylesheet's `url()` was left as the bundler's placeholder, a binary file could not have been served whole, and a test could not fetch the fixtures an app keeps in `public/`. Vitest's browser mode serves Vite's `publicDir` and resolves CSS assets through Vite. It runs several browsers as `instances`, and each file runs in each one.
+
+**Decision:**
+- **CSS assets as a build treats them.** Each placeholder's file is copied beside the page under a content-hashed name, as `esdev build` does, so two files named `logo.png` in different directories cannot collide.
+- **`public/` at the root of the origin**, as a build places it and as Vite serves its `publicDir`. The staged pages win a path both have. The same path check keeps a request inside each directory. Files are served as bytes, with the dev server's content types.
+- **`new URL(…, import.meta.url)` is not rewritten.** The build does not rewrite it either, and the test runner is not the place to start. A rooted path into `public/` is the supported way.
+- **Several browsers are a list of names**, `--browser=firefox,chrome` or an array in `test.browser`. They run one after another, one browser open at a time, so browsers do not compete for the machine and their output does not interleave. A browser that cannot be driven fails the run, but only after the others have run; a CI job learns about every browser from one run.
+- **One report.** Each file's name carries `[browser]`, JSON file lines carry `"browser"`, and machine reporters end once. Snapshots are shared: a value that differs between browsers is a failure worth seeing, not something to store twice.
+- `auto` cannot be in a list, because it chooses one browser.
+
+**Rejected:** running the browsers concurrently. It is faster on a large machine, but it makes timing-sensitive tests flaky in exactly the runs meant to compare browsers.
+
+---
+
 ### D118 — Watch-mode keys, read without taking the terminal · *Accepted (2026-09-24)*
 
 **Context:** Vitest's watch reads single keys:
