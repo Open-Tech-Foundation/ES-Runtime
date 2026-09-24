@@ -119,3 +119,47 @@ fn only_a_timer_id_is_accepted_and_a_spent_one_is_left_alone() {
         ]
     );
 }
+
+/// Each agent has its own timers: in a worker, `unrefTimer` lets that worker's
+/// timer go, which still fires while the worker works. Whether the *worker*
+/// holds the process open is the parent's `worker.unref()`, not this.
+#[test]
+fn a_worker_lets_its_own_timer_go_and_its_parent_lets_the_worker_go() {
+    let worker = temp("timers-worker.mjs");
+    std::fs::write(
+        &worker,
+        r#"
+        import { unrefTimer } from "runtime:process";
+        let beats = 0;
+        unrefTimer(setInterval(() => { beats += 1; }, 20));
+        setTimeout(() => postMessage(`worker beat while working: ${beats >= 3}`), 150);
+        "#,
+    )
+    .expect("write worker");
+    let app = temp("timers-worker-main.mjs");
+    std::fs::write(
+        &app,
+        r#"
+        const w = new Worker(new URL("./timers-worker.mjs", import.meta.url), {
+          type: "module",
+          permissions: ["imports"],
+        });
+        w.onmessage = (e) => {
+          console.log(e.data);
+          // Its job done, the worker is no reason to stay.
+          w.unref();
+        };
+        "#,
+    )
+    .expect("write app");
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .current_dir(env!("CARGO_TARGET_TMPDIR"))
+        .args(["--allow-imports", "--allow-workers"])
+        .arg(&app)
+        .output()
+        .expect("run esrun");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert_eq!(stdout(&out).trim(), "worker beat while working: true");
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+}

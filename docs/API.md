@@ -1692,6 +1692,10 @@ decides only when this program may end. `setTimeout` returns a number here, as
 on the web, so these are functions rather than Node's `timeout.unref()`; they
 match Deno's `Deno.unrefTimer`/`Deno.refTimer`.
 
+Each agent has its own timers, so in a worker these let that worker's timer go.
+A worker itself holds the process open until it is terminated, whatever its
+timers; `worker.unref()`, called by its parent, is what lets it go.
+
 ```js
 import { unrefTimer } from "runtime:process";
 

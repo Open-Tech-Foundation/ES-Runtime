@@ -215,7 +215,8 @@ unrefTimer(setInterval(flushMetrics, 10_000));
 ```
 
 `id` is what `setTimeout` or `setInterval` returned. A cleared or fired timer is
-left alone. These match Deno's `Deno.unrefTimer` and `Deno.refTimer`; Node puts
+left alone. In a worker they apply to that worker's own timers; the worker
+itself stays until it is terminated, or until its parent calls `worker.unref()`. These match Deno's `Deno.unrefTimer` and `Deno.refTimer`; Node puts
 `unref()` on the timer object, and `setTimeout` returns a number here, as on the
 web.
 
