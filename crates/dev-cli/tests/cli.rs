@@ -13283,6 +13283,162 @@ fn test_global_setup_tears_down_when_a_watch_is_interrupted() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A git repository with two test files: `cart.test.ts` reaching
+/// `price.ts` through `cart.ts`, and `other.test.ts` reaching `other.ts`. `None`
+/// where git is not installed.
+fn changed_project(name: &str) -> Option<PathBuf> {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    write_in(
+        &dir,
+        "src/price.ts",
+        "export const price = (n: number) => n * 2;\n",
+    );
+    write_in(
+        &dir,
+        "src/cart.ts",
+        "import { price } from \"./price\";\nexport const cart = (xs: number[]) => xs.map(price);\n",
+    );
+    write_in(&dir, "src/other.ts", "export const other = 1;\n");
+    write_in(
+        &dir,
+        "src/cart.test.ts",
+        "import { expect, test } from \"runtime:test\";\nimport { cart } from \"./cart\";\n\
+         test(\"cart\", () => expect(cart([1])).toEqual([2]));\n",
+    );
+    write_in(
+        &dir,
+        "src/other.test.ts",
+        "import { expect, test } from \"runtime:test\";\nimport { other } from \"./other.ts\";\n\
+         test(\"other\", () => expect(other).toBe(1));\n",
+    );
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .is_ok_and(|out| out.status.success())
+    };
+    if !(git(&["init", "-q", "."]) && git(&["add", "-A"]) && git(&["commit", "-qm", "init"])) {
+        eprintln!("git is not available; the --changed run did not happen");
+        return None;
+    }
+    Some(dir)
+}
+
+/// `--changed` runs the test files that reach what git says changed, and
+/// `--related` those that reach the files named.
+#[test]
+fn test_changed_and_related_run_the_files_a_change_reaches() {
+    let Some(dir) = changed_project("t_changed") else {
+        return;
+    };
+    let run = |args: &[&str]| {
+        let out = esdev_in(&dir)
+            .arg("test")
+            .args(args)
+            .output()
+            .expect("spawn esdev test");
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            stdout(&out),
+            stderr(&out)
+        );
+        (slash_paths(&stdout(&out)), stderr(&out))
+    };
+
+    // Nothing changed: nothing to run, and that is a pass.
+    let (text, err) = run(&["--changed"]);
+    assert!(
+        err.contains("changed: 0 files uncommitted; 0 of 2 test files reach them"),
+        "{err}"
+    );
+    assert!(!text.contains(".test.ts"), "{text}");
+
+    // Two imports away.
+    write_in(
+        &dir,
+        "src/price.ts",
+        "export const price = (n: number) => n + n;\n",
+    );
+    let (text, err) = run(&["--changed"]);
+    assert!(
+        err.contains("changed: 1 file uncommitted; 1 of 2 test files reach it"),
+        "{err}"
+    );
+    assert!(
+        text.contains("src/cart.test.ts") && !text.contains("src/other.test.ts"),
+        "{text}"
+    );
+
+    // A new, untracked test file is a change too.
+    write_in(
+        &dir,
+        "src/new.test.ts",
+        "import { test } from \"runtime:test\";\ntest(\"new\", () => {});\n",
+    );
+    let (text, _) = run(&["--changed"]);
+    assert!(text.contains("src/new.test.ts"), "{text}");
+    std::fs::remove_file(dir.join("src/new.test.ts")).unwrap();
+
+    // Since a commit: what it and the working tree changed.
+    Command::new("git")
+        .args(["commit", "-qam", "edit"])
+        .current_dir(&dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .status()
+        .expect("git commit");
+    let (text, err) = run(&["--changed=HEAD~1"]);
+    assert!(err.contains("changed: 1 file since HEAD~1"), "{err}");
+    assert!(
+        text.contains("src/cart.test.ts") && !text.contains("src/other.test.ts"),
+        "{text}"
+    );
+
+    // What decides every test's dependencies reaches every test.
+    write_in(&dir, "package.json", "{}\n");
+    let (text, _) = run(&["--changed"]);
+    assert!(text.contains("2 files passed"), "{text}");
+    std::fs::remove_file(dir.join("package.json")).unwrap();
+
+    let (text, err) = run(&["--related", "src/other.ts"]);
+    assert!(
+        err.contains("related: 1 file named; 1 of 2 test files reach it"),
+        "{err}"
+    );
+    assert!(
+        text.contains("src/other.test.ts") && !text.contains("src/cart.test.ts"),
+        "{text}"
+    );
+
+    for (args, says) in [
+        (vec!["--related"], "none were"),
+        (vec!["--changed", "--related", "src/a.ts"], "give one"),
+        (
+            vec!["--changed", "--watch"],
+            "--watch has no such selection",
+        ),
+        (vec!["--changed=no-such-branch"], "failed"),
+    ] {
+        let out = esdev_in(&dir)
+            .arg("test")
+            .args(&args)
+            .output()
+            .expect("spawn esdev test");
+        assert!(!out.status.success(), "{args:?}");
+        assert!(stderr(&out).contains(says), "{args:?}: {}", stderr(&out));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

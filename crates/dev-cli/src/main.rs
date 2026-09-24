@@ -67,6 +67,7 @@ mod module_mocks;
 mod plugins;
 mod preview;
 mod prompt;
+mod related;
 mod report;
 mod resolve;
 mod staging;
@@ -211,6 +212,11 @@ OPTIONS:
     --test-skip-pattern=<re>    Skip the tests whose full name matches
     --bail[=<n>]                Stop after <n> failed tests (1 by default); the
                                 rest are counted as not run
+    --changed[=<since>]         Run only the test files that reach what git
+                                says changed: uncommitted, or since a commit
+                                or branch
+    --related <file>...         Run only the test files that import these
+                                source files, directly or not
     --shard=<index>/<count>     Run one part of the files, to split a suite
                                 across machines: --shard=1/3 is the first of
                                 three
@@ -1447,6 +1453,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut bail = None;
     let mut summary = None;
     let mut shard = None;
+    let mut changed = None;
+    let mut related = false;
     let mut randomize = false;
     let mut seed = None;
     let mut repeats = None;
@@ -1545,6 +1553,11 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             }
             "--shard" => {
                 shard = Some(test::Shard::parse(require_value(flag, value)?)?);
+            }
+            "--changed" => changed = Some(value.map(str::to_string)),
+            "--related" => {
+                reject_value(flag, value)?;
+                related = true;
             }
             "--randomize" => {
                 reject_value(flag, value)?;
@@ -1647,6 +1660,37 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
              which ones: `esdev test --watch db`."
             .to_string());
     }
+    // `--related`'s files are the arguments a filter would be, so that a
+    // pre-commit tool can append the staged files: `esdev test --related a.ts`.
+    let affected_by = match (changed, related) {
+        (Some(_), true) => {
+            return Err(
+                "--changed and --related both choose the files a change reaches; \
+                 give one.\n\n\
+                 --changed asks git what changed; --related names the files."
+                    .to_string(),
+            );
+        }
+        (Some(since), false) => Some(test::AffectedBy::Changed(since)),
+        (None, true) if filters.is_empty() => {
+            return Err(
+                "--related runs the tests that import the files named after it, \
+                 and none were.\n\n\
+                 Name the source files: esdev test --related src/cart.ts src/price.ts"
+                    .to_string(),
+            );
+        }
+        (None, true) => Some(test::AffectedBy::Related(std::mem::take(&mut filters))),
+        (None, false) => None,
+    };
+    if affected_by.is_some() && (file.is_some() || watch) {
+        return Err(format!(
+            "{} selects test files for one run, and {} has no such selection.\n\n\
+             Drop one of them.",
+            if related { "--related" } else { "--changed" },
+            if watch { "--watch" } else { "--file" },
+        ));
+    }
     if shard.is_some() && file.is_some() {
         return Err("--file runs one file, so there is nothing to shard.\n\n\
              Drop --file; --shard splits the files a run discovers."
@@ -1675,6 +1719,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         global_setup,
         provided,
         global_setup_out,
+        affected_by,
         shard,
         randomize,
         seed,
@@ -1864,10 +1909,16 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     };
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let discover = || match &config.file {
-        Some(file) => (vec![root.join(file)], 1),
-        None => select_test_files(&root, config),
+        Some(file) => Ok((vec![root.join(file)], 1)),
+        None => select_test_files(&root, config, true),
     };
-    let (files, discovered) = discover();
+    let (files, discovered) = match discover() {
+        Ok(selected) => selected,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     // A shard left with none passed; see the process run.
     if files.is_empty() && discovered > 0 {
         return ExitCode::SUCCESS;
@@ -1956,7 +2007,13 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
     };
     let paint = style::Palette::stderr();
     loop {
-        let (files, _) = discover();
+        let (files, _) = match discover() {
+            Ok(selected) => selected,
+            Err(err) => {
+                eprintln!("error: {err}");
+                (Vec::new(), 0)
+            }
+        };
         if files.is_empty() {
             eprintln!(
                 "no test files found (looked for {})",
@@ -2061,13 +2118,9 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         // Global setup runs here, not in the page, as it would for any run —
         // and, as for any run, only when there is a file to run.
         let root = std::env::current_dir().unwrap_or_default();
-        let has_files = config.file.is_some() || config.watch || {
-            let mut files = test::discover(&root, &config.filters);
-            if let Some(shard) = config.shard {
-                test::shard(&mut files, &root, shard);
-            }
-            !files.is_empty()
-        };
+        let has_files = config.file.is_some()
+            || config.watch
+            || select_test_files(&root, &config, false).is_ok_and(|(files, _)| !files.is_empty());
         let setup = if has_files {
             match global_setup::start_or_report(&exe, &config).await {
                 Ok(setup) => setup,
@@ -2145,7 +2198,13 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         return global_setup::stop_into(setup, code).await;
     }
 
-    let (files, discovered) = select_test_files(&root, &config);
+    let (files, discovered) = match select_test_files(&root, &config, true) {
+        Ok(selected) => selected,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     config.snapshot_prune = config.filters.is_empty();
     // More shards than files leaves some with none: a shard that passed, with
     // its (empty) report written, rather than a suite that is missing.
@@ -2164,9 +2223,13 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
         return ExitCode::FAILURE;
     }
     // Once, before any file, and only for a run that has files to run.
-    let setup = match global_setup::start_or_report(&exe, &config).await {
-        Ok(setup) => setup,
-        Err(code) => return code,
+    let setup = if files.is_empty() {
+        None
+    } else {
+        match global_setup::start_or_report(&exe, &config).await {
+            Ok(setup) => setup,
+            Err(code) => return code,
+        }
     };
     config.provided = setup
         .as_ref()
@@ -2286,22 +2349,66 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     code
 }
 
-/// The files this run takes, and how many were discovered: its shard of them,
-/// if it is one, in the order it runs them. A shard says which it is on
-/// stderr, beside the seed, since the report alone does not say what was left
-/// to the other machines.
+/// The files this run takes, and how many were discovered: those a change
+/// reaches, if it asked for them, and its shard of those, in the order it runs
+/// them. What was chosen is said on stderr, beside the seed, since the report
+/// alone does not say what was left out.
 fn select_test_files(
     root: &std::path::Path,
     config: &TestConfig,
-) -> (Vec<std::path::PathBuf>, usize) {
+    announce: bool,
+) -> Result<(Vec<std::path::PathBuf>, usize), String> {
     let mut files = test::discover(root, &config.filters);
     let discovered = files.len();
+    if let Some(by) = &config.affected_by {
+        let (changed, what) = match by {
+            test::AffectedBy::Changed(since) => {
+                let changed = related::changed_files(root, since.as_deref())?;
+                let what = match since {
+                    Some(since) => format!("since {since}"),
+                    None => "uncommitted".to_string(),
+                };
+                (changed, what)
+            }
+            test::AffectedBy::Related(named) => (
+                named.iter().map(|file| root.join(file)).collect(),
+                "named".to_string(),
+            ),
+        };
+        // The modules every file runs with: a change they reach, reaches all.
+        let setup: Vec<_> = config
+            .setup
+            .iter()
+            .chain(&config.global_setup)
+            .filter_map(|module| match url::Url::parse(module) {
+                Ok(url) => url.to_file_path().ok(),
+                Err(_) => Some(root.join(module)).filter(|path| path.exists()),
+            })
+            .collect();
+        files = related::affected(root, &files, &setup, &changed)?;
+        if announce {
+            let label = match by {
+                test::AffectedBy::Changed(_) => "changed",
+                test::AffectedBy::Related(_) => "related",
+            };
+            let (count, plural) = (changed.len(), changed.len() != 1);
+            eprintln!(
+                "{label}: {count} file{} {what}; {} of {discovered} test files reach {}",
+                if plural { "s" } else { "" },
+                files.len(),
+                if plural { "them" } else { "it" },
+            );
+        }
+    }
     if let Some(shard) = config.shard {
+        let before = files.len();
         test::shard(&mut files, root, shard);
-        eprintln!("shard {shard}: {} of {discovered} files", files.len());
+        if announce {
+            eprintln!("shard {shard}: {} of {before} files", files.len());
+        }
     }
     test::shuffle(&mut files, config.seed);
-    (files, discovered)
+    Ok((files, discovered))
 }
 
 fn validate_unisolated_test_config(config: &TestConfig) -> Result<(), &'static str> {

@@ -67,6 +67,9 @@ pub struct TestConfig {
     pub quiet: bool,
     /// Run only this part of the discovered files, from `--shard`.
     pub shard: Option<Shard>,
+    /// Run only the test files these changes reach, from `--changed` or
+    /// `--related`.
+    pub affected_by: Option<AffectedBy>,
     /// Shuffle the run's order, from `--randomize`.
     pub randomize: bool,
     /// The seed the order is shuffled from, from `--seed` or chosen for a
@@ -172,6 +175,16 @@ pub fn shuffle(files: &mut [PathBuf], seed: Option<u32>) {
         let j = (next() * (i + 1) as f64) as usize;
         files.swap(i, j);
     }
+}
+
+/// What selects the test files a change reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AffectedBy {
+    /// `--changed[=<since>]`: what git says changed — uncommitted, or since a
+    /// commit or branch.
+    Changed(Option<String>),
+    /// `--related <file>…`: these source files.
+    Related(Vec<String>),
 }
 
 /// One part of a suite split across machines, from `--shard=<index>/<count>`.

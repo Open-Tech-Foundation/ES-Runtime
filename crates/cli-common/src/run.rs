@@ -938,6 +938,32 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolves import specifiers as a run's module loader does — the same
+/// node_modules walk and bundler-style fallbacks, confined to `root` — without
+/// running anything. For tools that map which modules import which.
+pub struct SourceResolver {
+    loader: Arc<dyn ModuleLoader>,
+}
+
+impl SourceResolver {
+    /// A resolver for the project at `root`.
+    pub fn new(root: &std::path::Path) -> Result<Self, String> {
+        let inner = NodeModuleLoader::with_base_and_root(root, root)
+            .map_err(|e| format!("module loader: {e}"))?;
+        Ok(Self {
+            loader: Arc::new(BundlerStyleLoader {
+                inner: Arc::new(inner),
+            }),
+        })
+    }
+
+    /// The URL `specifier` names when imported from the module at `referrer`
+    /// (a URL), or `None` when it names nothing that resolves.
+    pub fn resolve(&self, specifier: &str, referrer: &str) -> Option<String> {
+        self.loader.resolve_sync(specifier, referrer)?.ok()
+    }
+}
+
 /// The one root a run has: **the working directory**, exactly (D79).
 ///
 /// No walk and no marker file. The cwd rather than the entry file, because an

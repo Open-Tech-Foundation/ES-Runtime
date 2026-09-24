@@ -27,7 +27,7 @@ pub mod sourcemap;
 pub mod upgrade;
 
 pub use extension::{ExtensionContext, HostExtension, HostModule};
-pub use run::{Config, Inspector, Source, run};
+pub use run::{Config, Inspector, Source, SourceResolver, run};
 
 /// What writing a host extension's ops takes, re-exported so a binary reaches
 /// for this crate rather than for the engine and the provider crates directly.

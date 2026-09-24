@@ -101,6 +101,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --changed[=<since>]` and `--related <file>…`** run only the
+  test files that reach, through their imports, what git says changed (or the
+  files named). A change to esdev.json, package.json, tsconfig.json, a lockfile
+  or a setup module runs everything (DECISIONS D107).
 - **Global setup**: `test.globalSetup` in esdev.json, or `--global-setup`,
   names modules whose `setup` runs once before any test file and whose
   `teardown` runs after the last, in a process of their own. `provide(key,

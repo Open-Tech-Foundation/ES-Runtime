@@ -661,6 +661,24 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D107 — `--changed` and `--related` follow the import graph the runtime resolves · *Accepted (2026-09-24)*
+
+**Context:**
+- Vitest's `--changed[=<since>]` runs the tests affected by uncommitted changes, or by changes since a commit or branch, and its `related` command takes source files.
+- Jest spells these `--onlyChanged`, `--changedSince` and `--findRelatedTests <files>`.
+- Both follow static imports, and both rerun everything when the config or `package.json` changes.
+
+**Decision:**
+- **`--changed[=<since>]` with Vitest's semantics.** With no value, it takes staged, unstaged and untracked files, since a new test is a change. `<since>` compares the working tree with the merge base, as Jest's `--changedSince` does, so a branch that diverged from `origin/main` tests only its own changes.
+- **`--related` makes the positional arguments source files**, Jest's shape, so a pre-commit tool can append the staged files. Vitest's `related` subcommand would be a second way to run tests.
+- **The graph is resolved by the loader a run uses** (`SourceResolver` in `cli-common`), with the same bundler-style fallbacks. Changing that resolution changes both together. It follows static imports, re-exports and `import()` of a literal. It skips type-only imports, and stops at `node_modules`, which changes by being reinstalled.
+- **What reaches every test** — `esdev.json`, `package.json`, `tsconfig.json`, lockfiles, setup and global setup modules — runs everything. When a file was deleted, a test with an import that no longer resolves counts as affected, since that is the test that will now fail.
+- **Refused with `--watch` and `--file`.** The watch reruns on each change already. A narrowing watch is later work.
+
+**Consequences:** a file read at run time (a fixture, a computed `import()`) is invisible to the graph. Nothing reached is a passing run with nothing run, which is what a hook on an unrelated change wants.
+
+---
+
 ### D106 — Global setup in a process of its own, ended by closing its stdin · *Accepted (2026-09-24)*
 
 **Context:** a suite that needs a database or a server starts it once, not per file. Vitest's `globalSetup` modules export `setup`/`teardown` (or a default returning the teardown), run before any worker in a separate scope, and pass serializable values to tests with `provide`/`inject`. Jest's `globalSetup`/`globalTeardown` are two modules whose globals the tests cannot see. Here the runner is a Rust process supervising a process per file, so there is no JavaScript scope in the parent to run it in.

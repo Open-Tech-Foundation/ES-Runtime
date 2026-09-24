@@ -3,6 +3,8 @@ title: Running and isolating tests
 description: Run, filter, isolate, and diagnose esdev test files.
 ---
 
+import { Callout } from "@opentf/web-docs";
+
 # Running and isolating tests
 
 `test.only` runs that case and skips the rest; `describe.only` does it for a
@@ -85,6 +87,43 @@ esdev test --seed=1327238386
 Tests are shuffled among their siblings inside each `describe`, and groups
 among theirs, so a group's `beforeAll` and `afterAll` still wrap exactly its
 own tests.
+
+## Only what changed
+
+`--changed` runs the test files that reach a file git says changed, through
+their imports:
+
+```sh
+esdev test --changed               # uncommitted changes, and untracked files
+esdev test --changed=origin/main   # everything since this branch left main
+```
+
+`--related` does the same for files you name, so a pre-commit hook can pass
+the staged files:
+
+```sh
+esdev test --related src/cart.ts src/price.ts
+```
+
+A test file reaches a file when it imports it, or imports something that does,
+at any depth. Static imports, re-exports and `import()` of a string count.
+Type-only imports do not, since they are gone at run time. A change to
+`esdev.json`, `package.json`, `tsconfig.json`, a lockfile, or a setup module
+runs every test file.
+
+The run says what it chose on stderr:
+
+```text
+changed: 3 files since origin/main; 5 of 41 test files reach them
+```
+
+When nothing is reached, nothing runs and the run passes.
+
+<Callout type="note" title="What it cannot see">
+  A file a test reads at run time, such as a fixture loaded with
+  `runtime:fs` or a module imported from a computed specifier, is not an
+  import. A change to one is not seen.
+</Callout>
 
 ## Splitting across machines
 

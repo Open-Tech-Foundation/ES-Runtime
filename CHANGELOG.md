@@ -11,6 +11,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`cli-common`'s `SourceResolver`** resolves import specifiers the way a run's
+  module loader does, with its node_modules walk and bundler-style fallbacks,
+  without running anything. `esdev test --changed` builds its import graph with
+  it.
+- **`SourceTransform::reserved_query`**: a transform can name a query that the
+  transforming loader keeps on module ids rather than resolving it away, so the
+  same file can load as two modules. `esdev`'s `mock.module` uses it to load a
+  real module beside its mock.
+
 ## [0.31.0] - 2026-09-23
 
 ### Changed
