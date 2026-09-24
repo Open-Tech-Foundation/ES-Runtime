@@ -13668,6 +13668,13 @@ test("starts a server and forgets it", () => {
 });
 "#,
     );
+    // Let go on purpose, so not a leak.
+    write_in(
+        &dir,
+        "beat.test.js",
+        "import { test } from \"runtime:test\";\nimport { unrefTimer } from \"runtime:process\";\n\
+         test(\"a background heartbeat\", () => { unrefTimer(setInterval(() => {}, 1000)); });\n",
+    );
     let out = esdev_in(&dir)
         .args(["test", "--detect-async-leaks", "--timeout=30000"])
         .output()
@@ -13692,7 +13699,8 @@ test("starts a server and forgets it", () => {
         text.contains("clean.test.js\n  1 passed, 0 failed"),
         "{text}"
     );
-    assert!(text.contains("2 of 3 files failed"), "{text}");
+    assert!(text.contains("beat.test.js\n  1 passed, 0 failed"), "{text}");
+    assert!(text.contains("2 of 4 files failed"), "{text}");
 
     // Without it, the same file waits on what it left, until the budget ends
     // it — and the budget says where to look.

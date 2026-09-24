@@ -249,6 +249,10 @@ pub trait Engine {
     /// Whether any async op is still awaiting completion.
     fn has_pending_async_ops(&self) -> bool;
 
+    /// Whether any active timer holds the event loop open: one not cleared,
+    /// and not let go with `unrefTimer`.
+    fn has_referenced_timers(&self) -> bool;
+
     /// Attaches a debugger to this isolate, speaking the Chrome DevTools
     /// Protocol over `transport` (DECISIONS.md D59).
     ///
@@ -832,6 +836,7 @@ impl V8Engine {
             crate::diagnostics::install_span_builtins(scope, context)?;
             // `__heap_bytes`: this isolate's heap, which only the isolate knows.
             crate::op::install_heap_builtin(scope, context)?;
+            crate::op::install_timer_ref_builtin(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is
@@ -1026,6 +1031,10 @@ impl Engine for V8Engine {
 
     fn has_pending_async_ops(&self) -> bool {
         self.op_state.borrow().has_pending_async()
+    }
+
+    fn has_referenced_timers(&self) -> bool {
+        self.op_state.borrow().has_referenced_timers()
     }
 
     fn run_microtasks(&mut self) {
@@ -1323,6 +1332,38 @@ mod tests {
 
     fn engine() -> V8Engine {
         V8Engine::new(Limits::default()).expect("engine construction")
+    }
+
+    /// An unreferenced timer is still a timer — it stays in the table and still
+    /// fires — but it is no reason for the loop to stay open, and not pending
+    /// work a leak check reports.
+    #[test]
+    fn an_unreferenced_timer_does_not_hold_the_loop() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine.track_pending_work().expect("track");
+        engine
+            .eval("globalThis.t = setInterval(() => {}, 1000);")
+            .expect("eval");
+        assert!(engine.has_referenced_timers());
+        let found = engine.eval("__timer_ref(t, false)").expect("eval");
+        assert_eq!(found, Value::Bool(true));
+        assert!(!engine.has_referenced_timers());
+        assert_eq!(
+            engine
+                .eval("__esdev_pending_work(false).length")
+                .expect("eval"),
+            Value::Number(0.0)
+        );
+        engine.eval("__timer_ref(t, true)").expect("eval");
+        assert!(engine.has_referenced_timers());
+        // A cleared timer has nothing left to change.
+        engine.eval("clearInterval(t)").expect("eval");
+        assert_eq!(
+            engine.eval("__timer_ref(t, false)").expect("eval"),
+            Value::Bool(false)
+        );
+        assert!(!engine.has_referenced_timers());
     }
 
     /// `__esdev_pending_work`: only there when asked for; then every live timer,

@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`unrefTimer(id)` and `refTimer(id)` in `runtime:process`**: a timer let go
+  still fires while anything else keeps the program running, but no longer
+  keeps it alive on its own — for a heartbeat or a periodic flush. Deno's
+  `Deno.unrefTimer` shape, since `setTimeout` returns a number here
+  (DECISIONS D111).
+
 - **`cli-common`'s `SourceResolver`** resolves import specifiers the way a run's
   module loader does, with its node_modules walk and bundler-style fallbacks,
   without running anything. `esdev test --changed` builds its import graph with

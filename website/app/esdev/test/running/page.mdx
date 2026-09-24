@@ -290,5 +290,7 @@ timers.test.ts
 Each leak fails the file and points at the line that started it, and the file
 then ends instead of waiting. A server or socket started inside the runtime has
 no line of your code on its stack; the report says so. Close it in `afterAll`.
+A timer meant to run in the background, such as a heartbeat, is not a leak once
+it is let go with [`unrefTimer`](/api/process).
 It is not available in browser runs, or with `--isolation=none`, where the
 files share one event loop.

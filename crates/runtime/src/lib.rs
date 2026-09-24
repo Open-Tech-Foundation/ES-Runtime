@@ -1436,7 +1436,9 @@ impl Runtime {
     /// outstanding.
     pub fn has_pending_work(&self) -> bool {
         self.engine.has_pending_async_ops()
-            || !self.timers.is_empty()
+            // The engine's table rather than the schedule: it is exact about a
+            // cleared timer, and knows which ones `unrefTimer` let go.
+            || self.engine.has_referenced_timers()
             || self.module_eval_pending
             || self.engine.has_pending_dynamic_imports()
             || self.engine.has_pending_wasm()

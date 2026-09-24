@@ -441,6 +441,28 @@ function uptime() {
   return ops.process_uptime();
 }
 
+// Whether a timer holds the process open, spelled as Deno spells it:
+// `setTimeout` returns a number here, as on the web, so there is no timer
+// object to call `unref()` on as in Node. An unreferenced timer still fires
+// while anything else keeps the process running; alone, it does not keep it.
+// For a heartbeat or a periodic flush that should not be why a program never
+// exits.
+//
+// A cleared or already-fired timer is left alone: there is nothing to change.
+// Ungated: it decides only when *this* program may end.
+function timerRef(name, id, referenced) {
+  if (typeof id !== "number") {
+    throw new TypeError(`${name} needs the id setTimeout or setInterval returned`);
+  }
+  globalThis.__timer_ref(id, referenced);
+}
+function unrefTimer(id) {
+  timerRef("unrefTimer", id, false);
+}
+function refTimer(id) {
+  timerRef("refTimer", id, true);
+}
+
 export {
   env,
   args,
@@ -459,6 +481,8 @@ export {
   memoryUsage,
   cpuTime,
   uptime,
+  unrefTimer,
+  refTimer,
 };
 export default {
   env,
@@ -478,4 +502,6 @@ export default {
   memoryUsage,
   cpuTime,
   uptime,
+  unrefTimer,
+  refTimer,
 };

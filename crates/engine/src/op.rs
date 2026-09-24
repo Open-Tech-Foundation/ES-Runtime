@@ -282,6 +282,9 @@ struct TimerEntry {
     due_at: Option<f64>,
     /// Where it was scheduled from, when [`OpState::track_origins`] is on.
     origin: Option<Rc<str>>,
+    /// Whether it holds the event loop open. A timer starts referenced;
+    /// `unrefTimer` lets the program end while it is still scheduled.
+    referenced: bool,
     /// The async-context mapping current when the timer was *scheduled*,
     /// reinstalled around every firing.
     ///
@@ -420,6 +423,11 @@ impl OpState {
     /// Whether timer `id` is still active (not cleared).
     pub(crate) fn timer_is_active(&self, id: TimerId) -> bool {
         self.timers.contains_key(&id)
+    }
+
+    /// Whether any active timer holds the event loop open.
+    pub(crate) fn has_referenced_timers(&self) -> bool {
+        self.timers.values().any(|timer| timer.referenced)
     }
 }
 
@@ -789,6 +797,9 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     refs.push(v8::ExternalReference {
         function: heap_bytes.map_fn_to(),
     });
+    refs.push(v8::ExternalReference {
+        function: timer_ref.map_fn_to(),
+    });
     std::borrow::Cow::Owned(refs)
 }
 
@@ -904,6 +915,42 @@ pub(crate) fn install_timer_builtins(
     Ok(())
 }
 
+/// Installs `__timer_ref(id, referenced)`: whether the timer holds the event
+/// loop open. Returns whether `id` named an active timer. Read by
+/// `runtime:process`'s `refTimer`/`unrefTimer`, and hidden from guest code by
+/// the prelude like the other internal builtins.
+pub(crate) fn install_timer_ref_builtin(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+) -> Result<()> {
+    let global = context.global(scope);
+    install_global_fn(scope, global, "__timer_ref", timer_ref, None)
+}
+
+fn timer_ref(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let id = args.get(0).number_value(scope).unwrap_or(-1.0);
+    let referenced = args.get(1).boolean_value(scope);
+    let found = op_state(scope).is_some_and(|state| {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a timer id the guest was handed, checked against the table"
+        )]
+        let id = id as TimerId;
+        state
+            .borrow_mut()
+            .timers
+            .get_mut(&id)
+            .map(|timer| timer.referenced = referenced)
+            .is_some()
+    });
+    rv.set(v8::Boolean::new(scope, found).into());
+}
+
 /// Where the running JavaScript is: its innermost frames, one `at …` line
 /// each, as an error's stack would show them.
 fn caller(scope: &mut v8::PinScope) -> Rc<str> {
@@ -967,7 +1014,8 @@ fn pending_work(
         let mut state = state_rc.borrow_mut();
         let mut timers: Vec<_> = state.timers.iter().collect();
         timers.sort_by_key(|(id, _)| **id);
-        for (_, timer) in timers {
+        // An unreferenced timer holds nothing open, so it is not pending work.
+        for (_, timer) in timers.into_iter().filter(|(_, timer)| timer.referenced) {
             let kind = if timer.repeat { "Interval" } else { "Timeout" };
             found.push((kind.to_string(), timer.origin.clone()));
         }
@@ -1268,6 +1316,7 @@ fn timer_set_inner(
                 delay_ms,
                 due_at,
                 origin,
+                referenced: true,
                 context,
             },
         );

@@ -661,6 +661,19 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D111 — `unrefTimer` and `refTimer`: a timer may be let go · *Accepted (2026-09-24)*
+
+**Context:** a timer holds the event loop open, so a heartbeat or periodic-flush `setInterval` keeps a program running for ever, and since D110 fails a test file under `--detect-async-leaks` with no remedy but clearing it. Node gives its timer objects `unref()`/`ref()`/`hasRef()`; Bun the same; Deno, whose `setTimeout` returns a number as the web's does, has `Deno.unrefTimer(id)`/`Deno.refTimer(id)`. Sockets and workers here already have `unref()`.
+
+**Decision:**
+- **`unrefTimer(id)` and `refTimer(id)` in `runtime:process`**, Deno's shape. `setTimeout` keeps returning a number, the web's contract, instead of becoming an object only to carry the method. `runtime:process` holds the other questions about this program's own lifetime (`exit`, signals).
+- **The engine keeps a `referenced` flag on each timer.** Whether timers hold the loop open is now the engine's `has_referenced_timers()`, not whether the runtime's schedule is non-empty. That is also more exact about a cleared timer, which the schedule only drops lazily. An unreferenced timer stays scheduled and fires while other work keeps the loop running. `__esdev_pending_work` skips it, so leak detection agrees with process exit.
+- **Ungated**, like `memoryUsage`: it decides only when this program may end.
+- A cleared or fired id is left alone, as there is nothing to change; a non-number is a `TypeError`.
+- Rejected for now: `hasRef` (the caller set it) and Node's `refresh()`, which is a separate gap for its own decision.
+
+---
+
 ### D110 — `--detect-async-leaks` asks the engine what keeps the loop alive · *Accepted (2026-09-24)*
 
 **Context:** Vitest's `detectAsyncLeaks` and Jest's `--detectOpenHandles` both use Node's `async_hooks` to track async resources as they are created, and report the ones never cleaned up with the line that created them. Here a test file is a process that ends when its event loop has nothing left, so a leaked interval or server does not only leak: it keeps the file running until `--timeout` stops it, with nothing saying why. This runtime has no `async_hooks`. Its `runtime:context` (D88) is the counterpart of `AsyncLocalStorage`, which Node builds on top of `async_hooks`: it carries a value across async work, but has no resource lifecycle (no created/destroyed callbacks per timer or socket), and by design nothing enumerates what is in flight. So it cannot say what is still pending. The engine already knows exactly what keeps the loop open: its timer table and its pending async ops, each op by name. `runtime:diagnostics` does not answer this, because `inventory()` keeps servers and listeners for the agent's lifetime by design.

@@ -180,6 +180,18 @@ declare module "runtime:process" {
   export function uptime(): number;
 
   /**
+   * Lets a timer go: it still fires while anything else keeps the program
+   * running, but is no longer a reason on its own for the program to stay
+   * alive — for a heartbeat or a periodic flush. `id` is what `setTimeout` or
+   * `setInterval` returned; a cleared or fired timer is left alone. Deno's
+   * `Deno.unrefTimer`, and Node's `timeout.unref()`.
+   */
+  export function unrefTimer(id: number): void;
+
+  /** Undoes {@link unrefTimer}. A timer starts referenced. */
+  export function refTimer(id: number): void;
+
+  /**
    * A capability this process may hold. These are exactly the suffixes of the
    * `--allow-<name>` / `--deny-<name>` flags:
    *

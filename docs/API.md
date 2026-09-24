@@ -1679,6 +1679,28 @@ exit(); // defaults to 0
 
 ---
 
+### Timers that do not hold the process
+
+| Export | Type | Description |
+| ------ | ---- | ----------- |
+| `unrefTimer(id)` | `(id: number) => void` | The timer still fires while anything else keeps the program running, but is no longer a reason on its own for it to stay alive. |
+| `refTimer(id)` | `(id: number) => void` | Undoes `unrefTimer`. A timer starts referenced. |
+
+`id` is what `setTimeout` or `setInterval` returned; a cleared or fired timer is
+left alone, and anything but a number is a `TypeError`. No capability: it
+decides only when this program may end. `setTimeout` returns a number here, as
+on the web, so these are functions rather than Node's `timeout.unref()`; they
+match Deno's `Deno.unrefTimer`/`Deno.refTimer`.
+
+```js
+import { unrefTimer } from "runtime:process";
+
+// Flushes every 10s while the server runs, and never keeps it from exiting.
+unrefTimer(setInterval(flushMetrics, 10_000));
+```
+
+---
+
 ### Self-reporting
 
 All three need **no capability**, by the rule this module already applies to

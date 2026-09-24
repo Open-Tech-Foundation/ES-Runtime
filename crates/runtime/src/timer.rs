@@ -81,7 +81,7 @@ impl TimerQueue {
     ///
     /// `clearTimeout`/`clearInterval` deactivate a timer engine-side but cannot
     /// reach into this heap, so a cancelled entry would otherwise sit here until
-    /// its original deadline — keeping [`is_empty`](Self::is_empty) false and
+    /// its original deadline — keeping the queue non-empty and
     /// [`next_deadline_ms`](Self::next_deadline_ms) pointing at a firing that
     /// will never happen, which makes a driver wait out the full delay before
     /// the process can exit.
@@ -107,7 +107,10 @@ impl TimerQueue {
         self.heap.peek().map(|Reverse(s)| s.deadline_ms)
     }
 
-    /// Whether any timer is scheduled.
+    /// Whether any timer is scheduled. Whether the loop is held open is the
+    /// engine's question (`has_referenced_timers`), which knows about
+    /// `unrefTimer`; this remains for the tests of the schedule itself.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.heap.is_empty()
     }

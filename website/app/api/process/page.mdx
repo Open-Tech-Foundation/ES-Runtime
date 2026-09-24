@@ -45,6 +45,7 @@ import process from "runtime:process";
 | `memoryUsage()` | `() => object` | `{ heapUsed, heapLimit, external }` in bytes, for **this agent's isolate**. **No capability.** |
 | `cpuTime()` | `() => number` | CPU milliseconds **this agent's thread** has used. **No capability.** |
 | `uptime()` | `() => number` | Milliseconds since **this agent** started. **No capability.** |
+| `unrefTimer(id)` / `refTimer(id)` | `(id: number) => void` | Whether a timer keeps the program alive. **No capability.** |
 
 ## env — reading and writing
 
@@ -199,6 +200,24 @@ unmask(env.DB_HOST);                 // plain strings pass through
 
 Load values from a file with [`esrun --env-file=.env`](/api/cli) (no
 auto-discovery; the OS environment wins unless `--env-override` is passed).
+
+## Timers that do not hold the process
+
+A `setInterval` for a heartbeat or a periodic flush keeps a program running for
+ever. `unrefTimer` lets it go: the timer still fires while anything else keeps
+the program alive, but no longer keeps it alive on its own. `refTimer` undoes
+it.
+
+```js
+import { unrefTimer } from "runtime:process";
+
+unrefTimer(setInterval(flushMetrics, 10_000));
+```
+
+`id` is what `setTimeout` or `setInterval` returned. A cleared or fired timer is
+left alone. These match Deno's `Deno.unrefTimer` and `Deno.refTimer`; Node puts
+`unref()` on the timer object, and `setTimeout` returns a number here, as on the
+web.
 
 ## Reporting on yourself
 
