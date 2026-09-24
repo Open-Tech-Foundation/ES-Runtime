@@ -45,6 +45,13 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
+- **`esdev test` runs the project's plugins.** A test file and everything it
+  imports go through the `transform` hooks of the top-level `plugins` in
+  `esdev.json` before they are compiled, as in `esdev build` — per-file runs,
+  `--isolation=none`, global setup and `--browser` alike. A framework whose
+  JSX compiler is a plugin can now be tested without precompiling its
+  components. `--isolation=none` also compiles JSX with the project's `jsx`
+  settings, which it ignored before.
 - **The JUnit report of a run with no tests** says `time="0.000"`, not
   `time="-0.000"`.
 - **`Date()` without `new` under a frozen clock** returns the time as a string

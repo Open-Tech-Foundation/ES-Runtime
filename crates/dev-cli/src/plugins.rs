@@ -329,6 +329,239 @@ fn specifier(dir: &std::path::Path, module: &str) -> Result<String, String> {
         .map_err(|()| format!("cannot name the plugin {module} as a module"))
 }
 
+/// `then`, behind the project's plugins when it has any — what `esdev test`
+/// loads every module through.
+pub async fn transform(
+    dir: &std::path::Path,
+    specs: &[PluginSpec],
+    then: Arc<dyn es_runtime_cli_common::run::SourceTransform>,
+) -> Result<Arc<dyn es_runtime_cli_common::run::SourceTransform>, String> {
+    Ok(match host(dir, specs).await? {
+        Some(host) => Arc::new(PluginTransform::new(&host, dir, then)),
+        None => then,
+    })
+}
+
+/// A module source transform that puts every module through the project's
+/// plugins first, the way a build does.
+///
+/// # Why a test needs this
+///
+/// A build hands each module to the plugins' `transform` hooks and then
+/// compiles what they return. A test file is not bundled — it is loaded one
+/// module at a time by the runtime, through a [`SourceTransform`] — so without
+/// this a project whose `.jsx` means what its framework's compiler says it
+/// means would build, and then fail every test that imported a component.
+///
+/// Only `transform` is run. `resolve` and `load` answer the bundler's graph
+/// walk, and a test run has no graph: the runtime's own loader finds files.
+///
+/// # Why it blocks
+///
+/// The runtime asks for a module's source synchronously, and a hook's answer
+/// comes from another thread — the plugin isolate. Waiting on it here is what
+/// every module load already does for the file read; the isolate never waits on
+/// this thread, so there is nothing for the two to deadlock over.
+///
+/// [`SourceTransform`]: es_runtime_cli_common::run::SourceTransform
+pub struct PluginTransform {
+    /// In the order a build calls them: `pre`, then unordered, then `post`,
+    /// each in the order the project declared them.
+    passes: Vec<Arc<dyn contract::Pass>>,
+    /// What compiles the module once the plugins are done with it.
+    then: Arc<dyn es_runtime_cli_common::run::SourceTransform>,
+    ctx: Arc<dyn contract::Context>,
+}
+
+impl PluginTransform {
+    /// Every one of `host`'s plugins, ahead of `then`.
+    pub fn new(
+        host: &PluginHost,
+        dir: &std::path::Path,
+        then: Arc<dyn es_runtime_cli_common::run::SourceTransform>,
+    ) -> PluginTransform {
+        let every: Vec<usize> = (0..host.plugins.len()).collect();
+        let mut passes = host.passes(&every, None);
+        // Stable, so plugins of one order keep the order they were declared in.
+        passes.sort_by_key(
+            |pass| match pass.hooks().transform.as_ref().map(|h| h.order) {
+                Some(contract::Order::Pre) => 0,
+                Some(contract::Order::Post) => 2,
+                _ => 1,
+            },
+        );
+        passes.retain(|pass| pass.hooks().transform.is_some());
+        PluginTransform {
+            passes,
+            then,
+            ctx: Arc::new(TestContext {
+                dir: dir.to_path_buf(),
+            }),
+        }
+    }
+
+    /// `source` after every plugin whose filter admits `id`.
+    fn through_plugins(&self, id: &str, mut source: String) -> Result<String, String> {
+        let mut module_type = module_type(id);
+        for pass in &self.passes {
+            let admitted = pass
+                .hooks()
+                .transform
+                .as_ref()
+                .is_some_and(|hook| hook.filter.admits(id, Some(&source)));
+            if !admitted {
+                continue;
+            }
+            let answer = wait(pass.transform(&source, id, &module_type, &self.ctx))
+                .map_err(|e| format!("[plugin {}] {id}\n{e}", pass.name()))?;
+            if let Some(result) = answer {
+                source = result.code;
+                if let Some(changed) = result.module_type {
+                    module_type = changed;
+                }
+            }
+        }
+        Ok(source)
+    }
+}
+
+impl es_runtime_cli_common::run::SourceTransform for PluginTransform {
+    fn reserved_query(&self) -> Option<&'static str> {
+        self.then.reserved_query()
+    }
+
+    fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
+        // A mocked module is not the file's source at all, and the compiler
+        // after this replaces it whole; a plugin has nothing to say about it.
+        if self.passes.is_empty() || crate::module_mocks::synthetic(specifier).is_some() {
+            return self.then.transform(specifier, source);
+        }
+        // Plugins name modules by path, as the bundler hands them over. Only a
+        // file is theirs; a `runtime:` module is this binary's own.
+        let path = url::Url::parse(specifier)
+            .ok()
+            .filter(|url| url.scheme() == "file")
+            .and_then(|mut url| {
+                url.set_query(None);
+                url.set_fragment(None);
+                url.to_file_path().ok()
+            });
+        let source = match path {
+            Some(path) => self.through_plugins(&path.to_string_lossy(), source)?,
+            None => source,
+        };
+        self.then.transform(specifier, source)
+    }
+}
+
+/// What a module is before any plugin has changed it, spelled the way the
+/// bundler would tell a hook: its extension, with the JavaScript and
+/// TypeScript family names folded to the four the compiler knows.
+fn module_type(id: &str) -> String {
+    match std::path::Path::new(id)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
+        Some("js" | "mjs" | "cjs") => "js".to_string(),
+        Some("ts" | "mts" | "cts") => "ts".to_string(),
+        Some(other) => other.to_string(),
+        None => "js".to_string(),
+    }
+}
+
+/// Drives a hook's answer to completion on this thread.
+///
+/// Not a nested async runtime: the caller is already inside one, which refuses
+/// to be entered twice. The future only ever waits on the plugin isolate's
+/// reply, so parking until it is woken is all this needs to do.
+fn wait<T>(future: contract::Answer<'_, T>) -> Result<T, String> {
+    struct Unpark(std::thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut future = future;
+    loop {
+        if let std::task::Poll::Ready(answer) = future.as_mut().poll(&mut cx) {
+            return answer;
+        }
+        std::thread::park();
+    }
+}
+
+/// What a hook's `ctx` can do in a test run.
+///
+/// A test run is not a build: nothing is bundled, so there is no graph to add
+/// an entry to and no output to put an asset beside.
+struct TestContext {
+    dir: std::path::PathBuf,
+}
+
+impl contract::Context for TestContext {
+    fn resolve<'a>(
+        &'a self,
+        specifier: &'a str,
+        importer: Option<&'a str>,
+        _skip_self: bool,
+    ) -> contract::Answer<'a, Option<contract::ResolvedId>> {
+        Box::pin(async move { Ok(resolve_file(specifier, importer)) })
+    }
+
+    fn emit(&self, _emit: contract::Emit) -> Result<String, String> {
+        Err(
+            "ctx.emit() adds to a build's output, and a test run writes none — \
+             this plugin's transform cannot run under esdev test"
+                .to_string(),
+        )
+    }
+
+    fn log(&self, level: &str, message: String) {
+        eprintln!("esdev: plugin {level}: {message}");
+    }
+
+    fn depends_on(&self, _file: &str) {}
+
+    fn cwd(&self) -> std::path::PathBuf {
+        self.dir.clone()
+    }
+}
+
+/// A relative or absolute specifier, as the file it names — with the
+/// extensions and `index` files a bundler would try. A package is left
+/// unresolved: `None` is an answer a plugin already has to handle.
+fn resolve_file(specifier: &str, importer: Option<&str>) -> Option<contract::ResolvedId> {
+    const EXTENSIONS: [&str; 6] = ["ts", "tsx", "mts", "js", "jsx", "mjs"];
+    let base = if specifier.starts_with('/') {
+        std::path::PathBuf::from(specifier)
+    } else if specifier.starts_with("./") || specifier.starts_with("../") {
+        std::path::Path::new(importer?).parent()?.join(specifier)
+    } else {
+        return None;
+    };
+    let candidates = std::iter::once(base.clone())
+        .chain(EXTENSIONS.iter().map(|ext| {
+            let mut name = base.clone().into_os_string();
+            name.push(format!(".{ext}"));
+            std::path::PathBuf::from(name)
+        }))
+        .chain(
+            EXTENSIONS
+                .iter()
+                .map(|ext| base.join(format!("index.{ext}"))),
+        );
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .and_then(|path| dunce::canonicalize(path).ok())
+        .map(|path| contract::ResolvedId {
+            id: path.to_string_lossy().into_owned(),
+            external: false,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +629,48 @@ mod tests {
     async fn a_project_with_no_plugins_starts_nothing() {
         let none = host(std::path::Path::new("."), &[]).await.unwrap();
         assert!(none.is_none());
+    }
+
+    /// A hook is told what a module is in the bundler's vocabulary, so a
+    /// plugin written against a build reads the same `ctx.type` in a test.
+    #[test]
+    fn a_modules_type_is_what_the_bundler_would_call_it() {
+        assert_eq!(module_type("/a/b.mjs"), "js");
+        assert_eq!(module_type("/a/b.mts"), "ts");
+        assert_eq!(module_type("/a/b.jsx"), "jsx");
+        assert_eq!(module_type("/a/b.mdx"), "mdx");
+    }
+
+    /// `ctx.resolve()` in a test finds what a bundler would, and leaves a
+    /// package for the plugin's own fallback.
+    #[test]
+    fn a_test_run_resolves_files_the_way_a_bundler_would() {
+        let dir =
+            std::env::temp_dir().join(format!("esdev-plugins-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("util.ts"), "").unwrap();
+        std::fs::write(dir.join("lib/index.js"), "").unwrap();
+        let importer = dir.join("main.ts").to_string_lossy().into_owned();
+        let found = |specifier| resolve_file(specifier, Some(&importer)).map(|r| r.id);
+        assert!(found("./util").unwrap().ends_with("util.ts"));
+        assert!(found("./lib").unwrap().ends_with("index.js"));
+        assert!(found("./missing").is_none());
+        assert!(found("some-package").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A hook's answer arrives from another thread; waiting for it parks
+    /// this one rather than needing a runtime of its own.
+    #[test]
+    fn waiting_on_an_answer_from_another_thread() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<u32>();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let _ = tx.send(7);
+        });
+        let answer: contract::Answer<'_, u32> =
+            Box::pin(async move { rx.await.map_err(|e| e.to_string()) });
+        assert_eq!(wait(answer).unwrap(), 7);
     }
 
     #[test]

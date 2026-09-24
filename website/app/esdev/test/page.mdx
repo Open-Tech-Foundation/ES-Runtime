@@ -29,6 +29,13 @@ about it is refused rather than compiled for a framework nobody named.
 The same setting compiles the bundle, so a component means the same thing in a
 test and in a build.
 
+When a framework's compiler is a [plugin](/esdev/build/project#plugins-in-a-project),
+the project's top-level `plugins` compile every module a test loads, before
+the `jsx` setting does — in a browser run too. Only their `transform` hooks
+run: a test is not bundled, so there is no graph for `resolve` or `load` to
+answer, and `ctx.emit()` fails. A target's own `plugins` describe that target's
+bundle and do not apply.
+
 ## DOM tests
 
 Pass `--dom` to give each test file a fresh, in-memory DOM: `document`,

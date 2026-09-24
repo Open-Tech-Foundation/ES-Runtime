@@ -104,6 +104,18 @@ pub struct Project {
     /// module with a module's initialisation, so paying for it per build would
     /// be paying for it forty times.
     pub plugins: Vec<PluginSpec>,
+    /// How many of [`Project::plugins`] are the project's own — the top-level
+    /// `plugins`, which come first — rather than one target's.
+    shared_plugins: usize,
+}
+
+impl Project {
+    /// The top-level `plugins`: every target's, and the ones `esdev test`
+    /// compiles with. A target's own list describes that target's bundle, and
+    /// a test is not any one target.
+    pub fn project_plugins(&self) -> &[PluginSpec] {
+        &self.plugins[..self.shared_plugins]
+    }
 }
 
 /// One plugin, as the file names it.
@@ -576,7 +588,8 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     // and a config where naming one extra plugin silently dropped the shared
     // ones would be a build that differs between targets for no stated reason.
     let mut plugins = plugin_specs(root.get("plugins"), name, "`plugins`")?;
-    let shared: Vec<usize> = (0..plugins.len()).collect();
+    let shared_plugins = plugins.len();
+    let shared: Vec<usize> = (0..shared_plugins).collect();
 
     let mut targets = targets
         .iter()
@@ -605,6 +618,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         start,
         permissions,
         plugins,
+        shared_plugins,
         alias,
         test,
         jsx,
@@ -2120,6 +2134,23 @@ mod tests {
         // Sorted by name, so `api` is first.
         assert_eq!(project.targets[0].plugins, [0]);
         assert_eq!(project.targets[1].plugins, [0, 1]);
+        // A test run compiles with the project's, not with any one target's.
+        assert_eq!(
+            project
+                .project_plugins()
+                .iter()
+                .map(|p| p.module.as_str())
+                .collect::<Vec<_>>(),
+            ["./plugins/mdx.js"],
+        );
+    }
+
+    /// A buildless project — one that only tests — still has plugins to
+    /// compile with.
+    #[test]
+    fn a_project_with_no_targets_keeps_its_plugins_for_tests() {
+        let project = read(r#"{ "plugins": ["./plugins/framework.js"] }"#).expect("parsed");
+        assert_eq!(project.project_plugins().len(), 1);
     }
 
     /// The call a JSON file cannot make. A plugin that takes options is a

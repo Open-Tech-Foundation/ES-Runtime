@@ -11221,6 +11221,123 @@ export default {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A framework's compiler, as a project's plugin: it owns `.jsx` and lowers it
+/// to plain JavaScript with semantics no generic JSX runtime has. The project
+/// names no `jsx` settings, so the file compiles only if the plugin ran.
+fn framework_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    write_in(
+        &dir,
+        "framework.mjs",
+        r#"
+export default (options) => ({
+  name: "framework",
+  transform: {
+    filter: { id: /\.jsx$/ },
+    handler(code, id, ctx) {
+      if (code.includes("BROKEN")) throw new Error("cannot compile " + id.split("/").pop());
+      const compiled = code.replace(/<Greeting \/>/g, JSON.stringify(options.greeting));
+      return { code: compiled, type: "js" };
+    },
+  },
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "only-web.mjs",
+        r#"export default { name: "only-web", transform: { handler() { throw new Error("a target's plugin ran in a test"); } } };"#,
+    );
+    write_in(
+        &dir,
+        "greeting.jsx",
+        "export const greeting = <Greeting />;\n",
+    );
+    write_in(
+        &dir,
+        "greeting.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import { greeting } from './greeting.jsx';\n\
+         test('the plugin compiled the component', () => assertEquals(greeting, 'hi from the plugin'));\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": [{ "module": "./framework.mjs", "options": { "greeting": "hi from the plugin" } }],
+          "targets": {
+            "web": { "entry": "greeting.jsx", "out": "dist/web.js", "plugins": ["./only-web.mjs"] }
+          }
+        }"#,
+    );
+    dir
+}
+
+/// `esdev test` compiles what a test imports through the project's plugins,
+/// as `esdev build` does — and only the project's, not one target's.
+#[test]
+fn test_compiles_modules_through_the_projects_plugins() {
+    let dir = framework_project("p_plugins_test");
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same with every file in one process.
+#[test]
+fn test_compiles_through_the_plugins_without_isolation() {
+    let dir = framework_project("p_plugins_test_shared");
+    let out = esdev_in(&dir)
+        .args(["test", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without isolation, JSX still compiles the way the project's `jsx` says —
+/// the shared process used to compile it with nothing said at all.
+#[test]
+fn test_without_isolation_compiles_jsx_with_the_projects_settings() {
+    let dir = build_dir("p_jsx_test_shared");
+    write_in(
+        &dir,
+        "view.test.jsx",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         const h = (tag) => tag;\n\
+         test('classic JSX calls h', () => assertEquals(<section />, 'section'));\n",
+    );
+    write_in(&dir, "esdev.json", r#"{ "jsx": { "factory": "h" } }"#);
+    let out = esdev_in(&dir)
+        .args(["test", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A plugin that throws fails the file, naming the plugin and the module.
+#[test]
+fn test_reports_a_plugin_that_fails_to_compile_a_module() {
+    let dir = framework_project("p_plugins_test_fails");
+    write_in(&dir, "greeting.jsx", "export const greeting = BROKEN;\n");
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("framework"), "{text}");
+    assert!(text.contains("cannot compile greeting.jsx"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **`order: "pre"` is ordered against the built-in passes, not only against
 /// the other plugins.** A Tailwind compiler claims `.css` so that
 /// `@import "tailwindcss"` never reaches `esdev:css-modules`, which would treat
@@ -14495,6 +14612,24 @@ fn no_browser(err: &str) -> bool {
     }
     eprintln!("no browser can be driven here; the real-browser run did not happen");
     true
+}
+
+/// In a page, the test is bundled with the project's plugins, as its browser
+/// build would be.
+#[test]
+fn test_compiles_through_the_plugins_in_a_browser_run() {
+    let browser = browser_flag();
+    let dir = framework_project("p_plugins_test_browser");
+    let out = esdev_in(&dir)
+        .args(["test", &browser])
+        .output()
+        .expect("spawn esdev test --browser");
+    if no_browser(&stderr(&out)) {
+        return;
+    }
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// In a page: `mock.module` is refused by name — its modules are bundled before

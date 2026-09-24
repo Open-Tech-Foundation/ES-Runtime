@@ -155,15 +155,26 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let transform = match crate::plugins::transform(
+        &config.plugin_dir,
+        &config.plugins,
+        std::sync::Arc::new(TypeStripper::with_jsx(config.jsx.clone())),
+    )
+    .await
+    {
+        Ok(transform) => transform,
+        Err(err) => {
+            es_runtime_cli_common::diagnostics::print_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
     let run = Config {
         source: Source::Inline(entry(&config.global_setup)),
         args: Vec::new(),
         capabilities,
         scopes,
         options: RunOptions::default(),
-        transform: Some(std::sync::Arc::new(TypeStripper::with_jsx(
-            config.jsx.clone(),
-        ))),
+        transform: Some(transform),
         bundler_style_resolution: true,
         extensions: crate::guest::test_extensions(false),
         observer: None,

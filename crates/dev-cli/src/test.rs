@@ -84,6 +84,11 @@ pub struct TestConfig {
     /// by the parent and by every `--file` child, so a test means the same
     /// thing however it was started.
     pub jsx: crate::transform::JsxSettings,
+    /// The project's top-level `plugins`, whose hooks compile every module a
+    /// test loads the way `esdev build` would, and the directory they are
+    /// named from. Read, like `jsx`, by the parent and by every child.
+    pub plugins: Vec<crate::config::PluginSpec>,
+    pub plugin_dir: PathBuf,
     /// Run exactly this file, harness installed. This is what the parent
     /// invokes for each child, and it is a supported way to run one file
     /// directly.

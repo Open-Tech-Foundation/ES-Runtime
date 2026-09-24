@@ -1845,6 +1845,8 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         quiet,
         // Filled in by `test_settings`, which is where the project is read.
         jsx: crate::transform::JsxSettings::default(),
+        plugins: Vec::new(),
+        plugin_dir: std::path::PathBuf::new(),
         file,
         filters,
         jobs,
@@ -1961,6 +1963,8 @@ fn test_settings(config: &mut TestConfig) -> Result<(), String> {
         return Ok(());
     };
     config.jsx = project.jsx.clone();
+    config.plugins = project.project_plugins().to_vec();
+    config.plugin_dir.clone_from(&project.dir);
     if config.setup.is_empty() {
         config.setup = project
             .test
@@ -2736,6 +2740,19 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
         )
         .compiling_jsx(config.jsx.clone())
     };
+    let transform = match plugins::transform(
+        &config.plugin_dir,
+        &config.plugins,
+        std::sync::Arc::new(stripper),
+    )
+    .await
+    {
+        Ok(transform) => transform,
+        Err(err) => {
+            print_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
     // A rehearsal still applies here: this is also how every child of a
     // restricted parent executes, and the flags arrived on its command
     // line for exactly this run. A file that declares its own grant runs
@@ -2757,7 +2774,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             track_pending_work: config.detect_leaks,
             ..RunOptions::default()
         },
-        transform: Some(std::sync::Arc::new(stripper)),
+        transform: Some(transform),
         bundler_style_resolution: true,
         extensions: guest::test_extensions(config.dom),
         observer: None,
@@ -2942,13 +2959,28 @@ pub(crate) async fn run_tests_unisolated(
             return ExitCode::FAILURE;
         }
     };
+    // Compiled as each file would be in a child of its own: the project's
+    // plugins, then its `jsx`.
+    let transform = match plugins::transform(
+        &config.plugin_dir,
+        &config.plugins,
+        std::sync::Arc::new(TypeStripper::with_jsx(config.jsx.clone())),
+    )
+    .await
+    {
+        Ok(transform) => transform,
+        Err(err) => {
+            print_error(&err);
+            return ExitCode::FAILURE;
+        }
+    };
     let mut run = Config {
         source: Source::Inline(source),
         args: Vec::new(),
         capabilities,
         scopes,
         options: RunOptions::default(),
-        transform: Some(std::sync::Arc::new(TypeStripper::new())),
+        transform: Some(transform),
         bundler_style_resolution: true,
         extensions: guest::test_extensions(config.dom),
         observer: None,
