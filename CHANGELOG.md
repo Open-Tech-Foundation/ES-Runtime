@@ -17,6 +17,11 @@ namespace) is unstable and may change between minor releases until the API freez
   module loader does, with its node_modules walk and bundler-style fallbacks,
   without running anything. `esdev test --changed` builds its import graph with
   it.
+- **Pending-work tracking for embedders**: `Engine::track_pending_work`,
+  `Runtime::track_pending_work` and `RunOptions::track_pending_work` record where
+  each timer and async op starts, and install `__esdev_pending_work(release)`,
+  which lists what keeps the event loop alive and can release it. Off unless
+  asked for; esrun never asks. `esdev test --detect-async-leaks` uses it.
 - **`SourceTransform::reserved_query`**: a transform can name a query that the
   transforming loader keeps on module ids rather than resolving it away, so the
   same file can load as two modules. `esdev`'s `mock.module` uses it to load a

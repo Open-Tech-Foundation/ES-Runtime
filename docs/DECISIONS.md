@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D110 — `--detect-async-leaks` asks the engine what keeps the loop alive · *Accepted (2026-09-24)*
+
+**Context:** Vitest's `detectAsyncLeaks` and Jest's `--detectOpenHandles` both use Node's `async_hooks` to track async resources as they are created, and report the ones never cleaned up with the line that created them. Here a test file is a process that ends when its event loop has nothing left, so a leaked interval or server does not only leak: it keeps the file running until `--timeout` stops it, with nothing saying why. This runtime has no `async_hooks`. The engine already knows exactly what keeps the loop open: its timer table and its pending async ops, each op by name. `runtime:diagnostics` does not answer this, because `inventory()` keeps servers and listeners for the agent's lifetime by design.
+
+**Decision:**
+- **The engine reports its own pending work.** `Engine::track_pending_work` (through `Runtime` and `RunOptions::track_pending_work` in `cli-common`) records where each timer and async op starts: the innermost frames of the current stack. It also installs `__esdev_pending_work(release)`, which lists live timers and every op still holding the loop open. Only an esdev test run with the flag calls it. Every other run pays nothing and has no such global.
+- **After a file's tests drain, each pending item is a failed case**, named as a test would name it ("a setInterval", "an HTTP server"), with only the frames of the test's own code. The runtime's frames and the runner's are dropped. When no frame of the file's code started it (an HTTP server's accept loop starts inside `runtime:http`), the report says so rather than showing runtime internals.
+- **Then the work is released:** timers are cleared and ops stop holding the loop open, so the file ends and reports instead of hanging. Without the flag, the hang is reported by `--timeout`, whose message now points at the flag.
+- Refused with `--browser` (the browser's loop is not visible) and `--isolation=none` (one loop for every file, so nothing pending is one file's).
+- Rejected: counting handles through `runtime:diagnostics.inventory()`, which over-reports servers by design, and wrapping `setTimeout` in `runtime:test`, which sees timers but not servers, sockets or child processes.
+
+**Consequences:** `engine`, `runtime` and `cli-common` gain a small embedder API. Recording origins costs a stack capture per timer and async op, and is paid only under the flag.
+
+---
+
 ### D109 — `esdev test --inspect` debugs one file at a time · *Accepted (2026-09-24)*
 
 **Context:** a debugger attaches to one process, and each test file is a process (one per file by default). Vitest's guide asks for `--inspect-brk --no-file-parallelism`, and suggests raising test timeouts, which a paused breakpoint would otherwise trip.

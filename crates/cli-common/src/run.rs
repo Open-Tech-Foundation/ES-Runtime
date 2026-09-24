@@ -763,6 +763,11 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
+    // What keeps the loop alive, recorded from the first statement on.
+    if options.track_pending_work {
+        runtime.track_pending_work().map_err(|e| e.to_string())?;
+    }
+
     // Graceful shutdown on ^C / SIGTERM. Installed before the module runs, so a
     // server that binds immediately is covered from its first request.
     spawn_shutdown_watcher(

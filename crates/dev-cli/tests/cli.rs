@@ -13627,6 +13627,99 @@ fn test_coverage_settings_come_from_esdev_json() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--detect-async-leaks`: what a file's tests leave running fails the file,
+/// named as the test would name it and at the line that started it — and the
+/// file then ends rather than waiting on it.
+#[test]
+fn test_detect_async_leaks_names_what_a_file_left_running() {
+    let dir = build_dir("t_async_leaks");
+    write_in(
+        &dir,
+        "timers.test.ts",
+        r#"import { test } from "runtime:test";
+
+function poll(): void {
+  setInterval(() => {}, 1000);
+}
+test("starts a poller and forgets it", () => {
+  poll();
+  setTimeout(() => {}, 5000);
+});
+test("cleans up", () => {
+  const id = setTimeout(() => {}, 10);
+  clearTimeout(id);
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "clean.test.js",
+        r#"import { test } from "runtime:test";
+test("waits properly", async () => { await new Promise((r) => setTimeout(r, 5)); });
+"#,
+    );
+    write_in(
+        &dir,
+        "server.test.js",
+        r#"import { test } from "runtime:test";
+import { serve } from "runtime:http";
+test("starts a server and forgets it", () => {
+  serve({ port: 0 }, () => new Response("hi"));
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--detect-async-leaks", "--timeout=30000"])
+        .output()
+        .expect("spawn esdev test --detect-async-leaks");
+    let text = slash_paths(&stdout(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains("  FAIL async leak: a setInterval\n    a setInterval was still pending after the file's tests finished\n        at poll ("),
+        "{text}"
+    );
+    assert!(text.contains("timers.test.ts:4:3)\n"), "{text}");
+    assert!(text.contains("  FAIL async leak: a setTimeout\n"), "{text}");
+    assert!(text.contains("timers.test.ts:8:3\n"), "{text}");
+    // The runner's own frames are not the test's to change.
+    assert!(!text.contains("runAttempt"), "{text}");
+    assert!(
+        text.contains("  FAIL async leak: an HTTP server\n"),
+        "{text}"
+    );
+    assert!(text.contains("close it in afterAll"), "{text}");
+    assert!(
+        text.contains("clean.test.js\n  1 passed, 0 failed"),
+        "{text}"
+    );
+    assert!(text.contains("2 of 3 files failed"), "{text}");
+
+    // Without it, the same file waits on what it left, until the budget ends
+    // it — and the budget says where to look.
+    let out = esdev_in(&dir)
+        .args(["test", "timers", "--timeout=2000"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--detect-async-leaks"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = esdev_in(&dir)
+        .args(["test", "--detect-async-leaks", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("share one event loop"),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {

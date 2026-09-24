@@ -271,3 +271,24 @@ It is reported as a **failure**, not a hang:
 
 The cases queued behind it are reported as never started, so the report points
 at the one that is stuck.
+
+## A file that does not end
+
+A file whose tests all passed can still not finish. Its process ends when
+nothing is left to run, so a timer, a server or a socket its tests left open
+keeps it waiting until `--timeout` stops it. `--detect-async-leaks` names what
+was left instead:
+
+```text
+timers.test.ts
+  FAIL async leak: a setInterval
+    a setInterval was still pending after the file's tests finished
+        at poll (src/poller.ts:4:3)
+        at timers.test.ts:7:3
+```
+
+Each leak fails the file and points at the line that started it, and the file
+then ends instead of waiting. A server or socket started inside the runtime has
+no line of your code on its stack; the report says so. Close it in `afterAll`.
+It is not available in browser runs, or with `--isolation=none`, where the
+files share one event loop.

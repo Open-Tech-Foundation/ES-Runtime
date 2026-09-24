@@ -114,6 +114,9 @@ pub struct TestConfig {
     pub coverage_out: Option<PathBuf>,
     /// Where each child of a coverage run writes, set by the parent.
     pub coverage_dir: Option<PathBuf>,
+    /// `--detect-async-leaks`: what a file leaves pending after its tests is a
+    /// failure, named with where it was started.
+    pub detect_leaks: bool,
     /// `--inspect[=<addr>]` / `--inspect-brk[=<addr>]`: each file serves a
     /// debugger in turn, one file at a time.
     pub inspect: Option<crate::inspect::InspectConfig>,
@@ -161,6 +164,7 @@ impl TestConfig {
             seed: self.seed,
             repeats: self.repeats,
             list: self.list,
+            detect_leaks: self.detect_leaks,
         }
     }
 }
@@ -400,6 +404,11 @@ pub async fn run_all(
                 .chain(config.seed.iter().map(|seed| format!("--seed={seed}")))
                 .chain(config.repeats.iter().map(|n| format!("--repeats={n}")))
                 .chain(config.list.then(|| "--list".to_string()))
+                .chain(
+                    config
+                        .detect_leaks
+                        .then(|| "--detect-async-leaks".to_string()),
+                )
                 .chain(
                     config
                         .skip_pattern
@@ -740,8 +749,9 @@ pub(crate) fn timed_out(timeout: Option<u64>) -> String {
     let ms = timeout.unwrap_or_default();
     format!(
         "  FAIL the file took longer than {ms}ms and was stopped\n    \
-         Something in it never finished. Raise the budget with --timeout, or \
-         run it alone with --jobs=1 to watch where it stops."
+         Something in it never finished. Raise the budget with --timeout, \
+         run it alone with --jobs=1 to watch where it stops, or run it with \
+         --detect-async-leaks to name what its tests left running."
     )
 }
 

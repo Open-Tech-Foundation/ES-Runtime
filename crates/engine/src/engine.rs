@@ -305,6 +305,16 @@ pub trait Engine {
     /// observes either way, so the laziness is invisible.
     fn enable_async_context(&mut self) {}
 
+    /// From now on, records where each timer and async op is started, and
+    /// installs `__esdev_pending_work` to report — and release — what keeps the
+    /// event loop alive. For `esdev test --detect-async-leaks`; see
+    /// [`crate::op::install_pending_work_builtin`]. An engine that cannot
+    /// leaves it out and says nothing: the answer is then that nothing is
+    /// known, which is not a reason to stop a run.
+    fn track_pending_work(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Installs the clock `runtime:diagnostics` timestamps spans with, enabling
     /// the module (DECISIONS.md D89).
     ///
@@ -1026,6 +1036,14 @@ impl Engine for V8Engine {
         crate::async_context::enable(&mut self.isolate, &self.context, &self.context_state);
     }
 
+    fn track_pending_work(&mut self) -> Result<()> {
+        self.op_state.borrow_mut().track_origins = true;
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::op::install_pending_work_builtin(scope, context)
+    }
+
     fn heap_bytes(&mut self) -> (usize, usize, usize) {
         let stats = self.isolate.get_heap_statistics();
         (
@@ -1305,6 +1323,37 @@ mod tests {
 
     fn engine() -> V8Engine {
         V8Engine::new(Limits::default()).expect("engine construction")
+    }
+
+    /// `__esdev_pending_work`: only there when asked for; then every live timer,
+    /// by kind, with where it was scheduled — and, given `true`, released.
+    #[test]
+    fn pending_work_names_live_timers_and_lets_them_go() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let absent = engine
+            .eval("typeof globalThis.__esdev_pending_work")
+            .expect("eval");
+        assert_eq!(absent, Value::String("undefined".into()));
+
+        engine.track_pending_work().expect("track");
+        let listed = engine
+            .eval(
+                "function poll() { return setInterval(() => {}, 1000); }\n\
+                 poll();\n\
+                 const once = setTimeout(() => {}, 10);\n\
+                 clearTimeout(setTimeout(() => {}, 10));\n\
+                 JSON.stringify(__esdev_pending_work(false).map((w) => [w.kind, /at poll/.test(w.origin)]))",
+            )
+            .expect("eval");
+        assert_eq!(
+            listed,
+            Value::String(r#"[["Interval",true],["Timeout",false]]"#.into())
+        );
+        let released = engine
+            .eval("__esdev_pending_work(true).length + ':' + __esdev_pending_work(false).length")
+            .expect("eval");
+        assert_eq!(released, Value::String("2:0".into()));
     }
 
     #[test]

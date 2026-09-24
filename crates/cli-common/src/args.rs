@@ -54,11 +54,16 @@ pub struct RunOptions {
     /// Fraction of **traces** to export, via `--otel-sample=<0..1>`. Per trace,
     /// so a trace is kept whole or dropped whole.
     pub otel_sample: Option<f64>,
+    /// Record where timers and async ops start, and install the builtin that
+    /// reports what keeps the loop alive (`esdev test --detect-async-leaks`).
+    /// Never set by esrun.
+    pub track_pending_work: bool,
 }
 
 impl Default for RunOptions {
     fn default() -> Self {
         Self {
+            track_pending_work: false,
             timeout: None,
             env_file: None,
             import_policy: None,

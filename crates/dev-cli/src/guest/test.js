@@ -527,6 +527,36 @@ function schedule() {
   ]);
 }
 
+/// What a pending timer or host operation is, as the test would name it.
+const LEAKS = {
+  Timeout: "a setTimeout",
+  Interval: "a setInterval",
+  http_next_request: "an HTTP server",
+  ws_accept: "a WebSocket server",
+  ws_recv: "an open WebSocket",
+  net_accept: "a TCP listener",
+  net_read: "an open TCP connection",
+  net_datagram_receive: "a UDP socket",
+  net_datagram_receive_many: "a UDP socket",
+  system_wait: "a child process",
+  system_read: "a child process's output",
+  worker_recv: "a worker",
+  port_recv: "a MessagePort",
+  broadcast_recv_next: "a BroadcastChannel",
+  signal_next: "a signal listener",
+  fetch: "a fetch",
+  fetch_body_read: "a fetch's body",
+};
+
+/// The frames of a stack that are the test's own code: the lines it is the
+/// test's to change, without the runtime's and the runner's around them.
+function userFrames(stack) {
+  return stack
+    .split("\n")
+    .filter((line) => line && !/\((runtime|esdev):|at (runtime|esdev):/.test(line))
+    .join("\n");
+}
+
 async function drain() {
   try {
     if (nextRandom !== null) shuffleQueue();
@@ -559,6 +589,22 @@ async function drain() {
     draining = false;
     // Under `--coverage`, the counts while the modules are all still loaded.
     await ops.test_coverage_take?.();
+    // Under `--detect-async-leaks`, what the file left running is a failure —
+    // and then let go, so the file ends rather than waiting on it.
+    if (runOptions.detectLeaks && typeof globalThis.__esdev_pending_work === "function") {
+      for (const { kind, origin } of globalThis.__esdev_pending_work(true)) {
+        const what = LEAKS[kind] ?? `the async operation ${kind}`;
+        const frames = userFrames(origin ?? "");
+        const where = frames
+          ? `\n${frames}`
+          : "\n    (started inside the runtime, after the call that created it; close it in afterAll)";
+        ops.test_finished(
+          ops.test_registered(`async leak: ${what}`),
+          false,
+          `${what} was still pending after the file's tests finished${where}`,
+        );
+      }
+    }
     // The queue is empty and every group closed. A process run learns this by
     // reaching quiescence and does not listen; a page never goes quiet, so a
     // browser run is told instead.

@@ -903,6 +903,15 @@ impl Runtime {
         Ok(())
     }
 
+    /// Records where each timer and async op is started, and makes
+    /// `__esdev_pending_work` available to report what keeps the event loop
+    /// alive — `esdev test --detect-async-leaks`. Call it before loading the
+    /// entry module, so every origin is recorded.
+    pub fn track_pending_work(&mut self) -> Result<()> {
+        self.engine.track_pending_work()?;
+        Ok(())
+    }
+
     /// Returns a thread-safe handle for interrupting this runtime's execution —
     /// e.g. for a watchdog thread that bounds execution time (SPEC §4). Calling
     /// [`InterruptHandle::terminate`] stops the running script; the in-flight

@@ -104,6 +104,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`esdev test --detect-async-leaks`** fails a file whose tests leave a timer,
+  server, socket or other work pending, naming each and the line of the test's
+  code that started it. The file then ends instead of waiting on it until
+  `--timeout` (DECISIONS D110).
 - **`esdev test --inspect[=<addr>]` and `--inspect-brk[=<addr>]`** debug the
   tests: the files run one at a time, each serving the debugger in turn on the
   one address, with the per-file `--timeout` off (DECISIONS D109).

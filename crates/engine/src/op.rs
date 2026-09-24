@@ -260,6 +260,9 @@ struct PendingAsync {
     )>,
     /// The `target` attribute for that span, when detail was on at dispatch.
     target: Option<Rc<str>>,
+    /// The op's name and where it was called from, when something asked what
+    /// keeps the loop alive ([`OpState::track_origins`]).
+    origin: Option<(Rc<str>, Rc<str>)>,
 }
 
 struct TimerEntry {
@@ -277,6 +280,8 @@ struct TimerEntry {
     /// for — so this, rather than the arming time, is what a span records as
     /// `scheduled_at`. `None` until a diagnostics clock exists.
     due_at: Option<f64>,
+    /// Where it was scheduled from, when [`OpState::track_origins`] is on.
+    origin: Option<Rc<str>>,
     /// The async-context mapping current when the timer was *scheduled*,
     /// reinstalled around every firing.
     ///
@@ -339,6 +344,11 @@ pub(crate) struct OpState {
     /// (`esdev --trace-permissions`). `None` in every production run, which is
     /// what the check below costs then: one `Option` read per dispatch.
     pub(crate) observer: Option<crate::trace::SharedObserver>,
+    /// Record where each timer and async op was started, for
+    /// `__esdev_pending_work`. Off unless the embedder asked
+    /// ([`Engine::track_pending_work`](crate::Engine::track_pending_work)): it
+    /// captures a stack on every `setTimeout` and every async op.
+    pub(crate) track_origins: bool,
 }
 
 impl OpState {
@@ -360,6 +370,7 @@ impl OpState {
             wasm_modules: HashMap::new(),
             next_wasm_handle: 1,
             observer: None,
+            track_origins: false,
         }
     }
 
@@ -521,6 +532,9 @@ fn op_dispatch_inner(
     // Read before the handler borrow, so it is available when the pending entry
     // is built below.
     let keeps_loop_alive = state.ops[idx].keeps_loop_alive;
+    let origin = state
+        .track_origins
+        .then(|| (Rc::from(state.ops[idx].name.as_str()), caller(scope)));
 
     // The gate: one mask test, false for every program nothing is watching, and
     // the op's name is not even cloned unless it comes back true.
@@ -694,6 +708,7 @@ fn op_dispatch_inner(
                 // what makes an op span cover the wait and not just the call.
                 span,
                 target,
+                origin,
             });
             // Wake the driver so it re-ticks and polls this future now, rather
             // than parking first: the future hasn't been polled yet, so it has
@@ -887,6 +902,109 @@ pub(crate) fn install_timer_builtins(
     install_global_fn(scope, global, "clearTimeout", timer_clear, None)?;
     install_global_fn(scope, global, "clearInterval", timer_clear, None)?;
     Ok(())
+}
+
+/// Where the running JavaScript is: its innermost frames, one `at …` line
+/// each, as an error's stack would show them.
+fn caller(scope: &mut v8::PinScope) -> Rc<str> {
+    let mut lines = Vec::new();
+    if let Some(trace) = v8::StackTrace::current_stack_trace(scope, 12) {
+        for index in 0..trace.get_frame_count() {
+            let Some(frame) = trace.get_frame(scope, index) else {
+                continue;
+            };
+            let script = frame
+                .get_script_name_or_source_url(scope)
+                .map(|name| name.to_rust_string_lossy(scope))
+                .unwrap_or_default();
+            let place = format!(
+                "{script}:{}:{}",
+                frame.get_line_number(),
+                frame.get_column()
+            );
+            match frame.get_function_name(scope) {
+                Some(name) if name.length() > 0 => {
+                    lines.push(format!(
+                        "    at {} ({place})",
+                        name.to_rust_string_lossy(scope)
+                    ));
+                }
+                _ => lines.push(format!("    at {place}")),
+            }
+        }
+    }
+    Rc::from(lines.join("\n"))
+}
+
+/// Installs `__esdev_pending_work(release)` — what keeps the event loop alive:
+/// `[{ kind, origin }]`, a timer as `Timeout` or `Interval` and an async op by
+/// its name, with where each was started. Given `true`, it then lets all of it
+/// go: timers are cleared and every pending op stops holding the loop open, so
+/// the run can end once it has been reported.
+///
+/// Installed only on request ([`Engine::track_pending_work`](crate::Engine::track_pending_work)),
+/// by `esdev test --detect-async-leaks`, and never in a production run: a
+/// program has no business releasing its own pending work.
+pub(crate) fn install_pending_work_builtin(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+) -> Result<()> {
+    let global = context.global(scope);
+    install_global_fn(scope, global, "__esdev_pending_work", pending_work, None)
+}
+
+fn pending_work(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let release = args.get(0).boolean_value(scope);
+    let Some(state_rc) = op_state(scope) else {
+        return;
+    };
+    let mut found: Vec<(String, Option<Rc<str>>)> = Vec::new();
+    {
+        let mut state = state_rc.borrow_mut();
+        let mut timers: Vec<_> = state.timers.iter().collect();
+        timers.sort_by_key(|(id, _)| **id);
+        for (_, timer) in timers {
+            let kind = if timer.repeat { "Interval" } else { "Timeout" };
+            found.push((kind.to_string(), timer.origin.clone()));
+        }
+        for op in state.pending_async.iter().filter(|op| op.keeps_loop_alive) {
+            let (name, origin) = match &op.origin {
+                Some((name, origin)) => (name.to_string(), Some(origin.clone())),
+                None => ("async operation".to_string(), None),
+            };
+            found.push((name, origin));
+        }
+        if release {
+            state.timers.clear();
+            for op in &mut state.pending_async {
+                op.keeps_loop_alive = false;
+            }
+        }
+    }
+    let items: Vec<v8::Local<v8::Value>> = found
+        .into_iter()
+        .map(|(kind, origin)| {
+            let object = v8::Object::new(scope);
+            if let (Some(key), Some(value)) = (
+                v8::String::new(scope, "kind"),
+                v8::String::new(scope, &kind),
+            ) {
+                object.set(scope, key.into(), value.into());
+            }
+            if let (Some(key), Some(origin)) = (v8::String::new(scope, "origin"), origin)
+                && let Some(value) = v8::String::new(scope, &origin)
+            {
+                object.set(scope, key.into(), value.into());
+            }
+            object.into()
+        })
+        .collect();
+    let array = v8::Array::new_with_elements(scope, &items);
+    rv.set(array.into());
 }
 
 /// Installs `__heap_bytes()` → `[used, limit, external]` for this isolate.
@@ -1136,6 +1254,7 @@ fn timer_set_inner(
             .wants(crate::diagnostics::SpanKind::Timer)
             .then(|| recorder.now() + delay_ms as f64)
     });
+    let origin = state_rc.borrow().track_origins.then(|| caller(scope));
     let id = {
         let mut state = state_rc.borrow_mut();
         let id = state.next_timer_id;
@@ -1148,6 +1267,7 @@ fn timer_set_inner(
                 args: extra,
                 delay_ms,
                 due_at,
+                origin,
                 context,
             },
         );

@@ -216,6 +216,9 @@ OPTIONS:
     --inspect[=<addr>]          Serve a debugger for each file in turn, one file
                                 at a time (default 127.0.0.1:9229)
     --inspect-brk[=<addr>]      ...and stop before each file's first statement
+    --detect-async-leaks        Fail a file that leaves timers, servers or other
+                                work pending after its tests, naming where each
+                                was started
     --coverage                  Measure which statements, branches, functions
                                 and lines the tests ran, and report it
     --changed[=<since>]         Run only the test files that reach what git
@@ -1448,6 +1451,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut coverage = None;
     let mut coverage_out = None;
     let mut inspect = None;
+    let mut detect_leaks = false;
     let mut timeout = None;
     let mut reporter = None;
     let mut update_snapshots = false;
@@ -1549,6 +1553,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                     address: inspect::parse_address(value)?,
                     wait: flag == "--inspect-brk",
                 });
+            }
+            "--detect-async-leaks" => {
+                reject_value(flag, value)?;
+                detect_leaks = true;
             }
             "--_coverage" => {
                 coverage_out = Some(std::path::PathBuf::from(require_value(flag, value)?));
@@ -1746,6 +1754,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         coverage_out,
         coverage_dir: None,
         inspect,
+        detect_leaks,
         affected_by,
         shard,
         randomize,
@@ -2146,6 +2155,21 @@ async fn run_tests(mut config: TestConfig) -> ExitCode {
     if config.list {
         config.coverage = None;
     }
+    if config.detect_leaks {
+        let refusal = if config.browser.is_some() {
+            Some("a browser run's pending work is the browser's, which this runtime cannot see")
+        } else if config.isolation == Some(TestIsolation::None) {
+            Some(
+                "with --isolation=none the files share one event loop, so nothing pending is any one file's",
+            )
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            eprintln!("error: --detect-async-leaks: {refusal}.");
+            return ExitCode::FAILURE;
+        }
+    }
     if let Err(err) = prepare_inspect(&mut config) {
         eprintln!("error: {err}");
         return ExitCode::FAILURE;
@@ -2485,7 +2509,10 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
         args: Vec::new(),
         capabilities,
         scopes,
-        options: RunOptions::default(),
+        options: RunOptions {
+            track_pending_work: config.detect_leaks,
+            ..RunOptions::default()
+        },
         transform: Some(std::sync::Arc::new(stripper)),
         bundler_style_resolution: true,
         extensions: guest::test_extensions(config.dom),

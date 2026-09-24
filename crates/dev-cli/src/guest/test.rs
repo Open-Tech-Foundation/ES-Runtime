@@ -118,6 +118,8 @@ pub struct RunOptions {
     pub repeats: Option<u32>,
     /// Register the tests and name them, running none.
     pub list: bool,
+    /// Report what is still pending once the tests have finished.
+    pub detect_leaks: bool,
 }
 
 impl RunOptions {
@@ -130,6 +132,7 @@ impl RunOptions {
             "seed": self.seed,
             "repeats": self.repeats,
             "list": self.list,
+            "detectLeaks": self.detect_leaks,
         })
     }
 }
