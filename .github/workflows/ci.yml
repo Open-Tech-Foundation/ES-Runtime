@@ -99,6 +99,47 @@ jobs:
       - uses: ./.github/actions/setup-tsr
       - run: tsr test:inspector
 
+  # `esdev test --browser` in real browsers: Chrome, Firefox and Edge on each
+  # tier-1 platform, as the runner images install them. The images keep the
+  # drivers in directories of their own, named by CHROMEWEBDRIVER and
+  # EDGEWEBDRIVER, and esdev looks for a driver on PATH, so those go on it.
+  # Each step names its browser, so one that cannot be driven fails the job
+  # instead of passing as a skip, and runs whether or not the one before it
+  # passed. Safari is left out until it serves WebDriver BiDi.
+  browser:
+    name: browser tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target/debug/gn_out
+      - uses: ./.github/actions/setup-tsr
+      - name: Put the browser drivers on PATH
+        shell: bash
+        run: |
+          echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
+          echo "$EDGEWEBDRIVER" >> "$GITHUB_PATH"
+      - name: Chrome
+        run: tsr test:browser
+        env:
+          ESDEV_TEST_BROWSER: chrome
+      - name: Firefox
+        if: success() || failure()
+        run: tsr test:browser
+        env:
+          ESDEV_TEST_BROWSER: firefox
+      - name: Edge
+        if: success() || failure()
+        run: tsr test:browser
+        env:
+          ESDEV_TEST_BROWSER: edge
+
   miri:
     name: miri
     runs-on: ubuntu-latest

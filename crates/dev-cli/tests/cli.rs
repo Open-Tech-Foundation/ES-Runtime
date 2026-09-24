@@ -14471,12 +14471,39 @@ fn test_mock_module_says_what_is_wrong_with_a_call() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The flag a real-browser test runs with. `ESDEV_TEST_BROWSER` names the
+/// browser, as each step of CI's browser job does; otherwise `--browser` takes
+/// the first this machine can drive.
+fn browser_flag() -> String {
+    match std::env::var("ESDEV_TEST_BROWSER") {
+        Ok(name) if !name.is_empty() => format!("--browser={name}"),
+        _ => "--browser".to_string(),
+    }
+}
+
+/// Whether a real-browser test stops here because nothing could be driven:
+/// what `err` says, unless a browser was named. A job that names its browser
+/// and cannot drive it has failed, and must not pass as a skip.
+fn no_browser(err: &str) -> bool {
+    if !err.contains("no browser that can run the tests") {
+        return false;
+    }
+    if let Ok(name) = std::env::var("ESDEV_TEST_BROWSER")
+        && !name.is_empty()
+    {
+        panic!("ESDEV_TEST_BROWSER={name}, and it could not be driven:\n{err}");
+    }
+    eprintln!("no browser can be driven here; the real-browser run did not happen");
+    true
+}
+
 /// In a page: `mock.module` is refused by name — its modules are bundled before
 /// it loads, so there is no load to replace a module at — while `mock.when`
 /// and the clock work, the clock faking what only a page has — and global
 /// setup runs beside the browser.
 #[test]
 fn test_mocks_and_the_clock_in_a_browser_run() {
+    let browser = browser_flag();
     let dir = module_mock_project("t_mock_module_browser");
     write_in(
         &dir,
@@ -14540,13 +14567,12 @@ test("idle when nothing waits, else after 50ms or the timeout", () => {
 "#,
     );
     let out = esdev_in(&dir)
-        .args(["test", "--browser", "--timeout=60000"])
+        .args(["test", &browser, "--timeout=60000"])
         .output()
         .expect("spawn esdev test --browser");
     let (text, err) = (stdout(&out), stderr(&out));
     let _ = std::fs::remove_dir_all(&dir);
-    if err.contains("no browser that can run the tests") {
-        eprintln!("no browser can be driven here; the real-browser run did not happen");
+    if no_browser(&err) {
         return;
     }
     assert!(!out.status.success(), "{text}{err}");
@@ -14763,6 +14789,7 @@ fn test_browser_refuses_what_has_no_meaning_in_a_page() {
 /// and the stubbed tests above cover the choosing everywhere.
 #[test]
 fn test_browser_runs_the_files_in_a_real_page() {
+    let browser = browser_flag();
     let dir = build_dir("t_browser_real");
     write_in(
         &dir,
@@ -14805,13 +14832,12 @@ fn test_browser_runs_the_files_in_a_real_page() {
         "import { test } from \"runtime:test\";\ntest.skip(\"later\", () => {});\n",
     );
     let out = esdev_in(&dir)
-        .args(["test", "--browser", "--timeout=60000"])
+        .args(["test", &browser, "--timeout=60000"])
         .output()
         .expect("spawn esdev test --browser");
     let (out_text, err) = (stdout(&out), stderr(&out));
-    if err.contains("no browser that can run the tests") {
+    if no_browser(&err) {
         assert!(!out.status.success());
-        eprintln!("no browser can be driven here; the real-browser run did not happen");
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
@@ -14856,7 +14882,7 @@ fn test_browser_runs_the_files_in_a_real_page() {
     let json = esdev_in(&dir)
         .args([
             "test",
-            "--browser",
+            &browser,
             "--reporter=json",
             "--timeout=60000",
             "quiet",
@@ -15204,6 +15230,7 @@ test("dup", () => { expect("first").toMatchSnapshot(); });
 /// that can be driven; on a machine without one it checks nothing.
 #[test]
 fn test_browser_snapshots_are_the_process_runs_snapshots() {
+    let browser = browser_flag();
     let dir = build_dir("t_browser_snapshots");
     let file = |user: &str| {
         write_in(
@@ -15229,12 +15256,11 @@ fn test_browser_snapshots_are_the_process_runs_snapshots() {
     );
 
     let matched = esdev_in(&dir)
-        .args(["test", "--browser", "--timeout=60000"])
+        .args(["test", &browser, "--timeout=60000"])
         .output()
         .expect("spawn esdev test --browser");
     let (out, err) = (stdout(&matched), stderr(&matched));
-    if err.contains("no browser that can run the tests") {
-        eprintln!("no browser can be driven here; the browser snapshot run did not happen");
+    if no_browser(&err) {
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
@@ -15246,7 +15272,7 @@ fn test_browser_snapshots_are_the_process_runs_snapshots() {
 
     file("bob");
     let changed = esdev_in(&dir)
-        .args(["test", "--browser", "--timeout=60000"])
+        .args(["test", &browser, "--timeout=60000"])
         .output()
         .expect("spawn esdev test --browser");
     let out = stdout(&changed);
@@ -15261,7 +15287,7 @@ fn test_browser_snapshots_are_the_process_runs_snapshots() {
     );
 
     let updated = esdev_in(&dir)
-        .args(["test", "--browser", "--update-snapshots", "--timeout=60000"])
+        .args(["test", &browser, "--update-snapshots", "--timeout=60000"])
         .output()
         .expect("spawn esdev test --browser --update-snapshots");
     assert!(
@@ -15422,6 +15448,7 @@ test("written by another runner", () => {
 #[cfg(unix)]
 #[test]
 fn test_browser_watch_runs_again_when_a_file_changes() {
+    let browser = browser_flag();
     let dir = build_dir("t_browser_watch");
     let test = dir.join("w.test.js");
     let body = |want: u32| {
@@ -15434,7 +15461,7 @@ fn test_browser_watch_runs_again_when_a_file_changes() {
     let out = dir.join("out.txt");
     let err = dir.join("err.txt");
     let mut child = esdev_in(&dir)
-        .args(["test", "--browser", "--watch", "--timeout=60000"])
+        .args(["test", &browser, "--watch", "--timeout=60000"])
         .stdout(std::fs::File::create(&out).expect("create out"))
         .stderr(std::fs::File::create(&err).expect("create err"))
         .spawn()
@@ -15454,7 +15481,7 @@ fn test_browser_watch_runs_again_when_a_file_changes() {
         stop(&mut child);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
-            errors.contains("no browser that can run the tests"),
+            no_browser(&errors),
             "the first pass never finished:\n{first}\n{errors}"
         );
         return;
@@ -16378,6 +16405,88 @@ fn test_watch_keys_cancel_a_run_and_update_snapshots() {
     assert!(
         !dir.join("finished.txt").exists(),
         "a cancelled test ran on"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What `runtime:test` added since browser runs began, in a real page:
+/// fixtures, tags, concurrent tests (one at a time there) and benchmarks.
+#[test]
+fn test_browser_runs_fixtures_tags_concurrency_and_benchmarks() {
+    let browser = browser_flag();
+    let dir = build_dir("t_browser_phase4");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "tags": [{ "name": "db" }, { "name": "slow" }] } }"#,
+    );
+    write_in(
+        &dir,
+        "features.test.ts",
+        r#"import { describe, expect, test } from "runtime:test";
+const it = test.extend("user", async ({}, { onCleanup }) => {
+  const user = { name: "ada", closed: false };
+  onCleanup(() => { user.closed = true; });
+  return user;
+});
+it("a fixture", ({ user, task }) => {
+  expect(user.name).toBe("ada");
+  expect(task.name).toBe("a fixture");
+});
+test("tagged db", { tags: ["db"] }, () => {});
+test("tagged slow", { tags: ["slow"] }, () => { throw new Error("filtered out"); });
+describe.concurrent("concurrent", () => {
+  for (const i of [1, 2, 3]) {
+    test(`case ${i}`, async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      expect.assertions(1);
+      expect(i).toBeGreaterThan(0);
+    });
+  }
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "parse.bench.ts",
+        r#"import { expect, test } from "runtime:test";
+test("compare", async ({ bench }) => {
+  const results = await bench.compare(
+    bench("parse", () => JSON.parse("[1,2,3]")),
+    bench("stringify", () => JSON.stringify([1, 2, 3])),
+    { time: 50 },
+  );
+  expect(results.get("parse")!.samples).toBeGreaterThan(0);
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", &browser, "--tags-filter=!slow", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev test --browser");
+    let (text, err) = (stdout(&out), stderr(&out));
+    if no_browser(&err) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(out.status.success(), "{text}{err}");
+    assert!(
+        text.contains("5 passed, 0 failed, 1 skipped"),
+        "{text}{err}"
+    );
+
+    let out = esdev_in(&dir)
+        .args(["bench", &browser, "--reporter=json", "--timeout=60000"])
+        .output()
+        .expect("spawn esdev bench --browser");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.contains(r#""type":"bench""#))
+            .count(),
+        2,
+        "{text}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
