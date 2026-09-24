@@ -353,6 +353,10 @@ fn is_watchable(path: &Path, root: &Path, extensions: &[&str]) -> bool {
         // matched by its prefix. Without this the dev loop watches its own
         // half-finished output and rebuilds for ever.
         name.starts_with(crate::staging::PREFIX)
+            // What esdev writes for itself — screenshots, and the CommonJS
+            // packages it converted — which a run reading them must not
+            // restart for.
+            || name == ".esdev"
     }) {
         return false;
     }
@@ -518,6 +522,22 @@ mod tests {
         ] {
             assert!(is_interesting(Path::new(path), root), "{path}");
         }
+    }
+
+    /// esdev's own output is not a change to answer: converting a package
+    /// writes modules into `node_modules/.esdev`, and a watch loop that
+    /// restarted for that would restart once for every package it converted.
+    #[test]
+    fn esdevs_own_output_is_not_watched() {
+        let root = Path::new("/p");
+        assert!(!is_interesting(
+            Path::new("/p/node_modules/.esdev/deps/react-1a2b.mjs"),
+            root
+        ));
+        assert!(!is_interesting(
+            Path::new("/p/.esdev/screenshots/a.js"),
+            root
+        ));
     }
 
     /// The names are ignored *below the root*, not anywhere in the path — a

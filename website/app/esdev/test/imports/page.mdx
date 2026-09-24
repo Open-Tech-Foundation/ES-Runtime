@@ -19,3 +19,24 @@ resolved all of it, so ship the build rather than the source.
 | --- | --- |
 | `esdev`, Bun, a bundler | resolves `util.ts` |
 | `esrun`, Node | `ERR_MODULE_NOT_FOUND` |
+
+## CommonJS packages
+
+`esdev` runs a CommonJS package without a build step. The first run that
+imports one converts it to an ES module under `node_modules/.esdev/deps/`;
+later runs reuse the result until the package or the lockfile changes.
+
+```js
+import IntlMessageFormat, { IntlMessageFormat as Named } from "intl-messageformat";
+```
+
+| | |
+| --- | --- |
+| **Named imports** | Read from the source, as Node reads them: `exports.x =`, `Object.defineProperty(exports, "x", …)`, and re-exported files |
+| **The default import** | `module.exports`, or its `default` when the package was compiled from ES modules — the same as `esdev build` |
+| **Shared packages** | A package another one `require`s is loaded once, so react-dom and your test use the same React |
+| **Mocking** | `mock.module("pkg", …)` and `mock.importActual` work on a converted package |
+| **Node builtins** | A `require("fs")` fails where it runs, naming the package, not at import |
+
+The same conversion applies to `esdev app.ts`. `esrun` still loads ES module
+packages only, so ship the output of [`esdev build`](/esdev/build).

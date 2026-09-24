@@ -111,6 +111,12 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **CommonJS packages run unbundled.** `esdev test`, `esdev <file>`, global
+  setup and plugins convert a CommonJS dependency to an ES module the first
+  time it is imported, caching it under `node_modules/.esdev/deps/`. Named
+  imports, the default import and `mock.module` work as they do for an ES
+  module package, and a package required by several others is loaded once.
+  `esrun` still loads ES module packages only (DECISIONS D123).
 - **A grant per test file**: `@permissions` in a file's `/** … */` comment
   runs its tests under those `esrun` flags, starting from nothing, as its
   deployment does. The command line's permission flags apply to the files that

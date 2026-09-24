@@ -90,6 +90,13 @@ pub struct Config {
     /// the two binaries differ here, and why they still agree about every
     /// specifier that resolves under both.
     pub bundler_style_resolution: bool,
+    /// What loads a package the runtime refuses — how `esdev` runs a
+    /// CommonJS dependency unbundled.
+    ///
+    /// `esrun` passes `None`, and loads ES module packages only (D22): the
+    /// conversion is a bundler's, and the bundler lives in `esdev`. See
+    /// [`PackageConverter`].
+    pub package_converter: Option<Arc<dyn PackageConverter>>,
     /// Watches what the run actually reaches for — how `esdev` serves
     /// `--trace-permissions` (D59).
     ///
@@ -153,6 +160,84 @@ pub trait SourceTransform: Send + Sync {
     /// transform.
     fn reserved_query(&self) -> Option<&'static str> {
         None
+    }
+}
+
+/// Loads a package the runtime's resolver refuses, as a module of its own.
+///
+/// The runtime loads ES module packages only (D22), and `esdev build` converts
+/// CommonJS on the way in. A module run *unbundled* — a test file, `esdev
+/// app.ts` — had neither, so the same project built and could not be tested.
+/// This is the seam that lets `esdev` convert such a package when it is asked
+/// for, without teaching the runtime `require`.
+///
+/// **Resolving is synchronous and builds nothing.** `import.meta.resolve` and
+/// `mock.module` resolve with no await available, and must reach the same id an
+/// `import` does. So [`resolve`](Self::resolve) only *names* where the
+/// converted module will be, and [`prepare`](Self::prepare) makes it before
+/// it is read.
+pub trait PackageConverter: Send + Sync {
+    /// The id to load `specifier` by instead, when it names a package this
+    /// converts. Asked only after the runtime's own resolution failed, so it
+    /// can never replace a module that resolves.
+    fn resolve(&self, specifier: &str, referrer: &str) -> Option<String>;
+
+    /// Makes `id` ready to read, if it is one [`resolve`](Self::resolve)
+    /// named. `None` is an id that is not this converter's.
+    fn prepare(&self, id: &str) -> Option<es_runtime_providers::BoxFuture<Result<(), String>>>;
+}
+
+/// Wraps a [`ModuleLoader`] so a package it refuses is offered to a
+/// [`PackageConverter`] before the refusal stands.
+struct ConvertingLoader {
+    inner: Arc<dyn ModuleLoader>,
+    converter: Arc<dyn PackageConverter>,
+}
+
+impl ModuleLoader for ConvertingLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<String, ProviderError>> {
+        let resolving = self.inner.resolve(specifier, referrer);
+        let converter = self.converter.clone();
+        let specifier = specifier.to_string();
+        let referrer = referrer.to_string();
+        Box::pin(async move {
+            match resolving.await {
+                Ok(id) => Ok(id),
+                // The runtime's refusal, not one about the conversion: when
+                // nothing converts it, what was written is what failed.
+                Err(refused) => converter.resolve(&specifier, &referrer).ok_or(refused),
+            }
+        })
+    }
+
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        match self.inner.resolve_sync(specifier, referrer)? {
+            Ok(id) => Some(Ok(id)),
+            Err(refused) => Some(self.converter.resolve(specifier, referrer).ok_or(refused)),
+        }
+    }
+
+    fn load(
+        &self,
+        specifier: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<ModuleSource, ProviderError>> {
+        let inner = self.inner.clone();
+        let preparing = self.converter.prepare(specifier);
+        let specifier = specifier.to_string();
+        Box::pin(async move {
+            if let Some(preparing) = preparing {
+                preparing.await.map_err(ProviderError::Other)?;
+            }
+            inner.load(&specifier).await
+        })
     }
 }
 
@@ -654,6 +739,13 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         })
     } else {
         Arc::new(loader_impl)
+    };
+    let resolved: Arc<dyn ModuleLoader> = match &config.package_converter {
+        Some(converter) => Arc::new(ConvertingLoader {
+            inner: resolved,
+            converter: converter.clone(),
+        }),
+        None => resolved,
     };
     let loader: Arc<dyn ModuleLoader> = match &config.transform {
         Some(transform) => Arc::new(TransformingLoader {

@@ -39,6 +39,10 @@ namespace) is unstable and may change between minor releases until the API freez
   module loader does, with its node_modules walk and bundler-style fallbacks,
   without running anything. `esdev test --changed` builds its import graph with
   it.
+- **`cli-common`'s `Config::package_converter`** lets a binary load a package
+  the runtime's resolver refuses, through a `PackageConverter` it supplies.
+  `esdev` converts CommonJS packages with it; `esrun` passes `None` and still
+  loads ES module packages only (DECISIONS D123).
 - **Pending-work tracking for embedders**: `Engine::track_pending_work`,
   `Runtime::track_pending_work` and `RunOptions::track_pending_work` record where
   each timer and async op starts, and install `__esdev_pending_work(release)`,

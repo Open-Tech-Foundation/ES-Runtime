@@ -196,6 +196,7 @@ async fn start(dir: &std::path::Path, specs: &[PluginSpec]) -> Result<PluginHost
                 // A plugin is source somebody is editing, like everything else
                 // this binary runs.
                 bundler_style_resolution: true,
+                package_converter: Some(crate::commonjs::converter()),
                 extensions: crate::guest::extensions_hosting(hosted),
                 observer: None,
                 inspector: None,

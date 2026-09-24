@@ -18,6 +18,10 @@ path = "src/main.rs"
 es-runtime-cli-common.workspace = true
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
+# The runtime's own `node_modules` resolution, so a package converted from
+# CommonJS imports its ES module dependencies by the same URL the runtime
+# gives them everywhere else — one instance, not two.
+es-runtime-default-providers.workspace = true
 # A `file:` URL for a plugin module the config named by path — the generated
 # program that loads them has no file of its own for a relative specifier to be
 # relative to. Already in the tree (the loader speaks URLs), so no new crate.
@@ -57,6 +61,7 @@ rolldown_common.workspace = true
 rolldown_sourcemap.workspace = true
 # The vocabulary a hot update is assembled in. See the workspace manifest.
 rolldown_utils.workspace = true
+oxc_resolver.workspace = true
 rustc-hash.workspace = true
 # Which shard a test file falls in, by the hash Jest and Vitest shard with.
 sha1.workspace = true

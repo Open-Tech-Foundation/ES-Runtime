@@ -32,6 +32,9 @@ esdev build server.js         # a CJS dependency goes in
 esrun dist/server.js          # ordinary ESM comes out
 ```
 
+`esdev test` and `esdev <file>` convert a CommonJS package as they load it, so a
+test needs no build step. See [Imports](/esdev/test/imports#commonjs-packages).
+
 ## A shorter deploy line
 
 An unbundled program needs `--allow-imports`, because the loader walks

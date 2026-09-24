@@ -227,6 +227,7 @@ fn parse_args() -> Result<Config, String> {
                     // names no file is a mistake rather than something to
                     // search for.
                     bundler_style_resolution: false,
+                    package_converter: None,
                     // Nothing is added to the `runtime:` namespace here. A
                     // production binary offers the standard modules and only
                     // those, so `runtime:build` and `runtime:watch` — `esdev`'s
@@ -273,6 +274,7 @@ fn parse_args() -> Result<Config, String> {
                     // names no file is a mistake rather than something to
                     // search for.
                     bundler_style_resolution: false,
+                    package_converter: None,
                     // Nothing is added to the `runtime:` namespace here. A
                     // production binary offers the standard modules and only
                     // those, so `runtime:build` and `runtime:watch` — `esdev`'s

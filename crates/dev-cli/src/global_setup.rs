@@ -176,6 +176,7 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
         options: RunOptions::default(),
         transform: Some(transform),
         bundler_style_resolution: true,
+        package_converter: Some(crate::commonjs::converter()),
         extensions: crate::guest::test_extensions(false),
         observer: None,
         inspector: None,

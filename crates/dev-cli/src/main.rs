@@ -46,6 +46,7 @@ mod browser_run;
 mod build;
 mod bundler;
 mod check;
+mod commonjs;
 mod config;
 mod contract;
 mod coverage;
@@ -701,6 +702,7 @@ fn parse_args() -> Result<Command, String> {
                         // The file being edited resolves the way the build
                         // that bundles it does.
                         bundler_style_resolution: true,
+                        package_converter: Some(crate::commonjs::converter()),
                         extensions: guest::extensions(),
                         // The deploy line is printed with the entry as it was
                         // named, so it is one a reader can copy. For `-e` there
@@ -759,6 +761,7 @@ fn parse_args() -> Result<Command, String> {
                         // The file being edited resolves the way the build
                         // that bundles it does.
                         bundler_style_resolution: true,
+                        package_converter: Some(crate::commonjs::converter()),
                         extensions: guest::extensions(),
                         observer: permission_trace(tracing_permissions, path),
                         inspector: None,
@@ -2776,6 +2779,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
         },
         transform: Some(transform),
         bundler_style_resolution: true,
+        package_converter: Some(crate::commonjs::converter()),
         extensions: guest::test_extensions(config.dom),
         observer: None,
         inspector: None,
@@ -2982,6 +2986,7 @@ pub(crate) async fn run_tests_unisolated(
         options: RunOptions::default(),
         transform: Some(transform),
         bundler_style_resolution: true,
+        package_converter: Some(crate::commonjs::converter()),
         extensions: guest::test_extensions(config.dom),
         observer: None,
         inspector: None,

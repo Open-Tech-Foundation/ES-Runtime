@@ -338,6 +338,12 @@ rolldown_sourcemap = "=1.2.3"
 # via rolldown itself, so this adds no crate. Pinned with it for the same reason
 # `rolldown_common` is: these are the types its signatures name.
 rolldown_utils = "=1.2.3"
+# The resolver rolldown resolves with. `esdev` converts a CommonJS package it
+# is asked to load unbundled, and has to find the package the way `esdev build`
+# would before converting it — naming the resolver the bundler already uses
+# rather than writing a second one. Already in the graph via rolldown; pinned
+# with it.
+oxc_resolver = "=11.24.2"
 rustc-hash = "2.1.3"
 arcstr = "1.2.0"
 anyhow = "1.0.104"

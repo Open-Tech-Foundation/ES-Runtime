@@ -1030,6 +1030,135 @@ fn extra_conditions_add_rather_than_replace() {
     assert!(text.contains("custom"), "{text}");
 }
 
+/// Four CommonJS packages: one compiled from ES modules, two where one
+/// `require`s the other's state, and one that requires a Node builtin on a
+/// branch only a call reaches.
+fn commonjs_packages(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    let package = |name: &str, index: &str| {
+        let at = dir.join("node_modules").join(name);
+        std::fs::create_dir_all(&at).expect("mkdir");
+        write_in(
+            &at,
+            "package.json",
+            &format!(r#"{{"name":"{name}","version":"1.0.0","main":"index.js"}}"#),
+        );
+        write_in(&at, "index.js", index);
+    };
+    package(
+        "greeter",
+        "\"use strict\";\n\
+         Object.defineProperty(exports, \"__esModule\", { value: true });\n\
+         exports.greet = (name) => 'hi ' + name;\n\
+         exports.default = 'the default';\n",
+    );
+    package("shared-state", "module.exports = { count: 0 };\n");
+    package(
+        "counter",
+        "const state = require('shared-state');\n\
+         module.exports = { bump: () => ++state.count };\n",
+    );
+    package(
+        "needs-fs",
+        "exports.read = () => require('fs').readFileSync('x');\n",
+    );
+    write_in(&dir, "package.json", r#"{"name":"app"}"#);
+    dir
+}
+
+/// A test imports a CommonJS package unbundled: its names link, its default is
+/// what a bundler makes it, a package it requires is the same instance the
+/// test imports, and a builtin it cannot have fails only when it is reached.
+#[test]
+fn test_imports_commonjs_packages_unbundled() {
+    let dir = commonjs_packages("b_cjs_test");
+    write_in(
+        &dir,
+        "cjs.test.js",
+        "import { test, expect } from 'runtime:test';\n\
+         import greeting, { greet } from 'greeter';\n\
+         import state from 'shared-state';\n\
+         import { bump } from 'counter';\n\
+         import { read } from 'needs-fs';\n\
+         test('names and the default', () => {\n\
+           expect(greet('Ada')).toBe('hi Ada');\n\
+           expect(greeting).toBe('the default');\n\
+         });\n\
+         test('one instance of a required package', () => {\n\
+           bump();\n\
+           expect(state.count).toBe(1);\n\
+         });\n\
+         test('a builtin fails where it is required', () => {\n\
+           expect(read).toThrow('\"fs\"');\n\
+         });\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("3 passed"), "{}", stdout(&out));
+    // Converted once, into the project's own node_modules, and reused.
+    let converted = std::fs::read_dir(dir.join("node_modules/.esdev/deps"))
+        .expect("the conversions")
+        .count();
+    assert!(converted >= 4, "{converted}");
+    let again = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        again.status.success(),
+        "{}{}",
+        stdout(&again),
+        stderr(&again)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A converted package is a module like any other to `mock.module`: the mock
+/// replaces it, and `importActual` still reaches the real one.
+#[test]
+fn test_mocks_a_commonjs_package() {
+    let dir = commonjs_packages("b_cjs_mock");
+    write_in(
+        &dir,
+        "mock.test.js",
+        "import { test, expect, mock } from 'runtime:test';\n\
+         mock.module('greeter', () => ({ greet: () => 'mocked' }));\n\
+         import { greet } from 'greeter';\n\
+         test('mocked', async () => {\n\
+           expect(greet('Ada')).toBe('mocked');\n\
+           const real = await mock.importActual('greeter');\n\
+           expect(real.greet('Ada')).toBe('hi Ada');\n\
+         });\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `esdev <file>` runs it too, and `import.meta.resolve` names the module an
+/// import gets.
+#[test]
+fn a_module_run_unbundled_imports_a_commonjs_package() {
+    let dir = commonjs_packages("b_cjs_run");
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { greet } from 'greeter';\n\
+         console.log(greet('Ada'));\n\
+         console.log(import.meta.resolve('greeter').includes('/.esdev/deps/'));\n",
+    );
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "hi Ada\ntrue\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_commonjs_dependency_is_converted_rather_than_refused() {
     let dir = build_dir("b_cjs");
