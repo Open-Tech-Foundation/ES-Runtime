@@ -675,13 +675,20 @@ fn fingerprint(entry: &Path) -> String {
         .collect()
 }
 
-/// The directory an import was written in.
+/// The directory an import was written in — or, for a directory URL (one
+/// ending in `/`), that directory itself.
 fn referrer_dir(referrer: &str) -> PathBuf {
     url::Url::parse(referrer)
         .ok()
         .filter(|url| url.scheme() == "file")
         .and_then(|url| url.to_file_path().ok())
-        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .and_then(|path| {
+            if referrer.ends_with('/') {
+                Some(path)
+            } else {
+                path.parent().map(Path::to_path_buf)
+            }
+        })
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default()
 }

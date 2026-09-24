@@ -129,6 +129,15 @@ fn importer(referrer: &str) -> PathBuf {
         .ok()
         .filter(|url| url.scheme() == "file")
         .and_then(|url| url.to_file_path().ok())
+        // A directory URL resolves from inside it: the tsconfig that owns a
+        // file there is the one that owns the directory.
+        .map(|path| {
+            if referrer.ends_with('/') {
+                path.join("__esdev_entry__")
+            } else {
+                path
+            }
+        })
         .or_else(|| {
             std::env::current_dir()
                 .ok()

@@ -90,6 +90,19 @@ so it needs the same permission an import does (`--allow-imports`) and obeys the
 same root jail and import policy — a run that may not import a package may not
 locate it either. A URL it returns is always one `import()` accepts.
 
+A second argument resolves from somewhere other than the current module, as
+Node's does: an absolute URL, and a directory when it ends in `/`. A tool uses it
+to resolve a package the way the project it serves would, finding the project's
+copy rather than one nested under the tool:
+
+```js
+const root = new URL("./", `file://${cwd()}/`);   // cwd from runtime:process
+import.meta.resolve("@opentf/web", root);          // the project's copy
+import.meta.resolve("./app/page.jsx", root);       // relative to the project
+```
+
+A relative `parent` is a `TypeError`: a directory is a URL, not a path.
+
 ## Resolving packages
 
 Bare specifiers resolve from `node_modules`, honoring the package `exports` map:

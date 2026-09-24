@@ -39,6 +39,44 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// `import.meta.resolve(specifier, parent)`, as Node takes it: a tool resolves
+/// a package from the project it serves, not from its own file — so the
+/// project's copy wins over the tool's own nested one. A relative parent is
+/// refused, naming what to pass.
+#[test]
+fn import_meta_resolve_resolves_from_a_parent_url() {
+    let dir = std::env::temp_dir().join(format!("esrun-parent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for pkg in ["node_modules/pkg", "tool/node_modules/pkg"] {
+        std::fs::create_dir_all(dir.join(pkg)).unwrap();
+        std::fs::write(
+            dir.join(pkg).join("package.json"),
+            r#"{ "name": "pkg", "type": "module", "exports": "./i.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join(pkg).join("i.js"), "export default 1;\n").unwrap();
+    }
+    std::fs::write(dir.join("package.json"), r#"{ "name": "project" }"#).unwrap();
+    std::fs::write(
+        dir.join("tool/cli.js"),
+        "const root = new URL('../', import.meta.url);\n\
+         console.log(import.meta.resolve('pkg').includes('/tool/node_modules/'));\n\
+         console.log(!import.meta.resolve('pkg', root).includes('/tool/'));\n\
+         console.log(import.meta.resolve('pkg', root.href) === import.meta.resolve('pkg', root));\n\
+         console.log(import.meta.resolve('./x.js', root) === root.href + 'x.js');\n\
+         try { import.meta.resolve('pkg', './relative/'); } catch (e) { console.log(e instanceof TypeError); }\n",
+    )
+    .unwrap();
+    let out = esrun()
+        .current_dir(&dir)
+        .arg("tool/cli.js")
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true\ntrue\ntrue\ntrue\ntrue");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A module is its URL, query included, as in a browser and every other
 /// runtime: `?v=2` evaluates the file afresh, while one query imported twice,
 /// statically or not, is one module.

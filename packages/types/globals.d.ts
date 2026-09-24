@@ -145,3 +145,22 @@ interface Navigator {
 interface WorkerNavigator {
   readonly hardwareConcurrency: number;
 }
+
+interface ImportMeta {
+  /**
+   * The URL `specifier` names, resolved from `parent` rather than from this
+   * module: an absolute URL, and a directory when it ends in `/`.
+   *
+   * How a tool resolves a package the way the project it serves would — from
+   * the project's root, not from the tool's own file.
+   *
+   * ```ts
+   * const root = new URL("./", `file://${cwd()}/`);
+   * import.meta.resolve("@opentf/web", root);
+   * ```
+   *
+   * The second argument is Node's; a bare specifier needs `--allow-imports`,
+   * as importing it does.
+   */
+  resolve(specifier: string, parent?: string | URL): string;
+}

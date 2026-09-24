@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D127 — `import.meta.resolve(specifier, parent)` · *Proposed (2026-09-25)*
+
+**Context:** `import.meta.resolve` resolves only against the calling module. A tool — Web-App-Framework's dev server, a codegen step — has to resolve a package the way the *project it serves* would: from the project's root, so the project's copy wins over the one nested under the tool. With no way to say that, the dev server carries its own `node_modules` walk and `exports` resolver in JavaScript (`resolveFrom`, `throughExports`), a second resolver that already disagrees with the runtime's: it tries conditions in the order it lists them, where D40 follows the order the package's author wrote.
+
+**Decision (maintainer sign-off pending):**
+
+- **An optional second argument, `parent`: an absolute URL, as a string or a `URL`.** Node's shape (`import.meta.resolve(specifier, parent)`), so code written for it reads the same here. It replaces the module as the base for every kind of specifier: a relative one joins onto it, a bare or `#private` one resolves through the loader from it.
+- **A directory is a URL ending in `/`, and resolves from inside itself**, as URL resolution already treats it. The loader's referrer-to-directory step took a referrer's parent, which is right for a module and wrong for `file:///app/` (it gave `/`); a referrer ending in `/` is now its own directory there, and in `esdev`'s alias and CommonJS lookups, which had the same step.
+- **A relative `parent` is a `TypeError`**, naming the fix. **Rejected: resolving it against the calling module**, which makes `"./"` mean the tool's directory — the one place the argument exists to get away from. **Rejected: accepting a filesystem path**, which is what `resolveFrom` took; a path is not a URL, and a URL is what every other module API here takes.
+- **No new capability.** A bare specifier reads `package.json` files as it did, under the same grant, root jail and import policy.
+
+**Consequences:** the dev server's resolver becomes `import.meta.resolve(spec, root)`, and there is one resolver again. The type definitions declare the second argument. Verified by a loader unit test (a directory referrer resolves from inside it; a file referrer from its directory), an `esrun` end-to-end test (the tool's own copy by default, the project's from its root, a string and a `URL` agreeing, a relative specifier against the parent, a relative parent refused), and a type test. Documented per D27 (`docs/API.md`, site `docs/modules`, `CHANGELOG`).
+
+---
+
 ### D126 — A module is its URL, query included · *Proposed (2026-09-25)*
 
 **Context:** `import("./m.js?v=2")` returned the module already loaded for `./m.js`. The loader canonicalizes a path for the root jail and the import policy and rebuilt the id from the canonical path, which dropped the query, and the realm's module map is keyed by that id. No decision chose this; it fell out of canonicalization. The HTML module map is keyed by URL, and Node, Deno and Bun key theirs the same way, so `?v=2` means a fresh evaluation there. Web-App-Framework's dev server, which reads a project's `otfw.config.js` and each docs `_meta.js` again when they change, therefore bundled every version to a new file path to get a new module (its own comment: "the runtime's ESM cache is keyed by file path and ignores a `?v=` query"), and that workaround raced: two concurrent reads of one file cleared each other's output directory, and a sidebar fell back to its default order at random.

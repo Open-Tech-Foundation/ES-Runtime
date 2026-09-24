@@ -15,6 +15,9 @@ itself.
 
 ### Added
 
+- **`import.meta.resolve(specifier, parent)`**: the `parent` a resolution
+  starts from, as a string or `URL`.
+
 - **Durable-worker shards** — `shards`, `module` and `permissions` on
   `DurableConfig`, and `DurableErrorCode.ShardLost`.
 - **`toMatchScreenshot`** on `Matchers`, and `ScreenshotOptions`.
