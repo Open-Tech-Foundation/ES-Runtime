@@ -1,0 +1,200 @@
+---
+title: import.meta across runtimes
+description: What the standard defines on import.meta, what Node, Deno, Bun and build tools add, what esrun and esdev provide, and how to write code that runs on all of them.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# import.meta across runtimes
+
+`import.meta` is an object every ES module gets, describing that module.
+ECMAScript defines the object and leaves its contents to the host. The web
+defines two members. Every server runtime adds its own, and build tools add
+more at compile time, so code that reaches past the two standard members is
+code that runs in one place.
+
+This page lists what exists where, what esrun and esdev provide, and how to
+write module code that runs unchanged across them.
+
+## The standard: `url` and `resolve`
+
+The HTML standard defines exactly two members, and every runtime below
+implements both:
+
+| Member | |
+| --- | --- |
+| `import.meta.url` | The module's absolute URL, as a string: `"file:///app/server.js"` |
+| `import.meta.resolve(specifier)` | The URL `specifier` names when imported from this module, as a string. Synchronous; one argument |
+
+```js
+const config = new URL("./config.json", import.meta.url);   // a file beside this module
+const worker = import.meta.resolve("./worker.js");           // "file:///app/worker.js"
+```
+
+Anything else on `import.meta` is an extension.
+
+## What exists where
+
+| Member | Standard | esrun / esdev | Node | Deno | Bun |
+| --- | --- | --- | --- | --- | --- |
+| `url` | Yes | Yes | Yes | Yes | Yes |
+| `resolve(specifier)` | Yes | Yes | Yes | Yes | Yes |
+| `resolve(specifier, parent)` | No | Yes | Behind `--experimental-import-meta-resolve` | No | No |
+| `dirname` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
+| `filename` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
+| `main` | No | No | Experimental (22.18, 24.2) | Yes | Yes |
+| `dir`, `file`, `path` | No | No | No | No | Yes |
+| `env` | No | `esdev build` output only | No | No | Yes, `process.env` |
+| `hot` | No | `esdev start` bundles only | No | No | No |
+| `glob(pattern)` | No | No | No | No | No |
+
+Build tools add members of their own at compile time, and they are gone from
+the output:
+
+| Member | Where it comes from |
+| --- | --- |
+| `import.meta.env` | Vite (`VITE_*`, `MODE`, `BASE_URL`, `DEV`, `PROD`, `SSR`); [`esdev build`](/esdev/build/project#import-meta-env) (`PUBLIC_*`, `MODE`, `DEV`, `PROD`) |
+| `import.meta.hot` | Vite's HMR; [`esdev start`](/esdev/start/hmr)'s, a subset of Vite's with `signal` and `keep` added |
+| `import.meta.glob` | Vite only |
+
+<Callout type="note" title="Versions">
+  Node added `dirname` and `filename` in 20.11 and 21.2, and marked them stable
+  in 22.16 and 24.0. `main` is experimental, from 22.18 and 24.2.
+  `import.meta.resolve` is a release candidate since 20.6, and the `parent`
+  argument is outside that: it needs the flag, and Node calls it non-standard.
+</Callout>
+
+## What esrun and esdev provide
+
+**At run time, in `esrun` and `esdev` alike: `url` and `resolve`, nothing
+else.**
+
+`import.meta.url` is the module's URL, query included: `./config.js?v=2` is
+a module of its own, evaluated afresh, which is how a dev server re-reads a
+file that changed ([Module system](/docs/modules#a-module-is-its-url)).
+
+`import.meta.resolve(specifier, parent)` takes a second argument this runtime
+supports without a flag: an absolute URL to resolve from instead of this
+module, and a directory when it ends in `/`. A tool uses it to resolve a
+package the way the project it serves would:
+
+```js
+const root = new URL("./", `file://${cwd()}/`);    // cwd from runtime:process
+import.meta.resolve("@opentf/web", root);           // the project's copy, not the tool's
+```
+
+A bare specifier reads `package.json` files, so it needs `--allow-imports`, as
+importing it does.
+
+**At build time, in esdev only:**
+
+- `import.meta.env` is replaced in what [`esdev build`](/esdev/build/project#import-meta-env)
+  writes. In a module run unbundled, with `esdev <file>` or `esdev test`, it is
+  `undefined`.
+- `import.meta.hot` exists in the bundles [`esdev start`](/esdev/start/hmr)
+  serves hot, and is `undefined` everywhere else.
+
+`dirname`, `filename`, `main` and Bun's `dir`, `file`, `path` and `env` are not
+provided: code that reads them gets `undefined`.
+
+## Writing code that runs everywhere
+
+Use the two standard members, and derive the rest from them.
+
+### A file beside the module
+
+A `file:` URL is the portable form: [`runtime:fs`](/api/fs) takes one wherever
+it takes a path, and so do Node's and Deno's file APIs.
+
+```js
+const schema = new URL("./schema.sql", import.meta.url);
+```
+
+### The module's directory or path
+
+Derive them from `import.meta.url` rather than reading `dirname` or `filename`:
+
+```js
+import { dirname, fromFileURL } from "runtime:path";
+
+const filename = fromFileURL(import.meta.url);
+const directory = dirname(filename);
+```
+
+`runtime:path` is this runtime's module. In a library meant for several
+runtimes, keep the value a URL (`new URL(".", import.meta.url)` is the
+directory) and convert it at the edge where a path is needed. See
+[Migrating from Node](/docs/migration/node) for the rest of the `__dirname`
+translation.
+
+### Whether this module is the entry
+
+`import.meta.main` has no portable form. Put the program in a module of its own
+and keep what it uses in modules that export it:
+
+```js
+// lib.js — importable anywhere, runs nothing
+export function run() { /* … */ }
+
+// main.js — the entry, and only the entry
+import { run } from "./lib.js";
+run();
+```
+
+### Resolving from somewhere else
+
+`import.meta.resolve(specifier, parent)` is this runtime's, and Node's only
+behind a flag. Code that has to run elsewhere cannot rely on the second
+argument. Resolve from a module that lives where resolution should start, or
+keep the call in code that only ever runs under esdev, such as a dev server or
+a build step.
+
+### Environment values
+
+`import.meta.env` is a build-time replacement, not an object that exists at run
+time. Read the environment where the program runs through
+[`runtime:process`](/api/process), which a deployment grants with `--allow-env`.
+In source that is also bundled, guard the build-time form:
+
+```js
+const mode = import.meta.env?.MODE ?? "development";
+```
+
+### Hot replacement
+
+Always behind a check, so the module still runs where there is no dev loop:
+
+```js
+if (import.meta.hot) {
+  import.meta.hot.accept();
+}
+```
+
+### Re-reading a module that changed
+
+Import it under a new query. It works here, in browsers, whose module map is
+keyed by URL, and in Node, which documents it. Deno and Bun do not document how
+a query affects their module cache, so check before relying on it there:
+
+```js
+const fresh = await import(`./config.js?v=${Date.now()}`);
+```
+
+Every version stays in memory for the life of the process, so this belongs in
+development tools, not in a loop that runs in production.
+
+## TypeScript
+
+[`@opentf/esrun-types`](/esdev/typescript) declares what this runtime provides,
+including the `parent` argument. `import.meta.hot` is declared for esdev. A
+library that reads `import.meta.dirname` compiles against Node's types and
+still gets `undefined` here, so the compiler cannot catch it. Stay on `url` and
+`resolve`.
+
+## References
+
+- [HTML Standard: `HostGetImportMetaProperties`](https://html.spec.whatwg.org/multipage/webappapis.html#hostgetimportmetaproperties)
+- [Node.js: `import.meta`](https://nodejs.org/api/esm.html#importmeta)
+- [Deno: `ImportMeta`](https://docs.deno.com/api/web/~/ImportMeta)
+- [Bun: `import.meta`](https://bun.com/docs/runtime/module-resolution)
+- [Vite: env variables](https://vite.dev/guide/env-and-mode), [HMR API](https://vite.dev/guide/api-hmr), [glob import](https://vite.dev/guide/features)

@@ -47,8 +47,8 @@ await plugin.init();
 
 ## A module is its URL
 
-A module is identified by its URL, query and fragment included, as in a browser
-and in Node, Deno and Bun. The same URL imported twice, statically or
+A module is identified by its URL, query and fragment included, as the HTML
+standard's module map is keyed and as Node documents. The same URL imported twice, statically or
 dynamically, is one module; a different query is a different module, evaluated
 afresh from what is on disk:
 
@@ -90,8 +90,10 @@ so it needs the same permission an import does (`--allow-imports`) and obeys the
 same root jail and import policy — a run that may not import a package may not
 locate it either. A URL it returns is always one `import()` accepts.
 
-A second argument resolves from somewhere other than the current module, as
-Node's does: an absolute URL, and a directory when it ends in `/`. A tool uses it
+A second argument resolves from somewhere other than the current module: an
+absolute URL, and a directory when it ends in `/`. It is not standard — Node has
+the same argument behind `--experimental-import-meta-resolve`, and Deno and Bun
+do not — see [import.meta across runtimes](/docs/guides/import-meta). A tool uses it
 to resolve a package the way the project it serves would, finding the project's
 copy rather than one nested under the tool:
 
