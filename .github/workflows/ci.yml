@@ -99,8 +99,8 @@ jobs:
       - uses: ./.github/actions/setup-tsr
       - run: tsr test:inspector
 
-  # `esdev test --browser` in real browsers: Chrome, Firefox and Edge on each
-  # tier-1 platform, as the runner images install them. The images keep the
+  # `esdev test --browser` in real browsers: Chrome and Firefox on each tier-1
+  # platform, and Edge on Windows, as the runner images install them. The images keep the
   # drivers in directories of their own, named by CHROMEWEBDRIVER and
   # EDGEWEBDRIVER, and esdev looks for a driver on PATH, so those go on it.
   # Each step names its browser, so one that cannot be driven fails the job
@@ -134,8 +134,10 @@ jobs:
         run: tsr test:browser
         env:
           ESDEV_TEST_BROWSER: firefox
+      # Edge is Chromium, so a second Chromium run adds little but its driver
+      # and install paths; it is run where it is the machine's own browser.
       - name: Edge
-        if: success() || failure()
+        if: matrix.os == 'windows-latest' && (success() || failure())
         run: tsr test:browser
         env:
           ESDEV_TEST_BROWSER: edge
