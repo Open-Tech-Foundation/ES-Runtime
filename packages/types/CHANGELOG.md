@@ -15,9 +15,11 @@ itself.
 
 ### Added
 
-- **Benchmarks** — `bench` in `TestContext`, `Bench`, `BenchTask`,
-  `BenchOptions`, `BenchTaskOptions`, `BenchResult`, `BenchStatistics`, and the
-  `toBeFasterThan`/`toBeSlowerThan` matchers.
+- **Benchmarks** — `bench` in `TestContext`, `Bench` (with `from`),
+  `BenchTask`, `BenchOptions`, `BenchTaskOptions` (with `writeResult`),
+  `BenchTimer`, `BenchResult` (with `warnings` and `stored`),
+  `BenchResultData`, `BenchStatistics`, and the `toBeFasterThan`/`toBeSlowerThan`
+  matchers.
 - **`test.concurrent`, `test.sequential`, `describe.concurrent`,
   `describe.sequential`** and `concurrent` in `TestOptions`/`DescribeOptions`.
 - **`expectTypeOf` and `assertType`**, with `ExpectTypeOf`, `TypeMismatch` and

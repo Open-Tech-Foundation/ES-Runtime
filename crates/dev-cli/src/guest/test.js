@@ -1098,15 +1098,25 @@ async function runCase({ id, title, fn, scope, options, fixtures, concurrent }) 
 //
 // `bench` in the test context, under `esdev bench`: Vitest 5's shape. A
 // benchmark is registered with `bench(name, options?, fn)` and measured by
-// `.run()`, or several side by side by `bench.compare(...)`.
+// `.run()`, or several side by side by `bench.compare(...)`. A result can be
+// written to a file with `writeResult` and read back with `bench.from`, to
+// compare a run against an earlier one.
 
 /// The real clock, taken before a test can freeze one.
 const benchNow = globalThis.performance.now.bind(globalThis.performance);
 
-/// How long a sample should take, in milliseconds: a function faster than the
-/// clock can resolve is timed as a loop of calls, and each call's latency is
-/// the loop's time over its count.
+/// How long a sample should take, in milliseconds, at least: a function faster
+/// than the clock can resolve is timed as a loop of calls, and each call's
+/// latency is the loop's time over its count. A coarser clock — a browser's
+/// can step by a millisecond — makes for longer samples.
 const SAMPLE_MS = 0.5;
+const SAMPLE_STEPS = 10;
+
+/// The version of the file `writeResult` writes.
+const RESULT_FORMAT = 1;
+
+/// A margin of the mean, in percent, past which a result is called noisy.
+const NOISY_RME = 5;
 
 const BENCH = Symbol("bench");
 
@@ -1114,6 +1124,9 @@ function benchTask(name, a, b) {
   const [fn, options] = typeof a === "function" ? [a, b ?? {}] : [b, a ?? {}];
   if (typeof name !== "string" || typeof fn !== "function") {
     throw new TypeError("bench(name, options?, fn) needs a name and a function to measure");
+  }
+  if (options.writeResult !== undefined && typeof options.writeResult !== "string") {
+    throw new TypeError("bench's writeResult is the path of a file to write the result to");
   }
   const task = {
     [BENCH]: true,
@@ -1125,54 +1138,228 @@ function benchTask(name, a, b) {
   return task;
 }
 
+/// A benchmark that is not measured: its result is one written earlier, read
+/// from a file `writeResult` wrote, or returned by `source`.
+function storedTask(name, source) {
+  if (typeof name !== "string" || (typeof source !== "string" && typeof source !== "function")) {
+    throw new TypeError("bench.from(name, source) needs a name, and a path or a function that returns a result");
+  }
+  const task = {
+    [BENCH]: true,
+    name,
+    source,
+    run: async () => (await measure([task], {})).get(name),
+  };
+  return task;
+}
+
 function benchFixture() {
   const bench = (name, a, b) => benchTask(name, a, b);
+  bench.from = storedTask;
   // Measured in turns, one sample of each in each turn, so a slower stretch of
   // the machine lands on all of them rather than one.
   bench.compare = (...args) => {
     const last = args.at(-1);
     const options = last !== undefined && !last?.[BENCH] ? args.pop() : {};
     if (args.length === 0 || !args.every((task) => task?.[BENCH])) {
-      throw new TypeError("bench.compare(...benchmarks, options?) needs benchmarks made with bench()");
+      throw new TypeError("bench.compare(...benchmarks, options?) needs benchmarks made with bench() or bench.from()");
     }
     return measure(args, options);
   };
   return bench;
 }
 
-/// One timed sample of `task`: `calls` calls, and how long they took.
-async function sample(task, calls) {
+/// `runtime:fs`, for results written and read by path; a page has none.
+let benchFs = null;
+function fsFor(what) {
+  if (typeof ops.module_resolve_sync !== "function") {
+    return Promise.reject(new Error(`${what} needs files, which a test in a browser page cannot reach`));
+  }
+  benchFs ??= import(["runtime", "fs"].join(":"));
+  return benchFs;
+}
+
+async function readStored(task) {
+  let data;
+  if (typeof task.source === "function") {
+    data = await task.source();
+  } else {
+    const fs = await fsFor("bench.from(name, path)");
+    try {
+      data = await fs.file(task.source).json();
+    } catch (err) {
+      throw new Error(`bench.from cannot read ${task.source}: ${err?.message ?? err}`);
+    }
+    if (data?.esdevBench !== RESULT_FORMAT) {
+      throw new Error(`bench.from: ${task.source} is not a result that writeResult wrote`);
+    }
+  }
+  if (typeof data?.latency?.mean !== "number" || typeof data?.throughput?.mean !== "number") {
+    throw new TypeError(`bench.from(${JSON.stringify(task.name)}) was given something that is not a benchmark result`);
+  }
+  const { esdevBench: _, ...result } = data;
+  return { ...result, name: task.name, stored: true, warnings: result.warnings ?? [] };
+}
+
+async function writeStored(path, result) {
+  const fs = await fsFor("writeResult");
+  const slash = path.lastIndexOf("/");
+  try {
+    if (slash > 0) await fs.mkdir(path.slice(0, slash), { recursive: true });
+    await fs.write(path, `${JSON.stringify({ esdevBench: RESULT_FORMAT, ...result }, null, 2)}\n`);
+  } catch (err) {
+    throw new Error(`writeResult cannot write ${path}: ${err?.message ?? err}`);
+  }
+}
+
+/// What a benchmark's function is called with. `start()` and `end()` mark the
+/// part of a call that is timed; a function that calls neither is timed whole,
+/// and one must do the same on every call.
+function sectionTimer() {
+  let began = null;
+  let ended = false;
+  const timer = {
+    mode: null,
+    total: 0,
+    start() {
+      if (began !== null) throw new Error("b.start() was called twice without b.end()");
+      began = benchNow();
+    },
+    end() {
+      const now = benchNow();
+      if (began === null) throw new Error("b.end() was called without b.start()");
+      timer.total += now - began;
+      began = null;
+      ended = true;
+    },
+    /// After each call: the section closed, and the call timed as the others.
+    settle() {
+      if (began !== null) throw new Error("b.start() was called without b.end()");
+      const mode = ended ? "section" : "whole";
+      ended = false;
+      timer.mode ??= mode;
+      if (timer.mode !== mode) {
+        throw new Error("call b.start() and b.end() on every call of a benchmark, or on none");
+      }
+    },
+  };
+  return timer;
+}
+
+/// One timed sample of `task`: `calls` calls, and how long they took — or how
+/// long their sections took, when they mark one.
+async function sample(task, calls, timer) {
   await task.options.beforeEach?.();
+  timer.total = 0;
   const start = benchNow();
   for (let i = 0; i < calls; i++) {
-    const value = task.fn();
+    const value = task.fn(timer);
     if (value !== null && typeof value?.then === "function") await value;
+    timer.settle();
   }
   const elapsed = benchNow() - start;
   await task.options.afterEach?.();
-  return elapsed;
+  return timer.mode === "section" ? timer.total : elapsed;
 }
 
-/// Measures `tasks` side by side: warm each up, size its samples, then take
+/// Samples of `tasks` side by side: warm each up, size its samples, then take
 /// samples in turns until each has `iterations` and `time` has passed.
-async function measure(tasks, { time = 500, iterations = 10, warmupTime = 100, warmupIterations = 5 } = {}) {
+async function sampled(tasks, { time = 500, iterations = 10, warmupTime = 100, warmupIterations = 5 } = {}) {
   const runs = [];
+  const target = Math.max(SAMPLE_MS, SAMPLE_STEPS * clockResolution());
   for (const task of tasks) {
+    const timer = sectionTimer();
     let calls = 1;
     const warmStart = benchNow();
     for (let done = 0; done < warmupIterations || benchNow() - warmStart < warmupTime; done++) {
-      const elapsed = await sample(task, calls);
-      if (elapsed < SAMPLE_MS && calls < 1_000_000) calls *= 2;
+      const elapsed = await sample(task, calls, timer);
+      if (elapsed < target && calls < 1_000_000) calls *= 2;
     }
-    runs.push({ task, calls, latencies: [] });
+    runs.push({ task, calls, timer, latencies: [] });
   }
   const start = benchNow();
   while (runs.some((run) => run.latencies.length < iterations) || benchNow() - start < time * runs.length) {
-    for (const run of runs) run.latencies.push((await sample(run.task, run.calls)) / run.calls);
+    for (const run of runs) run.latencies.push((await sample(run.task, run.calls, run.timer)) / run.calls);
   }
-  const results = new Map(runs.map((run) => [run.task.name, summarise(run.task.name, run.latencies)]));
+  return runs;
+}
+
+/// How long calling a function that does nothing takes, through the same
+/// loop: work measured no slower than this was likely removed by the engine.
+/// Both are compared at their fastest sample, which the machine's load
+/// disturbs least.
+let emptyCall = null;
+async function emptyCallLatency() {
+  emptyCall ??= sampled([{ fn: () => {}, options: {} }], {
+    time: 20,
+    iterations: 5,
+    warmupTime: 10,
+    warmupIterations: 3,
+  }).then(([run]) => Math.min(...run.latencies));
+  return emptyCall;
+}
+
+/// The smallest step the clock takes, in milliseconds: the least of a few
+/// gaps between one change of its reading and the next.
+let clockStep = null;
+function clockResolution() {
+  if (clockStep === null) {
+    clockStep = Infinity;
+    for (let i = 0; i < 5; i++) {
+      let edge = benchNow();
+      const first = edge;
+      while ((edge = benchNow()) === first);
+      let next = edge;
+      while ((next = benchNow()) === edge);
+      clockStep = Math.min(clockStep, next - edge);
+    }
+  }
+  return clockStep;
+}
+
+/// Measures `tasks` — reads the stored ones — prints the table, writes what
+/// `writeResult` asked for, and reports each measured result to the run.
+async function measure(tasks, options = {}) {
+  const measured = tasks.filter((task) => task.source === undefined);
+  // Before measuring, not after: a result with nowhere to go is not worth the wait.
+  if (measured.some((task) => task.options.writeResult !== undefined)) await fsFor("writeResult");
+  const runs = measured.length === 0 ? [] : await sampled(measured, options);
+  const byTask = new Map();
+  for (const run of runs) {
+    const result = summarise(run.task.name, run.latencies);
+    result.warnings = await warnings(run, result);
+    byTask.set(run.task, result);
+  }
+  for (const task of tasks) {
+    if (task.source !== undefined) byTask.set(task, await readStored(task));
+  }
+  const results = new Map(tasks.map((task) => [task.name, byTask.get(task)]));
   report(results);
+  const id = currentRun()?.id;
+  for (const run of runs) {
+    const result = byTask.get(run.task);
+    if (run.task.options.writeResult !== undefined) await writeStored(run.task.options.writeResult, result);
+    if (id !== undefined) ops.test_bench?.(id, JSON.stringify(result));
+  }
   return results;
+}
+
+/// What makes a result untrustworthy, in words to act on.
+async function warnings(run, result) {
+  const out = [];
+  const { mean, rme } = result.latency;
+  if (rme > NOISY_RME) {
+    out.push(`noisy: the mean is only known to ±${rme.toFixed(1)}%; measure for longer, or on a quieter machine`);
+  }
+  if (run.timer.mode === "section") {
+    const step = clockResolution();
+    if (mean < 20 * step) {
+      out.push(`the timed section takes ${duration(mean)}, too short for a clock that steps by ${duration(step)}; time more work between b.start() and b.end()`);
+    }
+  } else if (result.latency.min <= 2 * (await emptyCallLatency())) {
+    out.push("as fast as calling an empty function: the engine may have removed the work, so use what it computes");
+  }
+  return out;
 }
 
 /// A benchmark's result: latency in milliseconds, throughput in operations a
@@ -1201,26 +1388,34 @@ function summarise(name, latencies) {
   };
 }
 
-/// The results, as a table the test's output carries.
+/// A duration in milliseconds, in the unit that reads best.
+function duration(ms) {
+  // A stored result may leave out what it did not record.
+  if (typeof ms !== "number") return "—";
+  return ms < 0.001 ? `${(ms * 1e6).toFixed(0)}ns` : ms < 1 ? `${(ms * 1000).toFixed(2)}µs` : `${ms.toFixed(2)}ms`;
+}
+
+/// The results, as a table the test's output carries, and what to distrust
+/// about them.
 function report(results) {
   const all = [...results.values()];
   const fastest = Math.max(...all.map((r) => r.throughput.mean));
   const number = (x) => (Number.isFinite(x) ? Math.round(x).toLocaleString("en-US") : "∞");
-  const ms = (x) => (x < 0.001 ? `${(x * 1e6).toFixed(0)}ns` : x < 1 ? `${(x * 1000).toFixed(2)}µs` : `${x.toFixed(2)}ms`);
   const rows = all.map((r) => [
-    r.name,
+    r.stored ? `${r.name} (stored)` : r.name,
     number(r.throughput.mean),
-    ms(r.latency.mean),
-    ms(r.latency.p75),
-    ms(r.latency.p99),
+    duration(r.latency.mean),
+    duration(r.latency.p75),
+    duration(r.latency.p99),
     `±${r.latency.rme.toFixed(2)}%`,
-    String(r.samples),
+    String(r.samples ?? "—"),
     all.length === 1 ? "" : r.throughput.mean === fastest ? "fastest" : `${(fastest / r.throughput.mean).toFixed(2)}× slower`,
   ]);
   const head = ["name", "ops/sec", "mean", "p75", "p99", "rme", "samples", ""];
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
   const line = (cells) => `  ${cells.map((cell, i) => (i === 0 ? cell.padEnd(widths[i]) : cell.padStart(widths[i]))).join("  ")}`.trimEnd();
-  console.log([line(head), ...rows.map(line)].join("\n"));
+  const notes = all.flatMap((r) => (r.stored ? [] : r.warnings.map((w) => `  ! ${r.name}: ${w}`)));
+  console.log([line(head), ...rows.map(line), ...notes].join("\n"));
 }
 
 /// Thrown by `context.skip()`: not a failure, and the case is reported skipped.

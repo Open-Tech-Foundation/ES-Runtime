@@ -37,6 +37,21 @@ declare module "runtime:test" {
     beforeEach?(): unknown;
     /** After each sample, outside the timing. */
     afterEach?(): unknown;
+    /**
+     * Writes the result to this file, relative to the project root, each time
+     * the benchmark is measured; `bench.from` reads it back.
+     */
+    writeResult?: string;
+  }
+
+  /**
+   * What a benchmark's function is called with. A function that calls
+   * `start()` and `end()` is timed between them, on every call; one that calls
+   * neither is timed whole.
+   */
+  export interface BenchTimer {
+    start(): void;
+    end(): void;
   }
 
   /** A statistic's spread, in its own unit. */
@@ -49,6 +64,14 @@ declare module "runtime:test" {
     rme: number;
   }
 
+  /** A result as `bench.from` accepts one from a function. */
+  export type BenchResultData = {
+    samples: number;
+    latency: Partial<BenchResult["latency"]> & { mean: number; rme: number };
+    throughput: Partial<BenchStatistics> & { mean: number };
+    warnings?: readonly string[];
+  };
+
   /** What measuring a benchmark found. */
   export interface BenchResult {
     readonly name: string;
@@ -58,6 +81,10 @@ declare module "runtime:test" {
     readonly latency: BenchStatistics & { p75: number; p99: number; p999: number; sd: number };
     /** Calls a second. */
     readonly throughput: BenchStatistics;
+    /** What makes the result untrustworthy, if anything: a wide margin, work the engine may have removed, a section too short to time. */
+    readonly warnings: readonly string[];
+    /** Read by `bench.from`, not measured in this run. */
+    readonly stored?: true;
   }
 
   /** A registered benchmark. */
@@ -68,8 +95,13 @@ declare module "runtime:test" {
   }
 
   export interface Bench {
-    (name: string, fn: () => unknown): BenchTask;
-    (name: string, options: BenchTaskOptions, fn: () => unknown): BenchTask;
+    (name: string, fn: (b: BenchTimer) => unknown): BenchTask;
+    (name: string, options: BenchTaskOptions, fn: (b: BenchTimer) => unknown): BenchTask;
+    /**
+     * A benchmark that is not measured: its result is read from a file
+     * `writeResult` wrote, or returned by `source`.
+     */
+    from(name: string, source: string | (() => BenchResultData | Promise<BenchResultData>)): BenchTask;
     /**
      * Measures benchmarks side by side, a sample of each in turn, prints them
      * as a table, and resolves to their results by name.

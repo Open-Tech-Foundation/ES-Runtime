@@ -84,6 +84,7 @@ const INSTALL: &str = r#"(send, config) => {
     test_skipped(id, because) { post("skipped", id, String(because ?? "")); },
     test_finished(id, ok, detail) { post("finished", id, ok === true, String(detail ?? "")); },
     test_set_file() {},
+    test_bench(id, json) { post("bench", id, String(json)); },
     test_snapshot(id, key, actual, kind) {
       post("snapshot", id, String(key), String(kind), String(actual));
       const name = names.get(id) ?? "";
@@ -771,6 +772,10 @@ impl FileState {
                 {
                     self.snapshot_failures.push((index, failure));
                 }
+            }
+            ("bench", Some(index)) => {
+                let json = message.get(2).and_then(Value::as_str).unwrap_or_default();
+                self.tally.bench(index, json);
             }
             ("skipped", Some(index)) => {
                 let because = message.get(2).and_then(Value::as_str).unwrap_or_default();

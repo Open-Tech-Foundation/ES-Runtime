@@ -11,7 +11,8 @@
 //! runners write them:
 //!
 //! - `json` — one object per line: a `case` for each failure (or each listed
-//!   test), a `file` for each file, a `summary` at the end.
+//!   test), a `bench` for each benchmark measured, a `file` for each file, a
+//!   `summary` at the end.
 //! - `junit` — `<testsuites>` / `<testsuite>` per file / `<testcase>`, with the
 //!   file as `classname` and the full name as `name`, as Vitest writes it.
 //! - `tap` — TAP version 13, one line per test, failures with a YAML block.
@@ -41,6 +42,9 @@ pub struct CaseResult {
     pub detail: String,
     /// How long it ran, in milliseconds.
     pub duration_ms: f64,
+    /// What its benchmarks measured, under `esdev bench`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub benchmarks: Vec<serde_json::Value>,
 }
 
 /// One file's results.
@@ -85,6 +89,7 @@ impl FileResult {
                 status: "failed".to_string(),
                 detail: why.to_string(),
                 duration_ms: 0.0,
+                benchmarks: Vec::new(),
             }],
         }
     }
@@ -96,6 +101,15 @@ pub fn json_file(result: &FileResult) -> String {
     let string = |text: &str| serde_json::Value::String(text.to_string()).to_string();
     let mut out = String::new();
     for case in &result.cases {
+        for bench in &case.benchmarks {
+            let _ = writeln!(
+                out,
+                r#"{{"type":"bench","file":{},"test":{},"result":{}}}"#,
+                string(&result.file),
+                string(&case.name),
+                bench
+            );
+        }
         match case.status.as_str() {
             "failed" => {
                 let _ = writeln!(
@@ -291,7 +305,27 @@ mod tests {
             status: status.to_string(),
             detail: detail.to_string(),
             duration_ms,
+            benchmarks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn json_reports_each_benchmark_before_its_file() {
+        let mut measured = case("parse", "passed", "", 12.0);
+        measured.benchmarks = vec![serde_json::json!({ "name": "fast", "samples": 10 })];
+        let result = FileResult {
+            file: "a.bench.ts".to_string(),
+            name: "a.bench.ts".to_string(),
+            cases: vec![measured],
+        };
+        assert_eq!(
+            json_file(&result),
+            "{\"type\":\"bench\",\"file\":\"a.bench.ts\",\"test\":\"parse\",\"result\":{\"name\":\"fast\",\"samples\":10}}\n\
+             {\"type\":\"file\",\"file\":\"a.bench.ts\",\"passed\":1,\"failed\":0,\"skipped\":0}\n"
+        );
+        // A case with none carries no field, so older summaries read the same.
+        let plain = serde_json::to_value(case("t", "passed", "", 1.0)).unwrap();
+        assert!(plain.get("benchmarks").is_none());
     }
 
     fn run() -> Vec<FileResult> {

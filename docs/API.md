@@ -3939,12 +3939,29 @@ measures several, one sample of each in turn, and resolves to a
 `Map<string, BenchResult>`. Both print a table. Options: `time` (500 ms of
 samples, at least), `iterations` (10), `warmupTime` (100 ms), `warmupIterations`
 (5); a benchmark's own options also take `beforeEach` and `afterEach`, run
-untimed around each sample. `fn` is awaited when it returns a promise.
+untimed around each sample, and `writeResult: path`, which writes the result
+as JSON (`{ "esdevBench": 1, ...result }`) each time it is measured, through
+`runtime:fs` and so under the file's grant; the path is relative to the project
+root. `fn` is called with `b`, and awaited when it returns a promise; when it
+calls `b.start()` and `b.end()`, only the time between them counts. It must do
+so on every call or on none, and each `start` needs an `end`.
+
+`bench.from(name, source)` is a benchmark that is not measured: `source` is a
+path `writeResult` wrote, or a function returning a result (at least `samples`,
+`latency.mean`, `latency.rme`, `throughput.mean`). Its result has
+`stored: true`, and the table names it `name (stored)`.
 
 A `BenchResult` is `{ name, samples, latency, throughput }`: `latency` in
 milliseconds per call (`mean`, `min`, `max`, `p50`, `p75`, `p99`, `p999`, `sd`,
 `rme`), `throughput` in calls per second (`mean`, `min`, `max`, `p50`, `rme`).
-`rme` is the 95% margin of the mean as a percentage.
+`rme` is the 95% margin of the mean as a percentage. `warnings` is a list of
+strings: the mean's margin is over 5%; the function is no slower than an empty
+one at its fastest sample; a `b.start()`/`b.end()` section is under 20 of the clock's steps. Each
+sample lasts at least 0.5ms and at least 10 of the clock's steps.
+
+With `--reporter=json`, each measured result is a line
+`{"type":"bench","file","test","result"}`, before its file's line; a retried
+test reports its last attempt's.
 
 `expect(result).toBeFasterThan(other, { delta? })` passes when `result`'s mean
 throughput is at least `(1 + delta)` times `other`'s; `toBeSlowerThan` the

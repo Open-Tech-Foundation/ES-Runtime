@@ -109,6 +109,12 @@ is the point, since none of the three has any business in a deployment.
   benchmark, `.run()` measures it, and `bench.compare(...)` measures several in
   turns and prints them as a table. `toBeFasterThan` and `toBeSlowerThan`
   compare results. `esdev test` does not run benchmark files (DECISIONS D116).
+  - `writeResult` saves a result to a file, and `bench.from` reads it back to
+    compare a run against an earlier one.
+  - `b.start()` and `b.end()` time only part of each call.
+  - Results warn when their margin is wide, when the work may have been
+    optimised away, and when a timed section is too short for the clock.
+  - `--reporter=json` writes a `bench` line for each result (DECISIONS D117).
 - **Concurrent tests**: `test.concurrent`, `describe.concurrent`,
   `{ concurrent }` on tests and groups, `test.sequential`/`describe.sequential`,
   and `--max-concurrency` / `test.maxConcurrency` (5 by default). Each test's

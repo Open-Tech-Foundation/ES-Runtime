@@ -62,6 +62,71 @@ A function too fast for the clock is timed in loops of calls, and each call's
 time is the loop's time divided by its count. `clock.freeze()` does not affect
 measurement.
 
+### Timing part of a call
+
+The function is called with `b`. When it calls `b.start()` and `b.end()`,
+only the code between them is timed, so each call can prepare its own input:
+
+```ts
+bench("sort", (b) => {
+  const data = shuffled(10_000);
+  b.start();
+  data.sort();
+  b.end();
+});
+```
+
+The section is timed on its own each call, so it should take many times the
+clock's step: a microsecond in esdev, and as much as a millisecond in some
+browsers. A function must mark a section on every call or on none.
+
+## Warnings
+
+A result's `warnings` lists what makes it untrustworthy, and the table prints
+them beneath it:
+
+| Warning | Means |
+| --- | --- |
+| noisy | The mean is known only to more than ±5%. Measure for longer, or on a quieter machine. |
+| as fast as calling an empty function | The engine may have removed the work, because nothing uses its result. |
+| the timed section is too short | The section between `b.start()` and `b.end()` is too short for the clock to time. |
+
+## Comparing with an earlier run
+
+`writeResult` writes a benchmark's result to a file each time it is measured,
+and `bench.from(name, path)` reads it back as a benchmark that is not measured
+again. Committing the file makes the comparison repeatable:
+
+```ts
+import { env } from "runtime:process";
+
+test("parse has not slowed down", async ({ bench }) => {
+  const parse = () => parseConfig(input);
+  if (env.WRITE_BENCH) {
+    await bench("parse", { writeResult: "./bench/parse.json" }, parse).run();
+    return;
+  }
+  const results = await bench.compare(
+    bench("current", parse),
+    bench.from("stored", "./bench/parse.json"),
+  );
+  expect(results.get("current")).not.toBeSlowerThan(results.get("stored"), { delta: 0.1 });
+});
+```
+
+```sh
+WRITE_BENCH=1 esdev bench   # store the result
+esdev bench                 # compare against it
+```
+
+Paths are relative to the project root. Files are read and written with the
+test's own permissions, so `--deny-write` stops `writeResult`, and a test in a
+browser page can use neither. `bench.from` also takes a function that returns
+a result, for one stored elsewhere.
+
+A stored result was measured on whatever machine wrote it. Compare against it
+on the same machine.
+
 ## Results
 
 | | |
@@ -70,6 +135,11 @@ measurement.
 | `samples` | How many samples were taken. |
 | `latency` | Milliseconds per call: `mean`, `min`, `max`, `p50`, `p75`, `p99`, `p999`, `sd`, and `rme`, the 95% margin of the mean as a percentage. |
 | `throughput` | Calls per second: `mean`, `min`, `max`, `p50` and `rme`. |
+
+`warnings` and `stored` (true for a result `bench.from` read) complete it.
+
+With `--reporter=json`, each measured result is a line of its own:
+`{ "type": "bench", "file", "test", "result" }`.
 
 `expect(a).toBeFasterThan(b, { delta })` and `toBeSlowerThan` compare two
 results' throughput. `delta` is the margin required, `0.1` being 10%, so that

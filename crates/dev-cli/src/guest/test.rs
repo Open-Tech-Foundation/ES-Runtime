@@ -70,6 +70,9 @@ struct Case {
     /// attempt and repeat included, since that is how long the run spent on it.
     began: Option<std::time::Instant>,
     duration_ms: f64,
+    /// What its benchmarks measured, in its last attempt, as `runtime:test`
+    /// reported each result.
+    benchmarks: Vec<serde_json::Value>,
 }
 
 enum Outcome {
@@ -1140,6 +1143,20 @@ impl HostExtension for TestExtension {
                 CASES.with_borrow_mut(|cases| mark_finished(cases, index, passed, detail));
                 Ok(Value::Undefined)
             }),
+            // bench(id, result JSON) — a benchmark this case measured, for
+            // the machine reporters.
+            OpDecl::sync("test_bench", |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(-1.0);
+                let json = args.get(1).and_then(Value::as_str).unwrap_or_default();
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "the id came from `registered`, which handed out an index"
+                )]
+                let index = id as usize;
+                CASES.with_borrow_mut(|cases| record_bench(cases, index, json));
+                Ok(Value::Undefined)
+            }),
             OpDecl::sync("test_set_file", |args| {
                 if let Some(file) = args.first().and_then(Value::as_str) {
                     set_snapshot_file(file);
@@ -1324,6 +1341,7 @@ fn register(cases: &mut Vec<Case>, name: String, file: Option<PathBuf>) -> usize
         outcome: None,
         began: None,
         duration_ms: 0.0,
+        benchmarks: Vec::new(),
     });
     cases.len() - 1
 }
@@ -1332,6 +1350,14 @@ fn mark_running(cases: &mut [Case], id: usize) {
     if let Some(case) = cases.get_mut(id) {
         case.started = true;
         case.began.get_or_insert_with(std::time::Instant::now);
+        // Another attempt: only the last one's measurements are its result.
+        case.benchmarks.clear();
+    }
+}
+
+fn record_bench(cases: &mut [Case], id: usize, json: &str) {
+    if let (Some(case), Ok(result)) = (cases.get_mut(id), serde_json::from_str(json)) {
+        case.benchmarks.push(result);
     }
 }
 
@@ -1382,6 +1408,7 @@ fn result(cases: &[Case], file: &str, name: &str) -> crate::report::FileResult {
                     status: status.to_string(),
                     detail,
                     duration_ms: case.duration_ms,
+                    benchmarks: case.benchmarks.clone(),
                 }
             })
             .collect(),
@@ -1574,6 +1601,11 @@ impl Tally {
             _ => Skip::Asked,
         };
         mark_skipped(&mut self.cases, id, because);
+    }
+
+    /// `bench(id, result)`.
+    pub fn bench(&mut self, id: usize, json: &str) {
+        record_bench(&mut self.cases, id, json);
     }
 
     /// `finished(id, ok, detail)`.
@@ -1778,6 +1810,7 @@ mod tests {
                 outcome: None,
                 began: None,
                 duration_ms: 0.0,
+                benchmarks: Vec::new(),
             });
         });
         let unfinished = CASES.with_borrow(|cases| cases.iter().all(|c| c.outcome.is_none()));

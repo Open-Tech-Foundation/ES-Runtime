@@ -16016,3 +16016,141 @@ test("ordinary", () => { expect(1).toBe(1); });
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A result written with `writeResult` is read back by `bench.from` and
+/// compared against a fresh one; `b.start()`/`b.end()` time part of a call;
+/// warnings say what to distrust; `--reporter=json` carries each result. The
+/// files go through `runtime:fs`, so the file's own grant decides.
+#[test]
+fn esdev_bench_stores_results_times_sections_and_warns() {
+    let dir = build_dir("t_bench_store");
+    write_in(
+        &dir,
+        "store.bench.ts",
+        r#"import { expect, test } from "runtime:test";
+import { env } from "runtime:process";
+const input = JSON.stringify({ a: [1, 2, 3], b: "x".repeat(200) });
+
+test("stored", async ({ bench }) => {
+  const parse = () => JSON.parse(input);
+  if (env.WRITE_BENCH) {
+    await bench("parse", { writeResult: "./results/parse.json", time: 50 }, parse).run();
+    return;
+  }
+  const results = await bench.compare(
+    bench("current", parse),
+    bench.from("previous", "./results/parse.json"),
+    bench.from("partial", () => ({ samples: 1, latency: { mean: 1, rme: 0 }, throughput: { mean: 1000 } })),
+    { time: 50 },
+  );
+  expect(results.get("previous")!.stored).toBe(true);
+  expect(results.get("previous")!.name).toBe("previous");
+  expect(results.get("current")!.stored).toBeUndefined();
+  expect(results.get("current")).toBeFasterThan(results.get("partial")!);
+});
+test("a section", async ({ bench }) => {
+  let setUp = 0;
+  const result = await bench("sort", (b) => {
+    const data = Array.from({ length: 3000 }, (_, i) => 3000 - i);
+    setUp++;
+    b.start();
+    data.sort((x, y) => x - y);
+    b.end();
+  }).run({ time: 50 });
+  expect(setUp).toBeGreaterThan(0);
+  // Long enough for the clock; whether it is noisy depends on the machine's load.
+  expect(result.warnings.join()).not.toContain("too short");
+});
+test("warnings", async ({ bench }) => {
+  const empty = await bench("empty", () => {}).run({ time: 30 });
+  expect(empty.warnings.join()).toContain("as fast as calling an empty function");
+  const tiny = await bench("tiny", (b) => { b.start(); b.end(); }).run({ time: 30 });
+  expect(tiny.warnings.join()).toContain("too short for a clock");
+});
+test("misuse", async ({ bench }) => {
+  await expect(bench("half", (b) => { b.start(); }).run()).rejects.toThrow("b.start() was called without b.end()");
+  await expect(bench("end", (b) => { b.end(); }).run()).rejects.toThrow("b.end() was called without b.start()");
+  let n = 0;
+  await expect(bench("mixed", (b) => { if (n++ % 2) { b.start(); b.end(); } }).run()).rejects.toThrow("on every call");
+  await expect(bench.from("missing", "./nope.json").run()).rejects.toThrow("bench.from cannot read ./nope.json");
+  await expect(bench.from("bad", () => ({}) as any).run()).rejects.toThrow("not a benchmark result");
+  expect(() => bench("x", { writeResult: 1 as any }, () => {})).toThrow("writeResult is the path");
+});
+"#,
+    );
+    std::fs::create_dir_all(dir.join("results")).expect("create results");
+    write_in(
+        &dir,
+        "results/foreign.json",
+        r#"{ "latency": { "mean": 1 } }"#,
+    );
+    let bench = |args: &[&str], env: Option<&str>| {
+        let mut command = esdev_in(&dir);
+        command.arg("bench").args(args);
+        if let Some(value) = env {
+            command.env("WRITE_BENCH", value);
+        } else {
+            command.env_remove("WRITE_BENCH");
+        }
+        command.output().expect("spawn esdev bench")
+    };
+
+    let out = bench(&["-t=stored"], Some("1"));
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let stored = std::fs::read_to_string(dir.join("results/parse.json")).expect("written");
+    let stored: serde_json::Value = serde_json::from_str(&stored).expect("json");
+    assert_eq!(stored["esdevBench"], 1);
+    assert_eq!(stored["name"], "parse");
+    assert!(stored["throughput"]["mean"].as_f64().unwrap() > 0.0);
+
+    let out = bench(&[], None);
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("4 passed, 0 failed"), "{text}");
+    assert!(text.contains("previous (stored)"), "{text}");
+    assert!(
+        text.contains("! empty: as fast as calling an empty function"),
+        "{text}"
+    );
+
+    // Each measured result is a `bench` line, before its file's line; the
+    // tables go to stderr with the rest of what tests print.
+    let out = bench(&["-t=stored", "--reporter=json"], None);
+    let lines: Vec<serde_json::Value> = stdout(&out)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a JSON line"))
+        .collect();
+    assert_eq!(lines[0]["type"], "bench", "{lines:?}");
+    assert_eq!(lines[0]["test"], "stored");
+    assert_eq!(lines[0]["result"]["name"], "current");
+    assert!(lines[0]["result"]["latency"]["p99"].is_number());
+    assert_eq!(
+        lines.len(),
+        3,
+        "only measured results, then file and summary: {lines:?}"
+    );
+    assert!(stderr(&out).contains("previous (stored)"));
+
+    // A file writeResult did not write is refused.
+    write_in(
+        &dir,
+        "foreign.bench.ts",
+        r#"import { expect, test } from "runtime:test";
+test("foreign", async ({ bench }) => {
+  await expect(bench.from("x", "./results/foreign.json").run()).rejects.toThrow("is not a result that writeResult wrote");
+});
+"#,
+    );
+    let out = bench(&["foreign"], None);
+    assert!(out.status.success(), "{}", stdout(&out));
+
+    // Without the grant to write, writeResult fails the test, saying why.
+    let out = bench(&["-t=stored", "--deny-write"], Some("1"));
+    assert!(!out.status.success());
+    assert!(
+        stdout(&out).contains("writeResult cannot write ./results/parse.json"),
+        "{}",
+        stdout(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

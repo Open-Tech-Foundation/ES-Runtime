@@ -661,6 +661,29 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D117 — Stored benchmark results, timed sections, and warnings · *Accepted (2026-09-24)* · *extends D116*
+
+**Context:** D116 measured and compared within one run. The other tools cover what it left out, each differently. Vitest 5 has `writeResult` and `bench.from` to compare against a stored result. Deno and Node have `b.start()`/`b.end()` to time part of a call. Node's `spec` reporter flags noisy and skewed results, and mitata flags work the engine removed. Deno and Node write JSON.
+
+**Decision:**
+- **Vitest's `writeResult` and `bench.from`**, reading and writing through `runtime:fs`, so the test file's grant decides as it does for any file the test touches. Snapshots are written by the host because the runner owns them. A result file is a path the author chose, so it is not.
+- **Our own versioned file**: `{ "esdevBench": 1, ...result }`. `bench.from(path)` refuses a file without the marker rather than comparing against a guess. A function source is trusted to return a result and checked only for its shape.
+- **Deno's and Node's `b.start()`/`b.end()`**, in the one function the benchmark already has, instead of Node's operation counts. The section is timed each call, so its precision is the clock's. That is what the third warning is for. Mixing timed-whole and timed-section calls is an error, since the two measure different things.
+- **Three warnings, each checkable by the runner and stated as what to do:**
+  - **Noisy:** the 95% margin of the mean is over 5%. Node uses the coefficient of variation instead; that measures samples, and ours are loop averages whose spread depends on how many calls a loop holds, whereas the margin says directly whether a comparison can be trusted.
+  - **As fast as an empty function:** the fastest sample is no slower than twice an empty function's fastest, called through the same loop. Fastest samples are compared because load disturbs them least; comparing means flagged real work, or missed removed work, whenever the machine was busier during one measurement than the other. This is mitata's dead-code check, done by comparison rather than code generation.
+  - **The section is too short:** under 20 of the clock's steps.
+
+  Skewness is not flagged, because timing distributions are right-skewed almost always, and a warning that always fires is ignored.
+- **Samples last at least ten clock steps.** A browser's clock can step by a millisecond, and a 0.5ms sample there measured nothing.
+- **`--reporter=json` carries each measured result** as a `bench` line before its file's line, from the test's last attempt. Stored results are left out, because they were not measured in this run.
+
+**Rejected:**
+- Node's raw samples in the result: nothing here uses them yet, and a stored result would grow with every sample.
+- A flag to refresh stored results: Vitest has none either, and an environment variable read by the test does it without a new flag.
+
+---
+
 ### D116 — Benchmarks as a test-context fixture, run by `esdev bench` · *Accepted (2026-09-24)*
 
 **Context:** Vitest 5 moved benchmarks from a separate `bench()` global with its own reporter to a `bench` fixture on the test context, inside `*.bench.*` files run by `vitest bench`: a benchmark is an ordinary test that measures, compares, and asserts on the result. Deno's `Deno.bench` and Bun's use of mitata keep benchmarks outside tests, with no assertions.

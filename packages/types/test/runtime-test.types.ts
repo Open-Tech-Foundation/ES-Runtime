@@ -568,4 +568,17 @@ test("benchmarks", async ({ bench }) => {
   expect(alone).toBeSlowerThan(results.get("async")!);
   // @ts-expect-error — a benchmark needs a function to measure.
   bench("nothing");
+  const section = bench("section", { writeResult: "./bench/section.json" }, (b) => {
+    b.start();
+    b.end();
+  });
+  const stored = await bench.compare(
+    section,
+    bench.from("previous", "./bench/section.json"),
+    bench.from("inline", () => ({ samples: 1, latency: { mean: 1, rme: 0 }, throughput: { mean: 1000 } })),
+  );
+  const warned: readonly string[] = stored.get("previous")!.warnings;
+  void warned;
+  // @ts-expect-error — writeResult is a path.
+  bench("x", { writeResult: true }, () => {});
 });

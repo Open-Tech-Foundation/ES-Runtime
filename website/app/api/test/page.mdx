@@ -117,8 +117,10 @@ fail under `esdev check` or `esdev test --typecheck`. See
 
 In `*.bench.*` files run by `esdev bench`, the context's `bench(name, options?, fn)`
 registers a benchmark; `.run()` measures it and `bench.compare(...)` measures
-several, resolving to results by name. `toBeFasterThan(other, { delta })` and
-`toBeSlowerThan` compare results. See [Benchmarks](/esdev/test/bench).
+several, resolving to results by name. `b.start()`/`b.end()` time part of a
+call, `writeResult` saves a result and `bench.from(name, source)` reads one
+back. `toBeFasterThan(other, { delta })` and `toBeSlowerThan` compare results.
+See [Benchmarks](/esdev/test/bench).
 
 ## Tags
 
