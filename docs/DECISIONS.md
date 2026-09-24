@@ -661,6 +661,19 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D121 — A grant per test file, declared as its deployment's flags · *Accepted (2026-09-24)* · *extends the production-grant rehearsal*
+
+**Context:** `esdev test --deny-all --allow-…` rehearses one grant for the whole run. A project whose modules are deployed with different grants — a config loader that reads one directory, a client that only talks to one host — could not test each against its own. Vitest and Jest run on Node, which has no capability model, so there is nothing to follow. Deno's `Deno.test` takes a `permissions` option per test that can only deny: the command line is the ceiling, because Deno starts from nothing and the command line is what grants.
+
+**Decision:**
+- **Per file, not per test, for now.** Each file already runs in a process of its own, so a file's grant is that process's grant, and the runtime needs no new ability. A grant per test would need the runtime to narrow a running process and restore it afterwards; that is a runtime decision of its own.
+- **`@permissions` in a JSDoc comment**, beside `@module-tag`, read without running the file, so a mistake in it fails that file before any of its code runs.
+- **`esrun`'s flags from `esrun`'s baseline.** The declaration starts from nothing, as `esrun` does, so it is the deployment's command line copied as it is, `--allow-imports` included. Starting from esdev's everything would have made the same words mean a different grant.
+- **The declaration wins for its file; the command line covers the rest.** A file that states its module's grant is making a claim about production, and a run-wide `--deny-net` rehearsal should not quietly change it. This departs from Deno's ceiling on purpose. `esdev` starts from everything, so its command line is not what grants, only another rehearsal; with no flags, a declaration only ever narrows. The other reading, intersecting the two, was rejected: a file could then pass under a grant narrower than it declared and hide the fact that it needs what it declared.
+- **Refused where it cannot hold:** `--isolation=none`, which runs every file in one process under one grant, and browser runs, where a page has the browser's sandbox instead.
+
+---
+
 ### D120 — `toMatchScreenshot`: Vitest's API, pixelmatch's comparison, no image crate · *Accepted (2026-09-24)*
 
 **Context:** Vitest's browser mode has `toMatchScreenshot`. It captures an element until two captures in a row agree, and compares the result with `__screenshots__/<file>/<name>-<browser>-<platform>.png` using pixelmatch, configured by `comparatorOptions`. The first run writes the reference and fails. A mismatch writes the actual and diff images elsewhere. A page cannot take its own picture; WebDriver BiDi's `browsingContext.captureScreenshot` can, clipped to a box.

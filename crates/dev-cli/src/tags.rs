@@ -181,6 +181,36 @@ fn unary(tokens: &[Token], at: &mut usize, text: &str) -> Result<Expr, String> {
 /// `/** … */` comments.
 pub fn module_tags(source: &str) -> Vec<String> {
     let mut tags = Vec::new();
+    for rest in jsdoc_tag(source, "@module-tag") {
+        if let Some(name) = rest.split_whitespace().next()
+            && !tags.iter().any(|tag| tag == name)
+        {
+            tags.push(name.to_string());
+        }
+    }
+    tags
+}
+
+/// The grant a file declares for its tests: the flags of each
+/// `@permissions` line in its `/** … */` comments, in order, or `None` when it
+/// declares none (D121).
+pub fn declared_permissions(source: &str) -> Option<Vec<String>> {
+    let lines = jsdoc_tag(source, "@permissions");
+    if lines.is_empty() {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// What follows `tag` on each line of the `/** … */` comments that has it.
+fn jsdoc_tag<'a>(source: &'a str, tag: &str) -> Vec<&'a str> {
+    let mut found = Vec::new();
     let mut rest = source;
     while let Some(open) = rest.find("/**") {
         let after = &rest[open + 3..];
@@ -189,16 +219,16 @@ pub fn module_tags(source: &str) -> Vec<String> {
         };
         for line in after[..close].lines() {
             let line = line.trim().trim_start_matches('*').trim();
-            if let Some(rest) = line.strip_prefix("@module-tag")
-                && let Some(name) = rest.split_whitespace().next()
-                && !tags.iter().any(|tag| tag == name)
+            // The tag whole: `@permissions` is not `@permissionsX`.
+            if let Some(rest) = line.strip_prefix(tag)
+                && (rest.is_empty() || rest.starts_with(char::is_whitespace))
             {
-                tags.push(name.to_string());
+                found.push(rest.trim());
             }
         }
         rest = &after[close + 2..];
     }
-    tags
+    found
 }
 
 #[cfg(test)]
@@ -260,5 +290,26 @@ mod tests {
         let source = "/**\n * Auth tests\n * @module-tag admin/pages\n * @module-tag acceptance\n */\n\
                       test('x', () => {});\n// @module-tag not-jsdoc\n/** @module-tag db */\n";
         assert_eq!(module_tags(source), ["admin/pages", "acceptance", "db"]);
+    }
+
+    #[test]
+    fn a_file_declares_its_grant_across_lines() {
+        let source = "/**\n * The config loader.\n * @permissions --allow-imports\n \
+                      * @permissions --allow-read=./config --allow-env=HOME\n */\n\
+                      // @permissions --allow-net\n/** @permissionsX --allow-all */\n";
+        assert_eq!(
+            declared_permissions(source).unwrap(),
+            [
+                "--allow-imports",
+                "--allow-read=./config",
+                "--allow-env=HOME"
+            ]
+        );
+        assert_eq!(declared_permissions("/** nothing */"), None);
+        // Declared and empty: a grant of nothing, not no declaration.
+        assert_eq!(
+            declared_permissions("/** @permissions */"),
+            Some(Vec::new())
+        );
     }
 }

@@ -16731,3 +16731,94 @@ test("button", async () => {{
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `@permissions` gives a file its own grant, written as its deployment's
+/// esrun flags: what it grants is reachable, nothing else is, and the command
+/// line's rehearsal applies only to files that declare none. A mistake in it
+/// fails that file; `--isolation=none` and browser runs refuse it.
+#[test]
+fn test_files_run_under_the_grant_they_declare() {
+    let dir = build_dir("t_file_permissions");
+    std::fs::create_dir_all(dir.join("config")).unwrap();
+    write_in(&dir, "config/app.json", r#"{ "port": 3000 }"#);
+    write_in(&dir, "secret.txt", "secret");
+    write_in(&dir, "port.ts", "export const fallback = 8080;\n");
+    write_in(
+        &dir,
+        "config.test.ts",
+        r#"/**
+ * The config loader reads its directory and nothing else.
+ * @permissions --allow-imports --allow-read=./config
+ */
+import { expect, test } from "runtime:test";
+import { file } from "runtime:fs";
+import { env } from "runtime:process";
+import { fallback } from "./port.ts";
+test("reads its config", async () => {
+  expect((await file("config/app.json").json()).port).not.toBe(fallback);
+});
+test("reads nothing else", async () => {
+  await expect(file("secret.txt").text()).rejects.toThrow("read");
+});
+test("has no environment", () => {
+  expect(() => env.HOME).toThrow();
+});
+"#,
+    );
+    write_in(
+        &dir,
+        "open.test.ts",
+        r#"import { expect, test } from "runtime:test";
+import { file } from "runtime:fs";
+test("reads anything", async () => {
+  expect(await file("secret.txt").text()).toBe("secret");
+});
+"#,
+    );
+    let run = |args: &[&str]| {
+        let out = esdev_in(&dir)
+            .arg("test")
+            .args(args)
+            .output()
+            .expect("spawn esdev test");
+        (out.status.success(), stdout(&out), stderr(&out))
+    };
+    let (ok, out, err) = run(&[]);
+    assert!(ok, "{out}{err}");
+    assert!(
+        out.contains("config.test.ts\n  3 passed, 0 failed"),
+        "{out}"
+    );
+
+    // The command line's rehearsal narrows the file that declares nothing,
+    // and leaves the one that does as it declared.
+    let (ok, out, _) = run(&["--deny-read"]);
+    assert!(!ok);
+    assert!(
+        out.contains("config.test.ts\n  3 passed, 0 failed"),
+        "{out}"
+    );
+    assert!(out.contains("FAIL reads anything"), "{out}");
+
+    write_in(
+        &dir,
+        "typo.test.ts",
+        "/** @permissions --allow-imports --allow-reed=./x */\n\
+         import { test } from \"runtime:test\";\ntest(\"x\", () => {});\n",
+    );
+    let (ok, out, err) = run(&["typo"]);
+    assert!(!ok);
+    assert!(
+        format!("{out}{err}").contains("@permissions: unknown option: --allow-reed"),
+        "{out}{err}"
+    );
+    std::fs::remove_file(dir.join("typo.test.ts")).unwrap();
+
+    let (ok, _, err) = run(&["--isolation=none"]);
+    assert!(!ok);
+    assert!(
+        err.contains("config.test.ts declares @permissions"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

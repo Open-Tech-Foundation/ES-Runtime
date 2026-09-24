@@ -289,6 +289,33 @@ flags only, never `esdev.json` keys — a rehearsal decides a single run. Run
 with none of them and nothing changes: full grant, full fidelity, exactly as
 before.
 
+### A grant per file
+
+A test file can declare the grant its module is deployed with, in a `/** … */`
+comment:
+
+```ts
+/**
+ * @permissions --allow-imports --allow-read=./config --allow-env=PORT
+ */
+import { expect, test } from "runtime:test";
+import { loadConfig } from "./config.ts";
+```
+
+The flags are `esrun`'s, and they start from what `esrun` starts from:
+nothing. Copy them from the command line the module is deployed with, and the
+file's tests run under exactly that grant. Paths are relative to the project
+root, as they are when `esrun` runs there. Several `@permissions` lines add up.
+
+A file's own grant is the one it runs under. The command-line flags apply to
+the files that declare none, so `esdev test --deny-net` narrows the rest of
+the suite without widening or narrowing a file that states its grant.
+
+A flag that is not a permission flag, or a combination `esrun` would refuse,
+fails that file with the reason. `--isolation=none` is refused when any file
+declares a grant, since one process has one grant, and so is a browser run of
+such a file, since a page has no grant to rehearse.
+
 ## The file is the entry, unaltered
 
 It keeps its own path, its module resolution, its relative imports and its

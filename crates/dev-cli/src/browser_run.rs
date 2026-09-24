@@ -427,6 +427,19 @@ impl Job {
         config: &TestConfig,
         options: &RunOptions,
     ) -> Result<(String, bool, usize, crate::report::FileResult), String> {
+        // A page has the browser's sandbox, not a grant, so a file whose tests
+        // are about a grant has nothing to rehearse here (D121).
+        if std::fs::read_to_string(&self.file)
+            .ok()
+            .and_then(|source| crate::tags::declared_permissions(&source))
+            .is_some()
+        {
+            return Err(
+                "this file declares @permissions, and a page has the browser's \
+                        sandbox rather than a grant; run it without --browser"
+                    .to_string(),
+            );
+        }
         let page = self.bundle(config).await?;
         let user_context = self
             .client

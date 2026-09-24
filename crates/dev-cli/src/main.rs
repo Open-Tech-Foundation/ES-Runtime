@@ -1888,6 +1888,45 @@ fn test_capabilities(
     Ok((permissions.resolve()?, permissions.scopes()?))
 }
 
+/// The grant a test file runs under: its own `@permissions`, resolved from
+/// `esrun`'s baseline so the flags read as its deployment's; or, with none,
+/// the command line's rehearsal (D121).
+fn file_capabilities(
+    file: &std::path::Path,
+    run_flags: &[String],
+) -> Result<
+    (
+        es_runtime_common::CapabilitySet,
+        es_runtime_cli_common::permissions::Scopes,
+    ),
+    String,
+> {
+    let Some(declared) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|source| tags::declared_permissions(&source))
+    else {
+        return test_capabilities(run_flags);
+    };
+    let mut permissions = Permissions::new(Baseline::Nothing);
+    for arg in &declared {
+        let (flag, value) = split_flag_value(arg);
+        let known = try_permission_flag(&mut permissions, flag, value)
+            .map_err(|err| format!("{}: @permissions: {err}", file.display()))?;
+        if !known {
+            return Err(format!(
+                "{}: @permissions: `{arg}` is not a permission flag. \
+                 It takes the flags esrun is run with, such as --allow-read=./data.",
+                file.display()
+            ));
+        }
+    }
+    let resolved = permissions
+        .resolve()
+        .and_then(|capabilities| Ok((capabilities, permissions.scopes()?)))
+        .map_err(|err| format!("{}: @permissions: {err}", file.display()))?;
+    Ok(resolved)
+}
+
 /// A module named relative to `dir`, as the file URL a child imports it by. A
 /// name that is not a file there is left as written: a bare specifier names a
 /// package, and where that lives is the resolver's question.
@@ -2699,14 +2738,16 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     };
     // A rehearsal still applies here: this is also how every child of a
     // restricted parent executes, and the flags arrived on its command
-    // line for exactly this run.
-    let (capabilities, scopes) = match test_capabilities(&config.permission_args) {
-        Ok(resolved) => resolved,
-        Err(err) => {
-            print_error(&err);
-            return ExitCode::FAILURE;
-        }
-    };
+    // line for exactly this run. A file that declares its own grant runs
+    // under that instead.
+    let (capabilities, scopes) =
+        match file_capabilities(std::path::Path::new(&file), &config.permission_args) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                print_error(&err);
+                return ExitCode::FAILURE;
+            }
+        };
     let mut run = Config {
         source: Source::File(file.clone()),
         args: Vec::new(),
@@ -2858,6 +2899,21 @@ pub(crate) async fn run_tests_unisolated(
         source.push_str("import \"runtime:dom\";");
     }
     source.push_str("import { __setTestFile } from \"runtime:test\";");
+    // One process has one grant; a file that declares its own needs a process
+    // of its own to have it.
+    if let Some(file) = files.iter().find(|file| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|source| tags::declared_permissions(&source))
+            .is_some()
+    }) {
+        print_error(&format!(
+            "{} declares @permissions, and --isolation=none runs every file in one \
+             process with one grant.\n\nDrop --isolation=none to run each file under its own.",
+            file.display()
+        ));
+        return ExitCode::FAILURE;
+    }
     for file in files {
         for setup in &config.setup {
             source.push_str(&module_import(setup));

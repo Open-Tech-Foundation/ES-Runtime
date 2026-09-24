@@ -104,6 +104,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **A grant per test file**: `@permissions` in a file's `/** … */` comment
+  runs its tests under those `esrun` flags, starting from nothing, as its
+  deployment does. The command line's permission flags apply to the files that
+  declare none (DECISIONS D121).
 - **`toMatchScreenshot`** in browser runs, with Vitest's API. An element is
   compared with `__screenshots__/<file>/<name>-<browser>-<platform>.png`,
   using pixelmatch's comparison. A first run writes the reference and fails
