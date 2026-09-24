@@ -204,6 +204,18 @@ test("mocks throw, answer for a while, and answer by argument", async () => {
 
 // --- clock ------------------------------------------------------------------
 
+test("the clock can be told what to fake", () => {
+  clock.freeze({ now: 0, toFake: ["setTimeout", "Date", "queueMicrotask"], loopLimit: 50 });
+  clock.freeze({ toNotFake: ["performance"] });
+  clock.freeze({ now: new Date() });
+  clock.advanceToNextFrame().runMicrotasks().release();
+
+  // @ts-expect-error — nextTick is Node's, and there is none to fake.
+  clock.freeze({ toFake: ["nextTick"] });
+  // @ts-expect-error — one list or the other.
+  clock.freeze({ toFake: ["Date"], toNotFake: ["Intl"] });
+});
+
 test("the clock takes milliseconds and moments", async () => {
   clock.freeze();
   clock.freeze(new Date());

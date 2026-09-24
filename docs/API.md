@@ -4128,22 +4128,34 @@ installed it. `.mockImplementation(...)` is how a test says otherwise.
 
 ### `clock`
 
-Time, stopped. `clock.freeze()` replaces `setTimeout`, `setInterval`, their
-cancels and `Date` on `globalThis`, and everything scheduled through them then
-moves only when the test says so.
+Time, stopped. `clock.freeze()` replaces the timers, `Date`, `performance.now`,
+`Temporal.Now` and `Intl.DateTimeFormat`'s "now" on `globalThis` — and, where
+the realm has them, `setImmediate`, `requestAnimationFrame` and
+`requestIdleCallback` — and everything scheduled through them then moves only
+when the test says so.
 
 | | |
 | --- | --- |
 | `clock.freeze(at?)` | Stops time — at `at` (a `Date`, ms, or a parseable string), or wherever it is. |
-| `clock.release()` | Real timers back. |
+| `clock.freeze({ now?, toFake?, toNotFake?, loopLimit? })` | …replacing only the names in `toFake`, or all but those in `toNotFake` (not both; an unknown name is a `TypeError`). By default, everything the realm has except `queueMicrotask`. `loopLimit` (default 10,000) is how many timers `advance` and `runAll` fire before throwing. |
+| `clock.release()` | The real ones back; waiting timers are dropped. |
 | `clock.isFrozen()` | |
 | `clock.advance(ms)` | Moves forward, running whatever comes due on the way. |
 | `clock.advanceAsync(ms)` | …pausing after each callback so whatever it resolved gets to run. |
+| `clock.advanceToNextFrame()` | To the next animation frame, running its callbacks and any timer due before it. |
 | `clock.next()` / `clock.nextAsync()` | Jump to the next timer and run it. |
 | `clock.runAll()` / `clock.runAllAsync()` | Drain the queue, or refuse one that never will. |
 | `clock.runPending()` / `clock.runPendingAsync()` | Only what is waiting now — an interval fires once rather than for ever. |
-| `clock.pending()` / `clock.clear()` | How many are waiting; drop them without running any. |
-| `clock.setSystemTime(t)` / `clock.realNow()` | Where the frozen clock stands; the real time while it is frozen. |
+| `clock.runMicrotasks()` | Runs the microtasks queued while `queueMicrotask` is faked, and any they queue. Each timer that fires runs them too. |
+| `clock.pending()` / `clock.clear()` | How many are waiting; drop them, and any faked microtasks, without running any. |
+| `clock.setSystemTime(t)` / `clock.realNow()` | Where the frozen clock stands, without firing timers (an unparseable time is a `TypeError`); the real time while it is frozen. |
+
+Animation frames fall every 16ms from the moment the clock froze, and a frame
+callback receives the frame's `performance.now()`. An idle callback runs at
+once when no timer is waiting, and otherwise after 50ms or its `timeout`,
+whichever is sooner. `performance.now()` starts from the real value, rounded
+down to a whole millisecond, and moves with the clock. `Date()` called without
+`new` returns the frozen time as a string.
 
 **`advanceAsync` is the one to reach for when the code under test `await`s.**
 The synchronous form fires every callback with nothing in between, so a

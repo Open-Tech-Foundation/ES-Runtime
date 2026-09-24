@@ -6773,7 +6773,7 @@ fn test_dom_animation_frames_follow_the_test_clock() {
            const frames = []; const cancelled = requestAnimationFrame(() => frames.push('cancelled'));\n\
            cancelAnimationFrame(cancelled); requestAnimationFrame((at) => frames.push(at));\n\
            clock.advance(15); assertEquals(frames, []);\n\
-           clock.advance(1); assertEquals(frames, [Date.now()]);\n\
+           clock.advance(1); assertEquals(frames, [performance.now()]);\n\
            clock.release();\n\
          });\n",
     );
@@ -12610,6 +12610,144 @@ await server.stop();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What `clock.freeze` replaces beyond timers — `Date()` as a function,
+/// `performance.now`, `Temporal.Now`, `Intl` — and the choice of which.
+#[test]
+fn test_clock_fakes_what_it_is_asked_to_and_puts_it_back() {
+    let dir = build_dir("t_clock_fakes");
+    write_in(
+        &dir,
+        "clock.test.ts",
+        r#"import { afterEach, expect, test, clock } from "runtime:test";
+
+afterEach(() => clock.release());
+
+test("Date called without new is a string of the frozen time", () => {
+  clock.freeze(new Date("2020-01-01T00:00:00Z"));
+  expect(Date()).toBe(new Date(1577836800000).toString());
+  expect(new Date()).toBeInstanceOf(Date);
+  expect(new Date().getTime()).toBe(1577836800000);
+  expect(Date.UTC(2020, 0, 1)).toBe(1577836800000);
+});
+test("performance.now moves with the clock", () => {
+  clock.freeze();
+  const before = performance.now();
+  clock.advance(250);
+  expect(performance.now() - before).toBe(250);
+});
+test("Temporal.Now reads the frozen clock", () => {
+  clock.freeze("2021-06-01T12:00:00Z");
+  expect(Temporal.Now.instant().epochMilliseconds).toBe(Date.parse("2021-06-01T12:00:00Z"));
+  expect(Temporal.Now.plainDateISO("UTC").toString()).toBe("2021-06-01");
+  clock.advance(60_000);
+  expect(Temporal.Now.zonedDateTimeISO("UTC").minute).toBe(1);
+});
+test("Intl formats the frozen now", () => {
+  clock.freeze("2021-06-01T12:00:00Z");
+  const f = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", year: "numeric" });
+  expect(f.format()).toBe("2021");
+  expect(Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long" }).formatToParts()[0].value).toBe("June");
+  expect(f).toBeInstanceOf(Intl.DateTimeFormat);
+});
+test("toFake picks what is replaced", () => {
+  const realSetTimeout = setTimeout;
+  clock.freeze({ now: 0, toFake: ["Date"] });
+  expect(Date.now()).toBe(0);
+  expect(setTimeout).toBe(realSetTimeout);
+});
+test("toNotFake keeps Date real", () => {
+  clock.freeze({ now: 0, toNotFake: ["Date"] });
+  expect(Date.now()).toBeGreaterThan(0);
+  let ran = false;
+  setTimeout(() => (ran = true), 5);
+  clock.advance(5);
+  expect(ran).toBe(true);
+});
+test("queueMicrotask only when asked, then run by runMicrotasks", () => {
+  clock.freeze({ toFake: ["queueMicrotask"] });
+  const seen: number[] = [];
+  queueMicrotask(() => { seen.push(1); queueMicrotask(() => seen.push(2)); });
+  expect(seen).toEqual([]);
+  clock.runMicrotasks();
+  expect(seen).toEqual([1, 2]);
+});
+test("a timer's microtasks run with it", () => {
+  clock.freeze({ toFake: ["setTimeout", "queueMicrotask"] });
+  const seen: string[] = [];
+  setTimeout(() => { queueMicrotask(() => seen.push("job")); seen.push("timer"); }, 1);
+  clock.advance(1);
+  expect(seen).toEqual(["timer", "job"]);
+});
+test("bad names and both lists are refused", () => {
+  expect(() => clock.freeze({ toFake: ["nextTick" as any] })).toThrow('cannot fake "nextTick"');
+  expect(() => clock.freeze({ toFake: ["Date"], toNotFake: ["Date"] })).toThrow("not both");
+  expect(() => clock.freeze({ loopLimit: 0 })).toThrow("loopLimit");
+  expect(clock.isFrozen()).toBe(false);
+});
+test("loopLimit", () => {
+  clock.freeze({ loopLimit: 5 });
+  setInterval(() => {}, 1);
+  expect(() => clock.runAll()).toThrow("clock.runAll: 5 timers fired");
+});
+test("an unparseable time is refused", () => {
+  clock.freeze();
+  expect(() => clock.setSystemTime("not a date")).toThrow("is not a time");
+});
+test("release puts everything back", () => {
+  const before = [setTimeout, Date, performance.now, Temporal.Now.instant, Intl.DateTimeFormat];
+  clock.freeze();
+  clock.release();
+  expect([setTimeout, Date, performance.now, Temporal.Now.instant, Intl.DateTimeFormat]).toEqual(before);
+  expect(Object.hasOwn(performance, "now")).toBe(false);
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("12 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_clock_advances_to_the_next_animation_frame() {
+    let dir = build_dir("t_clock_frames");
+    write_in(
+        &dir,
+        "frame.test.js",
+        r#"import { afterEach, expect, test, clock } from "runtime:test";
+afterEach(() => clock.release());
+test("frames fall every 16ms", () => {
+  clock.freeze();
+  const start = performance.now();
+  const stamps = [];
+  requestAnimationFrame((t) => stamps.push(t - start));
+  clock.advance(5);
+  requestAnimationFrame((t) => stamps.push(t - start));
+  expect(stamps).toEqual([]);
+  clock.advanceToNextFrame();
+  expect(stamps).toEqual([16, 16]);
+  const id = requestAnimationFrame(() => stamps.push("no"));
+  cancelAnimationFrame(id);
+  clock.advanceToNextFrame();
+  expect(stamps).toEqual([16, 16]);
+  expect(Date.now() - clock.realNow()).toBeLessThanOrEqual(32 + 50);
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("1 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `mock.module` over a small project: a module the file under test imports,
 /// a package, and the real module beside its mock.
 fn module_mock_project(name: &str) -> PathBuf {
@@ -12874,10 +13012,11 @@ fn test_mock_module_says_what_is_wrong_with_a_call() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A page's modules are bundled before it loads, so there is no load to
-/// replace a module at: the file fails with the reason, not a silent real module.
+/// In a page: `mock.module` is refused by name — its modules are bundled before
+/// it loads, so there is no load to replace a module at — while `mock.when`
+/// and the clock work, the clock faking what only a page has.
 #[test]
-fn test_mock_in_a_browser_run_refuses_only_what_needs_the_process() {
+fn test_mocks_and_the_clock_in_a_browser_run() {
     let dir = module_mock_project("t_mock_module_browser");
     write_in(
         &dir,
@@ -12901,6 +13040,28 @@ test("when in a page", () => {
 });
 "#,
     );
+    // The clock fakes what a page has and a process does not.
+    write_in(
+        &dir,
+        "src/idle.test.js",
+        r#"import { afterEach, expect, test, clock } from "runtime:test";
+afterEach(() => clock.release());
+test("idle when nothing waits, else after 50ms or the timeout", () => {
+  clock.freeze();
+  const seen = [];
+  requestIdleCallback((d) => seen.push(["now", d.didTimeout]));
+  clock.advance(0);
+  expect(seen).toEqual([["now", false]]);
+  setTimeout(() => {}, 1000);
+  requestIdleCallback((d) => seen.push(["later", d.didTimeout]));
+  requestIdleCallback((d) => seen.push(["soon", d.didTimeout]), { timeout: 10 });
+  clock.advance(10);
+  expect(seen.at(-1)).toEqual(["soon", true]);
+  clock.advance(40);
+  expect(seen.at(-1)).toEqual(["later", false]);
+});
+"#,
+    );
     let out = esdev_in(&dir)
         .args(["test", "--browser", "--timeout=60000"])
         .output()
@@ -12918,6 +13079,10 @@ test("when in a page", () => {
     );
     assert!(
         text.contains("src/answers.test.ts\n  1 passed, 0 failed"),
+        "{text}{err}"
+    );
+    assert!(
+        text.contains("src/idle.test.js\n  1 passed, 0 failed"),
         "{text}{err}"
     );
 }

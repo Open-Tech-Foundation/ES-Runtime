@@ -617,7 +617,8 @@ function requestAnimationFrame(callback) {
   const id = nextAnimationFrame++;
   const timer = setTimeout(() => {
     animationFrames.delete(id);
-    callback(Date.now());
+    // The frame's time on the `performance.now()` timeline, as a browser gives it.
+    callback(performance.now());
   }, 16);
   animationFrames.set(id, timer);
   return id;

@@ -420,9 +420,11 @@ the matchers read.
 
 ## clock
 
-Time, stopped. `clock.freeze()` replaces `setTimeout`, `setInterval`, their
-cancels and `Date` on `globalThis`, and everything scheduled through them then
-moves only when the test says so.
+Time, stopped. `clock.freeze()` replaces the timers, `Date`,
+`performance.now`, `Temporal.Now` and `Intl.DateTimeFormat`'s "now" — and,
+where the realm has them, `setImmediate`, `requestAnimationFrame` and
+`requestIdleCallback` — and everything scheduled through them then moves only
+when the test says so.
 
 ```js
 import { test, expect, mock, clock } from "runtime:test";
@@ -443,11 +445,14 @@ test("polls every second until it answers", async () => {
 | | |
 | --- | --- |
 | `clock.freeze(at?)` | Stops time, optionally at a moment |
-| `clock.release()` | Real timers back |
+| `clock.freeze({ now, toFake, toNotFake, loopLimit })` | …replacing only some of it |
+| `clock.release()` | The real ones back |
 | `clock.advance(ms)` / `advanceAsync(ms)` | Move it |
+| `clock.advanceToNextFrame()` | To the next animation frame (every 16ms) |
 | `clock.next()` / `nextAsync()` | Jump to the next timer and run it |
 | `clock.runAll()` / `runAllAsync()` | Drain the queue |
 | `clock.runPending()` / `runPendingAsync()` | Fire what is waiting once — an interval does not repeat |
+| `clock.runMicrotasks()` | Run microtasks, when `queueMicrotask` is faked |
 | `clock.pending()` / `clock.clear()` | How many are waiting; drop them |
 | `clock.setSystemTime(t)` / `clock.realNow()` | |
 
@@ -459,6 +464,10 @@ the assertion after it sees the state from before.
 `Date` moves with the clock rather than being frozen separately, because the two
 are one question: a stopped `setTimeout` beside a running `Date.now()` describes
 a machine that does not exist.
+
+By default `freeze` replaces everything the realm has except `queueMicrotask`.
+`toFake` names the only things to replace; `toNotFake` names the ones to leave
+real. See [Choosing what to fake](/esdev/test/mocks#choosing-what-to-fake).
 
 <Callout type="warning" title="It replaces globals for the whole process">
   Not for one test. That is safe here because a test file **is** a process — the

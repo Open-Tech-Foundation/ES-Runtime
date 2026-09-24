@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- **`clock.freeze(options)`** with the `FreezeOptions` and `Fakeable` types, and
+  `clock.advanceToNextFrame` and `clock.runMicrotasks`.
 - **`mock.when`** with the `When`, `WhenOptions` and `AnswerOptions` types, and
   the `toHaveBeenExhausted` matcher; **`mock.env`**; and, on `Mock`,
   `mockThrow`, `mockThrowOnce`, `withImplementation`, `getMockImplementation`

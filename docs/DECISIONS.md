@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D103 — The clock fakes all of time, and can be told what not to · *Accepted (2026-09-24)*
+
+**Context:** `clock.freeze()` replaced the timers and `Date`. Code also reads time through `performance.now`, `Temporal.Now` and `Intl.DateTimeFormat().format()`, and in a page schedules through `requestAnimationFrame`, `requestIdleCallback` and `setImmediate`. A test of any of these saw real time beside a frozen `Date`. Vitest (on `@sinonjs/fake-timers`) fakes everything available except `nextTick` and `queueMicrotask`, and takes `toFake` or `toNotFake` to choose.
+
+**Decision:**
+- **By default, everything the realm has, except `queueMicrotask`**, the same default as Vitest. An API the realm lacks is left absent rather than created. `toFake` and `toNotFake` take the same names as Vitest's, minus Node's `nextTick` and `hrtime`, which this runtime does not have; a name outside the list is a `TypeError` rather than ignored.
+- **Frames every 16ms from the moment of freezing, idle callbacks after 50ms or their timeout**, as `@sinonjs/fake-timers` schedules them, so a suite's frame arithmetic carries over. A frame callback receives `performance.now()`, as a browser gives it; the `--dom` realm's own `requestAnimationFrame` passed `Date.now()` and now matches.
+- **`performance.now()` continues from the real value, rounded down to a whole millisecond**, so the differences a test measures are exact rather than off by float noise.
+- **Faked microtasks run after each timer the clock fires**, and on `clock.runMicrotasks()`.
+- Rejected, for now: Vitest's `setTimerTickMode` (time that advances by itself), which changes what "frozen" means, and whose use — a test that sleeps for real — is served by `toFake`.
+
+**Consequences:** `Date` became a function rather than a class, so `Date()` without `new` returns a string as it should instead of throwing. The runner captures `queueMicrotask` at load, as it does `setTimeout`, so a faked one cannot stall it.
+
+---
+
 ### D102 — Answers by argument, `using`, and `mock.env` · *Accepted (2026-09-24)*
 
 **Context:** Vitest 4.1 added `mockThrow` and `mockThrowOnce`, and Vitest 5 added `vi.when(spy).calledWith(…).thenReturn(…)` with a `toHaveBeenExhausted` matcher; Jest has no per-argument API (suites use the third-party `jest-when`). Vitest and Jest both make a spy disposable, so `using spy = …spyOn(…)` restores it. Vitest stubs the environment with `vi.stubEnv` and undoes it with a separate `vi.unstubAllEnvs`; Jest and Bun have no environment API.

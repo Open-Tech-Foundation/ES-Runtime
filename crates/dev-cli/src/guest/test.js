@@ -194,6 +194,9 @@ let exclusive = false;
 // runner with it.
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
+// The drain is scheduled on a microtask; a clock that fakes `queueMicrotask`
+// must not hold it back.
+const realQueueMicrotask = globalThis.queueMicrotask;
 // The real clock, for the same reason: `expect.poll` and `waitFor` measure how
 // long they have waited, and a frozen `Date` would never let them stop.
 const realNow = Date.now;
@@ -517,9 +520,11 @@ function schedule() {
   // A microtask, not a call: the rest of the file is still registering, and a
   // drain that started on the first `test()` would run case one before case two
   // existed. By the time microtasks run, the module body is done.
-  queueMicrotask(() => {
-    drain();
-  });
+  Reflect.apply(realQueueMicrotask, globalThis, [
+    () => {
+      drain();
+    },
+  ]);
 }
 
 async function drain() {
@@ -2463,9 +2468,34 @@ const mock = {
 let frozen = null;
 
 /// How many timers one `runAll` will fire before it decides the queue is not
-/// going to end. An interval, or a timeout that reschedules itself, never
-/// drains — and a test that hangs teaches nothing.
+/// going to end, unless `freeze({ loopLimit })` says otherwise. An interval,
+/// or a timeout that reschedules itself, never drains — and a test that hangs
+/// teaches nothing.
 const RUNAWAY = 10_000;
+
+/// How far apart animation frames are, in milliseconds: 60 a second.
+const FRAME = 16;
+
+/// What `freeze` can replace. `queueMicrotask` only when asked: the promise
+/// jobs a test awaits are microtasks too, and holding those back is rarely
+/// what a test wants.
+const FAKEABLE = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "setImmediate",
+  "clearImmediate",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+  "requestIdleCallback",
+  "cancelIdleCallback",
+  "queueMicrotask",
+  "Date",
+  "performance",
+  "Temporal",
+  "Intl",
+];
 
 /// The clock the test drives, or a complaint that time is still real.
 function ticking(verb) {
@@ -2490,7 +2520,8 @@ function due(state, limit) {
   return found;
 }
 
-/// Runs one timer, having first decided whether it runs again.
+/// Runs one timer, having first decided whether it runs again — and then the
+/// microtasks it queued, when those are faked too.
 ///
 /// Rescheduled before it is called, so an interval that cancels itself from
 /// inside its own callback actually stops.
@@ -2499,6 +2530,17 @@ function fire(state, timer) {
   if (timer.every) timer.at += timer.every;
   else state.timers.delete(timer.id);
   Reflect.apply(timer.callback, undefined, timer.args);
+  runJobs(state);
+}
+
+/// Faked microtasks, in the order they were queued, including any they queue.
+function runJobs(state) {
+  for (let ran = 0; state.jobs.length > 0; ran += 1) {
+    if (ran >= state.loopLimit) {
+      throw new Error(`clock: ${state.loopLimit} microtasks ran and the queue is not draining`);
+    }
+    state.jobs.shift()();
+  }
 }
 
 /// Whatever is pending on the microtask queue, run.
@@ -2506,23 +2548,90 @@ function fire(state, timer) {
 /// A real macrotask, not `await Promise.resolve()`: a promise chain of unknown
 /// depth is only guaranteed to be finished once the queue has drained, and
 /// draining it is exactly what yielding to a real timer does.
-const settle = () =>
-  new Promise((resolve) => Reflect.apply(frozen.real.setTimeout, globalThis, [resolve, 0]));
+const settle = () => new Promise((resolve) => Reflect.apply(realSetTimeout, globalThis, [resolve, 0]));
+
+/// What `freeze` was asked to replace: a moment, or `{ now, toFake,
+/// toNotFake, loopLimit }`.
+function freezeOptions(input) {
+  const isOptions =
+    input !== null && typeof input === "object" && !(input instanceof Date);
+  const options = isOptions ? input : { now: input };
+  if (options.toFake !== undefined && options.toNotFake !== undefined) {
+    throw new TypeError("clock.freeze takes toFake or toNotFake, not both");
+  }
+  for (const key of ["toFake", "toNotFake"]) {
+    const names = options[key];
+    if (names === undefined) continue;
+    if (!Array.isArray(names)) throw new TypeError(`clock.freeze: ${key} is a list of names`);
+    for (const name of names) {
+      if (!FAKEABLE.includes(name)) {
+        throw new TypeError(
+          `clock.freeze: cannot fake ${JSON.stringify(name)}; it fakes ${FAKEABLE.join(", ")}`,
+        );
+      }
+    }
+  }
+  const loopLimit = options.loopLimit ?? RUNAWAY;
+  if (!(Number.isInteger(loopLimit) && loopLimit > 0)) {
+    throw new TypeError("clock.freeze: loopLimit is a whole number above 0");
+  }
+  const wanted = options.toFake
+    ? new Set(options.toFake)
+    : new Set(
+        FAKEABLE.filter((name) => name !== "queueMicrotask" && !options.toNotFake?.includes(name)),
+      );
+  return { now: options.now, loopLimit, wanted };
+}
 
 const clock = {
-  /// Stops time. Optionally at a given moment — otherwise wherever it is now.
+  /// Stops time. Optionally at a given moment — otherwise wherever it is now —
+  /// and, given `{ toFake }` or `{ toNotFake }`, only for some of it. What this
+  /// runtime does not have is left alone.
   freeze(at) {
     if (frozen) return clock;
-    const real = {
-      setTimeout: globalThis.setTimeout,
-      clearTimeout: globalThis.clearTimeout,
-      setInterval: globalThis.setInterval,
-      clearInterval: globalThis.clearInterval,
-      Date: globalThis.Date,
+    const { now, loopLimit, wanted } = freezeOptions(at);
+    const realDate = globalThis.Date;
+    const realPerformanceNow =
+      typeof globalThis.performance?.now === "function"
+        ? globalThis.performance.now.bind(globalThis.performance)
+        : null;
+    const state = {
+      now: realDate.now(),
+      start: 0,
+      timers: new Map(),
+      jobs: [],
+      next: 1,
+      loopLimit,
+      realDate,
+      realPerformanceNow,
+      undo: [],
     };
-    const state = { now: real.Date.now(), timers: new Map(), next: 1, real };
     frozen = state;
-    if (at !== undefined) clock.setSystemTime(at);
+    if (now !== undefined) clock.setSystemTime(now);
+    state.start = state.now;
+    // From a whole millisecond, so the differences a test measures are exact.
+    const performanceStart = realPerformanceNow ? Math.floor(realPerformanceNow()) : 0;
+    const performanceNow = () => performanceStart + (state.now - state.start);
+
+    // Each replacement is undone by `release`, in reverse.
+    const replace = (target, key, value) => {
+      const before = Object.getOwnPropertyDescriptor(target, key);
+      Object.defineProperty(target, key, {
+        value,
+        writable: true,
+        configurable: true,
+        enumerable: before?.enumerable ?? false,
+      });
+      state.undo.push(() => {
+        if (before) Object.defineProperty(target, key, before);
+        else delete target[key];
+      });
+    };
+    const fake = (name, value) => {
+      if (wanted.has(name) && typeof globalThis[name] === "function") {
+        replace(globalThis, name, value);
+      }
+    };
 
     const add = (callback, delay, args, every) => {
       const id = state.next++;
@@ -2535,37 +2644,113 @@ const clock = {
       });
       return id;
     };
-    globalThis.setTimeout = (callback, delay, ...args) => add(callback, delay, args, null);
-    globalThis.setInterval = (callback, delay, ...args) =>
-      add(callback, delay, args, Math.max(1, Number(delay) || 0));
-    globalThis.clearTimeout = (id) => void state.timers.delete(id);
-    globalThis.clearInterval = globalThis.clearTimeout;
+    const cancel = (id) => void state.timers.delete(Number(id));
+
+    fake("setTimeout", (callback, delay, ...args) => add(callback, delay, args, null));
+    fake("clearTimeout", cancel);
+    fake("setInterval", (callback, delay, ...args) =>
+      add(callback, delay, args, Math.max(1, Number(delay) || 0)),
+    );
+    fake("clearInterval", cancel);
+    fake("setImmediate", (callback, ...args) => add(callback, 0, args, null));
+    fake("clearImmediate", cancel);
+    // Frames fall every 16ms from the moment the clock froze, and a callback
+    // is given the frame's time as `performance.now()` reads it.
+    fake("requestAnimationFrame", (callback) =>
+      add(
+        () => callback(performanceNow()),
+        FRAME - ((state.now - state.start) % FRAME),
+        [],
+        null,
+      ),
+    );
+    fake("cancelAnimationFrame", cancel);
+    // Idle as soon as nothing else is waiting; otherwise after 50ms, or the
+    // callback's own timeout if that is sooner.
+    fake("requestIdleCallback", (callback, options) => {
+      const idle = state.timers.size > 0 ? 50 : 0;
+      const timeout = Number(options?.timeout);
+      const delay = timeout > 0 ? Math.min(timeout, idle) : idle;
+      const scheduled = state.now;
+      return add(
+        () =>
+          callback({
+            didTimeout: timeout > 0 && state.now - scheduled >= timeout,
+            timeRemaining: () => 50,
+          }),
+        delay,
+        [],
+        null,
+      );
+    });
+    fake("cancelIdleCallback", cancel);
+    fake("queueMicrotask", (callback) => {
+      if (typeof callback !== "function") {
+        throw new TypeError("queueMicrotask needs a function");
+      }
+      state.jobs.push(callback);
+    });
 
     // `Date` moves with the clock rather than being frozen separately, because
     // the two are one question: code that waits almost always also asks what
     // time it is, and a stopped `setTimeout` beside a running `Date.now()`
-    // describes a machine that does not exist.
-    globalThis.Date = class Date extends real.Date {
-      constructor(...args) {
-        if (args.length === 0) super(state.now);
-        else super(...args);
-      }
-      static now() {
-        return state.now;
-      }
-    };
+    // describes a machine that does not exist. A function rather than a class,
+    // so `Date()` without `new` still returns the time as a string.
+    if (wanted.has("Date")) {
+      const Date = function Date(...args) {
+        if (!new.target) return new realDate(state.now).toString();
+        return Reflect.construct(realDate, args.length === 0 ? [state.now] : args, new.target);
+      };
+      Object.setPrototypeOf(Date, realDate);
+      Date.prototype = realDate.prototype;
+      Date.now = () => state.now;
+      replace(globalThis, "Date", Date);
+    }
+    if (wanted.has("performance") && realPerformanceNow) {
+      replace(globalThis.performance, "now", performanceNow);
+    }
+    const Temporal = globalThis.Temporal;
+    if (wanted.has("Temporal") && Temporal?.Now) {
+      const instant = () => Temporal.Instant.fromEpochMilliseconds(state.now);
+      const zoned = (zone = Temporal.Now.timeZoneId()) => instant().toZonedDateTimeISO(zone);
+      replace(Temporal.Now, "instant", instant);
+      replace(Temporal.Now, "zonedDateTimeISO", zoned);
+      replace(Temporal.Now, "plainDateTimeISO", (zone) => zoned(zone).toPlainDateTime());
+      replace(Temporal.Now, "plainDateISO", (zone) => zoned(zone).toPlainDate());
+      replace(Temporal.Now, "plainTimeISO", (zone) => zoned(zone).toPlainTime());
+    }
+    // A formatter asked to format "now" — no date given — formats the clock's.
+    const DateTimeFormat = globalThis.Intl?.DateTimeFormat;
+    if (wanted.has("Intl") && DateTimeFormat) {
+      const { formatToParts } = DateTimeFormat.prototype;
+      const current = (formatter) => {
+        const format = formatter.format;
+        Object.defineProperties(formatter, {
+          format: { value: (date) => format(date === undefined ? state.now : date), configurable: true },
+          formatToParts: {
+            value: (date) => Reflect.apply(formatToParts, formatter, [date === undefined ? state.now : date]),
+            configurable: true,
+          },
+        });
+        return formatter;
+      };
+      replace(
+        globalThis.Intl,
+        "DateTimeFormat",
+        new Proxy(DateTimeFormat, {
+          construct: (target, args, newTarget) => current(Reflect.construct(target, args, newTarget)),
+          apply: (target, self, args) => current(Reflect.apply(target, self, args)),
+        }),
+      );
+    }
     return clock;
   },
 
-  /// Starts it again, and puts the real timers back.
+  /// Starts it again, and puts the real ones back. Timers still waiting are
+  /// dropped.
   release() {
     if (!frozen) return clock;
-    const { real } = frozen;
-    globalThis.setTimeout = real.setTimeout;
-    globalThis.clearTimeout = real.clearTimeout;
-    globalThis.setInterval = real.setInterval;
-    globalThis.clearInterval = real.clearInterval;
-    globalThis.Date = real.Date;
+    for (const undo of frozen.undo.reverse()) undo();
     frozen = null;
     return clock;
   },
@@ -2579,8 +2764,8 @@ const clock = {
     for (let fired = 0; ; fired += 1) {
       const timer = due(state, target);
       if (!timer) break;
-      if (fired >= RUNAWAY) {
-        throw new Error(`clock.advance: ${RUNAWAY} timers fired and the queue is not draining`);
+      if (fired >= state.loopLimit) {
+        throw new Error(`clock.advance: ${state.loopLimit} timers fired and the queue is not draining`);
       }
       fire(state, timer);
     }
@@ -2604,9 +2789,9 @@ const clock = {
     for (let fired = 0; ; fired += 1) {
       const timer = due(state, target);
       if (!timer) break;
-      if (fired >= RUNAWAY) {
+      if (fired >= state.loopLimit) {
         throw new Error(
-          `clock.advanceAsync: ${RUNAWAY} timers fired and the queue is not draining`,
+          `clock.advanceAsync: ${state.loopLimit} timers fired and the queue is not draining`,
         );
       }
       fire(state, timer);
@@ -2615,6 +2800,13 @@ const clock = {
     state.now = target;
     await settle();
     return clock;
+  },
+
+  /// To the next animation frame, running its callbacks and any timer due
+  /// before it.
+  advanceToNextFrame() {
+    const state = ticking("advanceToNextFrame");
+    return clock.advance(FRAME - ((state.now - state.start) % FRAME));
   },
 
   /// Jumps to whenever the next timer is due, and runs it.
@@ -2635,8 +2827,8 @@ const clock = {
   runAll() {
     const state = ticking("runAll");
     for (let fired = 0; state.timers.size > 0; fired += 1) {
-      if (fired >= RUNAWAY) {
-        throw new Error(`clock.runAll: ${RUNAWAY} timers fired and the queue is not draining`);
+      if (fired >= state.loopLimit) {
+        throw new Error(`clock.runAll: ${state.loopLimit} timers fired and the queue is not draining`);
       }
       clock.next();
     }
@@ -2668,28 +2860,38 @@ const clock = {
     return clock;
   },
 
+  /// The microtasks queued while `queueMicrotask` is faked, and any they queue.
+  runMicrotasks() {
+    runJobs(ticking("runMicrotasks"));
+    return clock;
+  },
+
   /// How many timers are waiting.
   pending: () => (frozen ? frozen.timers.size : 0),
 
-  /// Drops them all without running any.
+  /// Drops them all without running any, and any faked microtasks.
   clear() {
-    if (frozen) frozen.timers.clear();
+    if (frozen) {
+      frozen.timers.clear();
+      frozen.jobs.length = 0;
+    }
     return clock;
   },
 
   /// Where the frozen clock stands. A `Date`, a number of milliseconds, or a
-  /// string the platform's `Date` can parse.
+  /// string the platform's `Date` can parse. Timers do not fire because of it.
   setSystemTime(time) {
     const state = ticking("setSystemTime");
-    state.now = typeof time === "string" ? state.real.Date.parse(time) : Number(time);
+    const at = typeof time === "string" ? state.realDate.parse(time) : Number(time);
+    if (Number.isNaN(at)) throw new TypeError(`clock: ${String(time)} is not a time`);
+    state.now = at;
     return clock;
   },
 
   /// The real time, while the clock is frozen — for measuring how long
   /// something actually took.
-  realNow: () => (frozen ? frozen.real.Date.now() : Date.now()),
+  realNow: () => (frozen ? frozen.realDate.now() : Date.now()),
 };
-
 
 export {
   test,

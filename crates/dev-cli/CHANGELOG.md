@@ -37,6 +37,12 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
+- **`Date()` without `new` under a frozen clock** returns the time as a string
+  instead of throwing.
+- **`--dom`'s `requestAnimationFrame` passes the frame's `performance.now()`**
+  to its callback, as a browser does, rather than `Date.now()`.
+- **`clock.setSystemTime` refuses a time it cannot parse**, instead of setting
+  the clock to `NaN`.
 - **A browser-run file that fails to load names the error in Firefox.** The
   report showed only the stack, because Firefox's `error.stack` leaves out the
   message; the message now comes first, as in Chrome.
@@ -88,6 +94,13 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`clock.freeze()` fakes all of time**: `performance.now`, `Temporal.Now`,
+  `Intl.DateTimeFormat`'s "now", and — where the realm has them —
+  `setImmediate`, `requestAnimationFrame` and `requestIdleCallback`, beside the
+  timers and `Date`. `clock.freeze({ now, toFake, toNotFake, loopLimit })`
+  chooses what is replaced; `queueMicrotask` is faked only when named, with
+  `clock.runMicrotasks()` to run it. **`clock.advanceToNextFrame()`** runs the
+  next animation frame (DECISIONS D103).
 - **`mock.when(spy)`** gives a mock an answer per set of arguments:
   `calledWith(…)` followed by `thenReturn`, `thenThrow`, `thenResolve` or
   `thenReject`, each with `{ times }` and a `…Once` form, plus an `onUnmatched`

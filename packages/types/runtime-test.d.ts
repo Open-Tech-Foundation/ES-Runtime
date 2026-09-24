@@ -667,9 +667,10 @@ declare module "runtime:test" {
   /**
    * Time, stopped.
    *
-   * `freeze()` replaces `setTimeout`, `setInterval`, their cancels and `Date`
-   * on `globalThis`, so everything scheduled through them moves only when the
-   * test says so. It is safe because a test file is a **process**: the swap
+   * `freeze()` replaces the timers, `Date`, `performance.now`, `Temporal.Now`
+   * and `Intl.DateTimeFormat`'s "now" — and, where the realm has them,
+   * `setImmediate`, `requestAnimationFrame` and `requestIdleCallback` — so
+   * everything scheduled through them moves only when the test says so. It is safe because a test file is a **process**: the swap
    * cannot reach the next file, and the runner drains on microtasks rather
    * than timers, so a file that forgets {@link clock.release} still reports.
    *
@@ -686,10 +687,46 @@ declare module "runtime:test" {
    * });
    * ```
    */
+  /** What {@link clock.freeze} can replace. */
+  export type Fakeable =
+    | "setTimeout"
+    | "clearTimeout"
+    | "setInterval"
+    | "clearInterval"
+    | "setImmediate"
+    | "clearImmediate"
+    | "requestAnimationFrame"
+    | "cancelAnimationFrame"
+    | "requestIdleCallback"
+    | "cancelIdleCallback"
+    | "queueMicrotask"
+    | "Date"
+    | "performance"
+    | "Temporal"
+    | "Intl";
+
+  interface FreezeBase {
+    /** Where the clock starts. Default: now. */
+    now?: Date | number | string;
+    /** Timers `runAll` and `advance` fire before deciding the queue never drains. Default 10,000. */
+    loopLimit?: number;
+  }
+
+  /**
+   * Which parts of time `freeze` replaces. By default, all that the realm has
+   * except `queueMicrotask`; `toFake` names the only ones, `toNotFake` the
+   * ones to leave. Not both.
+   */
+  export type FreezeOptions =
+    | (FreezeBase & { toFake?: Fakeable[]; toNotFake?: never })
+    | (FreezeBase & { toNotFake?: Fakeable[]; toFake?: never });
+
   export const clock: {
     /** Stops time — at `at`, or wherever it is now. */
     freeze(at?: Date | number | string): typeof clock;
-    /** Starts it again, and puts the real timers back. */
+    /** …choosing what is replaced. */
+    freeze(options: FreezeOptions): typeof clock;
+    /** Starts it again, and puts the real ones back. Waiting timers are dropped. */
     release(): typeof clock;
     isFrozen(): boolean;
     /** Moves forward, running whatever comes due on the way. */
@@ -700,6 +737,8 @@ declare module "runtime:test" {
      * resolves a promise but returns before anything waiting on it has run.
      */
     advanceAsync(ms: number): Promise<typeof clock>;
+    /** To the next animation frame — they fall every 16ms — running what comes due. */
+    advanceToNextFrame(): typeof clock;
     /** Jumps to whenever the next timer is due, and runs it. */
     next(): typeof clock;
     nextAsync(): Promise<typeof clock>;
@@ -709,11 +748,13 @@ declare module "runtime:test" {
     /** Only what is waiting now — an interval fires once, not for ever. */
     runPending(): typeof clock;
     runPendingAsync(): Promise<typeof clock>;
+    /** Runs the microtasks queued while `queueMicrotask` is faked. */
+    runMicrotasks(): typeof clock;
     /** How many timers are waiting. */
     pending(): number;
-    /** Drops them all without running any. */
+    /** Drops them all without running any, and any faked microtasks. */
     clear(): typeof clock;
-    /** Where the frozen clock stands. */
+    /** Where the frozen clock stands. Timers do not fire because of it. */
     setSystemTime(time: Date | number | string): typeof clock;
     /** The real time, while the clock is frozen. */
     realNow(): number;

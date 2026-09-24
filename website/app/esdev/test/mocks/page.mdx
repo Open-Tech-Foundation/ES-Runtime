@@ -35,8 +35,9 @@ test("gives up after a minute", async () => {
 | `mock.when(spy)` | Answers by argument — see [below](#answers-by-argument) |
 | `mock.module(spec, factory)` | Replaces a module — see [below](#mocking-a-module) |
 | `mock.restoreAll()` | Every spy's method, replaced global and environment variable, back |
-| `clock.freeze(at?)` | Stops time — and `setTimeout`, `setInterval`, `Date` |
+| `clock.freeze(at?)` | Stops time — timers, `Date`, `performance.now`, `Temporal.Now` |
 | `clock.advance(ms)` | Moves it, running what comes due |
+| `clock.advanceToNextFrame()` | To the next animation frame |
 | `clock.advanceAsync(ms)` | …pausing after each callback, so an `await` resumes |
 | `clock.runAll()` / `runPending()` | Drain, or fire what is waiting once |
 | `clock.release()` | Real time again |
@@ -50,6 +51,41 @@ under the default process-per-file runner. With `--isolation=none`, release it
 and restore mocks before the file ends: the next file shares the same globals.
 The runner drains on microtasks rather than timers, so a file that forgets
 `clock.release()` still reports.
+
+## Choosing what to fake
+
+`clock.freeze()` replaces everything time-related the realm has:
+- the timers
+- `Date`
+- `performance.now`
+- `Temporal.Now`
+- `Intl.DateTimeFormat`'s "now"
+- `setImmediate`, `requestAnimationFrame` and `requestIdleCallback`, where
+  they exist
+
+To replace only some of it, pass `toFake`; to keep some real, pass `toNotFake`:
+
+```ts
+clock.freeze({ now: "2024-01-01", toFake: ["Date"] }); // timers stay real
+clock.freeze({ toNotFake: ["performance"] });          // measure real time
+```
+
+`queueMicrotask` is left alone unless `toFake` names it. When it is faked,
+the microtasks wait for `clock.runMicrotasks()`, or run after each timer the
+clock fires.
+
+In a `--dom` or `--browser` run, `clock.advanceToNextFrame()` runs the next
+animation frame. Frames fall every 16ms after the clock froze:
+
+```ts
+test("fades in over one frame", () => {
+  clock.freeze();
+  const box = fadeIn(document.body);
+  clock.advanceToNextFrame();
+  expect(box).toHaveStyle({ opacity: "1" });
+  clock.release();
+});
+```
 
 ## Restoring a spy with `using`
 
