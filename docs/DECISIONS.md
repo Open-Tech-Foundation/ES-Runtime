@@ -671,7 +671,7 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 - **Our own measurement, no dependency.** Each benchmark warms up, then is timed in samples of a loop of calls, sized in warm-up to about 0.5ms, so a function faster than the clock's resolution is measured by the loop and not by the clock. `compare` takes one sample of each in turn, so a slow stretch of the machine lands on all of them. The clock is the real `performance.now`, taken at load, so a test's frozen clock does not stop measurement.
 - **The result is latency and throughput**, each with mean, min, max, percentiles and relative margin of error, the fields tinybench reports and Vitest exposes.
 
-**Rejected:** a `bench()` global beside `test` (Vitest 4's API, which Vitest 5 left); vendoring tinybench, whose timing is the same idea and whose adaptive batching this needs anyway.
+**Rejected:** a `bench()` global beside `test` (Vitest 4's API, which Vitest 5 left); vendoring tinybench, which times each call alone and leaves batching a function faster than the clock to the author (by returning an overridden duration).
 
 ---
 
