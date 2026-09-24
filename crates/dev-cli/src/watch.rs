@@ -189,7 +189,15 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
 ///
 /// `None` means the watcher is gone, which can only happen at shutdown.
 pub async fn coalesce<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> Option<Vec<T>> {
-    let mut burst = vec![rx.recv().await?];
+    let first = rx.recv().await?;
+    Some(coalesce_from(first, rx).await)
+}
+
+/// [`coalesce`], once its first event has been received — for a caller that
+/// waits on `recv()` beside something else, since `recv()` can be cancelled
+/// without losing an event and a half-gathered burst cannot.
+pub async fn coalesce_from<T>(first: T, rx: &mut mpsc::UnboundedReceiver<T>) -> Vec<T> {
+    let mut burst = vec![first];
     // The cap starts with the burst, not with each event in it, so a stream of
     // changes cannot push it back for ever.
     let hold_until = tokio::time::Instant::now() + MAX_HOLD;
@@ -202,9 +210,9 @@ pub async fn coalesce<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> Option<Vec<T>> 
             // Another event: the save is still landing, so the lull restarts.
             Ok(Ok(Some(change))) => burst.push(change),
             // A lull, or the watcher stopped — either way the burst is over.
-            Ok(Ok(None) | Err(_)) => return Some(burst),
+            Ok(Ok(None) | Err(_)) => return burst,
             // Still arriving, and the cap is up. Build what is there.
-            Err(_) => return Some(burst),
+            Err(_) => return burst,
         }
     }
 }

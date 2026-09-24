@@ -80,6 +80,7 @@ mod trace;
 mod transform;
 mod types;
 mod watch;
+mod watch_keys;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
 use config::TestIsolation;
 use create::{CreateConfig, DEFAULT_TEMPLATE};
@@ -202,7 +203,8 @@ OPTIONS:
                                 a process holding a V8 heap
     --isolation=<mode>          process (default), or none to run all selected
                                 files serially in one process and retain caches
-    --watch                     Run them again whenever a source file changes
+    --watch                     Run them again whenever a source file changes;
+                                on a terminal, press h for the keys
     --dom                       Install esdev's test-only DOM globals
     --browser[=<name>]          Run the files in a real browser over WebDriver
                                 BiDi: auto (the default) takes the first of
@@ -1466,6 +1468,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
     let mut jobs = None;
     let mut isolation = None;
     let mut watch = false;
+    let mut watch_keys = false;
     let mut setup: Vec<String> = Vec::new();
     let mut global_setup: Vec<String> = Vec::new();
     let mut provided = None;
@@ -1551,6 +1554,10 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             "--watch" => {
                 reject_value(flag, value)?;
                 watch = true;
+            }
+            "--_watch-keys" => {
+                reject_value(flag, value)?;
+                watch_keys = true;
             }
             "--dom" => {
                 reject_value(flag, value)?;
@@ -1840,6 +1847,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         jobs,
         isolation,
         watch,
+        watch_keys,
         setup,
         timeout,
         reporter,
@@ -2566,7 +2574,7 @@ async fn run_selected(
         .unwrap_or_else(test::jobs)
         .min(files.len())
         .max(1);
-    let failed = test::run_all(exe, root, files, jobs, config).await;
+    let failed = test::run_all(exe, root, files, jobs, config).await.failed;
     let total = files.len();
     if !config.terminal_human() {
         // The reporter wrote its own ending.

@@ -661,6 +661,29 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D118 — Watch-mode keys, read without taking the terminal · *Accepted (2026-09-24)*
+
+**Context:** Vitest's watch reads single keys:
+- `a` or Enter reruns all, `r` reruns the current pattern, `f` reruns what failed;
+- `u` updates snapshots;
+- `p` and `t` filter by filename and test name, with live prompts, and `w` filters by project;
+- `h` shows help and `q` quits;
+- a key during a run cancels it.
+
+Jest reserves most of the same letters, plus `c` to clear filters and `i` for interactive snapshot updates. Neither CLI reference page documents the keys; they are in the tools' own help screens and source. Reading single keys takes the terminal out of line mode. The usual way of doing that, crossterm's raw mode and `cfmakeraw`, also turns off output processing, so a test process printing `\n` would staircase across the screen. Node's raw mode keeps `ONLCR` for that reason.
+
+**Decision:**
+- **Vitest's keys**, less `w`: there are no projects here. `c` is not taken, because Vitest uses it to cancel, and `a` already clears the filters as Vitest's does. `f` reruns the files that failed, as Vitest does, rather than the individual tests.
+- **Only `ICANON` and `ECHO` are cleared**, through rustix's termios. Output processing and signals stay the terminal's, so a test's output reads as it did, and ^C and ^Z still work. The mode is restored on every exit, and reapplied on `SIGCONT` after `fg`.
+- **Cancelling a run drops it.** Test processes are spawned `kill_on_drop`, and a file's timeout watchdog is aborted with it, so no pid is signalled after it may have been reused. A run under `--isolation=none` is in this process and is not cancelled; its key waits.
+- **Prompts are one line on stderr**, redrawn as typed, with a live count of the files a filename filter selects.
+- **The gate is a terminal on stdin.** Without one, the watch behaves as before. `--_watch-keys` reads keys from a pipe, for the end-to-end tests.
+- **Unix only for now.** Windows needs the console API instead, which crossterm wraps. It is not written yet because it could not be run on Windows before shipping. There the watch keeps its old behaviour.
+
+**Rejected:** a full-screen interface, because a test run's output belongs in the scrollback.
+
+---
+
 ### D117 — Stored benchmark results, timed sections, and warnings · *Accepted (2026-09-24)* · *extends D116*
 
 **Context:** D116 measured and compared within one run. The other tools cover what it left out, each differently. Vitest 5 has `writeResult` and `bench.from` to compare against a stored result. Deno and Node have `b.start()`/`b.end()` to time part of a call. Node's `spec` reporter flags noisy and skewed results, and mitata flags work the engine removed. Deno and Node write JSON.

@@ -104,6 +104,11 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **Watch-mode keys** for `esdev test --watch`, as Vitest has them: `a` or
+  Enter reruns everything, `r` reruns, `f` reruns the files that failed, `u`
+  updates snapshots, `p` and `t` filter by filename and test name, `h` shows
+  the keys, and `q` quits. A key that starts a run cancels the one in
+  progress. On a terminal on Linux and macOS (DECISIONS D118).
 - **`esdev bench`** runs `*.bench.*` and `*.benchmark.*` files, one at a time,
   with `bench` in the test context: `bench(name, options?, fn)` registers a
   benchmark, `.run()` measures it, and `bench.compare(...)` measures several in

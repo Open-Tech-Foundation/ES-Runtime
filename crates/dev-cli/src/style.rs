@@ -55,6 +55,12 @@ impl Palette {
         }
     }
 
+    /// No colour, whatever the streams are.
+    #[cfg(test)]
+    pub fn plain() -> Self {
+        Self { enabled: false }
+    }
+
     /// Something was produced.
     pub fn green(self, text: impl std::fmt::Display) -> String {
         self.wrap("32", text)

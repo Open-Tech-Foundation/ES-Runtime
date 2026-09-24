@@ -16154,3 +16154,230 @@ test("foreign", async ({ bench }) => {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `esdev test --watch` with its keys pressed, through a pipe
+/// (`--_watch-keys`): what each run printed is read off stdout, and a run has
+/// ended when stderr says the watch is waiting again.
+struct KeyedWatch {
+    child: std::process::Child,
+    out: PathBuf,
+    err: PathBuf,
+    seen: usize,
+    passes: usize,
+}
+
+impl KeyedWatch {
+    fn start(dir: &Path, name: &str) -> KeyedWatch {
+        let out = dir.join(format!("{name}.out"));
+        let err = dir.join(format!("{name}.err"));
+        let child = esdev_in(dir)
+            .args(["test", "--watch", "--_watch-keys", "--jobs=1"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::fs::File::create(&out).unwrap())
+            .stderr(std::fs::File::create(&err).unwrap())
+            .spawn()
+            .expect("spawn esdev test --watch");
+        KeyedWatch {
+            child,
+            out,
+            err,
+            seen: 0,
+            passes: 0,
+        }
+    }
+
+    fn press(&mut self, keys: &str) {
+        use std::io::Write;
+        let stdin = self.child.stdin.as_mut().expect("stdin");
+        stdin.write_all(keys.as_bytes()).expect("press");
+        stdin.flush().expect("flush");
+    }
+
+    fn stderr(&self) -> String {
+        std::fs::read_to_string(&self.err).unwrap_or_default()
+    }
+
+    /// Waits for the next run to end, and returns what it printed.
+    fn next_run(&mut self) -> String {
+        self.passes += 1;
+        let want = self.passes;
+        let err = wait_for_file(&self.err, Duration::from_secs(30), |text| {
+            text.matches("watching for changes").count() >= want
+        });
+        assert!(
+            err.matches("watching for changes").count() >= want,
+            "run {want} never ended:\n{err}"
+        );
+        let out = std::fs::read_to_string(&self.out).unwrap_or_default();
+        let run = out[self.seen..].to_string();
+        self.seen = out.len();
+        run
+    }
+
+    fn quit(mut self) {
+        self.press("q");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = self.child.try_wait().expect("wait") {
+                assert!(status.success(), "{status}");
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "q did not end the watch"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Vitest's watch keys: `f` reruns what failed, `t` and `p` filter, `a`
+/// clears the filters, `r` reruns as filtered, Escape leaves a filter as it
+/// was, `h` explains, `q` quits.
+#[test]
+fn test_watch_keys_rerun_filter_and_quit() {
+    let dir = build_dir("t_watch_keys");
+    write_in(
+        &dir,
+        "math.test.ts",
+        "import { expect, test } from \"runtime:test\";\n\
+         test(\"adds\", () => expect(1 + 1).toBe(2));\n\
+         test(\"breaks\", () => expect(1).toBe(2));\n",
+    );
+    write_in(
+        &dir,
+        "greet.test.ts",
+        "import { expect, test } from \"runtime:test\";\n\
+         test(\"greets\", () => expect(\"hi\").toBe(\"hi\"));\n",
+    );
+    let mut watch = KeyedWatch::start(&dir, "keys");
+    let run = watch.next_run();
+    assert!(run.contains("1 of 2 files failed"), "{run}");
+    assert!(
+        watch
+            .stderr()
+            .contains("watching for changes — press h for help, q to quit"),
+        "{}",
+        watch.stderr()
+    );
+
+    watch.press("f");
+    let run = watch.next_run();
+    assert!(
+        run.contains("math.test.ts") && !run.contains("greet.test.ts"),
+        "{run}"
+    );
+
+    watch.press("t");
+    watch.press("adds\n");
+    let run = watch.next_run();
+    assert!(run.contains("2 files passed"), "{run}");
+    assert!(!run.contains("FAIL breaks"), "{run}");
+    assert!(watch.stderr().contains("filter: tests matching /adds/"));
+
+    watch.press("p");
+    watch.press("greet\n");
+    let run = watch.next_run();
+    assert!(
+        run.contains("greet.test.ts") && !run.contains("math.test.ts"),
+        "{run}"
+    );
+    assert!(
+        watch
+            .stderr()
+            .contains("filter: files matching greet, tests matching /adds/")
+    );
+
+    // Escape: the filter stays, and nothing runs until a key asks.
+    watch.press("p");
+    watch.press("zzz");
+    watch.press("\u{1b}");
+    watch.press("r");
+    let run = watch.next_run();
+    assert!(
+        run.contains("greet.test.ts") && !run.contains("math.test.ts"),
+        "{run}"
+    );
+
+    watch.press("a");
+    let run = watch.next_run();
+    assert!(run.contains("1 of 2 files failed"), "{run}");
+    assert!(run.contains("FAIL breaks"), "{run}");
+
+    watch.press("h");
+    let help = wait_for_file(&watch.err, Duration::from_secs(10), |text| {
+        text.contains("Watch usage")
+    });
+    assert!(
+        help.contains("press f to rerun only the files that failed"),
+        "{help}"
+    );
+    watch.quit();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A key that starts a run cancels the one in progress, and its test process
+/// with it; `u` reruns updating snapshots.
+#[test]
+fn test_watch_keys_cancel_a_run_and_update_snapshots() {
+    let dir = build_dir("t_watch_keys_cancel");
+    write_in(
+        &dir,
+        "slow.test.ts",
+        "import { test } from \"runtime:test\";\n\
+         import { env } from \"runtime:process\";\n\
+         import { write } from \"runtime:fs\";\n\
+         test(\"slow\", async () => {\n\
+           await new Promise((r) => setTimeout(r, 2500));\n\
+           await write(\"finished.txt\", \"x\");\n\
+         });\n",
+    );
+    let snap = |value: &str| {
+        format!(
+            "import {{ expect, test }} from \"runtime:test\";\n\
+             test(\"value\", () => expect({value:?}).toMatchSnapshot());\n"
+        )
+    };
+    write_in(&dir, "snap.test.ts", &snap("one"));
+    let mut watch = KeyedWatch::start(&dir, "cancel");
+    let run = watch.next_run();
+    assert!(run.contains("2 files passed"), "{run}");
+    std::fs::remove_file(dir.join("finished.txt")).expect("the first run finished");
+
+    // Cancelled while the slow file runs: it never gets to write.
+    watch.press("r");
+    wait_for_file(&watch.out, Duration::from_secs(10), |text| {
+        text[watch.seen..].contains("slow.test.ts")
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    watch.press("a");
+    let run = watch.next_run();
+    assert!(watch.stderr().contains("cancelled"), "{}", watch.stderr());
+    assert!(run.contains("2 files passed"), "{run}");
+    std::fs::remove_file(dir.join("finished.txt")).expect("the second run finished");
+
+    // A snapshot that changed fails; `u` accepts it.
+    write_in(&dir, "snap.test.ts", &snap("two"));
+    let run = watch.next_run();
+    assert!(run.contains("snapshot changed"), "{run}");
+    watch.press("u");
+    let run = watch.next_run();
+    assert!(run.contains("2 files passed"), "{run}");
+    let stored =
+        std::fs::read_to_string(dir.join("__snapshots__/snap.test.ts.snap")).expect("snapshot");
+    assert!(stored.contains("\"two\""), "{stored}");
+
+    // `q` during a run ends it, and the file being run with it.
+    std::fs::remove_file(dir.join("finished.txt")).expect("the update run finished");
+    watch.press("r");
+    wait_for_file(&watch.out, Duration::from_secs(10), |text| {
+        text[watch.seen..].contains("slow.test.ts")
+    });
+    watch.quit();
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        !dir.join("finished.txt").exists(),
+        "a cancelled test ran on"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

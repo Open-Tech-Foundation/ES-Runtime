@@ -214,6 +214,34 @@ esdev test --jobs=1         # one at a time, writing straight to the terminal
 it happen. `--watch` re-discovers files every pass, so a test you are about to
 write is one the watcher will find.
 
+## Watch mode
+
+`esdev test --watch` runs the tests again whenever a source file changes. On a
+terminal, keys change what it runs:
+
+| Key | |
+| --- | --- |
+| `a` or Enter | Clear the filters and rerun every test |
+| `r` | Rerun with the current filters |
+| `f` | Rerun only the files that failed |
+| `u` | Rerun, updating snapshots that no longer match |
+| `p` | Filter by filename, as `esdev test <filter>` does |
+| `t` | Filter by test name, as `-t` does |
+| `h` | Show the keys |
+| `q` | Quit |
+
+`p` and `t` ask for the filter and show what it would select as you type.
+Enter applies it, an empty filter clears it, and Escape leaves it as it was.
+The filters in force are shown above the line the watch waits under, and a
+change to a file reruns with them.
+
+A key that starts a run, pressed while one is running, cancels that run and
+starts its own; `q` quits, ending the files being run. With
+`--isolation=none` the run is not cancelled, and the key waits for it to end.
+
+The keys need a terminal on stdin, and are read on Linux and macOS. Elsewhere,
+and when stdin is not a terminal, the watch reruns on changes and ^C stops it.
+
 ## Sharing one runtime
 
 For a suite whose startup and repeated imports cost more than its tests, opt

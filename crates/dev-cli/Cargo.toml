@@ -103,6 +103,9 @@ base64.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = [
     "process",
+    # `esdev test --watch` reads keys one at a time, unechoed, without taking
+    # the terminal's output processing or its signals (DECISIONS D118).
+    "termios",
     # `--inspect` binds its port with SO_REUSEADDR, so a `--watch` restart can
     # take it back while the last debugger's connections are still in TIME_WAIT.
     "net",

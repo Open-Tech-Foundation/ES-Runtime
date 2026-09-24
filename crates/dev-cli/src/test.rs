@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use crate::config::TestIsolation;
 
 /// What `esdev test` was asked to do.
+#[derive(Clone)]
 pub struct TestConfig {
     /// Install the esdev-only DOM realm before the test module evaluates.
     pub dom: bool,
@@ -95,6 +96,9 @@ pub struct TestConfig {
     pub isolation: Option<TestIsolation>,
     /// Keep running, re-running the files when a source file changes.
     pub watch: bool,
+    /// `--_watch-keys`: read watch keys from stdin even when it is not a
+    /// terminal, as the end-to-end tests do.
+    pub watch_keys: bool,
     /// Modules imported before the file under test, from `--setup` or the
     /// project's `test.setup`. Absolute by the time they get here.
     pub setup: Vec<String>,
@@ -419,7 +423,7 @@ pub async fn run_all(
     files: &[PathBuf],
     jobs: usize,
     config: &TestConfig,
-) -> usize {
+) -> Outcome {
     use futures_util::StreamExt;
 
     // What the parent hands down. A child runs one file and must run it the way
@@ -605,6 +609,8 @@ pub async fn run_all(
     };
 
     let mut failed = 0usize;
+    // The files that failed, for the watch's `f`.
+    let mut failing = Vec::new();
     if jobs <= 1 {
         for (index, file) in files.iter().enumerate() {
             let Some((child, summary)) = command(file, index) else {
@@ -624,8 +630,12 @@ pub async fn run_all(
                 (true, false) => Capture::Both,
             };
             let output = supervise(child, config.timeout, capture).await;
+            let before = failed;
             let why = settle(output, &mut failed, quiet);
             let result = take_result(summary, file, why);
+            if failed > before || result.failed() > 0 {
+                failing.push(file.clone());
+            }
             reporter.file(&result);
         }
     } else {
@@ -651,14 +661,26 @@ pub async fn run_all(
             if !quiet {
                 println!("{name}");
             }
+            let before = failed;
             let why = settle(output, &mut failed, true);
             let result = take_result(summary, file, why);
+            if failed > before || result.failed() > 0 {
+                failing.push(file.clone());
+            }
             reporter.file(&result);
         }
     }
     report_not_run(not_run.load(std::sync::atomic::Ordering::SeqCst), quiet);
     reporter.finish(files.len(), failed);
-    failed
+    Outcome { failed, failing }
+}
+
+/// What a run of several files came to.
+pub struct Outcome {
+    /// How many files failed.
+    pub failed: usize,
+    /// Which, in the order they finished.
+    pub failing: Vec<PathBuf>,
 }
 
 /// A machine reporter, written as files finish or at the end of the run, to
@@ -776,6 +798,9 @@ async fn supervise(
     if capture == Capture::Both {
         command.stderr(std::process::Stdio::piped());
     }
+    // A run the watch cancels drops this future, and the child goes with it
+    // rather than running on unwatched.
+    command.kill_on_drop(true);
     let child = command.spawn()?;
     let pid = child.id();
     let expired = std::sync::Arc::new(AtomicBool::new(false));
@@ -790,15 +815,23 @@ async fn supervise(
         })
     });
 
-    let output = child.wait_with_output().await;
-    if let Some(watchdog) = watchdog {
-        watchdog.abort();
-    }
-    let output = output?;
+    // Aborted however this ends — dropped included, or a watchdog outliving
+    // its child would signal whatever process was given the pid next.
+    let _watchdog = watchdog.map(AbortOnDrop);
+    let output = child.wait_with_output().await?;
     Ok(Finished {
         expired: expired.load(Ordering::SeqCst),
         output,
     })
+}
+
+/// A task that ends when this is dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// What of a child's output is held back, to print once it ends.
@@ -837,47 +870,297 @@ pub(crate) fn timed_out(timeout: Option<u64>) -> String {
 /// The exit status of a watched run is nobody's: it ends when the developer ends
 /// it, and what they read is the tally printed after each pass.
 pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), String> {
+    use crate::watch_keys::Action;
+
     let (_watcher, mut rx) = change_watcher(root)?;
     let paint = crate::style::Palette::stderr();
+    let mut keys = crate::watch_keys::start(config.watch_keys);
+    let stop = crate::watch::stopped();
+    tokio::pin!(stop);
+    let mut resumed = resumed();
+    let mut filters = config.filters.clone();
+    let mut name_pattern = config.name_pattern.clone();
+    let mut failing: Vec<PathBuf> = Vec::new();
+    let mut next = Pass::Filtered;
+
     loop {
-        let mut files = discover(root, &config.filters);
-        shuffle(&mut files, config.seed);
+        let (files, pass) = next.prepare(root, config, &filters, &name_pattern, &failing);
+        // A key that starts a run, pressed while one is running: that run is
+        // cancelled and this one takes its place.
+        let mut interrupted = None;
         if files.is_empty() {
             eprintln!("no test files found (looked for {})", sought_description());
         } else {
-            if config.isolation == Some(TestIsolation::None) {
-                let code = crate::run_tests_unisolated(&files, config).await;
-                report(
-                    files.len(),
-                    usize::from(code != std::process::ExitCode::SUCCESS),
-                );
-            } else {
-                let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
-                let failed = run_all(exe, root, &files, jobs, config).await;
-                // A machine reporter wrote its own ending.
-                if config.terminal_human() {
-                    report(files.len(), failed);
+            // A run in this process cannot be cut short; one in children can.
+            let cancellable = pass.isolation != Some(TestIsolation::None);
+            let run = run_pass(root, exe, &pass, &files);
+            tokio::pin!(run);
+            let outcome = loop {
+                tokio::select! {
+                    outcome = &mut run => break Some(outcome),
+                    () = &mut stop => return Ok(()),
+                    key = next_key(&mut keys), if cancellable => match key.and_then(Action::of) {
+                        Some(Action::Quit) => return Ok(()),
+                        Some(action) if action.runs() => {
+                            interrupted = Some(action);
+                            break None;
+                        }
+                        // Anything else waits for the run to end.
+                        _ => {}
+                    },
                 }
-                // Coverage for each pass, as Vitest's watch reports it.
-                if let Some(dir) = &config.coverage_dir
-                    && let Err(err) = crate::coverage::finish(dir, root, config)
-                {
-                    eprintln!("error: {err}");
-                }
+            };
+            match outcome {
+                Some(outcome) => failing = outcome,
+                None => eprintln!("\n{}", paint.dim("cancelled")),
             }
         }
-        eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
 
-        tokio::select! {
-            change = crate::watch::coalesce(&mut rx) => {
-                if change.is_none() {
-                    return Ok(());
+        next = 'idle: {
+            if let Some(action) = interrupted.take()
+                && let Some(pass) = start(action, &mut filters, &mut name_pattern, &failing)
+            {
+                break 'idle pass;
+            }
+            eprintln!(
+                "{}",
+                idle_line(&paint, keys.is_some(), &filters, &name_pattern)
+            );
+            loop {
+                tokio::select! {
+                    change = rx.recv() => {
+                        let Some(first) = change else { return Ok(()) };
+                        crate::watch::coalesce_from(first, &mut rx).await;
+                        break 'idle Pass::Filtered;
+                    }
+                    () = &mut stop => return Ok(()),
+                    () = next_resume(&mut resumed) => {
+                        if let Some(terminal) = keys.as_ref().and_then(|keys| keys.terminal.as_ref()) {
+                            let _ = terminal.apply();
+                        }
+                    }
+                    key = next_key(&mut keys) => {
+                        let Some(action) = key.and_then(Action::of) else { continue };
+                        match action {
+                            Action::Quit => return Ok(()),
+                            Action::Help => {
+                                eprint!("{}", crate::watch_keys::help(&paint));
+                                continue;
+                            }
+                            Action::FilterFiles | Action::FilterNames => {
+                                let Some(keys) = keys.as_mut() else { continue };
+                                let answer = if action == Action::FilterFiles {
+                                    crate::watch_keys::prompt(
+                                        &mut keys.rx,
+                                        "filter by filename ›",
+                                        &filters.join(" "),
+                                        |text| file_hint(root, text),
+                                    )
+                                    .await
+                                } else {
+                                    crate::watch_keys::prompt(
+                                        &mut keys.rx,
+                                        "filter by test name pattern ›",
+                                        name_pattern.as_deref().unwrap_or_default(),
+                                        |text| if text.is_empty() { "empty clears it".to_string() } else { String::new() },
+                                    )
+                                    .await
+                                };
+                                // Escape: nothing changed, nothing to run, and the
+                                // line the watch waits under is still showing.
+                                let Some(answer) = answer else { continue };
+                                if action == Action::FilterFiles {
+                                    filters = answer.split_whitespace().map(str::to_string).collect();
+                                } else {
+                                    name_pattern = (!answer.is_empty()).then_some(answer);
+                                }
+                                break 'idle Pass::Filtered;
+                            }
+                            _ => match start(action, &mut filters, &mut name_pattern, &failing) {
+                                Some(pass) => break 'idle pass,
+                                None => continue,
+                            },
+                        }
+                    }
                 }
             }
-            () = crate::watch::stopped() => return Ok(()),
-        }
+        };
         println!();
     }
+}
+
+/// Which files a watch run takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass {
+    /// The files the filename filters select.
+    Filtered,
+    /// The files that failed last time.
+    Failed,
+    /// The filtered files, updating snapshots.
+    Update,
+}
+
+impl Pass {
+    /// The files, shuffled if asked, and the configuration to run them with.
+    fn prepare(
+        self,
+        root: &Path,
+        config: &TestConfig,
+        filters: &[String],
+        name_pattern: &Option<String>,
+        failing: &[PathBuf],
+    ) -> (Vec<PathBuf>, TestConfig) {
+        let mut files = match self {
+            Pass::Failed => failing
+                .iter()
+                .filter(|file| file.exists())
+                .cloned()
+                .collect(),
+            Pass::Filtered | Pass::Update => discover(root, filters),
+        };
+        shuffle(&mut files, config.seed);
+        let mut pass = config.clone();
+        pass.filters = filters.to_vec();
+        pass.name_pattern = name_pattern.clone();
+        pass.update_snapshots |= self == Pass::Update;
+        (files, pass)
+    }
+}
+
+/// The run a key starts, with the filters it changes; `None` when there is
+/// nothing to run.
+fn start(
+    action: crate::watch_keys::Action,
+    filters: &mut Vec<String>,
+    name_pattern: &mut Option<String>,
+    failing: &[PathBuf],
+) -> Option<Pass> {
+    use crate::watch_keys::Action;
+    match action {
+        Action::RunAll => {
+            filters.clear();
+            *name_pattern = None;
+            Some(Pass::Filtered)
+        }
+        Action::Rerun => Some(Pass::Filtered),
+        Action::UpdateSnapshots => Some(Pass::Update),
+        Action::RerunFailed if failing.is_empty() => {
+            eprintln!("no failed files to rerun");
+            None
+        }
+        Action::RerunFailed => Some(Pass::Failed),
+        _ => None,
+    }
+}
+
+/// One run of `files`, and which of them failed.
+async fn run_pass(root: &Path, exe: &Path, config: &TestConfig, files: &[PathBuf]) -> Vec<PathBuf> {
+    if config.isolation == Some(TestIsolation::None) {
+        let code = crate::run_tests_unisolated(files, config).await;
+        let failed = code != std::process::ExitCode::SUCCESS;
+        report(files.len(), usize::from(failed));
+        // One process ran them all, and did not say which failed.
+        return if failed { files.to_vec() } else { Vec::new() };
+    }
+    let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
+    let outcome = run_all(exe, root, files, jobs, config).await;
+    // A machine reporter wrote its own ending.
+    if config.terminal_human() {
+        report(files.len(), outcome.failed);
+    }
+    // Coverage for each pass, as Vitest's watch reports it.
+    if let Some(dir) = &config.coverage_dir
+        && let Err(err) = crate::coverage::finish(dir, root, config)
+    {
+        eprintln!("error: {err}");
+    }
+    outcome.failing
+}
+
+/// The line the watch waits under: what it is filtering by, and what to press.
+fn idle_line(
+    paint: &crate::style::Palette,
+    keys: bool,
+    filters: &[String],
+    name_pattern: &Option<String>,
+) -> String {
+    let mut line = String::new();
+    if !filters.is_empty() {
+        line.push_str(&format!("files matching {}", filters.join(" ")));
+    }
+    if let Some(pattern) = name_pattern {
+        if !line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(&format!("tests matching /{pattern}/"));
+    }
+    let filter = if line.is_empty() {
+        String::new()
+    } else {
+        format!("{} {line}\n", paint.bold("filter:"))
+    };
+    let hint = if keys {
+        "watching for changes — press h for help, q to quit"
+    } else {
+        "watching for changes — ^C to stop"
+    };
+    format!("{filter}{}", paint.dim(hint))
+}
+
+/// How many files a filename filter would select, as it is typed.
+fn file_hint(root: &Path, text: &str) -> String {
+    let words: Vec<String> = text.split_whitespace().map(str::to_string).collect();
+    if words.is_empty() {
+        return "empty clears it".to_string();
+    }
+    match discover(root, &words).len() {
+        0 => "no files".to_string(),
+        1 => "1 file".to_string(),
+        n => format!("{n} files"),
+    }
+}
+
+/// The next key, or never when there are none to read.
+async fn next_key(keys: &mut Option<crate::watch_keys::Keys>) -> Option<crate::watch_keys::Key> {
+    match keys {
+        Some(keys) => match keys.rx.recv().await {
+            Some(key) => Some(key),
+            // Stdin closed: no more keys, and nothing to wake for.
+            None => std::future::pending().await,
+        },
+        None => std::future::pending().await,
+    }
+}
+
+/// `SIGCONT`: the watch is back in the foreground after ^Z, and the shell has
+/// put its own terminal mode back.
+#[cfg(unix)]
+fn resumed() -> Option<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
+        rustix::process::Signal::CONT.as_raw(),
+    ))
+    .ok()
+}
+
+#[cfg(not(unix))]
+fn resumed() -> Option<()> {
+    None
+}
+
+#[cfg(unix)]
+async fn next_resume(signal: &mut Option<tokio::signal::unix::Signal>) {
+    let Some(listener) = signal else {
+        return std::future::pending().await;
+    };
+    if listener.recv().await.is_none() {
+        *signal = None;
+        std::future::pending::<()>().await;
+    }
+}
+
+#[cfg(not(unix))]
+async fn next_resume(_: &mut Option<()>) {
+    std::future::pending().await
 }
 
 /// Watches `root` for the changes a test run cares about. The watcher must be
@@ -987,6 +1270,61 @@ fn is_run_file(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What each watch key runs, and which filters it clears.
+    #[test]
+    fn watch_keys_choose_the_next_run() {
+        use crate::watch_keys::Action;
+        let mut filters = vec!["db".to_string()];
+        let mut pattern = Some("adds".to_string());
+        let failing = vec![PathBuf::from("/p/a.test.ts")];
+
+        assert_eq!(
+            start(Action::Rerun, &mut filters, &mut pattern, &failing),
+            Some(Pass::Filtered)
+        );
+        assert_eq!(filters, ["db"]);
+        assert_eq!(
+            start(Action::RerunFailed, &mut filters, &mut pattern, &failing),
+            Some(Pass::Failed)
+        );
+        assert_eq!(
+            start(Action::RerunFailed, &mut filters, &mut pattern, &[]),
+            None
+        );
+        assert_eq!(
+            start(
+                Action::UpdateSnapshots,
+                &mut filters,
+                &mut pattern,
+                &failing
+            ),
+            Some(Pass::Update)
+        );
+        assert_eq!(
+            start(Action::RunAll, &mut filters, &mut pattern, &failing),
+            Some(Pass::Filtered)
+        );
+        assert!(filters.is_empty() && pattern.is_none());
+    }
+
+    #[test]
+    fn the_idle_line_names_the_filters_and_the_keys() {
+        let paint = crate::style::Palette::plain();
+        assert_eq!(
+            idle_line(&paint, true, &[], &None),
+            "watching for changes — press h for help, q to quit"
+        );
+        assert_eq!(
+            idle_line(
+                &paint,
+                false,
+                &["db".to_string()],
+                &Some("adds".to_string())
+            ),
+            "filter: files matching db, tests matching /adds/\nwatching for changes — ^C to stop"
+        );
+    }
 
     /// Benchmark files are not tests to `esdev test`, and are never measured
     /// for coverage as though they were source.
