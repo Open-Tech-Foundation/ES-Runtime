@@ -257,6 +257,11 @@ one instance per state directory.
 under a millisecond. On a spinning disk durability is the same but throughput
 is about thirty times lower ([measured](/docs/internals/durable-workers#on-real-storage)).
 
+**Memory.** Each worker kept open costs about 2.2 MB of native memory, whatever
+its size, and at most `maxLive` are open (128 by default, about 280 MB). Lower
+`configure({ maxLive })` on a small machine; workers past it are closed and
+reopened when called ([measured](/docs/internals/durable-workers#what-memory-costs)).
+
 **Stopping.** A result is only given once its writes are on disk, so a crash
 loses nothing that was answered. To let `stop()` run, shut down on a signal:
 

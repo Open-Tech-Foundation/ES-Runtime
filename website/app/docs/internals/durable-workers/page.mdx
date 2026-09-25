@@ -450,6 +450,31 @@ thirty here. **Durable workers need storage with fast syncs**, meaning an SSD
 or NVMe. A spinning disk keeps every promise and runs at a small fraction of the
 speed.
 
+## What memory costs
+
+A worker's own state is in the JS heap and capped at 1 MiB. The larger cost is
+native: every **open** worker keeps its SQLite file open, and the embedded
+engine gives each open database two buffer arenas of 3 MiB, of which about
+2.2 MB ends up resident. That size is fixed inside the engine (`turso_core`,
+checked up to 0.8.0-pre.13) and no pragma changes it.
+
+| `maxLive` | Resident memory at 500 / 1000 / 1500 / 2000 workers | JS heap |
+| --- | --- | --- |
+| 16 | 92 / 107 / 124 / 130 MB | 7 MB |
+| 64 | 201 / 217 / 226 / 235 MB | 22 MB |
+| 128 | 346 / 362 / 373 / 380 MB | 8 MB |
+| 256 | 609 / 627 / 642 / 651 MB | 17 MB |
+
+<sub>`bench/durable-memory.js`, release build, Linux, 2026-09-25: 2,000 new workers, one write each.</sub>
+
+So memory is set by `maxLive`, not by how many workers exist: about **2.2 MB
+per open worker**, on top of the process. Workers past `maxLive` are evicted
+and cost nothing until they are called again. The slower rise across each row
+is the catalog's own page cache growing with its rows, and it levels off: a
+6,000-worker run stayed at 416–419 MB from the 2,000th worker on. Size
+`maxLive` to the memory you have: the default of 128 is about 280 MB of open
+files.
+
 ## When shards pay
 
 Shards move the classes' code to other threads. They add a message each way per
