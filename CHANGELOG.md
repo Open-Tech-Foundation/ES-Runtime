@@ -25,6 +25,12 @@ namespace) is unstable and may change between minor releases until the API freez
   one row class instead of one per query — so a loop reading rows from several
   queries stays monomorphic. Reading six mixed columns of a SQLite row went
   from 1.2 µs to 0.39 µs.
+- **SQLite prepares a statement once per connection.** Each connection keeps
+  the 128 statements it ran most recently and reuses them, so a repeated
+  statement costs a reset instead of a parse — `select 1` went from ~50 µs to
+  ~24 µs, and cost no longer grows with the length of the SQL (a 200-character
+  query went from ~73 µs to ~26 µs). A statement re-prepares itself when the
+  schema changes under it, and one that failed is dropped rather than reused.
 
 ## [0.32.0] - 2026-09-25
 

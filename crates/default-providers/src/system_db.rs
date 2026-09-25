@@ -137,17 +137,112 @@ impl IO for JailedVfs {
 /// One open database: the connection, and the VFS and handle keeping it alive.
 struct ConnEntry {
     conn: Arc<Connection>,
+    /// Statements this connection has already prepared, ready to run again.
+    statements: Mutex<StatementCache>,
     _db: Arc<Database>,
     _io: Arc<dyn IO>,
+}
+
+impl ConnEntry {
+    fn new(conn: Arc<Connection>, db: Arc<Database>, io: Arc<dyn IO>) -> Self {
+        Self {
+            conn,
+            statements: Mutex::new(StatementCache::default()),
+            _db: db,
+            _io: io,
+        }
+    }
+
+    /// A statement for `sql` with `params` bound: the cached one if this
+    /// connection has run the text before, otherwise a fresh prepare.
+    ///
+    /// Named parameters are resolved by the engine rather than by rewriting the
+    /// SQL a layer up: the statement already knows where its names are, and
+    /// finding them anywhere else would mean parsing SQL twice.
+    fn prepare(&self, sql: &str, params: DbParams) -> Result<Statement, ProviderError> {
+        let cached = self.statements.lock().unwrap().take(sql);
+        let mut stmt = match cached {
+            Some(stmt) => stmt,
+            None => self.conn.prepare(sql).map_err(engine_error)?,
+        };
+        bind(&mut stmt, params)?;
+        Ok(stmt)
+    }
+
+    /// Hands a statement that ran to the end back for the next caller.
+    ///
+    /// Only a statement that finished cleanly comes back: one that failed or
+    /// was interrupted is dropped, so whatever state the failure left it in
+    /// cannot surface in someone else's query.
+    fn recycle(&self, sql: String, mut stmt: Statement) {
+        if stmt.reset().is_err() {
+            return;
+        }
+        // Bindings outlive a reset, and a caller who passes fewer parameters
+        // than the last one must see NULL there, not the last caller's value.
+        stmt.clear_bindings();
+        self.statements.lock().unwrap().put(sql, stmt);
+    }
+}
+
+/// Prepared statements by their text, least recently used evicted first.
+///
+/// Preparing is most of what a small statement costs — the engine parses and
+/// plans the SQL on every call, and that grows with the text, while running an
+/// already-prepared one is a reset and a step. So a connection keeps what it
+/// has prepared, as every SQLite driver does. The engine re-prepares a cached
+/// statement itself if the schema has changed under it, so a migration does not
+/// make the cache wrong, only a little slower once.
+///
+/// A statement is *taken* out while it runs and put back when it finishes, so
+/// two open result sets over the same text each get their own, and nothing is
+/// shared between threads mid-step.
+#[derive(Default)]
+struct StatementCache {
+    entries: HashMap<String, (u64, Statement)>,
+    clock: u64,
+}
+
+impl StatementCache {
+    /// Enough for every statement a typical program repeats, and bounded so a
+    /// program that builds SQL by string holds at most this many plans.
+    const LIMIT: usize = 128;
+
+    fn take(&mut self, sql: &str) -> Option<Statement> {
+        self.entries.remove(sql).map(|(_, stmt)| stmt)
+    }
+
+    fn put(&mut self, sql: String, stmt: Statement) {
+        if self.entries.len() >= Self::LIMIT && !self.entries.contains_key(&sql) {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (used, _))| *used)
+                .map(|(sql, _)| sql.clone());
+            if let Some(oldest) = oldest {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.clock += 1;
+        self.entries.insert(sql, (self.clock, stmt));
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 /// One open result set, positioned but not yet read.
 struct CursorEntry {
     stmt: Statement,
-    columns: usize,
     /// Set once the statement reports `Done`, so a fetch after exhaustion
     /// answers "no more rows" instead of stepping a finished program.
     done: bool,
+    /// Set when a fetch failed, so the statement is dropped rather than cached.
+    failed: bool,
+    /// Where the statement goes back to when the result set is closed.
+    sql: String,
+    conn: Arc<ConnEntry>,
 }
 
 /// An [`EmbeddedDb`] over `turso_core`, jailed to the filesystem provider it is
@@ -274,11 +369,7 @@ impl EmbeddedDb for SystemEmbeddedDb {
                     None => db.connect().map_err(engine_error)?,
                 };
                 confine_temp_storage(&conn);
-                Ok(ConnEntry {
-                    conn,
-                    _db: db,
-                    _io: io,
-                })
+                Ok(ConnEntry::new(conn, db, io))
             })
             .await?;
             conns.lock().unwrap().insert(id, Arc::new(entry));
@@ -298,8 +389,25 @@ impl EmbeddedDb for SystemEmbeddedDb {
         let id = self.id();
         Box::pin(async move {
             let entry = entry?;
-            let (columns, mut cursor, first) = blocking(move || {
-                let stmt = prepare(&entry.conn, &sql, params)?;
+            let (columns, cursor, first) = blocking(move || {
+                let stmt = entry.prepare(&sql, params)?;
+                let mut cursor = CursorEntry {
+                    stmt,
+                    done: false,
+                    failed: false,
+                    sql,
+                    conn: entry,
+                };
+                // Read the first batch here rather than making the caller ask
+                // for it. A query that fits in one batch is then finished
+                // before it returns, and costs one crossing instead of three.
+                let first = fill_batch(&mut cursor, max_bytes)?;
+                // The shape is read *after* the first step, not before: a
+                // cached statement whose schema changed is re-prepared by the
+                // engine inside that step, and until then it still describes
+                // the old columns — `SELECT *` would name one set of columns
+                // and carry another.
+                let stmt = &cursor.stmt;
                 let columns = (0..stmt.num_columns())
                     .map(|i| DbColumn {
                         name: stmt.get_column_name(i).into_owned(),
@@ -310,23 +418,16 @@ impl EmbeddedDb for SystemEmbeddedDb {
                         decl_type: None,
                     })
                     .collect::<Vec<_>>();
-                let n = columns.len();
-                let mut cursor = CursorEntry {
-                    stmt,
-                    columns: n,
-                    done: false,
-                };
-                // Read the first batch here rather than making the caller ask
-                // for it. A query that fits in one batch is then finished
-                // before it returns, and costs one crossing instead of three.
-                let first = fill_batch(&mut cursor, max_bytes)?;
                 Ok((columns, cursor, first))
             })
             .await?;
             if cursor.done {
                 // Nothing left to read, so nothing to hand out: no cursor id
                 // means no fetch and no close, and no way to leak either.
-                let _ = cursor.stmt.reset();
+                let CursorEntry {
+                    stmt, sql, conn, ..
+                } = cursor;
+                conn.recycle(sql, stmt);
                 return Ok(DbResult {
                     cursor: None,
                     columns,
@@ -349,7 +450,13 @@ impl EmbeddedDb for SystemEmbeddedDb {
         let entry = self.cursor(cursor);
         Box::pin(async move {
             let entry = entry?;
-            blocking(move || fill_batch(&mut entry.lock().unwrap(), max_bytes)).await
+            blocking(move || {
+                let mut cursor = entry.lock().unwrap();
+                let batch = fill_batch(&mut cursor, max_bytes);
+                cursor.failed |= batch.is_err();
+                batch
+            })
+            .await
         })
     }
 
@@ -360,7 +467,21 @@ impl EmbeddedDb for SystemEmbeddedDb {
             // so is closing one twice.
             if let Some(entry) = removed {
                 blocking(move || {
-                    let _ = entry.lock().unwrap().stmt.reset();
+                    // Sole owner once it is out of the map; a fetch still in
+                    // flight holds the other reference, and then the statement
+                    // is simply dropped with it rather than recycled.
+                    match Arc::try_unwrap(entry) {
+                        Ok(cursor) => {
+                            let cursor = cursor.into_inner().unwrap();
+                            if cursor.failed {
+                                return Ok(());
+                            }
+                            cursor.conn.recycle(cursor.sql, cursor.stmt);
+                        }
+                        Err(entry) => {
+                            let _ = entry.lock().unwrap().stmt.reset();
+                        }
+                    }
                     Ok(())
                 })
                 .await?;
@@ -379,8 +500,9 @@ impl EmbeddedDb for SystemEmbeddedDb {
         Box::pin(async move {
             let entry = entry?;
             blocking(move || {
-                let mut stmt = prepare(&entry.conn, &sql, params)?;
+                let mut stmt = entry.prepare(&sql, params)?;
                 run_to_completion(&mut stmt)?;
+                entry.recycle(sql, stmt);
                 Ok(ExecuteResult {
                     changes: entry.conn.changes().max(0) as u64,
                     last_insert_rowid: match entry.conn.last_insert_rowid() {
@@ -406,13 +528,15 @@ impl EmbeddedDb for SystemEmbeddedDb {
                 let mut changes = 0u64;
                 // Prepared once, reset between sets. Preparing per set would
                 // put the parser back on the hot path this exists to clear.
-                let mut stmt = entry.conn.prepare(&sql).map_err(engine_error)?;
+                let mut stmt = entry.prepare(&sql, DbParams::default())?;
                 for set in params {
                     stmt.reset().map_err(engine_error)?;
+                    stmt.clear_bindings();
                     bind(&mut stmt, set)?;
                     run_to_completion(&mut stmt)?;
                     changes += entry.conn.changes().max(0) as u64;
                 }
+                entry.recycle(sql, stmt);
                 Ok(ExecuteResult {
                     changes,
                     last_insert_rowid: match entry.conn.last_insert_rowid() {
@@ -441,7 +565,14 @@ impl EmbeddedDb for SystemEmbeddedDb {
         let removed = self.conns.lock().unwrap().remove(&db);
         Box::pin(async move {
             if let Some(entry) = removed {
-                blocking(move || entry.conn.close().map_err(engine_error)).await?;
+                blocking(move || {
+                    // The cached statements go first: they are the
+                    // connection's, and closing it under them would leave
+                    // programs pointing at a connection that no longer runs.
+                    entry.statements.lock().unwrap().clear();
+                    entry.conn.close().map_err(engine_error)
+                })
+                .await?;
             }
             Ok(())
         })
@@ -485,11 +616,7 @@ fn open_in_memory(opts: &EmbeddedDbOptions) -> Result<ConnEntry, ProviderError> 
         None => db.connect().map_err(engine_error)?,
     };
     confine_temp_storage(&conn);
-    Ok(ConnEntry {
-        conn,
-        _db: db,
-        _io: io,
-    })
+    Ok(ConnEntry::new(conn, db, io))
 }
 
 /// Points the engine's scratch space at memory rather than at the OS temp
@@ -526,7 +653,6 @@ fn fill_batch(cursor: &mut CursorEntry, max_bytes: usize) -> Result<RowBatch, Pr
             done: true,
         });
     }
-    let columns = cursor.columns;
     let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
     let mut rows = 0u32;
     loop {
@@ -536,7 +662,7 @@ fn fill_batch(cursor: &mut CursorEntry, max_bytes: usize) -> Result<RowBatch, Pr
                     .stmt
                     .row()
                     .ok_or_else(|| other("the engine reported a row and had none"))?;
-                encode_row(&mut bytes, row.get_values(), columns);
+                encode_row(&mut bytes, row.get_values());
                 rows += 1;
                 if bytes.len() >= max_bytes {
                     break;
@@ -589,21 +715,6 @@ fn run_to_completion(stmt: &mut Statement) -> Result<(), ProviderError> {
             }
         }
     }
-}
-
-/// Prepares `sql` on `conn` and binds `params`.
-///
-/// Named parameters are resolved by the engine rather than by rewriting the SQL
-/// a layer up: the statement already knows where its names are, and finding
-/// them anywhere else would mean parsing SQL twice.
-fn prepare(
-    conn: &Arc<Connection>,
-    sql: &str,
-    params: DbParams,
-) -> Result<Statement, ProviderError> {
-    let mut stmt = conn.prepare(sql).map_err(engine_error)?;
-    bind(&mut stmt, params)?;
-    Ok(stmt)
 }
 
 /// Binds one parameter set to an already-prepared statement.
@@ -664,15 +775,20 @@ fn to_engine_value(value: DbValue) -> Result<TursoValue, ProviderError> {
 
 /// Appends one row in the `EmbeddedDb` layout: a back-filled length, the column
 /// count, then each column as a length and a tagged payload.
-fn encode_row<'a>(out: &mut Vec<u8>, values: impl Iterator<Item = &'a TursoValue>, columns: usize) {
+fn encode_row<'a>(out: &mut Vec<u8>, values: impl Iterator<Item = &'a TursoValue>) {
     let start = out.len();
-    out.extend_from_slice(&0i32.to_be_bytes()); // back-filled below
-    out.extend_from_slice(&(columns as i16).to_be_bytes());
+    // Both back-filled below. The count is the row's own rather than the
+    // statement's as first described, so the two cannot disagree.
+    out.extend_from_slice(&0i32.to_be_bytes());
+    out.extend_from_slice(&0i16.to_be_bytes());
+    let mut columns = 0i16;
     for value in values {
         encode_value(out, value);
+        columns += 1;
     }
     let len = (out.len() - start) as i32;
     out[start..start + 4].copy_from_slice(&len.to_be_bytes());
+    out[start + 4..start + 6].copy_from_slice(&columns.to_be_bytes());
 }
 
 fn encode_value(out: &mut Vec<u8>, value: &TursoValue) {
@@ -1001,6 +1117,154 @@ mod tests {
             .unwrap();
         assert_eq!(result.first.rows, 1);
         assert!(result.cursor.is_none());
+    }
+
+    fn positional(values: Vec<DbValue>) -> DbParams {
+        DbParams {
+            positional: values,
+            named: Vec::new(),
+        }
+    }
+
+    /// Cached statements count, per connection.
+    fn cached(db: &SystemEmbeddedDb, id: u64) -> usize {
+        db.conn(id)
+            .unwrap()
+            .statements
+            .lock()
+            .unwrap()
+            .entries
+            .len()
+    }
+
+    /// A statement run once is kept and the next run of the same text reuses
+    /// it; one still open in a result set is not in the cache, so a second
+    /// result over the same text gets its own.
+    #[tokio::test]
+    async fn a_statement_is_prepared_once_and_reused() {
+        let (_root, db) = engine("stmt-cache");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
+        for i in 0..5 {
+            db.execute(
+                id,
+                "INSERT INTO t VALUES (?)".to_string(),
+                positional(vec![DbValue::Integer(i)]),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(cached(&db, id), 2, "the CREATE and the INSERT, once each");
+
+        let open_a = db
+            .query(id, "SELECT a FROM t".to_string(), DbParams::default(), 1)
+            .await
+            .unwrap();
+        let open_b = db
+            .query(id, "SELECT a FROM t".to_string(), DbParams::default(), 1)
+            .await
+            .unwrap();
+        let (a, b) = (open_a.cursor.unwrap(), open_b.cursor.unwrap());
+        assert_ne!(a, b);
+        assert_eq!(cached(&db, id), 2, "a statement in use is not in the cache");
+        db.close_cursor(a).await.unwrap();
+        db.close_cursor(b).await.unwrap();
+        assert_eq!(cached(&db, id), 3, "and comes back when its result closes");
+        let (_, rows) = collect(&db, id, "SELECT a FROM t", 4096).await;
+        assert_eq!(rows, 5);
+    }
+
+    /// A reused statement starts with no bindings: a parameter the second
+    /// caller did not pass is NULL, not the first caller's value.
+    #[tokio::test]
+    async fn a_reused_statement_forgets_the_last_bindings() {
+        let (_root, db) = engine("stmt-bindings");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER, b INTEGER)").await;
+        let insert = "INSERT INTO t VALUES (?, ?)";
+        db.execute(
+            id,
+            insert.to_string(),
+            positional(vec![DbValue::Integer(1), DbValue::Integer(10)]),
+        )
+        .await
+        .unwrap();
+        db.execute(
+            id,
+            insert.to_string(),
+            positional(vec![DbValue::Integer(2)]),
+        )
+        .await
+        .unwrap();
+        let result = db
+            .query(
+                id,
+                "SELECT count(*) FROM t WHERE a = 2 AND b IS NULL".to_string(),
+                DbParams::default(),
+                4096,
+            )
+            .await
+            .unwrap();
+        // One row, one column: [len:4][cols:2][len:4][tag][i64].
+        let count = i64::from_be_bytes(result.first.bytes[11..19].try_into().unwrap());
+        assert_eq!(count, 1);
+    }
+
+    /// The schema changing under a cached statement is the engine's to notice:
+    /// the next run re-prepares and sees the new shape.
+    #[tokio::test]
+    async fn a_cached_statement_follows_the_schema() {
+        let (_root, db) = engine("stmt-schema");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
+        exec(&db, id, "INSERT INTO t VALUES (1)").await;
+        let first = db
+            .query(id, "SELECT * FROM t".to_string(), DbParams::default(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(first.columns.len(), 1);
+        exec(&db, id, "ALTER TABLE t ADD COLUMN b TEXT").await;
+        let second = db
+            .query(id, "SELECT * FROM t".to_string(), DbParams::default(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(second.columns.len(), 2);
+        assert_eq!(second.first.rows, 1);
+    }
+
+    /// A statement that failed is dropped, not cached: the next caller gets a
+    /// fresh prepare and a clean answer.
+    #[tokio::test]
+    async fn a_failed_statement_is_not_kept() {
+        let (_root, db) = engine("stmt-failed");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER PRIMARY KEY)").await;
+        let insert = "INSERT INTO t VALUES (?)";
+        db.execute(
+            id,
+            insert.to_string(),
+            positional(vec![DbValue::Integer(1)]),
+        )
+        .await
+        .unwrap();
+        let before = cached(&db, id);
+        let duplicate = db
+            .execute(
+                id,
+                insert.to_string(),
+                positional(vec![DbValue::Integer(1)]),
+            )
+            .await;
+        assert!(duplicate.is_err());
+        assert_eq!(cached(&db, id), before - 1, "the failed statement went");
+        db.execute(
+            id,
+            insert.to_string(),
+            positional(vec![DbValue::Integer(2)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cached(&db, id), before);
     }
 
     /// A misspelled name binds nothing, and a statement run against an unbound
