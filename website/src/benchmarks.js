@@ -292,18 +292,18 @@ export default {
   },
   "results_pg_qps": {
     "pg_qps": {
-      "node": 8904,
-      "bun": 14152,
-      "deno": 9159,
-      "esrun": 4892
+      "node": 8341,
+      "bun": 13827,
+      "deno": 9074,
+      "esrun": 14510
     }
   },
   "results_pg_qps_rss": {
     "pg_qps": {
-      "node": 207,
-      "bun": 69,
-      "deno": 148,
-      "esrun": 144
+      "node": 211,
+      "bun": 67,
+      "deno": 143,
+      "esrun": 130
     }
   },
   "pg_qps_method": {
@@ -314,10 +314,10 @@ export default {
       "reps": 3,
       "aggregate": "max",
       "spread_pct": {
-        "node": 3.6,
-        "bun": 1.1,
-        "deno": 4,
-        "esrun": 0.7
+        "node": 0.3,
+        "bun": 1.9,
+        "deno": 2.3,
+        "esrun": 1.5
       },
       "queries": 100000
     }
