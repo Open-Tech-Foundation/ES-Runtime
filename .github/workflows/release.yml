@@ -18,8 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
+      release_opentf_esrun_mysql: ${{ steps.check.outputs.release_opentf_esrun_mysql }}
       release_opentf_esrun_postgres: ${{ steps.check.outputs.release_opentf_esrun_postgres }}
       release_opentf_esrun_redis: ${{ steps.check.outputs.release_opentf_esrun_redis }}
+      release_opentf_esrun_smtp: ${{ steps.check.outputs.release_opentf_esrun_smtp }}
       release_es_runtime_cli: ${{ steps.check.outputs.release_es_runtime_cli }}
       release_es_runtime_dev_cli: ${{ steps.check.outputs.release_es_runtime_dev_cli }}
     steps:
@@ -35,9 +37,11 @@ jobs:
       - uses: ./.github/actions/setup-esdev
       - id: check
         run: |
-          echo "should_release=$(otf-release check --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "should_release=$(otf-release check --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-smtp --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_mysql=$(otf-release check --package @opentf/esrun-mysql)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_postgres=$(otf-release check --package @opentf/esrun-postgres)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_redis=$(otf-release check --package @opentf/esrun-redis)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_smtp=$(otf-release check --package @opentf/esrun-smtp)" >> "$GITHUB_OUTPUT"
           echo "release_es_runtime_cli=$(otf-release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
           echo "release_es_runtime_dev_cli=$(otf-release check --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
@@ -180,6 +184,38 @@ jobs:
           name: es-runtime-dev-cli-${{ matrix.name }}-${{ matrix.arch }}
           path: .artifacts/es-runtime-dev-cli
 
+  publish-opentf-esrun-mysql:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_opentf_esrun_mysql == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - name: Build @opentf/esrun-mysql
+        run: npm run build
+        working-directory: packages/mysql
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+      - name: Publish
+        run: otf-release publish --package @opentf/esrun-mysql
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish-opentf-esrun-postgres:
     needs: [check-release]
     if: needs.check-release.outputs.release_opentf_esrun_postgres == 'true'
@@ -195,9 +231,9 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
-      - run: tsr install
       - name: Build @opentf/esrun-postgres
         run: tsr build
         working-directory: packages/postgres
@@ -227,9 +263,9 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
-      - run: tsr install
       - name: Build @opentf/esrun-redis
         run: tsr build
         working-directory: packages/redis
@@ -244,15 +280,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish:
-    needs: [check-release, publish-opentf-esrun-postgres, publish-opentf-esrun-redis]
-    if: >-
-      always() &&
-      needs.check-release.outputs.should_release == 'true' &&
-      needs.publish-opentf-esrun-postgres.result != 'failure' &&
-      needs.publish-opentf-esrun-postgres.result != 'cancelled' &&
-      needs.publish-opentf-esrun-redis.result != 'failure' &&
-      needs.publish-opentf-esrun-redis.result != 'cancelled'
+  publish-opentf-esrun-smtp:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_opentf_esrun_smtp == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -265,6 +295,49 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - name: Build @opentf/esrun-smtp
+        run: npm run build
+        working-directory: packages/smtp
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+      - name: Publish
+        run: otf-release publish --package @opentf/esrun-smtp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: [check-release, publish-opentf-esrun-mysql, publish-opentf-esrun-postgres, publish-opentf-esrun-redis, publish-opentf-esrun-smtp]
+    if: >-
+      always() &&
+      needs.check-release.outputs.should_release == 'true' &&
+      needs.publish-opentf-esrun-mysql.result != 'failure' &&
+      needs.publish-opentf-esrun-mysql.result != 'cancelled' &&
+      needs.publish-opentf-esrun-postgres.result != 'failure' &&
+      needs.publish-opentf-esrun-postgres.result != 'cancelled' &&
+      needs.publish-opentf-esrun-redis.result != 'failure' &&
+      needs.publish-opentf-esrun-redis.result != 'cancelled' &&
+      needs.publish-opentf-esrun-smtp.result != 'failure' &&
+      needs.publish-opentf-esrun-smtp.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
       - name: Install otf-release
         shell: bash
         env:
@@ -272,9 +345,8 @@ jobs:
         run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
-      - run: tsr install
       - name: Publish
-        run: otf-release publish --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis
+        run: otf-release publish --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-smtp
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

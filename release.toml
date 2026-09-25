@@ -26,8 +26,26 @@ uses = "./.github/actions/setup-tsr"
 uses = "./.github/actions/setup-esdev"
 
 [publish.ignore_paths]
-es-runtime-cli = []
+es-runtime-default-providers = []
+"@opentf/esrun-smtp" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
+"@opentf/esrun-types" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 es-runtime = []
+es-runtime-cli = []
+es-runtime-providers = []
 "@opentf/esrun-postgres" = [
     "**/*.md",
     "**/__tests__/**",
@@ -44,9 +62,8 @@ es-runtime = []
     "**/test/**",
     "**/tests/**",
 ]
-es-runtime-default-providers = []
-es-runtime-common = []
-"@opentf/esrun-types" = [
+es-runtime-engine = []
+"@opentf/esrun-mysql" = [
     "**/*.md",
     "**/__tests__/**",
     "**/*.test.*",
@@ -54,8 +71,16 @@ es-runtime-common = []
     "**/test/**",
     "**/tests/**",
 ]
-es-runtime-providers = []
-es-runtime-engine = []
+es-runtime-common = []
+
+[[package]]
+name = "@opentf/esrun-mysql"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/mysql/package.json"
 
 [[package]]
 name = "@opentf/esrun-postgres"
@@ -76,6 +101,15 @@ artifacts = ""
 manifest = "packages/redis/package.json"
 
 [[package]]
+name = "@opentf/esrun-smtp"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/smtp/package.json"
+
+[[package]]
 name = "@opentf/esrun-types"
 adapter = "npm"
 mode = "publish"
@@ -87,7 +121,6 @@ manifest = "packages/types/package.json"
 [[package]]
 name = "es-runtime-cli"
 adapter = "crates.io"
-setup = []
 mode = "build-only"
 matrix = true
 command = "cargo build --release --target {triple}"
@@ -143,10 +176,11 @@ runner = "windows-latest"
 stage_as = "win32-arm64"
 ext = ".exe"
 
+[[package.setup]]
+
 [[package]]
 name = "es-runtime-dev-cli"
 adapter = "crates.io"
-setup = []
 mode = "build-only"
 matrix = true
 # `-p`, so that the inspector switch this build carries (release.yml) can only
@@ -203,3 +237,5 @@ triple = "aarch64-pc-windows-msvc"
 runner = "windows-latest"
 stage_as = "win32-arm64"
 ext = ".exe"
+
+[[package.setup]]
