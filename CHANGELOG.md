@@ -11,6 +11,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **A MySQL QPS benchmark**, in the Postgres one's shape — 100,000 queries of
+  100 rows, 100 in flight — across Node and Deno (mysql2), Bun (`Bun.SQL`) and
+  esrun (`@opentf/esrun-mysql`), published as `mysql_qps` and charted beside
+  Postgres on the homepage. Both QPS runners now stage the driver build they
+  measure instead of relying on a copy left behind by another script.
+
 ### Changed
 
 - **`TextDecoder` decodes UTF-8 about three times faster.** A one-shot UTF-8

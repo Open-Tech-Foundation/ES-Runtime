@@ -1,11 +1,12 @@
 // Tab switcher for the homepage Benchmarks section: request throughput
 // (Hono vs Elysia per runtime), dev-server startup (vite vs oj vs esdev vs
-// bun) and production build time (same four tools). Every panel reads the
+// bun), production build time (same four tools), and database queries/sec
+// (Postgres and MySQL). Every panel reads the
 // generated benchmark data; the tab state is the only thing this component
 // owns.
 import BuildChart from "./BuildChart.jsx";
 import DevServerChart from "./DevServerChart.jsx";
-import PgQpsChart from "./PgQpsChart.jsx";
+import DbQpsChart from "./DbQpsChart.jsx";
 import RpsChart from "./RpsChart.jsx";
 
 function tabClass(active) {
@@ -32,6 +33,9 @@ export default function FrameworkTabs() {
           </button>
           <button type="button" onclick={() => (tab = "pg")} className={tabClass(tab === "pg")}>
             Postgres QPS
+          </button>
+          <button type="button" onclick={() => (tab = "mysql")} className={tabClass(tab === "mysql")}>
+            MySQL QPS
           </button>
         </div>
       </div>
@@ -91,10 +95,24 @@ export default function FrameworkTabs() {
             before its numbers publish.
           </p>
         </div>
+      ) : tab === "mysql" ? (
+        <div>
+          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <DbQpsChart db="mysql" large />
+          </div>
+          <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+            The same shape against local MySQL 8.4: 100,000 queries of 100
+            rows, 100 in flight, every response row-counted and the first
+            checksummed. Node and Deno use mysql2's prepared statements, Bun
+            its built-in <code className="font-mono">Bun.SQL</code>, esrun
+            @opentf/esrun-mysql — pools of 100 everywhere, no TLS. Best of
+            three runs.
+          </p>
+        </div>
       ) : (
         <div>
           <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <PgQpsChart large />
+            <DbQpsChart db="pg" large />
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             100,000 queries of 100 rows, 100 in flight at a time, against

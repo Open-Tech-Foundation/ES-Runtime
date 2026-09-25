@@ -138,6 +138,7 @@ const sections = [
   ["dev_server", () => data.dev_server, "SECTIONS=devserver"],
   ["build_time", () => data.build_time, "SECTIONS=buildtime"],
   ["results_pg_qps", () => data.results_pg_qps, "SECTIONS=pg_qps"],
+  ["results_mysql_qps", () => data.results_mysql_qps, "SECTIONS=mysql_qps"],
   [
     "results_rps.hono_sustained",
     () => data.results_rps?.hono_sustained,

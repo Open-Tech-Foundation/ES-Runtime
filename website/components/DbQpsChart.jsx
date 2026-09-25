@@ -1,7 +1,8 @@
-// Postgres QPS chart: queries/sec and peak memory for the 100-rows-x-100
-// in-flight scan per runtime. Same visual language as RpsChart (rows are
-// runtimes, bar columns are metrics, the winner of each column is drawn
-// bold); data comes from bench/db/pg/qps-run.sh via bench.results_pg_qps.
+// Database QPS chart: queries/sec and peak memory for the 100-rows-x-100
+// in-flight scan per runtime, for one database — `db` is "pg" or "mysql".
+// Same visual language as RpsChart (rows are runtimes, bar columns are
+// metrics, the winner of each column is drawn bold); data comes from
+// bench/db/<db>/qps-run.sh via bench.results_<db>_qps.
 //
 // NOTE: same compiler constraint as RpsChart — non-render computations use
 // plain loops, dynamic styles are objects.
@@ -31,12 +32,14 @@ const BRAND = {
   },
 };
 
-function getQps(rt) {
-  return bench.results_pg_qps?.pg_qps?.[rt] ?? null;
+const TITLES = { pg: "Postgres", mysql: "MySQL" };
+
+function qpsOf(db) {
+  return bench[`results_${db}_qps`]?.[`${db}_qps`] ?? null;
 }
 
-function getRss(rt) {
-  return bench.results_pg_qps_rss?.pg_qps?.[rt] ?? null;
+function rssOf(db) {
+  return bench[`results_${db}_qps_rss`]?.[`${db}_qps`] ?? null;
 }
 
 function getMax(f, runtimes) {
@@ -78,10 +81,14 @@ function fmtMb(v) {
   return typeof v === "number" ? v + " MB" : "n/a";
 }
 
-export default function PgQpsChart({ large = false }) {
-  if (!bench.results_pg_qps?.pg_qps) return null;
+export default function DbQpsChart({ db = "pg", large = false }) {
+  const qps = qpsOf(db);
+  const rss = rssOf(db);
+  if (!qps) return null;
+  const getQps = (rt) => qps[rt] ?? null;
+  const getRss = (rt) => rss?.[rt] ?? null;
   // Ranked fastest first; a runtime without a number sinks to the bottom.
-  const runtimes = ORDER.filter((rt) => bench.results_pg_qps.pg_qps[rt] !== undefined)
+  const runtimes = ORDER.filter((rt) => qps[rt] !== undefined)
     .slice()
     .sort((a, b) => {
       const va = getQps(a);
@@ -110,7 +117,7 @@ export default function PgQpsChart({ large = false }) {
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <span className={titleCls}>Postgres · 100 rows × 100 in flight</span>
+        <span className={titleCls}>{TITLES[db] ?? db} · 100 rows × 100 in flight</span>
       </div>
 
       <div className={"mb-2 grid grid-cols-12 gap-2 " + headCls}>

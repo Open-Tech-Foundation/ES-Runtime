@@ -13,6 +13,7 @@
     "ioredis": "^6.0.0",
     "js-yaml": "^4.2.0",
     "msgpackr": "^1.11.2",
+    "mysql2": "^3.24.4",
     "ndjson": "^2.0.0",
     "postgres": "^3.4.9",
     "puppeteer-core": "^25.11.0",

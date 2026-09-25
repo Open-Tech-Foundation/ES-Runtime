@@ -837,6 +837,32 @@ PG_URL=... SECTIONS=pg_qps bench/gen-bench-data.sh       # publish
 `max_connections=200` leaves headroom for the 100-connection pools; the seed
 is the shared `bench_num` table (200k rows, server-side `generate_series`).
 
+### MySQL QPS (the same shape)
+
+The Postgres QPS benchmark's shape against a local MySQL 8.4
+(`bench/db/mysql/qps-*.mjs`, runner `qps-run.sh`, published as
+`results_mysql_qps`): 100,000 queries of the same 100-row scan, 100 in flight,
+every response row-counted and the first checksummed. Node and Deno use
+mysql2's prepared statements (`pool.execute`) with a pool of 100, Bun its
+built-in `Bun.SQL` (`new SQL(url, { max: 100 })`), and esrun
+`@opentf/esrun-mysql` with a pool of 100, staged from `packages/mysql/dist`.
+
+Every runtime connects without TLS and may fetch the server's RSA key. Those
+are mysql2's defaults; esrun's driver and Bun both require them to be asked for
+(`sslmode: "disable"`, `allowPublicKeyRetrieval: true`), and the scripts do.
+
+```sh
+docker run -d --name esrun-mysql -e MYSQL_ROOT_PASSWORD=esrun \
+  -e MYSQL_DATABASE=esrun_test -p 3307:3306 mysql:8.4
+MYSQL_URL=mysql://root:esrun@127.0.0.1:3307/esrun_test node bench/db/mysql/seed.mjs
+MYSQL_URL=... bench/db/mysql/qps-run.sh                        # human table
+MYSQL_URL=... SECTIONS=mysql_qps bench/gen-bench-data.sh       # publish
+```
+
+MySQL's default `max_connections` (151) already fits one 100-connection pool
+at a time. The seed is `bench_num` again, 10,000 rows with `id` as the primary
+key; the query reads the first hundred.
+
 ### HTTP/1.1 vs HTTP/2
 
 `bench/http2.sh` measures the same hello-world server over HTTP/1.1 and over

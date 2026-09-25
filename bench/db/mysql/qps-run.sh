@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 #
-# Postgres QPS benchmark (Bun's shape: 100 rows x 100 queries in flight).
+# MySQL QPS benchmark — the Postgres one's shape (100 rows x 100 queries in flight).
 # Each runtime loops 100 concurrent workers over the same 100-row scan and
 # reports queries/sec; every response is row-counted and the first is
 # checksummed, so a runtime cannot win by doing less. Best of REPS wins,
 # with spread and the best rep's peak RSS.
 #
-# Usage:  PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test bench/db/pg/qps-run.sh
-#         QPS_WARMUP=1 QPS_MEASURE=3 REPS=2 bench/db/pg/qps-run.sh   (iterate)
+# Usage:  MYSQL_URL=mysql://root:esrun@127.0.0.1:3307/esrun_test bench/db/mysql/qps-run.sh
+#         QPS_WARMUP=1 REPS=2 bench/db/mysql/qps-run.sh   (iterate)
 set -uo pipefail
 cd "$(dirname "$0")"
 
-[ -n "${PG_URL:-}" ] || { echo "qps-run.sh needs PG_URL" >&2; exit 1; }
+[ -n "${MYSQL_URL:-}" ] || { echo "qps-run.sh needs MYSQL_URL" >&2; exit 1; }
 ESRUN="${ESRUN:-../../../target/release/esrun}"
 
 # The built driver, staged beside the script: esrun jails the module loader to
 # the project root it detects from the entry file, which here is `bench/`, so a
 # reach up into `packages/` is refused. Copying is what crosses that line, and it
 # keeps the benchmark measuring the built artifact rather than a stale copy.
-[ -f ../../../packages/postgres/dist/index.js ] || { echo "the driver is not built — run tsr build" >&2; exit 1; }
-rm -rf .driver && cp -r ../../../packages/postgres/dist .driver
+[ -f ../../../packages/mysql/dist/index.js ] || { echo "the driver is not built — run tsr build" >&2; exit 1; }
+rm -rf .driver && cp -r ../../../packages/mysql/dist .driver
 QPS_WARMUP="${QPS_WARMUP:-3}"
 QPS_TOTAL=100000
 REPS="${REPS:-3}"
@@ -40,7 +40,7 @@ fi
 # Runs one rep: stdout JSON has {qps}; peak RSS comes from getrusage, which
 # needs no GNU time. Prints "<qps> <peak_mb>" or "ERR ERR".
 run_once() {
-  QPS_WARMUP="$QPS_WARMUP" PG_URL="$PG_URL" python3 - "$@" <<'EOF'
+  QPS_WARMUP="$QPS_WARMUP" MYSQL_URL="$MYSQL_URL" python3 - "$@" <<'EOF'
 import json, resource, subprocess, sys
 p = subprocess.run(sys.argv[1:], capture_output=True, text=True)
 try:
@@ -78,7 +78,7 @@ if [ -n "${BENCH_JSON:-}" ]; then
     PEAK[$r]="$peak"
     SPREAD[$r]="$spread"
   done
-  printf '{\n  "results_pg_qps": {\n    "pg_qps": {'
+  printf '{\n  "results_mysql_qps": {\n    "mysql_qps": {'
   first=1
   for r in "${ORDER[@]}"; do
     [ -z "$first" ] && printf ','
@@ -86,7 +86,7 @@ if [ -n "${BENCH_JSON:-}" ]; then
     printf '\n      "%s": %s' "$r" "${QPS[$r]}"
   done
   printf '\n    }\n  },'
-  printf '\n  "results_pg_qps_rss": {\n    "pg_qps": {'
+  printf '\n  "results_mysql_qps_rss": {\n    "mysql_qps": {'
   first=1
   for r in "${ORDER[@]}"; do
     [ -z "$first" ] && printf ','
@@ -94,8 +94,8 @@ if [ -n "${BENCH_JSON:-}" ]; then
     printf '\n      "%s": %s' "$r" "${PEAK[$r]}"
   done
   printf '\n    }\n  },'
-  printf '\n  "pg_qps_method": {'
-  printf '\n    "pg_qps": {'
+  printf '\n  "mysql_qps_method": {'
+  printf '\n    "mysql_qps": {'
   printf '\n      "query": "%s",' "SELECT a, b, c FROM bench_num WHERE id <= 100 (100 rows x 100 in flight x 100,000)"
   printf '\n      "warmup_s": %s,' "$QPS_WARMUP"
   printf '\n      "queries": %s,' "$QPS_TOTAL"
@@ -112,7 +112,7 @@ if [ -n "${BENCH_JSON:-}" ]; then
   printf '\n    }'
   printf '\n  }\n}\n'
 else
-  echo "Postgres QPS — 100 rows x 100 queries in flight, 100,000 queries (higher is better)"
+  echo "MySQL QPS — 100 rows x 100 queries in flight, 100,000 queries (higher is better)"
   echo "warmup ${QPS_WARMUP}s, then 100,000 queries timed, best of $REPS"
   echo
   printf "%-7s | %12s | %8s | %8s\n" "runtime" "queries/s" "spread" "peak rss"
