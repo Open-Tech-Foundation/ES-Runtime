@@ -16,7 +16,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOC="$ROOT/website/app/docs/internals/http/page.mdx"
+DOC="$ROOT/website/app/docs/internals/http/comparison/page.mdx"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"; kill $(jobs -p) 2>/dev/null' EXIT
 
@@ -113,9 +113,17 @@ probe() {
     esrun)
       [ -x "$ESRUN" ] || { echo '{}'; return; }
       esrun_fixture "$port" > "$WORK/esrun-$kind-$port.mjs"
-      "$ESRUN" --allow-all "$WORK/esrun-$kind-$port.mjs" >/dev/null 2>&1 & pid=$! ;;
+      # From the fixture's own directory: the sandbox is the working
+      # directory (D79), and an entry outside it is refused.
+      (cd "$WORK" && exec "$ESRUN" --allow-all "esrun-$kind-$port.mjs") >/dev/null 2>&1 & pid=$! ;;
   esac
   sleep 2
+  # A server that died on startup would otherwise be measured as a port that
+  # refuses connections, and published as the runtime's behaviour.
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "error: the $rt $kind server exited on startup" >&2
+    exit 1
+  fi
   out="$(node "$script" "$port" "$CAP" 2>/dev/null)"
   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   echo "${out:-\{\}}"
@@ -173,6 +181,13 @@ TABLE="$(
 if [ "${1:-}" = "--json" ]; then
   for rt in esrun node bun deno; do echo "$rt timings=${T[$rt]} settings=${S[$rt]}"; done
   exit 0
+fi
+
+# A page without the markers would be rewritten unchanged and reported as
+# updated — which is how this table once went stale after it moved pages.
+if ! grep -q 'BEGIN probe:table' "$DOC" || ! grep -q 'END probe:table' "$DOC"; then
+  echo "error: $DOC has no probe:table markers; point DOC at the page holding the table" >&2
+  exit 1
 fi
 
 # Splice between the markers, leaving the surrounding prose alone.
