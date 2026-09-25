@@ -265,7 +265,7 @@ impl CssModules {
         path: &Path,
         read: &Files,
     ) -> Result<Option<BTreeMap<String, String>>, String> {
-        let bundled = crate::css::bundle::bundle(path)?;
+        let bundled = crate::css::load(path)?;
         read.extend(bundled.read_files);
 
         let (sheet, names) = if is_css_module(&path.to_string_lossy()) {
@@ -341,7 +341,7 @@ impl crate::css::modules::Resolve for Imports {
         // the class names it hands out would name rules that are not in the
         // output. `Collected::push` dedupes, so a module that is also imported
         // still appears once.
-        let bundled = crate::css::bundle::bundle(&path)?;
+        let bundled = crate::css::load(&path)?;
         self.read.extend(bundled.read_files);
         let mut deeper = Imports {
             from: path.parent().unwrap_or(Path::new(".")).to_path_buf(),

@@ -111,6 +111,31 @@ impl PluginHost {
     }
 }
 
+impl PluginHost {
+    /// Calls one hook of the `index`th plugin directly, with no build around
+    /// it — for a pass this binary ships as JavaScript and drives itself.
+    ///
+    /// `meta` lands on the hook's context, beside the methods every context
+    /// has. There is no bundler behind the call, so a hook that reaches for
+    /// `ctx.resolve()` or `ctx.emit()` is told its context has expired.
+    pub(crate) async fn call(
+        &self,
+        index: usize,
+        hook: &'static str,
+        args: Vec<es_runtime_cli_common::Value>,
+        meta: Vec<(String, es_runtime_cli_common::Value)>,
+    ) -> Result<es_runtime_cli_common::Value, String> {
+        let plugin = self
+            .plugins
+            .get(index)
+            .ok_or_else(|| format!("no plugin {index} is loaded"))?;
+        self.bridge
+            .call(plugin.id, hook, args, meta, None)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl Drop for PluginHost {
     fn drop(&mut self) {
         drop(self.shutdown.take());
@@ -158,13 +183,46 @@ async fn start(
     project: &crate::settings::Source,
     specs: &[PluginSpec],
 ) -> Result<PluginHost, String> {
-    let (bridge, hooks) = Bridge::new();
-    let (declared, told) = tokio::sync::oneshot::channel();
-    let (shutdown, ended) = tokio::sync::oneshot::channel();
     let source = driver(&project.root, specs)?;
     // The project's resolution, without its plugin transform: a plugin module
     // is compiled by the stripper alone, since the transform is this isolate.
-    let resolution = project.resolution();
+    let host = launch(project.resolution(), source, "the project's plugins")
+        .await
+        .map_err(|reason| match reason {
+            Some(reason) => format!("the project's plugins could not be loaded: {reason}"),
+            None => "the project's plugins could not be loaded — the run that loads them \
+                     ended before it declared any"
+                .to_string(),
+        })?;
+    if host.plugins.len() != specs.len() {
+        return Err(format!(
+            "the project declares {} plugin{}, and the modules named produced {}.\n\n\
+             A plugin module's export is one plugin; a module that exports several \
+             is not usable from `plugins`, where each entry is one thing to load.",
+            specs.len(),
+            if specs.len() == 1 { "" } else { "s" },
+            host.plugins.len()
+        ));
+    }
+    Ok(host)
+}
+
+/// Runs `source` in an isolate of its own and waits for it to hand its
+/// plugins to `runtime:build`'s `host()`.
+///
+/// The half of starting a host that does not care where the program came
+/// from: the project's configured plugins are one program, and a pass this
+/// binary ships in JavaScript ([`crate::tailwind`]) is another.
+///
+/// `Err(None)` is a run that ended without saying why.
+pub(crate) async fn launch(
+    resolution: crate::settings::Resolution,
+    source: String,
+    what: &'static str,
+) -> Result<PluginHost, Option<String>> {
+    let (bridge, hooks) = Bridge::new();
+    let (declared, told) = tokio::sync::oneshot::channel();
+    let (shutdown, ended) = tokio::sync::oneshot::channel();
     // Where the host thread leaves the reason its run failed. A program that
     // fails *before* declaring — a plugin module with no default export — closes
     // the declaration channel by ending, and then the only thing the waiting
@@ -219,37 +277,21 @@ async fn start(
                 // nobody is waiting any more, so say it here.
                 match reported.lock() {
                     Ok(mut slot) if slot.is_none() => *slot = Some(message),
-                    _ => eprintln!("esdev: the project's plugins stopped: {message}"),
+                    _ => eprintln!("esdev: {what} stopped: {message}"),
                 }
             }
         })
-        .map_err(|e| format!("cannot start the plugin host: {e}"))?;
+        .map_err(|e| Some(format!("cannot start the plugin host: {e}")))?;
 
     let plugins = match told.await {
-        Ok(result) => result?,
+        Ok(result) => result.map_err(Some)?,
         Err(_) => {
             // The thread is ending or has ended; wait for it so the reason it
             // failed is there to report rather than racing this message.
             let _ = thread.join();
-            let reason = failure.lock().ok().and_then(|mut slot| slot.take());
-            return Err(match reason {
-                Some(reason) => format!("the project's plugins could not be loaded: {reason}"),
-                None => "the project's plugins could not be loaded — the run that loads them \
-                         ended before it declared any"
-                    .to_string(),
-            });
+            return Err(failure.lock().ok().and_then(|mut slot| slot.take()));
         }
     };
-    if plugins.len() != specs.len() {
-        return Err(format!(
-            "the project declares {} plugin{}, and the modules named produced {}.\n\n\
-             A plugin module's export is one plugin; a module that exports several \
-             is not usable from `plugins`, where each entry is one thing to load.",
-            specs.len(),
-            if specs.len() == 1 { "" } else { "s" },
-            plugins.len()
-        ));
-    }
     // A run that failed after declaring reports itself from the thread, so the
     // host keeps the handle for shutdown as before.
     Ok(PluginHost {
@@ -494,7 +536,7 @@ fn module_type(id: &str) -> String {
 /// Not a nested async runtime: the caller is already inside one, which refuses
 /// to be entered twice. The future only ever waits on the plugin isolate's
 /// reply, so parking until it is woken is all this needs to do.
-fn wait<T>(future: contract::Answer<'_, T>) -> Result<T, String> {
+pub(crate) fn wait<F: std::future::Future>(future: F) -> F::Output {
     struct Unpark(std::thread::Thread);
     impl std::task::Wake for Unpark {
         fn wake(self: Arc<Self>) {
@@ -503,7 +545,7 @@ fn wait<T>(future: contract::Answer<'_, T>) -> Result<T, String> {
     }
     let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
     let mut cx = std::task::Context::from_waker(&waker);
-    let mut future = future;
+    let mut future = std::pin::pin!(future);
     loop {
         if let std::task::Poll::Ready(answer) = future.as_mut().poll(&mut cx) {
             return answer;

@@ -26,6 +26,21 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **Tailwind CSS v4, built in** (DECISIONS D135). A stylesheet that imports
+  `tailwindcss` or uses its directives is compiled wherever `esdev` reads one —
+  linked from a document, imported from a module, a CSS Module, or named as an
+  entry — by the project's own `tailwindcss`, with nothing to configure:
+
+  ```css
+  @import "tailwindcss";
+  ```
+
+  Class names are found the way Tailwind's own scanner finds them —
+  `.gitignore` honoured, `@source`, `@source not` and `source(…)` followed —
+  and the output goes through the same `url()` rewriting and minifying as any
+  other stylesheet. A project without Tailwind installed is told to install it;
+  Tailwind v3 is refused by name, since its configuration is run through
+  PostCSS.
 - **`esdev build` builds a module named by `new URL("./x.js", import.meta.url)`**
   as a content-hashed chunk of its own, and points the URL at it (DECISIONS
   D134). A built server that started `new Worker(new URL(…))`, or configured

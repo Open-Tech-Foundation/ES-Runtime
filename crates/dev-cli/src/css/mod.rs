@@ -85,12 +85,23 @@ pub struct Stylesheet {
     pub sources: usize,
 }
 
+/// Reads `entry` and everything it imports, and compiles the result with
+/// Tailwind when it uses Tailwind ([`crate::tailwind`]).
+///
+/// What every reader of a stylesheet starts from — a linked one, an imported
+/// one, an entry — so a sheet means the same thing whichever way it arrived.
+pub fn load(entry: &Path) -> Result<bundle::Bundled, String> {
+    let mut bundled = bundle::bundle(entry)?;
+    crate::tailwind::apply(entry, &mut bundled)?;
+    Ok(bundled)
+}
+
 /// Bundles `entry` and everything it imports, minified or not.
 ///
 /// The one entry point [`crate::html`] uses. The layers behind it are public so
 /// that a new pass can be added without routing it through here.
 pub fn build(entry: &Path, minify: bool) -> Result<Stylesheet, String> {
-    let mut bundled = bundle::bundle(entry)?;
+    let mut bundled = load(entry)?;
     if minify {
         minify::apply(&mut bundled.sheet);
     }
@@ -493,5 +504,92 @@ mod tests {
 
         let message = build(&entry, false).expect_err("a cycle");
         assert!(message.contains("imports itself"), "{message}");
+    }
+
+    /// A package `@import` is a compiler's to resolve. In a sheet no compiler
+    /// claims, it is the error it always was, word for word.
+    #[test]
+    fn a_package_import_in_plain_css_is_still_an_error() {
+        let entry = project("package-plain", &[("app.css", "@import \"some-kit\";\n")]);
+        let message = build(&entry, false).expect_err("nothing resolves a package");
+        assert!(
+            message.contains("imports some-kit, which is not there"),
+            "{message}"
+        );
+    }
+
+    /// A relative `@import` naming no file is a mistake whoever reads the sheet
+    /// — Tailwind included — so it fails before anything is claimed.
+    #[test]
+    fn a_missing_relative_import_fails_even_in_a_tailwind_sheet() {
+        let entry = project(
+            "package-relative",
+            &[(
+                "app.css",
+                "@import \"tailwindcss\";\n@import \"./gone.css\";\n",
+            )],
+        );
+        let message = bundle::bundle(&entry).expect_err("./gone.css is not there");
+        assert!(message.contains("imports ./gone.css"), "{message}");
+    }
+
+    /// In a Tailwind sheet the package import is kept where it was for the
+    /// compiler, and every path a directive names is made absolute against the
+    /// file that wrote it — including one inlined from another directory.
+    #[test]
+    fn a_tailwind_sheet_keeps_its_import_and_absolutizes_its_paths() {
+        let entry = project(
+            "tailwind-paths",
+            &[
+                (
+                    "styles/app.css",
+                    "@import \"tailwindcss\" source(\"../src\");\n@import \"./parts/extra.css\";\n@plugin \"./plugin.js\";\n@plugin \"@tailwindcss/typography\";\n@config \"../tailwind.config.js\";\n",
+                ),
+                (
+                    "styles/parts/extra.css",
+                    "@source \"../../lib\";\n@source not \"./legacy\";\n@source inline(\"p-4\");\n@reference \"./base.css\";\n",
+                ),
+            ],
+        );
+        let bundled = bundle::bundle(&entry).expect("a Tailwind sheet bundles");
+        let text = print::print(&bundled.sheet);
+        let root = entry
+            .parent()
+            .and_then(Path::parent)
+            .map(|root| dunce::canonicalize(root).expect("canonical"))
+            .expect("a root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        for expected in [
+            format!("@import \"tailwindcss\" source(\"{root}/styles/../src\")"),
+            format!("@plugin \"{root}/styles/plugin.js\""),
+            // A package is not a path.
+            "@plugin \"@tailwindcss/typography\"".to_string(),
+            format!("@config \"{root}/styles/../tailwind.config.js\""),
+            // Relative to the file that wrote it, not the one it landed in.
+            format!("@source \"{root}/styles/parts/../../lib\""),
+            format!("@source not \"{root}/styles/parts/legacy\""),
+            // A list of class names, not a path.
+            "@source inline(\"p-4\")".to_string(),
+            format!("@reference \"{root}/styles/parts/base.css\""),
+        ] {
+            assert!(text.contains(&expected), "{expected}\nnot in:\n{text}");
+        }
+    }
+
+    /// A path is written into a CSS string, so a `"` in a directory name must
+    /// not end the string. (Unix only: Windows refuses the directory name.)
+    #[cfg(unix)]
+    #[test]
+    fn an_absolutized_path_cannot_break_out_of_its_string() {
+        let entry = project(
+            "tailwind-quote\"dir",
+            &[("app.css", "@import \"tailwindcss\";\n@source \"./src\";\n")],
+        );
+        let bundled = bundle::bundle(&entry).expect("bundles");
+        let text = print::print(&bundled.sheet);
+        assert!(text.contains("tailwind-quote\\\"dir/src\""), "{text}");
+        let reparsed = parse::parse(&text);
+        assert_eq!(print::print(&reparsed), text);
     }
 }

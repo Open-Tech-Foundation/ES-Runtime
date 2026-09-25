@@ -56,6 +56,9 @@ pub struct Bundled {
     /// imported stylesheet changes nothing on a `--watch` save and the page
     /// keeps the rules it had.
     pub read_files: Vec<PathBuf>,
+    /// The `@import`s naming no file, each as the error it is unless a
+    /// compiler claims the sheet. Left in place in `sheet`.
+    missing: Vec<String>,
 }
 
 /// Reads `entry` and everything it imports.
@@ -65,10 +68,16 @@ pub fn bundle(entry: &Path) -> Result<Bundled, String> {
         referenced: Vec::new(),
         sources: 0,
         read_files: Vec::new(),
+        missing: Vec::new(),
     };
     let mut stack = Vec::new();
     let items = read(entry, &mut out, &mut stack)?;
     out.sheet.items = items;
+    if let Some(missing) = out.missing.first()
+        && !crate::tailwind::uses(&out.sheet)
+    {
+        return Err(missing.clone());
+    }
     Ok(out)
 }
 
@@ -98,6 +107,14 @@ fn read(file: &Path, out: &mut Bundled, stack: &mut Vec<PathBuf>) -> Result<Vec<
         std::fs::read_to_string(file).map_err(|e| format!("cannot read {}: {e}", display(file)))?;
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
 
+    // Against the canonical directory, because an absolute path is the point
+    // of rewriting a Tailwind directive's (below). Without the Windows verbatim
+    // prefix, which is not a path Tailwind or a glob can read.
+    let absolute_dir = canonical
+        .parent()
+        .map(|parent| dunce::simplified(parent).to_path_buf())
+        .unwrap_or_else(|| dir.clone());
+
     stack.push(canonical.clone());
     out.sources += 1;
     out.read_files.push(canonical);
@@ -105,6 +122,8 @@ fn read(file: &Path, out: &mut Bundled, stack: &mut Vec<PathBuf>) -> Result<Vec<
     let mut sheet = parse(&source);
     // `url()` first, while `dir` still means this file's directory.
     rewrite_urls_in_items(&mut sheet.items, &dir, out)?;
+    // The same for the paths a Tailwind directive names.
+    absolutize_directives(&mut sheet.items, &absolute_dir);
 
     let mut items = Vec::new();
     for item in sheet.items {
@@ -141,10 +160,20 @@ fn inline_import(
 
     let target = dir.join(&url);
     if !target.is_file() {
-        return Err(format!(
-            "{} imports {url}, which is not there.",
-            display(dir)
-        ));
+        let message = format!("{} imports {url}, which is not there.", display(dir));
+        // A relative path that is not there is a mistake whoever reads the
+        // sheet. A package is left for the compiler that claims the sheet —
+        // `@import "tailwindcss"` — and is this same error if none does.
+        if url.starts_with('.') {
+            return Err(message);
+        }
+        out.missing.push(message);
+        let mut kept = at.clone();
+        if let Ok(absolute) = dunce::canonicalize(dir) {
+            absolutize_source_function(&mut kept.prelude, &absolute);
+        }
+        items.push(Item::Rule(Rule::At(kept)));
+        return Ok(());
     }
 
     let inlined = read(&target, out, stack)?;
@@ -222,6 +251,92 @@ fn url_of(value: &ComponentValue) -> Option<String> {
             .map(Token::unescape),
         _ => None,
     }
+}
+
+// --- Tailwind directives -----------------------------------------------------
+
+/// Makes the path each top-level Tailwind directive names absolute.
+///
+/// `@source` is relative to its stylesheet whatever it looks like — Tailwind
+/// resolves `@source "src"` against the file, as it does `"./src"`. The three
+/// that load something (`@plugin`, `@config`, `@reference`) are relative only
+/// when they say so; anything else is a package, which is left alone.
+fn absolutize_directives(items: &mut [Item], dir: &Path) {
+    for item in items {
+        let Item::Rule(Rule::At(at)) = item else {
+            continue;
+        };
+        match at.name().as_str() {
+            "source" => absolutize_first_string(&mut at.prelude, dir, |_| true),
+            "plugin" | "config" | "reference" => {
+                absolutize_first_string(&mut at.prelude, dir, |path| path.starts_with('.'));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `source("../src")` on an `@import` left for a compiler: the directory
+/// Tailwind scans instead of the project. `source(none)` is left alone.
+fn absolutize_source_function(prelude: &mut [ComponentValue], dir: &Path) {
+    for value in prelude {
+        if let ComponentValue::Function(function) = value
+            && function.name() == "source"
+        {
+            absolutize_first_string(&mut function.arguments, dir, |_| true);
+        }
+    }
+}
+
+/// Rewrites the first string among `values` — the path — to an absolute one,
+/// when `relative` says it is one.
+///
+/// Only a string at this level: `@source inline("…")` carries its string
+/// inside a function, and it is a list of class names rather than a path.
+fn absolutize_first_string(
+    values: &mut [ComponentValue],
+    dir: &Path,
+    relative: impl Fn(&str) -> bool,
+) {
+    let Some(token) = values.iter_mut().find_map(|value| match value {
+        ComponentValue::Token(token) if token.kind == Kind::String => Some(token),
+        _ => None,
+    }) else {
+        return;
+    };
+    let path = token.unescape();
+    if Path::new(&path).is_absolute() || path.starts_with('/') || !relative(&path) {
+        return;
+    }
+    let absolute = format!(
+        "{}/{}",
+        dir.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/'),
+        path.strip_prefix("./").unwrap_or(&path)
+    );
+    *token = Token::new(Kind::String, quote(&absolute));
+}
+
+/// A CSS string holding `text`: `"` and `\` escaped, so no path can end the
+/// string it is written into.
+fn quote(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            // A newline cannot appear in a CSS string at all; it is written as
+            // the hex escape the tokenizer reads back as one.
+            '\n' => out.push_str("\\a "),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // --- url() rewriting ---------------------------------------------------------

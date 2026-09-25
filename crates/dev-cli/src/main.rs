@@ -80,6 +80,7 @@ mod staging;
 mod start;
 mod style;
 mod tags;
+mod tailwind;
 mod test;
 mod trace;
 mod transform;
