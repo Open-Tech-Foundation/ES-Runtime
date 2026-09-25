@@ -161,5 +161,9 @@ fn a_worker_lets_its_own_timer_go_and_its_parent_lets_the_worker_go() {
         .expect("run esrun");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
     assert_eq!(stdout(&out).trim(), "worker beat while working: true");
-    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
 }

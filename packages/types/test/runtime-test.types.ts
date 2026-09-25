@@ -15,8 +15,8 @@
 import {
   assertSnapshot,
   assertType,
-  beforeEach,
   type BenchResult,
+  beforeEach,
   clock,
   describe,
   expect,
@@ -163,6 +163,7 @@ test("spyOn needs an object and a key of it", () => {
 });
 
 test("mock.module takes exports, now or later", async () => {
+  // biome-ignore lint/suspicious/noConfusingVoidType: the assertion is that the synchronous overload returns `void`; `undefined` would test something else.
   const sync: void = mock.module("./mail.ts", () => ({ send: mock.fn() }));
   const later: Promise<void> = mock.module("./mail.ts", async (importOriginal) => ({
     ...(await importOriginal()),
@@ -183,13 +184,20 @@ test("mocks throw, answer for a while, and answer by argument", async () => {
   const load = mock.fn((id: number) => `user ${id}`);
   load.mockThrowOnce(new Error("down")).mockThrow("always");
   const impl: ((id: number) => string) | undefined = load.getMockImplementation();
-  load.withImplementation(() => "temporary", () => load(1));
-  const later: Promise<void> = load.withImplementation(() => "t", async () => {});
+  load.withImplementation(
+    () => "temporary",
+    () => load(1),
+  );
+  const later: Promise<void> = load.withImplementation(
+    () => "t",
+    async () => {},
+  );
   await later;
 
   {
     using spy = mock.spyOn(console, "log");
-    using answers = mock.when(load, { onUnmatched: "throw" })
+    using answers = mock
+      .when(load, { onUnmatched: "throw" })
       .calledWith(1)
       .thenReturn("one")
       .thenReturnOnce("first")
@@ -225,7 +233,9 @@ test("call order, resolved values and the new asymmetric matchers", async () => 
   expect(null).toBeNullable();
   expect(["a"]).toEqual(expect.arrayOf(expect.any(String)));
   expect([1]).toEqual(expect.not.arrayOf(expect.any(String)));
-  const schema = { "~standard": { version: 1 as const, vendor: "x", validate: (v: unknown) => ({ value: v }) } };
+  const schema = {
+    "~standard": { version: 1 as const, vendor: "x", validate: (v: unknown) => ({ value: v }) },
+  };
   expect("a").toEqual(expect.schemaMatching(schema));
   // @ts-expect-error — a schema has a ~standard member.
   expect.schemaMatching({});
@@ -246,7 +256,10 @@ test("equality testers and snapshot serializers", () => {
     serialize: (v, config, indentation, depth, refs, printer) =>
       `Date ${printer(v.toISOString(), config, indentation, depth, refs)}`,
   });
-  expect.addSnapshotSerializer({ test: () => false, print: (v, serialize, indent) => indent(serialize(v)) });
+  expect.addSnapshotSerializer({
+    test: () => false,
+    print: (v, serialize, indent) => indent(serialize(v)),
+  });
   // @ts-expect-error — a tester is a function.
   expect.addEqualityTesters([1]);
   if (Math.random() > 2) expect.fail("never");
@@ -334,7 +347,9 @@ declare function isString(v: unknown): v is string;
 declare function assertNumber(v: unknown): asserts v is number;
 
 test("type assertions", () => {
-  class Box { constructor(public size: number) {} }
+  class Box {
+    constructor(public size: number) {}
+  }
 
   expectTypeOf({ a: 1 }).toEqualTypeOf<{ a: number }>();
   expectTypeOf({ a: 1 }).toEqualTypeOf({ a: 2 });
@@ -343,7 +358,10 @@ test("type assertions", () => {
   expectTypeOf<number>().toExtend<string | number>();
   expectTypeOf<string | number>().not.toExtend<number>();
   expectTypeOf({ a: 1, b: 2 }).toMatchObjectType<{ a: number }>();
-  expectTypeOf({ name: "J", address: { city: "NY", zip: "1" } }).toMatchObjectType<{ name: string; address: { city: string } }>();
+  expectTypeOf({ name: "J", address: { city: "NY", zip: "1" } }).toMatchObjectType<{
+    name: string;
+    address: { city: string };
+  }>();
   expectTypeOf(parse).parameter(0).toBeString();
   expectTypeOf(parse).parameters.toEqualTypeOf<[text: string, strict?: boolean]>();
   expectTypeOf(parse).returns.toEqualTypeOf<{ ok: boolean }>();
@@ -407,8 +425,10 @@ test("type assertions", () => {
 test.concurrent("runs alongside", async ({ expect: check }) => {
   check(1).toBe(1);
 });
-test.concurrent.skip("skipped", async () => {});
-test.skip.concurrent("skipped too", async () => {});
+test.concurrent
+  .skip("skipped", async () => {});
+test.skip
+  .concurrent("skipped too", async () => {});
 test.concurrent.each([[1], [2]])("row %d", async (n) => void n);
 test.sequential("alone", () => {});
 test("an option", { concurrent: true }, async () => {});
@@ -575,7 +595,11 @@ test("benchmarks", async ({ bench }) => {
   const stored = await bench.compare(
     section,
     bench.from("previous", "./bench/section.json"),
-    bench.from("inline", () => ({ samples: 1, latency: { mean: 1, rme: 0 }, throughput: { mean: 1000 } })),
+    bench.from("inline", () => ({
+      samples: 1,
+      latency: { mean: 1, rme: 0 },
+      throughput: { mean: 1000 },
+    })),
   );
   const warned: readonly string[] = stored.get("previous")!.warnings;
   void warned;

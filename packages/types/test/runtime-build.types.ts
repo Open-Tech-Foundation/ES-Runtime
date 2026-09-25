@@ -10,4 +10,4 @@ const fromString: string = resolve("@opentf/web", root.href);
 // @ts-expect-error — `from` is required: without it there is nothing to resolve from.
 resolve("@opentf/web");
 
-export { fromUrl, fromString };
+export { fromString, fromUrl };
