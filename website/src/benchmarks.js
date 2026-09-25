@@ -4,16 +4,16 @@
 export default {
   "results_rps": {
     "hono": {
-      "node": 32741,
-      "bun": 79986,
-      "deno": 79014,
-      "esrun": 53708
+      "node": 32084,
+      "bun": 81116,
+      "deno": 78134,
+      "esrun": 49987
     },
     "staticserver": {
-      "node": 12459,
-      "bun": 26479,
-      "deno": 14083,
-      "esrun": 15703
+      "node": 11605,
+      "bun": 26432,
+      "deno": 13292,
+      "esrun": 13251
     },
     "hono_sustained": {
       "node": 33639,
@@ -22,10 +22,10 @@ export default {
       "esrun": 54194
     },
     "elysia": {
-      "node": 30782,
-      "bun": 87830,
-      "deno": 82350,
-      "esrun": 51461
+      "node": 31549,
+      "bun": 87488,
+      "deno": 76992,
+      "esrun": 49504
     }
   },
   "rps_method": {
@@ -38,10 +38,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 2.6,
-        "bun": 6.9,
-        "deno": 3.4,
-        "esrun": 1.3
+        "node": 4.2,
+        "bun": 2.3,
+        "deno": 2.7,
+        "esrun": 3.8
       },
       "duration": null
     },
@@ -55,10 +55,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 0.6,
+        "node": 1.8,
         "bun": 1.2,
-        "deno": 2.1,
-        "esrun": 9.9
+        "deno": 0.3,
+        "esrun": 7.8
       }
     },
     "hono_sustained": {
@@ -87,10 +87,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 1.8,
-        "bun": 4.4,
-        "deno": 0.9,
-        "esrun": 0.5
+        "node": 1,
+        "bun": 2.1,
+        "deno": 3.2,
+        "esrun": 1
       }
     }
   },
@@ -188,16 +188,16 @@ export default {
   },
   "results_rps_rss": {
     "hono": {
-      "node": 128,
-      "bun": 50,
-      "deno": 72,
-      "esrun": 46
+      "node": 111,
+      "bun": 45,
+      "deno": 48,
+      "esrun": 53
     },
     "staticserver": {
-      "node": 280,
-      "bun": 34,
-      "deno": 139,
-      "esrun": 131
+      "node": 286,
+      "bun": 37,
+      "deno": 158,
+      "esrun": 134
     },
     "hono_sustained": {
       "node": 133,
@@ -206,10 +206,10 @@ export default {
       "esrun": 55
     },
     "elysia": {
-      "node": 107,
-      "bun": 47,
+      "node": 98,
+      "bun": 46,
       "deno": 56,
-      "esrun": 50
+      "esrun": 52
     }
   },
   "dev_server": {
