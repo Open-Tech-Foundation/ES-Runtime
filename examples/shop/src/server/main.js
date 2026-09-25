@@ -4,10 +4,11 @@
 
 import { file } from "runtime:fs";
 import { serve } from "runtime:http";
+import { upgradeWebSocket } from "runtime:websocket";
 import { env, exit, onSignal, unmask } from "runtime:process";
 import { DurableError, configure, shutdown, startAlarms } from "runtime:workers";
 import { PRODUCTS } from "../shared/catalog.js";
-import { Customer, Delivery, Inventory } from "./workers.js";
+import { Customer, Delivery, Inventory, Shelf } from "./workers.js";
 
 const setting = (name, fallback) => unmask(env[name] ?? fallback);
 
@@ -130,6 +131,13 @@ async function fulfillment(request) {
 const server = serve({ port }, async (request) => {
   const url = new URL(request.url);
   if (url.pathname === "/fulfillment" && request.method === "POST") return fulfillment(request);
+  // Live stock: the browser's socket goes to the shelf, which holds it while
+  // it hibernates.
+  if (url.pathname === "/api/live" && request.headers.get("upgrade") === "websocket") {
+    const { response, socket } = upgradeWebSocket(request);
+    await Shelf.get("main").watch(socket);
+    return response;
+  }
   if (!url.pathname.startsWith("/api/")) return asset(url.pathname);
   const { id, fresh } = session(request);
   let response;

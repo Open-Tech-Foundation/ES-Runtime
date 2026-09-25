@@ -33,29 +33,40 @@ export class Inventory extends DurableWorker {
   }
 
   /** Adds `qty` to the shelf. Answers what is now available. */
-  restock(qty) {
+  async restock(qty) {
     this.state.set("restocked", (this.state.get("restocked") ?? 0) + Math.max(0, Math.floor(qty)));
+    await this.#changed();
     return this.available();
+  }
+
+  // Everyone watching the shelf hears the new number. Inventory tells the
+  // shelf and the shelf never asks back, so the two can never wait on each
+  // other; and the call waits for this worker's writes first, so no browser
+  // sees a number the disk has not heard.
+  #changed() {
+    return Shelf.get("main").changed(this.id, this.available());
   }
 
   /**
    * Holds `qty` for `customer`, replacing what it held before. Answers how many
    * it got, which is less than asked for when the stock has run out.
    */
-  reserve(customer, qty) {
+  async reserve(customer, qty) {
     const holds = this.#holds();
     const mine = holds.get(customer) ?? 0;
     const granted = Math.max(0, Math.min(qty, this.available() + mine));
     if (granted === 0) holds.delete(customer);
     else holds.set(customer, granted);
     this.state.set("holds", holds);
+    if (granted !== mine) await this.#changed();
     return granted;
   }
 
-  release(customer) {
+  async release(customer) {
     const holds = this.#holds();
     if (!holds.delete(customer)) return;
     this.state.set("holds", holds);
+    await this.#changed();
   }
 
   /** Turns `customer`'s hold into a sale for `orderId`. Repeating it is a no-op. */
@@ -205,5 +216,28 @@ export class Delivery extends DurableWorker {
     await res.body?.cancel();
     if (!res.ok) throw new Error(`the partner answered ${res.status}`);
     this.state.set("status", "delivered");
+  }
+}
+
+/**
+ * What every browser on the shop is watching: one worker holding their
+ * WebSockets. It hibernates when nothing changes, and the sockets stay open —
+ * the next stock change wakes it to tell everyone. A heartbeat from a browser
+ * is answered without waking it.
+ */
+export class Shelf extends DurableWorker {
+  static durableName = "Shelf";
+
+  start() {
+    this.ctx.setWebSocketAutoResponse({ request: "ping", response: "pong" });
+  }
+
+  watch(ws) {
+    this.ctx.acceptWebSocket(ws);
+  }
+
+  changed(id, available) {
+    const message = JSON.stringify({ id, available });
+    for (const ws of this.ctx.getWebSockets()) ws.send(message);
   }
 }

@@ -55,20 +55,43 @@ define("x-shop", (el) => {
     update(el);
   }
 
+  // Stock is pushed: the shelf tells every open page when a number changes.
+  // Reconnects on its own, and a heartbeat keeps idle proxies from closing it.
+  let socket = null;
+  let beat = null;
+  function live() {
+    socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/live`);
+    socket.onmessage = (e) => {
+      if (e.data === "pong") return;
+      const { id, available } = JSON.parse(e.data);
+      products = products.map((p) => (p.id === id ? { ...p, available } : p));
+      update(el);
+    };
+    socket.onclose = () => setTimeout(live, 1000);
+  }
+
   onReady(() => {
     void refresh();
-    // Stock moves when other customers buy, and deliveries finish on their own;
-    // the countdown on a held cart needs a tick as well.
+    live();
+    beat = setInterval(() => socket?.readyState === 1 && socket.send("ping"), 25_000);
+    // Deliveries finish on their own, and a held cart counts down.
     const poll = setInterval(async () => {
       try {
-        [products, orders] = await Promise.all([api.products(), api.orders()]);
+        orders = await api.orders();
         if (cart.expiresAt !== null && cart.expiresAt < Date.now()) cart = await api.cart();
       } catch {
         // The next tick tries again.
       }
       update(el);
     }, 2000);
-    return () => clearInterval(poll);
+    return () => {
+      clearInterval(poll);
+      clearInterval(beat);
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
+    };
   });
 
   const count = () => cart.lines.reduce((n, l) => n + l.qty, 0);
