@@ -26,6 +26,16 @@ namespace) is unstable and may change between minor releases until the API freez
   phase at a time. A checkout on a spinning disk measured the disk in the file
   rows, and was refused by the validator run after run.
 
+### Fixed
+
+- **esrun's Hono requests/sec is measured again.** Since the workspace moved to
+  pnpm, `bench/`'s packages resolve into the root store, outside esrun's
+  sandbox when started from `bench/` — so esrun's Hono server died on its first
+  import and the section published `esrun: null` beside three real numbers.
+  `rps.sh` now starts esrun from the workspace root (the `cd` D79 prescribes),
+  prints a server's output when it dies instead of discarding it, and the
+  validator refuses any server or QPS section with no esrun number.
+
 ### Changed
 
 - **`TextDecoder` decodes UTF-8 about three times faster.** A one-shot UTF-8

@@ -189,6 +189,23 @@ for (const [key, row] of Object.entries(cov)) {
   }
 }
 
+// esrun is the subject of every comparison, and a section where it produced
+// nothing is a broken run, not a result. The Hono row published `esrun: null`
+// for weeks this way: esrun's server could not start from bench/ and the
+// section was "present and populated" by the other three runtimes.
+if (runtimes.includes("esrun")) {
+  const subjects = [
+    ...Object.entries(data.results_rps || {}).map(([k, v]) => [`results_rps.${k}`, v]),
+    ["results_pg_qps.pg_qps", data.results_pg_qps?.pg_qps],
+    ["results_mysql_qps.mysql_qps", data.results_mysql_qps?.mysql_qps],
+  ];
+  for (const [path, row] of subjects) {
+    if (row && typeof row.esrun !== "number") {
+      errors.push(`${path}.esrun is missing — esrun did not produce a number in that section`);
+    }
+  }
+}
+
 const floorGap = data.results_floor_gap || {};
 for (const [key, row] of Object.entries(floorGap)) {
   for (const rt of runtimes) {

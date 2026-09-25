@@ -37,6 +37,8 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 ESRUN="${ESRUN:-../target/release/esrun}"
+# Absolute, because esrun is started from the workspace root (see measure).
+[ -x "$ESRUN" ] && ESRUN="$(cd "$(dirname "$ESRUN")" && pwd)/$(basename "$ESRUN")"
 SERVER="${SERVER:-scripts/helloserver.js}"  # the hello-world server to run
 # The port is chosen per run, not fixed: the OS hands out a free one and the
 # server scripts read it from BENCH_PORT. A fixed :3000 collided with an
@@ -122,7 +124,7 @@ trap cleanup EXIT
 URL="http://127.0.0.1:$PORT/"
 HDR="Accept-Encoding: identity"
 OUT="$(mktemp)"
-trap 'cleanup; rm -f "$OUT"' EXIT
+trap 'cleanup; rm -f "$OUT" "${SERVER_LOG:-}"' EXIT
 
 # Belt and braces on top of the per-run port: if $PORT is somehow occupied (a
 # PORT=... override, or the free port being claimed between pick and bind), stop
@@ -198,9 +200,23 @@ load_best() {
 }
 
 # Boots one runtime's server, waits for the port, loads it, tears it down.
+#
+# esrun starts from the workspace root, not from bench/. Its filesystem sandbox
+# is the working directory (DECISIONS D79), and pnpm links bench/'s packages
+# into the root's store — so from bench/, `import "hono"` resolves to a path
+# outside the sandbox and is refused. The sanctioned way to widen the root is
+# `cd`, and the other runtimes have no sandbox for it to matter to.
+#
+# The server's own output goes to a log, printed if it dies: discarding it is
+# how esrun's Hono row went missing for weeks with nothing to say why.
+SERVER_LOG="$(mktemp)"
 measure() {
-  local cmd="$1"
-  BENCH_PORT="$PORT" $SERVER_PIN $cmd "$SERVER" >/dev/null 2>&1 &
+  local cmd="$1" rt="$2"
+  if [ "$rt" = esrun ]; then
+    (cd .. && BENCH_PORT="$PORT" exec $SERVER_PIN $cmd "bench/$SERVER") >"$SERVER_LOG" 2>&1 &
+  else
+    BENCH_PORT="$PORT" $SERVER_PIN $cmd "$SERVER" >"$SERVER_LOG" 2>&1 &
+  fi
   SERVER_PID=$!
   for _ in $(seq 50); do
     (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break
@@ -211,6 +227,8 @@ measure() {
   # else is listening. Check the process we started is still alive.
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     SERVER_PID=""
+    echo "rps.sh: the $rt server exited before it was measured:" >&2
+    sed 's/^/  /' "$SERVER_LOG" | head -20 >&2
     echo "ERR ERR ERR null"
     return
   fi
@@ -230,7 +248,7 @@ measure() {
 if [ -n "${BENCH_JSON:-}" ]; then
   declare -A RPS SPREAD PEAK
   for r in "${ORDER[@]}"; do
-    read -r rps avg spread peak <<<"$(measure "${CMD[$r]}")"
+    read -r rps avg spread peak <<<"$(measure "${CMD[$r]}" "$r")"
     case "$rps" in '' | ERR) rps=null; spread=null ;; esac
     case "$peak" in '' | ERR) peak=null ;; esac
     RPS[$r]="$rps"
@@ -291,7 +309,7 @@ else
   printf "%-7s | %12s | %11s | %8s | %8s\n" "runtime" "req/sec" "avg lat" "spread" "peak rss"
   printf -- "--------+--------------+-------------+----------+----------\n"
   for r in "${ORDER[@]}"; do
-    read -r rps avg spread peak <<<"$(measure "${CMD[$r]}")"
+    read -r rps avg spread peak <<<"$(measure "${CMD[$r]}" "$r")"
     printf "%-7s | %12s | %9s ms | %6s%% | %6s MB\n" "$r" "$rps" "$avg" "$spread" "$peak"
   done
 fi

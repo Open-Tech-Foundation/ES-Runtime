@@ -117,9 +117,9 @@ preflight
 
 # Finished sections are kept, so a run that fails late resumes rather than
 # starting again. The cache is keyed on exactly what the numbers depend on —
-# the esrun and esdev binaries and every runtime's version — so a rebuilt esrun
-# or an upgraded Node invalidates it instead of being mixed with numbers it did
-# not produce. (The trailing "rows:" is kept only so existing keys still match.) It is cleared once a module is published.
+# the esrun and esdev binaries, every runtime's version and the bench/ scripts —
+# so a rebuilt esrun, an upgraded Node or a fixed harness invalidates it instead
+# of being mixed with numbers it did not produce. (The trailing "rows:" is kept only so existing keys still match.) It is cleared once a module is published.
 # RESUME=0 ignores it.
 fingerprint() {
   {
@@ -127,6 +127,9 @@ fingerprint() {
       [ -f "$bin" ] && sha256sum "$bin" | cut -d" " -f1
     done
     for rt in node bun deno llrt; do command -v "$rt" >/dev/null 2>&1 && "$rt" --version 2>&1 | head -1; done
+    # The harness itself: a fixed script must not reuse numbers the broken one
+    # measured. The committed bench/ tree, which is what publish.sh runs.
+    git rev-parse HEAD:bench 2>/dev/null || true
     echo "rows:"
   } | sha256sum | cut -c1-16
 }
