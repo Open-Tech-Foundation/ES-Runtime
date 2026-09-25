@@ -85,6 +85,11 @@ namespace) is unstable and may change between minor releases until the API freez
   real module beside its mock.
 
 ### Changed
+- **The embedded SQL engine is `turso_core` 0.8.0-pre.13**, up from pre.3.
+  `PRAGMA busy_timeout` now waits for a lock instead of failing at once, and
+  the wait parks the statement's blocking thread rather than spinning. Every
+  database, durable-worker and runtime suite passes unchanged, and the
+  durable-worker benchmark is within noise of before.
 - **`runtime:context` no longer slows every promise** (DECISIONS D131).
   Propagation rides V8's continuation-preserved embedder data instead of a
   promise hook: loading the module used to make every `await` in the program

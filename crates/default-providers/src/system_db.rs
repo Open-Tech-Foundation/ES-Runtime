@@ -552,6 +552,7 @@ fn fill_batch(cursor: &mut CursorEntry, max_bytes: usize) -> Result<RowBatch, Pr
             }
             // The engine is asking to be driven, not answering.
             StepResult::IO | StepResult::Yield => continue,
+            StepResult::Sleep { duration } => wait_as_asked(duration),
         }
     }
     Ok(RowBatch {
@@ -559,6 +560,15 @@ fn fill_batch(cursor: &mut CursorEntry, max_bytes: usize) -> Result<RowBatch, Pr
         rows,
         done: cursor.done,
     })
+}
+
+/// `StepResult::Sleep`: the engine's busy handler (set by `PRAGMA busy_timeout`)
+/// asks for a pause before the next step, while another connection holds the
+/// lock. Honoured rather than stepped through, which would spin a core for the
+/// whole wait. Statements run on a blocking thread, so this parks that thread
+/// and nothing else.
+fn wait_as_asked(duration: std::time::Duration) {
+    std::thread::sleep(duration);
 }
 
 /// Steps a statement to `Done`.
@@ -571,6 +581,7 @@ fn run_to_completion(stmt: &mut Statement) -> Result<(), ProviderError> {
     loop {
         match stmt.step().map_err(engine_error)? {
             StepResult::Row | StepResult::IO | StepResult::Yield => continue,
+            StepResult::Sleep { duration } => wait_as_asked(duration),
             StepResult::Done => return Ok(()),
             StepResult::Busy => return Err(busy()),
             StepResult::Interrupt => {
