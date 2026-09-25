@@ -274,6 +274,51 @@ fn calls_to_one_worker_run_one_at_a_time_in_order() {
 
 /// Two workers of the same class are two mailboxes: one being busy is not the
 /// other being busy.
+/// A call that writes, waits, and writes again has two flushes — the second
+/// queued behind the first. Its result must wait for both. The gate once saw
+/// neither: the first flush cleared the in-flight marker as it ended, so while
+/// the queued one committed there was "nothing in flight", and the answer went
+/// out ahead of the write. The process exits the moment it has its answers.
+#[test]
+fn a_result_waits_for_a_flush_queued_behind_another() {
+    let base = dir("queued-flush");
+    std::fs::write(
+        base.join("pair.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Pair extends DurableWorker {
+          async go(i) {
+            this.state.set(`a${i}`, i);
+            await new Promise((r) => setTimeout(r, 0));
+            this.state.set(`b${i}`, i);
+            return i;
+          }
+          async count() { return this.state.size; }
+        }
+    "#,
+    )
+    .expect("write class");
+    let first = run_in(
+        &base,
+        "write.mjs",
+        r#"import { Pair } from "./pair.mjs";
+           import { exit } from "runtime:process";
+           for (let i = 0; i < 50; i++) await Pair.get("p").go(i);
+           console.log("acked");
+           exit(0);"#,
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "acked");
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Pair } from "./pair.mjs";
+           console.log(await Pair.get("p").count());"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "100");
+}
+
 #[test]
 fn different_ids_are_different_workers() {
     let out = run(

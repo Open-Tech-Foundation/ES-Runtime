@@ -920,38 +920,45 @@ class State {
     // the transaction with everything else, and becomes true when it commits —
     // which is what a statement inside a transaction has always meant.
     if (this.#tx) return this.#flushWithin();
+    if (this.#queued) return this.#queued;
     if (this.#flushing) {
-      this.#queued ??= handled(
-        this.#flushing.then(
-          () => this.#flush(),
-          () => this.#flush(),
-        ),
-      );
+      // The next flush, behind the one in flight. When it starts it *becomes*
+      // the one in flight, so `#flushing` is never null while a commit is
+      // running — which is what `sync()` and the gate look at. It was: a queued
+      // flush ran with `#flushing` already cleared by the one before it, and a
+      // gate that saw nothing dirty and nothing in flight let a result go
+      // before its write had landed.
+      const next = () => {
+        this.#flushing = this.#queued;
+        this.#queued = null;
+        return this.#flush();
+      };
+      this.#queued = handled(this.#flushing.then(next, next));
       return this.#queued;
     }
     this.#flushing = handled(Promise.resolve().then(() => this.#flush()));
     return this.#flushing;
   }
 
+  // Runs as `#flushing`, which stays set until this flush ends — and, when a
+  // flush is queued behind it, until that one has taken over.
   async #flush() {
-    this.#queued = null;
     const keys = [...this.#dirty];
     this.#dirty.clear();
-    if (keys.length === 0 || this.#closed) {
-      this.#flushing = null;
-      return;
-    }
-    const { puts, gone } = this.#pending(keys);
     try {
-      await retryBusy(() => this.run(() => this.#commit(puts, gone)));
-    } catch (e) {
-      // The keys go back on the dirty set: a failed commit must not be a write
-      // that quietly never happens, and the next flush retries it.
-      for (const key of keys) this.#dirty.add(key);
-      this.#flushing = null;
-      throw e;
+      if (keys.length === 0 || this.#closed) return;
+      const { puts, gone } = this.#pending(keys);
+      try {
+        await retryBusy(() => this.run(() => this.#commit(puts, gone)));
+      } catch (e) {
+        // The keys go back on the dirty set: a failed commit must not be a
+        // write that quietly never happens, and the next flush retries it.
+        for (const key of keys) this.#dirty.add(key);
+        throw e;
+      }
+    } finally {
+      if (this.#queued === null) this.#flushing = null;
     }
-    this.#flushing = null;
     if (this.#dirty.size > 0) this.#schedule();
   }
 

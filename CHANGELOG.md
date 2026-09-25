@@ -84,6 +84,12 @@ namespace) is unstable and may change between minor releases until the API freez
   connection the engine then panicked over (`end_write_tx called while write
   lock not held`). The commit now waits for every write the transaction
   started, and one that fails rolls it back.
+- **A durable-worker call could be answered before its last write was on
+  disk.** When a call wrote, awaited, and wrote again, the second flush queued
+  behind the first, and the first cleared the in-flight marker as it ended, so
+  the gate saw nothing outstanding while the queued one was still committing.
+  A process that exited on the answer lost the write. The marker now passes
+  from one flush to the next.
 - **A durable worker could be closed halfway through its alarm**, losing the
   alarm: the scheduler cleared it outside the worker's mailbox, so an eviction
   made by other traffic could close the worker in between. Clearing, running
