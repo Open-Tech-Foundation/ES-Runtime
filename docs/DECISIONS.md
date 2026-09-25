@@ -661,6 +661,26 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D136 — `@opentf/esrun-smtp`: an SMTP client in JavaScript over `runtime:net`, message and transport in one package · *Proposed (2026-09-26)* · *follows D56's driver model*
+
+**Context:** a server sends mail — a sign-up confirmation, a password reset, a receipt — and on this runtime it cannot. `nodemailer`, the client nearly every Node service uses, speaks through `node:net` and `node:tls`, which esrun does not provide; Node, Bun and Deno ship no SMTP client of their own either, so their answer is that npm package. Everything SMTP needs is already here: `runtime:net` connects with `secureTransport: "starttls"` and upgrades in place with `startTls()` (submission on 587), or with `"on"` for implicit TLS (465, which RFC 8314 now recommends).
+
+**Decision (maintainer, 2026-09-26: a package; transport and message building; DKIM later; PLAIN, LOGIN and XOAUTH2):**
+
+- **A first-party package, not a `runtime:` module.** `@opentf/esrun-smtp`, JavaScript over `runtime:net`, as the Postgres, MySQL and Redis drivers are (D56). No runtime code, no new capability: reaching the server is `--allow-net`, scoped to its host like any other socket. **Rejected: `runtime:mail`** — it would grow the production binary for a protocol that needs nothing the runtime does not already expose.
+- **Transport and message in one package.** `send({ from, to, cc, bcc, subject, text, html, attachments })` builds an RFC 5322 message — `multipart/alternative` for text and HTML, `multipart/mixed` for attachments, `multipart/related` for images the HTML references by `cid:` — and sends it. A raw message is accepted too, for mail built elsewhere. **Rejected: transport only** — every application would need a MIME library, and none written for Node runs here.
+- **The protocol, as the server advertises it.** `EHLO`, then only what the reply lists: `STARTTLS` (RFC 3207), `PIPELINING` (RFC 2920), `SIZE` (RFC 1870, checked before the body is sent), `8BITMIME` (RFC 6152), `SMTPUTF8` (RFC 6531). Dot-stuffing, CRLF and the 998-octet line limit are the transport's to enforce, so no message can be framed wrongly.
+- **Logins: PLAIN (RFC 4616), LOGIN, XOAUTH2.** XOAUTH2 takes an access token the application obtains — refreshing it is the OAuth provider's protocol, not SMTP's. **Rejected: CRAM-MD5**, which modern providers no longer offer and which gives nothing over PLAIN inside TLS.
+- **Secure by default.** Certificates are verified; there is no flag that turns verification off. A login over a connection that is not encrypted is **refused** unless the connection is explicitly marked as trusted plaintext (`allowPlaintextAuth`, for a local relay or a test server) — the rule D56's MySQL driver applies to fetching a public key. A header value containing CR or LF is refused rather than stripped, because a silent repair of an injection attempt hides it.
+- **Errors say whether to retry.** SMTP's reply codes and enhanced status codes (RFC 3463) are mapped onto a small set of error codes, each marked permanent (5xx: bad address, rejected content) or transient (4xx: greylisting, rate limits), with the server's reply kept verbatim beside them.
+- **A pool.** Connections are reused across sends and closed after an idle timeout, since a TLS handshake and a login per message is most of what sending one costs.
+
+**Not in v1:** DKIM signing (RFC 6376) — most applications send through a relay (SES, Postmark, Gmail, Microsoft 365) that signs for them; it follows in its own increment on WebCrypto's RSA and Ed25519. Also out: DSN (RFC 3461), `CHUNKING`/`BDAT` (RFC 3030), and receiving mail.
+
+**Verification plan:** unit tests for header encoding (RFC 2047 encoded-words), MIME structure, dot-stuffing and line limits; a small SMTP server in JavaScript over `runtime:net` for protocol tests, including a server that advertises nothing and one that fails each step; end-to-end sends to a real server (Mailpit) that check the delivered message byte for byte; and a feature probe beside `bench/db/redis/features.mjs`, so any table comparing it with nodemailer is regenerated rather than typed.
+
+---
+
 ### D135 — Tailwind CSS in `esdev`: the project's compiler, our scanner, the CSS pipeline we already have · *Proposed (2026-09-26)* · *extends D67*
 
 **Context:** `esdev create --styling=tailwind` writes `@import "tailwindcss";`, and nothing in `esdev` compiled it — the OTF toolchain's plugin did, so a project outside OTF built a stylesheet whose `@import` either failed ("which is not there") or would have been fetched by the browser as a URL. Tailwind v4 is the CSS framework most new projects start with, and its official integrations are a Vite plugin, a PostCSS plugin and a CLI: none of them runs here.
