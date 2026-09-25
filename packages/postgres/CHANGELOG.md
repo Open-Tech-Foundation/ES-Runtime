@@ -13,6 +13,17 @@ the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
 
 ## [Unreleased]
 
+### Changed
+
+- **Three times the query throughput under load.** Rows that have already
+  arrived are read in one synchronous pass straight into the batch — one copy
+  per row and no promise, where each row used to cost several awaits and two
+  copies — and results of the same shape share one row class across every
+  connection and query, instead of a new class per query that made the
+  caller's property reads megamorphic. The Postgres QPS benchmark (100-row
+  scans, 100 in flight) went from 4,880 to 16,247 queries/s, against 14,932
+  for Bun's `bun:sql` and 9,457 for `postgres.js` on Node.
+
 ## [0.1.7] - 2026-09-25
 
 _Dependency updates._

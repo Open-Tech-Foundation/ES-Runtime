@@ -2,7 +2,7 @@
 // bytes arrive in chunks that have nothing to do with message boundaries.
 
 import { exit } from "runtime:process";
-import { FrameReader } from "../../dist/protocol/frame.js";
+import { FrameBatch, FrameReader } from "../../dist/protocol/frame.js";
 import { is, ok, report } from "./assert.mjs";
 
 function streamOf(chunks) {
@@ -85,6 +85,60 @@ const b = message(0x42, new Uint8Array(200).fill(7));
 {
   const r = new FrameReader(streamOf([new Uint8Array([0x53])]));
   is(await r.byte(), 0x53, "a raw byte is readable before any framing");
+}
+
+// `poll` answers from the buffer or not at all: null until a whole message has
+// arrived, and never a promise.
+{
+  const r = new FrameReader(streamOf([a.subarray(0, 3), a.subarray(3)]));
+  is(r.poll(), null, "nothing buffered, nothing polled");
+  await r.message().catch(() => {});
+  is(r.poll(), null, "the only message was taken by message()");
+}
+
+// `take` moves the run of matching messages that has arrived whole, and stops
+// at the first that does not match or has not arrived — leaving it for the
+// ordinary path.
+{
+  const row = (n) => message(0x44, new Uint8Array([0, 1, 0, 0, 0, 1, n]));
+  const run = [row(1), row(2), row(3), message(0x43, new Uint8Array([0])), row(4)];
+  const whole = new Uint8Array(run.reduce((n, m) => n + m.length, 0));
+  let at = 0;
+  for (const m of run) {
+    whole.set(m, at);
+    at += m.length;
+  }
+  // The fourth row is split, so only the three before the other tag are whole.
+  const r = new FrameReader(
+    streamOf([whole.subarray(0, whole.length - 2), whole.subarray(whole.length - 2)]),
+  );
+  is((await r.message()).tag, 0x44, "the first row arrives the ordinary way");
+  const batch = new FrameBatch(0);
+  r.take(0x44, batch, 1 << 16);
+  is(batch.count, 2, "the rest of the run is taken");
+  is(batch.size, 2 * 11, "each frame is copied from its length prefix on");
+  is(`${batch.gathered[10]},${batch.gathered[21]}`, "2,3", "and in order");
+  is(r.poll()?.tag, 0x43, "the message that ended the run is left in place");
+  r.take(0x44, batch, 1 << 16);
+  is(batch.count, 2, "a split message is not taken");
+  is((await r.message()).tag, 0x44, "it arrives the ordinary way once whole");
+}
+
+// `take` stops once the batch holds the limit, and a batch grows past its
+// first guess rather than refusing.
+{
+  const row = message(0x44, new Uint8Array(300).fill(1));
+  const r = new FrameReader(streamOf([row, row, row]));
+  await r.message();
+  const batch = new FrameBatch(0);
+  // Nothing more is buffered yet: the stream's chunks arrive one read at a time.
+  r.take(0x44, batch, 1);
+  const again = new FrameReader(streamOf([new Uint8Array([...row, ...row, ...row])]));
+  is((await again.message()).tag, 0x44, "prime the buffer");
+  again.take(0x44, batch, 1);
+  is(batch.count, 1, "the limit stops the run after the frame that crossed it");
+  again.take(0x44, batch, 1 << 16);
+  is(batch.size, 2 * 304, "the batch grew to hold both");
 }
 
 if (report("frame") > 0) exit(1);

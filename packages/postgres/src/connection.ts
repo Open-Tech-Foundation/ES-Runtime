@@ -23,7 +23,7 @@ import {
 } from "runtime:db";
 import { connect as netConnect } from "runtime:net";
 
-import { Fields, FrameReader } from "./protocol/frame.js";
+import { Fields, FrameBatch, FrameReader } from "./protocol/frame.js";
 
 /** What `runtime:net`'s `connect()` hands back. */
 type PgSocket = ReturnType<typeof netConnect>;
@@ -73,6 +73,41 @@ function readRowDescription(fields: Fields): Columns {
 
 /** How much of a result set to gather before handing it to the caller. */
 const BATCH_BYTES = 64 * 1024;
+
+/**
+ * The row class for a result of this shape — one per shape for the whole
+ * process, not one per query or per connection.
+ *
+ * A row's columns are getters on a generated class, and V8 can only make
+ * reading `row.id` fast while the rows at that line of the caller's code share
+ * one class. A class per query gives every result a new one; a class per
+ * connection gives a pool of a hundred a hundred of them, and the caller's
+ * property reads go megamorphic. The decoders are a pure function of the
+ * column types, the wire formats and the decode options, so that triple is the
+ * whole key.
+ */
+function rowShape(columns: Columns, formats: number[], options: DecodeOptions) {
+  const key = `${options.temporal !== false ? 1 : 0}|${formats.join(",")}|${columns.oids.join(",")}|${columns.names.join("\u0000")}`;
+  let shape = SHAPES.get(key);
+  if (shape === undefined) {
+    shape = defineRowShape(
+      columns.names.map((name, i) => ({ name, declType: null, oid: columns.oids[i]! })),
+      {
+        decoders: columns.oids.map((oid, i) => decoderForFormat(oid, formats[i] ?? 0, options)),
+      },
+    );
+    // Bounded, oldest first: a program generating SQL can produce shapes without
+    // end, and a cache that only grows is a leak with a hit rate.
+    if (SHAPES.size >= SHAPE_LIMIT) SHAPES.delete(SHAPES.keys().next().value!);
+  } else {
+    SHAPES.delete(key);
+  }
+  SHAPES.set(key, shape);
+  return shape;
+}
+
+const SHAPES = new Map<string, ReturnType<typeof defineRowShape>>();
+const SHAPE_LIMIT = 1000;
 
 export const POSTGRES_DIALECT: Dialect = new Dialect({
   name: "postgres",
@@ -731,23 +766,32 @@ export class PgConnection extends BaseConnection {
   }
 
   /** Reads rows until the batch is full or the statement finishes. */
-  async #batch(columns: number): Promise<Batch> {
-    const frames: Uint8Array[] = [];
-    let size = 0;
-    let rows = 0;
+  async #batch(): Promise<Batch> {
+    const frames = this.#frames;
+    const batch = new FrameBatch(Math.min(frames?.buffered ?? 0, BATCH_BYTES));
+    const done = (finished: boolean): Batch => ({
+      bytes: batch.gathered,
+      rows: batch.count,
+      done: finished,
+    });
     for (;;) {
+      // Every row that has already arrived, in one synchronous pass. A
+      // `DataRow` frame *is* the shared row encoding — length, column count,
+      // then each column's length and bytes — so it is copied into the batch
+      // as-is and never transcoded. Only what is not a row, or has not arrived
+      // yet, costs a promise.
+      if (frames !== null && this.#fatal === null) {
+        try {
+          frames.take(B.DataRow, batch, BATCH_BYTES);
+        } catch (e) {
+          throw this.#die(e);
+        }
+        if (batch.size >= BATCH_BYTES) return done(false);
+      }
       const { tag, frame } = await this.#next();
       if (tag === B.DataRow) {
-        // A `DataRow` frame *is* the shared row encoding — length, column
-        // count, then each column's length and bytes. So it is copied into the
-        // batch as-is and never transcoded. The copy is required: the frame is
-        // a view into the read buffer, which the next message overwrites.
-        frames.push(frame.slice());
-        size += frame.length;
-        rows++;
-        if (size >= BATCH_BYTES) {
-          return { bytes: join(frames, size), rows, done: false };
-        }
+        batch.append(frame, 0, frame.length);
+        if (batch.size >= BATCH_BYTES) return done(false);
         continue;
       }
       const fields = new Fields(frame);
@@ -756,19 +800,18 @@ export class PgConnection extends BaseConnection {
         case B.EmptyQueryResponse:
           this.#lastTag = tag === B.CommandComplete ? fields.cstring() : "";
           await this.#drainToReady();
-          return { bytes: join(frames, size), rows, done: true };
+          return done(true);
         case B.ErrorResponse: {
           const error = readServerMessage(fields);
           await this.#drainToReady();
           throw serverError(error);
         }
         case B.PortalSuspended:
-          return { bytes: join(frames, size), rows, done: false };
+          return done(false);
         default:
           this.#observe(tag, fields);
           break;
       }
-      void columns;
     }
   }
 
@@ -832,26 +875,13 @@ export class PgConnection extends BaseConnection {
         // A statement with no result — `INSERT` without `RETURNING`, run
         // through `query()`. Finish it and hand back an empty result rather
         // than leaving the connection mid-exchange.
-        await this.#batch(0);
+        await this.#batch();
         releaseOnce();
         return new Rows(emptySource(), defineRowShape([]));
       }
-      const columns = described.names.map((name, i) => ({
-        name,
-        declType: null,
-        // The type is fixed for the whole column, so the decoder is chosen once
-        // here rather than per value — which is what the shared row format
-        // makes possible, and what lets a column be asked for in binary at all.
-        oid: described.oids[i]!,
-      }));
-      const formats = this.#statements.get(q.text)?.formats ?? [];
-      const shape = defineRowShape(columns, {
-        decoders: described.oids.map((oid, i) =>
-          decoderForFormat(oid, formats[i] ?? 0, this.#decode),
-        ),
-      });
+      const shape = rowShape(described, this.#statements.get(q.text)?.formats ?? [], this.#decode);
 
-      let first: Batch | null = await this.#batch(columns.length);
+      let first: Batch | null = await this.#batch();
       if (first.done) {
         // The whole result arrived in one batch, so the exchange is over and
         // the connection is free before the caller has read a single row.
@@ -872,7 +902,7 @@ export class PgConnection extends BaseConnection {
               return batch;
             }
             try {
-              const batch = await self.#batch(columns.length);
+              const batch = await self.#batch();
               if (batch.done) releaseOnce();
               return batch;
             } catch (e) {
@@ -888,7 +918,7 @@ export class PgConnection extends BaseConnection {
             // `release(clean)` will assert once there is a pool.
             try {
               for (;;) {
-                const batch = await self.#batch(columns.length);
+                const batch = await self.#batch();
                 if (batch.done) return;
               }
             } finally {
@@ -912,7 +942,7 @@ export class PgConnection extends BaseConnection {
     const release = await this.#acquire();
     try {
       await this.#askAndDescribe(q.text, q.positional);
-      await this.#batch(0);
+      await this.#batch();
       return { changes: affectedRows(this.#lastTag), lastInsertRowid: null };
     } finally {
       release();
@@ -1221,16 +1251,6 @@ export class PgConnection extends BaseConnection {
       /* closing twice is not an error */
     }
   }
-}
-
-function join(frames: Uint8Array[], size: number): Uint8Array {
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const frame of frames) {
-    out.set(frame, at);
-    at += frame.length;
-  }
-  return out;
 }
 
 const NOTHING: Batch = { bytes: new Uint8Array(0), rows: 0, done: true };

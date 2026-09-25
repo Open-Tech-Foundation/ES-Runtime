@@ -14,6 +14,9 @@
 export class FrameReader {
   #reader: ReadableStreamDefaultReader<Uint8Array>;
   #buf: Uint8Array;
+  // Kept alongside the buffer rather than made per message: a view is an
+  // allocation, and a result set is hundreds of messages.
+  #view: DataView;
   #start = 0;
   #end = 0;
   #eof = false;
@@ -21,6 +24,7 @@ export class FrameReader {
   constructor(stream: ReadableStream<Uint8Array>, capacity: number = 64 * 1024) {
     this.#reader = stream.getReader();
     this.#buf = new Uint8Array(capacity);
+    this.#view = new DataView(this.#buf.buffer);
   }
 
   get buffered(): number {
@@ -29,17 +33,20 @@ export class FrameReader {
 
   /** Pulls until `n` bytes are buffered, or the peer hangs up. */
   async #need(n: number): Promise<void> {
-    while (this.buffered < n) {
-      if (this.#eof) {
-        throw new Error("the connection closed while a message was in flight");
-      }
-      const { value, done } = await this.#reader.read();
-      if (done || value === undefined) {
-        this.#eof = true;
-        continue;
-      }
-      this.#append(value);
+    while (this.buffered < n) await this.#fill();
+  }
+
+  /** Reads one more chunk off the socket, whatever size it happens to be. */
+  async #fill(): Promise<void> {
+    if (this.#eof) {
+      throw new Error("the connection closed while a message was in flight");
     }
+    const { value, done } = await this.#reader.read();
+    if (done || value === undefined) {
+      this.#eof = true;
+      return;
+    }
+    this.#append(value);
   }
 
   #append(chunk: Uint8Array): void {
@@ -54,6 +61,7 @@ export class FrameReader {
         const grown = new Uint8Array(size);
         grown.set(this.#buf.subarray(this.#start, this.#end));
         this.#buf = grown;
+        this.#view = new DataView(grown.buffer);
       }
       this.#end -= this.#start;
       this.#start = 0;
@@ -75,15 +83,56 @@ export class FrameReader {
    * call. A caller that keeps it (the row path does) copies it.
    */
   async message(): Promise<{ tag: number; frame: Uint8Array }> {
-    await this.#need(5);
+    for (;;) {
+      const message = this.poll();
+      if (message !== null) return message;
+      await this.#fill();
+    }
+  }
+
+  /**
+   * The next message if it has already arrived whole, or `null` — without a
+   * promise. A result set is usually in the buffer long before anyone asks for
+   * it, and waiting a microtask per message to be told so is most of what
+   * reading it would cost.
+   */
+  poll(): { tag: number; frame: Uint8Array } | null {
+    const length = this.#complete(this.#start);
+    if (length < 0) return null;
     const tag = this.#buf[this.#start]!;
-    const view = new DataView(this.#buf.buffer, this.#buf.byteOffset);
-    const length = view.getInt32(this.#start + 1);
-    if (length < 4) throw new Error(`a message declared a length of ${length}`);
-    await this.#need(1 + length);
     const frame = this.#buf.subarray(this.#start + 1, this.#start + 1 + length);
     this.#start += 1 + length;
     return { tag, frame };
+  }
+
+  /**
+   * Moves every message tagged `tag` that has already arrived into `batch`,
+   * stopping at the first that is not one, has not arrived whole, or once
+   * `batch` holds `limit` bytes. Synchronous, and copies each frame once.
+   *
+   * This is the row path: a `DataRow` frame is already the shared row layout,
+   * so a result set goes from the socket's buffer into the batch the caller
+   * decodes with no message objects and no promises in between.
+   */
+  take(tag: number, batch: FrameBatch, limit: number): void {
+    const buf = this.#buf;
+    let at = this.#start;
+    while (at < this.#end && buf[at] === tag && batch.size < limit) {
+      const length = this.#complete(at);
+      if (length < 0) break;
+      batch.append(buf, at + 1, length);
+      at += 1 + length;
+    }
+    this.#start = at;
+  }
+
+  /** The length of the message at `at` if all of it is buffered, else -1. */
+  #complete(at: number): number {
+    const available = this.#end - at;
+    if (available < 5) return -1;
+    const length = this.#view.getInt32(at + 1);
+    if (length < 4) throw new Error(`a message declared a length of ${length}`);
+    return available < 1 + length ? -1 : length;
   }
 
   async cancel(): Promise<void> {
@@ -92,6 +141,41 @@ export class FrameReader {
     } catch {
       /* the socket is going away regardless */
     }
+  }
+}
+
+/**
+ * Frames gathered into one buffer, back to back — a batch of rows in the shared
+ * layout `runtime:db` decodes.
+ *
+ * Every batch is a fresh buffer: rows keep a reference to it, so reusing one
+ * would silently rewrite rows a caller still holds.
+ */
+export class FrameBatch {
+  bytes: Uint8Array;
+  size = 0;
+  count = 0;
+
+  constructor(capacity: number) {
+    this.bytes = new Uint8Array(Math.max(capacity, 256));
+  }
+
+  append(source: Uint8Array, start: number, length: number): void {
+    if (this.size + length > this.bytes.length) {
+      let capacity = this.bytes.length * 2;
+      while (capacity < this.size + length) capacity *= 2;
+      const grown = new Uint8Array(capacity);
+      grown.set(this.bytes.subarray(0, this.size));
+      this.bytes = grown;
+    }
+    this.bytes.set(source.subarray(start, start + length), this.size);
+    this.size += length;
+    this.count++;
+  }
+
+  /** What was gathered, as a view — the spare capacity is not the caller's. */
+  get gathered(): Uint8Array {
+    return this.bytes.subarray(0, this.size);
   }
 }
 
