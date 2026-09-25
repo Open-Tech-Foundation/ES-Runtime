@@ -1,6 +1,6 @@
 {
   "name": "@opentf/esrun-smtp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SMTP client for esrun: STARTTLS and implicit TLS, PLAIN/LOGIN/XOAUTH2, MIME messages, pooling.",
   "type": "module",
   "sideEffects": false,

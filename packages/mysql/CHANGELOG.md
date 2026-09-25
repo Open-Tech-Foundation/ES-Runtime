@@ -11,6 +11,8 @@ pace of the MySQL protocol rather than the runtime's. See the root
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-25
+
 ### Added
 
 - **The MySQL driver.** MySQL's client/server protocol in JavaScript over
