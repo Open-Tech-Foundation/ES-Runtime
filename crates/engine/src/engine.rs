@@ -367,7 +367,7 @@ pub trait Engine {
     /// The identity of the executing task, as `runtime:context` reports it —
     /// `(id, parentId, traceId)`. Lets a guest span join the same lineage the
     /// runtime's own spans use rather than inventing a second one.
-    fn current_task_identity(&self) -> (u64, Option<u64>, Option<std::rc::Rc<str>>) {
+    fn current_task_identity(&mut self) -> (u64, Option<u64>, Option<std::rc::Rc<str>>) {
         (0, None, None)
     }
 
@@ -1042,7 +1042,7 @@ impl Engine for V8Engine {
     }
 
     fn enable_async_context(&mut self) {
-        crate::async_context::enable(&mut self.isolate, &self.context, &self.context_state);
+        crate::async_context::enable(&self.context_state);
     }
 
     fn track_pending_work(&mut self) -> Result<()> {
@@ -1069,7 +1069,10 @@ impl Engine for V8Engine {
     }
 
     fn reset_async_context(&mut self) {
-        self.context_state.borrow_mut().reset();
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::async_context::reset(scope);
     }
 
     fn enable_diagnostics(&mut self, clock: std::rc::Rc<dyn Fn() -> f64>) {
@@ -1112,8 +1115,11 @@ impl Engine for V8Engine {
         }
     }
 
-    fn current_task_identity(&self) -> (u64, Option<u64>, Option<std::rc::Rc<str>>) {
-        self.context_state.borrow().identity()
+    fn current_task_identity(&mut self) -> (u64, Option<u64>, Option<std::rc::Rc<str>>) {
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::async_context::identity(scope)
     }
 
     fn pump_message_loop(&mut self) -> bool {

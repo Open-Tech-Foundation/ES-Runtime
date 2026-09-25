@@ -5,9 +5,9 @@
 # Two questions, because they are the two claims those pages make:
 #
 #   1. What does carrying a context across an `await` cost, here and in the
-#      runtimes that ship `AsyncLocalStorage`? Ours is a V8 promise hook, so the
-#      honest comparison is against the others' own implementations of the same
-#      idea, on the same workload.
+#      runtimes that ship `AsyncLocalStorage`? Ours rides V8's continuation-
+#      preserved embedder data (D131), so the honest comparison is against the
+#      others' own implementations of the same idea, on the same workload.
 #   2. What does *observing* cost — nothing when unsubscribed, and how much when
 #      subscribed, when subscribed with `detail`, and when exporting OTLP? The
 #      module's central claim is that the first of those is free, and a claim
@@ -58,8 +58,9 @@ await bench("context", () => ctx.run(1, async () => { await null; sink += ctx.ge
 if (sink < 0) console.log("unreachable");
 JS
 
-# The bare loop in a program that never loads the module, which is what a
-# program not using contexts actually pays: no promise hook is installed.
+# The bare loop in a program that never loads the module. Against the
+# "baseline" row it shows what loading the module costs every other `await`,
+# which D131 brought to nothing.
 cat > "$WORK/ctx-esrun-bare.mjs" <<'JS'
 const N = 200000;
 const bench = async (label, body) => {

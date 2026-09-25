@@ -39,8 +39,13 @@ const ops = globalThis.__ops;
 
 // Host mapping accessors, installed by the engine (see `async_context.rs`).
 // Captured at load so that reassigning the globals cannot reach this module.
-const frameOf = globalThis.__ctx_frame;
-const swap = globalThis.__ctx_swap;
+//
+// The current scope is a record, `[mapping, task, parent, trace, span]`, that
+// V8 itself carries across every `await` (DECISIONS D131). This module reads
+// and copies it here, and crosses into the host only to fetch the current one
+// and to install a new one — the two calls `get()` and `run()` are built on.
+const current = globalThis.__ctx_current;
+const install = globalThis.__ctx_install;
 const taskId = globalThis.__ctx_task;
 const parentId = globalThis.__ctx_parent;
 // The trace id rides beside the mapping rather than inside it: it is the one
@@ -79,15 +84,25 @@ function derive(previous, kind) {
   return makeFrame(values, kind ?? previous?.kind ?? ROOT_KIND);
 }
 
+// The mapping in force now, or `undefined` for the root.
+const frameOf = () => current()?.[0];
+
+// The record for `frame` in the current task: the task, its parent, its trace
+// and its span carry over — only the mapping is this scope's. The root's slots
+// are the task 0 with no parent, no trace of its own and no span.
+const recordFor = (frame, record) =>
+  record === undefined ? [frame, 0, -1, undefined, -1] : [frame, record[1], record[2], record[3], record[4]];
+
 // Runs `fn` with `frame` current, then puts back whatever was current before —
 // on the throwing path too. Every scope in this module goes through here, which
 // is why there is no `enterWith`: a scope you cannot leave has no `finally`.
 function within(frame, fn, args, self) {
-  const saved = swap(frame);
+  const saved = current();
+  install(recordFor(frame, saved));
   try {
     return args === undefined ? fn.call(self) : fn.apply(self, args);
   } finally {
-    swap(saved);
+    install(saved);
   }
 }
 

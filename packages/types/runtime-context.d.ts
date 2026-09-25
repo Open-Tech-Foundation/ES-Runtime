@@ -72,9 +72,10 @@ declare module "runtime:context" {
 
   /** What {@link currentTask} reports. A copy; writing to it changes nothing. */
   export interface TaskInfo {
-    /** This task's id. Node's `executionAsyncId()`. */
+    /** This task's id. A task is the root, a timer firing or an inbound
+     * request; an `await` stays in the task that reached it. */
     id: number;
-    /** The id of the task that scheduled this one, or `null` at the root. Node's `triggerAsyncId()`. */
+    /** The id of the task that started this one, or `null` at the root. */
     parentId: number | null;
     /**
      * The W3C trace id this task runs under: minted per inbound request by

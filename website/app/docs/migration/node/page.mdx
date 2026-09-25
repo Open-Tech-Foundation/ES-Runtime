@@ -198,8 +198,8 @@ store.get().tenant;
 | `.run(store, fn)` | `.run(value, fn)` |
 | `AsyncLocalStorage.snapshot()` | `snapshot()` |
 | `AsyncLocalStorage.bind(fn)` | `bind(fn)` |
-| `executionAsyncId()` | `currentTask().id` |
-| `triggerAsyncId()` | `currentTask().parentId` |
+| `executionAsyncId()` | `currentTask().id` — per task (a timer firing, a request), not per promise |
+| `triggerAsyncId()` | `currentTask().parentId` — the task that started this one |
 | `.enterWith()` | Removed — `snapshot()` |
 | `.exit(fn)` | Removed — `run(undefined, fn)` |
 | `.disable()` | Removed |

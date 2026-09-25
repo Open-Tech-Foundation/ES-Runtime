@@ -560,12 +560,10 @@ fn op_dispatch_inner(
             crate::diagnostics::SpanKind::Op,
             || std::rc::Rc::from(name),
             || {
-                crate::async_context::state(scope)
-                    .map(|ctx| {
-                        let ctx = ctx.borrow();
-                        (ctx.current_span(), ctx.identity().2)
-                    })
-                    .unwrap_or((None, None))
+                (
+                    crate::async_context::current_span(scope),
+                    crate::async_context::current_trace(scope),
+                )
             },
             // An op has no observable gap between becoming runnable and
             // starting, so its queue delay is reported as zero rather than
@@ -1410,12 +1408,10 @@ pub(crate) fn fire_timer(
             crate::diagnostics::SpanKind::Timer,
             || std::rc::Rc::from(if repeat { "setInterval" } else { "setTimeout" }),
             || {
-                crate::async_context::state(scope)
-                    .map(|ctx| {
-                        let ctx = ctx.borrow();
-                        (ctx.current_span(), ctx.identity().2)
-                    })
-                    .unwrap_or((None, None))
+                (
+                    crate::async_context::current_span(scope),
+                    crate::async_context::current_trace(scope),
+                )
             },
             due_at,
         )

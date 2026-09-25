@@ -117,6 +117,8 @@
     "__structuredDeserialize",
     "__responseTrailers",
     "__ctx_enabled",
+    "__ctx_current",
+    "__ctx_install",
     "__ctx_frame",
     "__ctx_swap",
     "__ctx_task",

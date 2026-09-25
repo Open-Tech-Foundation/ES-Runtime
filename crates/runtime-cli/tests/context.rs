@@ -595,8 +595,11 @@ fn an_uncaught_timer_error_reports_the_timers_mapping() {
 // Tasks and trace ids
 // ---------------------------------------------------------------------------
 
-/// `currentTask()` reports a distinct id per continuation, the id of whatever
-/// scheduled it, and a stable trace across the whole tree.
+/// `currentTask()` reports the task the host started — the root, a timer
+/// firing — with the id of whatever started it and a stable trace across the
+/// whole tree. A promise continuation belongs to the task that scheduled it
+/// (D131): a per-promise id would need a per-promise callback, which is the
+/// cost that decision removed.
 #[test]
 fn current_task_reports_identity_and_lineage() {
     let out = lines(
@@ -606,9 +609,9 @@ fn current_task_reports_identity_and_lineage() {
         const root = currentTask();
         console.log(root.parentId === null, root.kind, /^[0-9a-f]{32}$/.test(root.traceId));
         const child = await Promise.resolve().then(() => currentTask());
-        console.log(child.id !== root.id, child.parentId !== null, child.traceId === root.traceId);
+        console.log(child.id === root.id, child.parentId === null, child.traceId === root.traceId);
         const grand = await Promise.resolve().then(() => Promise.resolve().then(() => currentTask()));
-        console.log(grand.id !== child.id, grand.traceId === root.traceId);
+        console.log(grand.id === child.id, grand.traceId === root.traceId);
         // A timer callback is its own task, parented to whatever armed it —
         // read at the moment of arming so the comparison is exact rather than
         // merely "different from the root".

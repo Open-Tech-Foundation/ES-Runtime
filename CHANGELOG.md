@@ -73,6 +73,15 @@ namespace) is unstable and may change between minor releases until the API freez
   real module beside its mock.
 
 ### Changed
+- **`runtime:context` no longer slows every promise** (DECISIONS D131).
+  Propagation rides V8's continuation-preserved embedder data instead of a
+  promise hook: loading the module used to make every `await` in the program
+  ~15× slower (2,165 ns → 117 ns now, the same as not loading it), and
+  propagation itself is 178 ns, against Node's 432 ns. Programs using
+  `runtime:diagnostics` or `runtime:workers`, which load it, gain the same.
+  **Changed meaning:** `currentTask().id` is per task (the root, a timer firing,
+  a request), not per promise, so it no longer changes at an `await`, and
+  `parentId` is the task that started this one.
 - **A module is its URL, query included.** `import("./m.js?v=2")` evaluates
   the file afresh instead of returning the module loaded for `./m.js`, as in a
   browser and in Node; one query imported twice is still one module, and

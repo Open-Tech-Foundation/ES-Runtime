@@ -1,31 +1,32 @@
 //! Async context propagation: the host half of `runtime:context`.
 //!
 //! One **mapping** — an opaque JS value the module owns, never interpreted here
-//! — is current at any moment. This module's whole job is to make the right
-//! mapping current when a continuation runs, and to put the previous one back
-//! afterwards. Everything about *what* a mapping contains (the context objects
-//! and their values) lives in `runtime_modules/context.js`; the host only ever
-//! moves the value around, so the two halves cannot disagree about a
-//! representation neither of them parses.
+//! — is current at any moment. Everything about *what* a mapping contains (the
+//! context objects and their values) lives in `runtime_modules/context.js`; the
+//! host only ever moves the value around, so the two halves cannot disagree
+//! about a representation neither of them parses.
 //!
-//! The **trace id** is the one exception, and it is carried beside the mapping
-//! rather than inside it. `runtime:diagnostics` attributes every record to a
-//! trace, on the recording path, in the host — reaching into an opaque JS value
-//! per span would be exactly the JS-on-the-hot-path that module exists to avoid.
-//! The module still owns the value: it mints the id and pushes it down with
-//! `__ctx_swap_trace`, so there is one source of truth and not a host copy that
-//! drifts from it.
+//! # Where "current" lives: V8's continuation data (DECISIONS.md D131)
+//!
+//! The current scope is a small JS **record**, `[mapping, task, parent, trace,
+//! span]`, held in V8's *continuation-preserved embedder data*. V8 captures that
+//! value when a promise reaction is created — `.then`, `await`,
+//! `queueMicrotask` — and restores it when the reaction runs, entirely inside
+//! V8. So propagation across every promise continuation costs what it costs a
+//! program with no contexts at all.
+//!
+//! This replaced a promise hook (D88), which called into the host on every
+//! promise: `Init` stamped each new promise with a record, `Before`/`After`
+//! swapped it around each reaction job. Loading `runtime:context` made every
+//! promise in the process ~27× slower, whether or not its context was read. A
+//! record is now created only when a scope *changes* — `run()`, a timer firing,
+//! a request, `withTrace`, a span — and read only when something needs it.
 //!
 //! The propagation points:
 //!
-//! * **Promise continuations** (`await`, `.then`, `queueMicrotask`) — V8's
-//!   promise hook. `Init` stamps the promise with the mapping current when it
-//!   was created; `Before`/`After` bracket its reaction job with that mapping
-//!   installed. Capturing at `Init` is what makes it *schedule* time rather than
-//!   settle time: `p.then(f)` creates its derived promise where `.then` is
-//!   written, and `await p` creates its throwaway promise at the `await`.
+//! * **Promise continuations** (`await`, `.then`, `queueMicrotask`) — V8.
 //! * **Timers** — [`crate::op`]'s `TimerEntry` carries a [`Capture`] taken in
-//!   `setTimeout`/`setInterval` and installed around each firing.
+//!   `setTimeout`/`setInterval` and installed around each firing, as a new task.
 //! * **Unhandled rejections** — captured where the rejection *originated*, in
 //!   the promise-reject callback, and installed around the guest's
 //!   `unhandledrejection` dispatch.
@@ -34,110 +35,74 @@
 //! code to stay out of it: dispatch is synchronous JS, so a listener already
 //! runs in the mapping of whoever called `dispatchEvent`. See DECISIONS.md D88.
 //!
-//! # Why this is off until asked for
+//! # Tasks
 //!
-//! A promise hook is isolate-wide and fires for *every* promise, so installing
-//! one unconditionally would tax every program in the runtime — including the
-//! overwhelming majority that never reads a context. It is therefore installed
-//! by [`crate::Engine::enable_async_context`], which `runtime` calls the first
-//! time it serves the `runtime:context` module source. Before that the mapping
-//! is empty everywhere, which is exactly what a program with no contexts would
-//! observe anyway, so laziness costs no observable behaviour.
+//! A task is a unit of work the host starts — the root, a timer firing, an
+//! inbound request — and a promise continuation belongs to the task that
+//! scheduled it. A per-promise id would need a per-promise callback, which is
+//! the cost D131 removed.
+//!
+//! The **trace id** rides in the record rather than in the mapping, because
+//! `runtime:diagnostics` attributes records to it on the host's recording path.
+//! The module still owns the value: it mints the id and pushes it down with
+//! `__ctx_swap_trace`, so there is one source of truth.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Identity of one async task — `currentTask().id`, Node's `executionAsyncId`.
+/// Identity of one async task — `currentTask().id`.
 pub(crate) type TaskId = u64;
 
-/// The task every agent starts in: whatever runs outside any continuation.
+/// The task every agent starts in: whatever runs outside any other task.
 /// Its `parentId` is `None`, which the module reports as `null`.
 const ROOT_TASK: TaskId = 0;
 
-/// The task identity JS sees for "no parent" (`parentId: null`). A negative
-/// number, so it cannot collide with a real id.
-const NO_PARENT: f64 = -1.0;
+/// The task identity JS sees for "no parent" (`parentId: null`), and the span
+/// id for "no enclosing span". Negative, so neither collides with a real id.
+const NONE: f64 = -1.0;
 
-/// Everything that must be swapped together to move into another async scope:
-/// the mapping plus the task identity that goes with it.
+/// The record's slots, in order.
+const FRAME: u32 = 0;
+const TASK: u32 = 1;
+const PARENT: u32 = 2;
+const TRACE: u32 = 3;
+const SPAN: u32 = 4;
+
+/// One scope, decoded: the mapping plus the task identity and the
+/// observability ids that go with it — what a timer stores at schedule time and
+/// puts back when it fires.
 ///
 /// Cloneable because a repeating timer installs the same capture on every
 /// firing, and a `Global` clone is a refcount bump rather than a copy.
 #[derive(Clone, Default)]
 pub(crate) struct Capture {
     /// The mapping, opaque to the host. `None` is the **root** mapping — the
-    /// module reads it as "every context at its default", and it is what a
-    /// continuation with no stamp gets, so a promise created before the hook was
-    /// installed can never inherit a mapping it was not part of.
+    /// module reads it as "every context at its default".
     frame: Option<v8::Global<v8::Value>>,
     task: TaskId,
     parent: Option<TaskId>,
-    /// The W3C trace id this scope runs under, or `None` for "not yet minted".
+    /// The W3C trace id this scope runs under, or `None` for the agent's root
+    /// trace (which may not be minted yet).
     ///
-    /// The host holds this where it holds nothing else about the mapping,
-    /// because it is the one part `runtime:diagnostics` must read on the
-    /// recording path — a record carries the trace it belongs to, and reaching
-    /// into an opaque JS value per span is exactly the JS-on-the-hot-path this
-    /// runtime refuses (DECISIONS.md D89). The module still *owns* it: it mints
-    /// the id and pushes it down with `__ctx_swap_trace`, so there is one
-    /// source of truth rather than a host copy that can drift.
-    ///
-    /// An `Rc<str>` so that propagating it across a continuation is a refcount
-    /// bump; it is 32 characters and it is copied on every promise `Init`.
+    /// An `Rc<str>` so that copying a capture is a refcount bump.
     trace: Option<Rc<str>>,
-    /// The diagnostics span this scope is running *inside*, if any.
-    ///
-    /// Carried here for the same reason as the trace, and it is what turns a
-    /// flat list of records into a tree: a span's parent is the span that was
-    /// open when it started, and "open when it started" is a property of the
-    /// async scope, not of the call stack. An op issued six `await`s deep inside
-    /// a request handler still nests under that request, because the capture
-    /// followed it.
-    ///
-    /// `None` at the root — a record with no enclosing span is a root span.
+    /// The diagnostics span this scope is running *inside*, if any — what turns
+    /// a flat list of records into a tree. `None` at the root.
     span: Option<u64>,
 }
 
-/// The current mapping, the task counter, and the reaction-job stack.
-///
-/// Lives in an isolate slot (like [`crate::op::OpState`]) so the promise hook —
-/// a bare `extern "C"` function with no closure to carry state — can reach it.
+/// What the host keeps about contexts. The scope itself is not here: it is
+/// V8's continuation data, read with [`current`].
 pub(crate) struct ContextState {
-    /// Whether the promise hook has been installed. Set once; never cleared,
-    /// because there is no safe moment to stop stamping promises that
-    /// continuations already in flight are going to read back.
+    /// Whether `runtime:context` has been loaded. Nothing is installed any more
+    /// (D131), but `runtime:http` still asks, so that a server whose program
+    /// cannot read a trace id does not draw entropy to mint one.
     enabled: bool,
-    /// The one guest context of this isolate, entered by the hook so that
-    /// reading and writing the promise's private slot has a context to work in.
-    /// V8 does not guarantee one is entered when the hook fires.
-    context: Option<v8::Global<v8::Context>>,
-    /// The private slot each promise carries its [`Capture`] in, as
-    /// `[frame, taskId, parentId, traceId, spanId]`.
-    ///
-    /// A private symbol rather than a side table keyed by the promise: a side
-    /// table would have to be told when a promise dies, and there is no such
-    /// signal. Hanging the record off the promise makes the two collectable
-    /// together, which is the same reason a `WeakMap` would work and a `Map`
-    /// would leak.
-    key: Option<v8::Global<v8::Private>>,
-    /// The mapping and task in force right now.
-    current: Capture,
-    /// Saved captures for reaction jobs currently on the stack. V8 brackets
-    /// every `PromiseReactionJob` with `Before`/`After`, including one whose
-    /// handler throws, so this is balanced in normal operation; [`reset`] exists
-    /// for the abnormal one.
-    ///
-    /// [`reset`]: ContextState::reset
-    stack: Vec<Capture>,
     /// Source of task ids. Starts past [`ROOT_TASK`] so `0` always means "the
     /// task the agent started in".
     next_task: TaskId,
-    /// The trace the **root** runs in, minted once per agent.
-    ///
-    /// Held apart from `current` because [`reset`](Self::reset) returns `current`
-    /// to its default once per turn, which would otherwise erase it — and then
-    /// every record written outside a request would carry no trace and be
-    /// unexportable. The root trace is a property of the agent, not of a scope.
+    /// The trace the **root** runs in, minted once per agent. A record whose
+    /// trace slot is empty reads as this one.
     root_trace: Option<Rc<str>>,
 }
 
@@ -145,130 +110,29 @@ impl ContextState {
     pub(crate) fn new() -> Self {
         ContextState {
             enabled: false,
-            context: None,
-            key: None,
-            current: Capture::default(),
-            stack: Vec::new(),
             next_task: ROOT_TASK + 1,
             root_trace: None,
         }
     }
 
-    /// Whether `runtime:context` has been loaded and the hook installed. Read
-    /// from JS as `__ctx_enabled()`: `runtime:http` uses it to skip minting a
-    /// trace id for a request nobody can observe.
+    /// Whether `runtime:context` has been loaded. Read from JS as
+    /// `__ctx_enabled()`.
     pub(crate) fn enabled(&self) -> bool {
         self.enabled
     }
 
-    /// The executing task's identity, as `(id, parentId, traceId)`.
-    ///
-    /// The seam `runtime:diagnostics` attributes a span through, so the two
-    /// modules report one lineage rather than each inventing its own — which is
-    /// the whole of the dependency between them, and it runs one way.
-    pub(crate) fn identity(&self) -> (TaskId, Option<TaskId>, Option<Rc<str>>) {
-        (
-            self.current.task,
-            self.current.parent,
-            self.current.trace.clone(),
-        )
+    /// Installs the trace every task under the root runs in. Ignored once a
+    /// trace exists, so it cannot overwrite what the program chose.
+    pub(crate) fn set_root_trace(&mut self, trace: Rc<str>) {
+        if self.root_trace.is_none() {
+            self.root_trace = Some(trace);
+        }
     }
 
-    /// The span this scope is running inside — a new span's parent.
-    pub(crate) fn current_span(&self) -> Option<u64> {
-        self.current.span
-    }
-
-    /// Makes `next` the enclosing span, returning what was. The caller restores
-    /// it; an unrestored one is bounded by the async branch it was set in, since
-    /// it lives in the capture rather than in a global.
-    pub(crate) fn swap_span(&mut self, next: Option<u64>) -> Option<u64> {
-        std::mem::replace(&mut self.current.span, next)
-    }
-
-    /// The capture to reinstall later — what a timer stores at schedule time.
-    pub(crate) fn capture(&self) -> Capture {
-        self.current.clone()
-    }
-
-    /// Makes `next` current, handing back what was current so the caller can put
-    /// it back. The caller is responsible for the restore; every caller here
-    /// does it on both the normal and the throwing path.
-    pub(crate) fn enter(&mut self, next: Capture) -> Capture {
-        std::mem::replace(&mut self.current, next)
-    }
-
-    /// Enters `parent`'s mapping as a **new task** parented to it.
-    ///
-    /// For a firing timer: the mapping is the one the timer was armed in, but
-    /// the callback is not the code that armed it, so it gets an id of its own
-    /// with the scheduler as its `parentId` — which is what `executionAsyncId`
-    /// and `triggerAsyncId` report for a timer in Node. A repeating timer is a
-    /// new task on every firing, for the same reason.
-    pub(crate) fn enter_child(&mut self, parent: Capture) -> Capture {
+    fn next_task(&mut self) -> TaskId {
         let id = self.next_task;
         self.next_task += 1;
-        self.enter(Capture {
-            frame: parent.frame,
-            task: id,
-            parent: Some(parent.task),
-            // The trace is the unit of work, not the task: a timer armed inside
-            // a request belongs to that request's trace, and a new task id is
-            // exactly what distinguishes the two.
-            trace: parent.trace,
-            span: parent.span,
-        })
-    }
-
-    /// Installs the trace every task under the root runs in.
-    ///
-    /// Used when the *deployment* turned on telemetry rather than the program:
-    /// a record has to name a trace, and a program that never imported
-    /// `runtime:context` has not minted one. Ignored once a trace exists, so it
-    /// cannot overwrite what the program chose.
-    pub(crate) fn set_root_trace(&mut self, trace: Rc<str>) {
-        if self.root_trace.is_some() {
-            return;
-        }
-        self.root_trace = Some(trace.clone());
-        if self.current.trace.is_none() {
-            self.current.trace = Some(trace);
-        }
-    }
-
-    /// Returns to the root mapping and drops any half-finished reaction-job
-    /// stack.
-    ///
-    /// Called once per tick, when no JS is on the stack and the answer is
-    /// therefore known rather than guessed. It matters because a `try/finally`
-    /// restore does **not** run when execution is *terminated* mid-callback — a
-    /// `process.exit()`, the watchdog, the heap guard — and without this a
-    /// mapping from a killed callback would still be current on the next tick.
-    /// It is also what keeps a `FinalizationRegistry` cleanup callback on the
-    /// empty mapping: cleanup runs as its own microtask, never nested inside a
-    /// reaction job, so "whatever the tick started with" is the root.
-    /// The capture a continuation with no stamp enters: the agent's root,
-    /// trace included.
-    ///
-    /// Not `Capture::default()` — that has no trace, so a promise created before
-    /// the hook was installed would produce records belonging to no trace and
-    /// therefore exportable to nothing.
-    fn root(&self) -> Capture {
-        Capture {
-            trace: self.root_trace.clone(),
-            ..Capture::default()
-        }
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.current = Capture {
-            // The agent's own trace survives the reset: it is a property of the
-            // agent and not of the scope being torn down, and without it every
-            // record written outside a request would carry no trace at all.
-            trace: self.root_trace.clone(),
-            ..Capture::default()
-        };
-        self.stack.clear();
+        id
     }
 }
 
@@ -279,13 +143,104 @@ pub(crate) fn state(scope: &v8::PinScope<'_, '_>) -> Option<Rc<RefCell<ContextSt
     scope.get_slot::<Rc<RefCell<ContextState>>>().cloned()
 }
 
-/// The mapping current right now, for a caller that will reinstall it later —
-/// `setTimeout` storing one on the timer, the promise-reject callback storing
-/// one on the rejection.
+/// The record current right now, or `None` at the root.
+fn record<'s>(scope: &v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Array>> {
+    let value = scope.get_continuation_preserved_embedder_data();
+    v8::Local::<v8::Array>::try_from(value).ok()
+}
+
+fn slot<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    record: v8::Local<'s, v8::Array>,
+    index: u32,
+) -> v8::Local<'s, v8::Value> {
+    record
+        .get_index(scope, index)
+        .unwrap_or_else(|| v8::undefined(scope).into())
+}
+
+fn number(scope: &v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Option<u64> {
+    value
+        .number_value(scope)
+        .filter(|n| *n >= 0.0)
+        .map(|n| n as u64)
+}
+
+fn trace_of(scope: &v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Option<Rc<str>> {
+    (!value.is_undefined() && !value.is_null()).then(|| Rc::from(value.to_rust_string_lossy(scope)))
+}
+
+/// Makes a record from its five slots and makes it current.
+fn install_slots(scope: &v8::PinScope<'_, '_>, slots: &[v8::Local<'_, v8::Value>; 5]) {
+    let record = v8::Array::new_with_elements(scope, slots);
+    scope.set_continuation_preserved_embedder_data(record.into());
+}
+
+/// The current record's slots, or the root's when there is none.
+fn slots<'s>(scope: &v8::PinScope<'s, '_>) -> [v8::Local<'s, v8::Value>; 5] {
+    match record(scope) {
+        Some(record) => [
+            slot(scope, record, FRAME),
+            slot(scope, record, TASK),
+            slot(scope, record, PARENT),
+            slot(scope, record, TRACE),
+            slot(scope, record, SPAN),
+        ],
+        None => [
+            v8::undefined(scope).into(),
+            v8::Number::new(scope, ROOT_TASK as f64).into(),
+            v8::Number::new(scope, NONE).into(),
+            v8::undefined(scope).into(),
+            v8::Number::new(scope, NONE).into(),
+        ],
+    }
+}
+
+/// The scope current right now, decoded — for a caller that will reinstall it
+/// later: `setTimeout` storing one on the timer, the promise-reject callback
+/// storing one on the rejection.
 pub(crate) fn capture(scope: &v8::PinScope<'_, '_>) -> Capture {
-    state(scope)
-        .map(|st| st.borrow().capture())
-        .unwrap_or_default()
+    let Some(record) = record(scope) else {
+        return Capture::default();
+    };
+    let frame = slot(scope, record, FRAME);
+    let task = slot(scope, record, TASK);
+    let parent = slot(scope, record, PARENT);
+    let trace = slot(scope, record, TRACE);
+    let span = slot(scope, record, SPAN);
+    Capture {
+        frame: (!frame.is_undefined()).then(|| v8::Global::new(scope, frame)),
+        task: number(scope, task).unwrap_or(ROOT_TASK),
+        parent: number(scope, parent),
+        trace: trace_of(scope, trace),
+        span: number(scope, span),
+    }
+}
+
+/// Makes `next` current.
+fn install(scope: &v8::PinScope<'_, '_>, next: &Capture) {
+    let frame: v8::Local<v8::Value> = match &next.frame {
+        Some(frame) => v8::Local::new(scope, frame),
+        None => v8::undefined(scope).into(),
+    };
+    let trace: v8::Local<v8::Value> = match next
+        .trace
+        .as_deref()
+        .and_then(|t| v8::String::new(scope, t))
+    {
+        Some(trace) => trace.into(),
+        None => v8::undefined(scope).into(),
+    };
+    install_slots(
+        scope,
+        &[
+            frame,
+            v8::Number::new(scope, next.task as f64).into(),
+            v8::Number::new(scope, next.parent.map_or(NONE, |id| id as f64)).into(),
+            trace,
+            v8::Number::new(scope, next.span.map_or(NONE, |id| id as f64)).into(),
+        ],
+    );
 }
 
 /// Makes `next` current, handing back what was — to be passed to [`leave`].
@@ -295,184 +250,97 @@ pub(crate) fn capture(scope: &v8::PinScope<'_, '_>) -> Capture {
 /// each runs the guest behind a `TryCatch`, so a throw becomes a caught
 /// exception rather than a Rust panic that would skip the restore.
 pub(crate) fn enter(scope: &v8::PinScope<'_, '_>, next: Capture) -> Option<Capture> {
-    state(scope).map(|st| st.borrow_mut().enter(next))
+    let previous = capture(scope);
+    install(scope, &next);
+    Some(previous)
 }
 
-/// [`enter`], but as a new task parented to `parent` — see
-/// [`ContextState::enter_child`].
+/// [`enter`], but as a **new task** in `parent`'s mapping.
+///
+/// For a firing timer: the mapping is the one the timer was armed in, but the
+/// callback is not the code that armed it, so it gets an id of its own with the
+/// scheduler as its `parentId`. A repeating timer is a new task on every firing.
+/// The trace and the enclosing span are the unit of work's, and carry over.
 pub(crate) fn enter_child(scope: &v8::PinScope<'_, '_>, parent: Capture) -> Option<Capture> {
-    state(scope).map(|st| st.borrow_mut().enter_child(parent))
-}
-
-/// Makes `next` the enclosing span for what follows, returning what was.
-pub(crate) fn swap_span(scope: &v8::PinScope<'_, '_>, next: Option<u64>) -> Option<u64> {
-    state(scope).and_then(|st| st.borrow_mut().swap_span(next))
-}
-
-/// Puts back what [`swap_span`] handed over.
-pub(crate) fn restore_span(scope: &v8::PinScope<'_, '_>, previous: Option<u64>) {
-    if let Some(st) = state(scope) {
-        st.borrow_mut().swap_span(previous);
-    }
+    let id = state(scope)?.borrow_mut().next_task();
+    enter(
+        scope,
+        Capture {
+            task: id,
+            parent: Some(parent.task),
+            ..parent
+        },
+    )
 }
 
 /// Puts back what [`enter`] handed over.
 pub(crate) fn leave(scope: &v8::PinScope<'_, '_>, previous: Option<Capture>) {
-    if let (Some(st), Some(previous)) = (state(scope), previous) {
-        st.borrow_mut().enter(previous);
+    if let Some(previous) = previous {
+        install(scope, &previous);
     }
 }
 
-/// Installs the promise hook, and with it the private key and the context the
-/// hook enters. Idempotent: the second call is the cheap `enabled` test.
-pub(crate) fn enable(
-    isolate: &mut v8::OwnedIsolate,
-    context: &v8::Global<v8::Context>,
-    state: &Rc<RefCell<ContextState>>,
-) {
-    if state.borrow().enabled {
-        return;
-    }
-    {
-        v8::scope!(let scope, isolate);
-        let name = v8::String::new(scope, "es-runtime.asyncContext");
-        let key = v8::Private::new(scope, name);
-        let mut st = state.borrow_mut();
-        st.key = Some(v8::Global::new(scope, key));
-        st.context = Some(context.clone());
-        st.enabled = true;
-    }
-    isolate.set_promise_hook(promise_hook);
+/// The span the current scope is running inside — a new span's parent.
+pub(crate) fn current_span(scope: &v8::PinScope<'_, '_>) -> Option<u64> {
+    let record = record(scope)?;
+    let span = slot(scope, record, SPAN);
+    number(scope, span)
 }
 
-/// V8's promise hook. `extern "C"`, so a panic here would unwind across C++
-/// frames; contained for the same reason every other V8 callback in this crate
-/// is (DECISIONS.md D15).
-unsafe extern "C" fn promise_hook(
-    kind: v8::PromiseHookType,
-    promise: v8::Local<v8::Promise>,
-    _parent: v8::Local<v8::Value>,
-) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        promise_hook_inner(kind, promise);
-    }));
+/// The trace the current scope runs in: its own, or the agent's root trace.
+pub(crate) fn current_trace(scope: &v8::PinScope<'_, '_>) -> Option<Rc<str>> {
+    let own = record(scope).and_then(|record| {
+        let trace = slot(scope, record, TRACE);
+        trace_of(scope, trace)
+    });
+    own.or_else(|| state(scope).and_then(|st| st.borrow().root_trace.clone()))
 }
 
-fn promise_hook_inner(kind: v8::PromiseHookType, promise: v8::Local<v8::Promise>) {
-    // `Resolve` fires at the head of a resolve/reject function, which is neither
-    // a scheduling point nor a continuation — nothing to stamp, nothing to
-    // install. Returning before building a scope keeps it off the cost of every
-    // settled promise.
-    if matches!(kind, v8::PromiseHookType::Resolve) {
-        return;
-    }
-
-    // SAFETY: the hook is called by V8 with `promise` live for its duration,
-    // which is what `CallbackScope` is for.
-    v8::callback_scope!(unsafe scope, promise);
-    v8::scope!(let scope, scope);
-
-    let Some(state_rc) = state(scope) else {
-        return;
+/// The executing task's identity, as `(id, parentId, traceId)`.
+pub(crate) fn identity(scope: &v8::PinScope<'_, '_>) -> (TaskId, Option<TaskId>, Option<Rc<str>>) {
+    let (task, parent) = match record(scope) {
+        Some(record) => {
+            let task = slot(scope, record, TASK);
+            let parent = slot(scope, record, PARENT);
+            (
+                number(scope, task).unwrap_or(ROOT_TASK),
+                number(scope, parent),
+            )
+        }
+        None => (ROOT_TASK, None),
     };
-    let Some((context, key)) = ({
-        let st = state_rc.borrow();
-        match (&st.context, &st.key) {
-            (Some(context), Some(key)) => Some((context.clone(), key.clone())),
-            _ => None,
-        }
-    }) else {
-        return;
-    };
-
-    // Entered explicitly rather than relying on whatever V8 happens to have
-    // entered: the private-slot accessors read the *current* context, and a hook
-    // can fire with none. This isolate has exactly one guest context, so there
-    // is no ambiguity about which.
-    let context = v8::Local::new(scope, &context);
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let key = v8::Local::new(scope, &key);
-    let object: v8::Local<v8::Object> = promise.into();
-
-    match kind {
-        v8::PromiseHookType::Init => {
-            let (frame, parent_task, id, trace, span) = {
-                let mut st = state_rc.borrow_mut();
-                let id = st.next_task;
-                st.next_task += 1;
-                (
-                    st.current.frame.clone(),
-                    st.current.task,
-                    id,
-                    st.current.trace.clone(),
-                    st.current.span,
-                )
-            };
-            let frame: v8::Local<v8::Value> = match &frame {
-                Some(frame) => v8::Local::new(scope, frame),
-                None => v8::undefined(scope).into(),
-            };
-            let id = v8::Number::new(scope, id as f64);
-            let parent = v8::Number::new(scope, parent_task as f64);
-            let trace: v8::Local<v8::Value> =
-                match trace.as_deref().and_then(|t| v8::String::new(scope, t)) {
-                    Some(trace) => trace.into(),
-                    None => v8::undefined(scope).into(),
-                };
-            // `-1` for "no enclosing span": a span id is a positive counter, so
-            // the sentinel cannot collide with one.
-            let span = v8::Number::new(scope, span.map_or(-1.0, |id| id as f64));
-            let record = v8::Array::new_with_elements(
-                scope,
-                &[frame, id.into(), parent.into(), trace, span.into()],
-            );
-            let _ = object.set_private(scope, key, record.into());
-        }
-        v8::PromiseHookType::Before => {
-            // A promise with no stamp was created before the hook existed. It
-            // enters the *root*, not the caller's mapping: inheriting whatever
-            // happened to be current would attach a request's values to a
-            // continuation that was scheduled outside it.
-            let next = read_record(scope, object, key).unwrap_or_else(|| state_rc.borrow().root());
-            let mut st = state_rc.borrow_mut();
-            let previous = st.enter(next);
-            st.stack.push(previous);
-        }
-        v8::PromiseHookType::After => {
-            let mut st = state_rc.borrow_mut();
-            // Balanced by V8 in normal operation; an empty stack means a `Before`
-            // was missed (a hook installed mid-flight), and the root is the only
-            // safe answer.
-            let previous = st.stack.pop().unwrap_or_else(|| st.root());
-            st.current = previous;
-        }
-        v8::PromiseHookType::Resolve => {}
-    }
+    (task, parent, current_trace(scope))
 }
 
-/// Reads back the `[frame, taskId, parentId, traceId]` a previous `Init` stamped.
-fn read_record(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<v8::Object>,
-    key: v8::Local<v8::Private>,
-) -> Option<Capture> {
-    let record = object.get_private(scope, key)?;
-    let record = v8::Local::<v8::Array>::try_from(record).ok()?;
-    let frame = record.get_index(scope, 0)?;
-    let task = record.get_index(scope, 1)?.number_value(scope)?;
-    let parent = record.get_index(scope, 2)?.number_value(scope)?;
-    let trace = record.get_index(scope, 3)?;
-    let span = record.get_index(scope, 4)?.number_value(scope)?;
-    Some(Capture {
-        frame: (!frame.is_undefined()).then(|| v8::Global::new(scope, frame)),
-        task: task as TaskId,
-        // Always `Some`: a stamped promise was created *by* a task, even if that
-        // task was the root (id `ROOT_TASK`). `None` is reserved for the root
-        // task itself, which nothing created — see [`Capture::default`].
-        parent: Some(parent as TaskId),
-        trace: (!trace.is_undefined()).then(|| Rc::from(trace.to_rust_string_lossy(scope))),
-        span: (span >= 0.0).then_some(span as u64),
-    })
+/// Makes `next` the enclosing span for what follows, returning what was.
+pub(crate) fn swap_span(scope: &v8::PinScope<'_, '_>, next: Option<u64>) -> Option<u64> {
+    let mut slots = slots(scope);
+    let previous = number(scope, slots[SPAN as usize]);
+    slots[SPAN as usize] = v8::Number::new(scope, next.map_or(NONE, |id| id as f64)).into();
+    install_slots(scope, &slots);
+    previous
+}
+
+/// Puts back what [`swap_span`] handed over.
+pub(crate) fn restore_span(scope: &v8::PinScope<'_, '_>, previous: Option<u64>) {
+    swap_span(scope, previous);
+}
+
+/// Marks `runtime:context` as loaded. Nothing to install: propagation is V8's.
+pub(crate) fn enable(state: &Rc<RefCell<ContextState>>) {
+    state.borrow_mut().enabled = true;
+}
+
+/// Returns to the root scope.
+///
+/// Called once per tick, when no JS is on the stack and the answer is therefore
+/// known rather than guessed. It matters because a `try/finally` restore does
+/// **not** run when execution is *terminated* mid-callback — a
+/// `process.exit()`, the watchdog, the heap guard — and without this a scope
+/// from a killed callback would still be current on the next tick. It is also
+/// what keeps a `FinalizationRegistry` cleanup callback on the empty mapping.
+pub(crate) fn reset(scope: &v8::PinScope<'_, '_>) {
+    scope.set_continuation_preserved_embedder_data(v8::undefined(scope).into());
 }
 
 /// Installs the four builtins `runtime:context` is written against.
@@ -487,6 +355,8 @@ pub(crate) fn install_builtins(
 ) -> crate::error::Result<()> {
     let global = context.global(scope);
     crate::op::install_global_fn(scope, global, "__ctx_enabled", ctx_enabled, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_current", ctx_current, None)?;
+    crate::op::install_global_fn(scope, global, "__ctx_install", ctx_install, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_frame", ctx_frame, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_swap", ctx_swap, None)?;
     crate::op::install_global_fn(scope, global, "__ctx_task", ctx_task, None)?;
@@ -505,6 +375,12 @@ pub(crate) fn external_references() -> Vec<v8::ExternalReference> {
     vec![
         v8::ExternalReference {
             function: ctx_enabled.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_current.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: ctx_install.map_fn_to(),
         },
         v8::ExternalReference {
             function: ctx_frame.map_fn_to(),
@@ -555,6 +431,8 @@ macro_rules! contained {
 }
 
 contained!(ctx_enabled, ctx_enabled_inner);
+contained!(ctx_current, ctx_current_inner);
+contained!(ctx_install, ctx_install_inner);
 contained!(ctx_frame, ctx_frame_inner);
 contained!(ctx_swap, ctx_swap_inner);
 contained!(ctx_task, ctx_task_inner);
@@ -575,41 +453,55 @@ fn ctx_enabled_inner(
     rv.set(v8::Boolean::new(scope, enabled).into());
 }
 
+/// `__ctx_current()` → the current record, or `undefined` at the root.
+///
+/// With [`ctx_install_inner`], the whole of `runtime:context`'s hot path: the
+/// module reads and copies the record's slots in JS, where the JIT makes that
+/// cheap, and crosses into the host only to fetch and to install one. Decoding
+/// slot by slot through the V8 API is several calls per slot, which is what
+/// made `run()` cost more than the propagation it exists for.
+fn ctx_current_inner(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    rv.set(scope.get_continuation_preserved_embedder_data());
+}
+
+/// `__ctx_install(record)` → makes `record` current. `undefined` is the root.
+/// The module builds records in the shape [`capture`] decodes.
+fn ctx_install_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    scope.set_continuation_preserved_embedder_data(args.get(0));
+}
+
 /// `__ctx_frame()` → the current mapping, or `undefined` for the root.
 fn ctx_frame_inner(
     scope: &mut v8::PinScope,
     _args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
-    let frame = state_rc.borrow().current.frame.clone();
-    if let Some(frame) = frame {
-        rv.set(v8::Local::new(scope, &frame));
+    if let Some(record) = record(scope) {
+        rv.set(slot(scope, record, FRAME));
     }
 }
 
-/// `__ctx_swap(next)` → makes `next` current and returns what was. One call
-/// rather than a get/set pair, so the module's `run()` cannot leave the two out
-/// of step on a throw.
+/// `__ctx_swap(next)` → makes `next` the current mapping and returns what was.
+/// One call rather than a get/set pair, so the module's `run()` cannot leave the
+/// two out of step on a throw. The hot path of `run()`: it copies four slots
+/// and allocates one small array, and never decodes them.
 fn ctx_swap_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
-    let next = args.get(0);
-    let next = (!next.is_undefined()).then(|| v8::Global::new(scope, next));
-    let previous = {
-        let mut st = state_rc.borrow_mut();
-        std::mem::replace(&mut st.current.frame, next)
-    };
-    if let Some(previous) = previous {
-        rv.set(v8::Local::new(scope, &previous));
-    }
+    let mut slots = slots(scope);
+    let previous = std::mem::replace(&mut slots[FRAME as usize], args.get(0));
+    install_slots(scope, &slots);
+    rv.set(previous);
 }
 
 /// `__ctx_task()` → the executing task's id.
@@ -618,70 +510,54 @@ fn ctx_task_inner(
     _args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
-    let id = state_rc.borrow().current.task;
-    rv.set(v8::Number::new(scope, id as f64).into());
+    let (task, _, _) = identity(scope);
+    rv.set(v8::Number::new(scope, task as f64).into());
 }
 
-/// `__ctx_parent()` → the id of the task that scheduled this one, or `-1`.
+/// `__ctx_parent()` → the id of the task that started this one, or `-1`.
 fn ctx_parent_inner(
     scope: &mut v8::PinScope,
     _args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
-    let parent = state_rc.borrow().current.parent;
-    let parent = parent.map_or(NO_PARENT, |id| id as f64);
-    rv.set(v8::Number::new(scope, parent).into());
+    let (_, parent, _) = identity(scope);
+    rv.set(v8::Number::new(scope, parent.map_or(NONE, |id| id as f64)).into());
 }
 
 /// `__ctx_trace()` → the trace id current in this scope, or `undefined` if none
-/// has been minted yet.
-///
-/// The module mints lazily on first read, so `undefined` is the signal to do so
-/// — which is why this is a separate accessor rather than part of the mapping.
+/// has been minted yet — the module's signal to mint one.
 fn ctx_trace_inner(
     scope: &mut v8::PinScope,
     _args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
-    let trace = state_rc.borrow().current.trace.clone();
-    if let Some(trace) = trace.as_deref().and_then(|t| v8::String::new(scope, t)) {
+    if let Some(trace) = current_trace(scope)
+        .as_deref()
+        .and_then(|t| v8::String::new(scope, t))
+    {
         rv.set(trace.into());
     }
 }
 
 /// `__ctx_swap_trace(next)` → makes `next` the current trace and returns what
-/// was, mirroring `__ctx_swap` for the mapping.
-///
-/// Separate from the mapping swap because the two change at different rates:
-/// `run()` is the hot path and never touches the trace, while `withTrace` and a
-/// new inbound request are per-unit-of-work. Folding them into one call would
-/// put a string allocation on the frequent one to serve the rare one.
+/// was, mirroring `__ctx_swap` for the mapping. `undefined` in or out means the
+/// agent's root trace.
 fn ctx_swap_trace_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
+    let mut slots = slots(scope);
     let next = args.get(0);
-    let next: Option<Rc<str>> = (!next.is_undefined() && !next.is_null())
-        .then(|| Rc::from(next.to_rust_string_lossy(scope)));
-    let previous = {
-        let mut st = state_rc.borrow_mut();
-        std::mem::replace(&mut st.current.trace, next)
+    let next = if next.is_null() {
+        v8::undefined(scope).into()
+    } else {
+        next
     };
-    if let Some(previous) = previous.as_deref().and_then(|t| v8::String::new(scope, t)) {
-        rv.set(previous.into());
+    let previous = std::mem::replace(&mut slots[TRACE as usize], next);
+    install_slots(scope, &slots);
+    if !previous.is_undefined() && !previous.is_null() {
+        rv.set(previous);
     }
 }
 
@@ -689,20 +565,15 @@ fn ctx_swap_trace_inner(
 /// returns the previous one as a number, `-1` for none.
 ///
 /// What `runtime:diagnostics` opens a user span with, and what `runtime:http`
-/// opens a request span with. The host owns the value so an op recorded in Rust
-/// can read it without calling into JS.
+/// opens a request span with.
 fn ctx_swap_span_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(state_rc) = state(scope) else {
-        return;
-    };
-    let next = args.get(0).number_value(scope).unwrap_or(-1.0);
-    let next = (next >= 0.0).then_some(next as u64);
-    let previous = state_rc.borrow_mut().swap_span(next);
-    rv.set(v8::Number::new(scope, previous.map_or(-1.0, |id| id as f64)).into());
+    let next = args.get(0).number_value(scope).unwrap_or(NONE);
+    let previous = swap_span(scope, (next >= 0.0).then_some(next as u64));
+    rv.set(v8::Number::new(scope, previous.map_or(NONE, |id| id as f64)).into());
 }
 
 /// `__ctx_span()` → the enclosing span id, or `-1` for none.
@@ -714,16 +585,15 @@ fn ctx_span_inner(
     _args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let current = state(scope).and_then(|st| st.borrow().current_span());
-    rv.set(v8::Number::new(scope, current.map_or(-1.0, |id| id as f64)).into());
+    let current = current_span(scope);
+    rv.set(v8::Number::new(scope, current.map_or(NONE, |id| id as f64)).into());
 }
 
 /// `__ctx_root_trace(id)` → installs the agent's root trace, if it has none.
 ///
 /// `runtime:context` mints the id (it has the entropy op; the engine has no
 /// provider) and pushes it down here rather than through `__ctx_swap_trace`,
-/// because the root trace has to survive the per-turn reset and a swapped one
-/// deliberately does not.
+/// because the root trace belongs to the agent and survives the per-turn reset.
 fn ctx_root_trace_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,

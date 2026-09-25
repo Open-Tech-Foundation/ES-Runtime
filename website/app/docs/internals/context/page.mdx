@@ -1,6 +1,6 @@
 ---
 title: "Internals: async context"
-description: How a value survives an await, why the promise hook is off until asked for, why EventTarget does not propagate, and what a context deliberately is not.
+description: How a value survives an await without a promise hook, what a task is, why EventTarget does not propagate, and what a context deliberately is not.
 ---
 
 # Internals: async context
@@ -24,45 +24,52 @@ half can disagree with the other about a representation only one of them has.
 
 ## The mechanism
 
-V8's promise hook, on three of its four events:
+The current scope is a small record, `[mapping, task, parent, trace, span]`,
+held in V8's *continuation-preserved embedder data*. V8 captures that value when
+a promise reaction is created and restores it when the reaction runs, entirely
+inside V8, with no callback into the host. So `await`, `.then()` and
+`queueMicrotask` carry the scope for what they cost a program with no contexts
+at all. It is the mechanism Chrome uses for task attribution and the one Node 24
+moved `AsyncLocalStorage` onto.
 
-| Event | |
-| --- | --- |
-| `Init` | stamp the new promise with the mapping current now |
-| `Before` | install that mapping for the reaction job |
-| `After` | put back what was current |
-| `Resolve` | ignored — neither a scheduling point nor a continuation |
-
-Stamping at `Init` is what makes propagation **schedule**-time rather than
-settle-time: `p.then(f)` creates its derived promise where `.then` is written,
-and `await p` creates its throwaway promise at the `await`. So `run()` with an
-`async` callback returns as soon as that callback first yields — the mapping is
+Capture happens where the reaction is **created**, which is what makes
+propagation schedule-time rather than settle-time: `p.then(f)` captures where
+`.then` is written, and `await p` captures at the `await`. So `run()` with an
+`async` callback returns as soon as that callback first yields, and the scope is
 reinstalled on entry to each continuation, not held until the promise settles.
 Two requests can be in flight without one's scope outliving the other.
 
-The stamp is a **private symbol on the promise**, not a side table. A side table
-would have to be told when a promise dies and there is no such signal; a record
-hanging off the promise is collected with it.
+A record is made only when the scope *changes*: `run()`, a timer firing, a
+request, `withTrace`, a span. The module reads and copies it in JS, and crosses
+into the host only to fetch the current record and to install a new one. The
+host decodes a record only when it needs one: arming a timer, opening an op's
+span, capturing a rejection.
 
-Timers and the unhandled-rejection record carry the same capture explicitly: a
-timer's is taken when it is armed, and a repeating timer reuses that one on every
-firing rather than picking up whatever the loop happened to be holding.
+Timers and the unhandled-rejection record carry a capture explicitly: a timer's
+is taken when it is armed, and a repeating timer reuses that one on every firing
+rather than picking up whatever the loop happened to be holding.
 
-## Why it is off until imported
+### What replaced what
 
-A promise hook is isolate-wide and fires for **every** promise. Installing one
-unconditionally would tax every program in the runtime, including the
-overwhelming majority that never reads a context.
+The first version used V8's promise hook: every new promise was stamped with a
+record in a private slot, and every reaction job was bracketed with a swap. That
+fired for every promise in the program once the module was loaded, whether or
+not anything read a context, and made a bare `await` about 15 times slower. It
+was installed lazily for that reason, and `runtime:workers` and
+`runtime:diagnostics` both load the module. Continuation data has no per-promise
+cost, so there is nothing left to be lazy about.
 
-So it is installed the first time the runtime serves the `runtime:context`
-module source — at *compile*, so the hook is in place for every promise the
-module graph creates on its way to running. Before that the mapping is empty
-everywhere, which is what such a program would observe either way.
+### Tasks
 
-`runtime:http` therefore does **not** import `runtime:context`. It reaches the
-per-request scope through the prelude's internal table and checks the hook is on
-first, so a server whose program uses contexts gets a trace per request, and one
-whose program does not mints nothing and draws no entropy.
+A task is a unit of work the host starts: the root, a timer firing, an inbound
+request. A promise continuation belongs to the task that scheduled it, so
+`currentTask().id` does not change at an `await`, and `parentId` names the task
+that started this one. That differs from Node's `executionAsyncId()`, which
+gives every promise an id of its own. A per-promise id needs a per-promise
+callback, and that callback was the cost that was removed.
+
+`runtime:http` still checks whether the module has been loaded before minting a
+trace per request, so a server whose program cannot read one draws no entropy.
 
 ## Copy-on-write, and why it is a `Map` copy
 
@@ -81,35 +88,19 @@ profile, not from first principles.
 {/* BEGIN probe:context — written by bench/probe-tracing.sh; do not hand-edit */}
 | | esrun | Node.js | Bun | Deno |
 | --- | --- | --- | --- | --- |
-| `await`, module never imported | 114ns | — | — | — |
-| Bare `await` | 2165ns | 135ns | 112ns | 99ns |
-| `await` inside a context scope | 2548ns | 552ns | 138ns | 418ns |
-| **Cost of propagation** | 383ns | 417ns | 26ns | 319ns |
+| `await`, module never imported | 137ns | — | — | — |
+| Bare `await` | 117ns | 151ns | 125ns | 110ns |
+| `await` inside a context scope | 295ns | 583ns | 189ns | 423ns |
+| **Cost of propagation** | 178ns | 432ns | 64ns | 313ns |
 
-<sub>esrun 0.28.0 · Node 24.14.0 · Bun 1.4.2+744846f84 · Deno 2.9.5 · Linux · 2026-09-15 · 200000 iterations</sub>
+<sub>esrun 0.31.0 · Node 24.14.0 · Bun 1.4.2+744846f84 · Deno 2.9.5 · Linux · 2026-09-25 · 200000 iterations</sub>
 {/* END probe:context */}
 
 The same workload everywhere: a value made current once, then read from inside a
-continuation. Read the rows carefully, because the interesting number is not the
-last one.
-
-**The propagation itself is competitive** — the last row is what `run()` and
-`get()` add over the same loop, and ours is in the same range as Node's.
-
-**The promise hook is not.** Our second row is an order of magnitude above the
-others because importing the module installs an isolate-wide promise hook, and
-V8 then takes a slower path for *every* promise in the program — including the
-ones that have nothing to do with any context. Node reaches the same goal without
-that penalty. This is a real gap and it is the reason the first row exists: a
-program that never imports `runtime:context` has no hook and pays none of it,
-which is why the hook is installed lazily rather than always.
-
-Measurement puts roughly 60% of the hook's cost in a single pair of
-`SetPrivate`/`GetPrivate` calls — the per-promise slot the capture is stamped
-into. Splitting that slot into cheaper pieces was tried and measured *worse*: it
-is the number of private accesses that costs, not the allocation. Closing the gap
-needs a cheaper per-promise slot than the public V8 API offers, which is the same
-thing Node solved by not using promise hooks at all.
+continuation. The last row is what `run()` and `get()` add over the same loop;
+the second is what every other `await` in the program pays once the module is
+loaded, which is the row the promise hook used to put an order of magnitude
+above the others.
 
 ## EventTarget
 
@@ -206,12 +197,6 @@ implicit-transaction pattern ported that way, run as two requests in flight wher
 one rolls back.
 
 ## Not done
-
-**The promise-hook overhead above.** Deferred, and the most valuable open item in
-this module: it needs a cheaper per-promise slot than `SetPrivate`/`GetPrivate`,
-and the two obvious rearrangements were tried and measured worse. Anyone picking
-this up should start by reproducing the breakdown with `bench/probe-tracing.sh`
-and confirming the slot is still the dominant term.
 
 Language-level `AsyncContext`, async task interception, and error bubbling
 through async stacks are out of scope. So is any `node:async_hooks` shim.

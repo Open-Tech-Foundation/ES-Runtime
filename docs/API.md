@@ -1291,8 +1291,8 @@ still sees the tenant and request that produced the failure.
 | `.run(store, fn)` | `.run(value, fn)` |
 | `AsyncLocalStorage.snapshot()` | `snapshot()` |
 | `AsyncLocalStorage.bind(fn)` | `bind(fn)` |
-| `executionAsyncId()` | `currentTask().id` |
-| `triggerAsyncId()` | `currentTask().parentId` |
+| `executionAsyncId()` | `currentTask().id` — per task (a timer firing, a request), not per promise |
+| `triggerAsyncId()` | `currentTask().parentId` — the task that started this one |
 | `.enterWith()` | **Removed** — a scope with no end is the main source of leaked request state. `snapshot()` covers the legitimate uses. |
 | `.exit(fn)` | **Removed** — `ctx.run(undefined, fn)` is exactly it. |
 | `.disable()` | **Removed** — a global kill switch breaks every consumer of every context at once, and no library can defend against another calling it. |
@@ -1302,10 +1302,9 @@ Porting an ORM's implicit-transaction pattern is a rename rather than a redesign
 
 ### Cost
 
-The V8 promise hook behind propagation is installed the first time
-`runtime:context` is imported, so a program that never uses a context is
-unaffected — including a `runtime:http` server, which mints a trace per request
-only once something can observe one.
+Propagation rides V8's continuation-preserved embedder data, so an `await` costs
+the same whether or not the module is loaded. A `runtime:http` server mints a
+trace per request only once something can observe one.
 
 ---
 

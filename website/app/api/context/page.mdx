@@ -55,8 +55,8 @@ tenant.get(); // null
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `number` | This task's id. Node's `executionAsyncId()`. |
-| `parentId` | `number \| null` | The task that scheduled this one; `null` at the root. Node's `triggerAsyncId()`. |
+| `id` | `number` | This task's id. A task is the root, a timer firing or an inbound request; an `await` stays in the task that reached it. |
+| `parentId` | `number \| null` | The task that started this one; `null` at the root. |
 | `traceId` | `string` | 32 lowercase hex, W3C trace-id. Read-only — `withTrace` is the only override. |
 | `kind` | `string` | `"main"`, `"http-request"` or `"worker"`. |
 
@@ -110,8 +110,8 @@ self.addEventListener("message", (e) =>
 | `.run(store, fn)` | `.run(value, fn)` |
 | `AsyncLocalStorage.snapshot()` | `snapshot()` |
 | `AsyncLocalStorage.bind(fn)` | `bind(fn)` |
-| `executionAsyncId()` | `currentTask().id` |
-| `triggerAsyncId()` | `currentTask().parentId` |
+| `executionAsyncId()` | `currentTask().id` — per task (a timer firing, a request), not per promise |
+| `triggerAsyncId()` | `currentTask().parentId` — the task that started this one |
 | `.enterWith()` | Removed — `snapshot()` |
 | `.exit(fn)` | Removed — `ctx.run(undefined, fn)` |
 | `.disable()` | Removed |
