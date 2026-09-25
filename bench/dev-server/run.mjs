@@ -1,13 +1,23 @@
 // Dev-server benchmark: vite vs oj vs esdev start on the generated fixture
 // (bench/dev-server/apps/app-<N>, same fanout-10 shape as oj's bench).
 //
-// Methodology follows oj's bench/run.mjs, minus the reload/HMR legs: per tool,
-// ITERS sessions of cold (tool caches cleared) + warm (caches primed by the
-// cold run); each session measures spawn -> server-ready PLUS a full browser
-// render to [data-done], because for an on-demand dev server "ready" fires
-// before any module is transformed and the render is the cost. Memory is the
-// server's peak RSS after the first cold render. Published number per cell is
-// the MIN over sessions (repo convention: contention only adds time).
+// Methodology follows oj's bench/run.mjs: per tool, ITERS sessions of cold
+// (tool caches cleared) + warm (caches primed by the cold run); each session
+// measures spawn -> server-ready PLUS a full browser render to [data-done],
+// because for an on-demand dev server "ready" fires before any module is
+// transformed and the render is the cost. Memory is the server's peak RSS
+// after the first cold render. Published number per cell is the MIN over
+// sessions (repo convention: contention only adds time).
+//
+// Then the edit loop, which is what a dev server is for once it is up: on the
+// warm server, with the page rendered, one component's marker text is
+// rewritten and the clock runs until the page shows the new text. Two edits —
+// a leaf (the last component, imported by one parent) and the root (Comp0,
+// under which the whole tree hangs) — because they stress different things:
+// a leaf is one module, the root invalidates the most. Whatever a tool does to
+// get there — hot module replacement, a rebuild and reload — is its answer;
+// save-to-visible is what the developer waits for. Each edit is reverted
+// before the next, so every tool and every session starts from the same tree.
 //
 // Legs: `vite` (default dev), `oj dev --bundle` (the mode oj's site charts
 // for the 10k-component app), `esdev start` (the dev loop), `bun ./index.html`
@@ -100,6 +110,49 @@ async function waitForServer(host, port, timeoutMs = 120000) {
   }
 }
 
+const EDIT_TIMEOUT_MS = 60000;
+
+/**
+ * Save-to-visible for one edit: rewrites component `index`'s marker text,
+ * then waits until the open page renders it. Returns ms, or null when the page
+ * never showed it — a tool that does not update the page has no number here,
+ * not a fast one. The file is put back either way.
+ */
+async function editOnce(page, index, tag) {
+  const file = path.join(app, "src", "components", `Comp${index}.tsx`);
+  const original = fs.readFileSync(file, "utf8");
+  const marker = `leaf-${index}-marker-${tag}`;
+  const selector = `[data-comp="${index}"] > span`;
+  try {
+    const t0 = Date.now();
+    fs.writeFileSync(file, original.replace(`leaf-${index}-marker-A`, marker));
+    try {
+      await page.waitForFunction(
+        (sel, text) => document.querySelector(sel)?.textContent === text,
+        { timeout: EDIT_TIMEOUT_MS, polling: "raf" },
+        selector,
+        marker,
+      );
+    } catch {
+      return null;
+    }
+    return Date.now() - t0;
+  } finally {
+    fs.writeFileSync(file, original);
+    // Wait for the revert to land too, so the next edit starts from a settled
+    // page rather than racing the previous update.
+    await page
+      .waitForFunction(
+        (sel, text) => document.querySelector(sel)?.textContent === text,
+        { timeout: EDIT_TIMEOUT_MS, polling: "raf" },
+        selector,
+        `leaf-${index}-marker-A`,
+      )
+      .catch(() => {});
+    await sleep(300);
+  }
+}
+
 async function renderOnce(browser, host, port) {
   const page = await browser.newPage();
   const t0 = Date.now();
@@ -142,7 +195,7 @@ function toolVersions() {
 
 async function bench(tool, browser) {
   const { host, port, spawn: spawnTool, clearCache } = TOOLS[tool];
-  const result = { tool, cold: [], warm: [], peakMb: null };
+  const result = { tool, cold: [], warm: [], leaf: [], root: [], peakMb: null };
   for (let i = 0; i < ITERS; i++) {
     clearCache();
     let t0 = Date.now();
@@ -161,6 +214,15 @@ async function bench(tool, browser) {
     const wReady = Date.now() - t0;
     const wRender = await renderOnce(browser, host, port);
     result.warm.push(wReady + wRender);
+
+    // The edit loop, on the warm server with a page open and rendered.
+    const page = await browser.newPage();
+    await page.goto(`http://${host}:${port}/`, { timeout: 180000 });
+    await page.waitForSelector("[data-done]", { timeout: 180000 });
+    await sleep(500);
+    result.leaf.push(await editOnce(page, N - 1, `L${i}`));
+    result.root.push(await editOnce(page, 0, `R${i}`));
+    await page.close();
     proc.kill("SIGKILL");
     await sleep(700);
   }
@@ -168,6 +230,11 @@ async function bench(tool, browser) {
 }
 
 const min = (xs) => Math.min(...xs);
+// The best edit that landed; null when none did in any session.
+const minEdit = (xs) => {
+  const landed = xs.filter((x) => typeof x === "number");
+  return landed.length === 0 ? null : Math.min(...landed);
+};
 
 async function main() {
   if (!fs.existsSync(path.join(app, "src"))) {
@@ -201,7 +268,13 @@ async function main() {
   if (process.env.BENCH_JSON) {
     const dev_server = {};
     for (const r of rows) {
-      dev_server[r.tool] = { cold_ms: min(r.cold), warm_ms: min(r.warm), peak_mb: r.peakMb };
+      dev_server[r.tool] = {
+        cold_ms: min(r.cold),
+        warm_ms: min(r.warm),
+        hmr_leaf_ms: minEdit(r.leaf),
+        hmr_root_ms: minEdit(r.root),
+        peak_mb: r.peakMb,
+      };
     }
     console.log(JSON.stringify({
       dev_server,
@@ -210,18 +283,21 @@ async function main() {
         legs: { vite: "vite dev (default)", oj: "oj dev --bundle", esdev: "esdev start", bun: "bun ./index.html" },
         iters: ITERS,
         aggregate: "min",
+        edit: "save-to-visible: a leaf (last component) and the root (Comp0) marker rewritten on the warm server",
+        edit_timeout_ms: EDIT_TIMEOUT_MS,
         versions,
       },
     }, null, 2));
     return;
   }
 
+  const ms = (v) => (v === null ? "n/a" : `${v}ms`).padEnd(10);
   console.log(`\n${N} components (fanout-10 tree), ${ITERS} cold+warm sessions each — min, spawn-to-painted`);
-  console.log("tool  | cold start | warm start | peak RSS");
-  console.log("------|------------|------------|----------");
+  console.log("tool  | cold start | warm start | leaf edit  | root edit  | peak RSS");
+  console.log("------|------------|------------|------------|------------|----------");
   for (const r of rows) {
     console.log(
-      `${r.tool.padEnd(5)} | ${String(min(r.cold) + "ms").padEnd(10)} | ${String(min(r.warm) + "ms").padEnd(10)} | ${r.peakMb}MB`
+      `${r.tool.padEnd(5)} | ${ms(min(r.cold))} | ${ms(min(r.warm))} | ${ms(minEdit(r.leaf))} | ${ms(minEdit(r.root))} | ${r.peakMb}MB`
     );
   }
   console.error(`versions: ${JSON.stringify(versions)}`);

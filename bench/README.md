@@ -763,12 +763,13 @@ SECTIONS=rps_elysia bench/gen-bench-data.sh
 SERVER=dist/elysia.bundle.js SERVER_KEY=elysia bench/rps.sh   # by hand
 ```
 
-### Dev-server startup (vite vs oj vs esdev vs bun)
+### Dev server: startup and rebuild (vite vs oj vs esdev vs bun)
 
 `bench/dev-server/` boots the same generated React app — 10,000 components in
 a fanout-10 tree, the shape of oj's bench fixture — under four dev servers
 and measures spawn-to-first-paint in a real (headless Chromium) browser, min
-of three cold+warm sessions each, plus peak RSS:
+of three cold+warm sessions each, plus peak RSS — and then how long an edit
+takes to reach the page:
 
 | leg | command | mode |
 | --- | --- | --- |
@@ -782,6 +783,16 @@ Cold clears the tool's cache first (`node_modules/.vite`, `.oj-cache`,
 records server ready plus the full render to `[data-done]`, because an
 on-demand server reports ready before transforming anything and the render is
 the cost.
+
+**Rebuild** is save-to-visible. On the warm server, with the page rendered,
+one component's marker text is rewritten on disk and the clock runs until the
+page shows the new text — `hmr_leaf_ms` for the last component (one module, one
+importer) and `hmr_root_ms` for `Comp0` (under which the whole tree hangs, so
+it invalidates the most). Whatever a tool does to get there — hot module
+replacement, a rebuild and reload — is its answer, because the wait is what the
+developer sees. Each edit is reverted and settled before the next, the minimum
+over the three sessions is published, and an edit the page never shows within
+60 s is `null`, not a fast number.
 
 ```sh
 cargo install oj --locked          # oj 0.2.0

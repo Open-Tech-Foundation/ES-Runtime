@@ -1,9 +1,10 @@
 // Tab switcher for the homepage Benchmarks section: request throughput
 // (Hono vs Elysia per runtime), dev-server startup (vite vs oj vs esdev vs
 // bun), production build time (same four tools), and database queries/sec
-// (Postgres and MySQL). Every panel reads the
+// (Postgres and MySQL, side by side in one tab). Every panel reads the
 // generated benchmark data; the tab state is the only thing this component
 // owns.
+import bench from "../src/benchmarks.js";
 import BuildChart from "./BuildChart.jsx";
 import DevServerChart from "./DevServerChart.jsx";
 import DbQpsChart from "./DbQpsChart.jsx";
@@ -26,16 +27,13 @@ export default function FrameworkTabs() {
             Request throughput
           </button>
           <button type="button" onclick={() => (tab = "dev")} className={tabClass(tab === "dev")}>
-            Dev-server startup
+            Dev server
           </button>
           <button type="button" onclick={() => (tab = "build")} className={tabClass(tab === "build")}>
             Build time
           </button>
-          <button type="button" onclick={() => (tab = "pg")} className={tabClass(tab === "pg")}>
-            Postgres QPS
-          </button>
-          <button type="button" onclick={() => (tab = "mysql")} className={tabClass(tab === "mysql")}>
-            MySQL QPS
+          <button type="button" onclick={() => (tab = "db")} className={tabClass(tab === "db")}>
+            Database QPS
           </button>
         </div>
       </div>
@@ -67,8 +65,15 @@ export default function FrameworkTabs() {
         </div>
       ) : tab === "dev" ? (
         <div>
-          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <DevServerChart large />
+          <div className="mx-auto max-w-4xl space-y-6">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <DevServerChart large view="startup" />
+            </div>
+            {bench.dev_server?.esdev?.hmr_leaf_ms !== undefined ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <DevServerChart large view="rebuild" />
+              </div>
+            ) : null}
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Same 10,000-component React app booted under{" "}
@@ -77,8 +82,10 @@ export default function FrameworkTabs() {
             <code className="font-mono">esdev start</code> and{" "}
             <code className="font-mono">bun ./index.html</code> — spawn to
             first paint in a real browser, min of three cold+warm sessions;
-            memory is peak RSS. The fixture shape follows oj's published
-            bench.
+            memory is peak RSS. Rebuild is save-to-visible on the warm server:
+            a leaf component's text, then the root's, edited on disk and timed
+            until the page shows it, however the tool gets it there. The
+            fixture shape follows oj's published bench.
           </p>
         </div>
       ) : tab === "build" ? (
@@ -95,32 +102,29 @@ export default function FrameworkTabs() {
             before its numbers publish.
           </p>
         </div>
-      ) : tab === "mysql" ? (
-        <div>
-          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <DbQpsChart db="mysql" large />
-          </div>
-          <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
-            The same shape against local MySQL 8.4: 100,000 queries of 100
-            rows, 100 in flight, every response row-counted and the first
-            checksummed. Node and Deno use mysql2's prepared statements, Bun
-            its built-in <code className="font-mono">Bun.SQL</code>, esrun
-            @opentf/esrun-mysql — pools of 100 everywhere, no TLS. Best of
-            three runs.
-          </p>
-        </div>
       ) : (
         <div>
-          <div className="mx-auto max-w-4xl rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <DbQpsChart db="pg" large />
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <DbQpsChart db="pg" large />
+            </div>
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <DbQpsChart db="mysql" large />
+            </div>
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
-            100,000 queries of 100 rows, 100 in flight at a time, against
-            local Postgres — every response row-counted and the first
-            checksummed. Node and Deno use postgres.js, Bun its native{" "}
-            <code className="font-mono">bun:sql</code>, esrun
-            @opentf/esrun-postgres — pools of 100 everywhere. Best of three
-            runs.
+            100,000 queries of 100 rows, 100 in flight at a time, against local
+            Postgres and MySQL 8.4 — every response row-counted and the first
+            checksummed, pools of 100 everywhere, best of three runs. Node and
+            Deno use postgres.js and mysql2, Bun its built-in{" "}
+            <code className="font-mono">Bun.SQL</code> for both, and esrun
+            @opentf/esrun-postgres and @opentf/esrun-mysql.{" "}
+            <a
+              href="/docs/benchmarks"
+              className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+            >
+              How it is measured →
+            </a>
           </p>
         </div>
       )}

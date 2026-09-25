@@ -81,20 +81,44 @@ function getPct(tools, key, tool) {
   return Math.max((v / max) * 100, 2);
 }
 
-const COLUMNS = [
-  { key: "cold_ms", title: "Cold start (lower ↓)", fmt: fmtMs },
-  { key: "warm_ms", title: "Warm start (lower ↓)", fmt: fmtMs },
-  { key: "peak_mb", title: "Peak memory (lower ↓)", fmt: fmtMb },
-];
+// Two views of one run: how long the server takes to come up, and how long an
+// edit takes to reach the page once it is up (save-to-visible).
+const VIEWS = {
+  startup: {
+    title: "Dev-server startup · 10,000 components",
+    columns: [
+      { key: "cold_ms", title: "Cold start (lower ↓)", fmt: fmtMs },
+      { key: "warm_ms", title: "Warm start (lower ↓)", fmt: fmtMs },
+      { key: "peak_mb", title: "Peak memory (lower ↓)", fmt: fmtMb },
+    ],
+  },
+  rebuild: {
+    title: "Dev-server rebuild · save to visible",
+    columns: [
+      { key: "hmr_leaf_ms", title: "Leaf edit (lower ↓)", fmt: fmtMs },
+      { key: "hmr_root_ms", title: "Root edit (lower ↓)", fmt: fmtMs },
+    ],
+  },
+};
 
-export default function DevServerChart({ large = false }) {
+// The grid is twelve columns: the name takes what the metrics leave.
+const SPAN = { 2: ["col-span-2", "col-span-5"], 3: ["col-span-3", "col-span-3"] };
+
+export default function DevServerChart({ large = false, view = "startup" }) {
   if (!bench.dev_server) return null;
-  // Fastest cold start first; a tool without a number sinks to the bottom.
+  const { title, columns } = VIEWS[view] ?? VIEWS.startup;
+  // A run from before a view existed has none of its numbers: show nothing
+  // rather than a card of "n/a".
+  const hasAny = ORDER.some((t) => columns.some((c) => typeof getVal(t, c.key) === "number"));
+  if (!hasAny) return null;
+  const [nameSpan, colSpan] = SPAN[columns.length] ?? SPAN[3];
+  const sortKey = columns[0].key;
+  // Fastest first by the view's first column; a tool without a number sinks.
   const tools = ORDER.filter((t) => bench.dev_server[t])
     .slice()
     .sort((a, b) => {
-      const va = getVal(a, "cold_ms");
-      const vb = getVal(b, "cold_ms");
+      const va = getVal(a, sortKey);
+      const vb = getVal(b, sortKey);
       if (typeof va !== "number") return 1;
       if (typeof vb !== "number") return -1;
       return va - vb;
@@ -116,16 +140,14 @@ export default function DevServerChart({ large = false }) {
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <span className={titleCls}>
-          Dev-server startup · 10,000 components
-        </span>
+        <span className={titleCls}>{title}</span>
       </div>
 
       <div className={"mb-2 grid grid-cols-12 gap-2 " + headCls}>
-        <div className="col-span-3">Tool</div>
-        <div className="col-span-3 text-left">Cold start (lower ↓)</div>
-        <div className="col-span-3 text-left">Warm start (lower ↓)</div>
-        <div className="col-span-3 text-left">Peak memory (lower ↓)</div>
+        <div className={nameSpan}>Tool</div>
+        {columns.map((col) => (
+          <div className={colSpan + " text-left"}>{col.title}</div>
+        ))}
       </div>
 
       <div className={large ? "space-y-3" : "space-y-2"}>
@@ -138,13 +160,13 @@ export default function DevServerChart({ large = false }) {
           };
           return (
             <div className="grid grid-cols-12 items-center gap-2">
-              <div className={"col-span-3 " + nameCls}>
+              <div className={nameSpan + " " + nameCls}>
                 {meta.label}
               </div>
-              {COLUMNS.map((col) => {
+              {columns.map((col) => {
                 const isWin = tool === getWinner(tools, col.key);
                 return (
-                  <div className="col-span-3 flex items-center gap-1.5 pr-1">
+                  <div className={colSpan + " flex items-center gap-1.5 pr-1"}>
                     <div className={barCls}>
                       <div
                         className={"h-full rounded-full " + meta.bar}

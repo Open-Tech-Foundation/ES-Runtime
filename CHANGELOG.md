@@ -15,9 +15,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 - **A MySQL QPS benchmark**, in the Postgres one's shape — 100,000 queries of
   100 rows, 100 in flight — across Node and Deno (mysql2), Bun (`Bun.SQL`) and
-  esrun (`@opentf/esrun-mysql`), published as `mysql_qps` and charted beside
-  Postgres on the homepage. Both QPS runners now stage the driver build they
-  measure instead of relying on a copy left behind by another script.
+  esrun (`@opentf/esrun-mysql`), published as `mysql_qps` and charted with
+  Postgres in one "Database QPS" tab on the homepage. Both QPS runners now
+  stage the driver build they measure instead of relying on a copy left behind
+  by another script.
+- **The dev-server benchmark measures rebuilds, not only startup.** On the warm
+  server, a leaf component's text and then the root's are edited on disk and
+  timed until the page shows them (`hmr_leaf_ms`, `hmr_root_ms`), for vite, oj,
+  esdev and Bun alike — whatever each does to get there. The homepage's "Dev
+  server" tab charts startup and rebuild separately.
 - **`bench/gen-bench-data.sh` checks every section's prerequisites before
   running any**, keeps each finished section so a failed run resumes instead
   of starting over, and prints how long each section took.
