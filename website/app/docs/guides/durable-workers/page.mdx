@@ -1,0 +1,336 @@
+---
+title: Durable workers
+description: Build stateful services with durable workers — one worker per entity, state that survives the process, alarms, collections, hibernating WebSockets — and deploy them.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Durable workers
+
+A durable worker is a small piece of state with the code that owns it: a cart,
+a chat room, one product's stock. You address it by id, the runtime runs one
+call at a time against it, and its state is in SQLite, so the next process that
+names it finds it where it was left. There is no database, cache or queue to
+run beside your service.
+
+This guide is the path from a first worker to a deployment. For every signature
+see the [API reference](/api/workers); for how it works and what it costs, see
+[Internals: durable workers](/docs/internals/durable-workers). The
+[shop example](https://github.com/Open-Tech-Foundation/ES-Runtime/tree/main/examples/shop)
+uses everything here.
+
+## A first worker
+
+```js
+// counter.js
+import { DurableWorker } from "runtime:workers";
+
+export class Counter extends DurableWorker {
+  add(n) {
+    const total = (this.state.get("total") ?? 0) + n;
+    this.state.set("total", total);
+    return total;             // answered once the write is on disk
+  }
+}
+
+console.log(await Counter.get("visits").add(1));
+```
+
+```sh
+esrun --allow-read --allow-write counter.js    # 1, then 2 on the next run
+```
+
+`Counter.get("visits")` is a reference; nothing opens until a method is called.
+Each worker needs `read` and `write`, like `runtime:db`, and no other grant.
+
+## One worker per thing
+
+Make a worker the unit that changes together: one per cart, per room, per
+product, per order. Calls to one worker run one at a time, in order, so a
+worker needs no lock, and two workers never wait on each other unless one calls
+the other.
+
+```js
+export class Stock extends DurableWorker {
+  take(n) {
+    const left = this.state.get("left") ?? 5;
+    if (n > left) throw new RangeError("sold out");
+    this.state.set("left", left - n);
+    return left - n;
+  }
+}
+
+await Stock.get("hoodie").take(1);   // forty callers at once still sell exactly five
+```
+
+A worker's key/value state is resident, so `state.get` is synchronous. It is
+capped at 1 MiB, and one value at 128 KiB. Keep what a call needs right away in
+keys, and put anything that accumulates in a collection.
+
+## Reading and writing state
+
+```js
+this.state.get("cart");                 // synchronous
+this.state.set("cart", items);          // no need to await it
+this.state.setMany({ a: 1, b: 2 });     // one commit
+this.state.delete("draft");
+this.state.keys({ prefix: "line:" });
+```
+
+Values are stored by structured clone, so a `Date`, `Map`, `Set` or `BigInt`
+comes back as itself.
+
+A call's **result** waits for its writes, so the usual pattern needs no
+`await`. Anything else that leaves the worker mid-call does not wait
+automatically, so await `state.sync()` first:
+
+```js
+this.state.set("status", "charged");
+await this.state.sync();                // now the outside world may hear of it
+await fetch(receiptUrl, { method: "POST", body });
+```
+
+Calls to other durable workers and `ws.send()` on a socket the worker owns wait
+for its writes by themselves.
+
+## Collections, for data that grows
+
+Declare them on the class. The fields you list are indexed columns; the rest of
+each document is stored as-is.
+
+```js
+export class Room extends DurableWorker {
+  static schema = { collections: { messages: { index: ["ts", "author"] } } };
+
+  async post(author, text) {
+    await this.state.collection("messages").insert({ author, text, ts: new Date() });
+  }
+
+  recent() {
+    return this.state.collection("messages").find().sort({ ts: "desc" }).limit(50).toArray();
+  }
+}
+```
+
+A query may only use declared fields, unless you pass `{ scan: true }`, which
+reads every document. Declaring a field later backfills it the next time the
+worker opens. `state.transaction(fn)` covers keys and collections together, and
+rolls both back if `fn` throws.
+
+## Calling other workers
+
+A worker calls another the way anything else does:
+
+```js
+async setQty(id, qty) {
+  const granted = await Inventory.get(id).reserve(this.id, qty);
+  this.state.set("cart", /* … */);
+}
+```
+
+The call waits until the caller's writes so far are committed, so the callee
+never acts on something the caller could still lose. A call that would close a
+loop in one chain (A calls B, which calls A) throws `ERR_DURABLE_CYCLE` instead
+of hanging.
+
+<Callout type="warn" title="Make calls flow one way">
+  Only a cycle *within one chain of calls* is detected. If A calls B for one
+  request while B calls A for another, each waits on the other. Design calls to
+  flow in one direction. The shop's inventory *tells* the shelf about changes,
+  and the shelf never calls back to ask.
+</Callout>
+
+## Work that spans workers
+
+Nothing makes several workers change atomically. Instead, make each step safe to
+repeat and record what you are doing before you do it. The shop's checkout does
+this:
+
+```js
+async checkout() {
+  const pending = { orderId: crypto.randomUUID(), lines: this.cartLines() };
+  this.state.set("checkout", pending);     // 1. the intent, before anything leaves
+  return this.#finish(pending);
+}
+
+async start() {                            // 2. a crash mid-way is finished on the next wake
+  const pending = this.state.get("checkout");
+  if (pending) await this.#finish(pending);
+}
+
+async #finish(pending) {
+  for (const line of pending.lines) {      // 3. every step is idempotent, keyed by the order id
+    await Inventory.get(line.id).commit(this.id, pending.orderId, line.qty);
+  }
+  // … record the order (skip if it exists), schedule delivery, then:
+  await this.state.delete("checkout");
+}
+```
+
+<Callout type="warn" title="Guard every step, not the method">
+  A method that returns early because its *first* write already happened
+  leaves the rest undone after a crash between writes. Check each step on its
+  own. The shop's delivery shipped with exactly this bug:
+  <code>{'if (has("shipment")) return;'}</code> skipped setting the alarm.
+</Callout>
+
+## Alarms
+
+A worker can ask to be woken at a time: a retry, an expiry, a nightly job.
+
+```js
+export class Cart extends DurableWorker {
+  async touch() {
+    await this.state.alarm.set(Date.now() + 30 * 60_000);   // abandon after 30 min
+  }
+  async alarm() {
+    this.state.set("items", []);                            // set another alarm to repeat
+  }
+}
+```
+
+Alarms fire only in a process that asks for them, and it has to name the
+classes it runs:
+
+```js
+import { startAlarms } from "runtime:workers";
+
+startAlarms({
+  classes: [Cart, Delivery],
+  onError: (error, context, worker) => {
+    if (worker?.gaveUp) markFailed(worker.name, worker.id);
+    else console.error(context, error);
+  },
+});
+```
+
+A handler that throws is retried with backoff (1s, 2s, 4s … up to
+`alarmRetries`, 5 by default); then `onError` hears about it with
+`gaveUp: true`. An alarm is **at least once**: if the process dies while its
+handler runs, it runs again after the restart, so keep its effects idempotent
+(send the webhook with an idempotency key, for example).
+
+## WebSockets that hibernate
+
+A worker can own sockets while it sleeps. Hand the connection to a method and
+accept it there:
+
+```js
+import { serve } from "runtime:websocket";
+
+for await (const ws of serve({ port: 4001 })) {
+  await Room.get("lobby").join(ws, "ana");
+}
+
+export class Room extends DurableWorker {
+  start() {
+    this.ctx.setWebSocketAutoResponse({ request: "ping", response: "pong" });
+  }
+  join(ws, name) {
+    this.ctx.acceptWebSocket(ws, [name]);
+    ws.serializeAttachment({ name });
+  }
+  webSocketMessage(ws, message) {
+    const { name } = ws.deserializeAttachment();
+    for (const peer of this.ctx.getWebSockets()) peer.send(`${name}: ${message}`);
+  }
+}
+```
+
+The worker is evicted when idle and the clients stay connected. The next
+message wakes it (`start()` runs again) and calls `webSocketMessage`. Keep
+per-connection data in the attachment, not in instance fields, which do not
+survive hibernation. The auto-response answers heartbeats without waking the
+worker. With `runtime:http`, `upgradeWebSocket(request)` gives you the socket
+to hand over in the same way.
+
+## Deploying
+
+**Where state lives.** In `.durable/` in the directory the process is started
+in, not beside the bundle, so `esrun dist/server.js` keeps it out of `dist/`.
+Set `configure({ dir })` to put it elsewhere; a relative path is relative to
+the working directory.
+
+**One process per directory.** The directory is locked by the process that
+opened it; a second one gets `ERR_DURABLE_LOCKED` until the first exits. Run
+one instance per state directory.
+
+**Fast storage.** Every write is a disk sync. On an SSD or NVMe that is well
+under a millisecond. On a spinning disk durability is the same but throughput
+is about thirty times lower ([measured](/docs/internals/durable-workers#on-real-storage)).
+
+**Stopping.** A result is only given once its writes are on disk, so a crash
+loses nothing that was answered. To let `stop()` run, shut down on a signal:
+
+```js
+import { exit, onSignal } from "runtime:process";
+import { shutdown } from "runtime:workers";
+
+onSignal("SIGTERM", async () => {
+  await server.stop();
+  await shutdown();       // flushes, runs stop(), closes sockets with 1001
+  exit(143);
+});
+```
+
+**Bundling.** A minified build renames classes, and the class name is the
+storage name, so give each class a fixed one:
+
+```js
+export class Cart extends DurableWorker {
+  static durableName = "Cart";
+}
+```
+
+## Shards
+
+By default a worker's code runs on the thread that called it. Shards move it to
+a pool of `Worker`s while the state stays with the owning process:
+
+```js
+configure({ shards: "auto", module: new URL("./workers.js", import.meta.url) });
+```
+
+The shard imports `module`, so keep the worker classes in a module of their own
+that does nothing else at its top level (with `esdev build`, a second target).
+Use shards for isolation (a stuck or out-of-memory worker ends one shard, not
+the server) or for CPU-heavy methods. They do not speed up work that waits on
+storage.
+
+## Testing
+
+Give each run a fresh directory, and shut down at the end:
+
+```js
+import { makeTempDir, remove } from "runtime:fs";
+import { configure, shutdown } from "runtime:workers";
+import { afterAll, expect, test } from "runtime:test";
+import { Counter } from "./counter.js";
+
+// A fresh directory per run, so a test never sees the last run's state.
+const dir = await makeTempDir({ prefix: "durable-test-" });
+configure({ dir });
+afterAll(async () => {
+  await shutdown();
+  await remove(dir, { recursive: true });
+});
+
+test("counts", async () => {
+  expect(await Counter.get("t").add(2)).toBe(2);
+});
+```
+
+To test what survives a restart, run the program twice as separate processes;
+state that only lives in one process proves nothing about the disk.
+
+## Checklist
+
+- One worker per thing that changes together; keys for hot state, collections
+  for what grows.
+- `await state.sync()` before a `fetch` or anything else that leaves mid-call.
+- Calls between workers flow one way.
+- Multi-step work records its intent first, and every step is idempotent.
+- Alarm handlers are idempotent; `startAlarms` names its classes.
+- `static durableName` on every class in a minified build.
+- One process per state directory, on fast storage, with `shutdown()` on
+  `SIGTERM`.

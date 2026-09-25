@@ -59,6 +59,7 @@ const NAV = [
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "Workers", path: "/docs/guides/workers" },
+      { title: "Durable workers", path: "/docs/guides/durable-workers" },
       {
         title: "HTTP server",
         items: [
