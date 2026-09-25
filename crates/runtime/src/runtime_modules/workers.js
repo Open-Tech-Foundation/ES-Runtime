@@ -334,15 +334,67 @@ let registry = null; // { db, dir }
 // it panics from its WAL ("end_write_tx called while write lock not held"), so
 // the discipline has to be here. Each worker's own database needs none of this:
 // it has exactly one writer, its own flush.
-let catalogQueue = Promise.resolve();
+//
+// And whatever is waiting when the connection comes free runs as one
+// transaction (D128). Each statement on its own was a commit, and a commit is a
+// disk sync shared by the whole process — on a spinning disk, ~90 catalog
+// writes a second for every worker there is. Grouped, a burst costs one. Every
+// caller is answered when the group has committed, so nothing is acknowledged
+// before it is durable. A `run` returns data, never a cursor: its answer is
+// read after the transaction that produced it has ended.
+let catalogDb = null;
+let catalogWaiting = [];
+let catalogBusy = false;
 
 function onCatalog(run) {
-  const next = catalogQueue.then(run, run);
-  catalogQueue = next.then(
-    () => {},
-    () => {},
-  );
-  return next;
+  return new Promise((resolve, reject) => {
+    catalogWaiting.push({ run, resolve, reject });
+    if (!catalogBusy) void drainCatalog();
+  });
+}
+
+async function drainCatalog() {
+  catalogBusy = true;
+  try {
+    while (catalogWaiting.length > 0) {
+      const batch = catalogWaiting;
+      catalogWaiting = [];
+      if (batch.length === 1 || catalogDb === null) {
+        for (const item of batch) {
+          try {
+            item.resolve(await item.run());
+          } catch (e) {
+            item.reject(e);
+          }
+        }
+        continue;
+      }
+      const outcomes = [];
+      try {
+        await catalogDb.transaction(async () => {
+          for (const item of batch) {
+            try {
+              outcomes.push({ ok: true, value: await item.run() });
+            } catch (e) {
+              outcomes.push({ ok: false, error: e });
+            }
+          }
+        });
+      } catch (e) {
+        // The commit failed, so nothing in the group happened — and every
+        // caller hears so, including the ones whose statement ran.
+        for (const item of batch) item.reject(e);
+        continue;
+      }
+      batch.forEach((item, i) => {
+        const outcome = outcomes[i];
+        if (outcome.ok) item.resolve(outcome.value);
+        else item.reject(outcome.error);
+      });
+    }
+  } finally {
+    catalogBusy = false;
+  }
 }
 
 async function registryDb() {
@@ -355,13 +407,14 @@ async function registryDb() {
   // A catalog written before alarms existed has no column for them. The table
   // is an index over the workers' own files rather than the state itself, so
   // widening it is the whole migration.
-  const columns = await (await onCatalog(() => db.query("PRAGMA table_info(worker)"))).toArray();
+  const columns = await onCatalog(async () => (await db.query("PRAGMA table_info(worker)")).toArray());
   if (!columns.some((c) => c.toObject().name === "next_alarm")) {
     await retryBusy(() =>
       onCatalog(() => db.execute("ALTER TABLE worker ADD COLUMN next_alarm INTEGER")),
     );
   }
   registry = { db, dir };
+  catalogDb = db;
   return db;
 }
 
@@ -2094,15 +2147,15 @@ class DurableWorker {
     const name = storageName(this);
     if (inShard) return ask({ [TAG]: "class", name, op: "list", args: [{ limit, after }] });
     const db = await registryDb();
-    const rows = await (
-      await onCatalog(() =>
-        db.query(
+    const rows = await onCatalog(async () =>
+      (
+        await db.query(
           sql`SELECT id, created_at, last_active, bytes FROM worker
               WHERE class = ${name} AND (${after ?? null} IS NULL OR last_active < ${after ?? null})
               ORDER BY last_active DESC LIMIT ${positive(limit, "limit")}`,
-        ),
-      )
-    ).toArray();
+        )
+      ).toArray(),
+    );
     return rows.map((row) => {
       const r = row.toObject();
       // A live worker's row is behind by construction — the catalog is written
@@ -3149,16 +3202,16 @@ async function nextAlarm(state) {
 
 async function fireDue(state) {
   const db = await registryDb();
-  const rows = await (
-    await onCatalog(() =>
-      db.query(
+  const rows = await onCatalog(async () =>
+    (
+      await db.query(
         `SELECT class, id FROM worker
          WHERE next_alarm IS NOT NULL AND next_alarm <= ? AND class IN (${placeholders(state.names)})
          ORDER BY next_alarm LIMIT ?`,
         [Date.now(), ...state.names, state.batch],
-      ),
-    )
-  ).toArray();
+      )
+    ).toArray(),
+  );
   for (const row of rows) {
     if (state.stopped) break;
     const due = row.toObject();
@@ -3275,6 +3328,7 @@ async function shutdown() {
     stopWatching();
   } finally {
     registry = null;
+    catalogDb = null;
     shards = null;
     shuttingDown = false;
     started = false;

@@ -68,6 +68,10 @@ namespace) is unstable and may change between minor releases until the API freez
   `import.meta.url` carries it. A dev server re-reads a changed file this way
   (DECISIONS D126).
 
+- **The durable-worker catalog commits in groups** (DECISIONS D128). Statements
+  waiting for the catalog run as one transaction, each answered when it has
+  committed, instead of a disk sync apiece for the whole process. On a spinning
+  disk the shop benchmark goes from 2–3 journeys a second to 5.
 - **A new durable worker is opened in one commit.** Its tables, its id and its
   collections were a commit each — up to eight disk syncs before its first call
   ran. On a spinning disk the first call on a new worker drops from ~99 ms to

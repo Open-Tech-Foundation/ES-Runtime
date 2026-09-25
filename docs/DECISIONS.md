@@ -661,6 +661,31 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D128 — Durable writes: the catalog commits in groups, and a mailbox waits for the code rather than the disk · *Proposed (2026-09-25)* · *amends D80, D81*
+
+**Context:** the shop example under load (`bench/durable-shop.js`) measured what D80 and D81 cost on real storage. On tmpfs, 32 concurrent customers ran about 200 journeys a second. On a spinning disk, where a commit is a ~11 ms sync, the same run managed 2 or 3, with a p50 of 2.5 s to add to a cart, although one customer alone took ~150 ms. Two structural points serialize every write behind the disk, and neither is a property the design needs.
+
+- **The catalog is one connection, and every statement on it is its own commit.** D80 put all catalog statements through one queue, because the engine panics on overlapping statements, and each statement committed on its own. Opening a worker, every alarm change (D81's two writes), every eviction and every delete is a sync, shared by the whole process. On the spinning disk that is ~90 catalog writes a second for everything, and a shop journey needs about twelve.
+- **A mailbox holds the next call until the previous call's writes are on disk.** D80's gate was implemented as "run the call, wait for its commit, then let the next call in". A hot worker, such as one product's inventory, therefore manages one call per sync. Committing is not what makes calls to one worker exclusive; running their code one at a time is.
+
+**Decision (maintainer sign-off pending):**
+
+- **Catalog statements queued together commit together.** The queue stays, and stays one-at-a-time on the connection, but whatever is waiting when the connection comes free runs as one transaction, and every caller in it is answered when that transaction commits. A lone statement still runs on its own. Nothing is acknowledged before it is durable, so D81's ordering argument (the index is written early, never late) is untouched. **Rejected: turning off syncing for the catalog** (`synchronous = OFF`) on the grounds that it is only an index. It is the index that makes an alarm *findable*: a row lost in a crash is an alarm that never fires, which is the one outcome D81 exists to rule out, and repairing that would mean scanning every worker's file at start.
+- **A mailbox lets the next call in when the previous call's code has finished; a result is released when the commit covering its writes has landed.** Calls still run one at a time and in order, and nothing a caller sees has not been committed. What changes is that the commits of consecutive calls overlap and coalesce, as Cloudflare's output gate allows. A call can now read a value the previous call wrote but that is not yet on disk. Its own result waits for a commit that includes that value, since flushes are ordered, so nothing leaves the worker ahead of the disk. The caveat D80 already stated is unchanged: a side effect issued mid-call (a `fetch`, a message) is not gated, and `state.sync()` is what a call awaits before one. That now also covers writes the *previous* call made.
+- **The barrier is "the writes made so far", not "no writes outstanding".** Waiting until the state is clean can wait for ever under steady writes. The gate waits for the flush that carries what was written before it, and no later one.
+- **A shard sends its writes before it answers, and does not wait for them.** The host's gate does the waiting, so a sharded worker pipelines as an unsharded one does. The channel is ordered, so the host has the writes before it has the answer.
+
+**Consequences:**
+
+- The only visible changes are speed, and that a call can observe the previous call's uncommitted writes, which no code outside the worker can see before they are durable.
+- A failed commit fails every call whose result was waiting on it, which is what "gated" means.
+
+Verified by the existing end-to-end suite (ordering, the `SIGKILL` gate test, transactions, alarms) and by the shop benchmark on both disks. The numbers are in `bench/durable-shop.js`, and the internals page quotes them from there.
+
+**Not solved here:** a worker's own file still commits once per flush. Coalescing helps a busy worker, not one that writes once and goes idle, so the cost of a new worker is still a few syncs.
+
+---
+
 ### D127 — Resolving from another module: `resolve(specifier, from)` in `runtime:build` · *Proposed (2026-09-25)*
 
 **Context:** `import.meta.resolve` resolves only against the calling module. A tool — Web-App-Framework's dev server, a codegen step — has to resolve a package the way the *project it serves* would: from the project's root, so the project's copy wins over the one nested under the tool. With no way to say that, the dev server carries its own `node_modules` walk and `exports` resolver in JavaScript (`resolveFrom`, `throughExports`), a second resolver that already disagrees with the runtime's: it tries conditions in the order it lists them, where D40 follows the order the package's author wrote.
