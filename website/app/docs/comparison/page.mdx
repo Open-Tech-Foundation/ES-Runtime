@@ -17,22 +17,28 @@ secure server runtime with a standards-first API, deny-by-default permissions,
 and a separate development binary, [`esdev`](/esdev), for everything that does
 not belong in production. The table makes the trade-offs explicit.
 
+Compared against **esrun 0.32.0, Node.js 26.10.0 (Current), Bun 1.4.2 and
+Deno 2.9.7**, checked on 2026-09-26 by running each runtime rather than by
+reading its documentation. A feature counts when the runtime ships it in a
+stable, official API — its own or its `node:` compatibility layer; an
+experimental or flag-gated one is <Partial />.
+
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
 | ES Modules | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| CommonJS (require) | <Partial /> | <Yes /> | <Yes /> | <Partial /> |
-| TypeScript (built-in) | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
+| CommonJS (require) | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
+| TypeScript (built-in) | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
 | JSX (built-in) | <Partial /> | <No /> | <Yes /> | <Yes /> |
 | JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
-| HTTP/3 server (QUIC) | <No /> | <No /> | <Yes /> | <No /> |
+| HTTP/3 server (QUIC) | <No /> | <No /> | <Partial /> | <No /> |
 | Stalled-connection timeouts by default | <Yes /> | <Partial /> | <Yes /> | <No /> |
-| UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
-| UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
-| Connected UDP sockets | <Yes /> | <Yes /> | <Yes /> | <No /> |
-| Temporal API | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Connected UDP sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Temporal API | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
@@ -40,17 +46,17 @@ not belong in production. The table makes the trade-offs explicit.
 | Built-in Postgres / MySQL client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
-| Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
+| Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Partial /> | <Partial /> |
 | Capability sandbox (deny by default) | <Yes /> | <Partial /> | <No /> | <Yes /> |
 | Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Workers / multi-thread | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Per-worker memory limit | <Yes /> | <Yes /> | <No /> | <No /> |
+| Per-worker memory limit | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Per-worker capabilities | <Yes /> | <No /> | <No /> | <Partial /> |
-| `worker.unref()` | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| `worker.unref()` | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Worker queue depth (backpressure signal) | <Yes /> | <No /> | <No /> | <No /> |
 | Durable workers (addressable state, alarms) | <Yes /> | <No /> | <No /> | <No /> |
 | Built-in OpenTelemetry export | <Yes /> | <No /> | <No /> | <Yes /> |
-| FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
+| FFI (dlopen) | <No /> | <Partial /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Bundler / test runner | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
@@ -69,10 +75,10 @@ there and another in production. Marked <Partial /> rather than <Yes /> because
 the answer is "in the toolchain, not in the runtime", which is a real difference
 from the other three.
 
-**On the UDP rows.** Deno is <Partial /> because `Deno.listenDatagram` is still
-behind `--unstable-net` — the API exists and works, it is simply not stable — and
-it has no connected-socket mode, so a client cannot make the OS filter replies or
-report an ICMP port-unreachable. Bun's surface is the widest of the four
+**On the UDP rows.** All four have it. In Deno the stable path is `node:dgram`,
+which binds, joins multicast groups and connects; Deno's own
+`Deno.listenDatagram` is still behind `--unstable-net` and has no
+connected-socket mode. Bun's surface is the widest of the four
 (source-specific membership, batch `sendMany`); ours is the only one where
 binding and sending are **separate grants**, which is what makes a receive-only
 service expressible. See the [UDP guide](/docs/guides/udp#coming-from-node-deno-or-bun)
@@ -86,6 +92,22 @@ entirely JavaScript over `runtime:net`, adding no native code to the runtime. Th
 driver per backend as runtime API and its internals are not exported, so a third
 party's second backend starts from nothing, while esrun's ship on the same public
 driver tier anyone else would use. Node and Deno leave both to npm.
+
+**On the TypeScript row for Node.** Node runs `.ts` files by stripping types:
+erasable syntax works, while an `enum` or a `namespace` fails without
+`--experimental-transform-types`.
+
+**On the Temporal row.** Node has it from 26; Node 24 LTS does not.
+
+**On the worker rows for Deno.** Its web `Worker` has no `unref()` or memory
+limit; `node:worker_threads` has both, and enforces `resourceLimits`. Bun
+accepts `resourceLimits` but does not enforce it — a worker allocating past the
+limit keeps running, and Bun's own compatibility table lists it as missing.
+
+**On the FFI and Node compatibility rows.** Node 26's `node:ffi` is experimental.
+Bun and Deno both describe their `node:` coverage as incomplete: Bun lists
+modules it implements partially, and Deno reports passing over 75% of Node's own
+test suite.
 
 **On the durable workers row.** `runtime:workers` gives a class addressable
 instances with their own storage, alarms, and WebSockets that hibernate with the
@@ -182,22 +204,21 @@ because it implements `node:http2` — which does serve h2c — while its own
 same server. Measured throughput for all four:
 [Benchmarks](/docs/benchmarks#http2).
 
-**On the stalled-connection row.** Measured, not read from docs: a socket that
-connects and then sends nothing is closed by esrun after **10s**, by Bun after
-**13s** and by Node after **88s** (a 60s `headersTimeout` polled on a 30s
-interval, hence the <Partial />), while Deno was still holding it open past
-**150s**. An idle keep-alive connection goes at 6s on Node, 12s on Bun and 30s
-on esrun; Deno again held past 150s. Versions: esrun 0.15.0, Node 24.14.0, Bun
-1.4.0 (canary), Deno 2.8.3, on Linux, 2026-08-03.
+**On the stalled-connection row.** Measured, not read from docs: a connection
+that sends nothing is closed by esrun, Bun and Node, and held open by Deno for as
+long as the probe waits. Node is <Partial /> because its bound is a 60s
+`headersTimeout` checked on a 30s interval, so a stalled connection lives for
+most of a minute and a half. The per-runtime times, for silent and for idle
+keep-alive connections, are in the
+[HTTP server internals](/docs/internals/http), generated by
+`bench/probe-runtimes.sh`.
 
-**On the HTTP/3 row.** Bun leads here and esrun does not have it. `Bun.serve({
-http3: true })` serves real HTTP/3 over TLS — verified against `curl
---http3-only`, which reports version 3 — on an embedded lsquic stack; it also has
-an HTTP/3 `fetch` client behind `--experimental-http3-fetch`, which is the half
-still marked experimental. Node has no `node:quic` in the current release line.
-Deno ships unstable QUIC *primitives* (`Deno.connectQuic` behind
-`--unstable-net`, with no matching listener), which is a transport with nothing
-speaking HTTP above it.
+**On the HTTP/3 row.** Bun leads here and esrun does not have it.
+`Bun.serve({ http3: true })` serves HTTP/3 over TLS on an embedded lsquic stack;
+Bun 1.4 marks it experimental, hence <Partial />. Node 26 has no `node:quic`.
+Deno ships QUIC *primitives* (`Deno.QuicEndpoint`, `Deno.connectQuic`) behind
+`--unstable-net`, and `Deno.serve` speaks HTTP/1.1 and HTTP/2 only — a transport
+with nothing speaking HTTP above it.
 
 HTTP/3 is not the cheap follow-on that HTTP/2 was, which is why the two rows
 differ: HTTP/2 was another version negotiated on a connection `serve()` already
@@ -239,7 +260,7 @@ a policy for what the module loader may resolve).
 | Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
 | Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
 | Filesystem root jail | always on | <No /> | <No /> | <No /> |
-| Status | alpha | stable (v22.13+) | [proposed](https://github.com/oven-sh/bun/issues/26637) | stable |
+| Status | alpha | stable (v22.13+) | [requested](https://github.com/oven-sh/bun/issues/6617) | stable |
 
 Rows 6–7 are about the module graph: under esrun's default and Node's
 `--permission`, the entry file still runs but a second file needs a grant. Deno
