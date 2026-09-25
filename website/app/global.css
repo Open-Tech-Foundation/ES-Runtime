@@ -326,6 +326,82 @@ button:not(:disabled),
   }
 }
 
+/* Durable-worker diagram (components/DurableDiagram.jsx).
+ *
+ * The story is a sequence of frames the component steps through every 2.6s.
+ * Every element exists in every frame; a frame changes classes, text and
+ * `opacity`, and these make the change read as a change rather than a repaint.
+ *
+ * The commit dot travels from the worker to its file (x=660 → 724), and the
+ * restart dot back. Each plays when its class is applied and stops when the
+ * class goes back to `edw-still`, so the next commit frame restarts it from
+ * zero — removing and re-adding an animation-name is what restarts it. */
+.edw-t {
+  transition:
+    fill 0.45s ease,
+    stroke 0.45s ease;
+}
+.edw-o {
+  transition: opacity 0.4s ease;
+}
+.edw-still {
+  opacity: 0;
+}
+@keyframes edw-commit {
+  0% {
+    transform: translateX(660px);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    transform: translateX(724px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(724px);
+    opacity: 0;
+  }
+}
+@keyframes edw-reload {
+  0% {
+    transform: translateX(724px);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    transform: translateX(660px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(660px);
+    opacity: 0;
+  }
+}
+.edw-commit {
+  animation: edw-commit 1.1s ease-in-out both;
+}
+.edw-reload {
+  animation: edw-reload 1.1s ease-in-out both;
+}
+
+/* Reduced motion: no travelling dots and no fades. The frames still advance —
+ * they are the content — and each frame's colours carry what happened. */
+@media (prefers-reduced-motion: reduce) {
+  .edw-commit,
+  .edw-reload {
+    animation: none;
+    opacity: 0;
+  }
+  .edw-t,
+  .edw-o {
+    transition: none;
+  }
+}
+
 /* Footer org link (logo + name). */
 .otfw-footer {
   background-color: #09090b;

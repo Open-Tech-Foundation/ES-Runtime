@@ -1,5 +1,6 @@
 import BenchRoller from "../components/BenchRoller.jsx";
 import CodeTabs from "../components/CodeTabs.jsx";
+import DurableDiagram from "../components/DurableDiagram.jsx";
 import FrameworkTabs from "../components/FrameworkTabs.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import SandboxDiagram from "../components/SandboxDiagram.jsx";
@@ -189,7 +190,8 @@ export default function HomePage() {
       </section>
 
       {/* Durable workers: the one thing here no other runtime ships in the
-          box. Properties, not numbers — the numbers are on the internals page,
+          box, shown as the story the shop example tells rather than as code.
+          Properties, not numbers — the numbers are on the internals page,
           where the scripts that produce them are named. */}
       <section className="border-b border-zinc-200 dark:border-zinc-800">
         <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
@@ -201,28 +203,16 @@ export default function HomePage() {
               Durable workers: addressable state that outlives the process.
             </p>
           </div>
-          <div className="grid gap-10 lg:grid-cols-2 lg:items-center">
-            <pre className="min-w-0 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950 p-5 text-[13px] leading-relaxed text-zinc-200">
-              <code>
-                <span className="text-brand-400">import</span> {"{ DurableWorker }"} <span className="text-brand-400">from</span> <span className="text-emerald-300">"runtime:workers"</span>;{"\n\n"}
-                <span className="text-brand-400">export class</span> <span className="text-blue-300">Stock</span> <span className="text-brand-400">extends</span> <span className="text-blue-300">DurableWorker</span>{" {\n"}
-                {"  "}<span className="text-blue-300">take</span>{"(n) {\n"}
-                {"    "}<span className="text-brand-400">const</span> left = <span className="text-brand-400">this</span>.state.<span className="text-blue-300">get</span>(<span className="text-emerald-300">"left"</span>) ?? <span className="text-orange-300">5</span>;{"\n"}
-                {"    "}<span className="text-brand-400">if</span> (n {">"} left) <span className="text-brand-400">throw new</span> <span className="text-blue-300">RangeError</span>(<span className="text-emerald-300">"sold out"</span>);{"\n"}
-                {"    "}<span className="text-brand-400">this</span>.state.<span className="text-blue-300">set</span>(<span className="text-emerald-300">"left"</span>, left - n);{"\n"}
-                {"    "}<span className="text-brand-400">return</span> left - n; <span className="text-zinc-500">{"// sent once it is on disk"}</span>{"\n"}
-                {"  }\n}\n\n"}
-                <span className="text-brand-400">await</span> Stock.<span className="text-blue-300">get</span>(<span className="text-emerald-300">"hoodie"</span>).<span className="text-blue-300">take</span>(<span className="text-orange-300">1</span>);{"\n"}
-              </code>
-            </pre>
-            <div className="grid gap-6 sm:grid-cols-2">
-              {durablePoints.map((p) => (
-                <div>
-                  <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{p.title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">{p.body}</p>
-                </div>
-              ))}
-            </div>
+          <div className="mx-auto max-w-5xl rounded-2xl bg-zinc-900 p-6 shadow-xl ring-1 ring-white/10 sm:p-8 dark:shadow-none">
+            <DurableDiagram />
+          </div>
+          <div className="mx-auto mt-12 grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-4">
+            {durablePoints.map((p) => (
+              <div>
+                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{p.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">{p.body}</p>
+              </div>
+            ))}
           </div>
           <p className="mx-auto mt-10 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Killed with <code className="font-mono">SIGKILL</code> under load, the example shop loses no
