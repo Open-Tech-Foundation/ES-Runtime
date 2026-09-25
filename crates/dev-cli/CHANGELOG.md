@@ -52,7 +52,11 @@ is the point, since none of the three has any business in a deployment.
   19, and the esdev templates from about 2,800 lines to about 650.
 
 ### Fixed
-- **`--changed` and `--related` follow aliases.** A test that imports
+-- **`esdev start` reads `.gitignore` again when it changes.** The rules were
+  whatever the file said when the loop began, so a directory ignored afterwards
+  (screenshots, a cache, a browser profile) kept triggering rebuilds and page
+  reloads until esdev was restarted.
+ **`--changed` and `--related` follow aliases.** A test that imports
   `@/db` is selected by a change to `src/db.ts`, and a change to an extended
   tsconfig (`tsconfig.base.json`) selects every test.
 - **`esdev build` prints the bundler's warnings.** They were dropped, and the

@@ -304,7 +304,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     let root = project.source.root.clone();
     let ignored = output_dirs(&project);
-    let gitignore = load_gitignore(&root)?;
+    let ignore_rules = IgnoreRules::load(&root)?;
     let watch_roots = watch_roots(&project);
     let scopes = watch_roots.clone();
     // The *paths*, not just the fact of a change: a stylesheet can be swapped
@@ -316,12 +316,17 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         if let Ok(event) = res
             && crate::watch::is_change(&event.kind)
         {
-            for path in event.paths.iter().filter(|path| {
-                scopes
+            for path in &event.paths {
+                if ignore_rules.refresh(path) {
+                    continue;
+                }
+                let rules = ignore_rules.current();
+                if scopes
                     .iter()
-                    .any(|scope| is_source(path, scope, &ignored, gitignore.as_ref()))
-            }) {
-                let _ = tx.send(path.clone());
+                    .any(|scope| is_source(path, scope, &ignored, rules.as_ref()))
+                {
+                    let _ = tx.send(path.clone());
+                }
             }
         }
     })
@@ -839,6 +844,51 @@ fn is_source(path: &Path, root: &Path, outputs: &[PathBuf], gitignore: Option<&G
     crate::watch::is_interesting(path, root) || crate::watch::is_asset(path, root)
 }
 
+/// The project's `.gitignore`, kept current while the loop runs.
+///
+/// Read once, the rules were whatever the file said when `esdev start` began:
+/// a directory added to it afterwards — screenshots, a cache, a browser profile
+/// a script writes into — kept triggering rebuilds, and every rebuild reloads
+/// the page, until the loop was restarted. The watcher already sees the file
+/// change, so that is when the rules are read again.
+struct IgnoreRules {
+    root: PathBuf,
+    file: PathBuf,
+    rules: std::sync::RwLock<Option<Gitignore>>,
+}
+
+impl IgnoreRules {
+    fn load(root: &Path) -> Result<Self, String> {
+        Ok(Self {
+            root: root.to_path_buf(),
+            file: root.join(".gitignore"),
+            rules: std::sync::RwLock::new(load_gitignore(root)?),
+        })
+    }
+
+    /// Whether `path` is the `.gitignore` itself, re-reading it if so. The
+    /// file is not a build input, so its own change is never a rebuild. A file
+    /// that no longer parses leaves the rules it had; the mistake is the
+    /// user's to fix, and dropping every rule would rebuild on everything.
+    fn refresh(&self, path: &Path) -> bool {
+        if path != self.file {
+            return false;
+        }
+        if let Ok(rules) = load_gitignore(&self.root)
+            && let Ok(mut held) = self.rules.write()
+        {
+            *held = rules;
+        }
+        true
+    }
+
+    fn current(&self) -> std::sync::RwLockReadGuard<'_, Option<Gitignore>> {
+        self.rules
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 fn load_gitignore(root: &Path) -> Result<Option<Gitignore>, String> {
     let path = root.join(".gitignore");
     if !path.is_file() {
@@ -1077,6 +1127,34 @@ mod tests {
         let refused = app_port(&flags(&["--allow-listen=8080"]), Some(3000)).expect_err("refused");
         assert!(refused.contains("listen"), "{refused}");
         assert!(refused.contains("PORT"), "{refused}");
+    }
+
+    /// A directory added to `.gitignore` while `esdev start` runs is ignored
+    /// from then on, not only after a restart.
+    #[test]
+    fn a_gitignore_edited_while_the_loop_runs_is_read_again() {
+        let root = std::env::temp_dir().join(format!("esdev-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("shots")).expect("create project");
+        std::fs::write(root.join(".gitignore"), "node_modules/\n").expect("write .gitignore");
+        let shot = root.join("shots/01.png");
+        let rules = IgnoreRules::load(&root).expect("load");
+        assert!(is_source(&shot, &root, &[], rules.current().as_ref()));
+
+        std::fs::write(root.join(".gitignore"), "node_modules/\nshots/\n")
+            .expect("edit .gitignore");
+        assert!(
+            rules.refresh(&root.join(".gitignore")),
+            "the file's own change is taken, not rebuilt for"
+        );
+        assert!(!is_source(&shot, &root, &[], rules.current().as_ref()));
+        assert!(!rules.refresh(&shot));
+
+        // A file that no longer parses keeps the rules it had.
+        std::fs::write(root.join(".gitignore"), "shots/\n[").expect("break .gitignore");
+        rules.refresh(&root.join(".gitignore"));
+        assert!(!is_source(&shot, &root, &[], rules.current().as_ref()));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
