@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-25
+
 ### Added
 
 - `AlarmOptions.onError`'s third argument, the worker it happened to.

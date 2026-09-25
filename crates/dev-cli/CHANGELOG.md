@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-25
+
 ### Changed
 - **`esdev <file>` reads `esdev.json`**, like every other command: its
   `jsx`, `alias` and `plugins` apply, and a file that does not parse is an
