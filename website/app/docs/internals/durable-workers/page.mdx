@@ -355,6 +355,63 @@ shard speaks first: when its half of the protocol is installed it sends
 imports `runtime:workers`, or whose top-level code never finishes, fails the
 start after 30 seconds instead of leaving a call waiting for ever.
 
+## On real storage
+
+Every durable write is a commit, and every commit is a disk sync. So what a
+durable worker costs is mostly a count of syncs, multiplied by what the storage
+charges for one. The same release build, on the same machine, on tmpfs and on a
+spinning disk:
+
+| | tmpfs | Spinning disk |
+| --- | --- | --- |
+| A call that touches no state | 4.5 µs | 4.4 µs |
+| A call that reads resident state | 5.3 µs | 5.1 µs |
+| A call that writes, one after another | 82 µs | 11.2 ms |
+| The same, 500 in flight on one worker | 8.5 µs | 14.9 µs |
+| The first call on a new worker | 2.1 ms | 59 ms |
+
+<sub>`bench/durable-workers.js`, best of 3, release build, Linux, 2026-09-25.</sub>
+
+The rows that do not write are the same on both, because the state is resident.
+The row that writes one call at a time is the device's sync rate. The row below
+it is why a busy worker is not bound by that rate: consecutive calls share their
+commits (the mailbox section above). Nothing shares a sync *across* workers,
+though, because each worker is its own file, so work spread over many workers
+is bound by the device.
+
+The shop example makes that concrete. It uses a new worker per customer, a
+handful of writes per journey, and 32 customers at once:
+
+| | tmpfs | Spinning disk |
+| --- | --- | --- |
+| Journeys a second | 212 | 6 |
+| Add to cart, p50 / p99 | 18 ms / 131 ms | 0.9 s / 4.0 s |
+| Checkout, p50 / p99 | 66 ms / 154 ms | 2.3 s / 4.4 s |
+| Acknowledged orders lost to `SIGKILL` | 0 of 114 | 0 of 101 |
+| Checkouts in flight at the kill, finished after restart | 14 of 14 | 15 of 15 |
+| Restart | 64 ms | 70 ms |
+
+<sub>`bench/durable-shop.js` (`WORKDIR` selects the disk), release build, Linux, 2026-09-25.</sub>
+
+Durability does not depend on the disk; throughput does, by a factor of about
+thirty here. **Durable workers need storage with fast syncs**, meaning an SSD
+or NVMe. A spinning disk keeps every promise and runs at a small fraction of the
+speed.
+
+## When shards pay
+
+Shards move the classes' code to other threads. They add a message each way per
+call (about 1 ms at p50 in the shop) and each costs a V8 isolate's memory. What
+they buy is isolation: a memory ceiling and a watchdog that end one shard
+instead of the process, and CPU work that does not block the thread serving
+requests.
+
+They do not buy throughput for work that waits on storage. The shop, which
+waits on disk and not on CPU, runs slightly slower with shards (212 journeys a
+second unsharded, 192 with two, 188 with four). Use shards when a worker's
+methods do real computation, or when one misbehaving worker must not take the
+server with it, not to make I/O-bound workers faster.
+
 ## What this is not
 
 Not an actor model. The [non-goal](/docs/scope) — no process model, scheduler,

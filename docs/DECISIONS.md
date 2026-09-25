@@ -661,6 +661,22 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D132 — What the shop example left open · *Open (2026-09-25)*
+
+**Context:** `examples/shop` (a cart per customer, stock per product, a webhook per order, on shards) was built to find what durable workers lack under realistic use, and `bench/durable-shop.js` put it under load, `SIGKILL` and contention. What it found and fixed is recorded in D128–D131, the D81 amendment and the changelog: writes escaping a transaction, a gate that released results early, alarms lost under eviction, catalog and mailbox serialization, the state directory, cycles, ungated calls between workers, and the `runtime:context` promise tax. This entry records what is still open, so each item can be argued on its own evidence.
+
+**Open:**
+
+- **Work across several workers is atomic only by hand.** The shop's checkout touches the customer, one inventory per product and a delivery. It is made safe with about forty lines of the standard recipe: write the intent first, make every step idempotent under an id, and let `start()` finish an interrupted one. Under `SIGKILL` it held: 29 checkouts in flight across two runs, all finished after restart. D80 deferred durable *execution* until there was a use case to argue it against, and this is one. **Proposal:** a small class over workers and alarms that owns the intent and the resume, with the shop's checkout as its first test, and still no second subsystem.
+- **Shards and bundling rub.** A sharded program needs its classes in a module a shard can import on its own. With `esdev build`, that means a second target whose classes are also bundled into the server, and `static durableName` on every class, because a minified class name is a different storage name. **Proposal:** have `esdev build` treat `configure({ module: new URL("./x.js", import.meta.url) })` the way it treats `new Worker(new URL(...))`, emitting that module as its own chunk, and say plainly in the docs that minified builds need `durableName`.
+- **Memory under churn is unexplained.** The shop's server sat at 330–480 MB RSS while serving about 2,000 new customers in ten seconds, with `maxLive` at 128. Nothing is known to leak, but nothing has attributed it either (V8 heap, SQLite page caches per open file, the catalog). **Proposal:** measure with `runtime:diagnostics`' memory readings (D91) before changing anything.
+- **Throughput across many workers is the device's sync rate.** By design (D128): each worker is its own file, so writes to different workers cannot share a sync. On a spinning disk the shop runs about 30 times slower than on fast storage, while losing nothing. The requirement for fast-sync storage is documented. A shared write-ahead log across workers would lift it, at the cost of the per-worker lock and recovery that D80 is built on; that is not proposed.
+- **The published types trail the runtime.** The shop, installing `@opentf/esrun-types` from npm, did not see shard options the runtime already had. **Proposal:** publish the types package in the same release as the runtime whose surface it describes, as its changelog already promises.
+
+**Decision:** none yet. Each item is to be taken up as its own entry when it is worked on.
+
+---
+
 ### D131 — `runtime:context` rides V8's own continuation data; a task is a unit the host starts · *Proposed (2026-09-25)* · *amends D88*
 
 **Context:** D88 carries a context across `await` with V8's promise hook. It fires on every promise: `Init` stamps each new promise with a five-element record in a private slot, and `Before`/`After` swap the current record around each reaction job. D88 made it lazy so that programs which never load `runtime:context` pay nothing, but a program that does load it pays on every promise it creates, not only on the ones whose context it reads. Measured (release build): a promise continuation goes from 0.16 µs to 4.4 µs, about 27× slower, as soon as the module is imported. D130 made `runtime:workers` depend on it, and a durable call went from 3.8 µs to 17 µs. The same tax already applied to every program using `runtime:diagnostics`, which imports it too.
