@@ -46,6 +46,7 @@ experimental or flag-gated one is <Partial />.
 | Built-in Postgres / MySQL client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
+| First-party SMTP client | <Partial /> | <No /> | <No /> | <No /> |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Partial /> | <Partial /> |
 | Capability sandbox (deny by default) | <Yes /> | <Partial /> | <No /> | <Yes /> |
 | Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
@@ -108,6 +109,11 @@ limit keeps running, and Bun's own compatibility table lists it as missing.
 Bun and Deno both describe their `node:` coverage as incomplete: Bun lists
 modules it implements partially, and Deno reports passing over 75% of Node's own
 test suite.
+
+**On the SMTP row.** esrun's is a first-party package,
+[`@opentf/esrun-smtp`](/docs/guides/email), JavaScript over `runtime:net` —
+<Partial /> for the same reason as the database clients. The other three leave
+mail to npm, where `nodemailer` needs `node:net`, which esrun does not provide.
 
 **On the durable workers row.** `runtime:workers` gives a class addressable
 instances with their own storage, alarms, and WebSockets that hibernate with the

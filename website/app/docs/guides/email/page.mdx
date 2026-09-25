@@ -1,0 +1,142 @@
+---
+title: Sending email
+description: Send mail over SMTP with @opentf/esrun-smtp — providers, attachments, failures and local testing.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Sending email
+
+[`@opentf/esrun-smtp`](https://www.npmjs.com/package/@opentf/esrun-smtp) sends
+mail over SMTP. It is written in JavaScript over [`runtime:net`](/api/net), so it
+needs no grant beyond reaching the mail server.
+
+```sh
+npm install @opentf/esrun-smtp
+```
+
+## Send a message
+
+```js
+import { env } from "runtime:process";
+import { createTransport } from "@opentf/esrun-smtp";
+
+const mail = createTransport({
+  host: "smtp.example.com",
+  user: "app@example.com",
+  password: env.SMTP_PASSWORD,
+});
+
+await mail.send({
+  from: "Example App <app@example.com>",
+  to: "ada@example.com",
+  subject: "Your receipt",
+  text: "Thanks for your order.",
+  html: "<p>Thanks for your <b>order</b>.</p>",
+});
+```
+
+Create one transport when the program starts and reuse it: it keeps sessions
+open between messages. Call `await mail.verify()` at startup to find a wrong
+password before the first email does.
+
+Grant only the server:
+
+```sh
+esrun --allow-net=smtp.example.com --allow-env=SMTP_PASSWORD server.js
+```
+
+## Connect to a provider
+
+Port 465 is TLS from the first byte; 587 is `STARTTLS`, which the client
+requires rather than attempts. Both are encrypted before any credential is sent.
+
+| Provider | Settings |
+| --- | --- |
+| Amazon SES | `host: "email-smtp.<region>.amazonaws.com"`, SMTP credentials from the SES console |
+| Postmark | `host: "smtp.postmarkapp.com"`, the server token as both `user` and `password` |
+| Gmail, Google Workspace | `host: "smtp.gmail.com"`, `user`, and an OAuth `accessToken` (XOAUTH2) |
+| Microsoft 365 | `host: "smtp.office365.com"`, `user`, and an OAuth `accessToken` (XOAUTH2) |
+
+An internal relay whose certificate your own authority signed:
+
+```js
+import { file } from "runtime:fs";
+
+const mail = createTransport({
+  host: "relay.internal",
+  ca: await file("certs/internal-ca.pem").text(),
+});
+```
+
+A relay on the same host that speaks only plaintext needs both
+`security: "none"` and, if it asks for a login, `allowPlaintextAuth: true`. The
+client refuses a login over plaintext otherwise.
+
+## Attachments and inline images
+
+```js
+import { file } from "runtime:fs";
+
+await mail.send({
+  from: "app@example.com",
+  to: "ada@example.com",
+  subject: "Invoice 1042",
+  html: '<img src="cid:logo"><p>Your invoice is attached.</p>',
+  attachments: [
+    { filename: "invoice-1042.pdf", content: file("invoices/1042.pdf") },
+    { filename: "logo.png", content: file("public/logo.png"), cid: "logo" },
+  ],
+});
+```
+
+`content` takes a string, bytes, or a `Blob` — `file()` from `runtime:fs` is
+one. An attachment with a `cid` is shown inside the HTML rather than offered as
+a download.
+
+## Handle failures
+
+`send()` resolves when the server has accepted the message for at least one
+recipient. Check `rejected` for the ones it refused:
+
+```js
+const { accepted, rejected } = await mail.send(message);
+for (const { address, reply } of rejected) log.warn("undeliverable", address, reply.code);
+```
+
+It throws an `SmtpError` when nothing was sent. `permanent` says whether to try
+again — a `4xx` reply, a timeout or a lost connection is worth retrying; a
+refused address or login is not:
+
+```js
+import { SmtpError } from "@opentf/esrun-smtp";
+
+try {
+  await mail.send(message);
+} catch (e) {
+  if (e instanceof SmtpError && !e.permanent) await retryLater(message);
+  else throw e;
+}
+```
+
+## Test locally
+
+[Mailpit](https://mailpit.axllent.org) catches mail and shows it in a browser:
+
+```sh
+docker run -d -p 1025:1025 -p 8025:8025 axllent/mailpit
+```
+
+```js
+const mail = createTransport({ host: "127.0.0.1", port: 1025, security: "none" });
+```
+
+Messages appear at `http://localhost:8025`.
+
+<Callout type="note" title="Every option and error code">
+  The package README lists every connection option, message field and error
+  code.
+</Callout>
+
+How the client works, and why it is a package rather than part of the runtime:
+[Internals: SMTP](/docs/internals/smtp).

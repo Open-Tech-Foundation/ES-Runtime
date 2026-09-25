@@ -1,0 +1,102 @@
+---
+title: "Internals: SMTP"
+description: Why the SMTP client is a package, why every message is 7-bit, and what the session rules cost.
+---
+
+# Internals: SMTP
+
+How [`@opentf/esrun-smtp`](/docs/guides/email) is put together, and why each
+rule it enforces is there. The decision and what was rejected are in
+`docs/DECISIONS.md` (D136).
+
+## A package, not a runtime module
+
+Everything SMTP needs is already in the runtime: `runtime:net` opens a socket
+with TLS from the first byte (`secureTransport: "on"`) or upgrades one in place
+(`"starttls"` and `startTls()`), and verifies the certificate either way. So the
+client is JavaScript over that API, as the [database drivers](/docs/db) are —
+no new code in `esrun`, and no new capability: reaching the server is
+`--allow-net`, scoped to its host like any other socket.
+
+That also decides what it cannot do. It reaches only hosts the run was granted,
+and a server's certificate is checked by the same verifier every other TLS
+connection uses, with no option to switch it off.
+
+## The layers
+
+| Layer | Does |
+| --- | --- |
+| Reply reader | Splits the byte stream into lines and lines into replies; lifts out the enhanced status code (`5.1.1`); times out. |
+| Framing | Normalises line endings to CRLF, dot-stuffs, appends `CRLF . CRLF`, and refuses a line over 998 octets. |
+| Session | Greeting, `EHLO` (or `HELO`), `STARTTLS` and `EHLO` again, login, one mail transaction at a time. |
+| Message | Builds the MIME tree and headers from the fields. |
+| Transport | The pool, and the one retry. |
+
+Framing belongs to the transport, not the message builder, so that no message —
+built here or passed raw — can be framed wrongly. A line beginning with `.` in
+a raw message is stuffed on the way out like one in a built message.
+
+## Why every message is 7-bit
+
+A built message uses quoted-printable for text, base64 for attachments and
+RFC 2047 encoded-words for headers, so every octet is ASCII and every line is
+short. `8BITMIME` would save the encoding's size overhead, but a message relayed
+onward can meet a hop that lacks it, and the failure then happens where the
+sender cannot see it. The encoding cost is paid once, at the sender, in exchange
+for a message every relay accepts. `8BITMIME` and `SMTPUTF8` are still declared
+when a raw message or a non-ASCII mailbox needs them — and refused, before
+anything is sent, when the server does not offer them.
+
+## Why STARTTLS is required, not attempted
+
+Opportunistic `STARTTLS` — upgrade if the server offers it, carry on in
+plaintext if not — is what an attacker on the path relies on: removing
+`STARTTLS` from the `EHLO` reply is enough to downgrade the session, credentials
+included. So `security: "starttls"` fails when the offer is missing, and
+plaintext is something a transport says (`security: "none"`), not something it
+falls into.
+
+After the upgrade, the extension list is read again from a fresh `EHLO`: the
+first one travelled in plaintext and could have been edited (RFC 3207 §4.2). Any
+bytes the server sent after agreeing to encrypt but before the handshake are
+refused rather than read, since they can only be an injection.
+
+## Logins over plaintext
+
+PLAIN, LOGIN and XOAUTH2 all send the secret itself, base64-encoded rather than
+protected. A login over an unencrypted session is therefore refused before
+anything is sent, unless `allowPlaintextAuth` is set for a relay on the same
+host. It is the rule the MySQL driver (`@opentf/esrun-mysql`) applies to
+fetching a server's public key over plaintext. Error messages name the command
+(`AUTH PLAIN`), never the line, so a refused login does not put the credential
+in a log.
+
+## Pipelining
+
+Without `PIPELINING`, a message to *n* recipients costs *n* + 2 round trips
+before the body: `MAIL FROM`, each `RCPT TO`, `DATA`. With it, those commands go
+in one write and their replies are read in order — one round trip however many
+recipients. The client stops early without it: a refused sender means no
+`RCPT TO`, and no accepted recipient means no `DATA`.
+
+A pipelined `DATA` can be answered `354` even when every recipient was refused.
+The server is then reading message text, and an `RSET` sent next would become
+part of it, so the client ends that empty message first.
+
+## The pool, and the one retry
+
+A TLS handshake and a login are most of the cost of sending one message, so
+sessions are kept. A kept session can be closed by the server at any time — an
+idle limit, a restart — and the first command on it then fails with a lost
+connection. That is the pool's failure, not the message's, so the message is
+sent once more on a fresh session. Only once, and only for a lost connection:
+a refused recipient is an answer, and retrying it would send it twice.
+
+The idle timer is unreferenced, so a script that has sent its mail exits rather
+than waiting out `idleTimeout`.
+
+## Not here
+
+DKIM signing, delivery status notifications (DSN), `CHUNKING`/`BDAT`, and
+receiving mail. DKIM is the next increment; until then, a relay such as SES,
+Postmark, Gmail or Microsoft 365 signs on the sender's behalf.
