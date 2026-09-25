@@ -11,6 +11,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **`TextDecoder` decodes UTF-8 about three times faster.** A one-shot UTF-8
+  decode no longer crosses the op boundary, which copied the bytes and cost a
+  fixed ~300 ns per call; the engine now reads them in place and builds the
+  string directly (~100 ns, below Node's ~130 ns). Every text column of every
+  `runtime:db` row is one of these.
+- **`runtime:db` rows are cheaper to read.** A result is iterated one promise
+  per row instead of an `async *` generator's several, `toArray()` takes whole
+  batches and settles none per row, an integer that fits in a number is read
+  without allocating a BigInt, and SQLite results with the same columns share
+  one row class instead of one per query — so a loop reading rows from several
+  queries stays monomorphic. Reading six mixed columns of a SQLite row went
+  from 1.2 µs to 0.39 µs.
+
 ## [0.32.0] - 2026-09-25
 
 ### Added

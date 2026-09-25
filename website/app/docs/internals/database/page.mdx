@@ -50,10 +50,17 @@ Applications routinely select more columns than they read. A row decodes
 nothing on arrival: one pass over the batch records each column's span, and a
 column is decoded when it is asked for.
 
-The accessor is a **class generated per query with prototype getters** — not a
-`Proxy`, which deoptimizes every access through it, and not per-row property
-definition, which would put every row in dictionary mode. Every row of a query
-shares one hidden class, so the getters stay monomorphic and inlinable.
+The accessor is a **class generated per result shape with prototype getters** —
+not a `Proxy`, which deoptimizes every access through it, and not per-row
+property definition, which would put every row in dictionary mode. Every row of
+a shape shares one hidden class, so the getters stay monomorphic and inlinable.
+
+Per *shape*, not per query: the built-in SQLite backend and the Postgres driver
+both keep one class for each distinct set of columns, reused across queries and
+connections. A class per query hands every result a new hidden class, so a line
+of application code that reads rows from a handful of queries — or from a pool of
+a hundred connections — goes megamorphic, and each column read becomes a generic
+lookup instead of an inlined getter.
 
 <Callout type="warning" title="The cost: spreading a row does not copy it">
   Prototype getters are not own properties, so `{ ...row }` yields an empty

@@ -103,6 +103,80 @@ fn an_integer_too_large_for_a_number_survives_the_round_trip() {
     assert_eq!(stdout(&out).trim(), "bigint 9007199254740993");
 }
 
+/// An integer is read as two 32-bit halves when it fits in a number, and as a
+/// BigInt only when it does not. The edges are where the two paths meet: the
+/// safe range's own ends, one past each, and the halves' sign boundaries.
+#[test]
+fn an_integer_is_a_number_exactly_when_a_number_holds_it() {
+    let out = run(
+        "int-edges",
+        r#"
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite::memory:", { driver: sqlite });
+        await db.execute("CREATE TABLE t (i INTEGER, v INTEGER)");
+        const values = [
+          0n, 1n, -1n, 4294967295n, 4294967296n, -4294967296n, -4294967297n,
+          9007199254740991n, -9007199254740991n, 9007199254740992n, -9007199254740992n,
+          9223372036854775807n, -9223372036854775808n,
+        ];
+        for (const [i, v] of values.entries()) await db.execute("INSERT INTO t VALUES (?, ?)", [i, v]);
+        for (const row of await (await db.query("SELECT v FROM t ORDER BY i")).toArray()) {
+          console.log(typeof row.v, String(row.v));
+        }
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "number 0\nnumber 1\nnumber -1\nnumber 4294967295\nnumber 4294967296\n\
+         number -4294967296\nnumber -4294967297\nnumber 9007199254740991\n\
+         number -9007199254740991\nbigint 9007199254740992\nbigint -9007199254740992\n\
+         bigint 9223372036854775807\nbigint -9223372036854775808"
+    );
+}
+
+/// `toArray()` takes whole batches and `for await` takes one row at a time;
+/// both must see every row of a result spanning several batches, and a loop
+/// that throws must close the cursor exactly as one that breaks does.
+#[test]
+fn every_way_of_reading_a_result_sees_the_same_rows_and_closes_it() {
+    let out = run(
+        "read-paths",
+        r#"
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
+        await db.execute("CREATE TABLE t (a INTEGER, pad TEXT)");
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < 3000; i++) {
+            await tx.execute("INSERT INTO t VALUES (?, ?)", [i, "x".repeat(100)]);
+          }
+        });
+        const all = await (await db.query("SELECT a, pad FROM t ORDER BY a")).toArray();
+        let iterated = 0, inOrder = true;
+        for await (const row of await db.query("SELECT a, pad FROM t ORDER BY a")) {
+          if (row.a !== iterated++) inOrder = false;
+        }
+        let thrown = null;
+        try {
+          for await (const row of await db.query("SELECT a FROM t")) {
+            if (row.a === 10) throw new Error("stop");
+          }
+        } catch (e) {
+          thrown = e.message;
+        }
+        const first = await (await db.query("SELECT a FROM t ORDER BY a DESC")).first();
+        const after = await (await db.query("SELECT count(*) AS n FROM t")).first();
+        console.log(all.length, all[2999].a, iterated, inOrder, thrown, first.a, after.n);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "3000 2999 3000 true stop 2999 3000");
+}
+
 #[test]
 fn the_sql_tag_binds_every_interpolation_as_a_parameter() {
     let out = run(

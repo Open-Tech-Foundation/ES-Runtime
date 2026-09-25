@@ -333,6 +333,13 @@ function decodeDynamic(bytes, view, start, length) {
   const size = length - 1;
   switch (tag) {
     case TAG_INTEGER: {
+      // Two 32-bit halves first: a value that fits in 53 bits — nearly every
+      // integer anyone stores — is assembled as a number with no BigInt
+      // allocated to read it.
+      const high = view.getInt32(at);
+      if (high > -0x200000 && high < 0x200000) {
+        return high * 0x100000000 + view.getUint32(at + 4);
+      }
       const value = view.getBigInt64(at);
       // A bigint only where a number would lose the value. Returning bigint
       // always would be exact and unusable — `row.id + 1` throws — and
@@ -718,6 +725,64 @@ function normalizeQuery(q, params, dialect, backend) {
 // Result sets
 // ---------------------------------------------------------------------------
 
+const NO_ROWS = [];
+
+/// The iterator `for await` drives over a result set.
+///
+/// Written out rather than as an `async *` generator: a generator settles
+/// several promises per `yield`, and a row is too small a unit of work to carry
+/// them. This settles one per row, and pulls and decodes a batch at a time.
+/// What the generator's `finally` gave for free is kept by hand: the cursor is
+/// closed when the rows end, when reading them fails, and when the caller stops
+/// early (`return()`, which `break` calls).
+class RowCursor {
+  constructor(rows) {
+    this._rows = rows;
+    this._batch = NO_ROWS;
+    this._at = 0;
+    this._finished = false;
+  }
+
+  next() {
+    if (this._at < this._batch.length) {
+      return Promise.resolve({ value: this._batch[this._at++], done: false });
+    }
+    return this._refill();
+  }
+
+  async _refill() {
+    if (this._finished) return { value: undefined, done: true };
+    let rows;
+    try {
+      rows = await this._rows._nextRows();
+    } catch (e) {
+      this._finished = true;
+      await this._rows.close();
+      throw e;
+    }
+    if (rows === null) {
+      this._finished = true;
+      this._batch = NO_ROWS;
+      await this._rows.close();
+      return { value: undefined, done: true };
+    }
+    this._batch = rows;
+    this._at = 1;
+    return { value: rows[0], done: false };
+  }
+
+  async return(value) {
+    this._finished = true;
+    this._batch = NO_ROWS;
+    await this._rows.close();
+    return { value, done: true };
+  }
+
+  [Symbol.asyncIterator]() {
+    return this;
+  }
+}
+
 /// An async-iterable result set that pulls one batch at a time.
 ///
 /// Never the whole result: a table larger than memory streams through this at
@@ -772,25 +837,32 @@ class Rows {
     );
   }
 
-  async *[Symbol.asyncIterator]() {
-    try {
-      while (!this._done) {
-        const batch = await this._source.next(BATCH_BYTES);
-        this._done = batch.done;
-        // A batch arrives one of two ways, and which one is the backend's
-        // nature rather than its choice: `bytes` for anything that read them
-        // off a socket or out of an engine, `records` for a backend whose
-        // values are already JavaScript. The branch is per batch, not per row.
-        if (batch.records !== undefined) {
-          for (const record of batch.records) yield new this._shape(record);
-        } else if (batch.rows > 0) {
-          const rows = decodeBatch(batch.bytes, this._shape, batch.rows);
-          for (const row of rows) yield row;
+  /// The next batch of rows, decoded, or `null` once the result is finished.
+  ///
+  /// Both ways of reading a result go through here, so a batch is the unit
+  /// everything else is built from: `toArray` takes whole batches and settles
+  /// no promise per row, and `for await` settles one.
+  async _nextRows() {
+    while (!this._done) {
+      const batch = await this._source.next(BATCH_BYTES);
+      this._done = batch.done;
+      // A batch arrives one of two ways, and which one is the backend's nature
+      // rather than its choice: `bytes` for anything that read them off a
+      // socket or out of an engine, `records` for a backend whose values are
+      // already JavaScript. The branch is per batch, not per row.
+      if (batch.records !== undefined) {
+        if (batch.records.length > 0) {
+          return batch.records.map((record) => new this._shape(record));
         }
+      } else if (batch.rows > 0) {
+        return decodeBatch(batch.bytes, this._shape, batch.rows);
       }
-    } finally {
-      await this.close();
     }
+    return null;
+  }
+
+  [Symbol.asyncIterator]() {
+    return new RowCursor(this);
   }
 
   /// The whole result set as an array. The convenience that undoes the
@@ -798,7 +870,13 @@ class Rows {
   /// every caller writing the same loop.
   async toArray() {
     const out = [];
-    for await (const row of this) out.push(row);
+    try {
+      for (let rows = await this._nextRows(); rows !== null; rows = await this._nextRows()) {
+        for (let i = 0; i < rows.length; i++) out.push(rows[i]);
+      }
+    } finally {
+      await this.close();
+    }
     return out;
   }
 
@@ -1034,22 +1112,15 @@ class BaseConnection {
         signal.removeEventListener("abort", onAbort);
       }
     };
-    const iterate = rows[Symbol.asyncIterator].bind(rows);
-    rows[Symbol.asyncIterator] = async function* withSignal() {
-      const inner = iterate();
+    // Wrapped at the batch, which every way of reading a result goes through,
+    // so `for await` and `toArray()` report an abort the same way.
+    const nextRows = rows._nextRows.bind(rows);
+    rows._nextRows = async () => {
       try {
-        for (;;) {
-          const next = await inner.next();
-          if (next.done === true) return;
-          yield next.value;
-        }
+        return await nextRows();
       } catch (e) {
         if (signal.aborted) throw signal.reason;
         throw e;
-      } finally {
-        // Forwarded, not assumed: a caller that breaks out of *this* generator
-        // must still run the inner one's cleanup, which closes the cursor.
-        await inner.return?.(undefined);
       }
     };
     return rows;
@@ -1298,6 +1369,36 @@ function sqliteError(e) {
   return asDbError(e, mapError(e, SQLITE_ERRORS));
 }
 
+/// The row class for a SQLite result of these columns — one per shape for the
+/// whole isolate, not one per query.
+///
+/// A row's columns are getters on a generated class, and V8 keeps reading
+/// `row.id` fast only while the rows reaching that line of the caller's code
+/// share one class. A class per query hands every result a new one, and a loop
+/// that reads rows from a few different queries goes megamorphic. SQLite's
+/// values carry their own type tags, so the names and declared types are the
+/// whole of what distinguishes one shape from another.
+function sqliteShape(columns) {
+  let key = "";
+  for (const column of columns) key += `${column.name}\u0000${column.declType ?? ""}\u0001`;
+  let shape = SQLITE_SHAPES.get(key);
+  if (shape === undefined) {
+    shape = defineRowShape(columns);
+    // Bounded, oldest first: a program generating SQL can produce shapes
+    // without end, and a cache that only grows is a leak with a hit rate.
+    if (SQLITE_SHAPES.size >= SHAPE_LIMIT) {
+      SQLITE_SHAPES.delete(SQLITE_SHAPES.keys().next().value);
+    }
+  } else {
+    SQLITE_SHAPES.delete(key);
+  }
+  SQLITE_SHAPES.set(key, shape);
+  return shape;
+}
+
+const SQLITE_SHAPES = new Map();
+const SHAPE_LIMIT = 1000;
+
 class SqliteConnection extends BaseConnection {
   constructor(id) {
     super({ dialect: SQLITE_DIALECT, backend: "sqlite" });
@@ -1316,7 +1417,7 @@ class SqliteConnection extends BaseConnection {
     } catch (e) {
       throw sqliteError(e);
     }
-    const shape = defineRowShape(result.columns);
+    const shape = sqliteShape(result.columns);
     const id = result.cursor;
     // The first batch came back with the query. When it was the whole answer
     // there is no cursor: nothing to fetch, nothing to close, and the query
