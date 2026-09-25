@@ -350,3 +350,55 @@ fn plain_css_needs_no_tailwind() {
     assert!(css.contains("color: red"), "{css}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `esdev create --styling=tailwind` writes a project this binary builds as
+/// it stands: the stylesheet, its `<link>` and the dependency — installed
+/// here by hand, since a test installs nothing from a registry.
+#[test]
+fn a_created_tailwind_project_builds() {
+    let parent = project("created");
+    for template in ["vanilla", "micro-ui", "react"] {
+        let out = esdev(&parent)
+            .args([
+                "create",
+                template,
+                &format!("--template={template}"),
+                "--styling=tailwind",
+                "--no-install",
+                "-y",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn esdev create");
+        assert!(out.status.success(), "{template}: {}", output(&out));
+        let dir = parent.join(template);
+        let manifest = std::fs::read_to_string(dir.join("package.json")).expect("package.json");
+        assert!(
+            manifest.contains("\"tailwindcss\""),
+            "{template}: {manifest}"
+        );
+        let html = std::fs::read_to_string(dir.join("index.html")).expect("index.html");
+        assert!(
+            html.contains("href=\"./src/styles.css\""),
+            "{template}: {html}"
+        );
+
+        // `react` needs its own dependencies to build, which a test does not
+        // install; the files are what is under test for it.
+        if template == "react" {
+            continue;
+        }
+        install_tailwind(&dir, "4.3.3");
+        let out = esdev(&dir)
+            .arg("build")
+            .output()
+            .expect("spawn esdev build");
+        assert!(out.status.success(), "{template}: {}", output(&out));
+        let css = built_css(&dir.join("dist"));
+        assert!(
+            css.contains("the package's style export"),
+            "{template}: {css}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&parent);
+}

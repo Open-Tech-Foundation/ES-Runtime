@@ -422,7 +422,8 @@ OPTIONS:
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
     --language=<name>           OTF templates only: js (default) or ts
-    --styling=<name>            spa and fullstack only: css or tailwind (default)
+    --styling=<name>            css or tailwind: react, vanilla and micro-ui
+                                default to css, spa and fullstack to tailwind
     --blog, --no-blog           docs only: keep the demo blog (default) or not
     --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
     --no-install                Write the files and stop
@@ -437,8 +438,7 @@ first run. The templates are baked into this binary, so create works offline
 and always writes a project this esdev can build.
 
 On a terminal it asks which template, which mode where there is a choice, the
-OTF axes where the template takes them (language, styling, blog), and whether
-to install. Anywhere else — a pipe, a CI job — it takes the defaults,
+axes the template takes (language, styling, blog), and whether to install. Anywhere else — a pipe, a CI job — it takes the defaults,
 installs nothing and says nothing, because a prompt in a script is a script
 that hangs. Every question has a flag:
 

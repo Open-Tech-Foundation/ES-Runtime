@@ -11640,6 +11640,8 @@ fn otf_axes_are_refused_where_they_do_not_apply() {
         ("spa", "--blog", "means nothing for spa"),
         ("spa", "--language=elm", "no language elm"),
         ("spa", "--styling=sass", "no styling sass"),
+        ("api", "--styling=tailwind", "has no styling"),
+        ("vanilla", "--styling=sass", "no styling sass"),
     ] {
         let dir = parent.join(format!("refused-{template}"));
         let refused = esdev_in(&parent)

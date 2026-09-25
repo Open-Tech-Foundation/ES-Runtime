@@ -12,7 +12,7 @@
 //!
 //! Which of those depends on whether anybody is there. On a terminal it asks
 //! which template, which *mode* if that template has more than one shape, the
-//! OTF axes where the template takes them (language, styling, blog), and
+//! axes the template takes (language, styling, blog), and
 //! whether to install — and away from one it writes the files and says
 //! nothing, because every other command here is a flag grammar that works
 //! unattended and `create` stays one whenever it cannot see a person
@@ -204,9 +204,9 @@ pub struct CreateConfig {
     /// Which language an OTF template scaffolds, or `None` to ask (or take
     /// the default). Meaningless — and refused — for other templates.
     pub language: Option<String>,
-    /// Which stylesheet an OTF app template writes, or `None` to ask (or
-    /// take the default). Only `spa` and `fullstack` ship `app/global.css`;
-    /// refused everywhere else.
+    /// Plain CSS or Tailwind, or `None` to ask (or take the default). Taken
+    /// by the templates with a page to style — `react`, `vanilla`, `micro-ui`,
+    /// `spa` and `fullstack` ([`stylings`]); refused everywhere else.
     pub styling: Option<String>,
     /// Whether the `docs` template keeps its demo blog, or `None` to ask
     /// (or take the default). Refused for every other template.
@@ -328,13 +328,14 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
             }
             Step::Styling => {
                 let template = answers.template.as_deref().expect("template first");
+                let (options, default) = stylings(template).unwrap_or((STYLINGS, DEFAULT_STYLING));
                 match resolve_choice(
                     template,
                     "styling",
                     "styling",
-                    template == "spa" || template == "fullstack",
-                    STYLINGS,
-                    DEFAULT_STYLING,
+                    stylings(template).is_some(),
+                    options,
+                    default,
                     config.styling.as_deref(),
                     "Select a Styling Solution?",
                     ask,
@@ -387,6 +388,7 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     }
     let template = answers.template.expect("the loop answers it");
     let mode = answers.mode;
+    let tailwind = answers.styling.as_deref() == Some("tailwind");
     let otf = match answers.language {
         Some(language) => Some(Otf {
             language,
@@ -406,10 +408,17 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     // withheld files — so from here the list is owned either way.
     let files: Vec<(String, Vec<u8>)> = match &otf {
         Some(otf) => apply_otf(&template, otf, &files),
-        None => files
-            .into_iter()
-            .map(|(path, contents)| (path, contents.to_vec()))
-            .collect(),
+        None => {
+            let files = files
+                .into_iter()
+                .map(|(path, contents)| (path, contents.to_vec()))
+                .collect();
+            if tailwind {
+                apply_tailwind(files)
+            } else {
+                files
+            }
+        }
     };
 
     let target = PathBuf::from(&config.dir);
@@ -734,6 +743,68 @@ const STYLINGS: &[(&str, &str)] = &[
 /// `create-web` starts its menu on Tailwind, so this does too.
 const DEFAULT_STYLING: &str = "tailwind";
 
+/// This repository's own templates that have a page to style. Their plain
+/// choice writes no stylesheet at all — they are hello worlds, and a starter
+/// stylesheet is one more file to delete (D100) — so Tailwind is the only
+/// choice that adds anything.
+const ESDEV_STYLED: &[&str] = &["react", "vanilla", "micro-ui"];
+
+const ESDEV_STYLINGS: &[(&str, &str)] = &[
+    ("css", "Plain CSS — no framework, nothing to install"),
+    ("tailwind", "TailwindCSS v4, compiled by esdev"),
+];
+
+/// Plain, because these templates promise nothing a page ships depends on,
+/// and choosing a framework is choosing a dependency.
+const ESDEV_DEFAULT_STYLING: &str = "css";
+
+/// The styling choices a template offers and its default, or `None` for one
+/// that takes no styling.
+fn stylings(template: &str) -> Option<(&'static [(&'static str, &'static str)], &'static str)> {
+    if template == "spa" || template == "fullstack" {
+        Some((STYLINGS, DEFAULT_STYLING))
+    } else if ESDEV_STYLED.contains(&template) {
+        Some((ESDEV_STYLINGS, ESDEV_DEFAULT_STYLING))
+    } else {
+        None
+    }
+}
+
+/// Where the Tailwind choice puts its stylesheet in one of [`ESDEV_STYLED`].
+const TAILWIND_STYLESHEET: &str = "src/styles.css";
+
+/// Tailwind for one of this repository's own templates: a stylesheet that
+/// imports it, the `<link>` that loads it, and the dependency that provides
+/// it. esdev compiles it (D135); nothing else is configured.
+///
+/// Linked from `index.html`, which every one of them builds from — the
+/// `react` modes included, since both render into it — so the stylesheet is
+/// part of the build rather than an import some module has to remember.
+fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
+    for (path, bytes) in &mut files {
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        let patched = match path.as_str() {
+            "index.html" => text.replacen(
+                "    <script type=\"module\"",
+                &format!(
+                    "    <link rel=\"stylesheet\" href=\"./{TAILWIND_STYLESHEET}\" />\n    <script type=\"module\""
+                ),
+                1,
+            ),
+            "package.json" => patch_tailwind_dep(text),
+            _ => continue,
+        };
+        *bytes = patched.into_bytes();
+    }
+    files.push((
+        TAILWIND_STYLESHEET.to_string(),
+        b"@import \"tailwindcss\";\n".to_vec(),
+    ));
+    files
+}
+
 /// Whether the `docs` template keeps its demo blog. `create-web` starts on
 /// yes; the embedded files are the blog-on-disk state with the config and
 /// page unpatched, so "no" only withholds files and "yes" patches two.
@@ -936,7 +1007,7 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
             && (template == "docs" || otf.styling.as_deref() == Some("tailwind"))
             && let Ok(text) = std::str::from_utf8(&bytes)
         {
-            bytes = otf_patch_tailwind_dep(text).into_bytes();
+            bytes = patch_tailwind_dep(text).into_bytes();
         }
         // The overlay wins, same as modes: a generated file replaces an
         // embedded one rather than being written beside it.
@@ -1039,7 +1110,7 @@ fn otf_patch_library_manifest(content: &str) -> String {
 }
 
 /// A project that imports `tailwindcss` depends on it, explicitly.
-fn otf_patch_tailwind_dep(content: &str) -> String {
+fn patch_tailwind_dep(content: &str) -> String {
     content.replace(
         "\"devDependencies\": {\n",
         "\"devDependencies\": {\n    \"tailwindcss\": \"latest\",\n",
@@ -2096,5 +2167,84 @@ mod tests {
         let page = otf_text(&blogged, "app/docs/page.mdx");
         assert!(page.contains("## Blog (demo)"));
         assert!(page.contains("## Edit Content"));
+    }
+
+    fn plain_written(template: &str, mode: Option<&str>) -> Vec<(String, Vec<u8>)> {
+        let (_, files) = TEMPLATES
+            .iter()
+            .find(|(name, _)| *name == template)
+            .expect("the template is embedded");
+        files_for(files, mode)
+            .into_iter()
+            .map(|(path, contents)| (path, contents.to_vec()))
+            .collect()
+    }
+
+    /// The templates with a page take a styling; the rest refuse one. Ours
+    /// default to plain, the OTF apps to Tailwind as `create-web` does.
+    #[test]
+    fn styling_is_offered_where_there_is_a_page() {
+        for template in ["react", "vanilla", "micro-ui"] {
+            assert_eq!(
+                stylings(template).map(|(_, default)| default),
+                Some("css"),
+                "{template}"
+            );
+        }
+        for template in ["spa", "fullstack"] {
+            assert_eq!(
+                stylings(template).map(|(_, default)| default),
+                Some("tailwind"),
+                "{template}"
+            );
+        }
+        for template in ["api", "lib", "docs", "library"] {
+            assert!(stylings(template).is_none(), "{template}");
+        }
+        // Every template the list names is one that is embedded.
+        for template in ESDEV_STYLED {
+            assert!(
+                TEMPLATES.iter().any(|(name, _)| name == template),
+                "{template}"
+            );
+        }
+    }
+
+    /// Tailwind is three things — the stylesheet, the `<link>` in the head,
+    /// the dependency — in every template and every mode that takes it.
+    #[test]
+    fn tailwind_adds_a_linked_stylesheet_and_its_dependency() {
+        for (template, mode) in [
+            ("vanilla", None),
+            ("micro-ui", None),
+            ("react", Some("static")),
+            ("react", Some("fullstack")),
+        ] {
+            let files = apply_tailwind(plain_written(template, mode));
+            assert_eq!(
+                otf_text(&files, TAILWIND_STYLESHEET),
+                "@import \"tailwindcss\";\n",
+                "{template}"
+            );
+            let html = otf_text(&files, "index.html");
+            let link = html
+                .find("<link rel=\"stylesheet\" href=\"./src/styles.css\" />")
+                .unwrap_or_else(|| panic!("{template}: no link in\n{html}"));
+            assert!(link < html.find("</head>").expect("a head"), "{template}");
+            let manifest: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "package.json")).expect("still JSON");
+            assert!(
+                manifest.pointer("/devDependencies/tailwindcss").is_some(),
+                "{template}: {manifest}"
+            );
+        }
+    }
+
+    /// Plain writes what it always wrote: no stylesheet, no dependency.
+    #[test]
+    fn plain_css_leaves_the_template_as_it_was() {
+        let files = plain_written("vanilla", None);
+        assert!(files.iter().all(|(path, _)| path != TAILWIND_STYLESHEET));
+        assert!(!otf_text(&files, "package.json").contains("tailwindcss"));
     }
 }

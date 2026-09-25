@@ -41,6 +41,11 @@ is the point, since none of the three has any business in a deployment.
   other stylesheet. A project without Tailwind installed is told to install it;
   Tailwind v3 is refused by name, since its configuration is run through
   PostCSS.
+- **`esdev create --styling=tailwind` for `react`, `vanilla` and `micro-ui`.**
+  The styling question the OTF templates ask is now asked by every template
+  with a page: Tailwind adds `src/styles.css`, links it from `index.html` and
+  adds `tailwindcss` to `devDependencies`. Plain CSS stays the default for
+  these three, and `api` and `lib` still refuse the flag.
 - **`esdev build` builds a module named by `new URL("./x.js", import.meta.url)`**
   as a content-hashed chunk of its own, and points the URL at it (DECISIONS
   D134). A built server that started `new Worker(new URL(…))`, or configured
