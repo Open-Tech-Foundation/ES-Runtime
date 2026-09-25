@@ -3718,6 +3718,11 @@ mod tests {
         let mut rt = runtime();
         assert_true(&mut rt, r#"btoa("hello") === "aGVsbG8=""#);
         assert_true(&mut rt, r#"atob("aGVsbG8=") === "hello""#);
+        // One character per byte, even when the bytes are valid UTF-8.
+        assert_true(
+            &mut rt,
+            r#"(() => { const s = atob(btoa("zo\u00c3\u00ab")); return s.length === 4 && s.charCodeAt(3) === 0xab; })()"#,
+        );
         assert_true(
             &mut rt,
             r#"(() => { try { btoa("Ā"); return false; } catch (e) { return e.name === "InvalidCharacterError"; } })()"#,

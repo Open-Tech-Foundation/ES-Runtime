@@ -34,6 +34,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`atob` returns one character per byte.** Decoded bytes that happened to
+  form valid UTF-8 were returned as the text they spelled: `atob("em/Dqw==")`
+  (`z o C3 AB`) came back as the three characters `"zoë"` instead of four,
+  so code rebuilding the bytes with `charCodeAt` lost some — any binary
+  payload could be corrupted by it, silently. Only ASCII now takes the
+  shortcut that skipped the conversion.
 - **esrun's Hono requests/sec is measured again.** Since the workspace moved to
   pnpm, `bench/`'s packages resolve into the root store, outside esrun's
   sandbox when started from `bench/` — so esrun's Hono server died on its first

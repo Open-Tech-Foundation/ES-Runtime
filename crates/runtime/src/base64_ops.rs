@@ -92,23 +92,25 @@ fn decode(s: &str) -> Option<String> {
 
     let decoded = STANDARD_NO_PAD.decode(&cleaned[..end]).ok()?;
 
-    // Fast path: if the output is valid UTF-8 (e.g. pure ASCII), this is
-    // zero-copy, and `v8::String::new` then recognizes the ASCII and builds a
-    // one-byte string directly. Returning the raw bytes for V8 to adopt as
-    // Latin-1 was tried and measured no faster, because that ASCII fast path
-    // already exists — so this keeps the simpler type.
-    match String::from_utf8(decoded) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            // Slow path: convert Latin-1 (u8 > 127) to UTF-8
-            let decoded = e.into_bytes();
-            let mut out = String::with_capacity(decoded.len() + decoded.len() / 4);
-            for b in decoded {
-                out.push(b as char);
-            }
-            Some(out)
-        }
+    // Fast path: ASCII bytes are the same code points in Latin-1 and UTF-8, so
+    // the buffer becomes the string with no copy, and `v8::String::new` then
+    // recognizes the ASCII and builds a one-byte string directly.
+    //
+    // Only ASCII. Bytes that merely *form valid UTF-8* — `C3 AB`, which is "ë"
+    // in UTF-8 — must still come back as two code points (U+00C3 U+00AB): `atob`
+    // returns one character per byte, and a caller rebuilding the bytes with
+    // `charCodeAt` otherwise gets fewer of them than were encoded. A
+    // `from_utf8` check here used to accept those, so any binary payload that
+    // happened to be valid UTF-8 was silently decoded as text.
+    if decoded.is_ascii() {
+        return Some(String::from_utf8(decoded).expect("ASCII is valid UTF-8"));
     }
+    // Every byte to its own code point: U+0000–U+00FF.
+    let mut out = String::with_capacity(decoded.len() * 2);
+    for b in decoded {
+        out.push(b as char);
+    }
+    Some(out)
 }
 
 /// Fuzz entry: `atob`'s decoder (see [`crate::fuzz`]).
@@ -128,6 +130,16 @@ mod tests {
         assert_eq!(encode("fo").as_deref(), Some("Zm8="));
         assert_eq!(encode("foo").as_deref(), Some("Zm9v"));
         assert_eq!(encode("foobar").as_deref(), Some("Zm9vYmFy"));
+    }
+
+    /// Bytes that happen to be valid UTF-8 are still one code point each.
+    /// `em/Dqw==` is `z o C3 AB` — "zoë" in UTF-8 — and must decode to four
+    /// characters, not three.
+    #[test]
+    fn decodes_each_byte_to_one_code_point_even_when_it_is_valid_utf8() {
+        assert_eq!(decode("em/Dqw==").as_deref(), Some("zo\u{c3}\u{ab}"));
+        assert_eq!(decode("4pyT").as_deref(), Some("\u{e2}\u{9c}\u{93}")); // "✓" in UTF-8
+        assert_eq!(decode("aGVsbG8=").as_deref(), Some("hello"));
     }
 
     #[test]
