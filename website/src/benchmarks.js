@@ -182,8 +182,8 @@ export default {
       "node": "graceful",
       "bun": "graceful",
       "deno": "graceful",
-      "llrt": "graceful",
-      "esrun": "exit:1"
+      "llrt": "timeout",
+      "esrun": "graceful"
     }
   },
   "results_rps_rss": {
@@ -214,24 +214,32 @@ export default {
   },
   "dev_server": {
     "vite": {
-      "cold_ms": 49186,
-      "warm_ms": 49580,
-      "peak_mb": 1232
+      "cold_ms": 53293,
+      "warm_ms": 52774,
+      "peak_mb": 1247,
+      "hmr_leaf_ms": 201,
+      "hmr_root_ms": 1033
     },
     "oj": {
-      "cold_ms": 3700,
-      "warm_ms": 3455,
-      "peak_mb": 345
+      "cold_ms": 3814,
+      "warm_ms": 3552,
+      "peak_mb": 374,
+      "hmr_leaf_ms": 38,
+      "hmr_root_ms": 890
     },
     "esdev": {
-      "cold_ms": 3474,
-      "warm_ms": 2320,
-      "peak_mb": 645
+      "cold_ms": 2410,
+      "warm_ms": 2362,
+      "peak_mb": 649,
+      "hmr_leaf_ms": 2613,
+      "hmr_root_ms": 2481
     },
     "bun": {
-      "cold_ms": 3238,
-      "warm_ms": 3370,
-      "peak_mb": 352
+      "cold_ms": 3158,
+      "warm_ms": 3198,
+      "peak_mb": 350,
+      "hmr_leaf_ms": 16,
+      "hmr_root_ms": 846
     }
   },
   "dev_server_method": {
@@ -245,30 +253,32 @@ export default {
     "iters": 3,
     "aggregate": "min",
     "versions": {
-      "vite": "8.3.0",
+      "vite": "8.3.1",
       "oj": "oj 0.2.0",
-      "esdev": "esdev 0.7.0",
+      "esdev": "esdev 0.10.0",
       "bun": "1.4.2"
-    }
+    },
+    "edit": "save-to-visible: a leaf (last component) and the root (Comp0) marker rewritten on the warm server",
+    "edit_timeout_ms": 60000
   },
   "build_time": {
     "vite": {
-      "build_ms": 854,
+      "build_ms": 816,
       "out_kb": 1855,
-      "peak_mb": 642
+      "peak_mb": 854
     },
     "oj": {
-      "build_ms": 10333,
+      "build_ms": 10085,
       "out_kb": 1857,
-      "peak_mb": 744
+      "peak_mb": 716
     },
     "esdev": {
-      "build_ms": 1175,
+      "build_ms": 1162,
       "out_kb": 1855,
-      "peak_mb": 399
+      "peak_mb": 383
     },
     "bun": {
-      "build_ms": 234,
+      "build_ms": 233,
       "out_kb": 1488,
       "peak_mb": 228
     }
@@ -284,10 +294,10 @@ export default {
     "iters": 3,
     "aggregate": "min",
     "versions": {
-      "vite": "8.3.0",
+      "vite": "8.3.1",
       "oj": "oj 0.2.0",
       "bun": "1.4.2",
-      "esdev": "esdev 0.7.0"
+      "esdev": "esdev 0.10.0"
     }
   },
   "results_pg_qps": {
