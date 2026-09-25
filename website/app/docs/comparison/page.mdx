@@ -12,9 +12,10 @@ export const Partial = () => <StatusIcon status="partial" className="size-4 shri
 # esrun vs Node.js · Bun · Deno
 
 Node.js, Bun, and Deno are general-purpose runtimes with broad toolchains and
-(varying degrees of) Node.js compatibility. esrun is intentionally smaller: a
-sandboxed, standards-only execution core you embed or run directly. The table
-makes the trade-offs explicit.
+(varying degrees of) Node.js compatibility. esrun is intentionally narrower: a
+secure server runtime with a standards-first API, deny-by-default permissions,
+and a separate development binary, [`esdev`](/esdev), for everything that does
+not belong in production. The table makes the trade-offs explicit.
 
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
@@ -47,10 +48,13 @@ makes the trade-offs explicit.
 | Per-worker capabilities | <Yes /> | <No /> | <No /> | <Partial /> |
 | `worker.unref()` | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Worker queue depth (backpressure signal) | <Yes /> | <No /> | <No /> | <No /> |
+| Durable workers (addressable state, alarms) | <Yes /> | <No /> | <No /> | <No /> |
+| Built-in OpenTelemetry export | <Yes /> | <No /> | <No /> | <Yes /> |
 | FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Bundler / test runner | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
+| Tailwind CSS in the toolchain | <Partial /> | <No /> | <Partial /> | <No /> |
 
 **Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental / dev-binary only · <No /> Not supported
 
@@ -76,12 +80,31 @@ for the call-by-call mapping, and [the benchmarks](/docs/benchmarks) for the two
 UDP rows.
 
 **On the database client rows.** esrun is <Partial /> because the drivers are
-first-party *packages* rather than runtime API — `@opentf/esrun-postgres` and
-`@opentf/esrun-redis`, both entirely JavaScript over `runtime:net`, adding no
-native code to the runtime. That is the point of the row below them: Bun ships a
+first-party *packages* rather than runtime API — `@opentf/esrun-postgres`,
+`@opentf/esrun-mysql` (MySQL and MariaDB) and `@opentf/esrun-redis`, all
+entirely JavaScript over `runtime:net`, adding no native code to the runtime. That is the point of the row below them: Bun ships a
 driver per backend as runtime API and its internals are not exported, so a third
 party's second backend starts from nothing, while esrun's ship on the same public
 driver tier anyone else would use. Node and Deno leave both to npm.
+
+**On the durable workers row.** `runtime:workers` gives a class addressable
+instances with their own storage, alarms, and WebSockets that hibernate with the
+instance — the Cloudflare Durable Objects model, in a process you run. The other
+three have no equivalent in the runtime: state and scheduling are left to a
+database and a job queue. See [Durable workers](/docs/guides/durable-workers).
+
+**On the OpenTelemetry row.** `esrun --otel` exports spans over OTLP/HTTP from
+the runtime itself; the program needs no SDK and no `net` grant to reach the
+collector. Deno's built-in export (`OTEL_DENO=1`, stable since 2.4) also covers
+logs and metrics. Node and Bun need the OpenTelemetry SDK from npm; Bun's native
+tracing is in review and not yet released.
+
+**On the Tailwind CSS row.** `esdev` compiles Tailwind v4 with the project's own
+`tailwindcss` and nothing to configure — <Partial /> because it is the
+development binary, not the runtime. Bun's bundler needs the
+`bun-plugin-tailwind` package and a `bunfig.toml` entry. Node has no bundler,
+and Deno's leaves CSS frameworks to other tools. See
+[Tailwind CSS](/esdev/build/tailwind).
 
 ## Redis clients, feature by feature
 
@@ -230,8 +253,9 @@ code may be fetched from, which esrun has no equivalent of because it refuses
 remote modules outright. Node's module policy mechanism was deprecated and
 removed.
 
-esrun's nine denial names — `read`, `write`, `imports`, `net`, `listen`, `env`,
-`run`, `signals`, `workers` — are also what `permissions.has()` takes, and what
+esrun's eleven permission names — `read`, `write`, `imports`, `net`, `listen`,
+`env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail` — are
+the `--allow-`/`--deny-` flag names, what `permissions.has()` takes, and what
 `new Worker(url, { permissions })` takes. See
 [Security model](/docs/security/permissions#granting-capabilities-in-esrun).
 
@@ -250,9 +274,9 @@ esrun's nine denial names — `read`, `write`, `imports`, `net`, `listen`, `env`
   place esrun's `node_modules` walk differs from theirs: Node, Deno and Bun walk
   up to the filesystem root, esrun stops at the directory you run in — and there
   is no flag to move it, because a boundary an argument can widen is not one.
-- **It embeds.** esrun is a Rust library with a driven event loop and no owned
-  thread, designed to run inside a host application — a use case the others do not
-  target.
+- **Two binaries.** `esrun` runs the service and has no development surface;
+  `esdev` bundles, tests, watches and debugs on your machine. Both share every
+  line that decides how a run behaves.
 
 - **WASI is enforced, not advisory.** Node's own docs say its `node:wasi` threat
   model "does not provide secure sandboxing". Here a guest's file access passes

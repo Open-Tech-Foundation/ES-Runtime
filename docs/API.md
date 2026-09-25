@@ -1580,7 +1580,7 @@ if (permissions.has("write")) await fs.write("cache.json", data);
 | Export | Type | Description |
 | ------ | ---- | ----------- |
 | `permissions.denied` | `readonly PermissionName[]` | The names this process may not use, in capability order. |
-| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for a name outside the nine — a typo'd check would otherwise read as a denial and take the degraded path forever. |
+| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for a name outside the eleven — a typo'd check would otherwise read as a denial and take the degraded path forever. |
 
 `PermissionName` is `"read" | "write" | "imports" | "net" | "listen" | "env" |
 "run" | "signals" | "workers"` — the same words the `--deny-<name>` flags use,
