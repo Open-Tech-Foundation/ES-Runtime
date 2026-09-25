@@ -79,6 +79,10 @@ if [ ! -d "$tree/bench/dev-server/apps/app-10000/node_modules" ]; then
     cd apps/app-10000 && npm install --no-audit --no-fund --silent)
 fi
 
+# Start from this checkout's data module, not the committed one, so phases
+# published but not yet committed here accumulate instead of being dropped.
+cp "$root/website/src/benchmarks.js" "$tree/website/src/benchmarks.js"
+
 echo "measuring in $tree at ${head:0:8}" >&2
 (cd "$tree/bench" && bash gen-bench-data.sh "$@")
 

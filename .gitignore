@@ -46,6 +46,8 @@ bench/db/pg/.driver/
 bench/db/mysql/.driver/
 # Sections kept by gen-bench-data.sh so a failed run can resume.
 bench/.cache/
+# Per-run scripts the WebSocket benchmark writes beside itself (esrun's sandbox).
+bench/websocket-chat/.run-*.mjs
 
 # esdev bundle of the Elysia server for the rps_elysia benchmark section
 # (bench/gen-bench-data.sh rebuilds it on every run; the source is tracked).

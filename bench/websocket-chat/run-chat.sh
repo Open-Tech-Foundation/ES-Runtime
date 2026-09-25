@@ -19,6 +19,11 @@
 set -u
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# Run from here, and write the per-run scripts here too: esrun's sandbox is the
+# working directory (DECISIONS D79), and it refuses an entry file outside it —
+# which a script in /tmp is. That, and esrun being given no capabilities while
+# `deno -A` had all of them, is how the esrun column went null.
+cd "$DIR"
 C="${WS_CLIENTS:-32}"
 WARMUP="${WS_WARMUP_MS:-1000}"
 MEASURE="${WS_MEASURE_MS:-3000}"
@@ -36,7 +41,7 @@ have() { case "$1" in
 esac }
 
 client_cmd() { case "$1" in
-  esrun) echo "$ESRUN" ;;
+  esrun) echo "$ESRUN --allow-all" ;;
   bun)   echo "bun" ;;
   deno)  echo "$DENO run -A --quiet" ;;
   node)  echo "node" ;;
@@ -45,7 +50,7 @@ esac }
 server_cmd() { case "$1" in
   bun)   echo "bun" ;;
   deno)  echo "$DENO run -A --quiet" ;;
-  esrun) echo "$ESRUN" ;;
+  esrun) echo "$ESRUN --allow-all" ;;
 esac }
 
 server_script() { case "$1" in
@@ -64,13 +69,24 @@ prelude() { # port
 # a fresh port to dodge TIME_WAIT on rebind.
 run_one() { # server_rt client_rt
   local srt="$1" crt="$2" port=$((PORTN++)) tmp stmp out spid up=""
-  stmp="$(mktemp --suffix=.mjs)"; { prelude "$port"; cat "$(server_script "$srt")"; } > "$stmp"
-  $(server_cmd "$srt") "$stmp" >/dev/null 2>&1 & spid=$!
+  stmp="$(mktemp --tmpdir="$DIR" --suffix=.mjs .run-XXXXXX)"; { prelude "$port"; cat "$(server_script "$srt")"; } > "$stmp"
+  local slog; slog="$(mktemp)"
+  $(server_cmd "$srt") "$stmp" >"$slog" 2>&1 & spid=$!
   for _ in $(seq 60); do (echo > "/dev/tcp/127.0.0.1/$port") 2>/dev/null && { up=1; break; }; sleep 0.1; done
-  if [ -z "$up" ]; then kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null; rm -f "$stmp"; echo "ERR ERR"; return; fi
-  tmp="$(mktemp --suffix=.mjs)"; { prelude "$port"; cat "$DIR/client.js"; } > "$tmp"
-  out="$($(client_cmd "$crt") "$tmp" 2>/dev/null)"
-  kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null; rm -f "$tmp" "$stmp"
+  if [ -z "$up" ]; then
+    # Said, not swallowed: a server that never came up is why a column is null.
+    echo "run-chat.sh: the $srt server did not start:" >&2
+    sed 's/^/  /' "$slog" | head -10 >&2
+    kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null; rm -f "$stmp" "$slog"; echo "ERR ERR"; return
+  fi
+  tmp="$(mktemp --tmpdir="$DIR" --suffix=.mjs .run-XXXXXX)"; { prelude "$port"; cat "$DIR/client.js"; } > "$tmp"
+  local clog; clog="$(mktemp)"
+  out="$($(client_cmd "$crt") "$tmp" 2>"$clog")"
+  if ! grep -q 'MSG_RECV_PER_SEC=' <<<"$out"; then
+    echo "run-chat.sh: the $crt client produced no result:" >&2
+    sed 's/^/  /' "$clog" | head -10 >&2
+  fi
+  kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null; rm -f "$tmp" "$stmp" "$slog" "$clog"
   local sps rps
   sps="$(grep -oE 'MSG_SENT_PER_SEC=[0-9]+' <<<"$out" | head -1 | cut -d= -f2)"
   rps="$(grep -oE 'MSG_RECV_PER_SEC=[0-9]+' <<<"$out" | head -1 | cut -d= -f2)"

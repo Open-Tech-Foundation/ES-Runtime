@@ -35,6 +35,11 @@ namespace) is unstable and may change between minor releases until the API freez
   `rps.sh` now starts esrun from the workspace root (the `cd` D79 prescribes),
   prints a server's output when it dies instead of discarding it, and the
   validator refuses any server or QPS section with no esrun number.
+- **esrun's WebSocket numbers are measured again.** The chat benchmark wrote its
+  per-run scripts to `/tmp` and gave esrun no capabilities, so since the sandbox
+  became the working directory (D79) esrun refused the entry file and both
+  sweeps published `esrun: null`. It now runs from its own directory with
+  `--allow-all`, like `deno -A`, and says why a server or client failed.
 
 ### Changed
 

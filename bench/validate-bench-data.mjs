@@ -198,6 +198,9 @@ if (runtimes.includes("esrun")) {
     ...Object.entries(data.results_rps || {}).map(([k, v]) => [`results_rps.${k}`, v]),
     ["results_pg_qps.pg_qps", data.results_pg_qps?.pg_qps],
     ["results_mysql_qps.mysql_qps", data.results_mysql_qps?.mysql_qps],
+    ...["server", "client"].flatMap((side) =>
+      Object.entries(data.websocket?.[side] || {}).map(([c, v]) => [`websocket.${side}.${c}`, v]),
+    ),
   ];
   for (const [path, row] of subjects) {
     if (row && typeof row.esrun !== "number") {
