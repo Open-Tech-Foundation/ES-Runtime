@@ -62,13 +62,17 @@ async function loadModule(request, base, read) {
   //
   // `join` does not restart at an absolute segment, and esdev has already made
   // a relative `@plugin` absolute against the file that wrote it.
-  const path = isAbsolute(request)
-    ? request
-    : request.startsWith(".")
-      ? join(base, request)
-      : fromFileURL(import.meta.resolve(request));
+  const local = isAbsolute(request) || request.startsWith(".");
+  const path = !local
+    ? fromFileURL(import.meta.resolve(request))
+    : isAbsolute(request)
+      ? request
+      : join(base, request);
   read.add(path);
-  const module = await import(toFileURL(path).href);
+  // A package is imported by its name, not by the path it resolved to: that
+  // path may be where the loader *will* put a CommonJS package's converted
+  // form, which only an import by name writes.
+  const module = await import(local ? toFileURL(path).href : request);
   return { path, base: dirname(path), module: module.default ?? module };
 }
 

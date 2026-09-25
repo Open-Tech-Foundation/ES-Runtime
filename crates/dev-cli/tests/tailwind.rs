@@ -402,3 +402,28 @@ fn a_created_tailwind_project_builds() {
     }
     let _ = std::fs::remove_dir_all(&parent);
 }
+
+/// `@plugin` naming a package loads it through the module loader — a
+/// CommonJS one included, which is what most Tailwind plugins on npm are.
+#[test]
+fn a_plugin_from_a_commonjs_package_is_loaded() {
+    let dir = project("package-plugin");
+    install_tailwind(&dir, "4.3.3");
+    html_project(&dir, "@import \"tailwindcss\";\n@plugin \"tw-tab\";\n");
+    write(
+        &dir,
+        "node_modules/tw-tab/package.json",
+        r#"{ "name": "tw-tab", "version": "1.0.0", "main": "index.js" }"#,
+    );
+    write(
+        &dir,
+        "node_modules/tw-tab/index.js",
+        "module.exports = function () { return \".tab-8 { tab-size: 8 }\"; };\n",
+    );
+
+    let out = esdev(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", output(&out));
+    let css = built_css(&dir.join("dist"));
+    assert!(css.contains(".tab-8 { tab-size: 8 }"), "{css}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

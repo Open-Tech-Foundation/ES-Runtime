@@ -38,7 +38,8 @@ is the point, since none of the three has any business in a deployment.
   Class names are found the way Tailwind's own scanner finds them —
   `.gitignore` honoured, `@source`, `@source not` and `source(…)` followed —
   and the output goes through the same `url()` rewriting and minifying as any
-  other stylesheet. A project without Tailwind installed is told to install it;
+  other stylesheet. `@plugin` loads a plugin beside the stylesheet or from a
+  package, CommonJS ones included. A project without Tailwind installed is told to install it;
   Tailwind v3 is refused by name, since its configuration is run through
   PostCSS.
 - **`esdev create --styling=tailwind` for `react`, `vanilla` and `micro-ui`.**
