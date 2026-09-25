@@ -278,6 +278,57 @@ is used, since these decide where state lives.
 | `module` | `null` | The module the classes are exported from, as an absolute URL. Required with `shards` |
 | `permissions` | `[]` | What a shard is granted, beside the `imports` it always has |
 
+## WebSockets that hibernate
+
+A durable worker can own WebSockets. The runtime holds an accepted socket, not
+the worker's instance, so the worker is evicted when idle while its sockets stay
+connected, and the next message wakes it. The names follow Cloudflare's
+WebSocket Hibernation API.
+
+```js
+import { DurableWorker } from "runtime:workers";
+import { serve } from "runtime:websocket";
+
+export class Room extends DurableWorker {
+  join(ws, name) {
+    this.ctx.acceptWebSocket(ws, [name]);   // the runtime holds it from now on
+    ws.serializeAttachment({ name });       // kept with the socket while the worker sleeps
+  }
+  webSocketMessage(ws, message) {
+    const { name } = ws.deserializeAttachment();
+    for (const peer of this.ctx.getWebSockets()) peer.send(`${name}: ${message}`);
+  }
+  webSocketClose(ws, code, reason, wasClean) {}
+}
+
+for await (const ws of serve({ port: 4001 })) await Room.get("lobby").join(ws, "ana");
+```
+
+A socket reaches a worker as an argument: pass a `runtime:websocket` connection
+(or a client `WebSocket`) to a method, and it arrives as a handle, not a copy.
+The method takes it with `ctx.acceptWebSocket`; a socket it does not accept stays
+the caller's.
+
+| | |
+| --- | --- |
+| `ctx.acceptWebSocket(ws, tags?)` | Takes ownership. At most 10 tags, 256 characters each. |
+| `ctx.getWebSockets(tag?)` | The sockets this worker owns, optionally only those with `tag`. |
+| `ctx.getTags(ws)` | The tags `ws` was accepted with. |
+| `ctx.setWebSocketAutoResponse({ request, response })` | Answers a message that is exactly `request` without waking the worker. `null` removes it. Held in memory, so set it in `start()`. |
+| `ctx.getWebSocketAutoResponse()` | The pair, or `null`. |
+| `ctx.getWebSocketAutoResponseTimestamp(ws)` | When `ws` was last auto-answered, or `null`. |
+| `ws.send(data)` / `ws.close(code?, reason?)` | Sends and closes. A send waits until the worker's writes so far are committed, and sends on one socket keep their order. |
+| `ws.serializeAttachment(value)` / `ws.deserializeAttachment()` | A structured-clonable value kept with the socket across hibernation. At most 16 KiB. |
+
+The handlers are optional methods: `webSocketMessage(ws, message)`,
+`webSocketClose(ws, code, reason, wasClean)` and `webSocketError(ws, error)`.
+Each runs through the mailbox like a call, after `start()` if the worker was
+hibernating. A binary message arrives as an `ArrayBuffer`.
+
+Sockets do not survive a process restart; clients reconnect. Deleting a worker,
+or `shutdown()`, closes its sockets with `1001` (going away). Sharded workers
+work the same way; the sockets stay on the agent that owns the directory.
+
 ## Shards
 
 With `shards`, a worker's code runs on one of a fixed pool of `Worker`s. Its

@@ -276,6 +276,46 @@ module holds a timer at all. Which is why it is not started for you: eviction
 deliberately has no timer so that a script exits, and an alarm scheduler that
 started itself would undo that for anyone who merely *set* a time.
 
+## Sockets that hibernate
+
+A worker that installed its own listeners on a WebSocket would lose them the
+moment it was evicted, while the socket stayed open: messages would arrive at
+listeners on an instance that no longer exists. So the only workable choice was
+to never evict such a worker, which makes a thousand idle chat rooms a thousand
+resident workers.
+
+Instead, the agent that holds the directory holds the socket. When a worker
+calls `ctx.acceptWebSocket(ws)`, the listeners are installed here, keyed to the
+worker, not to its instance. Eviction then frees the instance and leaves the
+socket connected. When a message arrives for a worker that is not live, it is
+materialized first (its `start()` runs), and then `webSocketMessage` runs as one
+mailbox entry, serialized with calls and alarms like any of them. Events on one
+socket are delivered in order.
+
+A socket reaches a worker as an argument because that is how everything reaches
+a worker. It crosses as a handle rather than a structured clone, since a
+connection cannot be cloned and the worker needs that very one. On a shard, the
+handle is a proxy: sends, closes and attachments are messages to the host, which
+owns the socket as it owns the database. The shard keeps a mirror of its
+sockets' tags and attachments, so `getWebSockets()` and
+`deserializeAttachment()` stay synchronous.
+
+**A send is gated.** A message to a client is a message leaving the worker, so
+`ws.send()` waits until the worker's writes so far are committed, the same
+barrier a reply and a call to another worker wait for. A client is never told
+something the disk has not heard; the test for it ends the process the moment
+the client hears back, and finds the write.
+
+**What survives what.** An attachment (at most 16 KiB) and the tags survive
+hibernation, because they are held with the socket. Neither survives a process
+restart, and neither does the socket: a TCP connection dies with its process.
+Cloudflare can keep sockets across a restart because its edge holds them; this
+runtime has no such tier, so clients reconnect.
+
+**Heartbeats do not wake anything.** An auto-response is matched on the host
+against the exact text of a message and answered there, so an application-level
+ping keeps a connection alive without materializing a worker.
+
 ## Shards: the code moves, the storage does not
 
 A shard is a `Worker` that runs the classes' code. Every database handle stays

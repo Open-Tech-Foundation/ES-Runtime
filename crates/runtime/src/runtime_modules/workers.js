@@ -1637,7 +1637,15 @@ const same_value = (a, b) =>
 // Live workers: the mailbox, the gate, and eviction
 // ---------------------------------------------------------------------------
 
-const LIFECYCLE = new Set(["start", "stop", "alarm", "constructor"]);
+const LIFECYCLE = new Set([
+  "start",
+  "stop",
+  "alarm",
+  "constructor",
+  "webSocketMessage",
+  "webSocketClose",
+  "webSocketError",
+]);
 
 // The workers a call came through, outermost first, as `key(cls, id)` values
 // (D130). It follows the work — `await`s, timers, op callbacks — so a call made
@@ -1709,16 +1717,28 @@ class LiveWorker {
     this.shard.worker.postMessage({ [TAG]: "alarm-sync", key: this.key, at: at && at.getTime() });
   }
 
+  /** Runs this worker's handler for an event on one of its sockets (D133). */
+  socketEvent(kind, id, payload) {
+    const within = [this.key];
+    const entry = socketTable.get(id);
+    const tags = entry?.tags ?? [];
+    const autoAt = entry?.autoAt ?? null;
+    return this.enqueue(() =>
+      callers.run(within, () => this.#invoke("socket", { kind, id, payload, chain: within, tags, autoAt })),
+    );
+  }
+
   #invoke(what, detail) {
     if (this.shard === null) {
       if (what === "alarm") return this.instance.alarm();
+      if (what === "socket") return runSocketHandler(this.instance, detail.kind, handleFor(detail.id), detail.payload);
       const fn = this.instance[detail.method];
       if (typeof fn !== "function" || LIFECYCLE.has(detail.method)) {
         throw new TypeError(
           `${describe(this.cls, this.id)} has no method ${String(detail.method)}()`,
         );
       }
-      return fn.apply(this.instance, detail.args);
+      return fn.apply(this.instance, revive(detail.args));
     }
     // A call still queued when its shard died was never sent, so it is safe to
     // run again: reported as the worker closing, which the reference answers by
@@ -1826,6 +1846,326 @@ class LiveWorker {
 }
 
 const describe = (cls, id) => `${storageName(cls)}(${JSON.stringify(id)})`;
+
+// ---------------------------------------------------------------------------
+// Hibernatable WebSockets (D133)
+// ---------------------------------------------------------------------------
+//
+// A durable worker's sockets belong to this agent, not to the worker's
+// instance. The listeners live here, keyed to the worker, so eviction frees the
+// instance and leaves its sockets connected — and the next message
+// materializes the worker again and runs its `webSocketMessage` through the
+// mailbox, like any call. Cloudflare's WebSocket Hibernation API, which these
+// names follow, with our addressing: a socket reaches a worker as an argument,
+// and the worker takes it with `ctx.acceptWebSocket`.
+
+// A socket crossing into a worker call is this token, not a clone: a
+// connection cannot be cloned, and the worker needs the same one.
+const SOCKET = "__durableSocket";
+// Cloudflare's limits, so code written against either fits both.
+const ATTACHMENT_LIMIT = 16 * 1024;
+const MAX_TAGS = 10;
+const TAG_LENGTH = 256;
+const AUTO_LENGTH = 2048;
+
+// `runtime:websocket`'s server connection and the `WebSocket` global share this
+// surface, and either can be handed to a worker.
+const isConnection = (v) =>
+  v !== null &&
+  typeof v === "object" &&
+  typeof v.send === "function" &&
+  typeof v.close === "function" &&
+  typeof v.addEventListener === "function" &&
+  "binaryType" in v &&
+  "bufferedAmount" in v;
+
+const isToken = (v) => v !== null && typeof v === "object" && typeof v[SOCKET] === "number";
+
+let socketSeq = 0;
+// id -> { id, conn, owner, tags, attachment, autoAt, sends, events, handle, listening }
+const socketTable = new Map();
+const socketIds = new WeakMap(); // connection -> id
+const ownedSockets = new Map(); // worker key -> Set<id>
+const autoResponses = new Map(); // worker key -> { request, response }
+
+/** The token a connection crosses into a call as, registering it if new. */
+function offerSocket(conn) {
+  let id = socketIds.get(conn);
+  if (id === undefined || !socketTable.has(id)) {
+    id = ++socketSeq;
+    socketIds.set(conn, id);
+    socketTable.set(id, {
+      id,
+      conn,
+      owner: null,
+      tags: [],
+      attachment: null,
+      autoAt: null,
+      sends: Promise.resolve(),
+      events: Promise.resolve(),
+      handle: null,
+      listening: false,
+    });
+  }
+  return { [SOCKET]: id };
+}
+
+/** What a call's arguments cross as: sockets by token, the rest by clone. */
+function sendable(args) {
+  return args.map((a) => {
+    if (isConnection(a)) return offerSocket(a);
+    if (a instanceof DurableSocket || a instanceof ShardSocket) return { [SOCKET]: a.socketId };
+    return structuredClone(a);
+  });
+}
+
+/** A socket the call was handed and did not accept stays its caller's. */
+function releaseOffered(args) {
+  for (const a of args) {
+    if (!isToken(a)) continue;
+    const entry = socketTable.get(a[SOCKET]);
+    if (entry && entry.owner === null) socketTable.delete(entry.id);
+  }
+}
+
+function ownedEntry(key, ws) {
+  const id = ws?.socketId;
+  const entry = typeof id === "number" ? socketTable.get(id) : undefined;
+  if (entry === undefined || entry.owner !== key) {
+    throw new TypeError("that WebSocket has not been accepted by this durable worker");
+  }
+  return entry;
+}
+
+function checkTags(tags) {
+  if (!Array.isArray(tags) || tags.some((t) => typeof t !== "string")) {
+    throw new TypeError("acceptWebSocket(ws, tags): tags must be an array of strings");
+  }
+  if (tags.length > MAX_TAGS) {
+    throw new TypeError(`acceptWebSocket(ws, tags): at most ${MAX_TAGS} tags a socket`);
+  }
+  if (tags.some((t) => t.length > TAG_LENGTH)) {
+    throw new TypeError(`acceptWebSocket(ws, tags): a tag is at most ${TAG_LENGTH} characters`);
+  }
+  return [...tags];
+}
+
+/** Hands socket `id` to worker `key`, and starts listening on it here. */
+function acceptSocket(key, id, tags) {
+  const entry = socketTable.get(id);
+  if (entry === undefined) {
+    throw new TypeError("acceptWebSocket(ws): that WebSocket was not handed to this call");
+  }
+  if (entry.owner !== null && entry.owner !== key) {
+    throw new TypeError(`acceptWebSocket(ws): that WebSocket already belongs to ${describeKey(entry.owner)}`);
+  }
+  entry.owner = key;
+  entry.tags = checkTags(tags);
+  let owned = ownedSockets.get(key);
+  if (!owned) ownedSockets.set(key, (owned = new Set()));
+  owned.add(id);
+  if (!entry.listening) {
+    entry.listening = true;
+    // Bytes rather than a Blob, so a binary message can cross to a shard.
+    entry.conn.binaryType = "arraybuffer";
+    entry.conn.addEventListener("message", (e) => onSocketEvent(id, "message", e.data));
+    entry.conn.addEventListener("close", (e) =>
+      onSocketEvent(id, "close", { code: e.code, reason: e.reason, wasClean: e.wasClean }),
+    );
+    entry.conn.addEventListener("error", (e) => onSocketEvent(id, "error", e.error ?? new Error(e.message ?? "WebSocket error")));
+  }
+}
+
+function forgetSocket(entry) {
+  socketTable.delete(entry.id);
+  ownedSockets.get(entry.owner)?.delete(entry.id);
+}
+
+// An event on a socket a worker owns. A message that is exactly the worker's
+// auto-response request is answered here without waking it; anything else
+// materializes the worker if it is hibernating and runs its handler through the
+// mailbox. Events on one socket are delivered in order.
+function onSocketEvent(id, kind, payload) {
+  const entry = socketTable.get(id);
+  if (entry === undefined || entry.owner === null) return;
+  if (kind === "message" && typeof payload === "string") {
+    const auto = autoResponses.get(entry.owner);
+    if (auto !== undefined && payload === auto.request) {
+      entry.conn.send(auto.response);
+      entry.autoAt = new Date();
+      return;
+    }
+  }
+  const owner = entry.owner;
+  entry.events = entry.events
+    .then(async () => {
+      const at = owner.indexOf("\u0000");
+      const cls = names.get(owner.slice(0, at));
+      if (cls === undefined || shuttingDown) return;
+      const worker = await materialize(cls, owner.slice(at + 1));
+      await worker.socketEvent(kind, id, payload);
+    })
+    .catch((e) => {
+      console.error(`${describeKey(owner)}: its WebSocket ${kind} handler failed:`, e);
+    })
+    .finally(() => {
+      if (kind === "close") forgetSocket(entry);
+    });
+}
+
+// A send from inside a worker is a message leaving it: it waits until the
+// worker's writes so far are committed (D133, as D130 does for calls), and
+// sends on one socket keep their order.
+function socketSend(id, data) {
+  const entry = socketTable.get(id);
+  if (entry === undefined) return;
+  const payload = data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? data.slice(0) : data;
+  entry.sends = entry.sends
+    .then(async () => {
+      const worker = entry.owner === null ? undefined : live.get(entry.owner);
+      await worker?.state.committed();
+      entry.conn.send(payload);
+    })
+    .catch(() => {});
+}
+
+function socketClose(id, code, reason) {
+  const entry = socketTable.get(id);
+  if (entry === undefined) return;
+  entry.sends = entry.sends.then(() => entry.conn.close(code, reason)).catch(() => {});
+}
+
+function socketAttach(id, bytes) {
+  const entry = socketTable.get(id);
+  if (entry !== undefined) entry.attachment = bytes;
+}
+
+function encodeAttachment(value) {
+  const bytes = encode(value, "serializeAttachment(value)");
+  if (bytes.byteLength > ATTACHMENT_LIMIT) {
+    fail(
+      DurableErrorCode.StateTooLarge,
+      `serializeAttachment: ${bytes.byteLength} bytes is over the ${ATTACHMENT_LIMIT}-byte limit for an attachment`,
+    );
+  }
+  return bytes;
+}
+
+/** Closes every socket `key` owns — the worker was deleted, or the runtime is
+ * shutting down. 1001 is "going away", which a client can tell from a failure. */
+function closeOwned(key, reason) {
+  for (const id of [...(ownedSockets.get(key) ?? [])]) {
+    const entry = socketTable.get(id);
+    if (entry) {
+      try {
+        entry.conn.close(1001, reason);
+      } catch {
+        // Already closing.
+      }
+      forgetSocket(entry);
+    }
+  }
+  ownedSockets.delete(key);
+  autoResponses.delete(key);
+}
+
+/**
+ * A worker's view of one socket it was handed or owns. The same object for the
+ * same socket while the worker is live.
+ */
+class DurableSocket {
+  #id;
+  constructor(id) {
+    this.#id = id;
+  }
+  get socketId() {
+    return this.#id;
+  }
+  get protocol() {
+    return socketTable.get(this.#id)?.conn.protocol ?? "";
+  }
+  send(data) {
+    socketSend(this.#id, data);
+  }
+  close(code, reason) {
+    socketClose(this.#id, code, reason);
+  }
+  serializeAttachment(value) {
+    socketAttach(this.#id, encodeAttachment(value));
+  }
+  deserializeAttachment() {
+    const bytes = socketTable.get(this.#id)?.attachment;
+    return bytes ? decode(bytes, CODEC_STRUCTURED_CLONE, "attachment") : null;
+  }
+}
+
+Object.defineProperty(DurableSocket.prototype, Symbol.toStringTag, { value: "DurableSocket" });
+
+// The handler for an event, if the class has one. Shared by both halves.
+function runSocketHandler(instance, kind, ws, payload) {
+  if (kind === "message") return instance.webSocketMessage?.(ws, payload);
+  if (kind === "close") return instance.webSocketClose?.(ws, payload.code, payload.reason, payload.wasClean);
+  if (kind === "error") return instance.webSocketError?.(ws, payload);
+  return undefined;
+}
+
+function handleFor(id) {
+  const entry = socketTable.get(id);
+  if (entry === undefined) return null;
+  entry.handle ??= new DurableSocket(id);
+  return entry.handle;
+}
+
+/** Arguments as a worker on this agent receives them: tokens become handles. */
+const revive = (args) => args.map((a) => (isToken(a) ? handleFor(a[SOCKET]) : a));
+
+function checkAutoResponse(pair) {
+  if (pair === undefined || pair === null) return null;
+  const { request, response } = pair;
+  if (typeof request !== "string" || typeof response !== "string") {
+    throw new TypeError("setWebSocketAutoResponse({ request, response }): both must be strings");
+  }
+  if (request.length > AUTO_LENGTH || response.length > AUTO_LENGTH) {
+    throw new TypeError(`setWebSocketAutoResponse: request and response are at most ${AUTO_LENGTH} characters`);
+  }
+  return { request, response };
+}
+
+/** The socket half of a worker's `ctx`, for a worker running on this agent. */
+function socketContext(key) {
+  return {
+    acceptWebSocket(ws, tags = []) {
+      if (!(ws instanceof DurableSocket)) {
+        throw new TypeError("acceptWebSocket(ws): pass a WebSocket this call was handed");
+      }
+      acceptSocket(key, ws.socketId, tags);
+    },
+    getWebSockets(tag) {
+      const out = [];
+      for (const id of ownedSockets.get(key) ?? []) {
+        const entry = socketTable.get(id);
+        if (entry && (tag === undefined || entry.tags.includes(tag))) out.push(handleFor(id));
+      }
+      return out;
+    },
+    getTags(ws) {
+      return [...ownedEntry(key, ws).tags];
+    },
+    setWebSocketAutoResponse(pair) {
+      const checked = checkAutoResponse(pair);
+      if (checked === null) autoResponses.delete(key);
+      else autoResponses.set(key, checked);
+    },
+    getWebSocketAutoResponse() {
+      const pair = autoResponses.get(key);
+      return pair ? { ...pair } : null;
+    },
+    getWebSocketAutoResponseTimestamp(ws) {
+      return ownedEntry(key, ws).autoAt;
+    },
+  };
+}
+
 
 // Every live worker in this process, keyed by class and id. This map *is* the
 // single-writer guarantee: one entry, one instance, one mailbox.
@@ -2003,7 +2343,7 @@ async function materialize(cls, id) {
       const controller = new AbortController();
       const pool = config.shards > 0 ? await shardPool() : null;
       if (pool === null) {
-        const ctx = Object.freeze({ id, name, signal: controller.signal });
+        const ctx = Object.freeze({ id, name, signal: controller.signal, ...socketContext(k) });
         materializing = { id, state, ctx };
         let instance;
         try {
@@ -2042,6 +2382,11 @@ async function materialize(cls, id) {
             id,
             alarm,
             state: [...state.encodedEntries()],
+            sockets: [...(ownedSockets.get(k) ?? [])].map((sid) => {
+              const entry = socketTable.get(sid);
+              return { id: sid, tags: entry.tags, attachment: entry.attachment, autoAt: entry.autoAt };
+            }),
+            auto: autoResponses.get(k) ?? null,
           });
           state.alarmHandler = opened.alarm === true;
         } finally {
@@ -2122,7 +2467,9 @@ function reference(cls, id) {
           // crosses a thread yet. What may be passed is then the same rule
           // everywhere, rather than one that tightens the day a worker moves to
           // a shard.
-          const sent = args.map((a) => structuredClone(a));
+          // A WebSocket crosses as a token instead (D133): it cannot be
+          // cloned, and the worker has to be able to take this very one.
+          const sent = sendable(args);
           const chain = callers.get();
           const target = `${storageName(cls)}\u0000${id}`;
           if (chain.includes(target)) {
@@ -2148,13 +2495,17 @@ function reference(cls, id) {
           // — an idle sweep on somebody else's call is enough. That is this
           // layer's business, not the caller's, so it is materialized again
           // rather than reported. Once: a second refusal is a real one.
-          for (let attempt = 0; ; attempt++) {
-            const worker = await materialize(cls, id);
-            try {
-              return structuredClone(await worker.call(property, sent, chain));
-            } catch (e) {
-              if (attempt > 0 || e?.code !== DurableErrorCode.Shutdown || shuttingDown) throw e;
+          try {
+            for (let attempt = 0; ; attempt++) {
+              const worker = await materialize(cls, id);
+              try {
+                return structuredClone(await worker.call(property, sent, chain));
+              } catch (e) {
+                if (attempt > 0 || e?.code !== DurableErrorCode.Shutdown || shuttingDown) throw e;
+              }
             }
+          } finally {
+            releaseOffered(sent);
           }
         };
         methods.set(property, call);
@@ -2221,6 +2572,7 @@ class DurableWorker {
     const db = await registryDb();
     const held = live.get(key(this, id));
     if (held) await evict(held, "deleted");
+    closeOwned(key(this, id), "deleted");
     const file = fileKey(id);
     const dir = `${registry.dir}/${name}/${file.slice(0, 2)}`;
     for (const suffix of ["", "-wal", "-shm"]) {
@@ -2489,6 +2841,26 @@ async function hostSide(shard, message) {
     if (message.op === "delete") return cls.delete(...message.args);
     if (message.op === "list") return cls.list(...message.args);
     throw new TypeError(`unknown durable class operation ${JSON.stringify(message.op)}`);
+  }
+  if (kind === "ws-op") {
+    // A sharded worker's socket operation, done here where the socket is.
+    // Checked against ownership, since a message is only as good as its key.
+    const entry = message.id === undefined ? undefined : socketTable.get(message.id);
+    switch (message.op) {
+      case "accept":
+        return acceptSocket(message.key, message.id, message.tags);
+      case "auto":
+        if (message.pair === null) autoResponses.delete(message.key);
+        else autoResponses.set(message.key, message.pair);
+        return null;
+    }
+    if (entry === undefined || entry.owner !== message.key) {
+      throw new TypeError("that WebSocket has not been accepted by this durable worker");
+    }
+    if (message.op === "send") return socketSend(message.id, message.data);
+    if (message.op === "close") return socketClose(message.id, message.code, message.reason);
+    if (message.op === "attach") return socketAttach(message.id, message.bytes);
+    throw new TypeError(`unknown socket operation ${JSON.stringify(message.op)}`);
   }
   const worker = shard.workers.get(message.key);
   if (worker === undefined) {
@@ -3085,8 +3457,9 @@ async function shardSide(message) {
       // Under the chain it was sent: a `Worker` starts with an empty context,
       // and a call this one makes has to know where it came from (D130).
       const result = await callers.run(message.chain ?? [held.key], () =>
-        fn.apply(held.instance, message.args),
+        fn.apply(held.instance, reviveInShard(held, message.args)),
       );
+      held.offered.clear();
       // Sent ahead of the answer, not waited for: the host's gate waits, so
       // the next call on this worker can start while this one commits.
       held.state.send();
@@ -3098,6 +3471,21 @@ async function shardSide(message) {
       // the next time repeats.
       held.state.alarmChanged(null);
       await callers.run(message.chain ?? [held.key], () => held.instance.alarm());
+      held.state.send();
+      return null;
+    }
+    case "socket": {
+      const held = resident(message.key);
+      const mirror = shardMirror(held, message.id, message.tags);
+      mirror.accepted = true;
+      mirror.autoAt = message.autoAt;
+      try {
+        await callers.run(message.chain ?? [held.key], () =>
+          runSocketHandler(held.instance, message.kind, mirror.handle, message.payload),
+        );
+      } finally {
+        if (message.kind === "close") held.sockets.delete(message.id);
+      }
       held.state.send();
       return null;
     }
@@ -3120,7 +3508,119 @@ async function shardSide(message) {
   }
 }
 
-async function openHere({ key, name, id, alarm, state: entries }) {
+
+// A shard's view of its workers' sockets (D133). The sockets are the host's; a
+// handle here is a proxy whose sends, closes and attachments are messages to
+// it, sent after the worker's pending writes so the host's gate sees them. The
+// tags and attachments are mirrored here so that `getWebSockets()` and
+// `deserializeAttachment()` stay synchronous, as they are unsharded.
+class ShardSocket {
+  #id;
+  #key;
+  constructor(id, key) {
+    this.#id = id;
+    this.#key = key;
+  }
+  get socketId() {
+    return this.#id;
+  }
+  get protocol() {
+    return "";
+  }
+  #op(op, detail) {
+    residents.get(this.#key)?.state.send();
+    handled(ask({ [TAG]: "ws-op", key: this.#key, op, id: this.#id, ...detail }));
+  }
+  send(data) {
+    this.#op("send", { data });
+  }
+  close(code, reason) {
+    this.#op("close", { code, reason });
+  }
+  serializeAttachment(value) {
+    const bytes = encodeAttachment(value);
+    const mirror = residents.get(this.#key)?.sockets.get(this.#id);
+    if (mirror) mirror.attachment = bytes;
+    this.#op("attach", { bytes });
+  }
+  deserializeAttachment() {
+    const bytes = residents.get(this.#key)?.sockets.get(this.#id)?.attachment;
+    return bytes ? decode(bytes, CODEC_STRUCTURED_CLONE, "attachment") : null;
+  }
+}
+
+Object.defineProperty(ShardSocket.prototype, Symbol.toStringTag, { value: "DurableSocket" });
+
+/** The mirror entry for socket `id` of `held`, and its one handle. */
+function shardMirror(held, id, tags = [], attachment = null) {
+  let mirror = held.sockets.get(id);
+  if (mirror === undefined) {
+    mirror = { tags, attachment, autoAt: null, handle: new ShardSocket(id, held.key), accepted: false };
+    held.sockets.set(id, mirror);
+  }
+  return mirror;
+}
+
+// Tokens in a call's arguments become handles, known to the mirror but not
+// accepted until the worker says so.
+function reviveInShard(held, args) {
+  return args.map((a) => {
+    if (!isToken(a)) return a;
+    const id = a[SOCKET];
+    const offered = held.offered.get(id) ?? new ShardSocket(id, held.key);
+    held.offered.set(id, offered);
+    return held.sockets.get(id)?.handle ?? offered;
+  });
+}
+
+function shardSocketContext(key) {
+  const held = () => residents.get(key);
+  const owned = (ws) => {
+    const mirror = held()?.sockets.get(ws?.socketId);
+    if (!mirror?.accepted) throw new TypeError("that WebSocket has not been accepted by this durable worker");
+    return mirror;
+  };
+  return {
+    acceptWebSocket(ws, tags = []) {
+      if (!(ws instanceof ShardSocket)) {
+        throw new TypeError("acceptWebSocket(ws): pass a WebSocket this call was handed");
+      }
+      const checked = checkTags(tags);
+      const h = held();
+      const mirror = shardMirror(h, ws.socketId);
+      mirror.tags = checked;
+      mirror.accepted = true;
+      mirror.handle = h.offered.get(ws.socketId) ?? mirror.handle;
+      h.offered.delete(ws.socketId);
+      // The host takes it before this call's answer arrives: one ordered channel.
+      handled(ask({ [TAG]: "ws-op", key, op: "accept", id: ws.socketId, tags: checked }));
+    },
+    getWebSockets(tag) {
+      const out = [];
+      for (const mirror of held()?.sockets.values() ?? []) {
+        if (mirror.accepted && (tag === undefined || mirror.tags.includes(tag))) out.push(mirror.handle);
+      }
+      return out;
+    },
+    getTags(ws) {
+      return [...owned(ws).tags];
+    },
+    setWebSocketAutoResponse(pair) {
+      const checked = checkAutoResponse(pair);
+      held().auto = checked;
+      handled(ask({ [TAG]: "ws-op", key, op: "auto", pair: checked }));
+    },
+    getWebSocketAutoResponse() {
+      const pair = held()?.auto;
+      return pair ? { ...pair } : null;
+    },
+    getWebSocketAutoResponseTimestamp(ws) {
+      return owned(ws).autoAt;
+    },
+  };
+}
+
+async function openHere({ key, name, id, alarm, state: entries, sockets = [], auto = null }) {
   const cls = names.get(name);
   if (cls === undefined) {
     throw new TypeError(
@@ -3130,7 +3630,7 @@ async function openHere({ key, name, id, alarm, state: entries }) {
   }
   const state = new ShardState(key, { entries, alarm, collections: schemaOf(cls) });
   const controller = new AbortController();
-  const ctx = Object.freeze({ id, name, signal: controller.signal });
+  const ctx = Object.freeze({ id, name, signal: controller.signal, ...shardSocketContext(key) });
   materializing = { id, state, ctx };
   let instance;
   try {
@@ -3139,7 +3639,15 @@ async function openHere({ key, name, id, alarm, state: entries }) {
     materializing = null;
   }
   state.alarmHandler = typeof instance.alarm === "function";
-  residents.set(key, { key, cls, id, instance, state, controller });
+  // Its sockets, as the host holds them: a worker woken from hibernation finds
+  // the ones it accepted before, with their tags and attachments.
+  const held = { key, cls, id, instance, state, controller, sockets: new Map(), offered: new Map(), auto };
+  for (const socket of sockets) {
+    const mirror = shardMirror(held, socket.id, socket.tags, socket.attachment);
+    mirror.accepted = true;
+    mirror.autoAt = socket.autoAt;
+  }
+  residents.set(key, held);
   try {
     if (typeof instance.start === "function") await callers.run([key], () => instance.start());
     await state.sync();
@@ -3437,6 +3945,7 @@ async function shutdown() {
     // One at a time, not `Promise.all`: closing a database checkpoints its WAL,
     // and the engine has been seen to panic when many do so at once.
     for (const worker of [...live.values()]) await evict(worker, "shutdown");
+    for (const owner of [...ownedSockets.keys()]) closeOwned(owner, "shutdown");
     if (registry) await registry.db.close();
     for (const shard of shards?.workers ?? []) {
       if (shard === null) continue;

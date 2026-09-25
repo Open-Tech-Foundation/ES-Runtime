@@ -661,6 +661,32 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D133 — Hibernatable WebSockets: the runtime holds a durable worker's sockets, and a message wakes it · *Proposed (2026-09-25)* · *extends D80*
+
+**Context:** a durable worker cannot own a WebSocket today. It can be handed one, but the listeners it installs belong to its instance, and eviction closes the instance while the socket stays open: after an idle sweep, messages arrive at listeners on a worker that no longer exists. A chat room, a live dashboard or a multiplayer session is exactly the "small, hot state behind a stream of messages" D80 is for, and the workaround is to keep such workers from ever being evicted, which makes `maxLive` and memory meaningless for them. Cloudflare's answer is the WebSocket Hibernation API: the platform holds the socket, the object is evicted while idle, and the next message constructs it again. celld implements the same API. We follow its names and shape (`follow, not copy`) and adapt what our model makes different.
+
+**Decision (maintainer sign-off pending):**
+
+- **A socket reaches a worker as an argument.** `Room.get(id).join(socket, name)` passes a `runtime:websocket` connection, or a client `WebSocket`, as a *handle* rather than a structured clone, and the method takes ownership with `this.ctx.acceptWebSocket(ws, tags)`. That is Cloudflare's "the object accepts it" with our addressing instead of a `fetch`. A handle the method does not accept stays the caller's.
+- **The runtime owns an accepted socket, not the instance.** Listeners live in the agent that holds the directory, keyed to the worker, so eviction (idle or `maxLive`) frees the instance and leaves its sockets connected. Nothing keeps a worker resident because it has sockets: that is what hibernation means here.
+- **Events are methods, run through the mailbox:** `webSocketMessage(ws, message)`, `webSocketClose(ws, code, reason, wasClean)` and `webSocketError(ws, error)`. A message for an evicted worker materializes it first (its `start()` runs), then the handler runs as one mailbox entry, serialized with calls and alarms and gated like them. The `ws` a handler gets is the same object each time for the same socket while the worker is live.
+- **Per-socket state survives hibernation:** `ws.serializeAttachment(value)` and `ws.deserializeAttachment()`, structured clone, at most 16 KiB (Cloudflare's limit). It is held with the socket in memory, not written to the worker's file, because a socket does not survive a process restart either.
+- **`this.ctx.getWebSockets(tag?)` and `this.ctx.getTags(ws)`,** with Cloudflare's limits: at most 10 tags a socket, 256 characters each.
+- **An auto-response answers without waking:** `this.ctx.setWebSocketAutoResponse({ request, response })` makes the runtime reply to a message that is exactly `request` itself, so an application heartbeat does not materialize the worker. `getWebSocketAutoResponseTimestamp(ws)` says when one was last sent. It is held in memory, so a worker sets it in `start()`.
+- **`ws.send()` from inside a worker is gated (D130's reasoning).** A message to a client is a message leaving the worker, so it waits until the worker's writes so far are committed, and sends on one socket stay in order. Cloudflare's output gate holds outgoing WebSocket messages for the same reason. A client is never told something the disk has not heard.
+- **Shards carry it.** Sockets stay on the host, like the database handles (D122); a sharded worker's handles are proxies whose sends, closes and attachments are messages to the host, and events are sent to the shard running the worker. A shard sends its writes before its socket operations, so the gate on the host sees them.
+- **Deleting a worker closes its sockets (1001), and so does `shutdown()`.** A process that exits drops them anyway; saying so explicitly lets a client tell "going away" from a failure.
+
+**Rejected:**
+
+- **Keeping the instance alive while it has sockets.** It is what applications do today, and it is the problem: a thousand idle rooms become a thousand resident workers.
+- **Persisting sockets across a restart.** A TCP connection dies with its process; pretending otherwise would mean a proxy tier this runtime does not have. Cloudflare can, because its edge holds the connection. Ours reconnects, and the docs say so.
+- **An event-timeout knob** (`setHibernatableWebSocketEventTimeout`). A handler is a mailbox entry like any call, bounded by the watchdog when sharded. A second timeout for one kind of entry is a second thing to explain.
+
+**Consequences:** `ctx` gains six methods and the class three optional handlers. No new capability: a socket was already authorized when it was accepted or dialled. `packages/types`, API.md, the site's API and internals pages and the CHANGELOG carry it (D27). The shop example gains live stock updates over a hibernating socket.
+
+---
+
 ### D132 — What the shop example left open · *Open (2026-09-25)*
 
 **Context:** `examples/shop` (a cart per customer, stock per product, a webhook per order, on shards) was built to find what durable workers lack under realistic use, and `bench/durable-shop.js` put it under load, `SIGKILL` and contention. What it found and fixed is recorded in D128–D131, the D81 amendment and the changelog: writes escaping a transaction, a gate that released results early, alarms lost under eviction, catalog and mailbox serialization, the state directory, cycles, ungated calls between workers, and the `runtime:context` promise tax. This entry records what is still open, so each item can be argued on its own evidence.

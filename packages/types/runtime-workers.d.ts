@@ -1,4 +1,6 @@
 declare module "runtime:workers" {
+  import type { WebSocketConnection } from "runtime:websocket";
+
   /**
    * Settings for every durable worker in this process.
    *
@@ -194,7 +196,46 @@ declare module "runtime:workers" {
     readonly name: string;
     /** Aborts when this worker is being closed. */
     readonly signal: AbortSignal;
+    /**
+     * Takes ownership of a WebSocket this call was handed. The runtime holds it
+     * from now on, so the worker can hibernate while it stays connected, and
+     * its events arrive at `webSocketMessage` / `webSocketClose` /
+     * `webSocketError`. At most 10 tags, 256 characters each.
+     */
+    acceptWebSocket(ws: DurableSocket, tags?: string[]): void;
+    /** The sockets this worker has accepted, optionally only those with `tag`. */
+    getWebSockets(tag?: string): DurableSocket[];
+    /** The tags `ws` was accepted with. */
+    getTags(ws: DurableSocket): string[];
+    /**
+     * Answers a message that is exactly `request` with `response` without
+     * waking the worker — for an application heartbeat. `null` removes it.
+     * Held in memory: set it in `start()`.
+     */
+    setWebSocketAutoResponse(pair: { request: string; response: string } | null): void;
+    getWebSocketAutoResponse(): { request: string; response: string } | null;
+    /** When `ws` was last answered by the auto-response, or `null`. */
+    getWebSocketAutoResponseTimestamp(ws: DurableSocket): Date | null;
   }
+
+  /**
+   * A worker's handle on a WebSocket it was handed or owns. `send` waits until
+   * the worker's writes so far are committed, and sends on one socket keep
+   * their order.
+   */
+  export interface DurableSocket {
+    readonly protocol: string;
+    send(data: string | ArrayBuffer | ArrayBufferView): void;
+    close(code?: number, reason?: string): void;
+    /** Keeps a structured-clonable value with the socket across hibernation.
+     * At most 16 KiB serialized. */
+    serializeAttachment(value: unknown): void;
+    deserializeAttachment<T = unknown>(): T | null;
+  }
+
+  /** A socket as a caller passes it: the connection itself, or a handle a
+   * worker already holds. */
+  type SocketArgument<T> = T extends DurableSocket ? DurableSocket | WebSocketConnection | WebSocket : T;
 
   /**
    * A reference to a durable worker: its methods, returning promises. Nothing
@@ -202,11 +243,20 @@ declare module "runtime:workers" {
    */
   export type DurableRef<T> = { readonly id: string } & {
     [K in keyof T as T[K] extends (...args: never[]) => unknown
-      ? K extends "start" | "stop" | "alarm" | "state" | "ctx" | "id"
+      ? K extends
+          | "start"
+          | "stop"
+          | "alarm"
+          | "webSocketMessage"
+          | "webSocketClose"
+          | "webSocketError"
+          | "state"
+          | "ctx"
+          | "id"
         ? never
         : K
       : never]: T[K] extends (...args: infer A) => infer R
-      ? (...args: A) => Promise<Awaited<R>>
+      ? (...args: { [I in keyof A]: SocketArgument<A[I]> }) => Promise<Awaited<R>>
       : never;
   };
 
@@ -257,6 +307,12 @@ declare module "runtime:workers" {
     stop?(reason: string): void | Promise<void>;
     /** Runs when the alarm set on this worker comes due. */
     alarm?(): void | Promise<void>;
+    /** A message on a socket this worker accepted. Wakes it if it is hibernating. */
+    webSocketMessage?(ws: DurableSocket, message: string | ArrayBuffer): void | Promise<void>;
+    /** A socket this worker accepted closed. */
+    webSocketClose?(ws: DurableSocket, code: number, reason: string, wasClean: boolean): void | Promise<void>;
+    /** A socket this worker accepted failed. */
+    webSocketError?(ws: DurableSocket, error: unknown): void | Promise<void>;
   }
 
   /** Stable `code` values on a {@link DurableError}. */

@@ -17,6 +17,10 @@ itself.
 
 ### Added
 
+- **Hibernatable WebSockets** — `DurableSocket`, the socket methods on
+  `DurableContext`, the `webSocketMessage`/`webSocketClose`/`webSocketError`
+  handlers, and references that accept a connection for a `DurableSocket`
+  parameter.
 - `AlarmOptions.onError`'s third argument, the worker it happened to.
 - `TaskInfo.id`/`parentId` describe a task (the root, a timer firing, a
   request), not a promise (DECISIONS D131).

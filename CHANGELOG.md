@@ -15,6 +15,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Durable workers can own WebSockets that hibernate** (DECISIONS D133).
+  Pass a `runtime:websocket` connection to a worker method and take it with
+  `this.ctx.acceptWebSocket(ws, tags)`: the runtime holds the socket, the worker
+  is evicted when idle while its clients stay connected, and the next message
+  wakes it to run `webSocketMessage(ws, message)` through its mailbox. With
+  `webSocketClose`/`webSocketError`, `ctx.getWebSockets(tag)`, per-socket
+  attachments that survive hibernation, and an auto-response that answers a
+  heartbeat without waking the worker. A worker's `ws.send()` waits for its
+  writes to commit. Works on shards.
+
 - **`startAlarms`' `onError` is told which worker** failed: a third argument,
   `{ name, id, gaveUp }`, or `null` for the scheduler itself — `gaveUp` when the
   alarm is gone for good (DECISIONS D81, amended).

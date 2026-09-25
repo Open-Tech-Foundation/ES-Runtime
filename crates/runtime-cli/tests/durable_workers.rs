@@ -1920,3 +1920,338 @@ fn a_cycle_through_a_shard_is_refused() {
     );
     assert_eq!(ok(&out).trim(), "ERR_DURABLE_CYCLE\npong");
 }
+
+// ---- hibernatable WebSockets (DECISIONS D133) -------------------------------
+
+/// A WebSocket program needs to listen and to dial, beside the durable grants.
+const SOCKET_GRANTS: &[&str] = &[
+    "--allow-read",
+    "--allow-write",
+    "--allow-imports",
+    "--allow-listen",
+    "--allow-net",
+    "--allow-workers",
+];
+
+/// A server that hands every connection to one room, and a client helper. The
+/// first message a client sends is its name; the room answers "joined".
+const ROOM_HARNESS: &str = r#"
+    import { serve } from "runtime:websocket";
+    export async function lobby(Room, id = "lobby") {
+      const server = serve({ hostname: "127.0.0.1", port: 0 });
+      const { port } = await server.addr;
+      (async () => {
+        for await (const ws of server) {
+          const name = await new Promise((r) => ws.addEventListener("message", (e) => r(e.data), { once: true }));
+          if (await Room.get(id).join(ws, name)) ws.send("joined");
+        }
+      })();
+      const client = (name) => new Promise((resolve) => {
+        const c = new WebSocket(`ws://127.0.0.1:${port}`);
+        const inbox = [];
+        c.onopen = () => c.send(name);
+        c.onmessage = (e) => { if (e.data === "joined") resolve({ c, inbox }); else inbox.push(e.data); };
+      });
+      const until = async (check) => {
+        const end = Date.now() + 30_000;
+        while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+      };
+      return { server, client, until };
+    }
+"#;
+
+fn socket_dir(name: &str) -> PathBuf {
+    let base = dir(name);
+    std::fs::write(base.join("harness.mjs"), ROOM_HARNESS).expect("write harness");
+    base
+}
+
+/// The room is evicted while its sockets stay connected; the next message wakes
+/// it, and what it knew — its state, each socket's attachment and tags — is
+/// still there. The close handler runs too, after hibernation.
+#[test]
+fn a_room_hibernates_and_a_message_wakes_it() {
+    let base = socket_dir("ws-hibernate");
+    let out = run_in(
+        &base,
+        "app.mjs",
+        r#"
+        import { DurableWorker, configure, shutdown } from "runtime:workers";
+        import { lobby } from "./harness.mjs";
+        configure({ evictAfter: 50 });
+        const log = [];
+        class Room extends DurableWorker {
+          start() { log.push("start"); }
+          stop(reason) { log.push(`stop ${reason}`); }
+          join(ws, name) {
+            this.ctx.acceptWebSocket(ws, [name, "everyone"]);
+            ws.serializeAttachment({ name, since: new Date(0) });
+            return true;
+          }
+          webSocketMessage(ws, message) {
+            const { name, since } = ws.deserializeAttachment();
+            const n = (this.state.get("n") ?? 0) + 1;
+            this.state.set("n", n);
+            for (const s of this.ctx.getWebSockets("everyone")) s.send(`${n} ${name}: ${message} ${since instanceof Date}`);
+          }
+          webSocketClose(ws, code) {
+            log.push(`close ${ws.deserializeAttachment().name} ${code} ${this.ctx.getTags(ws).join(",")}`);
+          }
+        }
+        class Other extends DurableWorker { ping() { return 1; } }
+        const { server, client, until } = await lobby(Room);
+        const ana = await client("ana");
+        const ben = await client("ben");
+        ana.c.send("hi");
+        await until(() => ben.inbox.length === 1);
+        await new Promise((r) => setTimeout(r, 80));
+        await Other.get("x").ping();
+        console.log(log.join(" | "));
+        ben.c.send("still there?");
+        await until(() => ana.inbox.length === 2);
+        console.log(ana.inbox.join(" / "));
+        ana.c.close(1000);
+        await until(() => log.some((l) => l.startsWith("close")));
+        console.log(log.join(" | "));
+        ben.c.close();
+        await shutdown();
+        await server.close();
+    "#,
+        SOCKET_GRANTS,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "start | stop idle\n\
+         1 ana: hi true / 2 ben: still there? true\n\
+         start | stop idle | start | close ana 1000 ana,everyone"
+    );
+}
+
+/// An application heartbeat is answered by the runtime, so it does not wake a
+/// hibernating worker — and the worker can see when it last did so.
+#[test]
+fn an_auto_response_answers_without_waking_the_worker() {
+    let base = socket_dir("ws-auto");
+    let out = run_in(
+        &base,
+        "app.mjs",
+        r#"
+        import { DurableWorker, configure, shutdown } from "runtime:workers";
+        import { lobby } from "./harness.mjs";
+        configure({ evictAfter: 50 });
+        let starts = 0;
+        class Room extends DurableWorker {
+          start() { starts++; this.ctx.setWebSocketAutoResponse({ request: "ping", response: "pong" }); }
+          join(ws) { this.ctx.acceptWebSocket(ws); return true; }
+          webSocketMessage(ws, message) {
+            ws.send(`echo ${message} ${this.ctx.getWebSocketAutoResponseTimestamp(ws) instanceof Date}`);
+          }
+        }
+        class Other extends DurableWorker { ping() { return 1; } }
+        const { server, client, until } = await lobby(Room);
+        const ana = await client("ana");
+        await new Promise((r) => setTimeout(r, 80));
+        await Other.get("x").ping();
+        ana.c.send("ping");
+        await until(() => ana.inbox.length === 1);
+        console.log(ana.inbox[0], starts);
+        ana.c.send("hello");
+        await until(() => ana.inbox.length === 2);
+        console.log(ana.inbox[1], starts);
+        ana.c.close();
+        await shutdown();
+        await server.close();
+    "#,
+        SOCKET_GRANTS,
+    );
+    assert_eq!(ok(&out).trim(), "pong 1\necho hello true 2");
+}
+
+/// A message to a client is a message leaving the worker, so it waits for the
+/// worker's writes. Here the client ends the process the moment it hears back;
+/// what the worker wrote before sending must have survived.
+#[test]
+fn a_socket_send_waits_for_the_workers_writes() {
+    let base = socket_dir("ws-gate");
+    std::fs::write(
+        base.join("room.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Room extends DurableWorker {
+          join(ws) { this.ctx.acceptWebSocket(ws); return true; }
+          webSocketMessage(ws, message) {
+            this.state.set("last", message);
+            ws.send("stored");
+          }
+          last() { return this.state.get("last") ?? "nothing"; }
+        }
+    "#,
+    )
+    .expect("write room");
+    let first = run_in(
+        &base,
+        "app.mjs",
+        r#"
+        import { exit } from "runtime:process";
+        import { Room } from "./room.mjs";
+        import { lobby } from "./harness.mjs";
+        const { client } = await lobby(Room);
+        const ana = await client("ana");
+        ana.c.onmessage = (e) => { if (e.data === "stored") exit(0); };
+        ana.c.send("important");
+    "#,
+        SOCKET_GRANTS,
+    );
+    assert!(first.status.success(), "{}", stderr(&first));
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Room } from "./room.mjs";
+           console.log(await Room.get("lobby").last());"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "important");
+}
+
+/// Deleting a worker closes its sockets with 1001, "going away" — which a
+/// client can tell from a failure.
+#[test]
+fn deleting_a_worker_closes_its_sockets() {
+    let base = socket_dir("ws-delete");
+    let out = run_in(
+        &base,
+        "app.mjs",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        import { lobby } from "./harness.mjs";
+        class Room extends DurableWorker { join(ws) { this.ctx.acceptWebSocket(ws); return true; } }
+        const { server, client, until } = await lobby(Room);
+        const ana = await client("ana");
+        let closed = null;
+        ana.c.onclose = (e) => { closed = e.code; };
+        await Room.delete("lobby");
+        await until(() => closed !== null);
+        console.log(closed);
+        await shutdown();
+        await server.close();
+    "#,
+        SOCKET_GRANTS,
+    );
+    assert_eq!(ok(&out).trim(), "1001");
+}
+
+/// What is refused, and where: a value that is not a socket, too many or too
+/// long tags, an attachment over 16 KiB, and a socket another worker owns. A
+/// socket the method does not accept stays its caller's.
+#[test]
+fn socket_misuse_is_refused_at_the_line_that_made_it() {
+    let base = socket_dir("ws-refusals");
+    let out = run_in(
+        &base,
+        "app.mjs",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        import { serve } from "runtime:websocket";
+        const said = [];
+        const attempt = (label, fn) => { try { fn(); said.push(`${label}: accepted`); } catch (e) { said.push(`${label}: ${e.code ?? e.name}`); } };
+        class Room extends DurableWorker {
+          probe(ws) {
+            attempt("not a socket", () => this.ctx.acceptWebSocket({ send() {} }));
+            attempt("11 tags", () => this.ctx.acceptWebSocket(ws, Array.from({ length: 11 }, (_, i) => `t${i}`)));
+            attempt("long tag", () => this.ctx.acceptWebSocket(ws, ["x".repeat(257)]));
+            this.ctx.acceptWebSocket(ws);
+            attempt("big attachment", () => ws.serializeAttachment(new Uint8Array(17 * 1024)));
+            return said.join(" | ");
+          }
+          steal(ws) { attempt("owned elsewhere", () => this.ctx.acceptWebSocket(ws)); return said.at(-1); }
+          ignore(ws) { return "not taken"; }
+        }
+        const server = serve({ hostname: "127.0.0.1", port: 0 });
+        const { port } = await server.addr;
+        const conns = [];
+        (async () => { for await (const ws of server) conns.push(ws); })();
+        const dial = () => new Promise((r) => { const c = new WebSocket(`ws://127.0.0.1:${port}`); c.onopen = () => r(c); });
+        const dialled = [await dial(), await dial()];
+        while (conns.length < 2) await new Promise((r) => setTimeout(r, 10));
+        console.log(await Room.get("a").probe(conns[0]));
+        console.log(await Room.get("b").steal(conns[0]));
+        console.log(await Room.get("c").ignore(conns[1]));
+        // Not accepted, so still the caller's: its own listener still hears it.
+        const heard = new Promise((r) => conns[1].addEventListener("message", (e) => r(e.data), { once: true }));
+        conns[1].send("x");
+        console.log("still mine:", typeof (await Promise.race([heard, new Promise((r) => setTimeout(() => r("n/a"), 50))])));
+        conns[1].close();
+        for (const c of dialled) c.close();
+        await shutdown();
+        await server.close();
+    "#,
+        SOCKET_GRANTS,
+    );
+    let text = ok(&out);
+    let lines: Vec<&str> = text.trim().lines().collect();
+    assert_eq!(
+        lines[0],
+        "not a socket: TypeError | 11 tags: TypeError | long tag: TypeError | big attachment: ERR_DURABLE_STATE_TOO_LARGE"
+    );
+    assert_eq!(lines[1], "owned elsewhere: TypeError");
+    assert_eq!(lines[2], "not taken");
+    assert_eq!(lines[3], "still mine: string");
+}
+
+/// On shards the sockets stay on the host and the worker's code runs on the
+/// shard; hibernation, attachments, tags and the auto-response behave the same.
+#[test]
+fn a_sharded_room_hibernates_and_wakes() {
+    let base = socket_dir("ws-shard");
+    std::fs::write(
+        base.join("room.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Room extends DurableWorker {
+          start() {
+            this.state.set("starts", (this.state.get("starts") ?? 0) + 1);
+            this.ctx.setWebSocketAutoResponse({ request: "ping", response: "pong" });
+          }
+          join(ws, name) { this.ctx.acceptWebSocket(ws, [name]); ws.serializeAttachment({ name }); return true; }
+          webSocketMessage(ws, message) {
+            const { name } = ws.deserializeAttachment();
+            for (const s of this.ctx.getWebSockets()) s.send(`${name}: ${message} (${this.state.get("starts")} starts, tag ${this.ctx.getTags(ws)})`);
+          }
+        }
+        export class Other extends DurableWorker { ping() { return 1; } }
+    "#,
+    )
+    .expect("write room");
+    let out = run_in(
+        &base,
+        "app.mjs",
+        r#"
+        import { configure, shutdown } from "runtime:workers";
+        import { Room, Other } from "./room.mjs";
+        import { lobby } from "./harness.mjs";
+        configure({ evictAfter: 50, shards: 2, module: new URL("./room.mjs", import.meta.url) });
+        const { server, client, until } = await lobby(Room);
+        const ana = await client("ana");
+        const ben = await client("ben");
+        ana.c.send("hi");
+        await until(() => ben.inbox.length === 1);
+        await new Promise((r) => setTimeout(r, 80));
+        await Other.get("x").ping();
+        ben.c.send("ping");
+        await until(() => ben.inbox.length === 2);
+        ben.c.send("woken?");
+        await until(() => ana.inbox.length === 2);
+        console.log(ben.inbox.join(" / "));
+        console.log(ana.inbox.join(" / "));
+        ana.c.close(); ben.c.close();
+        await shutdown();
+        await server.close();
+    "#,
+        SOCKET_GRANTS,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "ana: hi (1 starts, tag ana) / pong / ben: woken? (2 starts, tag ben)\n\
+         ana: hi (1 starts, tag ana) / ben: woken? (2 starts, tag ben)"
+    );
+}
