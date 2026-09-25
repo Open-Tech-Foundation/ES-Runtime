@@ -20,7 +20,8 @@ const failRate = Number(setting("FAIL_RATE", "0.3"));
 const adminToken = setting("ADMIN_TOKEN", "");
 
 // The classes' code runs on shards; their state stays in this process. A shard
-// imports the workers bundle, and needs `net` for the webhooks it sends.
+// imports the module that defines them — `esdev build` builds the one this URL
+// names as a chunk of its own — and needs `net` for the webhooks it sends.
 configure({
   shards: shards === "auto" ? "auto" : Number(shards),
   module: new URL("./workers.js", import.meta.url),

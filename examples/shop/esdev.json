@@ -7,10 +7,6 @@
     "server": {
       "entry": "src/server/main.js",
       "out": "dist/server.js"
-    },
-    "workers": {
-      "entry": "src/server/workers.js",
-      "out": "dist/workers.js"
     }
   },
   "start": {
