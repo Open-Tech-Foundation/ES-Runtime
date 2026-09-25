@@ -1,0 +1,36 @@
+{
+  "name": "@opentf/esrun-mysql",
+  "version": "0.1.0",
+  "description": "MySQL client and runtime:db driver for esrun.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "esrun": ">=0.22.0"
+  },
+  "scripts": {
+    "build": "esdev build --lib src"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "workspace:*",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["esrun", "es-runtime", "opentf", "mysql", "mariadb", "database", "driver"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/mysql"
+  },
+  "homepage": "https://esrun.opentechf.org/docs/db",
+  "publishConfig": {
+    "access": "public"
+  }
+}

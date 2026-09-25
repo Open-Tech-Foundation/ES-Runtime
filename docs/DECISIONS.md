@@ -2659,6 +2659,30 @@ caller passes beats the one that is a *name* the callee looks up, whenever both
 are possible. It is visible where it is used, it types, it composes, and it
 needs no registry, no reservation and no rule about who may replace what.
 
+**What the third wire backend showed** (*added 2026-09-25*). MySQL was the other
+backend this decision named, and `@opentf/esrun-mysql` met the test the same way:
+the client/server protocol, both password plugins, TLS, prepared statements and
+pooling in JavaScript over `runtime:net`, and **no Rust**. It is also the first
+backend whose rows are *not* already the shared layout. A binary-protocol row is
+a NULL bitmap followed by each value in its own encoding, so the driver
+transcodes it as it arrives — one copy per value, a length written where the
+bitmap said NULL — exactly as the row-format bullet above predicted a MySQL
+driver would. Nothing is decoded on the way in; the per-column decoders read
+MySQL's own encoding out of the span when a column is read. The text protocol,
+which a few statements (`USE`, `XA`) still need, is rewritten into a binary row
+first so one transcoder serves both.
+
+One default here was decided rather than inherited. A stock MySQL or MariaDB
+server offers TLS with a certificate it signed itself. The `mysql` client's
+`PREFERRED` mode encrypts to it without verifying, which protects against a
+passive listener and not against anyone who can answer in the server's place.
+**TLS in this runtime is verified**, so `ssl-mode=PREFERRED` against such a
+server fails, with an error naming both fixes: the authority as `sslRootCert`,
+or `ssl-mode=DISABLED`. **Rejected:** an unverified "encrypt only" mode — a
+second meaning of TLS that no other module has; and falling back to plaintext
+when verification fails, which turns a certificate an attacker substituted into
+a silent downgrade.
+
 **Also rejected:** a `node:sqlite` compatibility layer, or Node compatibility of any kind; an ORM or query builder in the runtime — the kit exists so those are written *on* the runtime, not *in* it. **Rejected for Redis specifically:** presenting `MULTI`/`EXEC` as `transaction(fn)` — it queues commands and applies them together, but does not roll back one that fails at `EXEC` time, so the helper would commit half a body that threw; a backend saying it has no transactions is more useful than one whose transactions silently are not.
 
 **Consequences:** `providers` gains an `EmbeddedDb` trait and `default-providers` its `turso_core` implementation; that is the whole of the Rust surface, and it does not grow when backends do. The dependency is pinned at a **pre-release** (`turso_core` 0.8.0-pre.3, MIT) — accepted deliberately, since it is the only reliable Rust implementation and the `sqlite:` scheme insulates callers from the swap, but 0.x churn is a real maintenance cost until it stabilizes. `EncryptionOpts` takes its key as a hex `String`, so key material transits a non-zeroizable Rust allocation; documented in SECURITY.md rather than papered over. Requesting binary result formats from Postgres will make that driver **extended-protocol-only** — result format codes live in `Bind`, and the simple query protocol cannot ask — which costs multi-statement query strings; the restriction is decided here rather than discovered in the phase that hits it. Benchmarks cannot reuse `bench/run.sh`'s one-script-per-runtime shape, since esrun uses `runtime:db` while the comparison uses `postgres.js`; a `bench/db/` with per-runtime scripts against a shared workload and a documented Postgres container is part of the Postgres phase. Documented per D27 (`API.md`, `types/runtime-db.d.ts`, site `api/db` + `docs/internals/database`, `CHANGELOG`).

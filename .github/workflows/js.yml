@@ -1,5 +1,5 @@
-# CI for the JavaScript in this repo: the two database drivers
-# (packages/postgres, packages/redis) and the pure-JS half of
+# CI for the JavaScript in this repo: the database drivers
+# (packages/postgres, packages/mysql, packages/redis) and the pure-JS half of
 # `runtime:serialization` (crates/runtime/js).
 #
 # Split out of ci.yml so it can be skipped when nothing here changed. These jobs
@@ -163,6 +163,52 @@ jobs:
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           PG_URL: postgres://postgres:esrun@127.0.0.1:5432/esrun_test?sslmode=disable
+
+  # The MySQL driver (packages/mysql), split the same way as the PostgreSQL job
+  # above. MySQL 8.4 rather than MariaDB: its default `caching_sha2_password`
+  # is the plugin with the most paths through it (fast, full, RSA over
+  # plaintext), and the suite runs unchanged against MariaDB locally.
+  mysql:
+    name: mysql driver
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: esrun
+          MYSQL_DATABASE: esrun_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pesrun"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - run: tsr build:esrun
+      - run: tsr install
+      - run: tsr typecheck
+      - run: tsr build
+      - run: tsr test:mysql
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          MYSQL_URL: mysql://root:esrun@127.0.0.1:3306/esrun_test?ssl-mode=DISABLED
 
   # The Redis driver (packages/redis). Split the same way as the PostgreSQL job
   # above, for the same reason — but it needs three servers rather than one,
