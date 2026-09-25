@@ -983,15 +983,43 @@ shares run.sh's runtime detection.
 
 ## Publishing to the site
 
-`website/src/benchmarks.js` is generated, never edited. `bench/gen-bench-data.sh`
-runs the four scripts in machine mode, merges their JSON, and writes the module:
+`website/src/benchmarks.js` is generated, never edited. Publish with
+`tsr bench:publish` (`bench/publish.sh`):
 
 ```sh
-bench/gen-bench-data.sh                       # everything
-bench/gen-bench-data.sh url encoding          # re-measure rows, merge into the rest
-SECTIONS=rps_static bench/gen-bench-data.sh   # one section only
-SECTIONS="workloads memory_safety" ...        # or several
+cargo build --release && tsr build            # what gets measured
+export PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test
+export MYSQL_URL=mysql://root:esrun@127.0.0.1:3307/esrun_test
+
+tsr bench:publish                             # everything
+SECTIONS=pg_qps tsr bench:publish             # one section
+SECTIONS="rps rps_elysia" tsr bench:publish   # a phase of several
+bench/publish.sh fsappend_large               # re-measure rows over the kept full run
 ```
+
+**Run it on a solid-state disk.** Several rows write files into the benchmark's
+directory, and on a spinning disk they measure the disk — slower than the SSD
+the site's numbers come from, and noisy enough that the validator rejects them.
+So `publish.sh` runs the suite in a detached git worktree (`BENCH_WORKTREE`,
+default `~/es-bench`), refuses one on a rotational disk, copies the release
+binaries and built drivers into it, installs its dependencies, runs
+`gen-bench-data.sh` there, and copies the data module back and regenerates this
+README's table from it. It measures the committed tree, so commit first; then
+review and commit `website/src/benchmarks.js` and this README.
+
+**Publish in phases.** Each section publishes on its own, keeping every other
+section's numbers. `workloads` carries the esrun version the validator checks,
+so after a version bump it goes first; after that any section, or group of
+them, can be published whenever. A section that finishes is kept (in
+`bench/.cache/`, keyed on the binaries and runtime versions) until a publish
+succeeds, so a run that fails late resumes rather than starting over, and a
+row the validator refuses can be re-measured alone over the kept run. Every
+section's prerequisites are checked before any of them runs, and each reports
+how long it took.
+
+Underneath, `bench/gen-bench-data.sh` runs the scripts in machine mode, merges
+their JSON and writes the module; `publish.sh` passes its arguments and
+environment straight through.
 
 The module is fed by five independent scripts and re-running all of them takes
 most of an hour, so `SECTIONS` picks which actually run: `workloads` (run.sh,

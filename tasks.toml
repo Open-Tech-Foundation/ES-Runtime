@@ -230,6 +230,13 @@ dir = "packages/redis"
 [tasks."test:drivers"]
 deps = ["test:postgres", "test:mysql", "test:redis"]
 
+# Regenerates the site's benchmark data from a checkout on a fast disk and
+# copies it back (bench/publish.sh). Needs `cargo build --release` and
+# `tsr build` first, PG_URL and MYSQL_URL for the database sections, and takes
+# SECTIONS to publish in phases: `SECTIONS=pg_qps tsr bench:publish`.
+[tasks."bench:publish"]
+run = "bash bench/publish.sh"
+
 # The debug binary the driver suites run against (ESRUN points at it). Debug,
 # not release: these check behaviour rather than speed.
 [tasks."build:esrun"]

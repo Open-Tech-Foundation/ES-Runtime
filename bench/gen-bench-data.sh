@@ -95,6 +95,18 @@ preflight() {
     [ -n "${MYSQL_URL:-}" ] || problems+=("mysql_qps needs MYSQL_URL — see bench/README.md")
     [ -f ../packages/mysql/dist/index.js ] || problems+=("mysql_qps needs the mysql driver built — tsr build")
   fi
+  # Several rows write files into this directory, and on a spinning disk they
+  # measure the disk. A warning rather than a refusal: bench/publish.sh is the
+  # front door and enforces it; this catches a direct run.
+  if command -v findmnt >/dev/null 2>&1; then
+    local source device
+    source="$(findmnt -n -o SOURCE --target . 2>/dev/null || true)"
+    device="$(lsblk -n -o PKNAME "$source" 2>/dev/null | head -1 || true)"
+    [ -n "$device" ] || device="$(basename "${source:-none}")"
+    if [ "$(cat "/sys/block/$device/queue/rotational" 2>/dev/null)" = 1 ]; then
+      echo "warning: this checkout is on a spinning disk, and the fs rows will measure it — use bench/publish.sh" >&2
+    fi
+  fi
   if [ ${#problems[@]} -gt 0 ]; then
     echo "not starting — fix these first:" >&2
     printf '  - %s\n' "${problems[@]}" >&2

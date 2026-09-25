@@ -21,6 +21,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - **`bench/gen-bench-data.sh` checks every section's prerequisites before
   running any**, keeps each finished section so a failed run resumes instead
   of starting over, and prints how long each section took.
+- **`tsr bench:publish`** (`bench/publish.sh`) publishes benchmark data from a
+  detached worktree on a solid-state disk and copies it back, one section or
+  phase at a time. A checkout on a spinning disk measured the disk in the file
+  rows, and was refused by the validator run after run.
 
 ### Changed
 
