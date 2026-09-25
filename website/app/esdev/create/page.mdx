@@ -57,6 +57,9 @@ a project the `esdev` that wrote it can build. Nothing is downloaded.
 esdev create my-app --template=vanilla --styling=tailwind
 ```
 
+Styling has no default. On a terminal the question has to be answered; an
+unattended run without `--styling` adds nothing to the template.
+
 The OTF Web starters build with the OTF toolchain (`otfw`, itself an
 ES-runtime program) rather than `esdev build`, so they carry no `esdev.json` —
 their `dev`/`build` scripts call `otfw`, which runs on the `esdev` beside it.
@@ -71,7 +74,7 @@ esdev create my-app --template=docs --no-blog
 | | |
 | --- | --- |
 | `--language=js\|ts` | `spa`, `fullstack`, `docs`, `library` — JavaScript (default) or TypeScript |
-| `--styling=css\|tailwind` | `spa`, `fullstack` — plain CSS or Tailwind v4 (default) |
+| `--styling=css\|tailwind` | `spa`, `fullstack` — plain CSS or Tailwind v4 |
 | `--blog`, `--no-blog` | `docs` — keep the demo blog (default) or withhold it |
 
 TypeScript is a conversion, not a second template: sources rename (`.jsx` to
@@ -213,7 +216,7 @@ other's flags by name. Nothing is ever overwritten.
 | `--template=<name>` | Which template (default `react`) |
 | `--mode=<name>` | Which shape of it, where it has more than one: `static` or `fullstack` |
 | `--language=<name>` | OTF templates: `js` (default) or `ts` |
-| `--styling=<name>` | `css` or `tailwind`: `react`, `vanilla` and `micro-ui` default to `css`, `spa` and `fullstack` to `tailwind` |
+| `--styling=<name>` | `css` or `tailwind`, for `react`, `vanilla`, `micro-ui`, `spa` and `fullstack` |
 | `--blog`, `--no-blog` | `docs`: keep the demo blog (default) or not |
 | `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
 | `--no-install` | Write the files and stop |

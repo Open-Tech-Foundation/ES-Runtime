@@ -11558,7 +11558,8 @@ fn otf_templates_scaffold_from_flags() {
     assert!(manifest.contains(r#""name": "shop-ts""#), "{manifest}");
     assert!(!manifest.contains("{{name}}"), "a placeholder survived");
 
-    // Defaults are JavaScript with Tailwind, mirroring `create-web`.
+    // Unattended, the language takes its default and styling adds nothing:
+    // a framework is only ever added because somebody chose it.
     let js = esdev_in(&parent)
         .args(["create", "shop-js", "--template=fullstack"])
         .stdin(std::process::Stdio::null())
@@ -11569,9 +11570,11 @@ fn otf_templates_scaffold_from_flags() {
     assert!(dir.join("app/page.jsx").is_file());
     assert!(dir.join("app/api/hello/route.js").is_file());
     let css = std::fs::read_to_string(dir.join("app/global.css")).expect("read");
+    assert!(!css.contains("tailwindcss"), "nothing was chosen: {css}");
+    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
     assert!(
-        css.starts_with("@import \"tailwindcss\";"),
-        "the Tailwind default prepends: {css}"
+        !manifest.contains("tailwindcss"),
+        "nothing was chosen: {manifest}"
     );
 
     // The blog is files plus two patches — or neither.

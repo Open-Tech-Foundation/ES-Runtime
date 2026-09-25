@@ -45,8 +45,15 @@ is the point, since none of the three has any business in a deployment.
 - **`esdev create --styling=tailwind` for `react`, `vanilla` and `micro-ui`.**
   The styling question the OTF templates ask is now asked by every template
   with a page: Tailwind adds `src/styles.css`, links it from `index.html` and
-  adds `tailwindcss` to `devDependencies`. Plain CSS stays the default for
-  these three, and `api` and `lib` still refuse the flag.
+  adds `tailwindcss` to `devDependencies`. `api` and `lib` still refuse the
+  flag.
+
+### Changed
+
+- **Styling has no default in `esdev create`.** The styling menu starts on
+  nothing and has to be answered, and `spa` and `fullstack` no longer add
+  Tailwind unless it is chosen. An unattended run without `--styling` writes
+  the template as it is, adding nothing; `--styling=tailwind` adds it.
 - **`esdev build` builds a module named by `new URL("./x.js", import.meta.url)`**
   as a content-hashed chunk of its own, and points the URL at it (DECISIONS
   D134). A built server that started `new Worker(new URL(…))`, or configured

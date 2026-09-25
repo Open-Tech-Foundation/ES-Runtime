@@ -304,7 +304,7 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
                     "language",
                     is_otf(template),
                     LANGUAGES,
-                    DEFAULT_LANGUAGE,
+                    Fallback::Preselected(DEFAULT_LANGUAGE),
                     config.language.as_deref(),
                     "Select a Language?",
                     ask,
@@ -328,14 +328,13 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
             }
             Step::Styling => {
                 let template = answers.template.as_deref().expect("template first");
-                let (options, default) = stylings(template).unwrap_or((STYLINGS, DEFAULT_STYLING));
                 match resolve_choice(
                     template,
                     "styling",
                     "styling",
                     stylings(template).is_some(),
-                    options,
-                    default,
+                    stylings(template).unwrap_or(STYLINGS),
+                    Fallback::Unasked(UNSTYLED),
                     config.styling.as_deref(),
                     "Select a Styling Solution?",
                     ask,
@@ -734,14 +733,20 @@ const DEFAULT_LANGUAGE: &str = "js";
 /// The stylesheets an OTF app template offers. Only `spa` and `fullstack`
 /// ship `app/global.css` (`docs` is always Tailwind, a library has no
 /// styles), so only they ask. Tailwind is a one-line prepend — the toolchain
-/// compiles it — not a second project.
+/// compiles it — and a dependency, not a second project.
 const STYLINGS: &[(&str, &str)] = &[
     ("css", "Plain CSS — a small starter stylesheet"),
     ("tailwind", "TailwindCSS v4, compiled by the toolchain"),
 ];
 
-/// `create-web` starts its menu on Tailwind, so this does too.
-const DEFAULT_STYLING: &str = "tailwind";
+/// What an unattended run without `--styling` writes: the template as it
+/// is, with nothing added.
+///
+/// **Styling has no default.** A framework is a dependency the project will
+/// carry, and choosing one is the person's call, so the menu starts on
+/// nothing and has to be answered. Only a run nobody can ask falls back — and
+/// it falls back to adding nothing, not to a framework.
+const UNSTYLED: &str = "css";
 
 /// This repository's own templates that have a page to style. Their plain
 /// choice writes no stylesheet at all — they are hello worlds, and a starter
@@ -754,17 +759,13 @@ const ESDEV_STYLINGS: &[(&str, &str)] = &[
     ("tailwind", "TailwindCSS v4, compiled by esdev"),
 ];
 
-/// Plain, because these templates promise nothing a page ships depends on,
-/// and choosing a framework is choosing a dependency.
-const ESDEV_DEFAULT_STYLING: &str = "css";
-
-/// The styling choices a template offers and its default, or `None` for one
-/// that takes no styling.
-fn stylings(template: &str) -> Option<(&'static [(&'static str, &'static str)], &'static str)> {
+/// The styling choices a template offers, or `None` for one that takes no
+/// styling.
+fn stylings(template: &str) -> Option<&'static [(&'static str, &'static str)]> {
     if template == "spa" || template == "fullstack" {
-        Some((STYLINGS, DEFAULT_STYLING))
+        Some(STYLINGS)
     } else if ESDEV_STYLED.contains(&template) {
-        Some((ESDEV_STYLINGS, ESDEV_DEFAULT_STYLING))
+        Some(ESDEV_STYLINGS)
     } else {
         None
     }
@@ -810,6 +811,25 @@ fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
 /// page unpatched, so "no" only withholds files and "yes" patches two.
 const DEFAULT_BLOG: bool = true;
 
+/// What an axis falls back to when its flag is absent.
+#[derive(Clone, Copy)]
+enum Fallback {
+    /// A default in the ordinary sense: the menu starts on it, and a run
+    /// nobody can ask takes it.
+    Preselected(&'static str),
+    /// No default: the menu starts on nothing and must be answered. A run
+    /// nobody can ask still needs an answer, and takes this one.
+    Unasked(&'static str),
+}
+
+impl Fallback {
+    fn value(self) -> &'static str {
+        match self {
+            Fallback::Preselected(value) | Fallback::Unasked(value) => value,
+        }
+    }
+}
+
 /// What resolving one named choice came to. `NotApplicable` is a template
 /// that does not take this axis at all.
 #[derive(Debug)]
@@ -832,7 +852,7 @@ fn resolve_choice(
     flag: &str,
     takes: bool,
     options: &[(&'static str, &'static str)],
-    default: &str,
+    default: Fallback,
     asked_for: Option<&str>,
     question: &str,
     ask: Ask,
@@ -856,7 +876,7 @@ fn resolve_choice(
         return Ok(Choice::Chosen(value.to_string()));
     }
     if ask.scripted || !crate::prompt::interactive() {
-        return Ok(Choice::Chosen(default.to_string()));
+        return Ok(Choice::Chosen(default.value().to_string()));
     }
     let choices: Vec<crate::prompt::Choice<'_>> = options
         .iter()
@@ -866,11 +886,13 @@ fn resolve_choice(
             description,
         })
         .collect();
-    let preselect = choices
-        .iter()
-        .position(|choice| choice.name == default)
-        .unwrap_or(0);
-    match crate::prompt::select(question, &choices, Some(preselect), ask.esc()) {
+    // An axis with a real default starts the menu on it; one without starts
+    // on nothing, so Enter alone cannot answer it.
+    let preselect = match default {
+        Fallback::Preselected(value) => choices.iter().position(|choice| choice.name == value),
+        Fallback::Unasked(_) => None,
+    };
+    match crate::prompt::select(question, &choices, preselect, ask.esc()) {
         Some(chosen) => Ok(Choice::Chosen(choices[chosen].name.to_string())),
         None => Ok(Choice::Back),
     }
@@ -1573,7 +1595,7 @@ mod tests {
                 "language",
                 true,
                 LANGUAGES,
-                DEFAULT_LANGUAGE,
+                Fallback::Preselected(DEFAULT_LANGUAGE),
                 None,
                 "Select a Language?",
                 SCRIPTED,
@@ -1873,7 +1895,7 @@ mod tests {
                 "language",
                 true,
                 LANGUAGES,
-                DEFAULT_LANGUAGE,
+                Fallback::Preselected(DEFAULT_LANGUAGE),
                 None,
                 "Select a Language?",
                 ASK,
@@ -1887,12 +1909,12 @@ mod tests {
                 "styling",
                 true,
                 STYLINGS,
-                DEFAULT_STYLING,
+                Fallback::Unasked(UNSTYLED),
                 None,
                 "Select a Styling Solution?",
                 ASK,
             ),
-            Ok(Choice::Chosen(styling)) if styling == DEFAULT_STYLING
+            Ok(Choice::Chosen(styling)) if styling == UNSTYLED
         ));
         assert!(matches!(
             resolve_blog("docs", None, ASK),
@@ -1905,7 +1927,7 @@ mod tests {
                 "language",
                 false,
                 LANGUAGES,
-                DEFAULT_LANGUAGE,
+                Fallback::Preselected(DEFAULT_LANGUAGE),
                 None,
                 "Select a Language?",
                 ASK,
@@ -1920,7 +1942,7 @@ mod tests {
                 "language",
                 true,
                 LANGUAGES,
-                DEFAULT_LANGUAGE,
+                Fallback::Preselected(DEFAULT_LANGUAGE),
                 Some("ts"),
                 "Select a Language?",
                 ASK,
@@ -1938,7 +1960,7 @@ mod tests {
                 "language",
                 false,
                 LANGUAGES,
-                DEFAULT_LANGUAGE,
+                Fallback::Preselected(DEFAULT_LANGUAGE),
                 Some("elm"),
                 "Select a Language?",
                 ASK,
@@ -1952,7 +1974,7 @@ mod tests {
                 "language",
                 true,
                 LANGUAGES,
-                DEFAULT_LANGUAGE,
+                Fallback::Preselected(DEFAULT_LANGUAGE),
                 Some("elm"),
                 "Select a Language?",
                 ASK,
@@ -1967,7 +1989,7 @@ mod tests {
                 "styling",
                 false,
                 STYLINGS,
-                DEFAULT_STYLING,
+                Fallback::Unasked(UNSTYLED),
                 Some("css"),
                 "Select a Styling Solution?",
                 ASK,
@@ -2180,23 +2202,13 @@ mod tests {
             .collect()
     }
 
-    /// The templates with a page take a styling; the rest refuse one. Ours
-    /// default to plain, the OTF apps to Tailwind as `create-web` does.
+    /// The templates with a page take a styling; the rest refuse one.
     #[test]
     fn styling_is_offered_where_there_is_a_page() {
-        for template in ["react", "vanilla", "micro-ui"] {
-            assert_eq!(
-                stylings(template).map(|(_, default)| default),
-                Some("css"),
-                "{template}"
-            );
-        }
-        for template in ["spa", "fullstack"] {
-            assert_eq!(
-                stylings(template).map(|(_, default)| default),
-                Some("tailwind"),
-                "{template}"
-            );
+        for template in ["react", "vanilla", "micro-ui", "spa", "fullstack"] {
+            let options = stylings(template).unwrap_or_else(|| panic!("{template}"));
+            let names: Vec<&str> = options.iter().map(|(name, _)| *name).collect();
+            assert_eq!(names, ["css", "tailwind"], "{template}");
         }
         for template in ["api", "lib", "docs", "library"] {
             assert!(stylings(template).is_none(), "{template}");

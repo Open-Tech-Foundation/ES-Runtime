@@ -422,8 +422,9 @@ OPTIONS:
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
     --language=<name>           OTF templates only: js (default) or ts
-    --styling=<name>            css or tailwind: react, vanilla and micro-ui
-                                default to css, spa and fullstack to tailwind
+    --styling=<name>            css or tailwind, for the templates with a page.
+                                Asked, never assumed; unattended, nothing is
+                                added
     --blog, --no-blog           docs only: keep the demo blog (default) or not
     --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
     --no-install                Write the files and stop
