@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-09-25
+
 ### Added
 
 - **`startAlarms`' `onError` is told which worker** failed: a third argument,
