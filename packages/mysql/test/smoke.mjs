@@ -3,7 +3,7 @@ import { connect, sql } from "runtime:db";
 import { env } from "runtime:process";
 import { driver } from "../dist/index.js";
 
-const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED";
+const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true";
 const db = await connect(url, { driver });
 console.log("server:", db.serverVersion.split("-")[0] !== "" ? "ok" : "?");
 await db.execute("DROP TABLE IF EXISTS smoke");

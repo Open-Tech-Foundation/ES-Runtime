@@ -86,6 +86,8 @@ export function parseConnectionString(url: string, overrides: MySqlOptions = {})
     const seconds = Number(connectSeconds);
     if (Number.isFinite(seconds) && seconds >= 0) options.connectTimeout = seconds * 1000;
   }
+  const retrieval = parsed.searchParams.get("allowPublicKeyRetrieval");
+  if (retrieval !== null) options.allowPublicKeyRetrieval = retrieval === "true";
   // A certificate, not a path: reading a file is a capability a connection
   // string should not exercise on the caller's behalf.
   const rootCert = parsed.searchParams.get("ssl-ca") ?? parsed.searchParams.get("sslrootcert");

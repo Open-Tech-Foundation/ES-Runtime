@@ -4,7 +4,7 @@ import { env } from "runtime:process";
 import { driver } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
-const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED";
+const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true";
 const pool = await connect(url, { driver, pool: { max: 4 } });
 
 const ids = await Promise.all(

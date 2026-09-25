@@ -2683,6 +2683,14 @@ second meaning of TLS that no other module has; and falling back to plaintext
 when verification fails, which turns a certificate an attacker substituted into
 a silent downgrade.
 
+The same reasoning decided the password's other route. `caching_sha2_password`
+needs the password itself on the first login after a restart, and without TLS
+it is encrypted to the server's RSA key — a key the server sends, over the very
+connection it protects. **Fetching it is opt-in** (`allowPublicKeyRetrieval`,
+Connector/J's name for the same switch), and naming it (`serverPublicKey`) is
+the way that needs no trust at all. Found by the benchmark rather than by
+review: Bun's client refused the same login, and it was right to.
+
 **Also rejected:** a `node:sqlite` compatibility layer, or Node compatibility of any kind; an ORM or query builder in the runtime — the kit exists so those are written *on* the runtime, not *in* it. **Rejected for Redis specifically:** presenting `MULTI`/`EXEC` as `transaction(fn)` — it queues commands and applies them together, but does not roll back one that fails at `EXEC` time, so the helper would commit half a body that threw; a backend saying it has no transactions is more useful than one whose transactions silently are not.
 
 **Consequences:** `providers` gains an `EmbeddedDb` trait and `default-providers` its `turso_core` implementation; that is the whole of the Rust surface, and it does not grow when backends do. The dependency is pinned at a **pre-release** (`turso_core` 0.8.0-pre.3, MIT) — accepted deliberately, since it is the only reliable Rust implementation and the `sqlite:` scheme insulates callers from the swap, but 0.x churn is a real maintenance cost until it stabilizes. `EncryptionOpts` takes its key as a hex `String`, so key material transits a non-zeroizable Rust allocation; documented in SECURITY.md rather than papered over. Requesting binary result formats from Postgres will make that driver **extended-protocol-only** — result format codes live in `Bind`, and the simple query protocol cannot ask — which costs multi-statement query strings; the restriction is decided here rather than discovered in the phase that hits it. Benchmarks cannot reuse `bench/run.sh`'s one-script-per-runtime shape, since esrun uses `runtime:db` while the comparison uses `postgres.js`; a `bench/db/` with per-runtime scripts against a shared workload and a documented Postgres container is part of the Postgres phase. Documented per D27 (`API.md`, `types/runtime-db.d.ts`, site `api/db` + `docs/internals/database`, `CHANGELOG`).

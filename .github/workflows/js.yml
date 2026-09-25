@@ -208,7 +208,7 @@ jobs:
       - run: tsr test:mysql
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
-          MYSQL_URL: mysql://root:esrun@127.0.0.1:3306/esrun_test?ssl-mode=DISABLED
+          MYSQL_URL: mysql://root:esrun@127.0.0.1:3306/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true
 
   # The Redis driver (packages/redis). Split the same way as the PostgreSQL job
   # above, for the same reason — but it needs three servers rather than one,

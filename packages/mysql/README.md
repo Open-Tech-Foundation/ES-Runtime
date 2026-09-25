@@ -58,6 +58,8 @@ environment.
 | `statementTimeout` | ms per statement, enforced by the server |
 | `preparedStatementCacheSize` | statements kept prepared per connection (100) |
 | `temporal` | decode dates and times to Temporal values (`true`) |
+| `serverPublicKey` | the server's RSA key, as PEM, for a password without TLS |
+| `allowPublicKeyRetrieval` | ask the server for that key instead (`false`) — see below |
 
 ### TLS is verified
 
@@ -82,11 +84,26 @@ or, on a network you trust, say so: `?ssl-mode=DISABLED`.
 ## Authentication
 
 `caching_sha2_password` (MySQL's default) and `mysql_native_password` (MariaDB's)
-are both spoken, including a server switching plugins mid-login. When
-`caching_sha2_password` needs the password itself — the first login after the
-server restarts — it is sent over TLS as it is, and over a plaintext connection
-encrypted to the server's RSA key. `mysql_clear_password` is refused: this
-driver never sends a password in the clear.
+are both spoken, including a server switching plugins mid-login.
+`mysql_clear_password` is refused: this driver never sends a password in the
+clear.
+
+`caching_sha2_password` usually proves the password without sending it. The
+first login after the server restarts is the exception: the server wants the
+password itself. Over TLS it is sent as it is. Without TLS it must be encrypted
+to the server's RSA key, and there are two ways to have that key:
+
+```js
+// The safe way: name it. SHOW STATUS LIKE 'Caching_sha2_password_rsa_public_key'
+await connect(url, { driver, serverPublicKey: pem });
+
+// On a network you trust: ask the server for it.
+await connect(`${url}&allowPublicKeyRetrieval=true`, { driver });
+```
+
+Asking is opt-in because the key arrives over the connection it is meant to
+protect — whoever can answer in the server's place can send their own and read
+the password. With neither, that login fails with an error naming both.
 
 ## Types
 

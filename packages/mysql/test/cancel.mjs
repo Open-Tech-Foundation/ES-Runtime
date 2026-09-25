@@ -8,7 +8,7 @@ import { env } from "runtime:process";
 import { driver } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
-const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED";
+const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true";
 const db = await connect(url, { driver });
 const SLOW =
   "SELECT COUNT(*) AS n FROM information_schema.columns a, information_schema.columns b, information_schema.columns c";

@@ -5,7 +5,7 @@ import { env } from "runtime:process";
 import { driver } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
-const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED";
+const url = env.MYSQL_URL ?? "mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true";
 const at = new URL(url);
 const as = (user, password, extra = "ssl-mode=DISABLED") =>
   `mysql://${user}:${encodeURIComponent(password)}@${at.host}${at.pathname}?${extra}`;
@@ -30,12 +30,26 @@ if (!admin.mariadb) {
     GRANT SELECT ON *.* TO 'esrun_sha2'@'%';
     FLUSH PRIVILEGES;
   `);
-  const full = await connect(as("esrun_sha2", "pässword-2"), { driver });
-  is(
-    (await (await full.query("SELECT CURRENT_USER() AS u")).first()).u,
-    "esrun_sha2@%",
-    "full authentication over RSA",
-  );
+  // Without TLS, the password needs a key — and fetching one over the same
+  // unauthenticated connection is opt-in, so by default this is refused.
+  let refused = null;
+  try {
+    await connect(as("esrun_sha2", "pässword-2"), { driver });
+  } catch (e) {
+    refused = e;
+  }
+  ok(refused?.code === DbErrorCode.AuthFailed && /serverPublicKey/.test(refused.message), "full auth over plaintext is refused unless a key is given or retrieval allowed");
+
+  // The safe way: the key named up front.
+  const key = (await (await admin.query("SHOW STATUS LIKE 'Caching_sha2_password_rsa_public_key'")).first()).Value;
+  const pinned = await connect(as("esrun_sha2", "pässword-2"), { driver, serverPublicKey: key });
+  is((await (await pinned.query("SELECT CURRENT_USER() AS u")).first()).u, "esrun_sha2@%", "full authentication to a pinned key");
+  await pinned.close();
+
+  // The opted-in way: asked for.
+  await admin.execute("FLUSH PRIVILEGES");
+  const full = await connect(as("esrun_sha2", "pässword-2", "ssl-mode=DISABLED&allowPublicKeyRetrieval=true"), { driver });
+  is((await (await full.query("SELECT CURRENT_USER() AS u")).first()).u, "esrun_sha2@%", "full authentication to a retrieved key");
   await full.close();
   const fast = await connect(as("esrun_sha2", "pässword-2"), { driver });
   is((await (await fast.query("SELECT 1 AS one")).first()).one, 1, "then the cached fast path");

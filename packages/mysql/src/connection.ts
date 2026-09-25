@@ -136,6 +136,27 @@ export interface MySqlOptions {
    * `DATE` and `TIME`.
    */
   temporal?: boolean;
+  /**
+   * The server's RSA public key, as PEM, for `caching_sha2_password` over a
+   * connection without TLS.
+   *
+   * When that plugin needs the password itself — the first login after the
+   * server restarts — a plaintext connection has to encrypt it to the server's
+   * key. Naming the key here is the safe way: the password goes to the server
+   * that holds it and to nobody else.
+   */
+  serverPublicKey?: string;
+  /**
+   * Ask the server for its public key when `serverPublicKey` is not given.
+   * Default `false`.
+   *
+   * The key arrives over the same unauthenticated connection it protects, so
+   * anyone able to answer in the server's place can send their own and read
+   * the password. That is a trade to make knowingly — on a network you trust —
+   * and so it is opt-in, as it is in MySQL's own Connector/J. The URL spells it
+   * `allowPublicKeyRetrieval=true`.
+   */
+  allowPublicKeyRetrieval?: boolean;
 }
 
 /**
@@ -348,7 +369,7 @@ export class MySqlConnection extends BaseConnection {
     if ((capabilities & CLIENT.CONNECT_WITH_DB) !== 0) response.cstring(options.database ?? "");
     response.cstring(plugin);
     await this.#write(response.finish(reader.seq + 1));
-    await this.#authenticate(plugin, password, hello.scramble, tls);
+    await this.#authenticate(plugin, password, hello.scramble, tls, options);
 
     // The session in UTC, so a TIMESTAMP arrives as the instant it is rather
     // than as a wall time in whatever zone the server was configured with.
@@ -366,6 +387,7 @@ export class MySqlConnection extends BaseConnection {
     password: string,
     scramble: Uint8Array,
     tls: boolean,
+    options: MySqlOptions,
   ): Promise<void> {
     for (;;) {
       const packet = await this.#packet();
@@ -393,9 +415,16 @@ export class MySqlConnection extends BaseConnection {
             // Full authentication: the server wants the password itself.
             if (tls) {
               await this.#reply(passwordBytes(password));
-            } else {
-              // Plaintext: ask for the server's public key and encrypt to it.
+            } else if (options.serverPublicKey !== undefined) {
+              await this.#reply(await encryptPassword(password, scramble, options.serverPublicKey));
+            } else if (options.allowPublicKeyRetrieval === true) {
+              // Plaintext, and the caller accepted the trade: ask for the key.
               await this.#reply(new Uint8Array([2]));
+            } else {
+              throw new DbError(
+                "the server needs the password itself (caching_sha2_password full authentication), and this connection has no TLS to send it over. Connect with TLS, give the server's key as serverPublicKey, or — on a network you trust — allowPublicKeyRetrieval: true",
+                { code: DbErrorCode.AuthFailed },
+              );
             }
             break;
           }

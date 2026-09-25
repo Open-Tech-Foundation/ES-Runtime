@@ -3,7 +3,9 @@
 #
 # There is no mock: the value of this package is that it speaks a real server's
 # protocol, and a fake one would only ever agree with our reading of the
-# documentation. Start a server, point MYSQL_URL at it.
+# documentation. Start a server, point MYSQL_URL at it. The default URL allows
+# public key retrieval: the server is local, and the auth test empties the
+# password cache, after which a plaintext login needs the server's key.
 #
 #   docker run -d -p 3307:3306 -e MYSQL_ROOT_PASSWORD=esrun -e MYSQL_DATABASE=esrun_test mysql:8.4
 set -euo pipefail
@@ -11,7 +13,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../../.." && pwd)"
 esrun="${ESRUN:-$root/target/release/esrun}"
-export MYSQL_URL="${MYSQL_URL:-mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED}"
+export MYSQL_URL="${MYSQL_URL:-mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true}"
 
 [ -x "$esrun" ] || { echo "no esrun at $esrun — cargo build --release -p es-runtime-cli" >&2; exit 1; }
 [ -f "$here/../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }

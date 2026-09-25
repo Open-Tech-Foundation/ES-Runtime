@@ -15,7 +15,8 @@ pace of the MySQL protocol rather than the runtime's. See the root
 
 - **The MySQL driver.** MySQL's client/server protocol in JavaScript over
   `runtime:net`, for `mysql:` and `mariadb:` URLs: `caching_sha2_password`
-  (fast, full over TLS, and full over plaintext by RSA) and
+  (fast, full over TLS, and full over plaintext to a pinned `serverPublicKey`
+  or — opted into — a retrieved one) and
   `mysql_native_password`, verified TLS, prepared statements cached per
   connection, binary rows transcoded into `runtime:db`'s shared layout and
   decoded lazily, Temporal values for dates and times, `executeScript`,
