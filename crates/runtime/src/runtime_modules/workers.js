@@ -1674,6 +1674,38 @@ const LIFECYCLE = new Set([
 // A `Worker` starts with an empty context, so a shard is sent the chain.
 const callers = createContext({ name: "durable-callers", defaultValue: [] });
 
+// Which workers are waiting on which (D130, amended): an edge A → B while a call
+// made from A waits on B. A mailbox runs one entry at a time, so a cycle here is
+// a deadlock whichever requests built it — the chain only ever sees one of them.
+const waits = new Map(); // key -> Map<key, count>
+
+function addWait(from, to) {
+  let out = waits.get(from);
+  if (!out) waits.set(from, (out = new Map()));
+  out.set(to, (out.get(to) ?? 0) + 1);
+}
+
+function removeWait(from, to) {
+  const out = waits.get(from);
+  const n = (out?.get(to) ?? 0) - 1;
+  if (n > 0) out.set(to, n);
+  else out?.delete(to);
+  if (out?.size === 0) waits.delete(from);
+}
+
+// The workers `from` waits on, in order, ending at `to` — or null if `from`
+// does not (transitively) wait on `to`. `from === to` is a path of one.
+function waitPath(from, to, seen = new Set()) {
+  if (from === to) return [to];
+  if (seen.has(from)) return null;
+  seen.add(from);
+  for (const next of waits.get(from)?.keys() ?? []) {
+    const rest = waitPath(next, to, seen);
+    if (rest !== null) return [from, ...rest];
+  }
+  return null;
+}
+
 const describeKey = (k) => {
   const at = k.indexOf("\u0000");
   return `${k.slice(0, at)}(${JSON.stringify(k.slice(at + 1))})`;
@@ -2512,6 +2544,22 @@ function reference(cls, id) {
           // leaves ahead of the disk: the caller's writes so far are committed
           // before the callee runs (D130).
           if (chain.length > 0) await live.get(chain.at(-1))?.state.committed();
+          // And a cycle across requests: the caller is about to wait on the
+          // target, so refuse if the target is already (through any number of
+          // workers) waiting on the caller. Checked and recorded with nothing
+          // in between, so two calls cannot both slip past it.
+          const caller = chain.at(-1);
+          if (caller !== undefined) {
+            const around = waitPath(target, caller);
+            if (around !== null) {
+              fail(
+                DurableErrorCode.Cycle,
+                `${[caller, ...around].map(describeKey).join(" → ")} is a cycle: each of these ` +
+                  "workers is busy until the next one answers, so this call could never be answered",
+              );
+            }
+            addWait(caller, target);
+          }
           // A worker can be closed between being materialized and being called
           // — an idle sweep on somebody else's call is enough. That is this
           // layer's business, not the caller's, so it is materialized again
@@ -2527,6 +2575,7 @@ function reference(cls, id) {
             }
           } finally {
             releaseOffered(sent);
+            if (caller !== undefined) removeWait(caller, target);
           }
         };
         methods.set(property, call);

@@ -165,6 +165,15 @@ already in the chain throws `ERR_DURABLE_CYCLE`, naming the chain. A timeout
 was the alternative, and it would have turned a certain deadlock into an
 occasional slow failure.
 
+A chain only sees one request. If A is in the middle of calling B for one
+request while B is in the middle of calling A for another, no chain contains
+both, and the mailboxes still wait on each other. So the host also keeps a
+**wait-for graph**: an edge A → B while a call made from A waits on B. Because a
+mailbox runs one entry at a time, a cycle in that graph is a deadlock whichever
+requests built it, and the call that would close one is refused before it
+waits. The one false alarm: a call a method starts and does not await still
+counts as its worker waiting.
+
 The same chain gives calls between workers an output gate. A call made from
 inside a worker is a message leaving it, so it waits until the caller's writes
 so far are committed, the barrier the reply already waits for. Without that,

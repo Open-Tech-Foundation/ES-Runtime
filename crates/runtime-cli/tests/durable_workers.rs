@@ -426,6 +426,37 @@ fn a_cycle_between_workers_is_refused_rather_than_waited_on() {
     );
 }
 
+/// Two requests, each holding one worker and calling the other: A → B in one,
+/// B → A in the other. Neither chain contains a cycle, but the mailboxes wait on
+/// each other for ever — unless the wait-for graph refuses the call that would
+/// close the loop (D130, amended). One request fails with the cycle named; the
+/// other then completes.
+#[test]
+fn a_deadlock_across_two_requests_is_refused() {
+    let out = run(
+        "cross-cycle",
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        const pause = () => new Promise((r) => setTimeout(r, 50));
+        class A extends DurableWorker {
+          async viaB() { await pause(); return `A got ${await B.get("b").ping()}`; }
+          ping() { return "a"; }
+        }
+        class B extends DurableWorker {
+          async viaA() { await pause(); return `B got ${await A.get("a").ping()}`; }
+          ping() { return "b"; }
+        }
+        const outcome = (p) => p.then((v) => v, (e) => `${e.code}: ${e.message.split(" is a cycle")[0]}`);
+        const [one, two] = await Promise.all([outcome(A.get("a").viaB()), outcome(B.get("b").viaA())]);
+        console.log([one, two].sort().join("\n"));
+    "#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "A got b\nERR_DURABLE_CYCLE: B(\"b\") → A(\"a\") → B(\"b\")"
+    );
+}
+
 /// A call to another worker is a message leaving this one, so what this one
 /// wrote before it is on disk before the other runs (D130). Here the other
 /// worker ends the process outright; the caller's write must have survived.

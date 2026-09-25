@@ -3171,9 +3171,10 @@ not a promise that never settles).
 
 **Calling another worker from inside one** works as it does from outside, with
 two differences. The call waits until the caller's writes so far are committed,
-because it is a message leaving the caller. And a call that would close a loop
-(A calls B, which calls A, or a worker calling itself) throws
-`ERR_DURABLE_CYCLE` rather than waiting for ever.
+because it is a message leaving the caller. And a call that would make workers
+wait on each other in a loop throws `ERR_DURABLE_CYCLE` rather than waiting for
+ever: A calls B, which calls A; a worker calling itself; or A calling B for one
+request while B calls A for another.
 
 ### `state`
 

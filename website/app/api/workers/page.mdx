@@ -108,8 +108,9 @@ hooks are not callable through a reference, and neither is anything the class
 does not have — a `TypeError` from the call, not a promise that never settles.
 
 A call made from inside another worker waits until the caller's writes so far
-are committed. A call that would close a loop (A calls B, which calls A, or a
-worker calling itself) throws `ERR_DURABLE_CYCLE` instead of waiting for ever.
+are committed. A call that would make workers wait on each other in a loop
+throws `ERR_DURABLE_CYCLE` instead of waiting for ever — within one request (A
+calls B, which calls A) or across two (A calls B while B calls A).
 
 ## `state`
 

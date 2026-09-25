@@ -129,16 +129,14 @@ async setQty(id, qty) {
 ```
 
 The call waits until the caller's writes so far are committed, so the callee
-never acts on something the caller could still lose. A call that would close a
-loop in one chain (A calls B, which calls A) throws `ERR_DURABLE_CYCLE` instead
-of hanging.
+never acts on something the caller could still lose. A call that would make
+workers wait on each other in a loop throws `ERR_DURABLE_CYCLE` instead of
+hanging: A calling B, which calls A, and also A calling B for one request while
+B calls A for another.
 
-<Callout type="warn" title="Make calls flow one way">
-  Only a cycle *within one chain of calls* is detected. If A calls B for one
-  request while B calls A for another, each waits on the other. Design calls to
-  flow in one direction. The shop's inventory *tells* the shelf about changes,
-  and the shelf never calls back to ask.
-</Callout>
+Being refused is still a failed request, so calls that flow one way are the
+better design. The shop's inventory *tells* the shelf about changes, and the
+shelf never calls back to ask.
 
 ## Work that spans workers
 
@@ -328,7 +326,7 @@ state that only lives in one process proves nothing about the disk.
 - One worker per thing that changes together; keys for hot state, collections
   for what grows.
 - `await state.sync()` before a `fetch` or anything else that leaves mid-call.
-- Calls between workers flow one way.
+- Calls between workers flow one way, so no request is refused as a cycle.
 - Multi-step work records its intent first, and every step is idempotent.
 - Alarm handlers are idempotent; `startAlarms` names its classes.
 - `static durableName` on every class in a minified build.

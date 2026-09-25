@@ -129,6 +129,10 @@ namespace) is unstable and may change between minor releases until the API freez
   connection the engine then panicked over (`end_write_tx called while write
   lock not held`). The commit now waits for every write the transaction
   started, and one that fails rolls it back.
+- **Two requests could deadlock two durable workers.** Cycle detection only
+  saw one request's chain of calls, so A calling B for one request while B
+  called A for another hung both for ever. A wait-for graph over the workers
+  now refuses the call that would close any such loop with `ERR_DURABLE_CYCLE`.
 - **A durable-worker alarm could be lost to a crash.** It was cleared on disk
   before its handler ran, so a process that died mid-handler (the shop's
   webhook delivery, killed with `SIGKILL`) never ran it again. It now stays on
