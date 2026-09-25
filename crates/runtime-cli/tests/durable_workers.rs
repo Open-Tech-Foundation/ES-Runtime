@@ -1277,6 +1277,58 @@ fn a_failing_alarm_is_retried_and_then_reported() {
     assert_eq!(ok(&out).trim(), "3 false boom 3@Flaky/f gave up");
 }
 
+/// A process that dies while an alarm's handler is running has not run that
+/// alarm, so the next process runs it again: at least once. It used to be
+/// cleared on disk before the handler started, and a crash in between lost it
+/// for good — found by the shop, whose webhook deliveries are alarms.
+#[test]
+fn an_alarm_interrupted_by_a_crash_runs_again() {
+    let base = dir("alarm-crash");
+    std::fs::write(
+        base.join("job.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        import { exit } from "runtime:process";
+        export class Job extends DurableWorker {
+          async arm() { await this.state.alarm.set(Date.now()); }
+          async alarm() {
+            const runs = (this.state.get("runs") ?? 0) + 1;
+            await this.state.set("runs", runs);
+            if (runs === 1) exit(0);
+          }
+          runs() { return this.state.get("runs") ?? 0; }
+          pending() { return this.state.alarm.get() !== null; }
+        }
+    "#,
+    )
+    .expect("write class");
+    let first = run_in(
+        &base,
+        "first.mjs",
+        r#"import { Job } from "./job.mjs";
+           import { startAlarms } from "runtime:workers";
+           await Job.get("j").arm();
+           startAlarms({ classes: [Job] });
+           await new Promise(() => {});"#,
+        &[],
+    );
+    assert!(first.status.success(), "{}", stderr(&first));
+    let second = run_in(
+        &base,
+        "second.mjs",
+        r#"import { Job } from "./job.mjs";
+           import { startAlarms, shutdown } from "runtime:workers";
+           const alarms = startAlarms({ classes: [Job] });
+           const end = Date.now() + 30_000;
+           while ((await Job.get("j").runs()) < 2 && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+           console.log("runs", await Job.get("j").runs(), "pending", await Job.get("j").pending());
+           await alarms.stop();
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "runs 2 pending false");
+}
+
 /// An alarm runs through the same mailbox a call does, so it cannot interleave
 /// with one — the reason a worker's state never needs a lock.
 #[test]

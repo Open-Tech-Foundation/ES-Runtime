@@ -129,6 +129,11 @@ namespace) is unstable and may change between minor releases until the API freez
   connection the engine then panicked over (`end_write_tx called while write
   lock not held`). The commit now waits for every write the transaction
   started, and one that fails rolls it back.
+- **A durable-worker alarm could be lost to a crash.** It was cleared on disk
+  before its handler ran, so a process that died mid-handler (the shop's
+  webhook delivery, killed with `SIGKILL`) never ran it again. It now stays on
+  disk until the handler finishes: at least once. A handler can therefore run
+  twice for one alarm; keep its effects idempotent.
 - **A durable-worker call could be answered before its last write was on
   disk.** When a call wrote, awaited, and wrote again, the second flush queued
   behind the first, and the first cleared the in-flight marker as it ended, so

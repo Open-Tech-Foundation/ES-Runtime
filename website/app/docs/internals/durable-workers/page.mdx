@@ -266,8 +266,11 @@ so they are neither woken nor stepped over.
 ### Firing
 
 An alarm goes through the worker's mailbox, so it cannot interleave with a call,
-and it is cleared **before** the handler runs: a handler that sets the next time
-repeats, one that sets nothing is done. A failure puts one back — 1s, 2s, 4s, to
+and it reads as cleared **inside** the handler: a handler that sets the next time
+repeats, one that sets nothing is done. It is only removed from disk once the
+handler has finished, though, so a process that dies mid-handler runs it again
+after a restart. That makes an alarm at-least-once, which is what a scheduler
+that never drops work has to be; a handler's effects should be idempotent. A failure puts one back — 1s, 2s, 4s, to
 a five-minute cap — with the attempt count stored beside the alarm, so a restart
 does not reset it, and the last failure is reported rather than dropped.
 

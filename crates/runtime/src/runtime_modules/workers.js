@@ -554,6 +554,9 @@ class State {
   #remote = false;
 
   #attempt = 0;
+  // Whether `alarm()` set or deleted the alarm itself since the scheduler
+  // suspended it — which decides what the scheduler does with it afterwards.
+  #alarmTouched = false;
   #chain = { tail: Promise.resolve() };
   #txChain = { tail: Promise.resolve() };
   #tx = false;
@@ -885,6 +888,7 @@ class State {
         "this durable worker has no alarm() method, so an alarm set on it could never run",
       );
     }
+    this.#alarmTouched = true;
     const at = when === null ? null : whenMs(when);
     if (at !== null) await this.#index(at, true);
     await retryBusy(() =>
@@ -899,6 +903,23 @@ class State {
     );
     this.#alarm = at;
     await this.#index(at, false);
+  }
+
+  /**
+   * For the scheduler, before it runs `alarm()`: the alarm reads as cleared
+   * while its handler runs — so setting the next time is how a handler repeats —
+   * but it stays on disk and in the catalog until the scheduler settles it
+   * afterwards. A process that dies mid-handler therefore runs it again after a
+   * restart, rather than losing it (D81, amended): at least once, not at most.
+   */
+  suspendAlarm() {
+    this.#alarm = null;
+    this.#alarmTouched = false;
+  }
+
+  /** Whether the handler set or deleted the alarm itself since `suspendAlarm`. */
+  get alarmTouched() {
+    return this.#alarmTouched;
   }
 
   /** Told once, when the instance exists: whether its class can answer an
@@ -3869,17 +3890,25 @@ function run(state, worker) {
       await indexAlarm(storageName(worker.cls), worker.id, at === null ? null : at.getTime(), false);
       return;
     }
-    // Cleared before the handler runs, so an `alarm()` that sets the next one
-    // is the natural way to repeat, and a handler that sets nothing is not woken
-    // again. A failure puts one back.
-    await worker.state.alarm.delete();
+    // Cleared for the handler, so an `alarm()` that sets the next one is the
+    // natural way to repeat, and a handler that sets nothing is not woken again.
+    // But only in memory: the alarm stays on disk until the handler is done, so
+    // a crash in the middle runs it again after a restart. A failure puts one
+    // back; success, or giving up, removes it — unless the handler already
+    // decided what the alarm should be.
+    worker.state.suspendAlarm();
+    const settle = async () => {
+      if (!worker.state.alarmTouched) await worker.state.alarm.delete();
+    };
     try {
       await invokeAlarm();
       if (worker.state.alarmAttempt !== 0) await worker.state.setAlarmAttempt(0);
+      await settle();
     } catch (e) {
       const attempt = worker.state.alarmAttempt + 1;
       if (attempt > config.alarmRetries) {
         await worker.state.setAlarmAttempt(0);
+        await settle();
         report(
           state,
           e,
