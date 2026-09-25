@@ -16,10 +16,10 @@ export default {
       "esrun": 13251
     },
     "hono_sustained": {
-      "node": 33639,
-      "bun": 83072,
-      "deno": 78594,
-      "esrun": 54194
+      "node": 32328,
+      "bun": 80443,
+      "deno": 78069,
+      "esrun": 48905
     },
     "elysia": {
       "node": 31549,
@@ -71,10 +71,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 1.4,
-        "bun": 0.2,
-        "deno": 1.5,
-        "esrun": 1.9
+        "node": 0.6,
+        "bun": 0.5,
+        "deno": 0.3,
+        "esrun": 0.3
       }
     },
     "elysia": {
@@ -97,69 +97,69 @@ export default {
   "websocket": {
     "server": {
       "32": {
-        "bun": 250802,
-        "deno": 209930,
-        "esrun": 295796
+        "bun": 241411,
+        "deno": 208838,
+        "esrun": 256712
       },
       "64": {
-        "bun": 249207,
-        "deno": 205849,
-        "esrun": 111087
+        "bun": 248566,
+        "deno": 203635,
+        "esrun": 97700
       },
       "128": {
-        "bun": 258877,
-        "deno": 215295,
-        "esrun": 51638
+        "bun": 251150,
+        "deno": 206065,
+        "esrun": 45682
       }
     },
     "client": {
       "32": {
-        "esrun": 253512,
-        "bun": 247822,
-        "deno": 250012,
-        "node": 254593
+        "esrun": 250323,
+        "bun": 248459,
+        "deno": 248905,
+        "node": 250357
       },
       "64": {
-        "esrun": 252172,
-        "bun": 248388,
-        "deno": 260502,
-        "node": 264566
+        "esrun": 253776,
+        "bun": 247398,
+        "deno": 250584,
+        "node": 255508
       },
       "128": {
-        "esrun": 265192,
-        "bun": 248798,
-        "deno": 250123,
-        "node": 255640
+        "esrun": 252706,
+        "bun": 248679,
+        "deno": 253226,
+        "node": 257022
       }
     }
   },
   "results_http2": {
     "node": {
-      "wide_h1": 32180,
-      "wide_h2": 15788,
-      "narrow_h1": 22224,
-      "narrow_h2": 37301,
+      "wide_h1": 34307,
+      "wide_h2": 15661,
+      "narrow_h1": 22901,
+      "narrow_h2": 40196,
       "split_server": true
     },
     "bun": {
-      "wide_h1": 88858,
-      "wide_h2": 38627,
-      "narrow_h1": 30436,
-      "narrow_h2": 50196,
+      "wide_h1": 90871,
+      "wide_h2": 37033,
+      "narrow_h1": 30738,
+      "narrow_h2": 47264,
       "split_server": true
     },
     "deno": {
-      "wide_h1": 90018,
-      "wide_h2": 21826,
-      "narrow_h1": 30388,
-      "narrow_h2": 37586,
+      "wide_h1": 93608,
+      "wide_h2": 20567,
+      "narrow_h1": 30263,
+      "narrow_h2": 41120,
       "split_server": false
     },
     "esrun": {
-      "wide_h1": 50392,
-      "wide_h2": 40406,
-      "narrow_h1": 18697,
-      "narrow_h2": 66308,
+      "wide_h1": 49145,
+      "wide_h2": 39898,
+      "narrow_h1": 17308,
+      "narrow_h2": 67181,
       "split_server": false
     }
   },
@@ -200,10 +200,10 @@ export default {
       "esrun": 134
     },
     "hono_sustained": {
-      "node": 133,
-      "bun": 50,
-      "deno": 72,
-      "esrun": 55
+      "node": 112,
+      "bun": 46,
+      "deno": 48,
+      "esrun": 72
     },
     "elysia": {
       "node": 98,
