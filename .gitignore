@@ -44,6 +44,8 @@ packages/*/node_modules/
 # Staged driver builds for the database benchmarks.
 bench/db/pg/.driver/
 bench/db/mysql/.driver/
+# Sections kept by gen-bench-data.sh so a failed run can resume.
+bench/.cache/
 
 # esdev bundle of the Elysia server for the rps_elysia benchmark section
 # (bench/gen-bench-data.sh rebuilds it on every run; the source is tracked).

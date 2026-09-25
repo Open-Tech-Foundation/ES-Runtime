@@ -18,6 +18,9 @@ namespace) is unstable and may change between minor releases until the API freez
   esrun (`@opentf/esrun-mysql`), published as `mysql_qps` and charted beside
   Postgres on the homepage. Both QPS runners now stage the driver build they
   measure instead of relying on a copy left behind by another script.
+- **`bench/gen-bench-data.sh` checks every section's prerequisites before
+  running any**, keeps each finished section so a failed run resumes instead
+  of starting over, and prints how long each section took.
 
 ### Changed
 

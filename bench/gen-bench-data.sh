@@ -10,6 +10,11 @@
 #         ESRUN=/path/to/esrun bench/gen-bench-data.sh
 #         bench/gen-bench-data.sh regex strings   (re-measure rows, merge the rest)
 #         SECTIONS=rps_static bench/gen-bench-data.sh   (one section only)
+#
+# Incremental is the normal way to run it: `workloads` carries the esrun
+# version the validator checks, so after a version bump run it first, then the
+# other sections one at a time — each publishes on its own, and one that fails
+# costs only itself.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -64,14 +69,74 @@ for s in $SECTIONS; do
   esac
 done
 
+selected() { case " $SECTIONS " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# Everything the selected sections need, checked before any of them runs. Each
+# section used to check its own prerequisites when it started, so a missing
+# fixture surfaced fifty minutes into a run and took every finished section
+# down with it.
+preflight() {
+  local problems=()
+  local esrun="${ESRUN:-../target/release/esrun}" esdev="${ESDEV:-../target/release/esdev}"
+  [ -x "$esrun" ] || problems+=("no esrun at $esrun — cargo build --release -p es-runtime-cli")
+  if selected rps_elysia || selected devserver || selected buildtime; then
+    [ -x "$esdev" ] || problems+=("no esdev at $esdev — cargo build --release -p es-runtime-dev-cli")
+  fi
+  if selected devserver || selected buildtime; then
+    [ -d dev-server/apps/app-10000/node_modules ] ||
+      problems+=("the dev-server fixture is missing — (cd dev-server && node gen.mjs 10000 && cd apps/app-10000 && npm install)")
+  fi
+  if selected pg_qps; then
+    [ -n "${PG_URL:-}" ] || problems+=("pg_qps needs PG_URL — see bench/README.md")
+    [ -f ../packages/postgres/dist/index.js ] || problems+=("pg_qps needs the postgres driver built — tsr build")
+  fi
+  if selected mysql_qps; then
+    [ -n "${MYSQL_URL:-}" ] || problems+=("mysql_qps needs MYSQL_URL — see bench/README.md")
+    [ -f ../packages/mysql/dist/index.js ] || problems+=("mysql_qps needs the mysql driver built — tsr build")
+  fi
+  if [ ${#problems[@]} -gt 0 ]; then
+    echo "not starting — fix these first:" >&2
+    printf '  - %s\n' "${problems[@]}" >&2
+    exit 1
+  fi
+}
+preflight
+
+# Finished sections are kept, so a run that fails late resumes rather than
+# starting again. The cache is keyed on exactly what the numbers depend on —
+# the esrun and esdev binaries, every runtime's version, and the row scope — so
+# a rebuilt esrun or an upgraded Node invalidates it instead of being mixed
+# with numbers it did not produce. It is cleared once a module is published.
+# RESUME=0 ignores it.
+fingerprint() {
+  {
+    for bin in "${ESRUN:-../target/release/esrun}" "${ESDEV:-../target/release/esdev}"; do
+      [ -f "$bin" ] && sha256sum "$bin" | cut -d" " -f1
+    done
+    for rt in node bun deno llrt; do command -v "$rt" >/dev/null 2>&1 && "$rt" --version 2>&1 | head -1; done
+    echo "rows:$ROW_SCOPE"
+  } | sha256sum | cut -c1-16
+}
+CACHE=".cache/sections/$(fingerprint)"
+mkdir -p "$CACHE"
+
 FRAGMENTS=()
 run_section() { # name  outfile  command...
   local name="$1" out="$2"; shift 2
-  case " $SECTIONS " in *" $name "*) ;; *) return 0 ;; esac
+  selected "$name" || return 0
+  if [ "${RESUME:-1}" != 0 ] && [ -s "$CACHE/$name.json" ]; then
+    echo "  section: $name (kept from an earlier run with these binaries)" >&2
+    cp "$CACHE/$name.json" "$out"
+    FRAGMENTS+=("$out")
+    return 0
+  fi
   echo "  section: $name" >&2
+  local started=$SECONDS
   "$@" > "$out"
   # Fail loudly here rather than writing a truncated module later.
   bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$out"
+  cp "$out" "$CACHE/$name.json"
+  echo "  section: $name done in $(( (SECONDS - started) / 60 ))m$(( (SECONDS - started) % 60 ))s" >&2
   FRAGMENTS+=("$out")
 }
 
@@ -208,6 +273,9 @@ node validate-bench-data.mjs "$TMP_COMBINED" ../website
 } > "$OUT"
 
 echo "wrote $OUT" >&2
+# Published: the kept sections have served their purpose, and the next run
+# should measure afresh.
+rm -rf "$CACHE"
 
 # The README quotes the same numbers, so it is regenerated from the module that
 # was just written rather than kept in step by hand. It had rotted badly when it
