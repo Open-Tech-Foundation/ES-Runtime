@@ -73,8 +73,32 @@ else.**
 a module of its own, evaluated afresh, which is how a dev server re-reads a
 file that changed ([Module system](/docs/modules#a-module-is-its-url)).
 
-`import.meta.resolve` is the standard one-argument form. A bare specifier
-reads `package.json` files, so it needs `--allow-imports`, as importing it does.
+`import.meta.resolve` is the standard one-argument form:
+
+```js
+import.meta.resolve("./schema.json");     // "file:///app/schema.json"
+import.meta.resolve("runtime:process");   // "runtime:process"
+import.meta.resolve("my-orm/migrations/001.sql");
+// "file:///app/node_modules/my-orm/migrations/001.sql"
+```
+
+A relative path or a URL is pure URL resolution against the current module: no
+I/O, and no check that the target exists — resolving a path and importing it
+are separate questions.
+
+A bare or `#private` specifier goes through the module loader, which is how a
+program locates a file shipped inside a dependency, wherever it was installed:
+
+```js
+import { file } from "runtime:fs";
+
+const sql = await file(new URL(import.meta.resolve("my-orm/migrations/001.sql"))).text();
+```
+
+That reads `package.json` files ([Resolving packages](/docs/modules#resolving-packages)),
+so it needs `--allow-imports`, as an import does, and obeys the same root jail
+and import policy: a run that may not import a package may not locate it
+either. A URL it returns is always one `import()` accepts.
 
 A tool that has to resolve from somewhere other than its own module — a dev
 server finding the project's copy of a package rather than one nested under

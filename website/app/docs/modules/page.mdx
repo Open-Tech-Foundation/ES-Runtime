@@ -65,36 +65,10 @@ in production. `import.meta.url` carries the query.
 
 ## import.meta
 
-```js
-import.meta.url;                          // "file:///app/server.js"
-import.meta.resolve("./schema.json");     // "file:///app/schema.json"
-import.meta.resolve("runtime:process");   // "runtime:process"
-```
-
-`resolve` is pure URL resolution against the current module: no I/O, and no
-check that the target exists — resolving a path and importing it are separate
-questions.
-
-Bare and `#private` specifiers resolve as well, through the module loader:
-
-```js
-import { file } from "runtime:fs";
-
-// Locate a file shipped inside a dependency, wherever it was installed.
-const schema = import.meta.resolve("my-orm/migrations/001.sql");
-const sql = await file(new URL(schema)).text();
-```
-
-That reads `package.json` files (see [Resolving packages](#resolving-packages)),
-so it needs the same permission an import does (`--allow-imports`) and obeys the
-same root jail and import policy — a run that may not import a package may not
-locate it either. A URL it returns is always one `import()` accepts.
-
-`resolve` takes one argument, as the standard defines it, and resolves from
-the current module. A tool that needs to resolve from somewhere else — a dev
-server resolving a package from the project it serves — does it under esdev,
-with [`resolve(specifier, from)`](/api/build#resolve-specifier-from) in
-`runtime:build`. See [import.meta across runtimes](/docs/guides/import-meta).
+`import.meta.url` and the standard one-argument `import.meta.resolve`, and
+nothing else at run time. What each resolves, the permission a bare specifier
+needs, and how this compares with Node, Deno and Bun are in
+[import.meta across runtimes](/docs/guides/import-meta).
 
 ## Resolving packages
 
