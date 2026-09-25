@@ -31,11 +31,21 @@ import {
   quotedPrintable,
 } from "./encode.js";
 
+/** A `Blob`, or anything read the same way. */
+export interface BlobLike {
+  arrayBuffer(): Promise<ArrayBuffer>;
+  readonly type?: string;
+}
+
 export interface Attachment {
   /** The name the recipient sees. */
   filename?: string;
-  content: string | Uint8Array | ArrayBuffer | Blob;
-  /** Defaults to the Blob's type, else `application/octet-stream`. */
+  /**
+   * The bytes: a string (sent as UTF-8), a `Uint8Array`, an `ArrayBuffer`, or
+   * anything with `arrayBuffer()` — a `Blob`, or `runtime:fs`'s `file()`.
+   */
+  content: string | Uint8Array | ArrayBuffer | BlobLike;
+  /** Defaults to the content's own `type` when it has one, else `application/octet-stream`. */
   contentType?: string;
   /**
    * Shows the attachment inline, for HTML that refers to it as `cid:<this>`.
@@ -189,7 +199,10 @@ async function attachmentPart(attachment: Attachment): Promise<Part> {
   const bytes = await toBytes(attachment.content);
   const type =
     attachment.contentType ??
-    (attachment.content instanceof Blob && attachment.content.type !== ""
+    (typeof attachment.content === "object" &&
+    "arrayBuffer" in attachment.content &&
+    typeof attachment.content.type === "string" &&
+    attachment.content.type !== ""
       ? attachment.content.type
       : "application/octet-stream");
   checkValue("Content-Type", type);

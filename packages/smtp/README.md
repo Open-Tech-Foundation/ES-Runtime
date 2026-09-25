@@ -78,7 +78,7 @@ which checks the settings at startup rather than at the first email.
 | `to`, `cc`, `bcc`, `replyTo` | One address or a list. `bcc` goes on the envelope only, never in a header. |
 | `subject` | Any Unicode; encoded as RFC 2047 words when not ASCII. |
 | `text`, `html` | Either or both. Both makes `multipart/alternative`. |
-| `attachments` | `{ filename, content, contentType?, cid? }`. `content` is a string, `Uint8Array`, `ArrayBuffer` or `Blob`. With `cid`, the attachment is inline, for HTML that shows it as `<img src="cid:…">`. |
+| `attachments` | `{ filename, content, contentType?, cid? }`. `content` is a string, `Uint8Array`, `ArrayBuffer`, or anything with `arrayBuffer()` — a `Blob`, or `runtime:fs`'s `file()`. With `cid`, the attachment is inline, for HTML that shows it as `<img src="cid:…">`. |
 | `headers` | Further headers by name. The ones the fields build are refused here. |
 | `messageId`, `date` | Default to `<uuid@sender's domain>` and now. |
 | `envelope` | `{ from, to }`, overriding the addresses the server is told. |

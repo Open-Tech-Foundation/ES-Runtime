@@ -18,7 +18,13 @@
 export type { ConnectionOptions, Rejected, Security, SendResult } from "./connection.js";
 export { type Reply, SmtpError, SmtpErrorCode } from "./errors.js";
 export type { Address, AddressInput } from "./mime/address.js";
-export { type Attachment, type Built, buildMessage, type Message } from "./mime/message.js";
+export {
+  type Attachment,
+  type BlobLike,
+  type Built,
+  buildMessage,
+  type Message,
+} from "./mime/message.js";
 export {
   createTransport,
   fromUrl,

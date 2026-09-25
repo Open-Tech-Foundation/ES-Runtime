@@ -226,4 +226,29 @@ ok(
   "an IDN domain does not",
 );
 
+{
+  // Anything with arrayBuffer() — runtime:fs's file() is not a Blob, but is
+  // read like one — and its own type is the default Content-Type.
+  const blobLike = {
+    type: "text/csv",
+    arrayBuffer: async () => new TextEncoder().encode("a,b").buffer,
+  };
+  const built = await buildMessage({
+    from: "a@b.io",
+    to: "c@d.io",
+    attachments: [{ filename: "t.csv", content: blobLike }],
+  });
+  ok(
+    built.text.includes('Content-Type: text/csv; name="t.csv"'),
+    "a Blob-like attachment keeps its type",
+  );
+  ok(built.text.includes(btoa("a,b")), "and its bytes");
+  const blob = await buildMessage({
+    from: "a@b.io",
+    to: "c@d.io",
+    attachments: [{ content: new Blob(["x"], { type: "text/plain" }) }],
+  });
+  ok(blob.text.includes("Content-Type: text/plain\r\n"), "a Blob's type is used");
+}
+
 if (report("mime") > 0) (await import("runtime:process")).exit(1);
