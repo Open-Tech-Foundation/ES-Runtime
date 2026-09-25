@@ -1150,7 +1150,9 @@ fn an_alarm_set_in_one_process_runs_in_the_next() {
         r#"import { Job } from "./job.mjs";
            import { startAlarms, shutdown } from "runtime:workers";
            const alarms = startAlarms({ classes: [Job] });
-           await new Promise((r) => setTimeout(r, 300));
+           // Waits for the thing itself, not for a guess at how long it takes.
+           const until = async (check) => { const end = Date.now() + 30_000; while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20)); };
+           await until(() => Job.get("j").ran());
            console.log("ran", await Job.get("j").ran(), "pending", await Job.get("j").pending());
            await alarms.stop();
            await shutdown();"#,
@@ -1181,7 +1183,12 @@ fn an_alarm_repeats_only_while_its_handler_asks_to() {
         const t = Ticker.get("a");
         await t.start_at(10);
         const alarms = startAlarms({ classes: [Ticker] });
-        await new Promise((r) => setTimeout(r, 400));
+        const until = async (check) => { const end = Date.now() + 30_000; while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20)); };
+        await until(async () => (await t.n()) >= 3);
+        // And then it stops: a handler that set nothing is not woken again.
+        // A fixed wait is right here — it is showing something does *not*
+        // happen, which a slow machine can only make easier to show.
+        await new Promise((r) => setTimeout(r, 100));
         console.log(await t.n(), await t.pending());
         await alarms.stop();
         await shutdown();
@@ -1259,7 +1266,9 @@ fn a_failing_alarm_is_retried_and_then_reported() {
           classes: [Flaky],
           onError: (e, _context, w) => reported.push(`${e.message}@${w.name}/${w.id}${w.gaveUp ? " gave up" : ""}`),
         });
-        await new Promise((r) => setTimeout(r, 4000));
+        // Retries back off 1s, then 2s: done when the last failure is reported.
+        const until = async (check) => { const end = Date.now() + 30_000; while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20)); };
+        await until(() => reported.length > 0);
         console.log(await f.tries(), await f.pending(), reported.join(","));
         await alarms.stop();
         await shutdown();
@@ -1292,7 +1301,8 @@ fn an_alarm_waits_for_the_call_in_flight() {
         await w.at(10);
         const alarms = startAlarms({ classes: [W] });
         await w.slow();
-        await new Promise((r) => setTimeout(r, 200));
+        const until = async (check) => { const end = Date.now() + 30_000; while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20)); };
+        await until(async () => (await w.log()).includes("alarm"));
         console.log(await w.log());
         await alarms.stop();
         await shutdown();
@@ -1393,7 +1403,8 @@ fn an_alarm_for_a_class_this_process_does_not_have_is_left_alone() {
            const p = Present.get("p");
            await p.at(10);
            const alarms = startAlarms({ classes: [Present], onError: (e) => console.log("REPORTED", e.message) });
-           await new Promise((r) => setTimeout(r, 300));
+           const until = async (check) => { const end = Date.now() + 30_000; while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20)); };
+           await until(() => p.ran());
            console.log("mine ran:", await p.ran());
            await alarms.stop();
            await shutdown();"#,
@@ -1408,7 +1419,8 @@ fn an_alarm_for_a_class_this_process_does_not_have_is_left_alone() {
         r#"import { Absent } from "./both.mjs";
            import { startAlarms, shutdown } from "runtime:workers";
            const alarms = startAlarms({ classes: [Absent] });
-           await new Promise((r) => setTimeout(r, 300));
+           const until = async (check) => { const end = Date.now() + 30_000; while (!(await check()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20)); };
+           await until(() => Absent.get("a").ran());
            console.log("ran:", await Absent.get("a").ran());
            await alarms.stop();
            await shutdown();"#,
@@ -1826,11 +1838,15 @@ fn alarms_run_on_a_shard() {
            const alarms = startAlarms({ classes: [Ticker, Flaky], onError: (e, c) => reported.push(c) });
            await Ticker.get("t").arm();
            await Flaky.get("f").arm();
-           const until = Date.now() + 5000;
+           const until = Date.now() + 30_000;
            while (Date.now() < until && (await Ticker.get("t").n()) < 3) {
              await new Promise((r) => setTimeout(r, 20));
            }
-           await new Promise((r) => setTimeout(r, 200));
+           // The first delivery attempt has run once `tries` is 1 and the
+           // retry it scheduled is pending.
+           while (Date.now() < until && !(await Flaky.get("f").seen()).startsWith("1 true")) {
+             await new Promise((r) => setTimeout(r, 20));
+           }
            console.log(await Ticker.get("t").n(), await Ticker.get("t").pending());
            console.log(await Flaky.get("f").seen(), reported.length);
            await alarms.stop();
