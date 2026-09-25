@@ -44,6 +44,39 @@ test("TextDecoder decodes DataView and ArrayBuffer", () => {
   assertEquals(new TextDecoder().decode(new DataView(buf)), "test");
 });
 
+test("TextDecoder reads a view at its offset, not its buffer's start", () => {
+  // Small arrays live on V8's heap and large ones off it; both must decode only
+  // the bytes the view covers.
+  const small = new TextEncoder().encode("xxhixx");
+  assertEquals(new TextDecoder().decode(small.subarray(2, 4)), "hi");
+  const large = new TextEncoder().encode("x".repeat(500) + "héllo" + "y".repeat(500));
+  assertEquals(new TextDecoder().decode(large.subarray(500, 506)), "héllo");
+  assertEquals(new TextDecoder().decode(new DataView(large.buffer, 500, 6)), "héllo");
+});
+
+test("TextDecoder strips a leading BOM unless told not to", () => {
+  const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x61]);
+  assertEquals(new TextDecoder().decode(bytes), "a");
+  assertEquals(new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes), "\ufeffa");
+});
+
+test("TextDecoder replaces each maximal invalid subpart once", () => {
+  // A truncated three-byte sequence is one U+FFFD; the byte after it stands.
+  assertEquals(new TextDecoder().decode(new Uint8Array([0x61, 0xe2, 0x82, 0x62])), "a\ufffdb");
+  assertEquals(new TextDecoder().decode(new Uint8Array([0xc0, 0x80])), "\ufffd\ufffd");
+});
+
+test("TextDecoder decodes a SharedArrayBuffer view", () => {
+  const shared = new Uint8Array(new SharedArrayBuffer(3));
+  shared.set([0x61, 0x62, 0x63]);
+  assertEquals(new TextDecoder().decode(shared), "abc");
+});
+
+test("TextDecoder refuses what is not a BufferSource", () => {
+  assertThrows(() => new TextDecoder().decode("abc"), "TypeError");
+  assertThrows(() => new TextDecoder().decode([1, 2]), "TypeError");
+});
+
 test("TextEncoder encodeInto writes into Uint8Array", () => {
   const enc = new TextEncoder();
   const dest = new Uint8Array(10);

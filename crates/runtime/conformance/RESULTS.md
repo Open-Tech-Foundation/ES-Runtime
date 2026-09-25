@@ -14,10 +14,10 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **373 / 373** (100%) |
+| Assertions passing | **392 / 392** (100%) |
 | Known deviations (`todo`) | **0** |
-| Files | 24 |
-| Last updated | 2026-08-08 |
+| Files | 25 |
+| Last updated | 2026-09-25 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
 **has** — it is counted above and gated as a non-regression floor. `todo(...)`
@@ -30,7 +30,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 
 | File | Area (SPEC §) | Passing | Deviations |
 | --- | --- | --- | --- |
-| `encoding.js` | TextEncoder/TextDecoder, all encodings §2.3 | 22 | — |
+| `encoding.js` | TextEncoder/TextDecoder, all encodings §2.3 | 27 | — |
 | `base64.js` | atob/btoa §2.3 | 6 | — |
 | `console.js` | console method set §2.2 | 3 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 19 | — |

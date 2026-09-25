@@ -132,6 +132,7 @@
     "__span_close",
     "__heap_bytes",
     "__timer_ref",
+    "__utf8_decode",
   ]) {
     const d = Object.getOwnPropertyDescriptor(globalThis, name);
     if (d !== undefined && d.enumerable && d.configurable) {

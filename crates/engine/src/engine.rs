@@ -837,6 +837,9 @@ impl V8Engine {
             // `__heap_bytes`: this isolate's heap, which only the isolate knows.
             crate::op::install_heap_builtin(scope, context)?;
             crate::op::install_timer_ref_builtin(scope, context)?;
+            // `__utf8_decode`: `TextDecoder`'s hot path, which must read the
+            // bytes where they lie rather than have the op boundary copy them.
+            crate::text::install(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is

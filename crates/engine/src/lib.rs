@@ -43,6 +43,7 @@ mod serialize;
 pub mod snapshot;
 pub mod sysinfo;
 mod sysmem;
+mod text;
 pub mod trace;
 mod value;
 

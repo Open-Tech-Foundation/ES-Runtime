@@ -798,6 +798,7 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     refs.push(v8::ExternalReference {
         function: timer_ref.map_fn_to(),
     });
+    refs.extend(crate::text::external_references());
     std::borrow::Cow::Owned(refs)
 }
 

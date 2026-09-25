@@ -6,6 +6,10 @@
 (() => {
   "use strict";
   const ops = globalThis.__ops;
+  // UTF-8's one-shot decode, read in place by the engine rather than copied
+  // across the op boundary — see `engine/src/text.rs`. Captured here, before any
+  // guest code runs, like every other builtin the prelude leans on.
+  const utf8Decode = globalThis.__utf8_decode;
 
   class TextEncoder {
     get encoding() {
@@ -90,6 +94,7 @@
 
       // No stream in flight and none being started: decode and be done.
       if (!streaming && this.#handle === null) {
+        if (this.#encoding === "utf-8") return utf8Decode(bytes, this.#fatal, this.#ignoreBOM);
         return ops.decode_once(this.#encoding, bytes, this.#fatal, this.#ignoreBOM);
       }
 
