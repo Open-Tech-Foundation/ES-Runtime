@@ -25,7 +25,7 @@ thing it was trying to stop being.
 ## Import
 
 ```js
-import { build } from "runtime:build";
+import { build, resolve } from "runtime:build";
 ```
 
 ## build(options)
@@ -85,6 +85,33 @@ present at all is enough to win.
 `mainFields` is what resolves a package too old to have an `exports` map. A
 neutral platform leaves it empty, so without it such a package does not resolve
 at all.
+
+## resolve(specifier, from)
+
+The URL `specifier` names when imported from `from` — an absolute URL, string or
+`URL`, and a directory when it ends in `/` — rather than from the calling
+module. Synchronous.
+
+```js
+import { resolve } from "runtime:build";
+
+const root = new URL("./", `file://${cwd()}/`);   // cwd from runtime:process
+resolve("@opentf/web", root);                      // the project's copy of the package
+resolve("./app/page.jsx", root);                   // a file in the project
+```
+
+It answers as an `import` written at `from` would, through the run's own
+loader: the root jail, the import policy, the project's aliases and CommonJS
+conversion. So the target must exist, and a denied run gets a `NotAllowedError`.
+
+| | |
+| --- | --- |
+| **Needs** | `--allow-imports`, as importing does |
+| **Throws** | `TypeError` when `from` is not an absolute URL, or `specifier` resolves to nothing |
+
+`import.meta.resolve` takes one argument, as the standard defines it; this is
+the second half, for tools that run under esdev. See
+[import.meta across runtimes](/docs/guides/import-meta).
 
 ## Bundle
 

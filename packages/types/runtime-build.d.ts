@@ -401,6 +401,27 @@ declare module "runtime:build" {
    */
   export function build(options: BuildOptions): Promise<Bundle>;
 
-  const _default: { build: typeof build };
+  /**
+   * The URL `specifier` names when imported from `from` — an absolute URL, and
+   * a directory when it ends in `/` — rather than from the calling module.
+   *
+   * What a dev server or a build step needs to resolve a package the way the
+   * project it serves would: the project's copy, not one nested under the tool.
+   * It answers as an `import` written at `from` would — the run's root jail,
+   * import policy, aliases and CommonJS conversion — so the target must exist.
+   *
+   * **`esdev` only**, like the rest of this module. `import.meta.resolve` takes
+   * one argument, as the standard defines it.
+   *
+   * Needs `--allow-imports`, as importing does.
+   *
+   * ```ts
+   * const root = new URL("./", `file://${cwd()}/`);
+   * resolve("@opentf/web", root);
+   * ```
+   */
+  export function resolve(specifier: string, from: string | URL): string;
+
+  const _default: { build: typeof build; resolve: typeof resolve };
   export default _default;
 }

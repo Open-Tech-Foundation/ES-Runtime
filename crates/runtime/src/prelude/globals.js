@@ -92,22 +92,11 @@
   // Like Node's, this is pure URL resolution: no I/O, and no check that the
   // target exists — resolving a path and importing it are separate questions.
   //
-  // `parent`, as Node takes it, resolves from somewhere other than this module:
-  // an absolute URL, string or `URL`. A directory URL ends in `/` and resolves
-  // from inside that directory — how a tool resolves a package the way the
-  // project it serves would, rather than the way its own file would.
-  globalThis.__make_import_meta_resolve = (moduleBase) => (specifier, parent) => {
-    let base = moduleBase;
-    if (parent !== undefined) {
-      const text = parent instanceof URL ? parent.href : String(parent);
-      if (!URL.canParse(text)) {
-        throw new TypeError(
-          `import.meta.resolve: the parent must be an absolute URL, got ${JSON.stringify(text)}; ` +
-            "a directory is a URL ending in /, such as new URL(\"./\", import.meta.url)",
-        );
-      }
-      base = new URL(text).href;
-    }
+  // One argument, as the HTML standard defines it (`resolve` has length 1); an
+  // extra one is ignored, as any builtin ignores one. Resolving from somewhere
+  // other than the module is a tool's need, and a tool runs under esdev: it is
+  // `resolve(specifier, from)` in `runtime:build`, which esrun does not serve.
+  globalThis.__make_import_meta_resolve = (base) => (specifier) => {
     const target = String(specifier);
     if (target.startsWith("node:")) {
       throw new TypeError(`node: builtins are not supported (cannot resolve ${JSON.stringify(target)})`);

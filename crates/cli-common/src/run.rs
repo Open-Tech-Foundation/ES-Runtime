@@ -910,6 +910,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     let extension_ctx = ExtensionContext {
         file_system: file_system.clone(),
         base_dir: &base_dir,
+        loader: loader.clone(),
     };
     for extension in &config.extensions {
         for op in extension.ops(&extension_ctx) {

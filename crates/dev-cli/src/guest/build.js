@@ -521,5 +521,28 @@ async function host(plugins) {
   await ops.build_host(described);
 }
 
-export { build, Bundle, BuildError, host };
-export default { build };
+// The URL `specifier` names when imported from `from` — an absolute URL, and a
+// directory when it ends in `/` — rather than from this module.
+//
+// A tool's need: a dev server or a build step resolves a package the way the
+// project it serves would, from the project's root, so the project's copy wins
+// over one nested under the tool. It resolves through the run's own loader, so
+// the answer is the one an `import` written there would get. `import.meta.resolve`
+// takes one argument, as the standard defines it; this is the esdev-only
+// second half.
+function resolve(specifier, from) {
+  if (typeof specifier !== "string") {
+    throw new TypeError("resolve: the specifier must be a string");
+  }
+  const text = from instanceof URL ? from.href : String(from);
+  if (!URL.canParse(text)) {
+    throw new TypeError(
+      `resolve: \`from\` must be an absolute URL, got ${JSON.stringify(text)}; ` +
+        'a directory is a URL ending in /, such as new URL("./", import.meta.url)',
+    );
+  }
+  return ops.build_resolve_from(specifier, new URL(text).href);
+}
+
+export { build, Bundle, BuildError, host, resolve };
+export default { build, resolve };

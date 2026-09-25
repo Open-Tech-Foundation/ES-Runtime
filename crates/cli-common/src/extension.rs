@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use es_runtime::OpDecl;
-use es_runtime_providers::FileSystem;
+use es_runtime_providers::{FileSystem, ModuleLoader};
 
 /// One `runtime:` module an extension serves: the specifier a program imports,
 /// and the ES module source behind it.
@@ -50,6 +50,10 @@ pub struct ExtensionContext<'a> {
     /// The entry module's directory — what a relative path in guest code means,
     /// the same base `runtime:fs` uses.
     pub base_dir: &'a Path,
+    /// The run's module loader: what an extension that resolves a specifier
+    /// resolves it with, so the answer is the one an `import` would get —
+    /// the same root jail, the same import policy, the same binary's hooks.
+    pub loader: Arc<dyn ModuleLoader>,
 }
 
 /// A binary's addition to the `runtime:` namespace.

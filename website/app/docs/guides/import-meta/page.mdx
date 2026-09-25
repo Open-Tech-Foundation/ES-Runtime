@@ -39,7 +39,7 @@ Anything else on `import.meta` is an extension.
 | --- | --- | --- | --- | --- | --- |
 | `url` | Yes | Yes | Yes | Yes | Yes |
 | `resolve(specifier)` | Yes | Yes | Yes | Yes | Yes |
-| `resolve(specifier, parent)` | No | Yes | Behind `--experimental-import-meta-resolve` | No | No |
+| `resolve(specifier, parent)` | No | No — esdev has [`resolve(specifier, from)`](/api/build#resolve-specifier-from) in `runtime:build` | Behind `--experimental-import-meta-resolve` | No | No |
 | `dirname` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
 | `filename` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
 | `main` | No | No | Experimental (22.18, 24.2) | Yes | Yes |
@@ -73,18 +73,21 @@ else.**
 a module of its own, evaluated afresh, which is how a dev server re-reads a
 file that changed ([Module system](/docs/modules#a-module-is-its-url)).
 
-`import.meta.resolve(specifier, parent)` takes a second argument this runtime
-supports without a flag: an absolute URL to resolve from instead of this
-module, and a directory when it ends in `/`. A tool uses it to resolve a
-package the way the project it serves would:
+`import.meta.resolve` is the standard one-argument form. A bare specifier
+reads `package.json` files, so it needs `--allow-imports`, as importing it does.
+
+A tool that has to resolve from somewhere other than its own module — a dev
+server finding the project's copy of a package rather than one nested under
+the tool — does it under esdev, with `resolve(specifier, from)` from
+[`runtime:build`](/api/build#resolve-specifier-from). The production binary
+serves neither that module nor the argument:
 
 ```js
-const root = new URL("./", `file://${cwd()}/`);    // cwd from runtime:process
-import.meta.resolve("@opentf/web", root);           // the project's copy, not the tool's
-```
+import { resolve } from "runtime:build";              // esdev only
 
-A bare specifier reads `package.json` files, so it needs `--allow-imports`, as
-importing it does.
+const root = new URL("./", `file://${cwd()}/`);    // cwd from runtime:process
+resolve("@opentf/web", root);                       // the project's copy, not the tool's
+```
 
 **At build time, in esdev only:**
 
@@ -143,11 +146,12 @@ run();
 
 ### Resolving from somewhere else
 
-`import.meta.resolve(specifier, parent)` is this runtime's, and Node's only
-behind a flag. Code that has to run elsewhere cannot rely on the second
-argument. Resolve from a module that lives where resolution should start, or
-keep the call in code that only ever runs under esdev, such as a dev server or
-a build step.
+The standard `resolve` resolves from the calling module only. Node has a
+second argument behind a flag; Deno, Bun and esrun do not. Portable code
+resolves from a module that lives where resolution should start. Code that only
+ever runs under esdev, such as a dev server or a build step, can use
+[`resolve(specifier, from)`](/api/build#resolve-specifier-from) from
+`runtime:build`.
 
 ### Environment values
 
@@ -185,8 +189,9 @@ development tools, not in a loop that runs in production.
 
 ## TypeScript
 
-[`@opentf/esrun-types`](/esdev/typescript) declares what this runtime provides,
-including the `parent` argument. `import.meta.hot` is declared for esdev. A
+[`@opentf/esrun-types`](/esdev/typescript) declares what this runtime provides:
+the one-argument `resolve`, and `runtime:build`'s `resolve(specifier, from)` for
+esdev. `import.meta.hot` is declared for esdev. A
 library that reads `import.meta.dirname` compiles against Node's types and
 still gets `undefined` here, so the compiler cannot catch it. Stay on `url` and
 `resolve`.

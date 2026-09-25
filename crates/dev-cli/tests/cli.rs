@@ -13000,6 +13000,50 @@ fn write_resolution_fixture(dir: &Path) {
     );
 }
 
+/// `runtime:build`'s `resolve(specifier, from)` resolves as an `import` written
+/// at `from` would: a tool finds the project's copy of a package rather than
+/// its own nested one. `import.meta.resolve` stays the standard one-argument
+/// form, and the production binary serves neither.
+#[test]
+fn runtime_build_resolves_from_the_project() {
+    let dir = build_dir("rb_resolve");
+    for pkg in ["node_modules/pkg", "tool/node_modules/pkg"] {
+        std::fs::create_dir_all(dir.join(pkg)).expect("mkdir");
+        write_in(
+            &dir.join(pkg),
+            "package.json",
+            r#"{ "name": "pkg", "type": "module", "exports": "./i.js" }"#,
+        );
+        write_in(&dir.join(pkg), "i.js", "export default 1;\n");
+    }
+    write_in(&dir, "package.json", r#"{ "name": "project" }"#);
+    write_in(
+        &dir.join("tool"),
+        "cli.js",
+        "import { resolve } from 'runtime:build';\n\
+         const root = new URL('../', import.meta.url);\n\
+         console.log(import.meta.resolve('pkg').includes('/tool/node_modules/'));\n\
+         console.log(!resolve('pkg', root).includes('/tool/'));\n\
+         console.log(resolve('pkg', root.href) === resolve('pkg', root));\n\
+         console.log(import.meta.resolve.length);\n\
+         try { resolve('pkg', './relative/'); } catch (e) { console.log(e instanceof TypeError); }\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("tool/cli.js")
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "true\ntrue\ntrue\n1\ntrue\n");
+
+    let denied = esdev_in(&dir)
+        .args(["--deny-all", "tool/cli.js"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!denied.status.success());
+    assert!(stderr(&denied).contains("imports"), "{}", stderr(&denied));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **A guest build asserts what the subcommand asserts.** The two used to
 /// disagree: `esdev build` names the `worker` condition and the `module`/`main`
 /// fields, and `runtime:build` named neither unless the caller did — so the

@@ -180,6 +180,28 @@ impl HostExtension for BuildExtension {
 
         let mut ops = Vec::new();
 
+        // resolve(specifier, from) -> URL: the answer an `import` written at
+        // `from` would get, through the run's own loader — its root jail, its
+        // import policy, and in esdev its aliases and CommonJS conversion.
+        // Gated as an import is (the `imports` permission): resolving a
+        // package reads `package.json` files.
+        let loader = ctx.loader.clone();
+        ops.push(
+            OpDecl::sync("build_resolve_from", move |args| {
+                let specifier = arg_str(&args, 0);
+                let from = arg_str(&args, 1);
+                match loader.resolve_sync(&specifier, &from) {
+                    Some(Ok(id)) => Ok(Value::String(id)),
+                    Some(Err(e)) => Err(OpError::new(ExceptionClass::TypeError, e.to_string())),
+                    None => Err(OpError::new(
+                        ExceptionClass::TypeError,
+                        format!("resolve: {specifier:?} cannot be resolved synchronously here"),
+                    )),
+                }
+            })
+            .requires(Capability::FileSystem),
+        );
+
         // create(options) -> id
         let this = state.clone();
         ops.push(

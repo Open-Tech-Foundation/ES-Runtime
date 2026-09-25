@@ -142,6 +142,10 @@ is the point, since none of the three has any business in a deployment.
   its driver to exit.
 
 ### Added
+- **`resolve(specifier, from)` in `runtime:build`** resolves a specifier as an
+  `import` written at `from` would, so a dev server or build step finds the
+  project's copy of a package rather than its own nested one. It goes through
+  the run's own loader and needs `--allow-imports` (DECISIONS D127).
 - **`--config=<path>` for `esdev test` and `esdev <file>`**, as `build`,
   `start` and `preview` already took it.
 - **`esdev test --watch` restarts when `esdev.json` changes**, with global

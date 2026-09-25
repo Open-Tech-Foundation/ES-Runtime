@@ -39,13 +39,13 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// `import.meta.resolve(specifier, parent)`, as Node takes it: a tool resolves
-/// a package from the project it serves, not from its own file — so the
-/// project's copy wins over the tool's own nested one. A relative parent is
-/// refused, naming what to pass.
+/// `import.meta.resolve` is the standard one: one argument, resolving from the
+/// calling module. A second is ignored, as any builtin ignores one — resolving
+/// from somewhere else is a tool's need, served by esdev's `runtime:build`, not
+/// something the production runtime carries.
 #[test]
-fn import_meta_resolve_resolves_from_a_parent_url() {
-    let dir = std::env::temp_dir().join(format!("esrun-parent-{}", std::process::id()));
+fn import_meta_resolve_takes_one_argument() {
+    let dir = std::env::temp_dir().join(format!("esrun-resolve-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     for pkg in ["node_modules/pkg", "tool/node_modules/pkg"] {
         std::fs::create_dir_all(dir.join(pkg)).unwrap();
@@ -60,11 +60,9 @@ fn import_meta_resolve_resolves_from_a_parent_url() {
     std::fs::write(
         dir.join("tool/cli.js"),
         "const root = new URL('../', import.meta.url);\n\
-         console.log(import.meta.resolve('pkg').includes('/tool/node_modules/'));\n\
-         console.log(!import.meta.resolve('pkg', root).includes('/tool/'));\n\
-         console.log(import.meta.resolve('pkg', root.href) === import.meta.resolve('pkg', root));\n\
-         console.log(import.meta.resolve('./x.js', root) === root.href + 'x.js');\n\
-         try { import.meta.resolve('pkg', './relative/'); } catch (e) { console.log(e instanceof TypeError); }\n",
+         console.log(import.meta.resolve.length);\n\
+         console.log(import.meta.resolve('pkg', root) === import.meta.resolve('pkg'));\n\
+         console.log(import.meta.resolve('pkg').includes('/tool/node_modules/'));\n",
     )
     .unwrap();
     let out = esrun()
@@ -73,7 +71,7 @@ fn import_meta_resolve_resolves_from_a_parent_url() {
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert_eq!(stdout(&out).trim(), "true\ntrue\ntrue\ntrue\ntrue");
+    assert_eq!(stdout(&out).trim(), "1\ntrue\ntrue");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

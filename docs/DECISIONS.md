@@ -661,7 +661,7 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
-### D127 — `import.meta.resolve(specifier, parent)` · *Proposed (2026-09-25)*
+### D127 — Resolving from another module: `resolve(specifier, from)` in `runtime:build` · *Proposed (2026-09-25)*
 
 **Context:** `import.meta.resolve` resolves only against the calling module. A tool — Web-App-Framework's dev server, a codegen step — has to resolve a package the way the *project it serves* would: from the project's root, so the project's copy wins over the one nested under the tool. With no way to say that, the dev server carries its own `node_modules` walk and `exports` resolver in JavaScript (`resolveFrom`, `throughExports`), a second resolver that already disagrees with the runtime's: it tries conditions in the order it lists them, where D40 follows the order the package's author wrote.
 
@@ -673,6 +673,8 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 - **No new capability.** A bare specifier reads `package.json` files as it did, under the same grant, root jail and import policy.
 
 **Consequences:** the dev server's resolver becomes `import.meta.resolve(spec, root)`, and there is one resolver again. The type definitions declare the second argument. Verified by a loader unit test (a directory referrer resolves from inside it; a file referrer from its directory), an `esrun` end-to-end test (the tool's own copy by default, the project's from its root, a string and a `URL` agreeing, a relative specifier against the parent, a relative parent refused), and a type test. Documented per D27 (`docs/API.md`, site `docs/modules`, `CHANGELOG`).
+
+**Amendment (out of the runtime, 2026-09-25).** The argument does not belong on `import.meta.resolve`. It put an extension no standard defines — which Node ships only behind a flag, and Deno and Bun not at all — into the prelude `esrun` shares, for a need only a development tool has. `esrun` stays narrow and standard, and dev machinery stays out of it. So `import.meta.resolve` is the standard one-argument form again, a second argument ignored as any builtin ignores one, and the capability is `resolve(specifier, from)` in `runtime:build`, which `esrun` refuses to load. It resolves through the run's own loader, handed to extensions in `ExtensionContext` for this, so its answer is exactly what an `import` written at `from` would get: root jail, import policy, and in `esdev` the aliases and CommonJS conversion — a target must exist, which the prelude's pure URL join did not ask. The directory-referrer fix stays: it is a correctness fix to resolution itself. The type definitions declare `resolve` in `runtime:build` and no longer the second argument. Verified by an `esrun` test that `import.meta.resolve` has length 1 and ignores a second argument, an `esdev` test of `resolve` (the project's copy, a string and a `URL` agreeing, a relative `from` refused, denied under `--deny-all`), and a type test.
 
 ---
 

@@ -13,10 +13,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
-- **`import.meta.resolve(specifier, parent)`** resolves from `parent` — an
-  absolute URL, a directory when it ends in `/` — rather than from the calling
-  module, as Node's does. A tool resolves a package the way the project it
-  serves would (DECISIONS D127).
+- **`cli-common`'s `ExtensionContext::loader`**: the run's module loader, so a
+  binary's `runtime:` extension resolves a specifier exactly as an `import`
+  would — root jail, import policy and the binary's hooks included. `esdev`'s
+  `runtime:build` uses it for `resolve(specifier, from)` (DECISIONS D127).
 
 - **Shards for durable workers** in `runtime:workers`: the classes' code runs
   on a fixed pool of `Worker`s while their state stays with the agent that owns
