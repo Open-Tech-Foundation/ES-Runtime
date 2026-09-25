@@ -35,6 +35,10 @@ Anything else on `import.meta` is an extension.
 
 ## What exists where
 
+### At run time
+
+What each runtime puts on `import.meta` when a module runs:
+
 | Member | Standard | esrun / esdev | Node | Deno | Bun |
 | --- | --- | --- | --- | --- | --- |
 | `url` | Yes | Yes | Yes | Yes | Yes |
@@ -44,18 +48,23 @@ Anything else on `import.meta` is an extension.
 | `filename` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
 | `main` | No | No | Experimental (22.18, 24.2) | Yes | Yes |
 | `dir`, `file`, `path` | No | No | No | No | Yes |
-| `env` | No | `esdev build` output only | No | No | Yes, `process.env` |
-| `hot` | No | `esdev start` bundles only | No | No | No |
-| `glob(pattern)` | No | No | No | No | No |
+| `env` | No | No | No | No | Yes — an alias for `process.env` |
 
-Build tools add members of their own at compile time, and they are gone from
-the output:
+### At build time
 
-| Member | Where it comes from |
-| --- | --- |
-| `import.meta.env` | Vite (`VITE_*`, `MODE`, `BASE_URL`, `DEV`, `PROD`, `SSR`); [`esdev build`](/esdev/build/project#import-meta-env) (`PUBLIC_*`, `MODE`, `DEV`, `PROD`) |
-| `import.meta.hot` | Vite's HMR; [`esdev start`](/esdev/start/hmr)'s, a subset of Vite's with `signal` and `keep` added |
-| `import.meta.glob` | Vite only |
+Members a build tool compiles away: they exist in the source it reads and are
+replaced in the output it writes, so the runtime never sees them. They come
+from Vite, and esdev provides two of them in its own form:
+
+| Member | Vite | esdev |
+| --- | --- | --- |
+| `import.meta.env` | `VITE_*` variables, `MODE`, `BASE_URL`, `DEV`, `PROD`, `SSR` | `PUBLIC_*` variables, `MODE`, `DEV`, `PROD` — in [`esdev build`](/esdev/build/project#import-meta-env) output only |
+| `import.meta.hot` | The HMR API | A subset of Vite's, with `signal` and `keep` added — in [`esdev start`](/esdev/start/hmr) bundles only |
+| `import.meta.glob(pattern)` | Imports every file a pattern matches | Not provided |
+
+Bun's `import.meta.env` and Vite's share a name and nothing else: Bun's is the
+live process environment at run time, Vite's and esdev's are values written into
+the bundle when it is built.
 
 <Callout type="note" title="Versions">
   Node added `dirname` and `filename` in 20.11 and 21.2, and marked them stable
@@ -179,8 +188,8 @@ ever runs under esdev, such as a dev server or a build step, can use
 
 ### Environment values
 
-`import.meta.env` is a build-time replacement, not an object that exists at run
-time. Read the environment where the program runs through
+`import.meta.env` is a build-time replacement, Vite's convention and esdev's,
+not an object that exists at run time (Bun's is the one exception). Read the environment where the program runs through
 [`runtime:process`](/api/process), which a deployment grants with `--allow-env`.
 In source that is also bundled, guard the build-time form:
 
@@ -190,7 +199,8 @@ const mode = import.meta.env?.MODE ?? "development";
 
 ### Hot replacement
 
-Always behind a check, so the module still runs where there is no dev loop:
+`import.meta.hot` is Vite's HMR convention, which esdev follows. Always put it
+behind a check, so the module still runs where there is no dev loop:
 
 ```js
 if (import.meta.hot) {
