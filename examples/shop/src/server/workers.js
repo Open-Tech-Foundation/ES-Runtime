@@ -187,10 +187,15 @@ export class Customer extends DurableWorker {
 export class Delivery extends DurableWorker {
   static durableName = "Delivery";
 
+  // Safe to repeat, and safe to repeat after a crash half-way through: it does
+  // whichever steps are still missing. Returning early because the shipment
+  // was there already left a delivery with no alarm when the process died
+  // between the two writes — found by the shop benchmark's SIGKILL.
   async schedule(shipment) {
-    if (this.state.has("shipment")) return;
-    this.state.setMany({ shipment, status: "pending", attempts: 0 });
-    await this.state.alarm.set(Date.now());
+    if (!this.state.has("shipment")) this.state.setMany({ shipment, status: "pending", attempts: 0 });
+    if (this.state.get("status") === "pending" && this.state.alarm.get() === null) {
+      await this.state.alarm.set(Date.now());
+    }
   }
 
   status() {
