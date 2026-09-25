@@ -24,6 +24,14 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev build` builds a module named by `new URL("./x.js", import.meta.url)`**
+  as a content-hashed chunk of its own, and points the URL at it (DECISIONS
+  D134). A built server that started `new Worker(new URL(…))`, or configured
+  durable-worker shards with `module: new URL(…)`, looked for a file that was
+  never emitted.
+
 ## [0.10.0] - 2026-09-25
 
 ### Changed

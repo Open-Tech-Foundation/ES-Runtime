@@ -67,6 +67,7 @@ mod inspect;
 mod install;
 mod jsx;
 mod module_mocks;
+mod module_url;
 mod plugins;
 mod preview;
 mod prompt;

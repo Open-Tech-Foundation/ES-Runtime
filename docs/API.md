@@ -3485,7 +3485,8 @@ await Cart.get("c1").add("book");   // runs on a shard
 
 Each shard imports `module` and runs the durable-worker classes it
 **exports**. A class it does not export is refused at its first call with a
-`TypeError`. Put the classes in a module of their own: a shard evaluates the
+`TypeError`. `esdev build` emits the module a `new URL()` names as a chunk of
+its own. Put the classes in a module of their own: a shard evaluates the
 module's top-level code, too.
 
 A worker is placed on a shard by a hash of its class and id, so it lands on

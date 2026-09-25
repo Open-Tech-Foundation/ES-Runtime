@@ -844,6 +844,76 @@ fn esdev_in(dir: &Path) -> Command {
     cmd
 }
 
+/// `new URL("./x.js", import.meta.url)` names a module the build has to emit
+/// (D134): a `Worker`'s entry, and the module a durable worker's shards import.
+/// Both are built as chunks of their own, the URLs point at them, and the
+/// bundle runs under esrun from its own directory.
+#[test]
+fn build_emits_the_modules_a_new_url_names() {
+    let dir = build_dir("b_module_url");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/w.js",
+        "self.onmessage = (e) => postMessage(`${e.data}!`);\n",
+    );
+    write_in(
+        &dir,
+        "src/workers.ts",
+        "import { DurableWorker } from \"runtime:workers\";\n\
+         export class Room extends DurableWorker {\n\
+           static durableName = \"Room\";\n\
+           hi(): string { return \"hi\"; }\n\
+         }\n",
+    );
+    write_in(
+        &dir,
+        "src/server.js",
+        "import { configure, shutdown } from \"runtime:workers\";\n\
+         import { Room } from \"./workers.ts\";\n\
+         const w = new Worker(new URL(\"./w.js\", import.meta.url));\n\
+         const echoed = await new Promise((r) => { w.onmessage = (e) => r(e.data); w.postMessage(\"echo\"); });\n\
+         configure({ shards: 1, module: new URL(\"./workers.ts\", import.meta.url) });\n\
+         console.log(echoed, await Room.get(\"r\").hi());\n\
+         w.terminate();\n\
+         await shutdown();\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/server.js", "--out=dist/server.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(dir.join("dist/server.js").exists(), "{}", stdout(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/server.js")).expect("read bundle");
+    assert!(
+        !bundle.contains("./w.js"),
+        "the source path survived:\n{bundle}"
+    );
+    assert!(
+        !bundle.contains("./workers.ts"),
+        "the source path survived:\n{bundle}"
+    );
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        eprintln!("skipping: esrun is not built beside esdev");
+        return;
+    };
+    let run = Command::new(esrun)
+        .current_dir(&dir)
+        .args([
+            "--allow-read",
+            "--allow-write",
+            "--allow-imports",
+            "--allow-workers",
+            "dist/server.js",
+        ])
+        .output()
+        .expect("spawn esrun");
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run).trim(), "echo! hi");
+}
+
 #[test]
 fn build_bundles_a_graph_into_one_file() {
     let dir = build_dir("b_graph");

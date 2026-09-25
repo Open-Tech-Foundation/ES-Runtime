@@ -749,12 +749,20 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             .and_then(|n| n.to_str())
             .ok_or_else(|| format!("--out={} does not name a file", out.display()))?
             .to_string();
+        // `[name].<ext>` with the entry named after the file, rather than the
+        // file name itself as the pattern: the same output for the entry, and a
+        // module a `new URL()` names (D134) gets its own name beside it instead
+        // of colliding with the one fixed name every entry would otherwise take.
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), ext.to_string()),
+            _ => (name.clone(), "js".to_string()),
+        };
         (
             dir,
-            name,
+            format!("[name].{ext}"),
             None,
             vec![InputItem {
-                name: None,
+                name: Some(stem),
                 import: config.source.clone(),
             }],
         )
@@ -936,6 +944,9 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                     // somebody's framework: a module that is still JSX when
                     // nothing has said how JSX compiles is refused by name.
                     std::sync::Arc::new(crate::jsx::JsxPass::new(config.jsx.clone())),
+                    // `new URL("./worker.js", import.meta.url)` → a chunk of its
+                    // own, so the built program finds the module it names (D134).
+                    std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
                     if config.lib {
                         // A library does not decide where a file is served
                         // from — the build that consumes it does.
@@ -999,7 +1010,16 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                     .unwrap_or("bundle");
                 PathBuf::from(dir).join(format!("{stem}.js"))
             }
-            None => out_dir.join(&filenames),
+            // The pattern with the entry's own name in it: the file `--out` named.
+            None => out_dir.join(
+                filenames.replace(
+                    "[name]",
+                    inputs
+                        .first()
+                        .and_then(|i| i.name.as_deref())
+                        .unwrap_or("bundle"),
+                ),
+            ),
         };
         let size = std::fs::metadata(cwd.join(&written))
             .map(|m| m.len())
@@ -1275,6 +1295,7 @@ fn browser_plugins(
                 minify,
             )),
             std::sync::Arc::new(crate::assets::Assets::new(assets.clone())),
+            std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
         ],
         configured,
     )

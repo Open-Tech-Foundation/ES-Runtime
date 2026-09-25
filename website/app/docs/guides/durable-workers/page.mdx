@@ -295,7 +295,9 @@ configure({ shards: "auto", module: new URL("./workers.js", import.meta.url) });
 ```
 
 The shard imports `module`, so keep the worker classes in a module of their own
-that does nothing else at its top level (with `esdev build`, a second target).
+that does nothing else at its top level. `esdev build` builds the module that
+`new URL()` names as a chunk of its own, shared with the server, so no second
+build target is needed.
 Use shards for isolation (a stuck or out-of-memory worker ends one shard, not
 the server) or for CPU-heavy methods. They do not speed up work that waits on
 storage.

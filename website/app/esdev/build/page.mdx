@@ -79,6 +79,20 @@ Naming an entry builds that one, with the project's `jsx`, `alias` and
 cost the `worker` condition. A dynamic `import()` emits a content-hashed chunk
 beside the entry.
 
+A module named with `new URL("./path.js", import.meta.url)` is built as a
+content-hashed chunk of its own, and the URL is rewritten to point at it. That
+is how a `Worker` finds its entry in the output, and how a durable worker's
+shards find the module that defines their classes:
+
+```js
+new Worker(new URL("./resize.worker.ts", import.meta.url));
+configure({ shards: "auto", module: new URL("./workers.js", import.meta.url) });
+```
+
+Only a literal path to a JavaScript or TypeScript module, with
+`import.meta.url` as the base, is built this way. Other files are left to the
+asset handling, and a computed path is left as written.
+
 The bundler's warnings are printed as the build runs. The one to act on is an
 import it could not resolve: the bundle keeps it as an import and the build
 succeeds, but the program fails where it is deployed, so the warning names the
