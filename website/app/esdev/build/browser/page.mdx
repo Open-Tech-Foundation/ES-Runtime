@@ -119,6 +119,9 @@ document, never injected from script.
 mapping's value becomes a transitive list of class names. A `.css` that is not
 `.module.css` is emitted unscoped for third-party stylesheets.
 
+A stylesheet that imports `tailwindcss` is compiled with the project's
+Tailwind in any of these paths — see [Tailwind CSS](/esdev/build/tailwind).
+
 <Callout type="note" title="What the CSS pipeline does not do">
   No syntax lowering or vendor prefixing, and no per-file typed class names.
 </Callout>

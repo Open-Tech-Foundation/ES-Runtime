@@ -144,6 +144,7 @@ const NAV = [
       { title: "WebCrypto", path: "/docs/internals/crypto" },
       { title: "WASI", path: "/docs/internals/wasi" },
       { title: "The bundler bridge", path: "/docs/internals/bundler" },
+      { title: "Tailwind CSS", path: "/docs/internals/tailwind" },
     ],
   },
   {

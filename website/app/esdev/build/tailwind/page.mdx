@@ -1,0 +1,135 @@
+---
+title: Tailwind CSS
+description: Use Tailwind CSS v4 in an esdev project — install the package, import it, build.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Tailwind CSS
+
+`esdev` compiles Tailwind CSS v4 itself. There is no plugin to add and no
+configuration file: install `tailwindcss` and import it.
+
+```sh
+npm install -D tailwindcss
+```
+
+```css
+/* src/styles.css */
+@import "tailwindcss";
+```
+
+```html
+<link rel="stylesheet" href="./src/styles.css" />
+```
+
+`esdev build` and `esdev start` now generate the utilities your project uses.
+The compiler is your project's own `tailwindcss`, so the Tailwind version is the
+one in your `package.json`.
+
+A new project can start this way:
+
+```sh
+esdev create my-app --template=react --styling=tailwind
+```
+
+## Where it applies
+
+Any stylesheet that imports `tailwindcss` or uses a Tailwind directive —
+`@theme`, `@apply`, `@utility`, `@variant`, `@custom-variant`, `@plugin`,
+`@config`, `@reference`, `@source` — is compiled, however it reaches the build:
+
+| | |
+| --- | --- |
+| Linked from an HTML entry | `<link rel="stylesheet" href="./styles.css">` |
+| Imported from a module | `import "./styles.css";` |
+| A CSS Module | `import styles from "./Button.module.css";` |
+| A stylesheet entry | `esdev build src/styles.css --out=dist/app.css` |
+
+Every other stylesheet is left as it was. The output goes through the same
+pipeline as any stylesheet: local `@import`s are inlined, `url()` references are
+copied and rewritten, and `--minify` minifies.
+
+## Where class names are found
+
+`esdev` scans your project for class names the way Tailwind does:
+
+- Every file under the project directory — the nearest directory above the
+  stylesheet with an `esdev.json` or `package.json` — is read.
+- Files your `.gitignore` ignores are skipped, as are `node_modules`,
+  stylesheets, lock files and binary files.
+
+Name other paths with `@source`, including ones `.gitignore` would skip:
+
+```css
+@import "tailwindcss";
+@source "../node_modules/@acme/ui";
+@source not "./src/legacy";
+```
+
+A path is relative to the stylesheet that wrote it, including in a stylesheet
+another one `@import`s. To scan one directory instead of the project, or to
+turn automatic detection off:
+
+```css
+@import "tailwindcss" source("../src");
+```
+
+```css
+@import "tailwindcss" source(none);
+@source "./components";
+```
+
+A class name must appear in full in the source. `text-{color}-500` built from
+a variable is never found; write the full names, or list them with
+`@source inline("text-red-500 text-green-500")`.
+
+## Plugins and CSS Modules
+
+`@plugin` loads a plugin from a package or from a path beside the stylesheet:
+
+```css
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@plugin "./tailwind/tab-size.js";
+```
+
+A CSS Module uses `@apply` against your theme with `@reference`, which makes the
+theme available without emitting it again:
+
+```css
+/* Button.module.css */
+@reference "../styles.css";
+
+.button {
+  @apply rounded px-3 py-1 text-white bg-brand;
+}
+```
+
+## Errors
+
+A build that cannot compile a stylesheet fails with Tailwind's own message,
+and writes nothing:
+
+```text
+error: cannot compile src/styles.css with Tailwind: Cannot apply unknown utility class `bg-brnd`
+```
+
+A stylesheet that uses Tailwind in a project that has not installed it fails
+with the command to run, rather than shipping `@import "tailwindcss"` to the
+browser.
+
+<Callout type="note" title="Tailwind v4 only">
+  Tailwind v3 is configured by a JavaScript file run through PostCSS, which
+  esdev does not run. A project with `tailwindcss` 3 installed is told to
+  upgrade: `npm install -D tailwindcss@4`.
+</Callout>
+
+<Callout type="note" title="The dev loop keeps classes until the stylesheet changes">
+  Under `esdev start`, a class you remove from a component stays in the served
+  CSS until the stylesheet itself is edited or the loop restarts. A release
+  build always starts clean.
+</Callout>
+
+How the compiler and the scanner fit into esdev is described in
+[Internals: Tailwind CSS](/docs/internals/tailwind).

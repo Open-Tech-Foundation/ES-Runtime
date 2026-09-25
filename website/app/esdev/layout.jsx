@@ -20,6 +20,7 @@ const NAV = [
       { title: "Bundling", path: "/esdev/build" },
       { title: "Project builds", path: "/esdev/build/project" },
       { title: "Browser builds", path: "/esdev/build/browser" },
+      { title: "Tailwind CSS", path: "/esdev/build/tailwind" },
       { title: "Libraries", path: "/esdev/build/library" },
       {
         title: "Writing plugins",

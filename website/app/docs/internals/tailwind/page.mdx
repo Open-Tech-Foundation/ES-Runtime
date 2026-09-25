@@ -1,0 +1,145 @@
+---
+title: "Internals: Tailwind CSS"
+description: How esdev compiles Tailwind CSS v4 — the project's compiler in an isolate, a scanner written in Rust, and the CSS pipeline both sit in.
+---
+
+# Internals: Tailwind CSS
+
+How `esdev` compiles a Tailwind stylesheet without a Tailwind integration
+package, and what that costs. The decision and what was rejected are in
+`docs/DECISIONS.md` (D135); how to use it is
+[Tailwind CSS](/esdev/build/tailwind).
+
+## Three halves, in two languages
+
+Tailwind's official integrations — the Vite plugin, the PostCSS plugin, the
+CLI — are each three things: a **compiler**, a **scanner** that finds class
+names in the project, and the **glue** that feeds one into the other and puts
+the output where the build wants it.
+
+| | Where it comes from | Where it runs |
+| --- | --- | --- |
+| Compiler | The project's `tailwindcss` | An isolate `esdev` starts |
+| Scanner | `esdev`, in Rust | The build's own thread |
+| Glue | `esdev`'s CSS pipeline | The build's own thread |
+
+**The compiler is the project's.** Tailwind v4's `tailwindcss` package is ES
+modules with no dependencies and no `node:` imports. It exports
+`compile(css, { loadStylesheet, loadModule })`, which parses the stylesheet
+and the theme, and `build(candidates)`, which generates CSS for the class names
+it is handed. Nothing in it needs Node, so it runs on this runtime unchanged —
+and because it is the project's install, the Tailwind version is the project's
+choice, as it is with `@tailwindcss/vite`.
+
+**The scanner is not in that package.** Tailwind ships it as
+`@tailwindcss/oxide`, a native addon, and this runtime does not load native
+addons. So it is written again, in Rust, following the rules Tailwind documents
+rather than a policy of its own (below).
+
+## One isolate, two crossings
+
+The compiler is JavaScript and the build is Rust, so the compiler runs in a V8
+isolate. It is started on the **first stylesheet that uses Tailwind** and kept
+for the rest of the process; a project without Tailwind never starts it.
+Its program is embedded in the `esdev` binary and talks to the build over the
+same bridge [`runtime:build`'s plugins](/docs/internals/bundler) use.
+
+Each stylesheet crosses twice:
+
+```text
+  build thread                          compiler isolate
+  ───────────────────────────           ─────────────────────────────
+  bundle the sheet (local @imports)
+  compile(css)            ──────────▶   compile(): theme, @import "tailwindcss",
+                          ◀──────────     @plugin …; reports sources, root
+  scan the project for candidates
+  build(candidates)       ──────────▶   build()
+                          ◀──────────   CSS
+  parse, rewrite url(), minify, print
+```
+
+The first crossing is what makes the scan correct. `@source`, `@source not` and
+`source(…)` are Tailwind's syntax, and Tailwind's `compile()` reports them as
+`sources` and `root` — so they are parsed once, by Tailwind, and the scanner
+only walks what it was told. A sheet with no `@tailwind utilities` — a CSS
+Module using `@apply` against a `@reference` — reports that too, and skips the
+scan entirely.
+
+**The compiler is kept per stylesheet.** `compile()` is the expensive half: it
+parses the theme and every stylesheet it imports. The isolate holds one compiler
+per stylesheet for as long as that stylesheet's text is unchanged, so the dev
+loop pays for it once per edit to the stylesheet, not once per save anywhere.
+The cost of that is the one limitation the dev loop has: Tailwind's `build()`
+only ever adds, so a class removed from a component stays generated until the
+stylesheet changes or the loop restarts.
+
+## Where it sits in the CSS pipeline
+
+Every stylesheet `esdev` reads — linked from a document, imported from a
+module, a CSS Module, a stylesheet entry — goes through one function that
+bundles it and then, if it uses Tailwind, compiles it. The order is the point:
+
+1. **Local `@import`s are inlined first**, so `@apply` and `@theme` see the
+   whole sheet, and each file's `url()`s are rewritten while it is still known
+   which file wrote them.
+2. **A package `@import` is kept** — `@import "tailwindcss"` names a package, not
+   a file — and resolved by the compiler's `loadStylesheet`, which picks the
+   package's `style` export, the condition Tailwind's own integrations resolve
+   with. In a sheet Tailwind does not claim it is the error it always was.
+3. **Paths in Tailwind directives are made absolute** at the same moment as
+   `url()`s, for the same reason: `@source "../lib"` in a file that is inlined
+   into another means a different directory there.
+4. **The compiled output is parsed back** into the pipeline's own tree, so it is
+   minified and printed like any other stylesheet.
+
+Which sheets are claimed is decided after step 1: one that imports
+`tailwindcss`, or uses an at-rule only Tailwind reads (`@theme`, `@apply`,
+`@utility`, `@variant`, `@custom-variant`, `@plugin`, `@config`, `@reference`,
+`@source`). None of those means anything to a browser, so a sheet using one is
+either compiled or broken — never correctly left alone.
+
+## The scanner
+
+**Which files.** Automatic detection walks the project — the nearest directory
+above the stylesheet with an `esdev.json` or `package.json` — honouring
+`.gitignore` whether or not the directory is a git checkout, and skipping
+`node_modules`, hidden directories, stylesheets, lock files, and binaries (by
+extension, and by a NUL byte in the first few kilobytes for one the extension
+list does not know). An explicit `@source` is walked without those filters,
+because reaching what they skip is what it is for. `@source not` removes paths
+from both.
+
+**Which strings.** Every run of text that *could* be a class name. The split is
+deliberately generous, and the asymmetry is why: a string that is not a utility
+costs the compiler a lookup and generates nothing, while a class name the
+scanner misses is a style missing from the page. Text is split on whitespace
+and quotes — once respecting `[…]`, so `content-['hi']` and `[&>*]:p-4` stay
+whole, and once through it, because a `[` is as often a JavaScript array — and
+each token again on the punctuation around a name in source, so the `px-2` in
+`className={cn("px-2")}` is found.
+
+## Costs
+
+**A thread and a runtime, once.** The isolate is one OS thread with its own
+single-threaded runtime, started on the first Tailwind stylesheet and kept.
+
+**Two crossings per stylesheet per build.** Each is a channel send, a wake-up
+of the isolate, and a copy of the stylesheet's text in each direction. The
+candidate list crosses once, as strings.
+
+**A project scan per stylesheet with utilities.** The scan is not cached
+between builds: a save anywhere may add a class name, and a cache keyed by
+modification times would cost most of what reading the files does on a project
+of ordinary size.
+
+**The build blocks on the compiler.** The CSS pipeline is synchronous, so the
+thread reading a stylesheet waits for the isolate's answer. The isolate never
+waits on the build, so the two cannot deadlock.
+
+## What is not scoped
+
+The compiler runs under `esdev`'s own grant, in the directory the build runs in,
+like a project's configured plugins — a `@plugin` is code the project chose to
+run. The scanner reads files with the process's own authority, as the bundler
+does: the extent of a project is not knowable before it is walked. `esdev` is a
+developer's machine; neither exists in `esrun`.
