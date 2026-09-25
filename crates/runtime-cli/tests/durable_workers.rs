@@ -451,9 +451,17 @@ fn a_deadlock_across_two_requests_is_refused() {
         console.log([one, two].sort().join("\n"));
     "#,
     );
-    assert_eq!(
-        ok(&out).trim(),
-        "A got b\nERR_DURABLE_CYCLE: B(\"b\") → A(\"a\") → B(\"b\")"
+    // Which request closes the loop — and so is the one refused — is whichever
+    // makes its second call last, which the two timers decide and a loaded
+    // machine can decide either way. Both outcomes are the behaviour under test.
+    let out = ok(&out);
+    assert!(
+        [
+            "A got b\nERR_DURABLE_CYCLE: B(\"b\") → A(\"a\") → B(\"b\")",
+            "B got a\nERR_DURABLE_CYCLE: A(\"a\") → B(\"b\") → A(\"a\")",
+        ]
+        .contains(&out.trim()),
+        "unexpected outcome:\n{out}"
     );
 }
 
