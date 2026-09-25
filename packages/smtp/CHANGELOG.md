@@ -10,6 +10,8 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-25
+
 ### Added
 
 - **The SMTP client** (DECISIONS D136). `createTransport()` connects with

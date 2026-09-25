@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-09-25
+
 ### Added
 
 - **A MySQL QPS benchmark**, in the Postgres one's shape — 100,000 queries of

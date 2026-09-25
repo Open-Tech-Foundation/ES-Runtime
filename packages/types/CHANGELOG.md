@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-25
+
 ### Added
 
 - **Hibernatable WebSockets** — `DurableSocket`, the socket methods on

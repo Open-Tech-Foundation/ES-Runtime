@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-25
+
 ### Added
 
 - **Tailwind CSS v4, built in** (DECISIONS D135). A stylesheet that imports
