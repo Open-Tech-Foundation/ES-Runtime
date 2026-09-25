@@ -682,7 +682,9 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 Verified by the existing end-to-end suite (ordering, the `SIGKILL` gate test, transactions, alarms) and by the shop benchmark on both disks. The numbers are in `bench/durable-shop.js`, and the internals page quotes them from there.
 
-**Not solved here:** a worker's own file still commits once per flush. Coalescing helps a busy worker, not one that writes once and goes idle, so the cost of a new worker is still a few syncs.
+**Measured** (`bench/durable-workers.js`, release build): one worker taking 500 gated writes at once instead of one after another goes from 86 to ~61,000 a second on a spinning disk, and from ~13,000 to ~125,000 on tmpfs. The catalog grouping alone moved the shop benchmark on the spinning disk from 2–3 journeys a second to 5.
+
+**Not solved here, and what it means for deployment:** grouping works *within* one file. Every worker is its own file, so writes to different workers are separate commits and cannot share a sync. A workload that touches many workers once each, like the shop's new customers, is bound by how many syncs the device does per second, divided among them. On a spinning disk that is ~90 a second for everything, and the shop manages about 5 journeys a second there against about 200 on fast storage. File-per-worker stays, because it is what gives a worker its own lock, its own recovery and its own size. The consequence is a requirement, stated where operators will read it: durable workers need storage with fast syncs (SSD or NVMe). A worker that writes once and goes idle also still pays a few syncs to be opened.
 
 ---
 

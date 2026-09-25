@@ -72,6 +72,12 @@ namespace) is unstable and may change between minor releases until the API freez
   waiting for the catalog run as one transaction, each answered when it has
   committed, instead of a disk sync apiece for the whole process. On a spinning
   disk the shop benchmark goes from 2–3 journeys a second to 5.
+- **A durable worker lets its next call in while the last one commits**
+  (DECISIONS D128). Calls still run one at a time and nothing is answered
+  before its writes are on disk, but consecutive calls' commits now coalesce:
+  one worker taking 500 gated writes at once instead of in turn goes from 86 to
+  ~61,000 a second on a spinning disk. A shard sends its writes ahead of its
+  answer rather than waiting for them.
 - **A new durable worker is opened in one commit.** Its tables, its id and its
   collections were a commit each — up to eight disk syncs before its first call
   ran. On a spinning disk the first call on a new worker drops from ~99 ms to

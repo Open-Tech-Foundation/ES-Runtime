@@ -69,6 +69,14 @@ await time("call, one gated write", WRITES, async () => {
   for (let i = 0; i < WRITES; i++) await w.write("k", i);
 });
 
+// The same writes, all in flight at once: the mailbox still runs them one at a
+// time, but lets the next one in while the last one's commit lands, so their
+// commits coalesce (D128). This row against the one above is what a busy
+// worker gains.
+await time("one gated write each, 500 at once", WRITES, async () => {
+  await Promise.all(Array.from({ length: WRITES }, (_, i) => w.write("k", i)));
+});
+
 const BATCH = 100;
 const batches = 20;
 await time("setMany, 100 keys per commit", BATCH * batches, async () => {

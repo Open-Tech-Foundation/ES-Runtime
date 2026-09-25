@@ -274,6 +274,52 @@ fn calls_to_one_worker_run_one_at_a_time_in_order() {
 
 /// Two workers of the same class are two mailboxes: one being busy is not the
 /// other being busy.
+/// The next call starts while the previous call's writes commit (D128), so a
+/// burst on one worker coalesces its commits — and still every call is
+/// answered, in order, only once what it wrote is durable. Two hundred calls
+/// at once, then a fresh process reads every one of them back.
+#[test]
+fn a_burst_on_one_worker_is_answered_in_order_and_all_of_it_survives() {
+    let base = dir("burst");
+    std::fs::write(
+        base.join("tally.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Tally extends DurableWorker {
+          async add(n) {
+            const seen = this.state.get("seen") ?? [];
+            seen.push(n);
+            this.state.set("seen", seen);
+            return seen.length;
+          }
+          async read() { return (this.state.get("seen") ?? []).join(","); }
+        }
+    "#,
+    )
+    .expect("write class");
+    let first = run_in(
+        &base,
+        "write.mjs",
+        r#"import { Tally } from "./tally.mjs";
+           import { shutdown } from "runtime:workers";
+           const t = Tally.get("t");
+           const answers = await Promise.all(Array.from({ length: 200 }, (_, i) => t.add(i)));
+           console.log(answers.every((n, i) => n === i + 1));
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "true");
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Tally } from "./tally.mjs";
+           const all = (await Tally.get("t").read()).split(",").map(Number);
+           console.log(all.length, all.every((n, i) => n === i));"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "200 true");
+}
+
 /// A call that writes, waits, and writes again has two flushes — the second
 /// queued behind the first. Its result must wait for both. The gate once saw
 /// neither: the first flush cleared the in-flight marker as it ended, so while

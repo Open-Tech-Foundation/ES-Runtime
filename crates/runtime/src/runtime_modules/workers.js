@@ -734,6 +734,19 @@ class State {
   }
 
   /**
+   * Resolves when every write made before now is on disk — and, unlike
+   * `sync()`, not the writes made while it waits. It is what the gate waits
+   * for (D128): with the next call already running and writing, "no write
+   * outstanding" may never come, but the flush that carries this call's writes
+   * always does. Flushes are ordered, so it also carries every earlier one.
+   */
+  committed() {
+    if (this.#tx) return this.sync();
+    if (this.#dirty.size > 0) return this.#schedule();
+    return this.#flushing ?? Promise.resolve();
+  }
+
+  /**
    * Runs `work` with this worker's database to itself.
    *
    * A connection is one conversation — the catalog learned that the hard way —
@@ -1713,20 +1726,24 @@ class LiveWorker {
       );
     }
     this.pending++;
-    const run = async () => {
-      const result = await work();
-      // The gate. Everything this call wrote is on disk before its caller is
-      // told anything at all, so a crash between the two is a call that never
-      // returned rather than one that lied.
-      await this.state.sync();
-      return result;
-    };
-    const done = this.tail.then(run, run);
+    const done = this.tail.then(work, work);
+    // The next call starts when this one's code has finished, not when its
+    // writes have reached the disk (D128): one call at a time is a rule about
+    // running code, and holding the next call for a sync made a busy worker as
+    // slow as its disk. Its commit and the next call's overlap and coalesce.
     this.tail = done.then(
       () => {},
       () => {},
     );
-    return done.finally(() => {
+    // The gate. Everything this call wrote is on disk before its caller is
+    // told anything at all, so a crash between the two is a call that never
+    // returned rather than one that lied. What it read from the call before
+    // is covered too, because that call's writes are in an earlier flush.
+    const gated = done.then(async (result) => {
+      await this.state.committed();
+      return result;
+    });
+    return gated.finally(() => {
       this.pending--;
       this.lastActive = Date.now();
     });
@@ -2749,6 +2766,13 @@ class ShardState {
     return this.#bytes;
   }
 
+  /** Sends the writes waiting to go, without waiting for the host to commit
+   * them. A call's answer follows them on the same ordered channel, and the
+   * host's gate does the waiting (D128). */
+  send() {
+    this.#send();
+  }
+
   /** Resolves once every write made so far has been committed by the host. */
   async sync() {
     while (this.#outgoing || this.#inflight.size > 0) {
@@ -2990,9 +3014,9 @@ async function shardSide(message) {
         throw new TypeError(`${describe(held.cls, held.id)} has no method ${String(message.method)}()`);
       }
       const result = await fn.apply(held.instance, message.args);
-      // The host's gate would wait for these anyway. Waiting here as well
-      // means a write that failed is this call's failure.
-      await held.state.sync();
+      // Sent ahead of the answer, not waited for: the host's gate waits, so
+      // the next call on this worker can start while this one commits.
+      held.state.send();
       return result;
     }
     case "alarm": {
@@ -3001,7 +3025,7 @@ async function shardSide(message) {
       // the next time repeats.
       held.state.alarmChanged(null);
       await held.instance.alarm();
-      await held.state.sync();
+      held.state.send();
       return null;
     }
     case "close": {

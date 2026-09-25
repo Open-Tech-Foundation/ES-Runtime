@@ -125,11 +125,30 @@ JavaScript exception a caller cannot act on. So every catalog statement goes
 through one queue. It is a small thing that took a flaky test to find, and it is
 an argument for the file-per-worker layout that was not the reason for it.
 
+What waits in that queue together commits together. Opening a worker, changing
+an alarm and closing a worker all write the catalog, and each statement used to
+be a commit of its own: on a disk where a commit is a sync, that capped the
+whole process at the disk's sync rate. Whatever is queued when the connection
+comes free now runs as one transaction, and each caller is answered when it has
+committed. The catalog keeps its syncs, even though it is only an index: it is
+what makes an alarm findable, and a row lost in a crash would be an alarm that
+never fires.
+
 ## The mailbox
 
 Calls to one worker queue and run one at a time, in the order they were made.
 There is no lock to take, because there is nothing to take it against: the state
 has exactly one reader and one writer, and they are the same call.
+
+"One at a time" is about running code, not about the disk. The next call starts
+when the previous call's code has finished, while that call's writes are still
+committing; each result is released once the commit that carries its writes has
+landed. So a burst of calls on one busy worker (a hot product's stock, say)
+shares its commits instead of paying one sync per call. A call can read what the
+previous call wrote before it is on disk, but nothing leaves the worker ahead of
+the disk: that call's own result waits for a later flush, and flushes are
+ordered. A side effect issued mid-call is the exception, as it always was, and
+`state.sync()` before it covers the previous call's writes too.
 
 The queue is bounded (`mailbox`, 1024 by default). Past it a call is refused with
 `ERR_DURABLE_BUSY` rather than waited on — a queue that grows without limit is a
