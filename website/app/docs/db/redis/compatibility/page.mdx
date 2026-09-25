@@ -20,6 +20,11 @@ shown: `redis` (node-redis, the official one) and `ioredis` (about twice the
 downloads, same organisation). They differ enough that showing only one would
 misreport Node.
 
+Produced by `bench/db/redis/features.mjs` against Redis 8.10.2 with node-redis
+6.2.1, ioredis 6.0.0, Bun 1.4.2 and esrun 0.32.0 (2026-09-26); the cluster,
+Sentinel and private-CA rows are checked as available APIs, since one server
+cannot exercise them.
+
 | | esrun<br/>`esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
 | --- | :---: | :---: | :---: | :---: |
 | Ships with the runtime | <No /> | <No /> | <No /> | <Yes /> |
@@ -32,7 +37,7 @@ misreport Node.
 | `WATCH` | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Cluster | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Sentinel | <Yes /> | <Yes /> | <Yes /> | <No /> |
-| Streams & consumer groups | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
+| Streams & consumer groups | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | TLS with a private CA | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Auto-reconnect | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
 | Unbounded-block guard | <Yes /> | <No /> | <No /> | <No /> |
@@ -45,8 +50,8 @@ misreport Node.
 
 **The partial cells.** node-redis and Bun have no pipeline builder; both
 pipeline commands issued together, so `Promise.all` is the idiom rather than a
-missing feature. Bun's streams are reachable through `send()` rather than typed
-methods, and its client has no `multi`, `watch`, cluster or Sentinel at all.
+missing feature. Bun's client has no `multi`, `watch`, cluster or Sentinel at
+all.
 esrun's reconnect is partial because it is **off by default** — a deliberate
 disagreement rather than a gap: turning it on changes what a thrown error means,
 and a pool already replaces dead connections.
