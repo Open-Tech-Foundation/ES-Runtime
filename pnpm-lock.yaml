@@ -266,6 +266,15 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/smtp:
+    devDependencies:
+      '@opentf/esrun-types':
+        specifier: workspace:*
+        version: link:../types
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   packages/types:
     devDependencies:
       typescript:
