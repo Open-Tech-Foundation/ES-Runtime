@@ -13,6 +13,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`startAlarms`' `onError` is told which worker** failed: a third argument,
+  `{ name, id, gaveUp }`, or `null` for the scheduler itself — `gaveUp` when the
+  alarm is gone for good (DECISIONS D81, amended).
+
 - **Durable-worker calls know who made them** (DECISIONS D130). A call that
   would close a loop — A calls B, which calls A — throws `ERR_DURABLE_CYCLE`,
   naming the chain, instead of waiting for ever. A call made from inside a

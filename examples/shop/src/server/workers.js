@@ -10,9 +10,6 @@ import { price, product } from "../shared/catalog.js";
 /** How long a cart holds stock after its last change. */
 export const CART_TTL = 2 * 60_000;
 
-/** How many times an order's webhook is tried before it is marked failed. */
-export const DELIVERY_ATTEMPTS = 6;
-
 /**
  * One product's stock. Every reservation and sale for the product goes through
  * this worker's mailbox, one at a time, so two customers can never both take
@@ -171,8 +168,10 @@ export class Customer extends DurableWorker {
 
 /**
  * One order's fulfillment webhook, delivered at least once. The partner is
- * called from `alarm()`, so a failure is retried on a timer that survives a
- * restart, with the order id as the idempotency key for the repeats.
+ * called from `alarm()`, and a refusal is thrown: the scheduler retries it with
+ * backoff, on a timer that survives a restart, and when it gives up the server's
+ * `onError` is told which delivery it was and marks it failed. The order id is
+ * the idempotency key for the repeats.
  */
 export class Delivery extends DurableWorker {
   static durableName = "Delivery";
@@ -187,33 +186,24 @@ export class Delivery extends DurableWorker {
     return { status: this.state.get("status") ?? "pending", attempts: this.state.get("attempts") ?? 0 };
   }
 
+  /** Called by the server when the scheduler has given up on this delivery. */
+  failed() {
+    this.state.set("status", "failed");
+  }
+
   async alarm() {
     const shipment = this.state.get("shipment");
-    if (!shipment) return;
-    const attempts = (this.state.get("attempts") ?? 0) + 1;
-    // Recorded before the call, and made durable: the call is the side effect
+    if (!shipment || this.state.get("status") !== "pending") return;
+    // Counted before the call, and made durable: the call is the side effect
     // the gate does not cover.
-    await this.state.set("attempts", attempts);
-    let ok = false;
-    try {
-      const res = await fetch(shipment.webhook, {
-        method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": shipment.order.id },
-        body: JSON.stringify({ order: shipment.order, customer: shipment.customer }),
-      });
-      ok = res.ok;
-      await res.body?.cancel();
-    } catch {
-      ok = false;
-    }
-    if (ok) {
-      this.state.set("status", "delivered");
-    } else if (attempts >= DELIVERY_ATTEMPTS) {
-      this.state.set("status", "failed");
-    } else {
-      // Our own backoff rather than a thrown error: the scheduler's retries end
-      // in `onError`, and nothing there says which order gave up.
-      await this.state.alarm.set(Date.now() + 500 * 2 ** (attempts - 1));
-    }
+    await this.state.set("attempts", (this.state.get("attempts") ?? 0) + 1);
+    const res = await fetch(shipment.webhook, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": shipment.order.id },
+      body: JSON.stringify({ order: shipment.order, customer: shipment.customer }),
+    });
+    await res.body?.cancel();
+    if (!res.ok) throw new Error(`the partner answered ${res.status}`);
+    this.state.set("status", "delivered");
   }
 }

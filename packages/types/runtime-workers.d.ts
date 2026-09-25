@@ -138,7 +138,14 @@ declare module "runtime:workers" {
      */
     classes: Array<typeof DurableWorker>;
     /** Hears about an alarm that failed for the last time. Defaults to `console.error`. */
-    onError?: (error: unknown, context: string) => void;
+    /** `worker` is the one it happened to — `null` for a failure of the
+     * scheduler itself. `gaveUp` is true when the alarm is gone for good,
+     * false when the next sweep will try again. */
+    onError?: (
+      error: unknown,
+      context: string,
+      worker: { name: string; id: string; gaveUp: boolean } | null,
+    ) => void;
     /** How many due workers one sweep wakes. Default `32`. */
     batch?: number;
   }

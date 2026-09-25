@@ -3330,7 +3330,11 @@ async function fire(state, cls, id) {
   try {
     worker = await materialize(cls, id);
   } catch (e) {
-    report(state, e, `could not open ${describe(cls, id)} for its alarm`);
+    report(state, e, `could not open ${describe(cls, id)} for its alarm`, {
+      name: storageName(cls),
+      id,
+      gaveUp: false,
+    });
     return;
   }
   try {
@@ -3339,7 +3343,11 @@ async function fire(state, cls, id) {
     // A worker that was closing when its turn came has not been touched: the
     // alarm is still set and still due, and the next sweep opens it afresh.
     if (e?.code === DurableErrorCode.Shutdown && !shuttingDown) return;
-    report(state, e, `the alarm on ${describe(cls, id)} could not be run`);
+    report(state, e, `the alarm on ${describe(cls, id)} could not be run`, {
+      name: storageName(cls),
+      id,
+      gaveUp: false,
+    });
   }
 }
 
@@ -3368,6 +3376,7 @@ function run(state, worker) {
           state,
           e,
           `the alarm on ${describe(worker.cls, worker.id)} failed ${attempt} times and was given up on`,
+          { name: storageName(worker.cls), id: worker.id, gaveUp: true },
         );
         return;
       }
@@ -3387,10 +3396,15 @@ function run(state, worker) {
 // two things to explain.
 const backoff = (attempt) => Math.min(1000 * 2 ** (attempt - 1), 300_000);
 
-function report(state, error, context) {
+// `worker` says which one, when there is one — `{ name, id, gaveUp }`, where
+// `gaveUp` means the alarm is gone for good rather than waiting for another
+// sweep. The context is a sentence for a person; a handler that has to act —
+// mark an order failed, page someone about one tenant — needs this as data
+// (D81, amended).
+function report(state, error, context, worker = null) {
   if (state.onError) {
     try {
-      state.onError(error, context);
+      state.onError(error, context, worker);
       return;
     } catch {
       // An `onError` that throws is not a reason to lose the failure it was

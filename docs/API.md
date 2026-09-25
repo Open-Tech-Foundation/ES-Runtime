@@ -3359,7 +3359,7 @@ is left exactly as it is, for the process that does list it.
 | Option | |
 | --- | --- |
 | `classes` | **Required.** The `DurableWorker` subclasses this process runs alarms for. |
-| `onError` | Hears an alarm that failed for the last time, and a worker that could not be opened. Defaults to `console.error`. |
+| `onError` | `(error, context, worker)`: hears an alarm that failed for the last time, and a worker that could not be opened. `worker` is `{ name, id, gaveUp }` (`gaveUp`: the alarm is gone for good, not waiting for the next sweep), or `null` for a failure of the scheduler itself. Defaults to `console.error`. |
 | `batch` | How many due workers one sweep wakes. Default `32`. |
 
 `stop()` drops the timer and resolves once the sweep in flight has finished;

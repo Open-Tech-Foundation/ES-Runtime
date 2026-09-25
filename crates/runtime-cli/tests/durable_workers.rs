@@ -1249,14 +1249,17 @@ fn a_failing_alarm_is_retried_and_then_reported() {
         const f = Flaky.get("f");
         await f.at(5);
         const reported = [];
-        const alarms = startAlarms({ classes: [Flaky], onError: (e) => reported.push(e.message) });
+        const alarms = startAlarms({
+          classes: [Flaky],
+          onError: (e, _context, w) => reported.push(`${e.message}@${w.name}/${w.id}${w.gaveUp ? " gave up" : ""}`),
+        });
         await new Promise((r) => setTimeout(r, 4000));
         console.log(await f.tries(), await f.pending(), reported.join(","));
         await alarms.stop();
         await shutdown();
     "#,
     );
-    assert_eq!(ok(&out).trim(), "3 false boom 3");
+    assert_eq!(ok(&out).trim(), "3 false boom 3@Flaky/f gave up");
 }
 
 /// An alarm runs through the same mailbox a call does, so it cannot interleave

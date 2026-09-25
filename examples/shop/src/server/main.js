@@ -26,9 +26,17 @@ configure({
   permissions: ["net"],
 });
 
+// A delivery the scheduler has given up on is marked failed, so the customer
+// sees it; anything else is logged.
 const alarms = startAlarms({
   classes: [Customer, Delivery],
-  onError: (error, context) => console.error(`alarm: ${context}:`, error),
+  onError: (error, context, worker) => {
+    if (worker?.name === "Delivery" && worker.gaveUp) {
+      Delivery.get(worker.id).failed().catch(() => {});
+    } else {
+      console.error(`alarm: ${context}:`, error);
+    }
+  },
 });
 
 const publicDir = new URL("./public/", import.meta.url);

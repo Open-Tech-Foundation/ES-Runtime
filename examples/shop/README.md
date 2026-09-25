@@ -8,7 +8,7 @@ beside it: no database, cache or queue.
 | --- | --- | --- |
 | `Customer` | session | the cart, a checkout in progress, the order history (a collection) |
 | `Inventory` | product | reservations and sales; every hold goes through its mailbox, so the last item is never sold twice |
-| `Delivery` | order | the fulfillment webhook, retried from `alarm()` until the partner accepts it |
+| `Delivery` | order | the fulfillment webhook, sent from `alarm()` and retried by the scheduler until the partner accepts it or it gives up |
 
 A cart left alone for two minutes gives its stock back, from an alarm. The
 worker code runs on shards; the state stays in the server process.
