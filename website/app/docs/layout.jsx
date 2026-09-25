@@ -149,7 +149,7 @@ const NAV = [
     title: "Runtime",
     items: [
       { title: "Module system", path: "/docs/modules" },
-      { title: "import.meta across runtimes", path: "/docs/guides/import-meta" },
+      { title: "import.meta", path: "/docs/guides/import-meta" },
       {
         title: "🔒 Security",
         items: [
