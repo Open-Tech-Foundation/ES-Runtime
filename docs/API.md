@@ -3170,6 +3170,12 @@ when a worker moves to a [shard](#shards). Lifecycle hooks are not callable thro
 and neither is anything the class does not have (a `TypeError` from the call,
 not a promise that never settles).
 
+**Calling another worker from inside one** works as it does from outside, with
+two differences. The call waits until the caller's writes so far are committed,
+because it is a message leaving the caller. And a call that would close a loop
+(A calls B, which calls A, or a worker calling itself) throws
+`ERR_DURABLE_CYCLE` rather than waiting for ever.
+
 ### `state`
 
 Anything `structuredClone` carries can be stored — `Date`, `Map`, `Set`, typed
@@ -3196,7 +3202,8 @@ changes a page costs orders of magnitude more than the comparison.
 
 **The gate covers the call's result, not the whole world.** Before a side effect
 that leaves the process mid-call — a `fetch`, a message — `await state.sync()`
-first, or make it the value you return.
+first, or make it the value you return. A call to another durable worker needs
+no `sync()`: it waits for the caller's writes by itself.
 
 **The state is resident, so its ceiling is real**: 1 MiB per worker and 128 KiB
 per value by default, refused at the write with `ERR_DURABLE_STATE_TOO_LARGE`.
@@ -4565,6 +4572,7 @@ try {
 | `ERR_DURABLE_STATE_FORMAT` | Stored state this build cannot read — written by a newer runtime. |
 | `ERR_DURABLE_SHUTDOWN` | The durable-worker runtime is shutting down, or that worker has been closed. |
 | `ERR_DURABLE_SHARD_LOST` | The shard running a durable worker ended while a call was in flight. The worker comes back on its next call. |
+| `ERR_DURABLE_CYCLE` | A durable worker was called by a chain that already holds it, which would wait for ever. The message names the chain. |
 | `ERR_INVALID_PATH` | The path names no valid target: it is empty, or it is the root jail itself and the operation would mutate it. |
 | `ERR_SAME_FILE` | Source and destination name the same file, for an operation that would have to read one while truncating the other. |
 | `ERR_CONNECTION_REFUSED` | The peer refused the connection. |

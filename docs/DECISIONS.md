@@ -661,6 +661,24 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D130 — A durable-worker call knows who made it: cycles fail and calls between workers are gated · *Proposed (2026-09-25)* · *amends D80*
+
+**Context:** two gaps the shop example hit have one cause: a durable worker cannot tell which worker, if any, is calling it.
+
+- **A cycle hangs for ever.** D80 said so: A calls B, B calls A, and each mailbox waits on the other. The shop had to be designed around it. A delivery could not report back to the customer that scheduled it, so the customer polls instead. Nothing told the author why; the first sign would have been a request that never returned.
+- **A call to another worker leaves ahead of the disk.** Only a call's *result* is gated. When the customer's checkout called the inventory, the inventory committed the sale while the customer's own record of the checkout might still be in memory, so a crash in between left a sale with no order. The shop gets this right by calling `state.sync()` first, which every author has to know to do. Cloudflare's output gate holds every outgoing message, calls to other objects included, until storage is durable. D80 only held the reply.
+
+**Decision (maintainer sign-off pending):**
+
+- **Every call runs with the chain of workers that led to it**, carried by `runtime:context` (D88): a caller's chain plus the worker being called. It follows `await`s and timers, costs no capability, and is invisible to the program.
+- **A call to a worker already in the chain throws `ERR_DURABLE_CYCLE` immediately**, naming the chain (`Customer("a") → Delivery("x") → Customer("a")`). Waiting is never right here: the worker at the start of the chain is busy until the end of it returns. **Rejected: timing out the wait.** A timeout picks a number and turns a certain deadlock into a slow, occasional failure.
+- **A call made from inside a worker waits until that worker's writes so far are committed**, the same barrier the gate uses (D128). A call to another worker is a message leaving this one, and nothing leaves ahead of the disk. `state.sync()` before such a call becomes unnecessary; it is still what a `fetch` or any other side effect needs. **Rejected: gating `fetch` as well.** `fetch` is a global the runtime shares with every program, not this module's to intercept. D80's documentation of it stands.
+- **Shards carry the chain across the thread.** A call to a shard sends its chain, and a shard's call back to the host sends it again, because a `Worker` starts with an empty context by design.
+
+**Consequences:** a new error code, `ERR_DURABLE_CYCLE`. A call from one worker to another now waits for the caller's pending commit, a few milliseconds on fast storage, and the caller's writes are what it waits for. The shop drops its manual `sync()` and could let deliveries report back, except that a delivery calling its customer during that customer's checkout *is* a cycle, so polling stays; it is now an error rather than a hang. Verified by end-to-end tests for a two-worker cycle, a self-call, a cycle through a shard, and a caller's write that is durable before its callee runs.
+
+---
+
 ### D129 — A durable directory is relative to where the program runs, not where its file is · *Proposed (2026-09-25)* · *fixes D80's implementation to match its contract*
 
 **Context:** D80's configuration, its types and its docs all say `dir` is relative to the working directory, which is also the sandbox (D79). The implementation handed the path to `runtime:fs` and `runtime:db`, which resolve a guest's relative path against the *entry file's* directory (D25). The two agree when a script runs from the project root, and disagree for every bundled server: `esrun dist/server.js` kept its state in `dist/.durable`, where the next deploy replaces it. The shop example hit it, and so would every application built with `esdev build`.

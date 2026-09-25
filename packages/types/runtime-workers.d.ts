@@ -261,6 +261,7 @@ declare module "runtime:workers" {
     IdCollision: "ERR_DURABLE_ID_COLLISION";
     Shutdown: "ERR_DURABLE_SHUTDOWN";
     ShardLost: "ERR_DURABLE_SHARD_LOST";
+    Cycle: "ERR_DURABLE_CYCLE";
     Configured: "ERR_DURABLE_CONFIGURED";
   }>;
 

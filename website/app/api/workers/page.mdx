@@ -107,6 +107,10 @@ be passed does not change when a worker moves to a [shard](#shards). Lifecycle
 hooks are not callable through a reference, and neither is anything the class
 does not have — a `TypeError` from the call, not a promise that never settles.
 
+A call made from inside another worker waits until the caller's writes so far
+are committed. A call that would close a loop (A calls B, which calls A, or a
+worker calling itself) throws `ERR_DURABLE_CYCLE` instead of waiting for ever.
+
 ## `state`
 
 Anything `structuredClone` carries can be stored — `Date`, `Map`, `Set`, typed
@@ -130,7 +134,8 @@ Mutating what `get` returns changes nothing on disk — a value is stored by
 
 <Callout type="warning" title="The gate covers the result, not the world">
   Before a side effect that leaves the process mid-call — a `fetch`, a message —
-  `await state.sync()` first, or make it the value you return.
+  `await state.sync()` first, or make it the value you return. A call to another
+  durable worker needs no `sync()`: it waits for the caller's writes by itself.
 </Callout>
 
 State is resident, so its ceiling is real: **1 MiB a worker, 128 KiB a value**,
@@ -340,3 +345,4 @@ onSignal("SIGTERM", async () => {
 | `ERR_DURABLE_STATE_FORMAT` | State written by a newer runtime, in a format this build cannot read. |
 | `ERR_DURABLE_SHUTDOWN` | Shutting down, or that worker has been closed. |
 | `ERR_DURABLE_SHARD_LOST` | The shard running the worker ended while a call was in flight. |
+| `ERR_DURABLE_CYCLE` | The call would close a loop of workers waiting on each other; the message names it. |

@@ -157,9 +157,19 @@ failure that has been hidden rather than reported.
 Two workers of the same class are two mailboxes. Work on one is not work on the
 other, which is the reason to address state by worker rather than by row.
 
-**A cycle deadlocks.** A worker calling back into one that is calling it waits
-forever, because a mailbox is strictly one at a time and nothing yet detects the
-cycle. It is written down here rather than discovered in production.
+**A cycle is refused.** A worker calling back into one that is calling it would
+wait for ever, because a mailbox is strictly one at a time. So every call
+carries the chain of workers it came through, in `runtime:context`, which
+follows `await`s and timers and is sent across to a shard. A call to a worker
+already in the chain throws `ERR_DURABLE_CYCLE`, naming the chain. A timeout
+was the alternative, and it would have turned a certain deadlock into an
+occasional slow failure.
+
+The same chain gives calls between workers an output gate. A call made from
+inside a worker is a message leaving it, so it waits until the caller's writes
+so far are committed, the barrier the reply already waits for. Without that,
+a worker that wrote an order and then called the inventory could have the sale
+committed while its own record was still in memory.
 
 ## Eviction has no timer
 

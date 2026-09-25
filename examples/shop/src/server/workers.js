@@ -123,10 +123,9 @@ export class Customer extends DurableWorker {
     const { lines, total } = price(this.#cart());
     if (lines.length === 0) throw new RangeError("the cart is empty");
     const pending = { orderId: crypto.randomUUID(), lines, total, webhook };
-    // The intent is written down first, and waited for: the calls below leave
-    // this worker, and only the *result* of a call is gated on its writes.
+    // The intent is written down first. The calls below are messages leaving
+    // this worker, so each waits until it is on disk.
     this.state.set("checkout", pending);
-    await this.state.sync();
     return this.#finish(pending);
   }
 
@@ -153,8 +152,8 @@ export class Customer extends DurableWorker {
 
   /**
    * The newest orders, with where each one's delivery has got to. Delivery is
-   * asked rather than told: a delivery that called back into its customer would
-   * be a cycle, and two workers waiting on each other wait for ever.
+   * asked rather than told: a delivery calling back into a customer that is
+   * mid-checkout — and so mid-call to that delivery — would be a cycle.
    */
   async orders() {
     const orders = this.state.collection("orders");

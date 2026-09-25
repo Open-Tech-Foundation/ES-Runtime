@@ -42,6 +42,7 @@
 // `runtime:db` does, and nothing else — the durability is SQLite's and the
 // authority is the filesystem's.
 
+import { createContext } from "runtime:context";
 import { connect, sqlite, sql } from "runtime:db";
 import { mkdir, realPath, remove } from "runtime:fs";
 import { hash } from "runtime:hashing";
@@ -82,6 +83,10 @@ const DurableErrorCode = Object.freeze({
   /// is on disk, so the worker comes back on the next call; the call that was
   /// in flight is the one that is lost.
   ShardLost: "ERR_DURABLE_SHARD_LOST",
+  /// A worker was called by a chain that already holds it — A → B → A, or a
+  /// worker calling itself. Each mailbox would wait on the other for ever, so
+  /// the call is refused instead, naming the chain (D130).
+  Cycle: "ERR_DURABLE_CYCLE",
   /// `configure()` after the first worker was materialized. The settings decide
   /// where state lives, so changing them mid-flight would split it.
   Configured: "ERR_DURABLE_CONFIGURED",
@@ -1634,6 +1639,17 @@ const same_value = (a, b) =>
 
 const LIFECYCLE = new Set(["start", "stop", "alarm", "constructor"]);
 
+// The workers a call came through, outermost first, as `key(cls, id)` values
+// (D130). It follows the work — `await`s, timers, op callbacks — so a call made
+// anywhere inside a worker's method knows it is being made from that worker.
+// A `Worker` starts with an empty context, so a shard is sent the chain.
+const callers = createContext({ name: "durable-callers", defaultValue: [] });
+
+const describeKey = (k) => {
+  const at = k.indexOf("\u0000");
+  return `${k.slice(0, at)}(${JSON.stringify(k.slice(at + 1))})`;
+};
+
 class LiveWorker {
   constructor(cls, id, db, instance, state, controller, shard = null, key = null) {
     this.cls = cls;
@@ -1644,7 +1660,7 @@ class LiveWorker {
     this.controller = controller;
     // The shard running this worker's code, or null when it runs here.
     this.shard = shard;
-    this.key = key;
+    this.key = key ?? `${storageName(cls)}\u0000${id}`;
     // A transaction a shard has open on this worker's connection.
     this.remoteTx = null;
     this.tx = null;
@@ -1664,8 +1680,9 @@ class LiveWorker {
    * the mailbox and the gate in one place: the result is not handed back until
    * the writes the call made are durable.
    */
-  call(method, args) {
-    return this.enqueue(() => this.#invoke("call", { method, args }));
+  call(method, args, chain = []) {
+    const within = [...chain, this.key];
+    return this.enqueue(() => callers.run(within, () => this.#invoke("call", { method, args, chain: within })));
   }
 
   /**
@@ -1676,7 +1693,8 @@ class LiveWorker {
    * and no call can interleave with it.
    */
   alarmTurn(body) {
-    return this.enqueue(() => body(() => this.#invoke("alarm", {})));
+    const within = [this.key];
+    return this.enqueue(() => body(() => callers.run(within, () => this.#invoke("alarm", { chain: within }))));
   }
 
   /**
@@ -2002,7 +2020,9 @@ async function materialize(cls, id) {
         // leave no worker behind rather than one whose first call reports
         // somebody else's failure.
         try {
-          if (typeof instance.start === "function") await instance.start();
+          if (typeof instance.start === "function") {
+            await callers.run([k], () => instance.start());
+          }
         } finally {
           worker.starting = false;
         }
@@ -2103,11 +2123,27 @@ function reference(cls, id) {
           // everywhere, rather than one that tightens the day a worker moves to
           // a shard.
           const sent = args.map((a) => structuredClone(a));
+          const chain = callers.get();
+          const target = `${storageName(cls)}\u0000${id}`;
+          if (chain.includes(target)) {
+            fail(
+              DurableErrorCode.Cycle,
+              `${[...chain, target].map(describeKey).join(" → ")} is a cycle: the first worker ` +
+                "is busy until the last returns, so this call could never be answered",
+            );
+          }
           // In a shard the workers are not here: the call is made by the agent
           // that holds them, which is also where the one it names may be running.
+          // The caller's writes go first, on the same ordered channel, so the
+          // host's gate below has them.
           if (inShard) {
-            return ask({ [TAG]: "ref", name: storageName(cls), id, method: property, args: sent });
+            residents.get(chain.at(-1))?.state.send();
+            return ask({ [TAG]: "ref", name: storageName(cls), id, method: property, args: sent, chain });
           }
+          // A call from inside a worker is a message leaving it, and nothing
+          // leaves ahead of the disk: the caller's writes so far are committed
+          // before the callee runs (D130).
+          if (chain.length > 0) await live.get(chain.at(-1))?.state.committed();
           // A worker can be closed between being materialized and being called
           // — an idle sweep on somebody else's call is enough. That is this
           // layer's business, not the caller's, so it is materialized again
@@ -2115,7 +2151,7 @@ function reference(cls, id) {
           for (let attempt = 0; ; attempt++) {
             const worker = await materialize(cls, id);
             try {
-              return structuredClone(await worker.call(property, sent));
+              return structuredClone(await worker.call(property, sent, chain));
             } catch (e) {
               if (attempt > 0 || e?.code !== DurableErrorCode.Shutdown || shuttingDown) throw e;
             }
@@ -2444,7 +2480,9 @@ async function hostSide(shard, message) {
     // A worker calling another. It is addressed here, where the workers are,
     // so the one it names runs wherever it is placed — possibly the same shard.
     const cls = await classNamed(message.name);
-    return reference(cls, message.id)[message.method](...message.args);
+    return callers.run(message.chain ?? [], () =>
+      reference(cls, message.id)[message.method](...message.args),
+    );
   }
   if (kind === "class") {
     const cls = await classNamed(message.name);
@@ -3044,7 +3082,11 @@ async function shardSide(message) {
       if (typeof fn !== "function" || LIFECYCLE.has(message.method)) {
         throw new TypeError(`${describe(held.cls, held.id)} has no method ${String(message.method)}()`);
       }
-      const result = await fn.apply(held.instance, message.args);
+      // Under the chain it was sent: a `Worker` starts with an empty context,
+      // and a call this one makes has to know where it came from (D130).
+      const result = await callers.run(message.chain ?? [held.key], () =>
+        fn.apply(held.instance, message.args),
+      );
       // Sent ahead of the answer, not waited for: the host's gate waits, so
       // the next call on this worker can start while this one commits.
       held.state.send();
@@ -3055,7 +3097,7 @@ async function shardSide(message) {
       // Cleared on the host before it asked, which is how a handler that sets
       // the next time repeats.
       held.state.alarmChanged(null);
-      await held.instance.alarm();
+      await callers.run(message.chain ?? [held.key], () => held.instance.alarm());
       held.state.send();
       return null;
     }
@@ -3097,9 +3139,9 @@ async function openHere({ key, name, id, alarm, state: entries }) {
     materializing = null;
   }
   state.alarmHandler = typeof instance.alarm === "function";
-  residents.set(key, { cls, id, instance, state, controller });
+  residents.set(key, { key, cls, id, instance, state, controller });
   try {
-    if (typeof instance.start === "function") await instance.start();
+    if (typeof instance.start === "function") await callers.run([key], () => instance.start());
     await state.sync();
   } catch (e) {
     residents.delete(key);

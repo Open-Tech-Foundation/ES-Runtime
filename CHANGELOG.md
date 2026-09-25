@@ -13,6 +13,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Durable-worker calls know who made them** (DECISIONS D130). A call that
+  would close a loop — A calls B, which calls A — throws `ERR_DURABLE_CYCLE`,
+  naming the chain, instead of waiting for ever. A call made from inside a
+  worker waits until the caller's writes so far are committed, so another
+  worker never acts on something the caller could still lose; `state.sync()` is
+  no longer needed before one. The chain crosses to shards.
+
 - **`cli-common`'s `ExtensionContext::loader`**: the run's module loader, so a
   binary's `runtime:` extension resolves a specifier exactly as an `import`
   would — root jail, import policy and the binary's hooks included. `esdev`'s

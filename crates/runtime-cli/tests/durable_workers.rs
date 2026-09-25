@@ -391,6 +391,82 @@ fn state_lives_in_the_working_directory_when_the_entry_is_below_it() {
     assert_eq!(ok(&second).trim(), "2");
 }
 
+/// A → B → A would wait for ever: A is busy until B returns, and B is waiting
+/// for A. It is refused at the call that closes the loop, naming it (D130).
+#[test]
+fn a_cycle_between_workers_is_refused_rather_than_waited_on() {
+    let out = run(
+        "cycle",
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        class A extends DurableWorker {
+          async start_() { return B.get("b").back(this.id); }
+          async ping() { return "pong"; }
+          async self() { return A.get(this.id).ping(); }
+        }
+        class B extends DurableWorker {
+          async back(id) { return A.get(id).ping(); }
+        }
+        try { await A.get("a").start_(); console.log("answered"); }
+        catch (e) { console.log(e.code, e.message.split(" is a cycle")[0]); }
+        try { await A.get("a").self(); console.log("answered"); }
+        catch (e) { console.log(e.code); }
+        console.log(await A.get("a").ping());
+    "#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "ERR_DURABLE_CYCLE A(\"a\") → B(\"b\") → A(\"a\")\nERR_DURABLE_CYCLE\npong"
+    );
+}
+
+/// A call to another worker is a message leaving this one, so what this one
+/// wrote before it is on disk before the other runs (D130). Here the other
+/// worker ends the process outright; the caller's write must have survived.
+#[test]
+fn a_callers_writes_are_durable_before_the_worker_it_calls_runs() {
+    let base = dir("call-gate");
+    std::fs::write(
+        base.join("w.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        import { exit } from "runtime:process";
+        export class Order extends DurableWorker {
+          async place() {
+            this.state.set("placed", true);
+            await Stock.get("s").take();
+          }
+          async placed() { return this.state.get("placed") === true; }
+        }
+        export class Stock extends DurableWorker {
+          ready() { return true; }
+          take() { exit(0); }
+        }
+    "#,
+    )
+    .expect("write classes");
+    let first = run_in(
+        &base,
+        "place.mjs",
+        r#"import { Order, Stock } from "./w.mjs";
+           // Both open already, so nothing but the gate stands between the
+           // caller's write and the callee ending the process.
+           await Stock.get("s").ready();
+           await Order.get("o").placed();
+           await Order.get("o").place();"#,
+        &[],
+    );
+    assert!(first.status.success(), "{}", stderr(&first));
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Order } from "./w.mjs";
+           console.log(await Order.get("o").placed());"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "true");
+}
+
 #[test]
 fn different_ids_are_different_workers() {
     let out = run(
@@ -1784,4 +1860,38 @@ fn a_class_the_module_does_not_export_is_refused() {
            await shutdown();"#,
     );
     assert_eq!(ok(&out).trim(), "TypeError true");
+}
+
+/// The chain crosses the thread: a cycle that runs through a shard is refused
+/// as it is on the host (D130).
+#[test]
+fn a_cycle_through_a_shard_is_refused() {
+    let base = dir("shard-cycle");
+    std::fs::write(
+        base.join("classes.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class P extends DurableWorker {
+          async go() { return Q.get("q").back(this.id); }
+          async ping() { return "pong"; }
+        }
+        export class Q extends DurableWorker {
+          async back(id) { return P.get(id).ping(); }
+        }
+    "#,
+    )
+    .expect("write classes");
+    let out = run_in(
+        &base,
+        "app.mjs",
+        r#"import { configure, shutdown } from "runtime:workers";
+           import { P } from "./classes.mjs";
+           configure({ shards: 2, module: new URL("./classes.mjs", import.meta.url) });
+           try { await P.get("p").go(); console.log("answered"); }
+           catch (e) { console.log(e.code); }
+           console.log(await P.get("p").ping());
+           await shutdown();"#,
+        SHARD_GRANTS,
+    );
+    assert_eq!(ok(&out).trim(), "ERR_DURABLE_CYCLE\npong");
 }

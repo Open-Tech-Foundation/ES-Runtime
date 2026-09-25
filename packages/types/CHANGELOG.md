@@ -15,6 +15,7 @@ itself.
 
 ### Added
 
+- `DurableErrorCode.Cycle` (`ERR_DURABLE_CYCLE`, DECISIONS D130).
 - **Durable-worker shards** — `shards`, `module` and `permissions` on
   `DurableConfig`, and `DurableErrorCode.ShardLost`.
 - **`toMatchScreenshot`** on `Matchers`, and `ScreenshotOptions`.
