@@ -21,10 +21,6 @@ const adminToken = setting("ADMIN_TOKEN", "");
 // The classes' code runs on shards; their state stays in this process. A shard
 // imports the workers bundle, and needs `net` for the webhooks it sends.
 configure({
-  // Beside the build, not in it: a relative path resolves against this file,
-  // so the default `./.durable` would sit inside `dist/` — and a deploy that
-  // replaces `dist/` would take every cart and order with it.
-  dir: "../.durable",
   shards: shards === "auto" ? "auto" : Number(shards),
   module: new URL("./workers.js", import.meta.url),
   permissions: ["net"],

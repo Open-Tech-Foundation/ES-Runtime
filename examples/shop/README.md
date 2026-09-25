@@ -23,6 +23,5 @@ esdev scripts/customer.js   # a customer in headless Chrome, with screenshots
 `FAIL_RATE` (default `0.3`) is how often the fake fulfillment partner refuses a
 webhook, so the retries are visible. `SHARDS` (default `2`) sets the pool.
 
-State lives in `.durable/`, one level above the server bundle — so beside
-`dist/`, not inside it, and in `.dev/.durable` under `esdev start`. Delete it to
-restock.
+State lives in `.durable/` in the directory the server is started from — the
+project, not `dist/`, so a new build does not replace it. Delete it to restock.

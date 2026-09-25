@@ -262,7 +262,7 @@ is used, since these decide where state lives.
 
 | Option | Default | |
 | --- | --- | --- |
-| `dir` | `"./.durable"` | Where state lives, inside the working directory |
+| `dir` | `"./.durable"` | Where state lives. A relative path is relative to the working directory, not to the entry file, so a bundled server keeps its state outside `dist/` |
 | `evictAfter` | `30000` | How long a worker may idle before it is closed |
 | `maxLive` | `128` | How many may be open at once |
 | `mailbox` | `1024` | How many calls may wait on one worker |

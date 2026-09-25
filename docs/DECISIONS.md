@@ -661,6 +661,21 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D129 — A durable directory is relative to where the program runs, not where its file is · *Proposed (2026-09-25)* · *fixes D80's implementation to match its contract*
+
+**Context:** D80's configuration, its types and its docs all say `dir` is relative to the working directory, which is also the sandbox (D79). The implementation handed the path to `runtime:fs` and `runtime:db`, which resolve a guest's relative path against the *entry file's* directory (D25). The two agree when a script runs from the project root, and disagree for every bundled server: `esrun dist/server.js` kept its state in `dist/.durable`, where the next deploy replaces it. The shop example hit it, and so would every application built with `esdev build`.
+
+**Decision (maintainer sign-off pending):**
+
+- **A relative `dir`, the default `./.durable` included, resolves against the working directory.** State is the deployment's data, not something shipped beside the code, so it belongs to the directory the program was started in, the same one the sandbox is rooted at. An absolute `dir` is used as given.
+- **The working directory is found without asking for it.** `cwd()` needs `Env` (it is host state), and this module adds no capability (D80). Instead it walks up from the entry's directory with `realPath("..")` until the sandbox refuses the step as an escape: the last step that was allowed is the root. The result is a relative path such as `../`, so nothing about the host is revealed, and it needs only the `read` the state already requires. A read grant scoped so tightly that the walk is denied stops the walk where it is, which is the old behaviour.
+- **D25 is unchanged for everything else.** A program's own relative paths still resolve against its file. Changing that rule for every guest path was considered and rejected: it would break every program that reads a file shipped next to its script, to fix one module whose contract already said something else.
+- **Rejected: refusing to start when a bundle sets no `dir`.** It was the first proposal. It would have needed the bundler to mark its output (coupling one build tool to one runtime module), and it made the common case fail. Knowing the root makes the refusal unnecessary.
+
+**Consequences:** existing state written by a server whose entry sits in a subdirectory is now looked for in the working directory; moving `dist/.durable` up one level is the migration, and the changelog says so. `esrun dist/server.js` and `cd dist && esrun server.js` keep state in different places, because they are started in different places, which is what D79 already says about the sandbox. Verified by an end-to-end test that runs a worker from a subdirectory entry and finds its state at the root, plus the existing suite.
+
+---
+
 ### D128 — Durable writes: the catalog commits in groups, and a mailbox waits for the code rather than the disk · *Proposed (2026-09-25)* · *amends D80, D81*
 
 **Context:** the shop example under load (`bench/durable-shop.js`) measured what D80 and D81 cost on real storage. On tmpfs, 32 concurrent customers ran about 200 journeys a second. On a spinning disk, where a commit is a ~11 ms sync, the same run managed 2 or 3, with a p50 of 2.5 s to add to a cart, although one customer alone took ~150 ms. Two structural points serialize every write behind the disk, and neither is a property the design needs.

@@ -61,6 +61,11 @@ itself.
 - **`toMatchInlineSnapshot` and `toThrowErrorMatchingInlineSnapshot`**.
 - **The `repeats` test option.**
 
+### Changed
+
+- `DurableConfig.dir` says a relative path is relative to the working
+  directory, not the entry file (DECISIONS D129).
+
 ## [0.7.0] - 2026-09-23
 
 ### Added

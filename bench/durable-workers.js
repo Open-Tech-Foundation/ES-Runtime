@@ -1,8 +1,7 @@
 // Durable workers: what a call costs, and what the gate costs (DECISIONS D80).
 //
 // Run:  esrun --allow-read --allow-write bench/durable-workers.js
-//       (from a directory it may write to — it writes ./.bench-durable and
-//        removes it on the way out.)
+//       (it writes bench/.bench-durable and removes it on the way out.)
 //
 // Why this exists: every number the documentation quotes about durable workers
 // has to come from somewhere a reader can re-run. Three of them matter.
@@ -20,7 +19,9 @@
 import { DurableWorker, configure, shutdown } from "runtime:workers";
 import { remove } from "runtime:fs";
 
-const DIR = "./.bench-durable";
+// Absolute, so the durable directory (relative to the working directory, D129)
+// and the `remove` below (relative to this file, D25) name the same place.
+const DIR = new URL(".bench-durable/", import.meta.url).pathname;
 configure({ dir: DIR, evictAfter: 50 });
 
 class Bench extends DurableWorker {

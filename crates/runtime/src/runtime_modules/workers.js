@@ -43,7 +43,7 @@
 // authority is the filesystem's.
 
 import { connect, sqlite, sql } from "runtime:db";
-import { mkdir, remove } from "runtime:fs";
+import { mkdir, realPath, remove } from "runtime:fs";
 import { hash } from "runtime:hashing";
 
 // Captured at load: these are how a value becomes bytes and back, and a program
@@ -397,10 +397,41 @@ async function drainCatalog() {
   }
 }
 
+// Where state lives. A relative `dir` means the directory the program was
+// started in (D129) — the deployment's, which is also the sandbox's root — not
+// the entry file's, which is what a relative path here would otherwise resolve
+// against (D25). For a bundled server the two differ: `./.durable` would sit
+// inside `dist/`, and the next deploy would replace it.
+async function stateDir(dir) {
+  if (/^([/\\]|[A-Za-z]:[/\\]|file:)/.test(dir)) return dir;
+  const root = await workingDir();
+  return root === "." ? dir : `${root}/${dir.replace(/^\.\//, "")}`;
+}
+
+// The working directory as a path relative to the entry's, found without
+// `cwd()` — which needs `Env`, a capability this module does not take. Each
+// step up that the sandbox allows is still inside it; the one it refuses as an
+// escape is past its root. Nothing about the host is revealed, and the only
+// grant used is the read the state needs anyway. A step refused for any other
+// reason (a read grant scoped too narrowly to see it) stops the walk there.
+async function workingDir() {
+  let root = ".";
+  for (let depth = 0; depth < 64; depth++) {
+    const up = depth === 0 ? ".." : `${root}/..`;
+    try {
+      await realPath(up);
+    } catch (e) {
+      return root;
+    }
+    root = up;
+  }
+  return root;
+}
+
 async function registryDb() {
   if (registry) return registry.db;
   started = true;
-  const dir = config.dir.replace(/\/+$/, "");
+  const dir = (await stateDir(config.dir)).replace(/\/+$/, "");
   await mkdir(dir, { recursive: true });
   const db = await openOwned(`${dir}/_registry.db`, dir);
   for (const ddl of REGISTRY_SCHEMA) await retryBusy(() => onCatalog(() => db.execute(ddl)));

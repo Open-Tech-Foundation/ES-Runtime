@@ -72,6 +72,13 @@ namespace) is unstable and may change between minor releases until the API freez
   waiting for the catalog run as one transaction, each answered when it has
   committed, instead of a disk sync apiece for the whole process. On a spinning
   disk the shop benchmark goes from 2–3 journeys a second to 5.
+- **A relative durable-worker `dir` is relative to the working directory**
+  (DECISIONS D129), as its documentation always said, rather than to the entry
+  file. `esrun dist/server.js` kept its state in `dist/.durable`, where the next
+  deploy replaced it; it now uses `./.durable` in the directory it was started
+  in. **Migration:** a server whose entry is in a subdirectory and that set no
+  absolute `dir` should move `dist/.durable` (or its own directory) up to the
+  working directory before upgrading.
 - **A durable worker lets its next call in while the last one commits**
   (DECISIONS D128). Calls still run one at a time and nothing is answered
   before its writes are on disk, but consecutive calls' commits now coalesce:

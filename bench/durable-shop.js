@@ -43,9 +43,9 @@ const SECONDS = Number(setting("SECONDS", "10"));
 const POOLS = setting("SHARDS", "0 2 4").split(/\s+/).filter(Boolean).map(Number);
 
 const SHOP = new URL("../examples/shop/", import.meta.url);
-// The server runs from WORKDIR, and keeps its state in `WORKDIR/.durable` —
-// `../.durable` from `dist/server.js`. Outside this script's sandbox, so it is
-// copied and cleared with `cp` and `rm` rather than `runtime:fs`.
+// The server runs from WORKDIR, and keeps its state in `WORKDIR/.durable`, the
+// directory it is started in. Outside this script's sandbox, so it is copied
+// and cleared with `cp` and `rm` rather than `runtime:fs`.
 const trim = (path) => path.replace(/\/+$/, "");
 const IN_PLACE = trim(SHOP.pathname);
 const WORKDIR = trim(setting("WORKDIR", "") || IN_PLACE);

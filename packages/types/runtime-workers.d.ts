@@ -6,7 +6,8 @@ declare module "runtime:workers" {
    * first worker is materialized, since these decide where state lives.
    */
   export interface DurableConfig {
-    /** Where state lives, relative to the working directory. Default `"./.durable"`. */
+    /** Where state lives. A relative path is relative to the working directory,
+     * not to the entry file. Default `"./.durable"`. */
     dir?: string;
     /** How long a worker may sit idle before it is closed. Default `30_000` ms. */
     evictAfter?: number;

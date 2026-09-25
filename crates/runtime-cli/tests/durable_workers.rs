@@ -365,6 +365,32 @@ fn a_result_waits_for_a_flush_queued_behind_another() {
     assert_eq!(ok(&second).trim(), "100");
 }
 
+/// State belongs to the directory the program runs in, not to the directory
+/// its file is in (D129). A bundled server is `esrun dist/server.js`, and a
+/// `./.durable` resolved beside the bundle was inside `dist/`, where the next
+/// deploy replaces it.
+#[test]
+fn state_lives_in_the_working_directory_when_the_entry_is_below_it() {
+    let base = dir("entry-below");
+    std::fs::create_dir_all(base.join("dist")).expect("create dist");
+    let source = r#"import { DurableWorker, shutdown } from "runtime:workers";
+        class Counter extends DurableWorker {
+          async add() { const n = (this.state.get("n") ?? 0) + 1; this.state.set("n", n); return n; }
+        }
+        console.log(await Counter.get("c").add());
+        await shutdown();"#;
+    std::fs::write(base.join("dist/server.mjs"), source).expect("write server");
+    let first = run_in(&base, "dist/server.mjs", source, &[]);
+    assert_eq!(ok(&first).trim(), "1");
+    assert!(base.join(".durable").is_dir(), "state is in the working directory");
+    assert!(!base.join("dist/.durable").exists(), "and not beside the bundle");
+    // A redeploy replaces the bundle; the state is untouched.
+    std::fs::remove_dir_all(base.join("dist")).expect("remove dist");
+    std::fs::create_dir_all(base.join("dist")).expect("recreate dist");
+    let second = run_in(&base, "dist/server.mjs", source, &[]);
+    assert_eq!(ok(&second).trim(), "2");
+}
+
 #[test]
 fn different_ids_are_different_workers() {
     let out = run(
