@@ -382,8 +382,14 @@ fn state_lives_in_the_working_directory_when_the_entry_is_below_it() {
     std::fs::write(base.join("dist/server.mjs"), source).expect("write server");
     let first = run_in(&base, "dist/server.mjs", source, &[]);
     assert_eq!(ok(&first).trim(), "1");
-    assert!(base.join(".durable").is_dir(), "state is in the working directory");
-    assert!(!base.join("dist/.durable").exists(), "and not beside the bundle");
+    assert!(
+        base.join(".durable").is_dir(),
+        "state is in the working directory"
+    );
+    assert!(
+        !base.join("dist/.durable").exists(),
+        "and not beside the bundle"
+    );
     // A redeploy replaces the bundle; the state is untouched.
     std::fs::remove_dir_all(base.join("dist")).expect("remove dist");
     std::fs::create_dir_all(base.join("dist")).expect("recreate dist");
