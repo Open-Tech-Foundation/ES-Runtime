@@ -449,20 +449,64 @@ pub fn request_path(head: &str) -> Option<String> {
 /// The `Sec-WebSocket-Key` of an upgrade request, or `None` if this is an
 /// ordinary GET.
 pub fn websocket_key(head: &str) -> Option<String> {
+    use base64::Engine as _;
+
+    let mut request_line = head.lines().next()?.split_whitespace();
+    if request_line.next()? != "GET"
+        || request_line.next()?.is_empty()
+        || request_line.next()? != "HTTP/1.1"
+        || request_line.next().is_some()
+    {
+        return None;
+    }
     let mut upgrading = false;
+    let mut connection_upgrade = false;
     let mut key = None;
+    let mut version = None;
+    let mut host = false;
     for line in head.lines().skip(1) {
         let Some((name, value)) = line.split_once(':') else {
             continue;
         };
         let value = value.trim();
         match name.trim().to_ascii_lowercase().as_str() {
-            "upgrade" if value.eq_ignore_ascii_case("websocket") => upgrading = true,
-            "sec-websocket-key" => key = Some(value.to_string()),
+            "host" if !value.is_empty() => host = true,
+            "connection" => {
+                connection_upgrade |= value
+                    .split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
+            }
+            "upgrade" => {
+                upgrading |= value
+                    .split(',')
+                    .any(|protocol| protocol.trim().eq_ignore_ascii_case("websocket"));
+            }
+            "sec-websocket-key" => {
+                if key.is_some() {
+                    return None;
+                }
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(value)
+                    .ok()?;
+                if decoded.len() != 16 {
+                    return None;
+                }
+                key = Some(value.to_string());
+            }
+            "sec-websocket-version" => {
+                if version.is_some() {
+                    return None;
+                }
+                version = Some(value);
+            }
             _ => {}
         }
     }
-    if upgrading { key } else { None }
+    if host && upgrading && connection_upgrade && version == Some("13") {
+        key
+    } else {
+        None
+    }
 }
 
 pub async fn respond(
@@ -471,8 +515,13 @@ pub async fn respond(
     content_type: &str,
     body: &str,
 ) -> std::io::Result<()> {
+    // An origin server with a clock stamps its error answers: HTTP wants
+    // `Date` on 2xx, 3xx and 4xx, and everything through here is one of
+    // those.
+    let date = crate::static_serve::http_date(std::time::SystemTime::now());
     let response = format!(
         "HTTP/1.1 {status}\r\n\
+         Date: {date}\r\n\
          Content-Type: {content_type}\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\r\n{body}",
@@ -607,10 +656,50 @@ mod tests {
 
     #[test]
     fn the_upgrade_key_is_read_only_from_an_upgrade() {
-        let upgrade = "GET /x HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc\r\n\r\n";
-        assert_eq!(websocket_key(upgrade).as_deref(), Some("abc"));
+        let upgrade = "GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        assert_eq!(
+            websocket_key(upgrade).as_deref(),
+            Some("dGhlIHNhbXBsZSBub25jZQ==")
+        );
         let plain = "GET /json/list HTTP/1.1\r\nHost: localhost\r\n\r\n";
         assert_eq!(websocket_key(plain), None);
+    }
+
+    #[test]
+    fn malformed_websocket_handshakes_are_not_upgrades() {
+        let required = [
+            "Host: localhost",
+            "Connection: Upgrade",
+            "Upgrade: websocket",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+        ];
+        for missing in 0..required.len() {
+            let headers = required
+                .iter()
+                .enumerate()
+                .filter_map(|(i, header)| (i != missing).then_some(*header))
+                .collect::<Vec<_>>()
+                .join("\r\n");
+            let head = format!("GET /x HTTP/1.1\r\n{headers}\r\n\r\n");
+            assert_eq!(websocket_key(&head), None, "missing {}", required[missing]);
+        }
+        for key in [
+            "abc",
+            "AQ==",
+            "dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        ] {
+            let head = format!(
+                "GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            );
+            assert_eq!(websocket_key(&head), None, "invalid key {key:?}");
+        }
+        let wrong_method = "POST /x HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        assert_eq!(websocket_key(wrong_method), None);
+        let wrong_http_version = "GET /x HTTP/1.0\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        assert_eq!(websocket_key(wrong_http_version), None);
+        let wrong_version = "GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 12\r\n\r\n";
+        assert_eq!(websocket_key(wrong_version), None);
     }
 
     #[test]

@@ -89,7 +89,9 @@ pub fn last_modified(mtime: SystemTime) -> String {
 /// Seconds since the epoch, saturating rather than panicking on the
 /// pre-epoch times a filesystem can in principle report.
 fn secs(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    t.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Formats a time as an IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`).
@@ -101,15 +103,9 @@ pub fn http_date(t: SystemTime) -> String {
     let days = secs / 86_400;
     let clock = secs % 86_400;
     let (y, m, d) = ymd(days);
-    // Day 0 was a Thursday.
-    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
     format!(
         "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
-        DAYS[(days % 7) as usize],
+        SHORT_DAYS[(days % 7) as usize],
         d,
         MONTHS[(m - 1) as usize],
         y,
@@ -144,11 +140,61 @@ pub fn parse_http_date(text: &str) -> Option<SystemTime> {
 }
 
 fn month(word: &str) -> Option<u64> {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    MONTHS.iter().position(|m| m.eq_ignore_ascii_case(word)).map(|i| i as u64 + 1)
+    MONTHS
+        .iter()
+        .position(|m| m.eq_ignore_ascii_case(word))
+        .map(|i| i as u64 + 1)
+}
+
+/// Day 0 was a Thursday: index by `days % 7`, the same arithmetic the
+/// formatter uses, so a parsed weekday is checked against its own date.
+const SHORT_DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+const LONG_DAYS: [&str; 7] = [
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Whether `token` names the weekday `days` falls on, in the given table.
+///
+/// Names match case-insensitively, but the calendar agreement is exact: a
+/// weekday disagreeing with its date makes the whole stamp untrusted, and
+/// the caller treats the header as absent — failing open to the full
+/// response rather than answering a conditional off a broken validator.
+fn weekday_is(token: &str, days: u64, names: &[&str; 7]) -> bool {
+    names[(days % 7) as usize].eq_ignore_ascii_case(token)
+}
+
+/// Interprets an RFC 850 two-digit year against the current timestamp.
+///
+/// The nearest matching year is the initial candidate. RFC 9110's exception
+/// is timestamp-based, though: if that candidate lands more than 50 years
+/// ahead, it means the most recent matching year in the past. Checking the
+/// full month, day and time matters on the 50-year anniversary itself.
+fn rfc850_year(yy: i64, m: u64, d: u64, clock: u64, now: SystemTime) -> i64 {
+    let now_secs = secs(now);
+    let now_days = now_secs / 86_400;
+    let now_clock = now_secs % 86_400;
+    let (now_y, now_m, now_d) = ymd(now_days);
+    let century = now_y.div_euclid(100) * 100;
+    let y = [century + yy - 100, century + yy, century + yy + 100]
+        .into_iter()
+        .min_by_key(|candidate| ((candidate - now_y).abs(), *candidate < now_y))
+        .expect("three century candidates");
+    let more_than_fifty_years_ahead =
+        y > now_y + 50 || (y == now_y + 50 && (m, d, clock) > (now_m, now_d, now_clock));
+    if more_than_fifty_years_ahead {
+        y - 100
+    } else {
+        y
+    }
 }
 
 fn days_from_civil(y: i64, m: u64, d: u64) -> Option<u64> {
@@ -156,7 +202,19 @@ fn days_from_civil(y: i64, m: u64, d: u64) -> Option<u64> {
     // Bounding first is what keeps the arithmetic below total — a header can
     // name any year at all, and an unbounded `i64` reaches overflow in the
     // era multiplication below.
-    if !(1970..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+    if !(1970..=9999).contains(&y) || !(1..=12).contains(&m) {
+        return None;
+    }
+    // And real calendar days, not just 1–31: February 31 must not become a
+    // timestamp a conditional request can match against.
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_len = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        _ => 28,
+    };
+    if d < 1 || d > month_len {
         return None;
     }
     let y = if m <= 2 { y - 1 } else { y };
@@ -185,9 +243,6 @@ fn hms(h: &str, m: &str, s: &str) -> Option<u64> {
 /// `Sun, 06 Nov 1994 08:49:37 GMT`
 fn parse_imf(text: &str) -> Option<SystemTime> {
     let (day_name, rest) = text.split_once(',')?;
-    if day_name.len() != 3 {
-        return None;
-    }
     let rest = rest.trim();
     let mut parts = rest.split_whitespace();
     let d: u64 = parts.next()?.parse().ok()?;
@@ -205,13 +260,21 @@ fn parse_imf(text: &str) -> Option<SystemTime> {
         return None;
     }
     let days = days_from_civil(y, m, d)?;
+    if !weekday_is(day_name.trim(), days, &SHORT_DAYS) {
+        return None;
+    }
     let secs = days.checked_mul(86_400)?.checked_add(clock)?;
     Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
 
 /// `Sunday, 06-Nov-94 08:49:37 GMT`
 fn parse_rfc850(text: &str) -> Option<SystemTime> {
-    let rest = text.split_once(',')?.1.trim();
+    parse_rfc850_at(text, SystemTime::now())
+}
+
+fn parse_rfc850_at(text: &str, now: SystemTime) -> Option<SystemTime> {
+    let (day_name, rest) = text.split_once(',')?;
+    let rest = rest.trim();
     let mut parts = rest.split_whitespace();
     let date = parts.next()?;
     let time = parts.next()?;
@@ -225,14 +288,16 @@ fn parse_rfc850(text: &str) -> Option<SystemTime> {
     if d.next().is_some() || !(0..=99).contains(&yy) {
         return None;
     }
-    // Two-digit years land in 1969..2068, per the HTTP rule of thumb.
-    let y = if yy >= 69 { 1900 + yy } else { 2000 + yy };
     let mut t = time.split(':');
     let clock = hms(t.next()?, t.next()?, t.next()?)?;
     if t.next().is_some() {
         return None;
     }
+    let y = rfc850_year(yy, m, day, clock, now);
     let days = days_from_civil(y, m, day)?;
+    if !weekday_is(day_name.trim(), days, &LONG_DAYS) {
+        return None;
+    }
     let secs = days.checked_mul(86_400)?.checked_add(clock)?;
     Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
@@ -240,9 +305,7 @@ fn parse_rfc850(text: &str) -> Option<SystemTime> {
 /// `Sun Nov  6 08:49:37 1994`
 fn parse_asctime(text: &str) -> Option<SystemTime> {
     let mut parts = text.split_whitespace();
-    if parts.next()?.len() != 3 {
-        return None;
-    }
+    let day_name = parts.next()?;
     let m = month(parts.next()?)?;
     let d: u64 = parts.next()?.parse().ok()?;
     let time = parts.next()?;
@@ -256,6 +319,9 @@ fn parse_asctime(text: &str) -> Option<SystemTime> {
         return None;
     }
     let days = days_from_civil(y, m, d)?;
+    if !weekday_is(day_name, days, &SHORT_DAYS) {
+        return None;
+    }
     let secs = days.checked_mul(86_400)?.checked_add(clock)?;
     Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
@@ -275,6 +341,21 @@ pub fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+/// Every field line named `name`, in the order received. List-valued fields
+/// such as `If-None-Match` combine repeated lines as comma-separated values.
+fn header_values<'a>(head: &'a str, name: &'static str) -> impl Iterator<Item = &'a str> + 'a {
+    head.lines().skip(1).filter_map(move |line| {
+        if line.is_empty() {
+            return None;
+        }
+        let (field, value) = line.split_once(':')?;
+        field
+            .trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim())
+    })
 }
 
 /// Whether an `If-None-Match` value matches `etag`, by the weak comparison
@@ -314,7 +395,10 @@ pub fn parse_range(value: &str, len: u64) -> RangeOutcome {
             if n == 0 {
                 continue;
             }
-            Span { start: len - n, end: len - 1 }
+            Span {
+                start: len - n,
+                end: len - 1,
+            }
         } else {
             // Syntax before bounds: both positions parse, or the whole
             // header is invalid — even when the first already misses the
@@ -340,7 +424,10 @@ pub fn parse_range(value: &str, len: u64) -> RangeOutcome {
             if first >= len {
                 continue;
             }
-            Span { start: first, end: end.min(len - 1) }
+            Span {
+                start: first,
+                end: end.min(len - 1),
+            }
         };
         spans.push(span);
         if spans.len() > MAX_RANGES {
@@ -391,8 +478,9 @@ pub fn coalesce(mut spans: Vec<Span>) -> Vec<Span> {
 /// one is answered in full rather than sliced against a validator that cannot
 /// promise identity.
 pub fn decide(head: &str, len: u64, etag: &str, mtime_secs: Option<u64>) -> Decision {
-    if let Some(inm) = header(head, "if-none-match") {
-        if etag_matches(inm, etag) {
+    let mut if_none_match = header_values(head, "if-none-match");
+    if let Some(first) = if_none_match.next() {
+        if etag_matches(first, etag) || if_none_match.any(|value| etag_matches(value, etag)) {
             return Decision::NotModified;
         }
     } else if let (Some(ms), Some(ims)) = (mtime_secs, header(head, "if-modified-since"))
@@ -526,21 +614,60 @@ mod tests {
         assert_eq!(http_date(t), "Fri, 21 Aug 2026 20:49:37 GMT");
         assert_eq!(parse_http_date(&http_date(t)), Some(t));
         // The obsolete forms still parse when a client sends one.
-        assert_eq!(
-            parse_http_date("Friday, 21-Aug-26 20:49:37 GMT"),
-            Some(t)
-        );
-        assert_eq!(
-            parse_http_date("Fri Aug 21 20:49:37 2026"),
-            Some(t)
-        );
+        assert_eq!(parse_http_date("Friday, 21-Aug-26 20:49:37 GMT"), Some(t));
+        assert_eq!(parse_http_date("Fri Aug 21 20:49:37 2026"), Some(t));
         assert_eq!(parse_http_date("not a date"), None);
         // Extreme years are rejected, not computed: the arithmetic below
         // overflows an `i64` long before a year with ten digits.
         assert_eq!(parse_http_date("Sun, 06 Nov 9999999999 08:49:37 GMT"), None);
         assert_eq!(parse_http_date("Sun, 06 Nov 10000 08:49:37 GMT"), None);
         assert_eq!(parse_http_date("Sun, 06 Nov 1969 08:49:37 GMT"), None);
-        assert!(parse_http_date("Sun, 06 Nov 9999 08:49:37 GMT").is_some());
+        assert!(parse_http_date("Sat, 06 Nov 9999 08:49:37 GMT").is_some());
+        // Impossible calendar days are rejected in every format, leap rules
+        // included — February 31 must never become a matchable timestamp.
+        assert_eq!(parse_http_date("Sat, 31 Feb 2024 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Saturday, 31-Feb-24 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sat Feb 31 08:49:37 2024"), None);
+        assert_eq!(parse_http_date("Wed, 29 Feb 2023 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sat, 31 Apr 2026 08:49:37 GMT"), None);
+        assert!(parse_http_date("Thu, 29 Feb 2024 08:49:37 GMT").is_some());
+        assert!(parse_http_date("Tue, 29 Feb 2000 08:49:37 GMT").is_some());
+        // Weekdays must name a real day *and* agree with the date: a
+        // disagreeing stamp is untrusted, and the header reads as absent.
+        assert_eq!(parse_http_date("Mon, 06 Nov 1994 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Funday, 06 Nov 1994 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Funday, 06-Nov-94 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Mon Nov  6 08:49:37 1994"), None);
+        assert_eq!(parse_http_date("Xyz Nov  6 08:49:37 1994"), None);
+        // The obsolete two-digit year lands nearest today: '99 is 1999,
+        // agreeing with the four-digit reading of the same moment.
+        assert_eq!(
+            parse_http_date("Saturday, 06-Nov-99 08:49:37 GMT"),
+            parse_http_date("Sat, 06 Nov 1999 08:49:37 GMT"),
+        );
+    }
+
+    #[test]
+    fn rfc850_year_cutoff_uses_the_full_timestamp() {
+        let now_days = days_from_civil(2026, 9, 28).expect("date");
+        let now = UNIX_EPOCH + Duration::from_secs(now_days * 86_400 + 8 * 3600 + 49 * 60 + 37);
+        let clock = 8 * 3600 + 49 * 60 + 37;
+
+        // On the anniversary, a stamp a few days later is over 50 years
+        // ahead and must roll back a century. A stamp before that anniversary
+        // remains in 2076, even though both candidates share the same year
+        // distance from 2026.
+        assert_eq!(rfc850_year(76, 10, 1, clock, now), 1976);
+        assert_eq!(rfc850_year(76, 9, 27, clock, now), 2076);
+        assert_eq!(
+            parse_rfc850_at("Friday, 01-Oct-76 08:49:37 GMT", now),
+            Some(
+                UNIX_EPOCH
+                    + Duration::from_secs(
+                        days_from_civil(1976, 10, 1).expect("date") * 86_400 + clock,
+                    )
+            ),
+        );
     }
 
     #[test]
@@ -561,6 +688,15 @@ mod tests {
     }
 
     #[test]
+    fn if_none_match_checks_every_field_line() {
+        let et = "W/\"10-100.000000000\"";
+        let request = format!(
+            "GET /a.bin HTTP/1.1\r\nIf-None-Match: W/\"other\"\r\nIf-None-Match: {et}\r\n\r\n"
+        );
+        assert_eq!(decide(&request, 10, et, Some(100)), Decision::NotModified);
+    }
+
+    #[test]
     fn ranges_parse() {
         use RangeOutcome::*;
         assert_eq!(
@@ -569,11 +705,17 @@ mod tests {
         );
         assert_eq!(
             parse_range("bytes=950-", 1000),
-            Satisfiable(vec![Span { start: 950, end: 999 }])
+            Satisfiable(vec![Span {
+                start: 950,
+                end: 999
+            }])
         );
         assert_eq!(
             parse_range("bytes=-50", 1000),
-            Satisfiable(vec![Span { start: 950, end: 999 }])
+            Satisfiable(vec![Span {
+                start: 950,
+                end: 999
+            }])
         );
         // Clamped, not rejected.
         assert_eq!(
@@ -587,10 +729,7 @@ mod tests {
         // Several, in the order asked.
         assert_eq!(
             parse_range("bytes=0-1, 10-11", 1000),
-            Satisfiable(vec![
-                Span { start: 0, end: 1 },
-                Span { start: 10, end: 11 },
-            ])
+            Satisfiable(vec![Span { start: 0, end: 1 }, Span { start: 10, end: 11 },])
         );
         // Valid but past the end.
         assert_eq!(parse_range("bytes=999-1999", 500), Unsatisfiable);
@@ -629,7 +768,12 @@ mod tests {
         assert_eq!(decide(&head(&[]), 10, et, Some(100)), Decision::Full);
         // A matching validator short-circuits everything, ranges included.
         assert_eq!(
-            decide(&head(&["If-None-Match: W/\"10-100\"", "Range: bytes=0-1"]), 10, et, Some(100)),
+            decide(
+                &head(&["If-None-Match: W/\"10-100\"", "Range: bytes=0-1"]),
+                10,
+                et,
+                Some(100)
+            ),
             Decision::NotModified
         );
         assert_eq!(
@@ -638,23 +782,43 @@ mod tests {
         );
         // A miss falls through to the ranges.
         assert_eq!(
-            decide(&head(&["If-None-Match: W/\"1-1\"", "Range: bytes=0-1"]), 10, et, Some(100)),
+            decide(
+                &head(&["If-None-Match: W/\"1-1\"", "Range: bytes=0-1"]),
+                10,
+                et,
+                Some(100)
+            ),
             Decision::Single(Span { start: 0, end: 1 })
         );
         // Without an mtime, date conditionals never match rather than
         // matching wrongly.
         assert_eq!(
-            decide(&head(&["If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT"]), 10, et, None),
+            decide(
+                &head(&["If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT"]),
+                10,
+                et,
+                None
+            ),
             Decision::Full
         );
         assert_eq!(
-            decide(&head(&["If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT"]), 10, et, Some(100)),
+            decide(
+                &head(&["If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT"]),
+                10,
+                et,
+                Some(100)
+            ),
             Decision::NotModified
         );
         assert_eq!(
             decide(
-                &head(&["If-None-Match: W/\"1-1\"", "If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT"]),
-                10, et, Some(100)
+                &head(&[
+                    "If-None-Match: W/\"1-1\"",
+                    "If-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT"
+                ]),
+                10,
+                et,
+                Some(100)
             ),
             Decision::Full
         );
@@ -673,11 +837,24 @@ mod tests {
         );
         // A stale If-Range restores the full file; a fresh date keeps the slice.
         assert_eq!(
-            decide(&head(&["Range: bytes=0-1", "If-Range: W/\"10-100\""]), 10, et, Some(100)),
+            decide(
+                &head(&["Range: bytes=0-1", "If-Range: W/\"10-100\""]),
+                10,
+                et,
+                Some(100)
+            ),
             Decision::Full
         );
         assert_eq!(
-            decide(&head(&["Range: bytes=0-1", "If-Range: Thu, 01 Jan 1970 00:01:40 GMT"]), 10, et, Some(100)),
+            decide(
+                &head(&[
+                    "Range: bytes=0-1",
+                    "If-Range: Thu, 01 Jan 1970 00:01:40 GMT"
+                ]),
+                10,
+                et,
+                Some(100)
+            ),
             Decision::Single(Span { start: 0, end: 1 })
         );
     }
@@ -728,7 +905,10 @@ mod tests {
             vec![],
             vec![Span { start: 0, end: 1 }],
             vec![Span { start: 0, end: 1 }, Span { start: 4, end: 5 }],
-            vec![Span { start: 9_999_950, end: 10_000_000 }],
+            vec![Span {
+                start: 9_999_950,
+                end: 10_000_000,
+            }],
         ] {
             let parts: Vec<(Span, Vec<u8>)> = spans
                 .iter()
@@ -736,7 +916,12 @@ mod tests {
                 .collect();
             let body = multipart_body("boundary-1", "application/octet-stream", 10_000_001, &parts);
             assert_eq!(
-                multipart_content_length("boundary-1", "application/octet-stream", 10_000_001, &spans),
+                multipart_content_length(
+                    "boundary-1",
+                    "application/octet-stream",
+                    10_000_001,
+                    &spans
+                ),
                 body.len() as u64,
             );
         }

@@ -69,7 +69,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
-use crate::inspect::{read_head, request_path, respond};
+use crate::inspect::{read_head, request_path};
 
 /// The path the injected script connects to.
 pub const HMR_PATH: &str = "/@esdev/hmr";
@@ -165,20 +165,81 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
     let path = target.split(['?', '#']).next().unwrap_or("/").to_string();
 
     if path == HMR_PATH {
-        updates(stream, &head, server.reload.subscribe()).await;
-        return;
+        // The handshake is a GET-only upgrade (RFC 6455 §4.1: the method
+        // MUST be GET), so only GET reaches the upgrader: a HEAD is
+        // answered like any error here — headers, no body — and anything
+        // else is refused rather than upgraded.
+        match crate::inspect::request_method(&head) {
+            Some("GET") => {
+                updates(stream, &head, server.reload.subscribe()).await;
+                return;
+            }
+            Some("HEAD") => {
+                respond_error(
+                    &mut stream,
+                    "426 Upgrade Required",
+                    "esdev's update channel is a WebSocket.",
+                    true,
+                    // A 426 names the protocol it wants: required, not
+                    // courtesy.
+                    &[("Upgrade", "websocket")],
+                )
+                .await;
+                return;
+            }
+            _ => {
+                respond_error(
+                    &mut stream,
+                    "405 Method Not Allowed",
+                    "esdev's update channel is a WebSocket.",
+                    false,
+                    &[("Allow", "GET, HEAD")],
+                )
+                .await;
+                return;
+            }
+        }
     }
+    // Errors below honour HEAD like everything else: the same headers a GET
+    // would name, no body bytes.
+    let head_only = matches!(crate::inspect::request_method(&head), Some("HEAD"));
     let Some(root) = &server.serve else {
-        let _ = respond(
+        respond_error(
             &mut stream,
             "404 Not Found",
-            "text/plain",
             "esdev serves only the reload stream here: this project has a server of its own.",
+            head_only,
+            &[],
         )
         .await;
         return;
     };
     serve_file(&mut stream, root, &path, &head).await;
+}
+
+/// An error answer: `text/plain` with the length a GET would carry, and no
+/// body on a HEAD. `no-store` throughout: a cached 404 outlives the rebuild
+/// that creates the file.
+async fn respond_error(
+    stream: &mut TcpStream,
+    status: &str,
+    message: &str,
+    head_only: bool,
+    extra: &[(&str, &str)],
+) {
+    let mut headers = vec![
+        (
+            "Content-Type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        ),
+        ("Content-Length".to_string(), message.len().to_string()),
+        ("Cache-Control".to_string(), "no-store".to_string()),
+    ];
+    for (name, value) in extra {
+        headers.push((name.to_string(), value.to_string()));
+    }
+    let body = (!head_only).then_some(message.as_bytes());
+    let _ = respond_static(stream, status, &headers, body).await;
 }
 
 /// Holds the connection open, writing an event per rebuild.
@@ -187,11 +248,12 @@ async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Recei
     // is the URL somebody reaches for when they want to know whether the dev
     // server is up, and a closed connection tells them nothing.
     let Some(key) = crate::inspect::websocket_key(head) else {
-        let _ = respond(
+        respond_error(
             &mut stream,
             "426 Upgrade Required",
-            "text/plain; charset=utf-8",
             "esdev's update channel is a WebSocket.",
+            false,
+            &[("Upgrade", "websocket")],
         )
         .await;
         return;
@@ -261,21 +323,21 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
         Some("GET") => false,
         Some("HEAD") => true,
         _ => {
-            let _ = respond_static(
+            // HEAD passes the gate above, so this arm is unreachable on
+            // one — `false` is what `head_only` would be here.
+            respond_error(
                 stream,
                 "405 Method Not Allowed",
-                &[
-                    ("Allow".to_string(), "GET, HEAD".to_string()),
-                    ("Cache-Control".to_string(), "no-store".to_string()),
-                ],
-                Some(b"this server serves files".as_slice()),
+                "this server serves files",
+                false,
+                &[("Allow", "GET, HEAD")],
             )
             .await;
             return;
         }
     };
     let Some(relative) = safe_path(path) else {
-        let _ = respond(stream, "400 Bad Request", "text/plain", "bad path").await;
+        respond_error(stream, "400 Bad Request", "bad path", head_only, &[]).await;
         return;
     };
     let file = root.join(&relative);
@@ -307,9 +369,8 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
         Missing,
     }
     fn resolve(canonical_root: Option<&Path>, logical: PathBuf) -> Resolved {
-        let contained = |canonical: &Path| {
-            canonical_root.is_none_or(|root| canonical.starts_with(root))
-        };
+        let contained =
+            |canonical: &Path| canonical_root.is_none_or(|root| canonical.starts_with(root));
         let Ok(canonical) = std::fs::canonicalize(&logical) else {
             return Resolved::Missing;
         };
@@ -355,7 +416,11 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
         let Ok(meta) = file.metadata() else {
             return Resolved::Missing;
         };
-        Resolved::File { logical, file, meta }
+        Resolved::File {
+            logical,
+            file,
+            meta,
+        }
     }
     let mut resolved = resolve(canonical_root.as_deref(), file);
     // **The fallback is what makes client-side routing work.** A reload on
@@ -371,33 +436,40 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
     }
     match resolved {
         Resolved::Outside => {
-            let _ = respond(
+            respond_error(
                 stream,
                 "403 Forbidden",
-                "text/plain",
                 "outside the served directory",
+                head_only,
+                &[],
             )
             .await;
         }
         Resolved::Missing => {
-            let _ = respond(
+            respond_error(
                 stream,
                 "404 Not Found",
-                "text/plain",
                 &format!("no {path} in {}", root.display()),
+                head_only,
+                &[],
             )
             .await;
         }
         Resolved::File { meta, .. } if !meta.is_file() => {
-            let _ = respond(
+            respond_error(
                 stream,
                 "404 Not Found",
-                "text/plain",
                 &format!("no {path} in {}", root.display()),
+                head_only,
+                &[],
             )
             .await;
         }
-        Resolved::File { logical, file, meta } => {
+        Resolved::File {
+            logical,
+            file,
+            meta,
+        } => {
             serve_resolved(stream, head, head_only, file, &meta, &logical).await;
         }
     }
@@ -448,10 +520,7 @@ async fn serve_resolved(
             let _ = respond_static(stream, "304 Not Modified", &headers, None).await;
         }
         crate::static_serve::Decision::Unsatisfiable => {
-            headers.push((
-                "Content-Range".to_string(),
-                format!("bytes */{len}"),
-            ));
+            headers.push(("Content-Range".to_string(), format!("bytes */{len}")));
             let _ = respond_static(
                 stream,
                 "416 Range Not Satisfiable",
@@ -476,7 +545,10 @@ async fn serve_resolved(
             if len > 0
                 && copy_span(
                     &mut file,
-                    crate::static_serve::Span { start: 0, end: len - 1 },
+                    crate::static_serve::Span {
+                        start: 0,
+                        end: len - 1,
+                    },
                     stream,
                 )
                 .await
@@ -494,11 +566,13 @@ async fn serve_resolved(
             ));
             headers.push(("Content-Length".to_string(), span.len().to_string()));
             if head_only {
-                let _ =
-                    respond_static(stream, "206 Partial Content", &headers, None).await;
+                let _ = respond_static(stream, "206 Partial Content", &headers, None).await;
                 return;
             }
-            if write_head(stream, "206 Partial Content", &headers).await.is_err() {
+            if write_head(stream, "206 Partial Content", &headers)
+                .await
+                .is_err()
+            {
                 return;
             }
             if copy_span(&mut file, span, stream).await.is_err() {
@@ -522,8 +596,7 @@ async fn serve_resolved(
             ));
             headers.push(("Content-Length".to_string(), length.to_string()));
             if head_only {
-                let _ =
-                    respond_static(stream, "206 Partial Content", &headers, None).await;
+                let _ = respond_static(stream, "206 Partial Content", &headers, None).await;
                 return;
             }
             // Streamed, never assembled: framing lines plus span bytes copied
@@ -532,7 +605,10 @@ async fn serve_resolved(
             // gigabytes. Past the status line the only honest failure is a
             // closed connection, so errors end the body rather than
             // answering anything.
-            if write_head(stream, "206 Partial Content", &headers).await.is_err() {
+            if write_head(stream, "206 Partial Content", &headers)
+                .await
+                .is_err()
+            {
                 return;
             }
             let mut ok = true;
@@ -559,8 +635,10 @@ async fn serve_resolved(
 ///
 /// [`respond`] stays for the fixed-shape text answers; this one is for file
 /// responses, whose headers depend on the decision and whose `HEAD` answers
-/// carry lengths without bodies. Nothing is added implicitly — callers name
-/// every header, including `Content-Length` when there is one.
+/// carry lengths without bodies. Callers name every header except `Date` —
+/// the server has a clock, so HTTP wants it stamped on 2xx, 3xx and 4xx,
+/// and stamping it here covers them all — including `Content-Length` when
+/// there is one.
 async fn respond_static(
     stream: &mut TcpStream,
     status: &str,
@@ -581,7 +659,8 @@ async fn write_head(
     status: &str,
     headers: &[(String, String)],
 ) -> std::io::Result<()> {
-    let mut head = format!("HTTP/1.1 {status}\r\n");
+    let date = crate::static_serve::http_date(std::time::SystemTime::now());
+    let mut head = format!("HTTP/1.1 {status}\r\nDate: {date}\r\n");
     for (name, value) in headers {
         head.push_str(name);
         head.push_str(": ");

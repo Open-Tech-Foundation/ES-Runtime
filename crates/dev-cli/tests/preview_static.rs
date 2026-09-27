@@ -43,8 +43,11 @@ fn fixture(name: &str) -> PathBuf {
 
     // Large enough to cross many 64 KiB copy chunks with a remainder, so a
     // streamed body proves itself byte-exact rather than merely short.
-    let big: Vec<u8> = (0..5 * 1024 * 1024 + 12345u32).map(|i| (i % 251) as u8).collect();
-    std::fs::write(dir.join("big.bin"), &big).expect("large fixture");    #[cfg(unix)]
+    let big: Vec<u8> = (0..5 * 1024 * 1024 + 12345u32)
+        .map(|i| (i % 251) as u8)
+        .collect();
+    std::fs::write(dir.join("big.bin"), &big).expect("large fixture");
+    #[cfg(unix)]
     {
         std::os::unix::fs::symlink(dir.join("data.bin"), dir.join("ok-link.bin"))
             .expect("a symlink that stays inside");
@@ -152,7 +155,14 @@ fn start(dir: &Path) -> (Preview, u16) {
             let _ = writeln!(out, "{line}");
         }
     });
-    (Preview { child, dir: dir.to_path_buf(), _stderr }, port)
+    (
+        Preview {
+            child,
+            dir: dir.to_path_buf(),
+            _stderr,
+        },
+        port,
+    )
 }
 
 struct Answer {
@@ -182,7 +192,11 @@ fn get(port: u16, request: &str) -> Answer {
             headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
         }
     }
-    Answer { status, headers, body: raw[split + 4..].to_vec() }
+    Answer {
+        status,
+        headers,
+        body: raw[split + 4..].to_vec(),
+    }
 }
 
 fn req(method: &str, path: &str, extra: &[&str]) -> String {
@@ -207,39 +221,77 @@ fn files_serve_with_validators() {
     let _preview = preview;
     let a = get(port, &req("GET", "/data.bin", &[]));
     assert_eq!(status(&a), "200", "{}", a.status);
-    assert_eq!(a.headers.get("accept-ranges").map(String::as_str), Some("bytes"));
-    assert_eq!(a.headers.get("cache-control").map(String::as_str), Some("no-cache"));
+    assert_eq!(
+        a.headers.get("accept-ranges").map(String::as_str),
+        Some("bytes")
+    );
+    assert_eq!(
+        a.headers.get("cache-control").map(String::as_str),
+        Some("no-cache")
+    );
     let etag = a.headers.get("etag").expect("an etag").clone();
     assert!(etag.starts_with("W/\""), "weak: {etag}");
-    let last = a.headers.get("last-modified").expect("a last-modified").clone();
+    let last = a
+        .headers
+        .get("last-modified")
+        .expect("a last-modified")
+        .clone();
     assert!(last.ends_with("GMT"), "imf-fixdate: {last}");
     assert_eq!(a.body, bytes());
 
     // Revalidation answers without resending.
-    let b = get(port, &req("GET", "/data.bin", &[&format!("If-None-Match: {etag}")]));
+    let b = get(
+        port,
+        &req("GET", "/data.bin", &[&format!("If-None-Match: {etag}")]),
+    );
     assert_eq!(status(&b), "304");
     assert!(b.body.is_empty());
     let c = get(port, &req("GET", "/data.bin", &["If-None-Match: *"]));
     assert_eq!(status(&c), "304");
-    let d = get(port, &req("GET", "/data.bin", &[&format!("If-Modified-Since: {last}")]));
+    let d = get(
+        port,
+        &req("GET", "/data.bin", &[&format!("If-Modified-Since: {last}")]),
+    );
     assert_eq!(status(&d), "304");
 
     // Stale validators fall through to the file.
-    let e = get(port, &req("GET", "/data.bin", &["If-None-Match: W/\"0-0\""]));
+    let e = get(
+        port,
+        &req("GET", "/data.bin", &["If-None-Match: W/\"0-0\""]),
+    );
     assert_eq!(status(&e), "200");
     assert_eq!(e.body, bytes());
     let f = get(
         port,
-        &req("GET", "/data.bin", &["If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT"]),
+        &req(
+            "GET",
+            "/data.bin",
+            &["If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT"],
+        ),
     );
     assert_eq!(status(&f), "200");
     // An extreme year is rejected, not computed — and never panics the server.
     let g = get(
         port,
-        &req("GET", "/data.bin", &["If-Modified-Since: Sun, 06 Nov 9999999999 08:49:37 GMT"]),
+        &req(
+            "GET",
+            "/data.bin",
+            &["If-Modified-Since: Sun, 06 Nov 9999999999 08:49:37 GMT"],
+        ),
     );
     assert_eq!(status(&g), "200");
     assert_eq!(g.body, bytes());
+    // An impossible calendar day is no validator either.
+    let h = get(
+        port,
+        &req(
+            "GET",
+            "/data.bin",
+            &["If-Modified-Since: Sat, 31 Feb 2024 08:49:37 GMT"],
+        ),
+    );
+    assert_eq!(status(&h), "200");
+    assert_eq!(h.body, bytes());
 }
 #[test]
 fn a_rapid_same_size_rewrite_changes_the_etag() {
@@ -256,7 +308,10 @@ fn a_rapid_same_size_rewrite_changes_the_etag() {
     let etag2 = second.headers.get("etag").expect("an etag").clone();
     assert_ne!(etag1, etag2, "a rewrite mints a new validator");
     // And the old one no longer revalidates.
-    let stale = get(port, &req("GET", "/data.bin", &[&format!("If-None-Match: {etag1}")]));
+    let stale = get(
+        port,
+        &req("GET", "/data.bin", &[&format!("If-None-Match: {etag1}")]),
+    );
     assert_eq!(status(&stale), "200");
 }
 
@@ -268,7 +323,10 @@ fn head_answers_lengths_without_bodies() {
     let _preview = preview;
     let a = get(port, &req("HEAD", "/app.js", &[]));
     assert_eq!(status(&a), "200");
-    assert_eq!(a.headers.get("content-length").map(String::as_str), Some("15"));
+    assert_eq!(
+        a.headers.get("content-length").map(String::as_str),
+        Some("15")
+    );
     assert!(a.body.is_empty());
     // Ranges on a HEAD answer the same headers a GET would, still bodiless.
     let b = get(port, &req("HEAD", "/data.bin", &["Range: bytes=0-9"]));
@@ -309,12 +367,18 @@ fn ranges_slice() {
     let e = get(port, &req("GET", "/data.bin", &["Range: items=0-9"]));
     assert_eq!(status(&e), "200");
     assert_eq!(e.body, full);
-    let f = get(port, &req("GET", "/data.bin", &["Range: bytes=999999-nope"]));
+    let f = get(
+        port,
+        &req("GET", "/data.bin", &["Range: bytes=999999-nope"]),
+    );
     assert_eq!(status(&f), "200");
     assert_eq!(f.body, full);
     // Duplicate full-file ranges coalesce to one span: the ask cannot
     // multiply what the server holds, and one span is a plain 206.
-    let g = get(port, &req("GET", "/data.bin", &["Range: bytes=0-1023, 0-1023"]));
+    let g = get(
+        port,
+        &req("GET", "/data.bin", &["Range: bytes=0-1023, 0-1023"]),
+    );
     assert_eq!(status(&g), "206");
     assert_eq!(
         g.headers.get("content-range").map(String::as_str),
@@ -331,7 +395,11 @@ fn multiple_ranges_come_back_multipart() {
     let _preview = preview;
     let a = get(port, &req("GET", "/data.bin", &["Range: bytes=0-1, 10-11"]));
     assert_eq!(status(&a), "206");
-    let ctype = a.headers.get("content-type").expect("a content type").clone();
+    let ctype = a
+        .headers
+        .get("content-type")
+        .expect("a content type")
+        .clone();
     let boundary = ctype
         .split("boundary=")
         .nth(1)
@@ -346,11 +414,23 @@ fn multiple_ranges_come_back_multipart() {
     assert!(a.body.windows(2).any(|w| w == &full[10..12]));
     // A HEAD over the same ranges reports the GET length. Boundaries are
     // per-response unique, so the comparison adjusts for their lengths.
-    let h = get(port, &req("HEAD", "/data.bin", &["Range: bytes=0-1, 10-11"]));
+    let h = get(
+        port,
+        &req("HEAD", "/data.bin", &["Range: bytes=0-1, 10-11"]),
+    );
     assert_eq!(status(&h), "206");
-    let htype = h.headers.get("content-type").expect("a content type").clone();
+    let htype = h
+        .headers
+        .get("content-type")
+        .expect("a content type")
+        .clone();
     let hboundary = htype.split("boundary=").nth(1).expect("a boundary");
-    let hlen: usize = h.headers.get("content-length").expect("a length").parse().expect("a number");
+    let hlen: usize = h
+        .headers
+        .get("content-length")
+        .expect("a length")
+        .parse()
+        .expect("a number");
     assert_eq!(
         hlen,
         a.body.len() - boundary.len() + hboundary.len(),
@@ -379,13 +459,21 @@ fn unsatisfiable_ranges_and_conditional_ranges() {
     let last = full.headers.get("last-modified").expect("lm").clone();
     let c = get(
         port,
-        &req("GET", "/data.bin", &["Range: bytes=0-1", "If-Range: W/\"0-0\""]),
+        &req(
+            "GET",
+            "/data.bin",
+            &["Range: bytes=0-1", "If-Range: W/\"0-0\""],
+        ),
     );
     assert_eq!(status(&c), "200");
     assert_eq!(c.body, bytes());
     let d = get(
         port,
-        &req("GET", "/data.bin", &["Range: bytes=0-1", &format!("If-Range: {last}")]),
+        &req(
+            "GET",
+            "/data.bin",
+            &["Range: bytes=0-1", &format!("If-Range: {last}")],
+        ),
     );
     assert_eq!(status(&d), "206");
     assert_eq!(d.body, bytes()[0..2]);
@@ -410,16 +498,115 @@ fn routing_fallbacks_and_refusals_hold() {
     // Only reads are served.
     let c = get(port, &req("POST", "/app.js", &[]));
     assert_eq!(status(&c), "405");
-    assert_eq!(c.headers.get("allow").map(String::as_str), Some("GET, HEAD"));
+    assert_eq!(
+        c.headers.get("allow").map(String::as_str),
+        Some("GET, HEAD")
+    );
+    // Errors honour HEAD too: the headers a GET would name, no body bytes.
+    let h = get(port, &req("HEAD", "/missing.js", &[]));
+    assert_eq!(status(&h), "404");
+    assert!(h.body.is_empty());
+    let hlen: usize = h
+        .headers
+        .get("content-length")
+        .expect("a length")
+        .parse()
+        .expect("a number");
+    assert!(hlen > 0, "the length its GET would send");
+    let h400 = get(port, &req("HEAD", "/../../etc/hostname", &[]));
+    assert_eq!(status(&h400), "400");
+    assert!(h400.body.is_empty());
+    // Every answer carries the clock: HTTP wants Date on 2xx–4xx.
+    let ok = get(port, &req("GET", "/app.js", &[]));
+    assert!(
+        ok.headers
+            .get("date")
+            .map(|d| d.ends_with("GMT"))
+            .unwrap_or(false)
+    );
+    assert!(h.headers.contains_key("date"));
     // Climbing out is refused before the filesystem is touched.
     let d = get(port, &req("GET", "/../../etc/hostname", &[]));
     assert_eq!(status(&d), "400");
+    // The update channel is a GET-only upgrade: HEAD answers bodilessly,
+    // and anything else is refused rather than upgraded. Every 426 names
+    // the protocol it wants.
+    let hmr_head = get(port, &req("HEAD", "/@esdev/hmr", &[]));
+    assert_eq!(status(&hmr_head), "426");
+    assert!(hmr_head.body.is_empty());
+    assert_eq!(
+        hmr_head.headers.get("upgrade").map(String::as_str),
+        Some("websocket")
+    );
+    let hmr_get = get(port, &req("GET", "/@esdev/hmr", &[]));
+    assert_eq!(status(&hmr_get), "426");
+    assert!(!hmr_get.body.is_empty());
+    assert_eq!(
+        hmr_get.headers.get("upgrade").map(String::as_str),
+        Some("websocket")
+    );
+    let hmr_missing_connection_upgrade = get(
+        port,
+        &req(
+            "GET",
+            "/@esdev/hmr",
+            &[
+                "Upgrade: websocket",
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                "Sec-WebSocket-Version: 13",
+            ],
+        ),
+    );
+    assert_eq!(status(&hmr_missing_connection_upgrade), "426");
+    let hmr_missing_version = get(
+        port,
+        &req(
+            "GET",
+            "/@esdev/hmr",
+            &[
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            ],
+        ),
+    );
+    assert_eq!(status(&hmr_missing_version), "426");
+    let hmr_http_10 = req(
+        "GET",
+        "/@esdev/hmr",
+        &[
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+        ],
+    )
+    .replacen("HTTP/1.1", "HTTP/1.0", 1);
+    let hmr_http_10 = get(port, &hmr_http_10);
+    assert_eq!(status(&hmr_http_10), "426");
+    let hmr_post = get(
+        port,
+        &req(
+            "POST",
+            "/@esdev/hmr",
+            &[
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                "Sec-WebSocket-Version: 13",
+            ],
+        ),
+    );
+    assert_eq!(status(&hmr_post), "405", "{}", hmr_post.status);
+    assert_eq!(
+        hmr_post.headers.get("allow").map(String::as_str),
+        Some("GET, HEAD")
+    );
 }
 
 #[test]
 #[cfg(unix)]
 fn symlinks_cannot_leave_the_root() {
-
     const NAME: &str = "symlinks_cannot_leave_the_root";
     let dir = fixture(NAME);
     let (preview, port) = start(&dir);
@@ -440,7 +627,11 @@ fn symlinks_cannot_leave_the_root() {
     let escape = get(port, &req("GET", "/linkdir/secret.txt", &[]));
     assert_eq!(status(&escape), "403", "{}", escape.status);
     let far = get(port, &req("GET", "/far-link.txt", &[]));
-    assert!(status(&far) == "403" || status(&far) == "404", "{}", far.status);
+    assert!(
+        status(&far) == "403" || status(&far) == "404",
+        "{}",
+        far.status
+    );
 }
 
 #[test]
@@ -469,7 +660,9 @@ fn large_bodies_stream_byte_exact() {
     let dir = fixture(NAME);
     let (preview, port) = start(&dir);
     let _preview = preview;
-    let big: Vec<u8> = (0..5 * 1024 * 1024 + 12345u32).map(|i| (i % 251) as u8).collect();
+    let big: Vec<u8> = (0..5 * 1024 * 1024 + 12345u32)
+        .map(|i| (i % 251) as u8)
+        .collect();
     // A whole 5 MiB body, streamed rather than buffered server-side.
     let full = get(port, &req("GET", "/big.bin", &[]));
     assert_eq!(status(&full), "200");

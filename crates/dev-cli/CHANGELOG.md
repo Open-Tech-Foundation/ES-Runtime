@@ -33,6 +33,15 @@ is the point, since none of the three has any business in a deployment.
   preview revalidates and seeks the way production will. Development only;
   production static traffic still belongs on a CDN or proxy.
 
+### Fixed
+
+- **WebSocket upgrades require a complete opening handshake.** The dev and
+  inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
+  WebSocket upgrade token, version 13, and a single 16-byte base64 key before
+  switching protocols. Conditional requests also check every `If-None-Match`
+  field line. RFC 850 HTTP dates apply the 50-year rule to the full timestamp,
+  including dates on the cutoff day.
+
 ## [0.11.0] - 2026-09-25
 
 ### Added
