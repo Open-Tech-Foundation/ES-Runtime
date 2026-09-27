@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const MAX_RANGES: usize = 32;
 
 /// An inclusive byte span of a representation, `start..=end`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Span {
     pub start: u64,
     pub end: u64,
@@ -152,7 +152,11 @@ fn month(word: &str) -> Option<u64> {
 }
 
 fn days_from_civil(y: i64, m: u64, d: u64) -> Option<u64> {
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || y < 1970 {
+    // HTTP dates name real moments: four-digit years from the epoch on.
+    // Bounding first is what keeps the arithmetic below total — a header can
+    // name any year at all, and an unbounded `i64` reaches overflow in the
+    // era multiplication below.
+    if !(1970..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
     let y = if m <= 2 { y - 1 } else { y };
@@ -161,7 +165,11 @@ fn days_from_civil(y: i64, m: u64, d: u64) -> Option<u64> {
     let mp = (m + 9) % 12;
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some((era as u64) * 146_097 + doe - 719_468)
+    let days = (era as u64)
+        .checked_mul(146_097)?
+        .checked_add(doe)?
+        .checked_sub(719_468)?;
+    Some(days)
 }
 
 fn hms(h: &str, m: &str, s: &str) -> Option<u64> {
@@ -197,7 +205,8 @@ fn parse_imf(text: &str) -> Option<SystemTime> {
         return None;
     }
     let days = days_from_civil(y, m, d)?;
-    Some(UNIX_EPOCH + Duration::from_secs(days * 86_400 + clock))
+    let secs = days.checked_mul(86_400)?.checked_add(clock)?;
+    Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
 
 /// `Sunday, 06-Nov-94 08:49:37 GMT`
@@ -224,7 +233,8 @@ fn parse_rfc850(text: &str) -> Option<SystemTime> {
         return None;
     }
     let days = days_from_civil(y, m, day)?;
-    Some(UNIX_EPOCH + Duration::from_secs(days * 86_400 + clock))
+    let secs = days.checked_mul(86_400)?.checked_add(clock)?;
+    Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
 
 /// `Sun Nov  6 08:49:37 1994`
@@ -246,7 +256,8 @@ fn parse_asctime(text: &str) -> Option<SystemTime> {
         return None;
     }
     let days = days_from_civil(y, m, d)?;
-    Some(UNIX_EPOCH + Duration::from_secs(days * 86_400 + clock))
+    let secs = days.checked_mul(86_400)?.checked_add(clock)?;
+    Some(UNIX_EPOCH + Duration::from_secs(secs))
 }
 
 /// The value of the first header field named `name` (case-insensitive), or
@@ -345,7 +356,29 @@ pub fn parse_range(value: &str, len: u64) -> RangeOutcome {
             RangeOutcome::Unsatisfiable
         };
     }
-    RangeOutcome::Satisfiable(spans)
+    RangeOutcome::Satisfiable(coalesce(spans))
+}
+
+/// Merges overlapping and adjacent spans, ascending.
+///
+/// Thirty-two duplicate full-file ranges would otherwise read and hold
+/// thirty-two copies of the file; merged, they are one span, and no request
+/// can hold more than the representation itself however it phrases the ask.
+/// Parts arrive ascending rather than in the order asked — each part carries
+/// its own `Content-Range`, so no consumer can misread the result.
+pub fn coalesce(mut spans: Vec<Span>) -> Vec<Span> {
+    spans.sort();
+    let mut merged: Vec<Span> = Vec::with_capacity(spans.len());
+    for span in spans {
+        if let Some(last) = merged.last_mut()
+            && span.start <= last.end.saturating_add(1)
+        {
+            last.end = last.end.max(span.end);
+            continue;
+        }
+        merged.push(span);
+    }
+    merged
 }
 
 /// Decides a file response from the request head and the representation's
@@ -406,9 +439,10 @@ pub fn boundary() -> String {
 }
 
 /// One part's framing, without its bytes: the boundary, the part headers,
-/// and the blank line the bytes follow. Shared by the builder and the
-/// length below, so the two cannot disagree about the shape.
-fn part_head(boundary: &str, content_type: &str, total_len: u64, span: Span) -> String {
+/// and the blank line the bytes follow. Shared by the builder, the length
+/// computation and the streaming writer, so the three cannot disagree about
+/// the shape.
+pub fn part_head(boundary: &str, content_type: &str, total_len: u64, span: Span) -> String {
     format!(
         "--{boundary}\r\nContent-Type: {content_type}\r\nContent-Range: bytes {}-{}/{total_len}\r\n\r\n",
         span.start, span.end,
@@ -418,6 +452,10 @@ fn part_head(boundary: &str, content_type: &str, total_len: u64, span: Span) -> 
 /// Assembles a `multipart/byteranges` body from already-read spans: each
 /// part carries its own `Content-Type` and `Content-Range`, closed by the
 /// terminating boundary.
+///
+/// Test oracle only: the server streams parts instead of assembling them
+/// (see below), and this is what the length computation is checked against.
+#[cfg(test)]
 pub fn multipart_body(
     boundary: &str,
     content_type: &str,
@@ -497,6 +535,12 @@ mod tests {
             Some(t)
         );
         assert_eq!(parse_http_date("not a date"), None);
+        // Extreme years are rejected, not computed: the arithmetic below
+        // overflows an `i64` long before a year with ten digits.
+        assert_eq!(parse_http_date("Sun, 06 Nov 9999999999 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 10000 08:49:37 GMT"), None);
+        assert_eq!(parse_http_date("Sun, 06 Nov 1969 08:49:37 GMT"), None);
+        assert!(parse_http_date("Sun, 06 Nov 9999 08:49:37 GMT").is_some());
     }
 
     #[test]
@@ -650,6 +694,30 @@ mod tests {
         assert!(text.contains("Content-Range: bytes 0-1/10\r\n\r\nab\r\n"));
         assert!(text.contains("Content-Range: bytes 4-5/10\r\n\r\nef\r\n"));
         assert!(text.ends_with("--b--\r\n"));
+    }
+
+    #[test]
+    fn overlapping_ranges_coalesce() {
+        let s = |a, b| Span { start: a, end: b };
+        // Duplicates collapse: thirty-two full-file asks become one span.
+        assert_eq!(
+            parse_range("bytes=0-1023, 0-1023", 1024),
+            RangeOutcome::Satisfiable(vec![s(0, 1023)])
+        );
+        // Overlap and adjacency merge; order normalises ascending.
+        assert_eq!(
+            parse_range("bytes=200-300, 0-100, 50-250", 1000),
+            RangeOutcome::Satisfiable(vec![s(0, 300)])
+        );
+        assert_eq!(
+            parse_range("bytes=0-99, 100-199", 1000),
+            RangeOutcome::Satisfiable(vec![s(0, 199)])
+        );
+        // Disjoint spans stay disjoint.
+        assert_eq!(
+            parse_range("bytes=0-1, 10-11", 1000),
+            RangeOutcome::Satisfiable(vec![s(0, 1), s(10, 11)])
+        );
     }
 
     #[test]

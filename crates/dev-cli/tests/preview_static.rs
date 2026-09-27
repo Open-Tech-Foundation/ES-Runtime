@@ -215,6 +215,13 @@ fn files_serve_with_validators() {
         &req("GET", "/data.bin", &["If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT"]),
     );
     assert_eq!(status(&f), "200");
+    // An extreme year is rejected, not computed — and never panics the server.
+    let g = get(
+        port,
+        &req("GET", "/data.bin", &["If-Modified-Since: Sun, 06 Nov 9999999999 08:49:37 GMT"]),
+    );
+    assert_eq!(status(&g), "200");
+    assert_eq!(g.body, bytes());
 }
 #[test]
 fn a_rapid_same_size_rewrite_changes_the_etag() {
@@ -287,6 +294,15 @@ fn ranges_slice() {
     let f = get(port, &req("GET", "/data.bin", &["Range: bytes=999999-nope"]));
     assert_eq!(status(&f), "200");
     assert_eq!(f.body, full);
+    // Duplicate full-file ranges coalesce to one span: the ask cannot
+    // multiply what the server holds, and one span is a plain 206.
+    let g = get(port, &req("GET", "/data.bin", &["Range: bytes=0-1023, 0-1023"]));
+    assert_eq!(status(&g), "206");
+    assert_eq!(
+        g.headers.get("content-range").map(String::as_str),
+        Some("bytes 0-1023/1024")
+    );
+    assert_eq!(g.body, full);
 }
 
 #[test]

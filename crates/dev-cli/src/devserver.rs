@@ -476,48 +476,49 @@ async fn serve_resolved(
         }
         crate::static_serve::Decision::Multi(spans) => {
             let boundary = crate::static_serve::boundary();
-            let (parts, ok) = match head_only {
-                true => (Vec::new(), true),
-                false => {
-                    let mut parts = Vec::with_capacity(spans.len());
-                    let mut ok = true;
-                    for span in &spans {
-                        match read_span(&mut file, *span) {
-                            Ok(bytes) => parts.push((*span, bytes)),
-                            Err(_) => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    (parts, ok)
-                }
-            };
-            if !ok {
-                let _ = respond(stream, "500 Internal Server Error", "text/plain", "unreadable").await;
-                return;
-            }
-            // A `HEAD` answers the length its `GET` would send, computed
-            // arithmetically — no span is read for a body nobody receives.
-            let body = (!head_only).then(|| {
-                crate::static_serve::multipart_body(&boundary, &content_type, len, &parts)
-            });
-            let length = match &body {
-                Some(b) => b.len() as u64,
-                None => crate::static_serve::multipart_content_length(
-                    &boundary,
-                    &content_type,
-                    len,
-                    &spans,
-                ),
-            };
+            // The length up front, arithmetically — it is what a `HEAD`
+            // answers with, and what a `GET` streams exactly.
+            let length = crate::static_serve::multipart_content_length(
+                &boundary,
+                &content_type,
+                len,
+                &spans,
+            );
             headers.push((
                 "Content-Type".to_string(),
                 format!("multipart/byteranges; boundary={boundary}"),
             ));
             headers.push(("Content-Length".to_string(), length.to_string()));
-            let _ =
-                respond_static(stream, "206 Partial Content", &headers, body.as_deref()).await;
+            if head_only {
+                let _ =
+                    respond_static(stream, "206 Partial Content", &headers, None).await;
+                return;
+            }
+            // Streamed, never assembled: framing lines plus span bytes copied
+            // in chunks off the one handle, so thirty-two duplicate
+            // full-file ranges cost a 64 KiB buffer rather than tens of
+            // gigabytes. Past the status line the only honest failure is a
+            // closed connection, so errors end the body rather than
+            // answering anything.
+            if write_head(stream, "206 Partial Content", &headers).await.is_err() {
+                return;
+            }
+            let mut ok = true;
+            for span in &spans {
+                let head = crate::static_serve::part_head(&boundary, &content_type, len, *span);
+                if stream.write_all(head.as_bytes()).await.is_err()
+                    || copy_span(&mut file, *span, stream).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                let tail = format!("--{boundary}--\r\n");
+                let _ = stream.write_all(tail.as_bytes()).await;
+            }
+            let _ = stream.flush().await;
         }
     }
 }
@@ -548,6 +549,20 @@ async fn respond_static(
     headers: &[(String, String)],
     body: Option<&[u8]>,
 ) -> std::io::Result<()> {
+    write_head(stream, status, headers).await?;
+    if let Some(body) = body {
+        stream.write_all(body).await?;
+    }
+    stream.flush().await
+}
+
+/// The status line and headers, without the body: what a streamed response
+/// writes before producing its bytes.
+async fn write_head(
+    stream: &mut TcpStream,
+    status: &str,
+    headers: &[(String, String)],
+) -> std::io::Result<()> {
     let mut head = format!("HTTP/1.1 {status}\r\n");
     for (name, value) in headers {
         head.push_str(name);
@@ -556,11 +571,29 @@ async fn respond_static(
         head.push_str("\r\n");
     }
     head.push_str("Connection: close\r\n\r\n");
-    stream.write_all(head.as_bytes()).await?;
-    if let Some(body) = body {
-        stream.write_all(body).await?;
+    stream.write_all(head.as_bytes()).await
+}
+
+/// Copies one span onto the socket in chunks, off the shared handle.
+///
+/// The buffer is fixed at 64 KiB no matter how long the span: a merged
+/// full-file span streams through it rather than landing in memory whole.
+async fn copy_span(
+    file: &mut std::fs::File,
+    span: crate::static_serve::Span,
+    stream: &mut TcpStream,
+) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(span.start))?;
+    let mut remaining = span.len();
+    let mut buf = [0u8; 65536];
+    while remaining > 0 {
+        let n = remaining.min(65536) as usize;
+        file.read_exact(&mut buf[..n])?;
+        stream.write_all(&buf[..n]).await?;
+        remaining -= n as u64;
     }
-    stream.flush().await
+    Ok(())
 }
 
 /// The request path as a relative path, or `None` if it tries to leave the
