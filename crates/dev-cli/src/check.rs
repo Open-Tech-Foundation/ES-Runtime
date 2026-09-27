@@ -1,4 +1,4 @@
-//! `esdev check` — typecheck the project with its own `tsc`.
+//! `esdev typecheck` — typecheck the project with its own `tsc`.
 //!
 //! `esdev` strips types without checking them, so a type error is invisible
 //! until something runs `tsc --noEmit` — usually an npm script somebody has
@@ -11,7 +11,7 @@
 //! `npm run typecheck` would use) and speaks Windows' `.cmd` shims, so this
 //! does not reimplement either. What runs is found the way `--install-types`
 //! finds it — the `packageManager` field, then the lockfile, then what is
-//! installed — and everything past `check` is `tsc`'s own. Nothing is added:
+//! installed — and everything past `typecheck` is `tsc`'s own. Nothing is added:
 //! not a checker, not an opinion about flags, not a rewrite of the
 //! diagnostics. A convenience needs to stay one.
 
@@ -51,9 +51,9 @@ pub async fn check_to(dir: &Path, args: &[String], to_stderr: bool) -> Result<()
         // A declared manager that is not installed is the project's answer
         // anyway: say that rather than leaking the spawn failure.
         if e.kind() == std::io::ErrorKind::NotFound {
-            format!(
+                format!(
                 "this project uses {name}, which is not installed here.\n\n\
-                     Install it and run `esdev check` again.",
+                     Install it and run `esdev typecheck` again.",
                 name = manager.name(),
             )
         } else {
@@ -90,20 +90,20 @@ fn missing_typescript(dir: &Path, manager: PackageManager) -> Option<String> {
     if !dir.join("node_modules").is_dir() {
         return Some(format!(
             "the dependencies are not installed here.\n\n\
-             Run `{name} install`, then `esdev check` again.",
+             Run `{name} install`, then `esdev typecheck` again.",
             name = manager.name(),
         ));
     }
     if !manifest_depends_on(dir, "typescript") {
         return Some(
             "this project does not depend on TypeScript.\n\n\
-             Add it to the dev dependencies and install, then `esdev check` again."
+             Add it to the dev dependencies and install, then `esdev typecheck` again."
                 .to_string(),
         );
     }
     Some(format!(
         "TypeScript is not installed here.\n\n\
-         Run `{name} install`, then `esdev check` again.",
+         Run `{name} install`, then `esdev typecheck` again.",
         name = manager.name(),
     ))
 }
@@ -126,7 +126,7 @@ fn manifest_depends_on(dir: &Path, name: &str) -> bool {
 }
 
 /// How `tsc` is invoked under each manager: the program plus the arguments
-/// ahead of it. `tsc --noEmit` and whatever was passed to `check` follow.
+/// ahead of it. `tsc --noEmit` and whatever was passed to `typecheck` follow.
 fn exec_command(manager: PackageManager, yarn_berry: bool) -> (String, Vec<String>) {
     let words = |words: &[&str]| words.iter().map(ToString::to_string).collect();
     match manager {
@@ -181,7 +181,7 @@ mod tests {
 
     /// A directory holding a fixture project root.
     fn root(name: &str, files: &[(&str, &str)]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("esdev-check-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("esdev-typecheck-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the fixture");
         for (name, contents) in files {

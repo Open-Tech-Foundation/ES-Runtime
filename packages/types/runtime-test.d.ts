@@ -894,7 +894,7 @@ declare module "runtime:test" {
 
   /**
    * Assertions about a type, checked by TypeScript and nothing at run time —
-   * so `esdev check`, or `esdev test --typecheck`, is where they fail.
+   * so `esdev typecheck`, or `esdev test --typecheck`, is where they fail.
    */
   export interface ExpectTypeOf<Actual, Positive extends boolean = true> {
     /** The same assertions, each the other way round. */

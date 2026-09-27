@@ -21,7 +21,7 @@ test("parse's types", () => {
 ```
 
 TypeScript checks these assertions; at run time they do nothing. So they fail
-where TypeScript runs: `esdev check`, or `esdev test --typecheck`, which runs
+where TypeScript runs: `esdev typecheck`, or `esdev test --typecheck`, which runs
 the project's `tsc --noEmit` before the tests and fails the run when it fails.
 A failing assertion names what it expected and what it found:
 

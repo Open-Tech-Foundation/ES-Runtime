@@ -88,12 +88,12 @@ const data = await file("./config.json").text();
 `esdev` never checks types while it runs; your editor does, and so does:
 
 ```sh
-esdev check                  # tsc --noEmit, with the project's own TypeScript
-esdev check --pretty false   # arguments go to tsc untouched
+esdev typecheck                  # tsc --noEmit, with the project's own TypeScript
+esdev typecheck --pretty false   # arguments go to tsc untouched
 esdev test --typecheck       # the tests, and the check, in one run
 ```
 
-`esdev check` runs the `tsc` the project installed, through its package manager
+`esdev typecheck` runs the `tsc` the project installed, through its package manager
 (found as `--install-types` finds it), so the version that checks is the version
 the project uses. Its output is `tsc`'s own.
 

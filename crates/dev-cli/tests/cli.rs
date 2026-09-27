@@ -9079,15 +9079,15 @@ fn a_filter_selects_by_path() {
     assert!(!stdout(&out).contains("beta.test.mjs"), "{}", stdout(&out));
 }
 
-/// `esdev check` runs the project's TypeScript through its package manager:
+/// `esdev typecheck` runs the project's TypeScript through its package manager:
 /// a fake `npm` records the invocation, so no network and no real install is
 /// involved. Unix-only: the fake is a shell script.
 #[cfg(unix)]
 #[test]
-fn check_runs_tsc_through_the_projects_package_manager() {
+fn typecheck_runs_tsc_through_the_projects_package_manager() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = build_dir("t_check");
+    let dir = build_dir("t_typecheck_cmd");
     write_in(
         &dir,
         "package.json",
@@ -9100,7 +9100,7 @@ fn check_runs_tsc_through_the_projects_package_manager() {
     let npm = bin.join("npm");
     std::fs::write(
         &npm,
-        "#!/bin/sh\necho \"$@\" >> \"$ESDEV_CHECK_CAPTURE\"\nexit \"${ESDEV_CHECK_EXIT:-0}\"\n",
+        "#!/bin/sh\necho \"$@\" >> \"$ESDEV_TYPECHECK_CAPTURE\"\nexit \"${ESDEV_TYPECHECK_EXIT:-0}\"\n",
     )
     .expect("write fake npm");
     std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -9112,12 +9112,12 @@ fn check_runs_tsc_through_the_projects_package_manager() {
     );
 
     let out = esdev_in(&dir)
-        .arg("check")
+        .arg("typecheck")
         .env("PATH", &path)
-        .env("ESDEV_CHECK_CAPTURE", &capture)
-        .env("ESDEV_CHECK_EXIT", "0")
+        .env("ESDEV_TYPECHECK_CAPTURE", &capture)
+        .env("ESDEV_TYPECHECK_EXIT", "0")
         .output()
-        .expect("spawn esdev check");
+        .expect("spawn esdev typecheck");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
     let invoked = std::fs::read_to_string(&capture).expect("read capture");
     assert!(
@@ -9127,12 +9127,12 @@ fn check_runs_tsc_through_the_projects_package_manager() {
 
     // The exit code is tsc's own: a failing check fails the command.
     let out = esdev_in(&dir)
-        .arg("check")
+        .arg("typecheck")
         .env("PATH", &path)
-        .env("ESDEV_CHECK_CAPTURE", &capture)
-        .env("ESDEV_CHECK_EXIT", "3")
+        .env("ESDEV_TYPECHECK_CAPTURE", &capture)
+        .env("ESDEV_TYPECHECK_EXIT", "3")
         .output()
-        .expect("spawn esdev check");
+        .expect("spawn esdev typecheck");
     assert!(!out.status.success());
     assert!(stderr(&out).contains("tsc failed"), "{}", stderr(&out));
 
@@ -9142,8 +9142,8 @@ fn check_runs_tsc_through_the_projects_package_manager() {
 /// Without TypeScript installed there is nothing to run: the error names the
 /// install rather than failing inside the package manager.
 #[test]
-fn check_without_typescript_names_the_install() {
-    let dir = build_dir("t_check_missing");
+fn typecheck_without_typescript_names_the_install() {
+    let dir = build_dir("t_typecheck_cmd_missing");
     write_in(
         &dir,
         "package.json",
@@ -9151,9 +9151,9 @@ fn check_without_typescript_names_the_install() {
     );
 
     let out = esdev_in(&dir)
-        .arg("check")
+        .arg("typecheck")
         .output()
-        .expect("spawn esdev check");
+        .expect("spawn esdev typecheck");
     assert!(!out.status.success());
     assert!(stderr(&out).contains("npm install"), "{}", stderr(&out));
 
@@ -14970,7 +14970,7 @@ test("untagged", () => { console.log(`flaky selected: ${matchesTags(["flaky"])}`
 
 /// `esdev test --typecheck` runs the project's `tsc --noEmit` before the
 /// tests, and its failure fails a run whose tests pass. A fake `npm` stands in
-/// for the package manager, as in `esdev check`'s own test.
+/// for the package manager, as in `esdev typecheck`'s own test.
 #[cfg(unix)]
 #[test]
 fn test_typecheck_fails_a_run_whose_types_do_not_check() {

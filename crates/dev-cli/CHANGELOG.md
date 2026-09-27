@@ -24,6 +24,12 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed `esdev check` to `esdev typecheck`.** The old name no longer works;
+  run `esdev typecheck [args...]` to run `tsc --noEmit` through the project's
+  package manager.
+
 ### Added
 
 - **Full static semantics in the dev server** (DECISIONS D137). `esdev start`

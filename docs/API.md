@@ -4021,7 +4021,7 @@ compares after flattening intersections. `assertType<T>(value)` checks `value`
 is a `T`. A failure is a TypeScript error naming `TypeMismatch<Expected, Actual>`
 or `TypeCheckFailed<Wanted, Actual>`.
 
-`esdev test --typecheck` runs the project's `tsc --noEmit` (as `esdev check`
+`esdev test --typecheck` runs the project's `tsc --noEmit` (as `esdev typecheck`
 does) before the tests; its failure fails the run. Under a machine reporter its
 output goes to stderr.
 
