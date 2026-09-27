@@ -40,7 +40,11 @@ fn fixture(name: &str) -> PathBuf {
     std::fs::write(dir.join("data.bin"), bytes()).expect("bytes");
     std::fs::write(dir.join("empty.txt"), b"").expect("empty");
     std::fs::write(dir.join("payload.bin"), "console.log('aliased');").expect("payload");
-    #[cfg(unix)]
+
+    // Large enough to cross many 64 KiB copy chunks with a remainder, so a
+    // streamed body proves itself byte-exact rather than merely short.
+    let big: Vec<u8> = (0..5 * 1024 * 1024 + 12345u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.join("big.bin"), &big).expect("large fixture");    #[cfg(unix)]
     {
         std::os::unix::fs::symlink(dir.join("data.bin"), dir.join("ok-link.bin"))
             .expect("a symlink that stays inside");
@@ -457,4 +461,22 @@ fn a_fifo_answers_instead_of_hanging() {
     // And the server is still answering afterwards.
     let again = get(port, &req("GET", "/app.js", &[]));
     assert_eq!(status(&again), "200");
+}
+
+#[test]
+fn large_bodies_stream_byte_exact() {
+    const NAME: &str = "large_bodies_stream_byte_exact";
+    let dir = fixture(NAME);
+    let (preview, port) = start(&dir);
+    let _preview = preview;
+    let big: Vec<u8> = (0..5 * 1024 * 1024 + 12345u32).map(|i| (i % 251) as u8).collect();
+    // A whole 5 MiB body, streamed rather than buffered server-side.
+    let full = get(port, &req("GET", "/big.bin", &[]));
+    assert_eq!(status(&full), "200");
+    assert_eq!(full.body.len(), big.len());
+    assert_eq!(full.body, big);
+    // A range straddling copy-chunk boundaries.
+    let span = get(port, &req("GET", "/big.bin", &["Range: bytes=60000-70000"]));
+    assert_eq!(status(&span), "206");
+    assert_eq!(span.body, big[60000..70001]);
 }

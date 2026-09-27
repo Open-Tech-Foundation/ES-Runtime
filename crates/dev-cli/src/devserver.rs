@@ -252,10 +252,10 @@ async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Recei
 /// canonicalization for containment plus a kind metadata — the kind must
 /// come from metadata because opening a directory fails on Windows — and
 /// the surviving candidate costs one open whose metadata feeds the
-/// validators and whose handle feeds every read. The conditionals and
-/// ranges parse the head already in memory, and only ranged reads add seeks
-/// after that (reading just the spans, never the whole file for a slice of
-/// it).
+/// validators. Every body then streams off that handle in fixed 64 KiB
+/// chunks: full, single-range and multi-range alike, so no request ever
+/// holds a file (or a span of one) in memory whole. The conditionals and
+/// ranges parse the head already in memory.
 async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str) {
     let head_only = match crate::inspect::request_method(head) {
         Some("GET") => false,
@@ -461,18 +461,30 @@ async fn serve_resolved(
             .await;
         }
         crate::static_serve::Decision::Full => {
-            use std::io::Read;
             headers.push(("Content-Type".to_string(), content_type));
             headers.push(("Content-Length".to_string(), len.to_string()));
-            let body = (!head_only).then(|| {
-                let mut body = Vec::with_capacity(len.min(8 << 20) as usize);
-                file.read_to_end(&mut body).ok().map(|_| body)
-            }).flatten();
-            if !head_only && body.is_none() {
-                let _ = respond(stream, "500 Internal Server Error", "text/plain", "unreadable").await;
+            if head_only {
+                let _ = respond_static(stream, "200 OK", &headers, None).await;
                 return;
             }
-            let _ = respond_static(stream, "200 OK", &headers, body.as_deref()).await;
+            // Streamed like every other body: the head promises the length
+            // from the handle's metadata, then the bytes follow in fixed
+            // chunks — no request ever holds a whole file in memory.
+            if write_head(stream, "200 OK", &headers).await.is_err() {
+                return;
+            }
+            if len > 0
+                && copy_span(
+                    &mut file,
+                    crate::static_serve::Span { start: 0, end: len - 1 },
+                    stream,
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = stream.flush().await;
         }
         crate::static_serve::Decision::Single(span) => {
             headers.push(("Content-Type".to_string(), content_type));
@@ -481,13 +493,18 @@ async fn serve_resolved(
                 format!("bytes {}-{}/{len}", span.start, span.end),
             ));
             headers.push(("Content-Length".to_string(), span.len().to_string()));
-            let body = (!head_only).then(|| read_span(&mut file, span).ok()).flatten();
-            if !head_only && body.is_none() {
-                let _ = respond(stream, "500 Internal Server Error", "text/plain", "unreadable").await;
+            if head_only {
+                let _ =
+                    respond_static(stream, "206 Partial Content", &headers, None).await;
                 return;
             }
-            let _ =
-                respond_static(stream, "206 Partial Content", &headers, body.as_deref()).await;
+            if write_head(stream, "206 Partial Content", &headers).await.is_err() {
+                return;
+            }
+            if copy_span(&mut file, span, stream).await.is_err() {
+                return;
+            }
+            let _ = stream.flush().await;
         }
         crate::static_serve::Decision::Multi(spans) => {
             let boundary = crate::static_serve::boundary();
@@ -538,20 +555,6 @@ async fn serve_resolved(
     }
 }
 
-/// Reads one byte span through the open handle, seeking straight to it.
-///
-/// What keeps a `<video>` seek cheap: the bytes around the span are never
-/// read, which a full read plus a slice would do on every seek of a large
-/// file. Sharing the handle with every other read is what keeps the spans
-/// of one response on one version of the file.
-fn read_span(file: &mut std::fs::File, span: crate::static_serve::Span) -> std::io::Result<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
-    file.seek(SeekFrom::Start(span.start))?;
-    let mut buf = vec![0u8; span.len() as usize];
-    file.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
 /// A response with caller-chosen headers and an optional body.
 ///
 /// [`respond`] stays for the fixed-shape text answers; this one is for file
@@ -591,8 +594,11 @@ async fn write_head(
 
 /// Copies one span onto the socket in chunks, off the shared handle.
 ///
-/// The buffer is fixed at 64 KiB no matter how long the span: a merged
-/// full-file span streams through it rather than landing in memory whole.
+/// The buffer is fixed at 64 KiB no matter how long the span: a full-file
+/// body streams through it rather than landing in memory whole, and a
+/// `<video>` seek never reads the bytes around its span. Sharing the handle
+/// with every other read is what keeps the spans of one response on one
+/// version of the file.
 async fn copy_span(
     file: &mut std::fs::File,
     span: crate::static_serve::Span,
