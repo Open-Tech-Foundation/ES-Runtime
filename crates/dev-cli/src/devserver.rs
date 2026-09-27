@@ -12,9 +12,16 @@
 //! A frontend-only project has no server to be that, and telling somebody to
 //! write one before they can look at their page is not parity with any tool
 //! they have used. So when there is no target to run, this serves the output
-//! directory: `GET`, files, an SPA fallback, and nothing else. No module graph,
+//! directory: `GET` and `HEAD`, files, an SPA fallback, and the HTTP file
+//! semantics a browser leans on — validators and revalidation (`ETag`,
+//! `Last-Modified`, `304`), single and multiple ranges (`206`, `416`) — so a
+//! preview answers about the build rather than about itself. No module graph,
 //! no transform, no middleware — those would be a second, different way to run
 //! the app, which is what this design is arranged to avoid.
+//!
+//! Dev and preview only: production static traffic belongs on a CDN or a
+//! proxy with real hardening, and nothing here — loopback-bound, unlogged,
+//! unmetered — pretends otherwise.
 //!
 //! # The update channel
 //!
@@ -51,6 +58,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::AsyncWriteExt;
@@ -170,7 +178,7 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
         .await;
         return;
     };
-    serve_file(&mut stream, root, &path).await;
+    serve_file(&mut stream, root, &path, &head).await;
 }
 
 /// Holds the connection open, writing an event per rebuild.
@@ -236,35 +244,323 @@ async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Recei
 }
 
 /// Answers a file request, falling back to `index.html` the way a single-page
-/// app needs.
-async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str) {
+/// app needs, and honouring validators and ranges the way a browser expects.
+///
+/// Routing settles paths rather than trusting them: the root once per
+/// request, then each candidate path once (one more for a directory's
+/// `index.html`, one more for the SPA fallback). Each candidate costs a
+/// canonicalization for containment plus a kind metadata — the kind must
+/// come from metadata because opening a directory fails on Windows — and
+/// the surviving candidate costs one open whose metadata feeds the
+/// validators and whose handle feeds every read. The conditionals and
+/// ranges parse the head already in memory, and only ranged reads add seeks
+/// after that (reading just the spans, never the whole file for a slice of
+/// it).
+async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str) {
+    let head_only = match crate::inspect::request_method(head) {
+        Some("GET") => false,
+        Some("HEAD") => true,
+        _ => {
+            let _ = respond_static(
+                stream,
+                "405 Method Not Allowed",
+                &[
+                    ("Allow".to_string(), "GET, HEAD".to_string()),
+                    ("Cache-Control".to_string(), "no-store".to_string()),
+                ],
+                Some(b"this server serves files".as_slice()),
+            )
+            .await;
+            return;
+        }
+    };
     let Some(relative) = safe_path(path) else {
         let _ = respond(stream, "400 Bad Request", "text/plain", "bad path").await;
         return;
     };
-    let mut file = root.join(&relative);
-    if file.is_dir() {
-        file = file.join("index.html");
+    let file = root.join(&relative);
+    // The served root, settled once: every resolution below is checked
+    // against this. `None` when the root itself is unreachable, in which
+    // case nothing under it resolves either.
+    let canonical_root = std::fs::canonicalize(root).ok();
+    // `symlink_metadata` only reveals a link at the final component, while a
+    // link in any parent (`linkdir -> /etc`, asking for `/linkdir/passwd`)
+    // is followed silently — so the check cannot be "is this a link", it has
+    // to be "is this path, fully settled, still inside". The root is settled
+    // once per request; each candidate path is settled once more (see the
+    // call count note on `serve_file`).
+    // Moved by value a few times per request against syscalls that cost a
+    // thousand times more; boxing it would buy nothing measurable.
+    #[allow(clippy::large_enum_variant)]
+    enum Resolved {
+        /// Ready to answer: the path as requested (which names the MIME
+        /// type), the one open handle, and that handle's metadata — so
+        /// length, validators and every byte below are always one version.
+        File {
+            logical: PathBuf,
+            file: std::fs::File,
+            meta: std::fs::Metadata,
+        },
+        /// A path settling outside the served directory.
+        Outside,
+        /// Nothing to serve here.
+        Missing,
     }
+    fn resolve(canonical_root: Option<&Path>, mut logical: PathBuf) -> Resolved {
+        let contained = |canonical: &Path| {
+            canonical_root.is_none_or(|root| canonical.starts_with(root))
+        };
+        let Ok(mut canonical) = std::fs::canonicalize(&logical) else {
+            return Resolved::Missing;
+        };
+        if !contained(&canonical) {
+            return Resolved::Outside;
+        }
+        // The kind comes from metadata, never from opening: opening a
+        // directory fails on Windows (CreateFileW without directory flags),
+        // so a dir must be recognised before any handle exists. This
+        // metadata answers routing only — length, mtime and bytes all come
+        // from the handle below, so the single-version guarantee holds.
+        let Ok(kind) = std::fs::metadata(&canonical) else {
+            return Resolved::Missing;
+        };
+        if kind.is_dir() {
+            logical = logical.join("index.html");
+            let Ok(settled) = std::fs::canonicalize(&logical) else {
+                return Resolved::Missing;
+            };
+            if !contained(&settled) {
+                return Resolved::Outside;
+            }
+            canonical = settled;
+        }
+        let Ok(file) = std::fs::File::open(&canonical) else {
+            return Resolved::Missing;
+        };
+        let Ok(meta) = file.metadata() else {
+            return Resolved::Missing;
+        };
+        Resolved::File { logical, file, meta }
+    }
+    let mut resolved = resolve(canonical_root.as_deref(), file);
     // **The fallback is what makes client-side routing work.** A reload on
     // /about asks for a file nobody wrote; the app's router is in the bundle
     // index.html loads. It applies only to paths that look like routes — a
     // missing .js answered with HTML is a syntax error three steps from its
     // cause, and a missing image should be a missing image.
-    if !file.is_file() && Path::new(path).extension().is_none() {
-        file = root.join("index.html");
+    if !matches!(&resolved, Resolved::File { meta, .. } if meta.is_file())
+        && !matches!(resolved, Resolved::Outside)
+        && Path::new(path).extension().is_none()
+    {
+        resolved = resolve(canonical_root.as_deref(), root.join("index.html"));
     }
-    let Ok(bytes) = std::fs::read(&file) else {
-        let _ = respond(
-            stream,
-            "404 Not Found",
-            "text/plain",
-            &format!("no {path} in {}", root.display()),
-        )
-        .await;
-        return;
-    };
-    let _ = respond_bytes(stream, content_type(&file), &bytes).await;
+    match resolved {
+        Resolved::Outside => {
+            let _ = respond(
+                stream,
+                "403 Forbidden",
+                "text/plain",
+                "outside the served directory",
+            )
+            .await;
+        }
+        Resolved::Missing => {
+            let _ = respond(
+                stream,
+                "404 Not Found",
+                "text/plain",
+                &format!("no {path} in {}", root.display()),
+            )
+            .await;
+        }
+        Resolved::File { meta, .. } if !meta.is_file() => {
+            let _ = respond(
+                stream,
+                "404 Not Found",
+                "text/plain",
+                &format!("no {path} in {}", root.display()),
+            )
+            .await;
+        }
+        Resolved::File { logical, file, meta } => {
+            serve_resolved(stream, head, head_only, file, &meta, &logical).await;
+        }
+    }
+}
+
+/// Serves a resolved file: validators, conditionals and ranges around the
+/// read. Split from routing above so the two stay readable apart — one finds
+/// and opens the file, the other answers for it.
+///
+/// The handle is taken by value and every byte below comes out of it, so the
+/// length, the validators and the body cannot straddle a rebuild.
+#[allow(clippy::too_many_arguments)]
+async fn serve_resolved(
+    stream: &mut TcpStream,
+    head: &str,
+    head_only: bool,
+    mut file: std::fs::File,
+    meta: &std::fs::Metadata,
+    logical: &Path,
+) {
+    let len = meta.len();
+    let mtime = meta.modified().ok();
+    let mtime_secs = mtime.map(|t| {
+        t.duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    });
+    let tag = crate::static_serve::etag(len, mtime.unwrap_or(UNIX_EPOCH));
+    // Typed by what was asked for, read from where it settled: an in-root
+    // `app.js` pointing at a `.bin` is JavaScript to the browser that
+    // asked for it.
+    let content_type = content_type(logical).to_string();
+    // `no-cache`: always revalidate, so a rebuild is never stale — but
+    // revalidations still answer `304` instead of resending.
+    let mut headers = vec![
+        ("ETag".to_string(), tag.clone()),
+        ("Accept-Ranges".to_string(), "bytes".to_string()),
+        ("Cache-Control".to_string(), "no-cache".to_string()),
+    ];
+    if let Some(t) = mtime {
+        headers.push((
+            "Last-Modified".to_string(),
+            crate::static_serve::last_modified(t),
+        ));
+    }
+    match crate::static_serve::decide(head, len, &tag, mtime_secs) {
+        crate::static_serve::Decision::NotModified => {
+            let _ = respond_static(stream, "304 Not Modified", &headers, None).await;
+        }
+        crate::static_serve::Decision::Unsatisfiable => {
+            headers.push((
+                "Content-Range".to_string(),
+                format!("bytes */{len}"),
+            ));
+            let _ = respond_static(
+                stream,
+                "416 Range Not Satisfiable",
+                &headers,
+                Some(b"".as_slice()),
+            )
+            .await;
+        }
+        crate::static_serve::Decision::Full => {
+            use std::io::Read;
+            headers.push(("Content-Type".to_string(), content_type));
+            headers.push(("Content-Length".to_string(), len.to_string()));
+            let body = (!head_only).then(|| {
+                let mut body = Vec::with_capacity(len.min(8 << 20) as usize);
+                file.read_to_end(&mut body).ok().map(|_| body)
+            }).flatten();
+            if !head_only && body.is_none() {
+                let _ = respond(stream, "500 Internal Server Error", "text/plain", "unreadable").await;
+                return;
+            }
+            let _ = respond_static(stream, "200 OK", &headers, body.as_deref()).await;
+        }
+        crate::static_serve::Decision::Single(span) => {
+            headers.push(("Content-Type".to_string(), content_type));
+            headers.push((
+                "Content-Range".to_string(),
+                format!("bytes {}-{}/{len}", span.start, span.end),
+            ));
+            headers.push(("Content-Length".to_string(), span.len().to_string()));
+            let body = (!head_only).then(|| read_span(&mut file, span).ok()).flatten();
+            if !head_only && body.is_none() {
+                let _ = respond(stream, "500 Internal Server Error", "text/plain", "unreadable").await;
+                return;
+            }
+            let _ =
+                respond_static(stream, "206 Partial Content", &headers, body.as_deref()).await;
+        }
+        crate::static_serve::Decision::Multi(spans) => {
+            let boundary = crate::static_serve::boundary();
+            let (parts, ok) = match head_only {
+                true => (Vec::new(), true),
+                false => {
+                    let mut parts = Vec::with_capacity(spans.len());
+                    let mut ok = true;
+                    for span in &spans {
+                        match read_span(&mut file, *span) {
+                            Ok(bytes) => parts.push((*span, bytes)),
+                            Err(_) => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    (parts, ok)
+                }
+            };
+            if !ok {
+                let _ = respond(stream, "500 Internal Server Error", "text/plain", "unreadable").await;
+                return;
+            }
+            // A `HEAD` answers the length its `GET` would send, computed
+            // arithmetically — no span is read for a body nobody receives.
+            let body = (!head_only).then(|| {
+                crate::static_serve::multipart_body(&boundary, &content_type, len, &parts)
+            });
+            let length = match &body {
+                Some(b) => b.len() as u64,
+                None => crate::static_serve::multipart_content_length(
+                    &boundary,
+                    &content_type,
+                    len,
+                    &spans,
+                ),
+            };
+            headers.push((
+                "Content-Type".to_string(),
+                format!("multipart/byteranges; boundary={boundary}"),
+            ));
+            headers.push(("Content-Length".to_string(), length.to_string()));
+            let _ =
+                respond_static(stream, "206 Partial Content", &headers, body.as_deref()).await;
+        }
+    }
+}
+
+/// Reads one byte span through the open handle, seeking straight to it.
+///
+/// What keeps a `<video>` seek cheap: the bytes around the span are never
+/// read, which a full read plus a slice would do on every seek of a large
+/// file. Sharing the handle with every other read is what keeps the spans
+/// of one response on one version of the file.
+fn read_span(file: &mut std::fs::File, span: crate::static_serve::Span) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(span.start))?;
+    let mut buf = vec![0u8; span.len() as usize];
+    file.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+/// A response with caller-chosen headers and an optional body.
+///
+/// [`respond`] stays for the fixed-shape text answers; this one is for file
+/// responses, whose headers depend on the decision and whose `HEAD` answers
+/// carry lengths without bodies. Nothing is added implicitly — callers name
+/// every header, including `Content-Length` when there is one.
+async fn respond_static(
+    stream: &mut TcpStream,
+    status: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+) -> std::io::Result<()> {
+    let mut head = format!("HTTP/1.1 {status}\r\n");
+    for (name, value) in headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    stream.write_all(head.as_bytes()).await?;
+    if let Some(body) = body {
+        stream.write_all(body).await?;
+    }
+    stream.flush().await
 }
 
 /// The request path as a relative path, or `None` if it tries to leave the

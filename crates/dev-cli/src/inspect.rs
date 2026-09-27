@@ -434,6 +434,11 @@ pub async fn read_head(stream: &mut TcpStream) -> Option<String> {
     String::from_utf8(head).ok()
 }
 
+/// The method from a request head's first line.
+pub fn request_method(head: &str) -> Option<&str> {
+    head.lines().next()?.split_whitespace().next()
+}
+
 /// The path from a request head's first line.
 pub fn request_path(head: &str) -> Option<String> {
     let mut parts = head.lines().next()?.split_whitespace();

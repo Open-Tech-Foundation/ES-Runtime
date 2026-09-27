@@ -77,6 +77,7 @@ mod resolve;
 mod screenshot;
 mod settings;
 mod staging;
+mod static_serve;
 mod start;
 mod style;
 mod tags;

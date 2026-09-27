@@ -18,7 +18,11 @@ esdev preview --config=deploy/esdev.json   # the site another project file descr
 ```
 
 It serves; it does not build. Missing paths that look like routes fall back to
-`index.html`, as a client-side router needs. A project whose output is a server
+`index.html`, as a client-side router needs. Responses carry `ETag` and
+`Last-Modified` validators (revalidations answer `304`) and honour `Range`
+requests — single, suffix, and multi-range `206`s, `416` when nothing
+satisfies — so seeking a `<video>` and caching an asset behave in preview the
+way they will in production. A project whose output is a server
 bundle has nothing to serve — run it the way production will, under `esrun`.
 
 For the rebuild-and-reload workflow, return to [The dev loop](/esdev/start).

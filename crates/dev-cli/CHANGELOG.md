@@ -24,6 +24,15 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **Full static semantics in the dev server** (DECISIONS D137). `esdev start`
+  (frontend-only projects) and `esdev preview` answer validators (`ETag`,
+  `Last-Modified`, `304`), single and multi-range requests (`206`,
+  `multipart/byteranges`, `416`), `HEAD`, and symlink containment — so a
+  preview revalidates and seeks the way production will. Development only;
+  production static traffic still belongs on a CDN or proxy.
+
 ## [0.11.0] - 2026-09-25
 
 ### Added
