@@ -306,11 +306,11 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
         /// Nothing to serve here.
         Missing,
     }
-    fn resolve(canonical_root: Option<&Path>, mut logical: PathBuf) -> Resolved {
+    fn resolve(canonical_root: Option<&Path>, logical: PathBuf) -> Resolved {
         let contained = |canonical: &Path| {
             canonical_root.is_none_or(|root| canonical.starts_with(root))
         };
-        let Ok(mut canonical) = std::fs::canonicalize(&logical) else {
+        let Ok(canonical) = std::fs::canonicalize(&logical) else {
             return Resolved::Missing;
         };
         if !contained(&canonical) {
@@ -324,16 +324,31 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
         let Ok(kind) = std::fs::metadata(&canonical) else {
             return Resolved::Missing;
         };
-        if kind.is_dir() {
-            logical = logical.join("index.html");
-            let Ok(settled) = std::fs::canonicalize(&logical) else {
+        // The kind decides before any handle exists. Opening a directory
+        // fails on Windows, and opening a FIFO blocks until a writer
+        // arrives — either one turns the request into a failure or a hung
+        // connection, so only regular files reach `File::open`. The index
+        // target gets its own kind check: a directory entry can name
+        // anything, FIFO included. Kind metadata answers routing only —
+        // length, mtime and bytes all come from the handle below, so the
+        // single-version guarantee holds.
+        let (canonical, logical) = if kind.is_dir() {
+            let index = logical.join("index.html");
+            let Ok(settled) = std::fs::canonicalize(&index) else {
                 return Resolved::Missing;
             };
             if !contained(&settled) {
                 return Resolved::Outside;
             }
-            canonical = settled;
-        }
+            match std::fs::metadata(&settled) {
+                Ok(kind) if kind.is_file() => (settled, index),
+                _ => return Resolved::Missing,
+            }
+        } else if kind.is_file() {
+            (canonical, logical)
+        } else {
+            return Resolved::Missing;
+        };
         let Ok(file) = std::fs::File::open(&canonical) else {
             return Resolved::Missing;
         };

@@ -11,6 +11,9 @@
 //! test reads which from the command's own stderr. A fixed port would collide
 //! with whatever else is running, and the symptom would not read as one.
 
+// A test reporting why it skipped is talking to whoever reads the run.
+#![allow(clippy::print_stderr)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -52,6 +55,17 @@ fn fixture(name: &str) -> PathBuf {
         // Points outside no matter how it is read: `/etc/hostname` may not
         // exist everywhere, so the test accepts either refusal below.
         std::os::unix::fs::symlink("/etc/hostname", dir.join("far-link.txt")).ok();
+        // A FIFO must never be opened: opening one blocks until a writer
+        // arrives, which would hang the connection. Skip where mkfifo is
+        // unavailable rather than failing the suite for the fixture.
+        if std::process::Command::new("mkfifo")
+            .arg(dir.join("fifo.bin"))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            std::fs::write(dir.join("fifo-present"), b"").expect("fifo marker");
+        }
     }
     dir
 }
@@ -401,6 +415,7 @@ fn routing_fallbacks_and_refusals_hold() {
 #[test]
 #[cfg(unix)]
 fn symlinks_cannot_leave_the_root() {
+
     const NAME: &str = "symlinks_cannot_leave_the_root";
     let dir = fixture(NAME);
     let (preview, port) = start(&dir);
@@ -422,4 +437,24 @@ fn symlinks_cannot_leave_the_root() {
     assert_eq!(status(&escape), "403", "{}", escape.status);
     let far = get(port, &req("GET", "/far-link.txt", &[]));
     assert!(status(&far) == "403" || status(&far) == "404", "{}", far.status);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_fifo_answers_instead_of_hanging() {
+    const NAME: &str = "a_fifo_answers_instead_of_hanging";
+    let dir = fixture(NAME);
+    if !dir.join("fifo-present").is_file() {
+        eprintln!("SKIP: mkfifo unavailable");
+        return;
+    }
+    let (preview, port) = start(&dir);
+    let _preview = preview;
+    // Would block in `read_to_end` for the full timeout if the server
+    // opened the FIFO: the open blocks until a writer arrives.
+    let fifo = get(port, &req("GET", "/fifo.bin", &[]));
+    assert_eq!(status(&fifo), "404", "{}", fifo.status);
+    // And the server is still answering afterwards.
+    let again = get(port, &req("GET", "/app.js", &[]));
+    assert_eq!(status(&again), "200");
 }
