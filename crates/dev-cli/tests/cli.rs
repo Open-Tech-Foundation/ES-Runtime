@@ -11399,6 +11399,56 @@ fn create_reports_and_retries_a_transient_registry_failure() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+#[test]
+fn react_compiler_runs_before_jsx_lowering_in_an_esdev_build() {
+    let parent = watch_dir("c_react_compiler");
+    std::fs::create_dir_all(parent.join("src")).expect("create source directory");
+    std::fs::create_dir_all(parent.join("node_modules/react"))
+        .expect("create React package directory");
+    write_in(
+        &parent,
+        "esdev.json",
+        r#"{"jsx":{"importSource":"react","reactCompiler":true},"build":{"targets":{"app":{"entry":"src/App.tsx","out":"dist/app.js","platform":"browser"}}}}"#,
+    );
+    write_in(
+        &parent,
+        "src/App.tsx",
+        "export function Greeting({ name }: { name: string }) { return <h1>Hello {name}</h1>; }",
+    );
+    write_in(
+        &parent,
+        "node_modules/react/package.json",
+        r#"{"name":"react","type":"module","exports":{"./compiler-runtime":"./compiler-runtime.js","./jsx-runtime":"./jsx-runtime.js"}}"#,
+    );
+    write_in(
+        &parent,
+        "node_modules/react/compiler-runtime.js",
+        "export function c(size) { const cache = new Array(size); cache.__OXC_REACT_COMPILER__ = true; return cache; }",
+    );
+    write_in(
+        &parent,
+        "node_modules/react/jsx-runtime.js",
+        "export const Fragment = Symbol.for('react.fragment'); export function jsx(type, props) { return { type, props }; } export const jsxs = jsx;",
+    );
+
+    let built = esdev_in(&parent)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(built.status.success(), "{}", stderr(&built));
+    let output = std::fs::read_to_string(parent.join("dist/app.js")).expect("read bundle");
+    assert!(
+        output.contains("__OXC_REACT_COMPILER__"),
+        "the React Compiler runtime was not included:\n{output}"
+    );
+    assert!(
+        !output.contains("<h1>"),
+        "JSX was not lowered after the React Compiler:\n{output}"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 /// It owns nothing it writes into, so a directory with anything in it is
 /// refused — and `--force` means "write among what is there", never over it.
 #[test]

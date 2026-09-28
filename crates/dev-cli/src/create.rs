@@ -2869,6 +2869,17 @@ mod tests {
         assert!(plugin.contains("\";;;;\" +"));
     }
 
+    #[test]
+    fn both_react_modes_opt_into_oxc_react_compiler() {
+        for mode in ["static", "fullstack"] {
+            let files = plain_written("react", Some(mode));
+            let config: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+            assert_eq!(config["jsx"]["importSource"], "react", "{mode}");
+            assert_eq!(config["jsx"]["reactCompiler"], true, "{mode}");
+        }
+    }
+
     /// Every template that builds a static site has a `preview` script through
     /// `esdev preview`. Servers are run, not served — `esdev preview` refuses
     /// them by design — so the production check there is `start`/`serve`, and

@@ -1,6 +1,7 @@
 {
   "jsx": {
-    "importSource": "react"
+    "importSource": "react",
+    "reactCompiler": true
   },
   "build": {
     "targets": {

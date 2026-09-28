@@ -26,6 +26,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **The React templates opt into OXC's experimental React Compiler.**
+  `jsx.reactCompiler` runs the React 19 compiler before JSX lowering in browser,
+  server, development, and release builds (using OXC's SSR mode for server
+  targets); it remains opt-in for other projects.
 - **`esdev create` resolves every template dependency from npm at scaffold
   time.** It writes the current `latest` dist-tag as an exact version,
   independent of the selected package manager, and reports resolved versions.

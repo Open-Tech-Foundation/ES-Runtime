@@ -931,33 +931,33 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             options.output.clone(),
             Some(crate::bundler::printed()),
         )?;
+        let mut own_plugins: Vec<std::sync::Arc<dyn crate::contract::Pass>> = Vec::new();
+        if config.jsx.react_compiler {
+            own_plugins.push(std::sync::Arc::new(
+                crate::react_compiler::ReactCompiler::new(
+                    !config.lib && config.platform == crate::config::Platform::Server,
+                    config.jsx.clone(),
+                ),
+            ));
+        }
+        own_plugins.extend([
+            std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                &cwd,
+                crate::cssmodules::Collected::new(),
+                config.minify,
+            )) as std::sync::Arc<dyn crate::contract::Pass>,
+            std::sync::Arc::new(crate::jsx::JsxPass::new(config.jsx.clone())),
+            std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
+            if config.lib {
+                std::sync::Arc::new(crate::assets::Assets::refusing())
+                    as std::sync::Arc<dyn crate::contract::Pass>
+            } else {
+                std::sync::Arc::new(crate::assets::Assets::new(assets.clone()))
+            },
+        ]);
         let mut bundler = rolldown::BundlerBuilder::default()
             .with_options(translated)
-            .with_plugins(installed(
-                vec![
-                    std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                        &cwd,
-                        crate::cssmodules::Collected::new(),
-                        config.minify,
-                    )),
-                    // Before the bundler's own JSX pass can default to
-                    // somebody's framework: a module that is still JSX when
-                    // nothing has said how JSX compiles is refused by name.
-                    std::sync::Arc::new(crate::jsx::JsxPass::new(config.jsx.clone())),
-                    // `new URL("./worker.js", import.meta.url)` → a chunk of its
-                    // own, so the built program finds the module it names (D134).
-                    std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
-                    if config.lib {
-                        // A library does not decide where a file is served
-                        // from — the build that consumes it does.
-                        std::sync::Arc::new(crate::assets::Assets::refusing())
-                            as std::sync::Arc<dyn crate::contract::Pass>
-                    } else {
-                        std::sync::Arc::new(crate::assets::Assets::new(assets.clone()))
-                    },
-                ],
-                &config.plugins,
-            ))
+            .with_plugins(installed(own_plugins, &config.plugins))
             .build()
             .map_err(reported!())?;
         // Which pass failed, when there is more than one. The two write the
@@ -1246,7 +1246,14 @@ pub async fn bundle_browser_entries(
                 options.output.clone(),
                 Some(crate::bundler::printed()),
             )?)
-            .with_plugins(browser_plugins(root, &styles, &assets, minify, plugins))
+            .with_plugins(browser_plugins(
+                root,
+                &styles,
+                &assets,
+                minify,
+                &options.jsx_settings,
+                plugins,
+            ))
             .build()
             .map_err(reported!())?;
         let output = bundler.write().await.map_err(reported!())?;
@@ -1285,20 +1292,25 @@ fn browser_plugins(
     styles: &crate::cssmodules::Collected,
     assets: &crate::assets::Emitted,
     minify: bool,
+    jsx_settings: &crate::transform::JsxSettings,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
-    installed(
-        vec![
-            std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                root,
-                styles.clone(),
-                minify,
-            )),
-            std::sync::Arc::new(crate::assets::Assets::new(assets.clone())),
-            std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
-        ],
-        configured,
-    )
+    let mut own: Vec<std::sync::Arc<dyn crate::contract::Pass>> = Vec::new();
+    if jsx_settings.react_compiler {
+        own.push(std::sync::Arc::new(
+            crate::react_compiler::ReactCompiler::new(false, jsx_settings.clone()),
+        ));
+    }
+    own.extend([
+        std::sync::Arc::new(crate::cssmodules::CssModules::new(
+            root,
+            styles.clone(),
+            minify,
+        )) as std::sync::Arc<dyn crate::contract::Pass>,
+        std::sync::Arc::new(crate::assets::Assets::new(assets.clone())),
+        std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
+    ]);
+    installed(own, configured)
 }
 
 /// This toolchain's own pass, then the project's, through one adapter each.
@@ -1554,7 +1566,14 @@ async fn build_warm(
                 options.output.clone(),
                 Some(crate::bundler::printed()),
             )?)
-            .with_plugins(browser_plugins(root, &styles, &assets, minify, plugins))
+            .with_plugins(browser_plugins(
+                root,
+                &styles,
+                &assets,
+                minify,
+                &options.jsx_settings,
+                plugins,
+            ))
             .build()
             .map_err(reported!())?;
         *held = Some(Warm {

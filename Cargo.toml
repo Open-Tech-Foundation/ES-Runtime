@@ -300,6 +300,13 @@ oxc = { version = "0.151.0", features = [
     # so this re-exports what is compiled either way.
     "ast_visit",
 ] }
+# The experimental OXC React Compiler still targets the OXC 0.143 AST used by
+# Rolldown. Keep this alias separate from esdev's newer source transformer.
+oxc_143 = { package = "oxc", version = "=0.143.0", features = [
+    "semantic",
+    "codegen",
+] }
+oxc_react_compiler = "=0.143.0"
 # The bundler behind `esdev build` (DECISIONS D59), and confined to `dev-cli`
 # for the same reason `oxc` is: bundling happens on the developer's machine, and
 # `esrun` runs the artifact rather than producing it.

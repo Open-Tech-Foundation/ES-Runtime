@@ -76,6 +76,10 @@ pub struct JsxSettings {
     /// `__source` and `__self` on every element, which a dev-only renderer
     /// reads to say where a component came from.
     pub development: bool,
+    /// Run OXC's experimental React Compiler before JSX lowering. React's
+    /// compiler runtime is selected for React 19.
+    #[serde(default)]
+    pub react_compiler: bool,
 }
 
 impl JsxSettings {

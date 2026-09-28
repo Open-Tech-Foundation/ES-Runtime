@@ -446,7 +446,13 @@ const COVERAGE_KEYS: &[&str] = &[
 const THRESHOLD_KEYS: &[&str] = &["lines", "functions", "branches", "statements"];
 
 /// The keys `jsx` may carry.
-const JSX_KEYS: &[&str] = &["importSource", "factory", "fragment", "development"];
+const JSX_KEYS: &[&str] = &[
+    "importSource",
+    "factory",
+    "fragment",
+    "development",
+    "reactCompiler",
+];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
 ///
@@ -734,6 +740,12 @@ fn read_jsx(value: Option<&Value>, file: &str) -> Result<crate::transform::JsxSe
             .as_bool()
             .ok_or_else(|| format!("{file}: `jsx.development` must be true or false."))?,
     };
+    let react_compiler = match map.get("reactCompiler") {
+        None => false,
+        Some(found) => found
+            .as_bool()
+            .ok_or_else(|| format!("{file}: `jsx.reactCompiler` must be true or false."))?,
+    };
 
     let function = match (import_source, factory) {
         (Some(source), None) => {
@@ -768,9 +780,17 @@ fn read_jsx(value: Option<&Value>, file: &str) -> Result<crate::transform::JsxSe
             ));
         }
     };
+    if react_compiler
+        && !matches!(function, Some(crate::transform::JsxFunction::Imported { ref source }) if source == "react")
+    {
+        return Err(format!(
+            "{file}: `jsx.reactCompiler` requires `jsx.importSource` to be `react`."
+        ));
+    }
     Ok(crate::transform::JsxSettings {
         function,
         development,
+        react_compiler,
     })
 }
 
@@ -2604,6 +2624,14 @@ mod tests {
                 source: "preact".to_string(),
             })
         );
+
+        let react = read(r#"{ "jsx": { "importSource": "react", "reactCompiler": true } }"#)
+            .expect("read experimental React compiler setting");
+        assert!(react.jsx.react_compiler);
+        let incompatible =
+            read(r#"{ "jsx": { "importSource": "preact", "reactCompiler": true } }"#)
+                .expect_err("React Compiler needs React runtime");
+        assert!(incompatible.contains("requires `jsx.importSource` to be `react`"));
 
         // Nothing said is nothing assumed.
         assert_eq!(read(r#"{ "test": {} }"#).expect("read").jsx.function, None);

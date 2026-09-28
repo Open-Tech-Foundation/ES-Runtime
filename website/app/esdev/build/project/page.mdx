@@ -122,9 +122,23 @@ Either the compiler imports the function, or the module already has one:
 | `factory` | A function already in scope to call for each element — `"h"`, `"React.createElement"`. The module imports it itself. |
 | `fragment` | What `<>…</>` calls, alongside `factory` |
 | `development` | `true` — add `__source` and `__self` to every element |
+| `reactCompiler` | `true` — opt into OXC's experimental React Compiler (requires `importSource: "react"`, targets React 19) |
 
 The two are alternatives, so naming both is refused. So is `fragment` without
 `factory`, and so is an empty `jsx` section.
+
+React projects can opt into OXC's experimental React Compiler:
+
+```json
+{ "jsx": { "importSource": "react", "reactCompiler": true } }
+```
+
+It runs before JSX lowering in both development and release builds. Browser
+targets use client output, while server targets use OXC's SSR output mode. The
+React templates enable it by default; other projects leave it off unless they
+opt in. The compiler is included in esdev, so a project does not need a separate
+compiler package. Use React 19 in the project. Because the compiler is
+experimental, its behaviour may change with future esdev releases.
 
 A file overrides the project with the pragma it probably already carries, which
 is what makes a file borrowed from another project work unchanged — and what

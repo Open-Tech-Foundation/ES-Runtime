@@ -1334,6 +1334,7 @@ mod tests {
                         fragment: None,
                     }),
                     development: false,
+                    react_compiler: false,
                 },
                 alias: vec![("@".to_string(), "/p/src".to_string())],
                 plugins: vec![crate::config::PluginSpec {

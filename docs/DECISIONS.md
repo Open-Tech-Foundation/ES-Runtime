@@ -2906,3 +2906,13 @@ The day before, the same reasoning had been taken one step further and an out-of
 **Rejected:** leaving `latest` in generated manifests (the manifest keeps moving); pinning versions in the embedded templates (they age until the next esdev release); asking the selected package manager to resolve versions (manager-independent scaffolding and `--no-install` would then need special handling).
 
 **Consequences:** `create` needs npm registry access even with `--no-install`; embedded template files still need no remote fetch. This supersedes D64's fully offline scaffolding consequence and D140's source-time version pins. When the registry is unavailable, the three retries are visible and creation fails without a partial project.
+
+### D139 — Use OXC's experimental React Compiler in React templates · *Proposed (2026-09-29)*
+
+**Context:** React templates already use Rolldown's OXC JSX transform, but it does not perform React Compiler memoization. The official OXC transform package is a Node native addon, while esdev project plugins execute in its ESM-only V8 isolate, which cannot load that addon.
+
+**Decision:** Add an esdev `jsx.reactCompiler` opt-in backed by OXC's published Rust compiler crate. It runs as a pre-transform on React source modules, before configured plugins and JSX lowering, and targets React 19. Browser targets use client output and server targets use SSR output. The React static and full-stack templates enable it. Files in `node_modules` are excluded; compiler output keeps source maps and then flows through the normal TypeScript, JSX and Fast Refresh transforms.
+
+**Rejected:** importing `oxc-transform-react` from a template plugin (it requires NAPI and Node built-ins); enabling compilation globally for every JSX framework (the compiler targets React and should not affect Preact or other runtimes).
+
+**Consequences:** esdev builds include OXC's experimental compiler and its current limitations; projects opt in explicitly with `jsx.reactCompiler: true`. This adds a native Rust compiler dependency to esdev, not to generated projects.

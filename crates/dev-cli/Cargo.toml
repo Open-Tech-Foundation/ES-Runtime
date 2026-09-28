@@ -51,6 +51,10 @@ futures-util.workspace = true
 # TypeScript/JSX type-stripping. Lives here and nowhere else: `esrun` runs
 # JavaScript, and what turns a `.ts` into that runs on the developer's machine.
 oxc.workspace = true
+# React templates opt into OXC's experimental React Compiler before JSX
+# lowering; its crate currently operates on the OXC generation Rolldown uses.
+oxc_143.workspace = true
+oxc_react_compiler.workspace = true
 # `esdev build`. Same confinement as oxc: the production binary runs bundles, it
 # does not make them.
 rolldown.workspace = true
