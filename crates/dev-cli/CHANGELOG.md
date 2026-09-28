@@ -29,6 +29,12 @@ is the point, since none of the three has any business in a deployment.
 - **Renamed `esdev check` to `esdev typecheck`.** The old name no longer works;
   run `esdev typecheck [args...]` to run `tsc --noEmit` through the project's
   package manager.
+- **The dev loop narrates itself.** `esdev start` prints a banner with ready
+  timing and the URL once it is listening and built, then one line per save
+  (`hot-swapped N modules`, `reloaded`, `restarted server`) with how long it
+  took — instead of served-directory and watch-path plumbing, a raw `ws://`
+  line, and silence between saves. Build reports moved from stdout to
+  stderr, and the HMR failure line speaks words rather than a debug dump.
 - **The site `esdev/create` page follows the scaffolder.** It documents the
   package-manager question and `--package-manager`, the `preview` script in
   static templates, and the `typecheck` setup TypeScript mode scaffolds.

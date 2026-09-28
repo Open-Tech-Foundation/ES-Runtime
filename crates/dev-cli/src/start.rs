@@ -67,7 +67,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::build::{BuildRequest, Dev, ProjectBuild};
 use crate::config::Output;
-use crate::devserver::{DevServer, HMR_PATH, Update};
+use crate::devserver::{DevServer, Update};
 use crate::settings::Settings;
 
 /// The port the endpoint binds when the config does not say.
@@ -248,6 +248,35 @@ fn any_free() -> std::io::Result<u16> {
         .map(|addr| addr.port())
 }
 
+/// Ready timing in human units: whole milliseconds under a second, one
+/// decimal over it. Pure, so the banner's shape tests without a listener.
+fn format_duration(elapsed: std::time::Duration) -> String {
+    if elapsed.as_secs() == 0 {
+        format!("{}ms", elapsed.as_millis())
+    } else {
+        format!("{:.1}s", elapsed.as_secs_f64())
+    }
+}
+
+/// One line of loop narration, from what was sent to the page and whether
+/// the server is a new process. Pure, so the vocabulary tests without one.
+fn cycle_summary(update: &Update, replaced_the_server: bool) -> String {
+    let summary = match update {
+        Update::Patch { changed_ids, .. } => {
+            let n = changed_ids.len();
+            format!("hot-swapped {n} module{}", if n == 1 { "" } else { "s" })
+        }
+        Update::Css => "swapped stylesheet".to_string(),
+        Update::Reload if replaced_the_server => "restarted server".to_string(),
+        Update::Reload => "reloaded".to_string(),
+    };
+    match (update, replaced_the_server) {
+        (Update::Reload, _) => summary,
+        (_, true) => format!("restarted server, {summary}"),
+        (_, false) => summary,
+    }
+}
+
 /// What `esdev start` was asked to do.
 pub struct StartConfig {
     /// The project, and everything it builds, with the flags applied.
@@ -262,6 +291,7 @@ pub struct StartConfig {
 
 /// Runs the dev loop until the user interrupts it.
 pub async fn start(config: StartConfig) -> Result<(), String> {
+    let started = std::time::Instant::now();
     let project = Arc::new(config.project);
     let serve = serve_dir(&project)?;
 
@@ -350,18 +380,6 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     if !opens_its_own && project.start.port.is_none() && port != DEFAULT_PORT {
         eprintln!("{tag} {DEFAULT_PORT} was taken; use --port to pin one");
     }
-    match &serve {
-        Some(dir) => eprintln!(
-            "{tag} serving {} on {}",
-            dir.strip_prefix(&root).unwrap_or(dir).display(),
-            paint.cyan(format_args!("http://127.0.0.1:{port}"))
-        ),
-        None => eprintln!(
-            "{tag} update channel on {} — pages reconnect on their own",
-            paint.cyan(format_args!("ws://127.0.0.1:{port}{HMR_PATH}"))
-        ),
-    }
-    eprintln!("{tag} watching {}", paint.dim(root.display()));
 
     let run = project.start.run.clone();
     let watched = project.start.watch.clone();
@@ -382,19 +400,43 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     if let Some(app) = &app {
         // The reason before the result, so the line a developer's eye lands on
         // is the URL rather than an aside about a port they are leaving behind.
+        // The URL itself prints with the banner below, once the first build
+        // has run — one line for it, not two.
         if let Some(asked) = app.moved_from {
             eprintln!("{tag} {asked} was taken; use --port to pin one");
         }
-        eprintln!(
-            "{tag} the app is on {}",
-            paint.cyan(format_args!("http://localhost:{}", app.port))
-        );
     }
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 
     // The first build is allowed to fail like any other: the loop below is what
     // a developer fixes it in.
     let built = rebuild(&project, &watched, port, config.hot).await;
+
+    // The banner goes last: ready means listening *and* built, with the first
+    // build's own lines above it. One block with no per-line tags — the
+    // process is the brand — and the URL as an affordance: it names what to
+    // open, never plumbing (no served directory, no watch path, no ws://
+    // line). A project with a server of its own names the app's URL instead
+    // of this endpoint's; without one known, the endpoint's is the only URL
+    // there is. The app sentence stays recognizable: the test helper reads it.
+    eprintln!(
+        "esdev {} — ready in {}",
+        env!("CARGO_PKG_VERSION"),
+        format_duration(started.elapsed())
+    );
+    eprintln!();
+    match &app {
+        Some(app) => eprintln!(
+            "  {}  the app is on {}",
+            paint.dim("→"),
+            paint.cyan(format_args!("http://localhost:{}/", app.port))
+        ),
+        None => eprintln!(
+            "  {}  Local:   {}",
+            paint.dim("→"),
+            paint.cyan(format_args!("http://localhost:{port}/"))
+        ),
+    }
     let mut child = match (&output, built) {
         (Some(output), true) => spawn(
             &exe,
@@ -455,6 +497,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // The full build still happens, and has to: what is on disk is what a
         // hard refresh and every page opened after this one will load, and a
         // patch updates neither.
+        let cycle = std::time::Instant::now();
         let hot = if config.hot && !changed.is_empty() {
             crate::build::hot_update(&changed).await
         } else {
@@ -540,6 +583,15 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             // graph to compute one against yet.
             None => update_for(&changed),
         };
+        // One line per pass, like the banner: what the save did and how long
+        // it took. Untagged, like the banner — the loop's older event lines
+        // keep their `esdev:` tags; these two lines are the new vocabulary.
+        eprintln!(
+            "{} {} in {}",
+            paint.green("✓"),
+            cycle_summary(&update, replaced_the_server),
+            format_duration(cycle.elapsed())
+        );
         let _ = reload.send(update);
     }
 }
@@ -946,6 +998,52 @@ mod tests {
 
     fn paths(list: &[&str]) -> Vec<PathBuf> {
         list.iter().map(PathBuf::from).collect()
+    }
+
+    /// Ready timing reads in human units: milliseconds under a second, one
+    /// decimal over it.
+    #[test]
+    fn ready_timing_reads_in_human_units() {
+        assert_eq!(format_duration(std::time::Duration::from_millis(0)), "0ms");
+        assert_eq!(
+            format_duration(std::time::Duration::from_millis(182)),
+            "182ms"
+        );
+        assert_eq!(
+            format_duration(std::time::Duration::from_millis(999)),
+            "999ms"
+        );
+        assert_eq!(
+            format_duration(std::time::Duration::from_millis(1000)),
+            "1.0s"
+        );
+        assert_eq!(
+            format_duration(std::time::Duration::from_millis(2340)),
+            "2.3s"
+        );
+    }
+
+    /// One loop pass reads as one line: what was sent, and whether the
+    /// server is new — a restart never passes as a plain reload.
+    #[test]
+    fn a_loop_pass_reads_as_one_line() {
+        let patch = |n: usize| Update::Patch {
+            url: "/_assets/1.js".to_string(),
+            changed_ids: (0..n).map(|i| format!("m{i}")).collect(),
+        };
+        assert_eq!(cycle_summary(&patch(3), false), "hot-swapped 3 modules");
+        assert_eq!(cycle_summary(&patch(1), false), "hot-swapped 1 module");
+        assert_eq!(
+            cycle_summary(&patch(2), true),
+            "restarted server, hot-swapped 2 modules"
+        );
+        assert_eq!(cycle_summary(&Update::Css, false), "swapped stylesheet");
+        assert_eq!(
+            cycle_summary(&Update::Css, true),
+            "restarted server, swapped stylesheet"
+        );
+        assert_eq!(cycle_summary(&Update::Reload, false), "reloaded");
+        assert_eq!(cycle_summary(&Update::Reload, true), "restarted server");
     }
 
     /// A stylesheet is the one thing that can be replaced in a page that is

@@ -135,8 +135,8 @@ fn start(dir: &Path) -> (Preview, u16) {
     let mut lines = BufReader::new(stderr).lines();
     let mut port = None;
     for line in lines.by_ref().map_while(Result::ok) {
-        if let Some(at) = line.find("http://127.0.0.1:") {
-            let digits: String = line[at + "http://127.0.0.1:".len()..]
+        if let Some(at) = line.find("http://localhost:") {
+            let digits: String = line[at + "http://localhost:".len()..]
                 .chars()
                 .take_while(|c| c.is_ascii_digit())
                 .collect();

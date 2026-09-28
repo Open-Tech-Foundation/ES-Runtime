@@ -90,7 +90,9 @@ impl Loop {
             };
             if let Some(at) = line.find("the app is on http://localhost:") {
                 port = line[at + "the app is on http://localhost:".len()..]
-                    .trim()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
                     .parse()
                     .ok();
                 break;
@@ -164,4 +166,62 @@ fn a_named_dev_directory_is_used_instead() {
         !dir.join(".dev").exists() && !dir.join("dist").exists(),
         "a build landed outside the named dev directory"
     );
+}
+
+/// The loop narrates itself: a banner with ready timing and the app URL on
+/// startup, then one line per save. No plumbing (no `ws://` line, no watch
+/// path, no `127.0.0.1`) and the port still reads from the app sentence.
+#[test]
+fn the_loop_narrates_startup_and_every_save() {
+    let dir = project("narrates", &server_project(None));
+    let mut dev = Loop::start(dir.clone());
+    let stderr = dev.child.stderr.take().expect("stderr");
+    let mut lines = BufReader::new(stderr).lines();
+    let deadline = Instant::now() + Duration::from_secs(120);
+
+    let mut saw_ready = false;
+    let mut port = None;
+    while Instant::now() < deadline {
+        let Ok(Some(line)) = lines.next().transpose() else {
+            break;
+        };
+        assert!(!line.contains("ws://"), "plumbing in the banner: {line}");
+        assert!(
+            !line.contains("watching "),
+            "plumbing in the banner: {line}"
+        );
+        assert!(!line.contains("127.0.0.1"), "use localhost: {line}");
+        if line.contains("ready in") {
+            saw_ready = true;
+        }
+        if let Some(at) = line.find("the app is on http://localhost:") {
+            port = line[at + "the app is on http://localhost:".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok();
+        }
+        if saw_ready && port.is_some() {
+            break;
+        }
+    }
+    assert!(saw_ready, "no ready banner");
+    let port: u16 = port.expect("the loop never named the app port");
+
+    // A save restarts the server and says so, once.
+    std::fs::write(dir.join("src/server.ts"), SERVER.replace("ok", "ok2"))
+        .expect("touch the server");
+    let mut restarts = 0;
+    while Instant::now() < deadline {
+        let Ok(Some(line)) = lines.next().transpose() else {
+            break;
+        };
+        if line.contains("restarted server") {
+            restarts += 1;
+            break;
+        }
+    }
+    assert_eq!(restarts, 1, "no cycle line for the save");
+    assert!(get(port).contains("ok"), "the restarted server answers");
 }

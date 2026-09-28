@@ -10763,13 +10763,13 @@ fn start_in_logging(dir: &Path, args: &[&str]) -> (Supervisor, PathBuf) {
     )
 }
 
-/// Waits for the `http://127.0.0.1:<port>` esdev printed, and returns the port.
+/// Waits for the `http://localhost:<port>` esdev printed, and returns the port.
 fn announced_port(log: &Path) -> u16 {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline {
         let text = std::fs::read_to_string(log).unwrap_or_default();
-        if let Some(at) = text.find("http://127.0.0.1:") {
-            let rest = &text[at + "http://127.0.0.1:".len()..];
+        if let Some(at) = text.find("http://localhost:") {
+            let rest = &text[at + "http://localhost:".len()..];
             let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
             if !digits.is_empty()
                 && rest.len() > digits.len()

@@ -100,13 +100,21 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
     });
 
     let paint = crate::style::Palette::stderr();
+    // The URL as an affordance, localhost like the dev loop: the bind stays
+    // loopback. The directory relative to here when it is under it.
     eprintln!(
         "{} {} {}",
         paint.green("preview"),
         paint.dim("→"),
-        paint.cyan(format!("http://127.0.0.1:{port}")),
+        paint.cyan(format!("http://localhost:{port}/")),
     );
-    eprintln!("{}", paint.dim(format!("  serving {}", dir.display())));
+    eprintln!(
+        "{}",
+        paint.dim(format_args!(
+            "  serving {}",
+            dir.strip_prefix(&root).unwrap_or(&dir).display()
+        ))
+    );
 
     tokio::select! {
         () = crate::devserver::serve(listener, server) => Ok(()),

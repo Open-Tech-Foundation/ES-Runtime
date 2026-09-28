@@ -1114,8 +1114,8 @@ fn warn_about_runtime_imports(
     if seen.is_empty() {
         return;
     }
-    let paint = crate::style::Palette::stdout();
-    println!(
+    let paint = crate::style::Palette::stderr();
+    eprintln!(
         "{} the CommonJS output imports {}, which only esrun serves — a\n     \
          require() of it from Node cannot resolve",
         paint.dim("note"),
@@ -1493,9 +1493,10 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
         // Reported rather than swallowed. A patch that cannot be computed is a
         // page that reloads, which looks exactly like a dev loop with no hot
         // updates at all — so the one thing that must not happen is this failing
-        // quietly.
+        // quietly. Human words (this is anyhow, so Display is the message, not
+        // the backtrace); the loop's cycle line states the reload itself.
         Err(errors) => {
-            eprintln!("esdev: no hot update ({errors:?})");
+            eprintln!("esdev: no hot update — {errors}");
             return None;
         }
     };
@@ -1521,13 +1522,10 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
                 changed_ids: patch.changed_ids,
             })
         }
-        // Something no patch can express. Its reason is rolldown's own words,
-        // and it is the sort of thing a developer wants to see rather than a
-        // page that reloads for no stated cause.
-        rolldown_common::HmrUpdate::FullReload { reason } => {
-            eprintln!("esdev: reloading — {reason}");
-            None
-        }
+        // Something no patch can express. The loop's cycle line states the
+        // reload this causes, so this stays quiet: a second line saying it
+        // again would be the loop narrating twice.
+        rolldown_common::HmrUpdate::FullReload { reason: _ } => None,
         rolldown_common::HmrUpdate::Noop => None,
     }
 }
@@ -1649,6 +1647,19 @@ fn copy_tree(from: &Path, into: &Path) -> Result<usize, String> {
         }
     }
     Ok(copied)
+}
+
+/// A build report line: stderr in the dev loop, where stdout stays the
+/// program's — stdout for a one-shot build, where the report is the
+/// command's result (Vite and Parcel print theirs there too).
+macro_rules! report {
+    ($dev_loop:expr, $($arg:tt)*) => {
+        if $dev_loop {
+            eprintln!($($arg)*)
+        } else {
+            println!($($arg)*)
+        }
+    };
 }
 
 /// What `esdev build` was asked to build: one entry named on the command line,
@@ -1893,8 +1904,14 @@ async fn build_targets(
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
             copy_assets(&target.assets, &settings.source.root, &out_dir)
                 .map_err(|e| format!("target \"{}\": {e}", target.name))?;
-            let paint = crate::style::Palette::stdout();
-            println!(
+            let dev_loop = project.dev.is_some();
+            let paint = if dev_loop {
+                crate::style::Palette::stderr()
+            } else {
+                crate::style::Palette::stdout()
+            };
+            report!(
+                dev_loop,
                 "{} {} {}",
                 paint.green("built"),
                 paint.dim("→"),
@@ -1953,12 +1970,18 @@ async fn build_targets(
         })
         .await
         .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
-        let paint = crate::style::Palette::stdout();
+        let dev_loop = project.dev.is_some();
+        let paint = if dev_loop {
+            crate::style::Palette::stderr()
+        } else {
+            crate::style::Palette::stdout()
+        };
         // The same word the flags produce for the same build: a library is
         // *built*, an application is *bundled*, and a project that says which it
         // is should not read differently from the command line that says it.
         let verb = if target.lib { "built" } else { "bundled" };
-        println!(
+        report!(
+            dev_loop,
             "{} {} {}",
             paint.green(verb),
             paint.dim("→"),
@@ -1975,8 +1998,14 @@ async fn build_targets(
         run_output(&settings.source.root, &output)
             .await
             .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
-        let paint = crate::style::Palette::stdout();
-        println!(
+        let dev_loop = project.dev.is_some();
+        let paint = if dev_loop {
+            crate::style::Palette::stderr()
+        } else {
+            crate::style::Palette::stdout()
+        };
+        report!(
+            dev_loop,
             "{} {} {}",
             paint.green("ran"),
             paint.dim("→"),
