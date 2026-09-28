@@ -10,7 +10,7 @@ import { Callout } from "@opentf/web-docs";
 ```sh
 esdev create my-app
 cd my-app
-npm install        # or bun, pnpm, yarn
+npm install        # the manager chosen at scaffolding — npm unless said otherwise
 npm run dev
 ```
 
@@ -79,13 +79,15 @@ esdev create my-app --template=docs --no-blog
 
 TypeScript is a conversion, not a second template: sources rename (`.jsx` to
 `.tsx`) and a `tsconfig.json` plus the compiler-macro declarations arrive
-beside them. The library's test runs under `esdev test` in either language.
+beside them — with the `typescript` dependency and a `typecheck` script, so
+the config has something to act on it. The library's test runs under
+`esdev test` in either language.
 
 ## Every template is a hello world
 
-Each one writes the smallest project that runs, builds and tests: a
-`hello(name)` function, a test for it, and an entry that shows the greeting. For
-`api`, the server answers `{"message":"Hello, world!"}`.
+Each esdev-built template writes the smallest project that runs, builds and
+tests: a `hello(name)` function, a test for it, and an entry that shows the
+greeting. For `api`, the server answers `{"message":"Hello, world!"}`.
 
 ```text
 src/hello.ts        hello(name) → "Hello, world!"
@@ -93,9 +95,12 @@ src/hello.test.ts   its test, with runtime:test
 src/main.ts         shows it (App.tsx and entry.client.tsx for react)
 ```
 
-The scripts are all there from the start: `dev`, `build`, `test` and
-`typecheck`, plus `test:dom` where a template has a DOM test. Nothing chooses a
-license for you; add one when you publish.
+The OTF starters are pages rather than packages: one page — the file to edit
+named in it — and the scripts to run it. Every template's scripts are there
+from the start: `dev` and `build` everywhere, `test` and `typecheck` where the
+project runs under `esdev`, `test:dom` where it has a DOM test, and `preview`
+where it builds a static site. Nothing chooses a license for you; add one when
+you publish.
 
 ## Modes
 
@@ -119,10 +124,10 @@ Fast Refresh during `npm run dev`.
 ## It asks, or it writes files and stops
 
 On a terminal it asks which template, which mode if that template has more than
-one, the OTF axes where the template takes them, and whether to install — as
-a menu you arrow through. The OTF starters choose behind one group entry, in a
-second menu; neither menu preselects — the template is the one answer worth
-choosing explicitly:
+one, the OTF axes where the template takes them, which package manager the
+project uses, and whether to install — as a menu you arrow through. The OTF
+starters choose behind one group entry, in a second menu; neither menu
+preselects — the template is the one answer worth choosing explicitly:
 
 ```text
 ? Which Template?
@@ -165,14 +170,18 @@ defaults and says nothing. A prompt in a script is a script that hangs.
 ```sh
 esdev create my-app --template=react --mode=fullstack
 esdev create my-app --template=api --install=bun
+esdev create my-app --template=spa --package-manager=pnpm --no-install
 esdev create my-app --yes            # defaults, no questions
 esdev create my-app --no-install
 ```
 
-Only package managers this machine actually has are offered. Unattended it
-installs nothing: there is no lockfile yet to say which one this project uses,
-and guessing wrong leaves the wrong one behind — which is a reason not to
-guess, not a reason not to ask.
+The manager question offers all four — it declares what the project uses, and
+the scaffolded docs name it. The install question only offers what this
+machine actually has, starting on the chosen one when it is here; an explicit
+`--install=<manager>` answers both at once. Unattended it installs nothing:
+there is no lockfile yet to say which one this project uses, and guessing
+wrong leaves the wrong one behind — which is a reason not to guess, not a
+reason not to ask.
 
 It still does no `git init`.
 
@@ -218,6 +227,7 @@ other's flags by name. Nothing is ever overwritten.
 | `--language=<name>` | OTF templates: `js` (default) or `ts` |
 | `--styling=<name>` | `css` or `tailwind`, for `react`, `vanilla`, `micro-ui`, `spa` and `fullstack` |
 | `--blog`, `--no-blog` | `docs`: keep the demo blog (default) or not |
+| `--package-manager=<name>` | The project's manager: `npm`, `bun`, `pnpm`, `yarn` — the docs name it |
 | `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
 | `--no-install` | Write the files and stop |
 | `-y`, `--yes` | Take every default; never ask |

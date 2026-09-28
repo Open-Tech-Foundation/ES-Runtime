@@ -29,6 +29,9 @@ is the point, since none of the three has any business in a deployment.
 - **Renamed `esdev check` to `esdev typecheck`.** The old name no longer works;
   run `esdev typecheck [args...]` to run `tsc --noEmit` through the project's
   package manager.
+- **The site `esdev/create` page follows the scaffolder.** It documents the
+  package-manager question and `--package-manager`, the `preview` script in
+  static templates, and the `typecheck` setup TypeScript mode scaffolds.
 
 ### Added
 
