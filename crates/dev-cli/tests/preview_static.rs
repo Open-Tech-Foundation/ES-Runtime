@@ -673,3 +673,54 @@ fn large_bodies_stream_byte_exact() {
     assert_eq!(status(&span), "206");
     assert_eq!(span.body, big[60000..70001]);
 }
+
+/// A scaffolded project previews what it built: `create` writes it, `build`
+/// writes `dist/`, and the release output serves with an entry document.
+///
+/// Vanilla, because it needs no registry: every other static template pulls
+/// a framework, and a test that downloads the internet is a test that flakes
+/// on it. stdin is closed throughout, so the scaffold takes its defaults.
+#[test]
+fn a_scaffolded_project_previews_what_it_built() {
+    let parent =
+        std::env::temp_dir().join(format!("esdev-preview-scaffold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).expect("scaffold parent");
+
+    let created = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .args(["create", "shop", "--template=vanilla", "--no-install"])
+        .current_dir(&parent)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let dir = parent.join("shop");
+
+    let built = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .arg("build")
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn esdev build");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(dir.join("dist/index.html").is_file(), "no built site");
+
+    let dist = dir.join("dist");
+    let (preview, port) = start(&dist);
+    let _preview = preview;
+    let index = get(port, &req("GET", "/", &[]));
+    assert_eq!(status(&index), "200", "{}", index.status);
+    let body = String::from_utf8(index.body).expect("the document is text");
+    assert!(body.contains("<title>shop</title>"), "{body}");
+    assert!(index.headers.contains_key("etag"), "no validator");
+
+    let _ = std::fs::remove_dir_all(&parent);
+}

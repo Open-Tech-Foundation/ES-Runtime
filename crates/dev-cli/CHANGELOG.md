@@ -85,6 +85,8 @@ is the point, since none of the three has any business in a deployment.
 - **Every scaffolded README points at the file to edit.** The entry,
   component, or docs convention is named up front, and the libraries show
   the consumer import.
+- **The bare ignore file covers killed builds too.** `esdev init` projects
+  ignore `.esdev-build-*/`, like every `create` template now does.
 - **WebSocket upgrades require a complete opening handshake.** The dev and
   inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
   WebSocket upgrade token, version 13, and a single 16-byte base64 key before

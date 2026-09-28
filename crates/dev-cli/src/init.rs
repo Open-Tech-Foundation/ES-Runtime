@@ -660,6 +660,15 @@ mod tests {
                 manifest["scripts"].get("build:debug").is_none(),
                 "{language}: a debug build beside the minified one"
             );
+            let (_, ignore) = files
+                .iter()
+                .find(|(path, _)| path == ".gitignore")
+                .expect("an ignore file");
+            let ignore = String::from_utf8_lossy(ignore);
+            assert!(
+                ignore.contains(".esdev-build-"),
+                "{language}: a killed build leaves staging behind"
+            );
         }
     }
 }
