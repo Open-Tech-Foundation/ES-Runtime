@@ -6,10 +6,10 @@ export default defineDocsConfig({
   site: { url: null },
 
   docs: {
-    title: "My Docs",
+    title: "{{name}}",
     dir: "docs",
     nav: [{ label: "Docs", href: "/docs" }],
-    footer: { text: "© 2026 My Project" },
+    footer: { text: "© 2026 {{name}}" },
     // Per-page "Last updated" (from git) and "Edit this page" (GitHub). Set repoUrl to
     // your repository root; links use <repoUrl>/edit/main/<source-path>.
     repoUrl: null, // e.g. "https://github.com/you/your-repo"
