@@ -1000,8 +1000,8 @@ enum ManagerChoice {
 }
 
 /// No such manager, from a flag that names one. Shared by the manager
-/// question and the install, so both name the same known set.
-fn unknown_manager(named: &str) -> String {
+/// question, the install, and `init`, so every command names the same set.
+pub(crate) fn unknown_manager(named: &str) -> String {
     format!(
         "there is no {named} package manager.\n\nKnown: {}.",
         crate::install::MANAGERS
@@ -1038,6 +1038,16 @@ fn resolve_manager(asked_for: Option<&str>, ask: Ask) -> Result<ManagerChoice, S
 /// the *project* uses — what its docs name — and installing is a later,
 /// separate question that only offers what this machine has.
 fn ask_manager(ask: Ask) -> Option<&'static str> {
+    manager_menu(ask.esc())
+}
+
+/// The manager menu, shared with `init` — which has no step machine to step
+/// back through, so Esc cancels the run there. `None` is Esc either way.
+pub(crate) fn ask_manager_choice() -> Option<&'static str> {
+    manager_menu(crate::prompt::OnEsc::Cancel)
+}
+
+fn manager_menu(esc: crate::prompt::OnEsc) -> Option<&'static str> {
     let choices: Vec<crate::prompt::Choice<'_>> = crate::install::MANAGERS
         .iter()
         .map(|manager| crate::prompt::Choice {
@@ -1055,7 +1065,7 @@ fn ask_manager(ask: Ask) -> Option<&'static str> {
     let preselect = choices
         .iter()
         .position(|choice| choice.name == DEFAULT_MANAGER);
-    crate::prompt::select("Which Package Manager?", &choices, preselect, ask.esc())
+    crate::prompt::select("Which Package Manager?", &choices, preselect, esc)
         .map(|chosen| choices[chosen].name)
 }
 
@@ -1533,7 +1543,8 @@ fn write(destination: &Path, contents: &[u8], name: &str, manager: &str) -> Resu
 }
 
 /// The placeholders filled in, pure so the rendering tests without files.
-fn render(text: &str, name: &str, manager: &str) -> String {
+/// Shared with `init`, whose bare project names the manager in the same docs.
+pub(crate) fn render(text: &str, name: &str, manager: &str) -> String {
     text.replace(PLACEHOLDER, name)
         .replace(PM_PLACEHOLDER, manager)
 }

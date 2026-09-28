@@ -9213,6 +9213,71 @@ fn init_bare_typescript_has_its_config() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+/// The bare docs name the chosen manager: `--package-manager` renders, the
+/// default is npm, and an unknown name fails before writing.
+#[test]
+fn init_names_the_chosen_package_manager() {
+    let parent = temp("t_init_pm");
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).expect("create parent");
+
+    let out = esdev()
+        .args([
+            "init",
+            "yarned",
+            "--package-manager=yarn",
+            "-y",
+            "--no-install",
+        ])
+        .current_dir(&parent)
+        .output()
+        .expect("spawn esdev init");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let dir = parent.join("yarned");
+    let readme = std::fs::read_to_string(dir.join("README.md")).expect("read readme");
+    assert!(readme.contains("yarn run dev"), "{readme}");
+    assert!(!readme.contains("{{pm}}"), "a placeholder survived");
+    assert!(
+        stdout(&out).contains("yarn install"),
+        "the next steps name it too: {}",
+        stdout(&out)
+    );
+
+    // Unsaid: npm, matching the install default.
+    let out = esdev()
+        .args(["init", "plain", "-y", "--no-install"])
+        .current_dir(&parent)
+        .output()
+        .expect("spawn esdev init");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let readme = std::fs::read_to_string(parent.join("plain").join("README.md")).expect("read");
+    assert!(readme.contains("npm run dev"), "{readme}");
+    assert!(!readme.contains("{{pm}}"), "a placeholder survived");
+
+    // An unknown name fails before writing.
+    let unknown = esdev()
+        .args(["init", "nope", "--package-manager=cargo", "-y"])
+        .current_dir(&parent)
+        .output()
+        .expect("spawn esdev init");
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("there is no cargo package manager"),
+        "{}",
+        stderr(&unknown)
+    );
+    // The directory itself is created on the way in; nothing is written into it.
+    let dir = parent.join("nope");
+    assert!(
+        dir.read_dir()
+            .map(|mut r| r.next().is_none())
+            .unwrap_or(true),
+        "it wrote a project anyway"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 /// Adopting writes the one missing file: a server entry becomes a run
 /// server target. Without a manifest the types step warns rather than
 /// failing, and offline-friendly.

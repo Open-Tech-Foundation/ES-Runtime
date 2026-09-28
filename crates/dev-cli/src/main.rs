@@ -392,6 +392,9 @@ OPTIONS:
     --language=<name>         js or ts. Asked outright; new projects only
     --entry=<path>            The file to adopt. Asked with the detected
                               entry as the default; existing projects only
+    --package-manager=<name>  The new project's package manager: npm, bun,
+                              pnpm or yarn. Asked; the docs name it.
+                              New projects only
     --install[=<manager>]     Install after writing: npm, bun, pnpm or yarn.
                               New projects only
     --no-install              Write the files and stop
@@ -1360,6 +1363,7 @@ fn parse_init(args: impl Iterator<Item = String>) -> Result<InitConfig, String> 
     let mut name: Option<String> = None;
     let mut language: Option<String> = None;
     let mut entry: Option<String> = None;
+    let mut manager: Option<String> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
     let mut yes = false;
@@ -1374,6 +1378,9 @@ fn parse_init(args: impl Iterator<Item = String>) -> Result<InitConfig, String> 
             "--name" => name = Some(require_value(flag, value)?.to_string()),
             "--language" => language = Some(require_value(flag, value)?.to_string()),
             "--entry" => entry = Some(require_value(flag, value)?.to_string()),
+            "--package-manager" => {
+                manager = Some(require_value(flag, value)?.to_string());
+            }
             "--install" => {
                 install = Some(Some(
                     value.unwrap_or(crate::create::DEFAULT_MANAGER).to_string(),
@@ -1408,6 +1415,7 @@ fn parse_init(args: impl Iterator<Item = String>) -> Result<InitConfig, String> 
         name,
         language,
         entry,
+        manager,
         install,
         force,
         yes,

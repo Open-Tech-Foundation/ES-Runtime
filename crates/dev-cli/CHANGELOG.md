@@ -32,6 +32,10 @@ is the point, since none of the three has any business in a deployment.
 - **The site `esdev/create` page follows the scaffolder.** It documents the
   package-manager question and `--package-manager`, the `preview` script in
   static templates, and the `typecheck` setup TypeScript mode scaffolds.
+- **`esdev init` names the project's package manager too.** The bare README
+  renders `{{pm}}` from `--package-manager` (asked, npm by default,
+  `--install=<manager>` answering implicitly), and the bare manifests drop
+  `build:debug` like the `create` templates did.
 
 ### Added
 

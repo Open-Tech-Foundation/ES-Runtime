@@ -13,8 +13,9 @@
 //! is there", never "write over it".
 //!
 //! Every question has a flag, so the interactive path stays a convenience over
-//! the scriptable one: `--name`, `--language` and `--entry` answer what would
-//! otherwise be asked, and `-y` takes every default without asking at all.
+//! the scriptable one: `--name`, `--language`, `--package-manager` and
+//! `--entry` answer what would otherwise be asked, and `-y` takes every
+//! default without asking at all.
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,9 @@ pub struct InitConfig {
     /// `--install[=<manager>]` / `--no-install`: installing a new project's
     /// dependencies, exactly as `create` spells them.
     pub install: Option<Option<String>>,
+    /// `--package-manager`: which manager the new project's docs name.
+    /// New projects only; `--install=<manager>` answers this implicitly.
+    pub manager: Option<String>,
     /// `--force`: write a new project among what is there. Never replaces.
     pub force: bool,
     /// `-y`: take every default; never ask, even on a terminal.
@@ -217,6 +221,23 @@ fn init_new(config: &InitConfig, target: &Path) -> Result<String, String> {
         None => None,
     };
 
+    // The installer names the manager implicitly; otherwise the flag, a
+    // question, or the default — the same precedence `create` uses, without
+    // its step machine. Esc cancels here rather than stepping back.
+    let manager: String = match &install {
+        Some(manager) => manager.name.to_string(),
+        None => match &config.manager {
+            Some(named) => crate::install::by_name(named)
+                .map(|manager| manager.name.to_string())
+                .ok_or_else(|| crate::create::unknown_manager(named))?,
+            None if interactive => match crate::create::ask_manager_choice() {
+                Some(answer) => answer.to_string(),
+                None => return Ok(String::new()),
+            },
+            None => crate::create::DEFAULT_MANAGER.to_string(),
+        },
+    };
+
     let files = bare(&language);
     let mut written = 0;
     for (path, contents) in &files {
@@ -229,7 +250,7 @@ fn init_new(config: &InitConfig, target: &Path) -> Result<String, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
         }
-        write(&destination, contents, &name)?;
+        write(&destination, contents, &name, &manager)?;
         written += 1;
     }
     let mut report = format!(
@@ -246,7 +267,8 @@ fn init_new(config: &InitConfig, target: &Path) -> Result<String, String> {
         config,
         target,
         install.is_some(),
-        "npm run dev",
+        &manager,
+        &format!("{manager} run dev"),
         &paint,
     ));
     Ok(report)
@@ -283,14 +305,17 @@ fn bare(language: &str) -> Vec<(String, Vec<u8>)> {
     files
 }
 
-/// Writes one file, substituting the project's name into it.
+/// Writes one file, substituting the project's name and package manager.
 ///
 /// Text only, like `create`: a binary would be corrupted by a search and
 /// replace, so anything that is not UTF-8 is written as embedded.
-fn write(destination: &Path, contents: &[u8], name: &str) -> Result<(), String> {
+fn write(destination: &Path, contents: &[u8], name: &str, manager: &str) -> Result<(), String> {
     match std::str::from_utf8(contents) {
-        Ok(text) if text.contains(crate::create::PLACEHOLDER) => {
-            std::fs::write(destination, text.replace(crate::create::PLACEHOLDER, name))
+        Ok(text)
+            if text.contains(crate::create::PLACEHOLDER)
+                || text.contains(crate::create::PM_PLACEHOLDER) =>
+        {
+            std::fs::write(destination, crate::create::render(text, name, manager))
         }
         _ => std::fs::write(destination, contents),
     }
@@ -396,8 +421,15 @@ fn init_existing(config: &InitConfig, target: &Path) -> Result<String, String> {
     }
     let paint = crate::style::Palette::stdout();
     // No install step: adopting installs nothing, and the types line above
-    // already said how that half went.
-    report.push_str(&next_steps(config, target, true, "esdev start", &paint));
+    // already said how that half went — so the manager is unused.
+    report.push_str(&next_steps(
+        config,
+        target,
+        true,
+        crate::create::DEFAULT_MANAGER,
+        "esdev start",
+        &paint,
+    ));
     Ok(report)
 }
 
@@ -464,6 +496,7 @@ fn next_steps(
     config: &InitConfig,
     target: &Path,
     installed: bool,
+    manager: &str,
     dev: &str,
     paint: &crate::style::Palette,
 ) -> String {
@@ -475,7 +508,10 @@ fn next_steps(
         ));
     }
     if !installed {
-        steps.push_str(&format!("\n  {}", paint.bold(format_args!("npm install"))));
+        steps.push_str(&format!(
+            "\n  {}",
+            paint.bold(format_args!("{manager} install"))
+        ));
     }
     steps.push_str(&format!("\n  {}", paint.bold(format_args!("{dev}"))));
     if !target.join(".git").exists() {
@@ -587,5 +623,43 @@ mod tests {
         let ts = bare("ts");
         assert!(ts.iter().any(|(path, _)| path == "src/index.ts"));
         assert!(ts.iter().any(|(path, _)| path == "tsconfig.json"));
+    }
+
+    /// The bare docs name the chosen manager and nothing fixed — the same
+    /// rule as `create`'s templates — and no bare manifest keeps a debug
+    /// build beside the minified one.
+    #[test]
+    fn bare_docs_name_the_manager() {
+        for language in ["js", "ts"] {
+            let files = bare(language);
+            let (_, readme) = files
+                .iter()
+                .find(|(path, _)| path == "README.md")
+                .expect("a readme");
+            let readme = String::from_utf8_lossy(readme);
+            assert!(
+                readme.contains(crate::create::PM_PLACEHOLDER),
+                "{language}: names no manager"
+            );
+            for verb in [
+                "npm install",
+                "npm run",
+                "npm test",
+                "npm start",
+                "pnpm ",
+                "npx ",
+            ] {
+                assert!(!readme.contains(verb), "{language}: {verb}");
+            }
+            let (_, manifest) = files
+                .iter()
+                .find(|(path, _)| path == "package.json")
+                .expect("a manifest");
+            let manifest: serde_json::Value = serde_json::from_slice(manifest).expect("valid JSON");
+            assert!(
+                manifest["scripts"].get("build:debug").is_none(),
+                "{language}: a debug build beside the minified one"
+            );
+        }
     }
 }

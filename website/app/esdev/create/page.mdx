@@ -205,8 +205,9 @@ esdev:
 esdev init my-app
 ```
 
-It asks the name (defaulting to the directory), the language, and whether to
-install — `esdev init my-app --language=ts --install=bun` answers all three.
+It asks the name (defaulting to the directory), the language, the package
+manager, and whether to install — `esdev init my-app --language=ts
+--package-manager=bun --install=bun` answers all four.
 A directory with a project in it gets the one file it is missing instead: a
 working `esdev.json` with the detected entry, plus its types installed:
 
