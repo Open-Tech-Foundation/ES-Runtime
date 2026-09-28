@@ -37,6 +37,10 @@ A project with a server of its own names the app's URL instead of the
 endpoint's. A failed build prints its error and nothing more; the loop keeps
 running, and the next save gets its own line.
 
+A failed build also shows in the page: the same error, full-screen, until the
+fix clears it with the next update. Fresh loads never see it — a build that
+fails writes nothing, so a new page opens the last good output.
+
 ## The server is yours
 
 ```json

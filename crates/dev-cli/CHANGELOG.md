@@ -52,6 +52,9 @@ is the point, since none of the three has any business in a deployment.
   every usage line via `{{pm}}` instead of a fixed `npm`/`pnpm`;
   `--install=<manager>` answers the question implicitly, and unattended runs
   keep npm. The install menu starts on the chosen manager when it is at hand.
+- **Build failures show in the page as an overlay.** The dev loop broadcasts
+  the failure over the update channel and the page renders what the terminal
+  prints, full-screen, until the fix clears it with the next update.
 - **Serving any static folder is documented** (site `esdev/start/preview`).
   `esdev preview --dir=<folder>` needs no project and no external package —
   just an `index.html` at the folder's root.

@@ -270,6 +270,9 @@ fn cycle_summary(update: &Update, replaced_the_server: bool) -> String {
         Update::Css => "swapped stylesheet".to_string(),
         Update::Reload if replaced_the_server => "restarted server".to_string(),
         Update::Reload => "reloaded".to_string(),
+        // Never routed here: failures send before the cycle line. Named
+        // anyway, so the vocabulary stays total if that ever changes.
+        Update::Error { .. } => "errored".to_string(),
     };
     match (update, replaced_the_server) {
         (Update::Reload, _) => summary,
@@ -411,7 +414,13 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     // The first build is allowed to fail like any other: the loop below is what
     // a developer fixes it in.
-    let built = rebuild(&project, &watched, port, config.hot).await;
+    let built = match rebuild(&project, &watched, port, config.hot).await {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!("esdev: {err}");
+            false
+        }
+    };
 
     // The banner goes last: ready means listening *and* built, with the first
     // build's own lines above it. One block with no per-line tags — the
@@ -509,7 +518,14 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // the most ordinary event there is, and the server you were about to
         // fix it on should still be answering — including while the build runs,
         // which is why the stop is here and not above.
-        if !rebuild(&project, &watched, port, config.hot).await {
+        if let Err(err) = rebuild(&project, &watched, port, config.hot).await {
+            eprintln!("esdev: {err}");
+            // The page shows it rather than sitting on the last good build in
+            // silence; the next successful pass clears it with whatever update
+            // it sends. No cycle line: the codeframe above is the message.
+            let _ = reload.send(Update::Error {
+                message: crate::devserver::strip_ansi(&err),
+            });
             continue;
         }
 
@@ -618,12 +634,18 @@ impl From<Option<Vec<PathBuf>>> for Woken {
     }
 }
 
-/// Builds the project in dev mode, reporting whether it worked.
+/// Builds the project in dev mode, reporting the failure.
 ///
-/// The error is printed rather than returned, because in a loop a failed build
-/// is a message and not an exit: the developer is mid-edit, and the tool's job
-/// is to still be there when they finish.
-async fn rebuild(project: &Arc<Settings>, watched: &[String], port: u16, hot: bool) -> bool {
+/// The error is returned rather than printed: in a loop a failed build is a
+/// message and not an exit — the terminal prints it, and so does the page as
+/// an overlay — because the developer is mid-edit either way, and the tool's
+/// job is to still be there when they finish.
+async fn rebuild(
+    project: &Arc<Settings>,
+    watched: &[String],
+    port: u16,
+    hot: bool,
+) -> Result<(), String> {
     let targets = if watched.is_empty() {
         None
     } else {
@@ -638,13 +660,9 @@ async fn rebuild(project: &Arc<Settings>, watched: &[String], port: u16, hot: bo
             outdir: PathBuf::from(project.start.devdir()),
         }),
     }));
-    match crate::build::run(request).await {
-        Ok(()) => true,
-        Err(err) => {
-            eprintln!("esdev: {err}");
-            false
-        }
-    }
+    // Unprefixed: callers print it with the terminal's `esdev:` tag, and the
+    // loop sends it to the page stripped of paint.
+    crate::build::run(request).await
 }
 
 /// Starts the application's server as a child process.
@@ -1045,6 +1063,15 @@ mod tests {
         );
         assert_eq!(cycle_summary(&Update::Reload, false), "reloaded");
         assert_eq!(cycle_summary(&Update::Reload, true), "restarted server");
+        assert_eq!(
+            cycle_summary(
+                &Update::Error {
+                    message: "boom".to_string()
+                },
+                false
+            ),
+            "errored"
+        );
     }
 
     /// A stylesheet is the one thing that can be replaced in a page that is

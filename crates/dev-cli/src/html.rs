@@ -303,10 +303,31 @@ pub fn hashed_name(path: &Path, bytes: &[u8]) -> String {
 /// The few lines that make a document reload itself, injected only by the dev
 /// loop.
 ///
-/// **A WebSocket**, and it was server-sent events until the channel started
-/// being built to carry hot updates rather than the word "reload". Why it
-/// changed is [`crate::devserver`]'s to explain; what it costs is here, and it
-/// is the reconnect loop `EventSource` used to provide for free.
+/// Three things live in here, and all three are worth the bytes.
+///
+/// **A WebSocket**, where server-sent events used to be: the channel carries
+/// hot updates now rather than the word "reload". What that costs is the
+/// reconnect loop below — `EventSource` provided it for free, a WebSocket
+/// does not, and a dev server being restarted is the ordinary case rather
+/// than a failure. A page that gave up after the first drop would look broken
+/// for the rest of the session. Backoff, because the socket also fails while
+/// esdev is down and a tight retry would spin a core; capped, because somebody
+/// who fixes the thing should not then wait a minute for the page to notice.
+///
+/// **The stylesheet swap**, which is the whole point of a `css` update: the
+/// replacement is inserted and only then is the old one removed, on its
+/// `load`. Removing first would leave the document unstyled for a frame,
+/// which is a flash of white on every save — worse than the reload this is
+/// avoiding. The old link is also removed on `error`, or a stylesheet that
+/// 404s would leave two of them behind on every save until the page had a
+/// hundred.
+///
+/// **The error overlay**: a failed build leaves the page on its last good
+/// output, which from the browser looks exactly like a save that did nothing.
+/// The `error` message shows what the terminal shows instead, full-screen,
+/// until the next patch, swap or reload clears it. Plain inline styles under
+/// an `__esdev_` id — no classes for the application's CSS to collide with —
+/// and `textContent`, never `innerHTML`, because the message holds code.
 ///
 /// It is `esdev`'s endpoint rather than the application's, so no template ships
 /// dev-only code and nothing has to be stripped from it later.
@@ -352,26 +373,62 @@ fn reload_client(port: u16) -> String {
          if((tries||0)<10)setTimeout(function(){{patch(m,(tries||0)+1);}},100);\
          else location.reload();\
          }};\
-         el.onload=function(){{if(!hot.apply(m.changedIds))location.reload();}};\
-         document.head.appendChild(el);\
-         }}\
-         function open(){{\
-         var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
-         s.onopen=function(){{wait=250;}};\
-         s.onmessage=function(e){{\
-         var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
-         if(m.type===\"css\")css();\
-         else if(m.type===\"patch\")patch(m,0);\
-         else if(m.type===\"reload\")location.reload();\
-         }};\
-         s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
-         s.onerror=function(){{s.close();}};\
-         }}\
-         open();\
-         }})();\
-         </script>\n",
-        path = crate::devserver::HMR_PATH
+          el.onload=function(){{if(!hot.apply(m.changedIds))location.reload();}};\
+          document.head.appendChild(el);\
+          }}\
+          {overlay}\
+          function open(){{\
+          var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
+          s.onopen=function(){{wait=250;}};\
+          s.onmessage=function(e){{\
+          var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
+          if(m.type===\"error\"){{err(m);return;}}\
+          clearErr();\
+          if(m.type===\"css\")css();\
+          else if(m.type===\"patch\")patch(m,0);\
+          else if(m.type===\"reload\")location.reload();\
+          }};\
+          s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
+          s.onerror=function(){{s.close();}};\
+          }}\
+          open();\
+          }})();\
+          </script>\n",
+        path = crate::devserver::HMR_PATH,
+        overlay = overlay_script(),
     )
+}
+
+/// Shows a build failure full-screen, and clears it on the next update.
+///
+/// Plain text, not a format string: it is interpolated into the client as
+/// data, so its braces ship as written. Built once and reused: a second
+/// failure while one is showing replaces the text rather than stacking
+/// overlays. `textContent`, so code in the message cannot become markup;
+/// inline styles under an `__esdev_` id, so the application's CSS cannot
+/// reach it. No close button — like Vite's and Next's overlays, the fix
+/// dismisses it, which is the next message.
+fn overlay_script() -> &'static str {
+    "\
+    function clearErr(){\
+    var d=document.getElementById('__esdev_err');\
+    if(d&&d.parentNode)d.parentNode.removeChild(d);\
+    }\
+    function err(m){\
+    var d=document.getElementById('__esdev_err');\
+    if(!d){\
+    d=document.createElement('div');d.id='__esdev_err';\
+    d.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(24,4,4,.94);color:#ffd9d9;padding:24px;overflow:auto;font:14px/1.5 monospace;';\
+    var h=document.createElement('div');\
+    h.textContent='Build failed \\u2014 fix and save';\
+    h.style.cssText='font-weight:bold;margin-bottom:12px;';\
+    var p=document.createElement('pre');p.id='__esdev_err_pre';\
+    p.style.cssText='margin:0;white-space:pre-wrap;word-break:break-word;';\
+    d.appendChild(h);d.appendChild(p);\
+    (document.body||document.documentElement).appendChild(d);\
+    }\
+    document.getElementById('__esdev_err_pre').textContent=m.message||'Build failed';\
+    }"
 }
 
 /// Where the reload script goes: just before `</body>`, or `</html>`, or at the
@@ -979,6 +1036,26 @@ globalThis.__rolldown_runtime__ ??= new EsdevRuntime("esdev");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The injected client shows build errors and clears them: the error
+    /// branch, the dismissal on every other update, the overlay id — and no
+    /// innerHTML (which would make code in the message markup). Brace balance
+    /// is checked by hand with `node --check`, not here: the minified client
+    /// legitimately nests closes (`}}`), so a substring assert cannot tell a
+    /// balanced one from a broken one.
+    #[test]
+    fn the_client_shows_and_clears_build_errors() {
+        let client = reload_client(5173);
+        assert!(client.contains("m.type===\"error\""), "no error branch");
+        assert!(client.contains("clearErr()"), "nothing dismisses it");
+        assert!(client.contains("__esdev_err"), "no overlay");
+        assert!(client.contains("textContent"), "unsafe rendering");
+        assert!(!client.contains("innerHTML"), "markup from code");
+        assert!(
+            client.contains("ws://127.0.0.1:5173"),
+            "the channel lost its port"
+        );
+    }
 
     #[test]
     fn a_relative_path_is_an_input_and_everything_else_is_a_url() {

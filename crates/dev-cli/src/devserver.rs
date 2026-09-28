@@ -97,6 +97,12 @@ pub enum Update {
     Css,
     /// Nothing finer-grained is available: load the page again.
     Reload,
+    /// The build failed. The page shows it rather than sitting on the last
+    /// good build in silence; the next patch, swap or reload clears it.
+    Error {
+        /// The failure as the terminal prints it, without colour.
+        message: String,
+    },
 }
 
 impl Update {
@@ -124,6 +130,12 @@ impl Update {
             }
             Self::Css => "{\"type\":\"css\"}".to_string(),
             Self::Reload => "{\"type\":\"reload\"}".to_string(),
+            Self::Error { message } => {
+                format!(
+                    "{{\"type\":\"error\",\"message\":\"{}\"}}",
+                    escape_json(message)
+                )
+            }
         }
     }
 }
@@ -803,9 +815,75 @@ fn escape_json(text: &str) -> String {
     out
 }
 
+/// Terminal escapes out of overlay text.
+///
+/// The server's stderr is usually a terminal, so diagnostics arrive painted —
+/// and a painted string in the DOM reads as garbage around the message. Only
+/// CSI sequences (`ESC [ params … final`: SGR colours and the reset this
+/// codebase and its diagnostics emit); anything else passes through.
+pub(crate) fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        // An escape: consume a CSI sequence, keep anything else as written
+        // (a lone ESC is data, not paint, and dropping data corrupts).
+        let mut clipped = String::from(c);
+        let mut is_csi = false;
+        for c in chars.by_ref() {
+            clipped.push(c);
+            if !is_csi {
+                if c == '[' {
+                    is_csi = true;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if ('@'..='~').contains(&c) {
+                clipped.clear();
+                break;
+            }
+        }
+        out.push_str(&clipped);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_update_carries_its_message_as_json() {
+        let message = Update::Error {
+            message: "target \"web\": boom \"quoted\"".to_string(),
+        }
+        .as_message();
+        assert_eq!(
+            message,
+            r#"{"type":"error","message":"target \"web\": boom \"quoted\""}"#
+        );
+        // And it parses as the object the client reads.
+        assert!(message.starts_with("{\"type\":\"error\","));
+    }
+
+    /// Paint out, text intact: SGR colours and the reset go, everything else
+    /// — including a lone ESC and a truncated sequence — stays byte for byte.
+    #[test]
+    fn overlay_text_is_stripped_of_paint() {
+        assert_eq!(
+            strip_ansi("\x1b[32mbuilt\x1b[0m → dist/\nplain"),
+            "built → dist/\nplain"
+        );
+        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
+        assert_eq!(strip_ansi("lone \x1b"), "lone \x1b");
+        assert_eq!(strip_ansi("cut \x1b[32"), "cut \x1b[32");
+        assert_eq!(strip_ansi("\x1b[mreset-empty\x1b[0m"), "reset-empty");
+    }
 
     #[test]
     fn a_path_that_climbs_out_is_refused() {

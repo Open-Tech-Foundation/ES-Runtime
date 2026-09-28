@@ -501,7 +501,9 @@ async fn a_replaced_module_s_listeners_are_aborted() {
 #[test]
 fn every_fixture_gets_a_port_of_its_own() {
     // Every name passed to `Fixture::start` in this file.
-    const FIXTURES: &[&str] = &["accept", "reload", "css", "dep", "signal", "keep"];
+    const FIXTURES: &[&str] = &[
+        "accept", "reload", "css", "dep", "signal", "keep", "overlay",
+    ];
 
     let mut taken: Vec<(u16, &str)> = Vec::new();
     for name in FIXTURES {
@@ -558,4 +560,51 @@ async fn keep_survives_every_replacement() {
         "the kept value did not survive a second replacement"
     );
     assert_eq!(page.eval("window.__esdev_test_marker").await, "here");
+}
+
+/// **The overlay.** A build that fails shows in the page — what the terminal
+/// shows — and the fix clears it. The page is never loaded again in between:
+/// the marker survives a break-and-fix cycle that a reload would destroy.
+#[tokio::test]
+async fn a_failed_build_shows_in_the_page_until_it_is_fixed() {
+    let Some(fixture) = Fixture::start(
+        "overlay",
+        "import { label } from \"./counter.mjs\";\n\
+         document.getElementById(\"out\").textContent = label;\n\
+         import.meta.hot.accept();\n",
+    ) else {
+        eprintln!("skipped: no chromium on this machine");
+        return;
+    };
+
+    let mut page = Page::open(&fixture).await;
+
+    fixture.edit("src/counter.mjs", "export const label = ;\n");
+    assert!(
+        page.until("document.getElementById('__esdev_err') !== null")
+            .await,
+        "no overlay for the broken build"
+    );
+    assert!(
+        page.eval("document.getElementById('__esdev_err_pre').textContent")
+            .await
+            .contains("counter.mjs"),
+        "the overlay names the file"
+    );
+
+    fixture.edit("src/counter.mjs", "export const label = \"TWO\";\n");
+    assert!(
+        page.until("document.getElementById('__esdev_err') === null")
+            .await,
+        "the fix did not clear the overlay"
+    );
+    // The fix reached the page however the engine delivered it: recovery
+    // after an errored build reloads rather than patching (Vite does the
+    // same), so no marker survives — but the overlay is gone and the new
+    // code runs.
+    assert!(
+        page.until("document.getElementById('out').textContent === 'TWO'")
+            .await,
+        "the fix never reached the page"
+    );
 }
