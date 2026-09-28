@@ -23,7 +23,7 @@
 //! write a server before they can look at their page is not parity with
 //! anything.
 //!
-//! # A restart is a SIGTERM, and a rebuild that fails changes nothing
+//! # A restart is a SIGTERM, and a failed rebuild leaves the server running
 //!
 //! The restart policy is `--watch`'s, for `--watch`'s reasons: a fresh process
 //! cannot carry anything forward, and `SIGTERM` is the graceful stop production
@@ -31,10 +31,12 @@
 //! dropped.
 //!
 //! What is new here is the build in front of it, and the rule that goes with
-//! it: **a failed build leaves everything running.** A syntax error mid-edit is
-//! the most ordinary event in a dev loop, and the right response to it is a
-//! message and the server you already had — not a dead port and a browser that
-//! cannot load the page that would tell you what you broke.
+//! it: **a failed build leaves the server running.** A syntax error mid-edit is
+//! the most ordinary event in a dev loop, and the right response is a message
+//! and the server you already had — not a dead port and a browser that cannot
+//! load the page that would tell you what you broke. The dev output is written
+//! in place, so a failed build may have updated some of its files; the separate
+//! deployment output stays untouched.
 //!
 //! # Two ports, and neither of them fights for one
 //!

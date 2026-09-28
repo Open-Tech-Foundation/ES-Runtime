@@ -1834,16 +1834,21 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
         // Everything worked, so everything moves. Until this line the output on
         // disk is the last build that worked.
         Ok(()) => staging.commit(),
-        // …and this one drops the staging directory with it. The note is worth
-        // the two lines: the paths in whatever the failing step printed name a
-        // directory that no longer exists, and a developer looking at an
-        // untouched `dist` should know it is untouched rather than stale.
-        Err(err) => Err(format!(
-            "{err}\n\n\
-             Nothing was written: a build stages its output and moves it into \
-             place only once every target and every step has succeeded, so what \
-             is deployed is still the last build that worked."
-        )),
+        // A staged build drops its temporary output here; a dev build writes
+        // to its separate dev directory as it goes. Say which happened so a
+        // developer knows whether that output can contain partial results.
+        Err(err) => {
+            let note = if project.dev.is_some() {
+                "The dev output directory may contain files written before this \
+                 failure. It is separate from the deployment output, which was \
+                 not changed."
+            } else {
+                "Nothing was written: a build stages its output and moves it into \
+                 place only once every target and every step has succeeded, so what \
+                 is deployed is still the last build that worked."
+            };
+            Err(format!("{err}\n\n{note}"))
+        }
     }
 }
 

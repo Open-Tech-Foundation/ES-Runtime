@@ -24,6 +24,12 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev start` now reports accurately when a rebuild fails: its separate dev
+  output may contain files from the failed build, while the deployment output
+  stays untouched.
+
 ## [0.12.0] - 2026-09-28
 
 ### Changed

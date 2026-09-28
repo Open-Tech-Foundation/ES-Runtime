@@ -3222,6 +3222,42 @@ fn a_failed_build_leaves_the_previous_output_where_it_was() {
     );
 }
 
+/// The dev loop writes to its own output directory as it builds, so its error
+/// must not promise that nothing was written. The deployment directory remains
+/// separate and untouched.
+#[test]
+fn a_failed_dev_build_says_its_output_may_be_partial() {
+    let dir = watch_dir("s_failed_build_note");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.ts", "document.title = 'working';\n");
+    write_in(&dir, "src/broken.ts", "const broken = ;\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body><script type=\"module\" src=\"./src/main.ts\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"build":{"targets":{"app":{"entry":"index.html","outdir":"dist"},"z-broken":{"entry":"src/broken.ts","out":"dist/broken.js"}}}}"#,
+    );
+
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
+    let _port = announced_port(&log);
+    let err = std::fs::read_to_string(&log).expect("read esdev log");
+    assert!(
+        err.contains("The dev output directory may contain files"),
+        "{err}"
+    );
+    assert!(
+        err.contains("deployment output, which was not changed"),
+        "{err}"
+    );
+    assert!(!err.contains("Nothing was written"), "{err}");
+    assert!(dir.join(".dev/dist/index.html").exists(), "{err}");
+    assert!(!dir.join("dist/index.html").exists(), "{err}");
+}
+
 /// The same property one step earlier: a target that cannot be bundled at all.
 /// The first target had already succeeded, and its output must not be visible
 /// either — half a deployment is not a deployment.
