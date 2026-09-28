@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "otfw dev",
     "build": "otfw build",
-    "serve": "otfw serve",
-    "preview": "npm run build && npm run serve"
+    "serve": "otfw serve"
   },
   "dependencies": {
     "@opentf/web": "latest"

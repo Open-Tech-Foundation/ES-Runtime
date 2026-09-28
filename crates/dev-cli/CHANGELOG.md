@@ -49,12 +49,11 @@ is the point, since none of the three has any business in a deployment.
 - **`esdev create` no longer scaffolds a `build:debug` script.** The
   `api`, `vanilla`, `micro-ui`, and `react` (fullstack mode) templates ship
   only `build`; an unminified build is `esdev build` without `--minify`.
-- **`esdev create` scaffolds a `preview` script in every servable template.**
-  Static builds (`vanilla`, `micro-ui`, `react` static, OTF `spa`/`docs`)
-  serve `dist/` through `esdev preview`; server templates (`api`, `react`
-  fullstack, OTF `fullstack`) build and run the production server, like
-  `next start`. Libraries (`lib`, OTF `library`) build a package, not a
-  site, so they get none.
+- **`esdev create` scaffolds a `preview` script in the static templates.**
+  `vanilla`, `micro-ui`, `react` (static mode), and the OTF `spa`/`docs`
+  starters serve `dist/` through `esdev preview`. Server templates keep
+  `start`/`serve` — servers are run, not served — and libraries build a
+  package, not a site, so neither gets one.
 - **WebSocket upgrades require a complete opening handshake.** The dev and
   inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
   WebSocket upgrade token, version 13, and a single 16-byte base64 key before

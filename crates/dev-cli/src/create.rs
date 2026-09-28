@@ -2191,10 +2191,10 @@ mod tests {
         }
     }
 
-        /// Every template that builds something servable has a `preview` script:
-    /// static sites through `esdev preview`, servers by building and running
-    /// the production server. A library builds a package, not a site, so a
-    /// preview there would only fail with the command's own "no site" error.
+    /// Every template that builds a static site has a `preview` script through
+    /// `esdev preview`. Servers are run, not served — `esdev preview` refuses
+    /// them by design — so the production check there is `start`/`serve`, and
+    /// a library builds a package, not a site, so neither gets one.
     #[test]
     fn every_servable_template_has_a_preview_script() {
         fn scripts(files: &[(String, Vec<u8>)]) -> serde_json::Value {
@@ -2202,56 +2202,56 @@ mod tests {
                 .map(|manifest| manifest["scripts"].clone())
                 .expect("valid JSON")
         }
-        for (template, mode, expected) in [
-            ("api", None, "npm run build && npm start"),
-            ("vanilla", None, "esdev preview"),
-            ("micro-ui", None, "esdev preview"),
-            ("react", Some("static"), "esdev preview"),
-            ("react", Some("fullstack"), "npm run build && npm start"),
+        for (template, mode) in [
+            ("vanilla", None),
+            ("micro-ui", None),
+            ("react", Some("static")),
         ] {
             assert_eq!(
                 scripts(&plain_written(template, mode))["preview"],
-                serde_json::json!(expected),
+                serde_json::json!("esdev preview"),
                 "{template} {mode:?}: wrong preview script"
             );
         }
-        for (template, language, styling, blog, expected) in [
-            ("spa", "js", Some("css"), None, "esdev preview --dir=dist"),
-            ("spa", "ts", Some("css"), None, "esdev preview --dir=dist"),
-            (
-                "fullstack",
-                "js",
-                Some("css"),
-                None,
-                "npm run build && npm run serve",
-            ),
-            ("docs", "js", None, Some(true), "esdev preview --dir=dist"),
-            ("docs", "ts", None, Some(false), "esdev preview --dir=dist"),
+        for (template, language, styling, blog) in [
+            ("spa", "js", Some("css"), None),
+            ("spa", "ts", Some("css"), None),
+            ("docs", "js", None, Some(true)),
+            ("docs", "ts", None, Some(false)),
         ] {
             assert_eq!(
                 scripts(&otf_written(template, language, styling, blog))["preview"],
-                serde_json::json!(expected),
+                serde_json::json!("esdev preview --dir=dist"),
                 "{template} {language}: wrong preview script"
             );
         }
-        // A package is published, not served.
-        assert!(
-            scripts(&plain_written("lib", None)).get("preview").is_none(),
-            "lib: a package has nothing to preview"
-        );
-        for language in ["js", "ts"] {
+        // Servers are run (`start`/`serve`), and packages are published:
+        // neither has a site to preview.
+        for (template, mode) in [("api", None), ("react", Some("fullstack")), ("lib", None)] {
             assert!(
-                scripts(&otf_written("library", language, None, None))
+                scripts(&plain_written(template, mode)).get("preview").is_none(),
+                "{template} {mode:?}: nothing servable to preview"
+            );
+        }
+        for (template, language, styling, blog) in [
+            ("fullstack", "js", Some("css"), None),
+            ("fullstack", "ts", Some("css"), None),
+            ("library", "js", None, None),
+            ("library", "ts", None, None),
+        ] {
+            assert!(
+                scripts(&otf_written(template, language, styling, blog))
                     .get("preview")
                     .is_none(),
-                "library {language}: a package has nothing to preview"
+                "{template} {language}: nothing servable to preview"
             );
         }
     }
 
     /// JavaScript writes what is embedded: no config, no renames.
     #[test]
-    fn javascript_writes_the_embedded_files() {        let files = otf_written("spa", "js", Some("css"), None);
+    fn javascript_writes_the_embedded_files() {
+        let files = otf_written("spa", "js", Some("css"), None);
         let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"app/page.jsx"));
         assert!(paths.contains(&"jsconfig.json"));

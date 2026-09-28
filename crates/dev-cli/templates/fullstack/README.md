@@ -6,5 +6,4 @@ An [OTF Web](https://web.opentechf.org) fullstack app. Start with `app/page.jsx`
 pnpm install
 pnpm run dev
 pnpm run build
-pnpm run preview   # builds, then serves the production build
 ```

@@ -11598,8 +11598,8 @@ fn otf_templates_scaffold_from_flags() {
         "JavaScript has no tsconfig to check: {manifest}"
     );
     assert!(
-        manifest.contains(r#""preview": "npm run build && npm run serve""#),
-        "no production run of what it builds: {manifest}"
+        !manifest.contains("preview"),
+        "a server is run, not previewed: {manifest}"
     );
 
     // The blog is files plus two patches — or neither.
