@@ -133,18 +133,37 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
     watcher
         .watch(&root, RecursiveMode::Recursive)
         .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
+    // One banner, like the dev loop's: version, and what is watched —
+    // relative when it is under here (`.` for here itself), absolute when
+    // it is not. Then only events: the loop's older per-event `esdev:` lines
+    // stay, and restarts read like the dev loop's cycle lines.
+    eprintln!(
+        "esdev {} — watching {}",
+        env!("CARGO_PKG_VERSION"),
+        display_root(&root)
+    );
 
-    eprintln!("esdev: watching {}", root.display());
+    // When the last restart-driving change arrived. Spent spawning the child
+    // at the top of the next pass, so the line reads `restarted` — past
+    // tense — and times the restart itself rather than the wait before it.
+    let mut changed_at: Option<std::time::Instant> = None;
 
     loop {
         let mut child = Command::new(&exe)
             .args(&config.child_args)
             .spawn()
             .map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
+        if let Some(at) = changed_at.take() {
+            eprintln!(
+                "{} restarted in {}",
+                crate::style::Palette::stderr().green("✓"),
+                crate::start::format_duration(at.elapsed())
+            );
+        }
 
         // Wait for whichever comes first: the program finishing, a file
         // changing, or the user interrupting.
-        let restart = tokio::select! {
+        tokio::select! {
             status = child.wait() => {
                 match status {
                     Ok(status) if status.success() => {
@@ -158,13 +177,15 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
                 // It is gone; there is nothing to stop. Hold here until
                 // something changes, so the watcher outlives the program.
                 match coalesce(&mut rx).await {
-                    Some(_) => true,
+                    Some(_) => {
+                        changed_at = Some(std::time::Instant::now());
+                    }
                     None => return Ok(()),
                 }
             }
             _ = coalesce(&mut rx) => {
+                changed_at = Some(std::time::Instant::now());
                 stop(&mut child, config.grace).await;
-                true
             }
             _ = tokio::signal::ctrl_c() => {
                 // ^C reached the child too (it shares this process group), so
@@ -173,10 +194,21 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
                 return Ok(());
             }
         };
+    }
+}
 
-        if restart {
-            eprintln!("esdev: change detected, restarting");
-        }
+/// The watched directory as the developer sees it: relative when it is under
+/// here (`.` for here itself), absolute when it is not.
+fn display_root(root: &Path) -> String {
+    let shown = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| root.strip_prefix(&cwd).ok())
+        .map(|relative| relative.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.to_string_lossy().into_owned());
+    if shown.is_empty() {
+        ".".to_string()
+    } else {
+        shown
     }
 }
 

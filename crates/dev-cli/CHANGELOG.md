@@ -35,6 +35,8 @@ is the point, since none of the three has any business in a deployment.
   took — instead of served-directory and watch-path plumbing, a raw `ws://`
   line, and silence between saves. Build reports moved from stdout to
   stderr, and the HMR failure line speaks words rather than a debug dump.
+  `esdev run --watch` speaks the same language: a banner naming what is
+  watched, then `✓ restarted in Nms` per restart.
 - **The site `esdev/create` page follows the scaffolder.** It documents the
   package-manager question and `--package-manager`, the `preview` script in
   static templates, and the `typecheck` setup TypeScript mode scaffolds.

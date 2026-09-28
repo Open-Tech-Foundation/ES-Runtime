@@ -250,7 +250,8 @@ fn any_free() -> std::io::Result<u16> {
 
 /// Ready timing in human units: whole milliseconds under a second, one
 /// decimal over it. Pure, so the banner's shape tests without a listener.
-fn format_duration(elapsed: std::time::Duration) -> String {
+/// Shared with `run --watch`, which times its restarts in the same words.
+pub(crate) fn format_duration(elapsed: std::time::Duration) -> String {
     if elapsed.as_secs() == 0 {
         format!("{}ms", elapsed.as_millis())
     } else {
