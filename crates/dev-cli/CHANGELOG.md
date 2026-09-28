@@ -32,6 +32,9 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **Serving any static folder is documented** (site `esdev/start/preview`).
+  `esdev preview --dir=<folder>` needs no project and no external package —
+  just an `index.html` at the folder's root.
 - **Full static semantics in the dev server** (DECISIONS D137). `esdev start`
   (frontend-only projects) and `esdev preview` answer validators (`ETag`,
   `Last-Modified`, `304`), single and multi-range requests (`206`,

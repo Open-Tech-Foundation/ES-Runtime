@@ -25,4 +25,20 @@ satisfies — so seeking a `<video>` and caching an asset behave in preview the
 way they will in production. A project whose output is a server
 bundle has nothing to serve — run it the way production will, under `esrun`.
 
+## Any static folder, no packages
+
+`--dir` serves whatever folder you point it at — no project, no `esdev.json`,
+no `npx serve` or `python3 -m http.server`. The folder needs an `index.html`
+at its root; everything else is served as-is, with the same fallback,
+validators, and ranges as above.
+
+```sh
+esdev preview --dir=./public        # → http://127.0.0.1:4173
+esdev preview --dir=./dist --port=5000
+```
+
+Handy for a mock API's docs folder, a downloaded theme, or the `dist/` of a
+tool that is not `esdev build` — anything with an entry document. Loopback
+only, like every endpoint `esdev` opens; `Ctrl-C` stops it.
+
 For the rebuild-and-reload workflow, return to [The dev loop](/esdev/start).
