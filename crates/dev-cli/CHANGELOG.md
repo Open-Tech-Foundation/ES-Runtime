@@ -46,6 +46,9 @@ is the point, since none of the three has any business in a deployment.
   (`spa`, `fullstack`, `docs`, `library`) previously wrote a config nothing
   could act on; the script runs `esdev typecheck` and JavaScript mode gains
   neither.
+- **`esdev create` no longer scaffolds a `build:debug` script.** The
+  `api`, `vanilla`, `micro-ui`, and `react` (fullstack mode) templates ship
+  only `build`; an unminified build is `esdev build` without `--minify`.
 - **WebSocket upgrades require a complete opening handshake.** The dev and
   inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
   WebSocket upgrade token, version 13, and a single 16-byte base64 key before
