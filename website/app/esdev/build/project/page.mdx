@@ -7,19 +7,51 @@ import { Callout } from "@opentf/web-docs";
 
 # Project builds
 
+## Project config shape
+
+Configuration is grouped by concern: `build.targets` describes outputs,
+`resolve.alias` describes shared import resolution, and `dev` describes the
+development loop. Project plugins stay at the top level and target plugins add
+to them. `jsx` and `test` also stay at the top level because they apply across
+build targets or to their own command.
+
+```json
+{
+  "build": { "targets": { "server": { "entry": "src/server.ts", "out": "dist/server.js" } } },
+  "resolve": { "alias": { "@": "./src" } },
+  "plugins": ["./plugins/mdx.mjs"],
+  "dev": {
+    "run": "server",
+    "app": { "port": 8080 },
+    "watch": { "targets": ["server"], "paths": ["./config"] },
+    "outDir": ".dev"
+  }
+}
+```
+
+`dev.app.port` is the app server's fallback port. In a static project,
+`dev.server.port` pins esdev's listener instead. The app owns the browser
+endpoint in full-stack mode; request proxying is not available yet. The old
+top-level `targets`, `alias`, and `start` keys remain accepted while projects
+migrate; new configs should use the grouped keys above. A top-level
+`permissions` block is rejected: development permissions come from esdev, and
+production grants belong on the `esrun` command.
+
 A command line describes one bundle. An app that renders on the server and
 hydrates in the browser is two, from two entries, with two shapes of output —
 and the site it prerenders is a third that has to *run*.
 
 ```json
 {
-  "targets": {
-    "server":    { "entry": "src/server.ts", "out": "dist/server.js",
-                   "assets": ["index.html", "public"] },
-    "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
-                   "platform": "browser" },
-    "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
-                   "then": "run" }
+  "build": {
+    "targets": {
+      "server":    { "entry": "src/server.ts", "out": "dist/server.js",
+                     "assets": ["index.html", "public"] },
+      "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
+                     "platform": "browser" },
+      "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
+                     "then": "run" }
+    }
   }
 }
 ```
@@ -45,7 +77,7 @@ esdev build src/app.ts           # ignores the project file entirely
 | `types` | `false` — skip declarations |
 | `dts-bundle` | `true`, or the entry to link from |
 | `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
-| `alias` (top level) | Specifier rewrites for every target |
+| `resolve.alias` | Specifier rewrites shared by every target and source command |
 | `plugins` | Plugins for this target, **added** to the project's |
 
 `define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
@@ -109,16 +141,16 @@ all: a project that is tested and never bundled still has something to say.
 
 ## Aliases
 
-Top level, because a rewrite is a property of the source tree rather than of
-one output:
+Under `resolve`, because a rewrite is a property of the source tree rather than
+of one output:
 
 ```json
-{ "alias": { "@": "./src", "react": "preact/compat" } }
+{ "resolve": { "alias": { "@": "./src", "react": "preact/compat" } } }
 ```
 
 A path is resolved against the project; anything else names a package. The
 longest match wins, so `@/ui` beats `@`. `--alias=@=./src` replaces the alias of
-the same name. `esdev build <entry>` reads the project's `alias`, `jsx` and
+the same name. `esdev build <entry>` reads the project's `resolve.alias`, `jsx` and
 `plugins` too, though not its targets: the entry is in the project's source tree.
 
 `esdev test` and `esdev <file>` apply the same aliases to what they run
@@ -162,9 +194,11 @@ loads them:
     "./plugins/mdx.js",
     { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }
   ],
-  "targets": {
-    "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
-                 "platform": "browser", "plugins": ["./plugins/only-web.js"] }
+  "build": {
+    "targets": {
+      "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
+                   "platform": "browser", "plugins": ["./plugins/only-web.js"] }
+    }
   }
 }
 ```

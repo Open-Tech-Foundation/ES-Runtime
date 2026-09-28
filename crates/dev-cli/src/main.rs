@@ -18,9 +18,8 @@
 //! flags starts, because an inner loop that dies on an unnamed capability at
 //! every save is the cost D59 put on this binary to avoid. The gap is what
 //! `--trace-permissions` closes: it prints the `esrun` line that grants exactly
-//! what the run reached for. `esdev start` is narrower still — it spawns the
-//! child under `esdev.json`'s `permissions`, so the dev loop runs under the
-//! production grant.
+//! what the run reached for. `esdev start` keeps the development default for
+//! its server child; production grants belong on the `esrun` command.
 //!
 //! Argument grammar is `esrun`'s, unchanged: every flag is `--flag` or
 //! `--flag=value` — a value is never a separate argument — and esdev's flags
@@ -467,13 +466,13 @@ USAGE:
 
 OPTIONS:
     --port=<n>                  The port you open, and it gets that one or
-                                fails. Without it: your `listen` grant's port,
+                                fails. Without it: the app's `dev.app.port`,
                                 or 5173 for a frontend project — and any free
                                 port if that is taken, printed when it moves
     --no-hot                    Reload the page on a change instead of patching
                                 the changed module into it
     --config=<path>             Read this instead of ./esdev.json
-    --allow-read=<paths>        Also watch explicitly granted read paths
+    --allow-read=<paths>        Also watch these paths for changes
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
 
@@ -481,11 +480,13 @@ It is `esdev build` on a loop. A dev build differs from a release build in
 exactly two ways — process.env.NODE_ENV is \"development\", and nothing is
 content-hashed. A build that fails leaves everything running.
 
-The server is yours: `\"start\": { \"run\": \"server\" }` names the target whose
-output esdev runs as a child process, under the config's `permissions`, and
-restarts with a SIGTERM — the same graceful stop production gets. It is the
-same file production runs; nothing wraps it. A project with no server of its
-own is served from its output directory instead, with an index.html fallback.
+The server is yours: `\"dev\": { \"run\": \"server\" }` names the target whose
+output esdev runs as a child process with esdev's normal development
+permissions, and restarts with a SIGTERM — the same graceful stop production
+gets. Declare its default port with `dev.app.port`; esdev passes a selected
+free port through `PORT`. It is the same file production runs; nothing wraps
+it. A project with no server of its own is served from its output directory
+instead, with an index.html fallback.
 
     The dev loop:  https://esrun.opentechf.org/esdev/start
 ";
@@ -527,10 +528,10 @@ A PROJECT (esdev.json)
     and hydrates in the browser is two bundles a command line cannot describe:
 
         {
-          \"targets\": {
+          \"build\": { \"targets\": {
             \"server\": { \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" },
             \"web\":    { \"entry\": \"index.html\", \"outdir\": \"dist\" }
-          }
+          } }
         }
 
     An .html entry is a different kind of build: the tags in the document are
@@ -1428,14 +1429,12 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     let mut port: Option<u16> = None;
     let mut hot = true;
     let mut options = RunOptions::default();
-    let mut permission_args = Vec::new();
+    let mut watch_paths = Vec::new();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
-        // One shared flag applies here, and it is the one a restart uses. The
-        // rest shape a *run*, and `start` does not run your program — it runs
-        // the target's output as a child, under what esdev.json grants. Taking
-        // them and dropping them would be a flag somebody keeps passing and
-        // keeps believing, so they fall through to the error below.
+        // `--shutdown-grace` applies to the restart. Other permission flags
+        // shape a restricted run; `start` uses esdev's normal development
+        // permissions for its server child, so those flags are refused below.
         if flag == "--shutdown-grace" {
             options.try_flag(flag, value)?;
             continue;
@@ -1463,16 +1462,14 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                     Some(value) => format!("--allow-read={value}"),
                     None => "--allow-read".to_string(),
                 };
-                permission_args.push(permission);
+                watch_paths.push(permission);
             }
             flag if RunOptions::is_shared_flag(flag) => {
                 return Err(format!(
-                    "{flag} shapes a run, and `esdev start` does not run your program — it \
-                     builds what {} describes and runs the output as a child process, under \
-                     that file's `permissions`.\n\n\
-                     `esdev <file> {flag}=…` takes it, and what the child may reach is \
-                     `permissions` in that file.",
-                    config::FILE_NAME
+                    "{flag} shapes a restricted run; `esdev start` runs its server child with \
+                     esdev's normal development permissions. Put production grants on the \
+                     `esrun` command that deploys the built program.\n\n\
+                     `esdev <file> {flag}=…` takes this flag."
                 ));
             }
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
@@ -1480,7 +1477,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     }
     let settings = settings::Settings::load(config_path.as_deref())?;
     let project = match settings.has_project {
-        true => settings.with_start(port, permission_args),
+        true => settings.with_start(port, watch_paths),
         // No esdev.json — but an OTF Web project was never going to have one.
         // Refusing with the missing file is a dead end there; name the
         // toolchain its scripts call instead.

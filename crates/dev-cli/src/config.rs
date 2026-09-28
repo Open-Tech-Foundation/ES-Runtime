@@ -12,20 +12,16 @@
 //!
 //! # Why JSON, and not `esdev.config.ts`
 //!
-//! Vite and Next both take an executable config, and both are right to: their
-//! configs carry **plugins**, and a plugin is a function, which JSON cannot
-//! hold. esdev has no plugin API, no resolver hooks and no transform pipeline
-//! to configure, so an executable config here would be a program whose entire
-//! content is data.
+//! Vite and Next both take an executable config because their plugins are
+//! functions. esdev has build plugins too, but the config names plugin modules
+//! and their JSON options; the functions themselves live in those modules.
+//! That keeps project config as data instead of executing arbitrary config
+//! code before a build or dev run starts.
 //!
-//! There is also an ordering problem specific to this project. This file
-//! carries `permissions`, and executing a config to learn what a run may do
-//! means running guest code *before* that has been decided. Vite has no
-//! capability model, so the question never arises for them; here it would be a
-//! hole in the one property the runtime is built around. The day esdev grows a
-//! hook that takes a function, this becomes a real question again — and the key
-//! names below are chosen so a future `esdev.config.ts` can export the same
-//! shape and leave every existing `esdev.json` valid.
+//! Executing a config to learn what to build would run guest code before the
+//! runtime exists. If a future feature needs functions directly in config, this
+//! question can be revisited; today's plugin module references already express
+//! the supported hooks without an executable config.
 //!
 //! # `esrun` never reads this file
 //!
@@ -33,14 +29,12 @@
 //! picks up a checked-in file granting itself capabilities is precisely what the
 //! capability model exists to prevent — the grant a service runs under must be
 //! visible on the command that deployed it, not in a file that travelled with
-//! the source. `permissions` here shapes the child that `esdev start` runs on a
-//! developer's machine, which is how you develop *under* production's grants
-//! without being able to ship them by accident.
+//! the source. A dev server launched by `esdev start` runs with esdev's normal
+//! development permissions. Production grants belong on the `esrun` command
+//! that deploys the built program.
 
 use std::path::{Path, PathBuf};
 
-use es_runtime_cli_common::args::try_permission_flag;
-use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use serde_json::{Map, Value};
 
 /// The file looked for when `--config` did not name one.
@@ -73,14 +67,9 @@ pub struct Project {
     pub targets: Vec<Target>,
     /// What `esdev start` does, if the file says.
     pub start: Start,
-    /// The permission flags the dev loop's child runs under, **as flags**.
-    ///
-    /// Kept in the spelling a person would type rather than as a resolved
-    /// capability set, because that is what they are: `esdev start` hands them
-    /// to a child process, and what it hands over should be readable in `ps`
-    /// and pasteable into a terminal. The translation happens once, here, and
-    /// is checked by `esrun`'s own parser on the way through.
-    pub permissions: Vec<String>,
+    /// Additional roots from `dev.watch.paths`, added to the dev loop's watch
+    /// list. They do not grant access to the server child.
+    pub watch_paths: Vec<String>,
     /// Specifier rewrites applied to every target's build: `find` → what it is
     /// replaced with, longest prefix first.
     ///
@@ -149,6 +138,9 @@ pub struct Start {
     /// output of the one HTML target, since that is what a frontend-only stack
     /// has.
     pub serve: Option<String>,
+    /// The app's default port. When `esdev start` moves a busy port, it sets
+    /// `PORT` in the server child to the free one it selected.
+    pub listen: Option<u16>,
     /// **The port you open.** For a project with a `run` target that is the
     /// application's own port; for a frontend project, where esdev serves the
     /// output itself, it is esdev's listener. Either way it is the address a
@@ -391,6 +383,11 @@ const TARGET_KEYS: &[&str] = &[
 /// The keys the file may carry at the top level.
 const TOP_LEVEL_KEYS: &[&str] = &[
     "$schema",
+    "build",
+    "dev",
+    "resolve",
+    // Kept as input aliases for existing projects; new configs use the
+    // grouped sections above.
     "targets",
     "start",
     "permissions",
@@ -406,7 +403,14 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// command that uses it has not been written yet is deliberate: a typo in
 /// `start` should be reported by the build that read the file, not held until
 /// the day somebody runs the other command.
-const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "devdir"];
+const START_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port", "devdir"];
+
+const BUILD_KEYS: &[&str] = &["targets"];
+const RESOLVE_KEYS: &[&str] = &["alias"];
+const DEV_KEYS: &[&str] = &["run", "watch", "serve", "app", "server", "outDir"];
+const DEV_WATCH_KEYS: &[&str] = &["targets", "paths"];
+const DEV_APP_KEYS: &[&str] = &["port"];
+const DEV_SERVER_KEYS: &[&str] = &["port"];
 
 /// The keys `test` may carry.
 const TEST_KEYS: &[&str] = &[
@@ -549,19 +553,100 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     let root = object(&root, name, "the file")?;
     known_keys(root, name, "", TOP_LEVEL_KEYS)?;
 
+    // The grouped form is the public shape. Existing root-level fields remain
+    // readable as aliases so projects can migrate without a broken build.
+    let build = root
+        .get("build")
+        .map(|v| object(v, name, "`build`"))
+        .transpose()?;
+    if let Some(build) = build {
+        known_keys(build, name, "`build`", BUILD_KEYS)?;
+    }
+    let resolve = root
+        .get("resolve")
+        .map(|v| object(v, name, "`resolve`"))
+        .transpose()?;
+    if let Some(resolve) = resolve {
+        known_keys(resolve, name, "`resolve`", RESOLVE_KEYS)?;
+    }
+    let dev = root
+        .get("dev")
+        .map(|v| object(v, name, "`dev`"))
+        .transpose()?;
+    if let Some(dev) = dev {
+        known_keys(dev, name, "`dev`", DEV_KEYS)?;
+        if let Some(watch) = dev.get("watch") {
+            known_keys(
+                object(watch, name, "`dev.watch`")?,
+                name,
+                "`dev.watch`",
+                DEV_WATCH_KEYS,
+            )?;
+        }
+        if let Some(app) = dev.get("app") {
+            known_keys(
+                object(app, name, "`dev.app`")?,
+                name,
+                "`dev.app`",
+                DEV_APP_KEYS,
+            )?;
+        }
+        if let Some(server) = dev.get("server") {
+            let server = object(server, name, "`dev.server`")?;
+            if server.contains_key("proxy") {
+                return Err(format!(
+                    "{name}: `dev.server.proxy` is not available yet. Full-stack apps own the HTTP endpoint, and esdev does not proxy requests or HMR traffic."
+                ));
+            }
+            known_keys(server, name, "`dev.server`", DEV_SERVER_KEYS)?;
+        }
+    }
+    let grouped_targets = build.and_then(|build| build.get("targets"));
+    if build.is_some() && grouped_targets.is_none() {
+        return Err(format!(
+            "{name}: `build` needs a `targets` object. Describe one or more named outputs under `build.targets`."
+        ));
+    }
+    if grouped_targets.is_some() && root.contains_key("targets") {
+        return Err(format!(
+            "{name} sets both `build.targets` and legacy top-level `targets`; keep one."
+        ));
+    }
+    let targets_value = grouped_targets.or_else(|| root.get("targets"));
+    let alias_value = resolve.and_then(|resolve| resolve.get("alias"));
+    if alias_value.is_some() && root.contains_key("alias") {
+        return Err(format!(
+            "{name} sets both `resolve.alias` and legacy top-level `alias`; keep one."
+        ));
+    }
+    let alias_value = alias_value.or_else(|| root.get("alias"));
+    let dev_watch = dev.and_then(|dev| dev.get("watch"));
+    let legacy_start = root.get("start");
+    if dev.is_some() && legacy_start.is_some() {
+        return Err(format!(
+            "{name} sets both `dev` and legacy `start`; keep one."
+        ));
+    }
+    if root.contains_key("permissions") {
+        return Err(format!(
+            "{name}: `permissions` is not an esdev setting. Development runs with esdev's development permissions; pass production grants to `esrun`. Put extra watched files under `dev.watch.paths`."
+        ));
+    }
+
     // `targets` is optional, because a config is no longer only about building:
     // a project that is tested and never bundled still has a `test` section and
     // a `jsx` one, and making it invent a target to say so would be a worse file
     // than no file. What is refused is a config that says *nothing*.
     // The sections that mean something without a build: how the project is
     // tested, how its JSX compiles, what its specifiers resolve to.
-    const BUILDLESS_KEYS: &[&str] = &["test", "jsx", "alias", "plugins", "permissions"];
-    let targets = match root.get("targets") {
+    const BUILDLESS_KEYS: &[&str] = &["test", "jsx", "alias", "resolve", "plugins"];
+    let targets = match targets_value {
         Some(targets) => object(targets, name, "`targets`")?.clone(),
         None => {
             // `start` builds and serves the targets, so a file that names one
             // without them is still incomplete.
-            if !root.contains_key("start")
+            if legacy_start.is_none()
+                && dev.is_none()
                 && root
                     .keys()
                     .any(|key| BUILDLESS_KEYS.contains(&key.as_str()))
@@ -579,7 +664,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
             }
         }
     };
-    if root.contains_key("targets") && targets.is_empty() {
+    if targets_value.is_some() && targets.is_empty() {
         return Err(format!(
             "{name} has no targets in `targets`.\n\n\
              An empty object builds nothing; remove the key, or name what it builds."
@@ -605,22 +690,22 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     // would change under a dependency edit nobody connected to this file.
     targets.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let start = match root.get("start") {
-        Some(start) => read_start(start, &targets, name)?,
-        None => Start::default(),
+    let start = match dev {
+        Some(dev) => read_dev(dev, &targets, name)?,
+        None => match legacy_start {
+            Some(start) => read_start(start, &targets, name)?,
+            None => Start::default(),
+        },
     };
-    let permissions = match root.get("permissions") {
-        Some(permissions) => permission_flags(permissions, name)?,
-        None => Vec::new(),
-    };
-    let alias = aliases(root.get("alias"), name, &dir)?;
+    let watch_paths = read_watch_paths(dev_watch, name)?;
+    let alias = aliases(alias_value, name, &dir)?;
     let test = read_test(root.get("test"), name)?;
     let jsx = read_jsx(root.get("jsx"), name)?;
     Ok(Some(Project {
         dir,
         targets,
         start,
-        permissions,
+        watch_paths,
         plugins,
         shared_plugins,
         alias,
@@ -1285,15 +1370,73 @@ fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, St
         None => None,
         Some(serve) => Some(string(serve, file, "`start`'s `serve`")?.to_string()),
     };
+    let listen = read_port(map, "listen", file)?;
     let port = read_port(map, "port", file)?;
     let devdir = read_devdir(map, file, targets)?;
     Ok(Start {
         run,
         watch,
         serve,
+        listen,
         port,
         devdir,
     })
+}
+
+/// Reads the grouped development settings into the runtime's stable start
+/// model. The app and esdev server ports have separate homes even though the
+/// current full-stack runner still exposes the app directly.
+fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Result<Start, String> {
+    let mut normalized = Map::new();
+    for key in ["run", "serve"] {
+        if let Some(value) = value.get(key) {
+            normalized.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(watch) = value.get("watch") {
+        let watch = object(watch, file, "`dev.watch`")?;
+        if let Some(targets) = watch.get("targets") {
+            normalized.insert("watch".to_string(), targets.clone());
+        }
+    }
+    if let Some(app) = value.get("app") {
+        let app = object(app, file, "`dev.app`")?;
+        if let Some(port) = app.get("port") {
+            normalized.insert("listen".to_string(), port.clone());
+        }
+    }
+    if let Some(server) = value.get("server") {
+        let server = object(server, file, "`dev.server`")?;
+        if let Some(port) = server.get("port") {
+            normalized.insert("port".to_string(), port.clone());
+        }
+    }
+    if let Some(out_dir) = value.get("outDir") {
+        normalized.insert("devdir".to_string(), out_dir.clone());
+    }
+    let start = read_start(&Value::Object(normalized), targets, file)?;
+    if start.run.is_some() && value.get("server").is_some() {
+        return Err(format!(
+            "{file}: `dev.server` configures esdev's static-site listener and cannot be combined with `dev.run`; the app owns the endpoint in full-stack mode."
+        ));
+    }
+    if start.run.is_none() && value.get("app").is_some() {
+        return Err(format!(
+            "{file}: `dev.app` requires `dev.run` to name the server target."
+        ));
+    }
+    Ok(start)
+}
+
+/// Additional source paths for the dev watcher. They are deliberately plain
+/// paths rather than permission grants.
+fn read_watch_paths(value: Option<&Value>, file: &str) -> Result<Vec<String>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let map = object(value, file, "`dev.watch`")?;
+    let paths = string_array(map.get("paths"), file, "`dev.watch`'s `paths`")?;
+    Ok(paths)
 }
 
 /// `start`'s `devdir`: the directory the dev loop's builds go into.
@@ -1397,8 +1540,9 @@ fn read_port(map: &Map<String, Value>, key: &str, file: &str) -> Result<Option<u
 /// function application. The file holds the argument instead —
 /// `{ "module": "…", "options": { … } }` — and esdev makes the call. That is
 /// the whole of the difference from an executable config, and it keeps
-/// `permissions` decidable without running anything: this file is still read as
-/// data, and the plugins load *after* what the run may do has been settled.
+/// project settings decidable without running anything: this file is still
+/// read as data, and the plugins load *after* the build and start settings have
+/// been parsed.
 ///
 /// Two spellings, because most plugins need no options:
 ///
@@ -1509,84 +1653,6 @@ fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {
          Targets in this file: {}.",
         names.join(", ")
     )
-}
-
-/// Validates `permissions` by translating it into the flags it stands for and
-/// handing them to the parser `esrun` uses.
-///
-/// **The translation is the point.** A second dialect of what `read` means would
-/// be a second thing to keep true, and the one that drifted would be the one
-/// granting capabilities. Here `{"allow": {"read": ["./data"]}}` becomes
-/// `--allow-read=./data` and is checked by exactly the code that checks the
-/// flag — so an unknown capability, a scope on a capability that takes none, and
-/// a grant that moves the wrong way all fail here with the message they have
-/// always had.
-///
-/// Checked against [`Baseline::Nothing`], because this block states the grant
-/// the *deployed* program runs under — an `esrun` line — even though `esdev
-/// start` is what spawns it. The returned list is therefore pinned to its mode
-/// with an explicit `--deny-all`/`--allow-all` (D65), so it means the same thing
-/// whichever binary is handed it and a developer's `esdev start` child runs
-/// under exactly the production grant.
-fn permission_flags(value: &Value, file: &str) -> Result<Vec<String>, String> {
-    let map = object(value, file, "`permissions`")?;
-    known_keys(map, file, "`permissions`", &["deny", "allow"])?;
-    let mut permissions = Permissions::new(Baseline::Nothing);
-    let mut flags = Vec::new();
-
-    for name in string_array(map.get("deny"), file, "`permissions`'s `deny`")? {
-        let flag = format!("--deny-{name}");
-        try_permission_flag(&mut permissions, &flag, None)
-            .map_err(|e| format!("{file}: `permissions`: {e}"))?;
-        flags.push(flag);
-    }
-    if let Some(allow) = map.get("allow") {
-        let allow = object(allow, file, "`permissions`'s `allow`")?;
-        for (name, scopes) in allow {
-            let flag = format!("--allow-{name}");
-            let at = format!("`permissions`'s `allow.{name}`");
-            // `true` is the unnarrowed grant, the shape `--allow-net` has. A
-            // list narrows it. Both spellings exist because both flags do.
-            let value = match scopes {
-                Value::Bool(true) => None,
-                Value::Array(_) => Some(string_array(Some(scopes), file, &at)?.join(",")),
-                other => {
-                    return Err(format!(
-                        "{file}: {at} is {other}, which is neither a grant nor a \
-                         narrowing.\n\n\
-                         Write `true` to grant it outright, or a list to narrow it: \
-                         \"read\": [\"./data\"]."
-                    ));
-                }
-            };
-            try_permission_flag(&mut permissions, &flag, value.as_deref())
-                .map_err(|e| format!("{file}: `permissions`: {e}"))?;
-            flags.push(match &value {
-                Some(scopes) => format!("{flag}={scopes}"),
-                None => flag,
-            });
-        }
-    }
-    // Resolving is what rejects a grant that contradicts the denials around it,
-    // and it is cheap; doing it here means the file is wrong when it is read
-    // rather than when a run is finally attempted with it.
-    permissions
-        .resolve()
-        .map_err(|e| format!("{file}: `permissions`: {e}"))?;
-    permissions
-        .scopes()
-        .map_err(|e| format!("{file}: `permissions`: {e}"))?;
-    // Pin the mode. A file that already says `"deny": ["all"]` or
-    // `"allow": {"all": true}` has said it; anything else was checked against
-    // "nothing granted" and has to carry that with it, or `esdev start` — whose
-    // own baseline is everything — would read the same list the other way round.
-    if !flags
-        .iter()
-        .any(|f| f == "--deny-all" || f == "--allow-all")
-    {
-        flags.insert(0, "--deny-all".to_string());
-    }
-    Ok(flags)
 }
 
 /// Reads a JSON object, or says what was found instead.
@@ -2378,11 +2444,14 @@ mod tests {
         assert!(err.contains("is not a target"), "{err}");
         assert!(err.contains("Did you mean \"server\"?"), "{err}");
 
-        read(
+        let start = read(
             r#"{ "targets": { "server": { "entry": "s.ts" } },
-                 "start": { "run": "server", "watch": ["server"], "port": 5173 } }"#,
+                 "start": { "run": "server", "watch": ["server"], "listen": 8080, "port": 5173 } }"#,
         )
-        .expect("parsed");
+        .expect("parsed")
+        .start;
+        assert_eq!(start.listen, Some(8080));
+        assert_eq!(start.port, Some(5173));
     }
 
     /// The dev loop writes into `.dev` unless the file says otherwise, and the
@@ -2449,50 +2518,55 @@ mod tests {
         assert!(empty.contains("empty"), "{empty}");
     }
 
-    /// Permissions go through the flag parser, so the file cannot mean anything
-    /// the command line does not.
+    /// The grouped schema carries project settings by domain, and permission
+    /// declarations are refused because esdev is not a deployment command.
     #[test]
-    fn permissions_are_checked_by_the_flag_parser() {
-        read(
-            r#"{ "targets": { "a": { "entry": "a.ts" } },
-                 "permissions": { "deny": ["all"], "allow": { "read": ["./data"], "listen": true } } }"#,
-        )
-        .expect("parsed");
-
-        let unknown = read(
-            r#"{ "targets": { "a": { "entry": "a.ts" } },
-                 "permissions": { "deny": ["all"], "allow": { "filesystem": true } } }"#,
-        )
-        .expect_err("refused");
-        assert!(unknown.contains("permissions"), "{unknown}");
-
-        // A bare grant is the whole point after D65: the block states a deploy
-        // grant, and a deployment starts from nothing.
+    fn grouped_sections_parse_and_permissions_are_not_project_config() {
         let project = read(
-            r#"{ "targets": { "a": { "entry": "a.ts" } },
-                 "permissions": { "allow": { "read": true } } }"#,
+            r#"{
+                "build": { "targets": { "server": { "entry": "src/server.ts" } } },
+                "resolve": { "alias": { "@": "./src" } },
+                "dev": {
+                    "run": "server",
+                    "app": { "port": 8080 },
+                    "watch": { "targets": ["server"], "paths": ["./config"] },
+                    "outDir": ".work"
+                }
+            }"#,
         )
         .expect("parsed");
-        // ...and it is pinned to that mode on the way out, so `esdev start` —
-        // whose own baseline is everything — spawns the child under the same
-        // grant `esrun` would.
-        assert_eq!(project.permissions, ["--deny-all", "--allow-read"]);
+        assert_eq!(project.targets[0].name, "server");
+        assert_eq!(project.start.run.as_deref(), Some("server"));
+        assert_eq!(project.start.listen, Some(8080));
+        assert_eq!(project.start.watch, ["server"]);
+        assert_eq!(project.watch_paths, ["./config"]);
+        assert_eq!(project.alias[0].0, "@");
+        assert_eq!(project.start.devdir(), ".work");
 
-        // A denial with nothing granted is the flag parser's error, reported here.
-        let ungrounded = read(
-            r#"{ "targets": { "a": { "entry": "a.ts" } },
-                 "permissions": { "deny": ["read"] } }"#,
-        )
-        .expect_err("refused");
-        assert!(ungrounded.contains("requires --allow-all"), "{ungrounded}");
+        let err = read(r#"{ "permissions": { "allow": { "net": true } } }"#)
+            .expect_err("permission block refused");
+        assert!(err.contains("not an esdev setting"), "{err}");
 
-        // Which the file says as `"allow": {"all": true}`, the shape that means
-        // "everything, minus these".
-        read(
-            r#"{ "targets": { "a": { "entry": "a.ts" } },
-                 "permissions": { "deny": ["read"], "allow": { "all": true } } }"#,
+        let static_site = read(
+            r#"{
+                "build": { "targets": { "web": { "entry": "index.html" } } },
+                "dev": { "server": { "port": 5174 } }
+            }"#,
         )
-        .expect("parsed");
+        .expect("static dev server config");
+        assert_eq!(static_site.start.port, Some(5174));
+
+        let proxy = read(
+            r#"{
+                "build": { "targets": { "web": { "entry": "index.html" } } },
+                "dev": { "server": { "proxy": { "/api": "http://localhost:8080" } } }
+            }"#,
+        )
+        .expect_err("proxy behavior is not implemented");
+        assert!(
+            proxy.contains("`dev.server.proxy` is not available yet"),
+            "{proxy}"
+        );
     }
 
     /// A document decides its own shape, so the keys that would decide it here

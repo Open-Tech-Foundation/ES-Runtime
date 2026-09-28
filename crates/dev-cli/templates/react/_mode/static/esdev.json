@@ -2,20 +2,28 @@
   "jsx": {
     "importSource": "react"
   },
-  "targets": {
-    "web": {
-      "entry": "index.html",
-      "outdir": "dist",
-      "refresh": "react",
-      "plugins": ["./plugins/react-refresh.mjs"]
-    },
-    "prerender": {
-      "entry": "src/prerender.tsx",
-      "out": "dist/prerender.js",
-      "then": "run"
+  "build": {
+    "targets": {
+      "web": {
+        "entry": "index.html",
+        "outdir": "dist",
+        "refresh": "react",
+        "plugins": [
+          "./plugins/react-refresh.mjs"
+        ]
+      },
+      "prerender": {
+        "entry": "src/prerender.tsx",
+        "out": "dist/prerender.js",
+        "then": "run"
+      }
     }
   },
-  "start": {
-    "watch": ["web"]
+  "dev": {
+    "watch": {
+      "targets": [
+        "web"
+      ]
+    }
   }
 }

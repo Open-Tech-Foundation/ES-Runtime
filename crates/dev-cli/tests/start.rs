@@ -6,10 +6,10 @@
 //! checks that the development bundle is under the dev directory — and that
 //! `dist/`, the deployment `esdev build` writes, was never touched.
 //!
-//! The app port is never pinned: the fixture grants one, the loop takes it or
-//! any free one, and the test reads which from the loop's own stderr. A fixed
-//! port would collide with whatever else is running, and the symptom would not
-//! read as a collision.
+//! The app port is never pinned: the fixture declares a default, the loop takes
+//! it or any free one, and the test reads which from the loop's own stderr. A
+//! fixed port would collide with whatever else is running, and the symptom
+//! would not read as a collision.
 
 // A test reporting why it skipped is talking to whoever reads the run.
 #![allow(clippy::print_stderr)]
@@ -17,6 +17,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 const SERVER: &str = r#"import { serve } from "runtime:http";
@@ -122,14 +123,20 @@ fn get(port: u16) -> String {
 }
 
 fn server_project(devdir: Option<&str>) -> String {
+    // The start integration tests run in parallel. Distinct declared ports
+    // keep their app listeners independent instead of making a test depend on
+    // whether another one won the probe/release race.
+    static NEXT_PORT: AtomicU16 = AtomicU16::new(20_000);
+    let listen = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
     let start = match devdir {
-        Some(dev) => format!(r#""start": {{ "run": "server", "devdir": "{dev}" }}"#),
-        None => r#""start": { "run": "server" }"#.to_string(),
+        Some(dev) => format!(
+            r#""dev": {{ "run": "server", "app": {{ "port": {listen} }}, "outDir": "{dev}" }}"#
+        ),
+        None => format!(r#""dev": {{ "run": "server", "app": {{ "port": {listen} }} }}"#),
     };
     format!(
-        r#"{{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }},
-              {start},
-              "permissions": {{ "allow": {{ "listen": ["8080"], "env": ["PORT"] }} }} }}"#
+        r#"{{ "build": {{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }} }},
+              {start} }}"#
     )
 }
 
@@ -165,6 +172,38 @@ fn a_named_dev_directory_is_used_instead() {
     assert!(
         !dir.join(".dev").exists() && !dir.join("dist").exists(),
         "a build landed outside the named dev directory"
+    );
+}
+
+#[test]
+fn the_dev_child_uses_esdev_permissions_not_the_configured_production_grant() {
+    let held = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("hold the default port");
+    let listen = held.local_addr().expect("held port").port();
+    let dir = project(
+        "development-permissions",
+        &format!(
+            r#"{{
+              "build": {{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }} }},
+              "dev": {{ "run": "server", "app": {{ "port": {listen} }} }}
+            }}"#
+        ),
+    );
+    std::fs::write(
+        dir.join("src/server.ts"),
+        format!(
+            "import {{ serve }} from \"runtime:http\";\n\
+             import {{ env }} from \"runtime:process\";\n\
+             serve({{ port: Number(env.PORT ?? \"{listen}\") }}, () => new Response(\"ok\"));\n"
+        ),
+    )
+    .expect("write server that follows PORT");
+
+    let mut dev = Loop::start(dir);
+    let port = dev.wait_for_app();
+    assert_ne!(port, listen, "esdev moved off the occupied declared port");
+    assert!(
+        get(port).contains("ok"),
+        "the development child can read PORT"
     );
 }
 

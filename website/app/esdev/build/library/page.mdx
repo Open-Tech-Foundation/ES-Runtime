@@ -129,14 +129,16 @@ constructs such as module augmentations stop the build and name themselves.
 
 ```json
 {
-  "targets": {
-    "lib": {
-      "entry": "src",
-      "lib": true,
-      "format": ["esm", "cjs"],
-      "outdir": "dist",
-      "types": true,
-      "assets": ["README.md", "LICENSE"]
+  "build": {
+    "targets": {
+      "lib": {
+        "entry": "src",
+        "lib": true,
+        "format": ["esm", "cjs"],
+        "outdir": "dist",
+        "types": true,
+        "assets": ["README.md", "LICENSE"]
+      }
     }
   }
 }

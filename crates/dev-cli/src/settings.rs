@@ -81,8 +81,10 @@ pub struct Settings {
     /// The targets, in name order, with the build flags applied.
     pub targets: Vec<Target>,
     pub start: Start,
-    /// The grant the dev loop's child runs under, as flags.
-    pub permissions: Vec<String>,
+    /// Extra paths the dev loop watches, plus any paths supplied by
+    /// `--allow-read`. Config paths are plain paths; CLI values retain their
+    /// flag spelling until the watcher resolves them.
+    pub watch_paths: Vec<String>,
     /// The file's `test` section. [`crate::test`] resolves it against the
     /// test flags, which are the one command whose flags outnumber the file.
     pub test: TestSettings,
@@ -119,7 +121,7 @@ impl Settings {
             plugins: project.plugins,
             targets: project.targets,
             start: project.start,
-            permissions: project.permissions,
+            watch_paths: project.watch_paths,
             test: project.test,
         }
     }
@@ -135,7 +137,7 @@ impl Settings {
             plugins: Vec::new(),
             targets: Vec::new(),
             start: Start::default(),
-            permissions: Vec::new(),
+            watch_paths: Vec::new(),
             test: TestSettings::default(),
         }
     }
@@ -155,12 +157,12 @@ impl Settings {
     }
 
     /// `esdev start`'s flags: `--port` replaces the file's, and each
-    /// `--allow-read` adds to the grant the dev loop's child runs under.
-    pub fn with_start(mut self, port: Option<u16>, grants: Vec<String>) -> Settings {
+    /// `--allow-read` adds paths for the dev loop to watch.
+    pub fn with_start(mut self, port: Option<u16>, watch_paths: Vec<String>) -> Settings {
         if let Some(port) = port {
             self.start.port = Some(port);
         }
-        self.permissions.extend(grants);
+        self.watch_paths.extend(watch_paths);
         self
     }
 
@@ -334,15 +336,18 @@ mod tests {
         assert_eq!(target.conditions, ["c", "d"]);
     }
 
-    /// `--port` replaces the file's; `--allow-read` adds to its grant.
+    /// `--port` replaces the file's; `--allow-read` adds to its watch paths.
     #[test]
-    fn start_flags_replace_the_port_and_add_to_the_grant() {
+    fn start_flags_replace_the_port_and_add_watch_paths() {
         let mut settings = Settings::empty(PathBuf::from("/p"));
         settings.start.port = Some(3000);
-        settings.permissions = vec!["--allow-net".to_string()];
+        settings.watch_paths = vec!["--allow-read=./assets".to_string()];
         let settings = settings.with_start(Some(4000), vec!["--allow-read=./data".to_string()]);
         assert_eq!(settings.start.port, Some(4000));
-        assert_eq!(settings.permissions, ["--allow-net", "--allow-read=./data"]);
+        assert_eq!(
+            settings.watch_paths,
+            ["--allow-read=./assets", "--allow-read=./data"]
+        );
         let kept = Settings::empty(PathBuf::from("/p")).with_start(None, Vec::new());
         assert_eq!(kept.start.port, None);
     }

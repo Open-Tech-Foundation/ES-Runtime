@@ -1,18 +1,21 @@
 {
-  "targets": {
-    "server": {
-      "entry": "src/server.ts",
-      "out": "dist/server.js"
+  "build": {
+    "targets": {
+      "server": {
+        "entry": "src/server.ts",
+        "out": "dist/server.js"
+      }
     }
   },
-  "start": {
+  "dev": {
     "run": "server",
-    "watch": ["server"]
-  },
-  "permissions": {
-    "allow": {
-      "listen": ["8080"],
-      "env": ["PORT"]
+    "watch": {
+      "targets": [
+        "server"
+      ]
+    },
+    "app": {
+      "port": 8080
     }
   }
 }

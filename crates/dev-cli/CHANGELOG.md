@@ -26,6 +26,17 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **Grouped project configuration by concern.** Build outputs now live under
+  `build.targets`, aliases under `resolve.alias`, and development settings
+  under `dev`; `dev.watch.paths` replaces permission-shaped watch paths.
+  Project permission blocks are rejected: development uses esdev's normal
+  permissions, and deployment grants belong on `esrun`. Existing root-level
+  `targets`, `alias`, and `start` remain accepted as migration aliases.
+- **`esdev start` runs its server child with esdev's development permissions.**
+  `esdev.json` no longer supplies permission flags to that child; production
+  grants belong on the `esrun` command. `dev.app.port` declares the app's
+  default port and lets esdev pass a free replacement through `PORT` when the
+  default is busy. API and React full-stack templates use this setting.
 - **Renamed `esdev check` to `esdev typecheck`.** The old name no longer works;
   run `esdev typecheck [args...]` to run `tsc --noEmit` through the project's
   package manager.

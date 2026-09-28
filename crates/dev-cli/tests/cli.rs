@@ -457,8 +457,8 @@ fn upgrade_dry_run_takes_no_value() {
 }
 
 /// A flag that is taken and dropped is one somebody keeps passing and keeps
-/// believing. `esdev start` does not run your program — it runs a build's
-/// output as a child, under esdev.json's grants — so the run-shaping flags it
+/// believing. `esdev start` runs the server build's output as a child, under
+/// esdev's development permissions — so the run-shaping flags it
 /// used to accept and ignore are refused by name. `--shutdown-grace` is the one
 /// that does apply: it bounds the drain on a restart.
 ///
@@ -476,7 +476,8 @@ fn start_refuses_the_run_flags_it_cannot_apply() {
             .expect("spawn esdev start");
         assert!(!out.status.success(), "{flag} was accepted");
         assert!(
-            stderr(&out).contains("does not run your program"),
+            stderr(&out)
+                .contains("runs its server child with esdev's normal development permissions"),
             "{flag}: {}",
             stderr(&out)
         );
@@ -489,7 +490,8 @@ fn start_refuses_the_run_flags_it_cannot_apply() {
     assert!(!grace.status.success());
     assert!(stderr(&grace).contains("esdev.json"), "{}", stderr(&grace));
     assert!(
-        !stderr(&grace).contains("does not run your program"),
+        !stderr(&grace)
+            .contains("runs its server child with esdev's normal development permissions"),
         "{}",
         stderr(&grace)
     );
@@ -1837,8 +1839,8 @@ fn flag_project(name: &str) -> PathBuf {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "alias": { "@": "./src/a" },
-             "targets": { "app": { "entry": "src/app.ts", "out": "dist/app.js" } } }"#,
+        r#"{ "resolve": { "alias": { "@": "./src/a" } },
+             "build": { "targets": { "app": { "entry": "src/app.ts", "out": "dist/app.js" } } } }"#,
     );
     dir
 }
@@ -2850,8 +2852,8 @@ fn lib_says_when_a_commonjs_output_imports_a_runtime_module() {
         .output()
         .expect("spawn esdev build --lib");
     assert!(out.status.success(), "{}", stderr(&out));
-    let report = stdout(&out);
-    assert!(report.contains("runtime:fs"), "{report}");
+    let note = stderr(&out);
+    assert!(note.contains("runtime:fs"), "{note}");
 
     // The ES half says nothing, because there is nothing wrong with it.
     let esm_only = esdev_in(&dir)
@@ -9538,16 +9540,15 @@ fn project_dir(name: &str) -> PathBuf {
         &dir,
         "esdev.json",
         r#"{
-          "targets": {
+          "build": { "targets": {
             "server":    { "entry": "src/server.mjs", "out": "dist/server.js",
                            "assets": ["index.html", "public"] },
             "browser":   { "entry": "src/client.mjs", "outdir": "dist/client",
                            "platform": "browser" },
             "prerender": { "entry": "src/prerender.mjs", "out": "dist/prerender.js",
                            "then": "run" }
-          },
-          "start": { "run": "server", "watch": ["server", "browser"] },
-          "permissions": { "deny": ["all"], "allow": { "read": ["./dist"], "listen": ["8080"] } }
+          } },
+          "dev": { "run": "server", "watch": { "targets": ["server", "browser"] } }
         }"#,
     );
     dir
@@ -9730,11 +9731,10 @@ fn a_config_error_names_the_key_and_the_one_it_was_nearly() {
     assert!(stderr(&out).contains("`outdir`"), "{}", stderr(&out));
 }
 
-/// The permissions in the file go through the same parser the flags do, so the
-/// file cannot mean anything a command line could not — and it is wrong when it
-/// is read, not when a run is finally attempted with it.
+/// Project permissions do not belong in the development config. `dev` uses the
+/// development grant; production grants are passed to `esrun`.
 #[test]
-fn permissions_in_the_file_are_checked_by_the_flag_parser() {
+fn permissions_are_not_accepted_in_project_config() {
     let dir = build_dir("p_perms");
     write_in(&dir, "app.mjs", "console.log(1);\n");
     write_in(
@@ -9745,7 +9745,11 @@ fn permissions_in_the_file_are_checked_by_the_flag_parser() {
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("filesystem"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("not an esdev setting"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// `--config` points at a file elsewhere, and every path in it is relative to
@@ -11086,11 +11090,10 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{ "targets": {{
+            r#"{{ "build": {{ "targets": {{
                    "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }},
-                   "web": {{ "entry": "index.html", "outdir": "dist" }} }},
-                 "start": {{ "run": "server" }},
-                 "permissions": {{ "deny": ["all"], "allow": {{ "listen": ["{served}"] }} }} }}"#
+                   "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "dev": {{ "run": "server" }} }}"#
         ),
     );
 
@@ -11179,9 +11182,8 @@ fn a_failed_build_leaves_the_running_server_alone() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{ "targets": {{ "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }},
-                 "start": {{ "run": "server" }},
-                 "permissions": {{ "deny": ["all"], "allow": {{ "listen": ["{served}"] }} }} }}"#
+            r#"{{ "build": {{ "targets": {{ "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }} }},
+                 "dev": {{ "run": "server" }} }}"#
         ),
     );
 
@@ -11483,7 +11485,7 @@ fn each_mode_writes_its_own_project_and_none_of_the_other() {
     let full = std::fs::read_to_string(parent.join("fullstack/esdev.json")).expect("read");
     assert!(full.contains("\"run\": \"server\""), "{full}");
     assert!(
-        full.contains("--allow") || full.contains("listen"),
+        full.contains("\"app\":") && full.contains("\"port\": 8080"),
         "{full}"
     );
 
@@ -17450,7 +17452,11 @@ fn test_watch_restarts_when_the_project_file_changes() {
     std::fs::create_dir_all(dir.join("b")).unwrap();
     write_in(&dir, "a/x.ts", "export default 'from a';\n");
     write_in(&dir, "b/x.ts", "export default 'from b';\n");
-    write_in(&dir, "esdev.json", r#"{ "alias": { "@": "./a" } }"#);
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "resolve": { "alias": { "@": "./a" } } }"#,
+    );
     write_in(
         &dir,
         "which.test.ts",
@@ -17461,7 +17467,11 @@ fn test_watch_restarts_when_the_project_file_changes() {
     let run = watch.next_run();
     assert!(run.contains("VALUE from a"), "{run}");
 
-    write_in(&dir, "esdev.json", r#"{ "alias": { "@": "./b" } }"#);
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "resolve": { "alias": { "@": "./b" } } }"#,
+    );
     let err = wait_for_file(&watch.err, Duration::from_secs(30), |text| {
         text.contains("esdev.json changed — restarting")
             && text.matches("watching for changes").count() >= 2

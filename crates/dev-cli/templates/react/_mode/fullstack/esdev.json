@@ -2,27 +2,32 @@
   "jsx": {
     "importSource": "react"
   },
-  "targets": {
-    "server": {
-      "entry": "src/server.tsx",
-      "out": "dist/server.js"
-    },
-    "web": {
-      "entry": "index.html",
-      "outdir": "dist",
-      "refresh": "react",
-      "plugins": ["./plugins/react-refresh.mjs"]
+  "build": {
+    "targets": {
+      "server": {
+        "entry": "src/server.tsx",
+        "out": "dist/server.js"
+      },
+      "web": {
+        "entry": "index.html",
+        "outdir": "dist",
+        "refresh": "react",
+        "plugins": [
+          "./plugins/react-refresh.mjs"
+        ]
+      }
     }
   },
-  "start": {
+  "dev": {
     "run": "server",
-    "watch": ["server", "web"]
-  },
-  "permissions": {
-    "allow": {
-      "read": ["./dist"],
-      "env": ["PORT"],
-      "listen": ["8080"]
+    "watch": {
+      "targets": [
+        "server",
+        "web"
+      ]
+    },
+    "app": {
+      "port": 8080
     }
   }
 }
