@@ -1,6 +1,7 @@
 # {{name}}
 
 React on [ES Runtime](https://esrun.opentechf.org), built to static files.
+Start with `src/App.tsx` — the build prerenders it into `dist/index.html`.
 
 ```sh
 {{pm}} install

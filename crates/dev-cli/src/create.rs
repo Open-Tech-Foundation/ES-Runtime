@@ -1893,6 +1893,43 @@ mod tests {
         }
     }
 
+    /// Every README points at the file to edit: a backticked path under
+    /// `src/` or `app/`, not just commands to run. `react` is two projects
+    /// with two READMEs, so both modes are checked.
+    #[test]
+    fn readmes_point_at_the_file_to_edit() {
+        let mut checked = 0;
+        for (template, mode) in [
+            ("api", None),
+            ("lib", None),
+            ("vanilla", None),
+            ("micro-ui", None),
+            ("react", Some("static")),
+            ("react", Some("fullstack")),
+            ("spa", None),
+            ("fullstack", None),
+            ("docs", None),
+            ("library", None),
+        ] {
+            let (_, files) = TEMPLATES
+                .iter()
+                .find(|(name, _)| *name == template)
+                .expect("the template is embedded");
+            let files = files_for(files, mode);
+            let (_, readme) = files
+                .iter()
+                .find(|(path, _)| path == "README.md")
+                .unwrap_or_else(|| panic!("{template} {mode:?} has no README"));
+            let readme = String::from_utf8_lossy(readme);
+            assert!(
+                readme.contains("`src/") || readme.contains("`app/"),
+                "{template} {mode:?}: names no file to edit"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 10, "a template escaped the list");
+    }
+
     /// No scaffolded page ships someone else's brand: every document titles
     /// itself with the project being created.
     #[test]

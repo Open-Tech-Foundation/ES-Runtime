@@ -1,6 +1,7 @@
 # {{name}}
 
 React on [ES Runtime](https://esrun.opentechf.org), rendered by a server of its own.
+Start with `src/App.tsx` — `src/server.tsx` renders it per request.
 
 ```sh
 {{pm}} install

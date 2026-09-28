@@ -1,6 +1,7 @@
 # {{name}}
 
 [Micro-UI](https://www.npmjs.com/package/@opentf/micro-ui) on [ES Runtime](https://esrun.opentechf.org).
+Start with `src/main.ts`.
 
 ```sh
 {{pm}} install

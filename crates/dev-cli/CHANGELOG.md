@@ -82,6 +82,9 @@ is the point, since none of the three has any business in a deployment.
   its example route.** The README names the production serve command, and
   the page says `/api/hello` is its own example rather than the message's
   source.
+- **Every scaffolded README points at the file to edit.** The entry,
+  component, or docs convention is named up front, and the libraries show
+  the consumer import.
 - **WebSocket upgrades require a complete opening handshake.** The dev and
   inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
   WebSocket upgrade token, version 13, and a single 16-byte base64 key before

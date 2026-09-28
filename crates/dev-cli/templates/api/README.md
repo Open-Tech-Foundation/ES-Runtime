@@ -1,6 +1,7 @@
 # {{name}}
 
-A JSON API on [ES Runtime](https://esrun.opentechf.org).
+A JSON API on [ES Runtime](https://esrun.opentechf.org). Start with
+`src/server.ts`; the greeting lives in `src/hello.ts`.
 
 ```sh
 {{pm}} install

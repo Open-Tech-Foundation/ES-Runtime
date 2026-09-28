@@ -1,6 +1,7 @@
 # {{name}}
 
 TypeScript and the DOM on [ES Runtime](https://esrun.opentechf.org), no framework.
+Start with `src/main.ts`.
 
 ```sh
 {{pm}} install
