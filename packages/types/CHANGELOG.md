@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Changed
+
+- Update the `ExpectTypeOf` documentation to refer to `esdev typecheck`, the
+  renamed command for checking type assertions.
+
 ## [0.9.0] - 2026-09-25
 
 ### Added
