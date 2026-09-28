@@ -75,7 +75,7 @@ the microtasks wait for `clock.runMicrotasks()`, or run after each timer the
 clock fires.
 
 In a `--dom` or `--browser` run, `clock.advanceToNextFrame()` runs the next
-animation frame. Frames fall every 16ms after the clock froze:
+animation frame. Frames fall after the clock freezes:
 
 ```ts
 test("fades in over one frame", () => {

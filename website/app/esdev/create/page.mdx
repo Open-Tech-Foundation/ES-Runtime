@@ -45,14 +45,14 @@ esdev create my-app --template=react --mode=fullstack
 | `docs` | An OTF Web documentation site — MDX docs, sidebar, search, optional blog |
 | `library` | An OTF Web component library — publishable components, `esdev`-tested |
 
-The template files are **baked into the binary**. While scaffolding, `create`
-queries the npm registry for the current `latest` release of each dependency
-and writes that exact version into the generated `package.json`, regardless of
-which package manager you choose for installation. It reports the versions as
-it resolves them. Temporary registry failures are retried three times with
-increasing delays; if the registry stays unavailable, `create` reports the
-package that failed and stops before writing the project. Scaffolding therefore
-needs registry access.
+Template files are **baked into esdev**. During scaffolding, `create` looks up
+each dependency's current `latest` version on the npm registry and writes that
+exact version to `package.json`. It prints each resolved version. These lookups
+need registry access, even when you pass `--no-install`.
+
+If a lookup fails, esdev retries it three times with increasing delays. If the
+registry is still unavailable, it reports the package and stops before writing
+the project.
 
 `react`, `vanilla` and `micro-ui` start without a stylesheet.
 `--styling=tailwind` adds `src/styles.css` importing Tailwind, links it from
@@ -168,8 +168,8 @@ the previous question — the second OTF menu returns to the first — and `Esc`
 at the first question cancels: nothing is written, and the exit status is
 zero.
 
-Away from one — a pipe, a CI job, anything with `CI` set — it takes the
-defaults and says nothing. A prompt in a script is a script that hangs.
+In a pipe or CI job, esdev uses the defaults without prompting. It still
+reports resolved package versions and whether scaffolding succeeded.
 
 **Every question has a flag**, so nothing is only reachable by answering one:
 

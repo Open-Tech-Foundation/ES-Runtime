@@ -446,11 +446,10 @@ first run. Template files are baked into this binary; package versions are
 resolved from the npm registry while scaffolding, so create needs registry
 access even with --no-install.
 
-On a terminal it asks which template, which mode where there is a choice, the
-axes the template takes (language, styling, blog), which package manager the
-project uses, and whether to install. Anywhere else — a pipe, a CI job — it takes the defaults,
-installs nothing and says nothing, because a prompt in a script is a script
-that hangs. Every question has a flag:
+On a terminal it asks which template, mode and supported options to use, which
+package manager the project uses, and whether to install. In a pipe or CI job it
+uses defaults without prompting. It still reports resolved package versions
+and whether scaffolding succeeded. Every question has a flag:
 
     esdev create my-app --template=api --install=bun
     esdev create my-app --template=spa --package-manager=pnpm --no-install
@@ -538,7 +537,8 @@ A PROJECT (esdev.json)
 
     An .html entry is a different kind of build: the tags in the document are
     the inputs, and what is written out is the same document pointing at the
-    hashed results. A flag beats the file; naming an entry ignores it entirely.
+    hashed results. A flag beats the file. Naming an entry skips its target
+    list but still uses project source settings such as jsx, aliases and plugins.
     esrun never reads esdev.json — the grant a service runs under belongs on
     the command that deployed it.
 
@@ -1200,9 +1200,9 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
              --out=dist, not --out=dist/index.js."
         ));
     }
-    // The project around the entry, when there is one: its `jsx`, `alias` and
-    // `plugins` describe the source tree the entry is in. Its targets do not
-    // apply — this build is the one the command line describes.
+    // The project around the entry, when there is one: its `jsx`,
+    // `resolve.alias` and `plugins` describe the source tree the entry is in.
+    // Its targets do not apply — this build is the one the command line describes.
     let settings = settings::Settings::load(None)?.with_alias(&alias);
     Ok(BuildRequest::Single(Box::new(build::EntryBuild {
         config: BuildConfig {

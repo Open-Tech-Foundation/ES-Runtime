@@ -17,13 +17,13 @@ esdev preview --dir=dist --port=5000
 esdev preview --config=deploy/esdev.json   # the site another project file describes
 ```
 
-It serves; it does not build. Missing paths that look like routes fall back to
-`index.html`, as a client-side router needs. Responses carry `ETag` and
-`Last-Modified` validators (revalidations answer `304`) and honour `Range`
-requests — single, suffix, and multi-range `206`s, `416` when nothing
-satisfies — so seeking a `<video>` and caching an asset behave in preview the
-way they will in production. A project whose output is a server
-bundle has nothing to serve — run it the way production will, under `esrun`.
+Preview serves existing output; it does not build. Missing paths fall back to
+`index.html` for client-side routes. Responses support `ETag` and
+`Last-Modified` revalidation (`304`) and HTTP range requests (`206`, or `416`
+when a range cannot be satisfied).
+
+A server bundle has no static output to preview. Run it under `esrun`, as it
+will run in production.
 
 ## Any static folder, no packages
 

@@ -45,20 +45,17 @@ Mask a volatile field without hiding the rest of the value:
 expect(user).toMatchSnapshot({ id: expect.any(String) });
 ```
 
-`assertSnapshot(value, name?)` is the assertion spelling, and
-`expect(fn).toThrowErrorMatchingSnapshot()` stores a thrown error. A missing
-snapshot is created only outside CI; `--ci` (and `CI`) requires it to exist.
-`--update-snapshots` updates changed entries and prunes obsolete entries only
-after a complete, unfiltered, all-passing file run.
-When a value changes, the failing test prints a line-by-line unified diff:
-removed snapshot lines begin with `-` and received lines begin with `+`.
-Large diffs are review-sized by default; pass `--full-diff` for every changed
-line. Ordinary diffs retain three unchanged context lines around each change.
-Byte snapshots instead identify sizes, the first differing byte, and a
-small hexadecimal window. Text diffs render trailing spaces as `·`, tabs as
-`⇥`, CRLF's carriage return as `␍`, and report a missing final newline.
-Each passing run that used snapshots prints a summary such as
-`snapshots: 3 matched, 0 failed, 1 written`.
+`assertSnapshot(value, name?)` is the assertion function. Use
+`expect(fn).toThrowErrorMatchingSnapshot()` to store a thrown error. Missing
+snapshots are created locally, but `--ci` (or `CI`) requires them to exist.
+`--update-snapshots` updates changed entries and prunes obsolete ones only
+after a complete, unfiltered, passing run.
+
+When a snapshot differs, esdev prints a unified diff with three lines of context
+by default. Use `--full-diff` to show every changed line. Byte snapshots show
+the sizes, first differing byte and a small hexadecimal window. Text snapshots
+make trailing spaces (`·`), tabs (`⇥`) and carriage returns (`␍`) visible, and
+report a missing final newline. Passing runs print a short snapshot summary.
 
 ## Inline snapshots
 

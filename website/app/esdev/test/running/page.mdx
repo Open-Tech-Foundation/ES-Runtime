@@ -245,10 +245,10 @@ starts its own; `q` quits, ending the files being run. With
 The keys need a terminal on stdin, and are read on Linux and macOS. Elsewhere,
 and when stdin is not a terminal, the watch reruns on changes and ^C stops it.
 
-A change to `esdev.json` (or the `--config` file) restarts the watch: global
-setup is torn down and every setting is read again, so an edited `alias`, `jsx`
-or `test` section applies from the next run. A change to `tsconfig.json`
-applies on the next run without a restart.
+A change to `esdev.json` (or the `--config` file) restarts the watch and reruns
+global setup. Changes to `resolve.alias`, `jsx` or `test` settings apply on the
+next run. Changes to `tsconfig.json` also apply on the next run, without
+restarting the watcher.
 
 ## Sharing one runtime
 
@@ -259,13 +259,13 @@ out of the process boundary:
 esdev test --isolation=none
 ```
 
-All selected files then run serially in one process. Their V8 heap, globals and
-ES-module cache stay alive, so a shared dependency evaluates once for the run.
-Likewise, a `--setup` module evaluates once rather than once per file.
-That is a performance mode, not an isolation mode: a global or mock left by one
-file reaches the next, `exit()` or a crash ends the whole run, and a hanging
-file cannot be stopped independently. `--jobs`, `--timeout`, and the per-file
-JSON reporter are unavailable with it.
+All selected files run serially in one process. They share a V8 heap, globals
+and ES-module cache, so shared dependencies and `--setup` modules load once.
+
+This can speed up a suite, but files are no longer isolated: globals and mocks
+can leak between them, and `exit()` or a crash ends the whole run. A hanging
+file cannot be stopped independently. `--jobs`, `--timeout` and per-file JSON
+reports are unavailable with this mode.
 
 The default, `--isolation=process`, retains the process-per-file behavior.
 

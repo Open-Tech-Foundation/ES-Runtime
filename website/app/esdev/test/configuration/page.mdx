@@ -44,8 +44,8 @@ file.**
 | `coverage` | `--coverage` | What coverage measures and writes ([Coverage](/esdev/test/coverage)) |
 | `tags`, `strictTags` | — | The tags tests may carry ([Tags](/esdev/test/tags)) |
 
-The project's top-level settings apply to tests as to every command: [`jsx`](/esdev/build/project#jsx),
-[`alias`](/esdev/test/imports#aliases) and [`plugins`](/esdev/build/project#plugins-in-a-project).
+The project's top-level settings apply to tests: [`jsx`](/esdev/build/project#jsx),
+[`resolve.alias`](/esdev/build/project#aliases) and [`plugins`](/esdev/build/project#plugins-in-a-project).
 `--config=<path>` reads another file in place of `./esdev.json`.
 
 A setup module is imported **before** the file under test, so a global it stubs

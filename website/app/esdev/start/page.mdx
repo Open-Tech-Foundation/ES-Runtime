@@ -25,12 +25,12 @@ A banner once it is listening *and* built, then one line per save — nothing
 else. Build reports and errors go to stderr, so stdout stays the program's:
 
 ```text
-esdev 0.11.0 — ready in 182ms
+esdev <version> — ready in <duration>
 
   →  Local:   http://localhost:5173/
-✓ hot-swapped 3 modules in 41ms
-✓ reloaded in 38ms
-✓ restarted server in 120ms
+✓ hot-swapped <count> modules in <duration>
+✓ reloaded in <duration>
+✓ restarted server in <duration>
 ```
 
 A project with a server of its own names the app's URL instead of the
@@ -122,15 +122,19 @@ pin the endpoint.
 "dev": { "run": "server", "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "app": { "port": 8080 }, "outDir": ".dev" }
 ```
 
-`watch.targets` narrows what gets rebuilt; leaving it out rebuilds everything.
-`watch.paths` adds paths to the watcher; relative paths resolve from the config
-file, and absolute paths are accepted. `serve`
-overrides the directory served when there is no `run`. `app.port` is the
-server's fallback port when `run` names a target. `server.port` pins esdev's
-listener for a frontend-only project. In full-stack mode, the app owns the
-browser endpoint and esdev's listener remains an internal HMR channel. A
-request proxy is not implemented yet; a future proxy belongs under
-`dev.server.proxy` once its full-stack request and HMR behavior is defined.
+These `dev` settings control what the loop rebuilds and serves:
+
+- `watch.targets` selects targets to rebuild. If omitted, esdev rebuilds all
+  targets.
+- `watch.paths` adds watched paths, resolved relative to `esdev.json`.
+- `serve` selects the directory to serve when no `run` target is configured.
+- `app.port` sets the app server's fallback port. `server.port` pins esdev's
+  listener for a frontend-only project.
+
+In full-stack mode, the app owns the browser endpoint; esdev's listener is an
+internal HMR channel. Request proxying is not available yet. Any future proxy
+setting will live under `dev.server.proxy` once its request and HMR behavior is
+defined.
 
 ## What is watched
 

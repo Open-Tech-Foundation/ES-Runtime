@@ -11,13 +11,15 @@ import { Callout } from "@opentf/web-docs";
 esdev test --coverage
 ```
 
+The output has this shape; values depend on which code your tests run:
+
 ```text
 ---------------|---------|----------|---------|---------|-------------------
  File          | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
 ---------------|---------|----------|---------|---------|-------------------
- All files     |   66.66 |     37.5 |      80 |   69.23 |
- src/labels.js |     100 |       50 |     100 |     100 |
- src/math.ts   |      50 |       25 |   66.66 |   57.14 | 7-8,10
+ All files     |   <value> |   <value> |   <value> |   <value> |
+ src/labels.js |   <value> |   <value> |   <value> |   <value> |
+ src/math.ts   |   <value> |   <value> |   <value> |   <value> | <lines>
 ---------------|---------|----------|---------|---------|-------------------
 ```
 

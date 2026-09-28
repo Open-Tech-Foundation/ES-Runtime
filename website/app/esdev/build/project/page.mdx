@@ -37,9 +37,9 @@ top-level `targets`, `alias`, and `start` keys are rejected. Move them to
 `permissions` block is rejected: development permissions come from esdev, and
 production grants belong on the `esrun` command.
 
-A command line describes one bundle. An app that renders on the server and
-hydrates in the browser is two, from two entries, with two shapes of output —
-and the site it prerenders is a third that has to *run*.
+Each target describes one bundle. An app that renders on the server and
+hydrates in the browser needs separate server and browser targets. A static
+site may also need a prerender target that runs after the bundles are built.
 
 ```json
 {
@@ -59,7 +59,7 @@ and the site it prerenders is a third that has to *run*.
 ```sh
 esdev build                      # every target
 esdev build --target=browser     # one
-esdev build src/app.ts           # ignores the project file entirely
+esdev build src/app.ts           # one-off entry; project source settings still apply
 ```
 
 ## Target options
@@ -77,8 +77,10 @@ esdev build src/app.ts           # ignores the project file entirely
 | `types` | `false` — skip declarations |
 | `dts-bundle` | `true`, or the entry to link from |
 | `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
-| `resolve.alias` | Specifier rewrites shared by every target and source command |
 | `plugins` | Plugins for this target, **added** to the project's |
+
+`resolve.alias` is a project-level setting shared by targets and source
+commands; it is not a target option. See [Aliases](#aliases).
 
 `define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
 string, `"PORT": 8080` with a number.

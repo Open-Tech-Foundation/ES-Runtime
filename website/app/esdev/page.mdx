@@ -7,11 +7,9 @@ import { Callout } from "@opentf/web-docs";
 
 # esdev
 
-Two binaries. `esrun` runs a service in production and has no development
-surface at all — no inspector port, no file watcher, no test discovery, no
-transform, and it grants nothing unless the command line says so. That
-narrowness is what makes `--allow-listen=8080` a statement rather than a hope,
-and it bills your inner loop. `esdev` is the binary that pays it.
+Use `esrun` to run JavaScript ES modules, usually the bundle you deploy. Use
+`esdev` during development: it runs TypeScript and JSX, bundles projects,
+watches files, runs tests and provides debugging tools.
 
 ```sh
 esdev create my-app           # scaffold a project that already runs
@@ -98,9 +96,10 @@ settled. See [TypeScript setup](/esdev/typescript) for editor types.
 
 ## The project
 
-`esdev.json` in the working directory is read once, by every command, and
-combined with that command's flags; a flag beats the file. `--config=<path>`
-names another file, for any command. See [Project config](/esdev/build/project).
+Commands that use project settings read `esdev.json` from the project
+directory, then combine it with the command's flags. A flag takes precedence.
+Use `--config=<path>` to name a different file. See
+[Project config](/esdev/build/project).
 
 ## Watch
 
@@ -166,14 +165,11 @@ a value is never a separate argument — and they come **before** the script.
 Each subcommand takes `--help`, and every `--help` is short on purpose: the
 grammar and the flags, then a link to the page that has the rest.
 
-## What it deliberately is not
+## What it does not include
 
-No formatter and no linter: `oxlint` and `oxfmt` are npm binaries that already
-work, and neither `oxc_formatter` nor `oxc_linter` is published as a usable
-library crate. No package installer — `esrun` resolves an existing
-`node_modules` and installs nothing, which is correct. No task runner. And no
-*framework's* dev server: [`esdev start`](/esdev/start) is the build on a
-loop for the project in front of it, not an asset graph somebody else's router
-plugs into. What `esdev` offers instead is the bundler and the watcher as
-modules — so the framework that wants one can be a program on this runtime
-rather than a Node script.
+`esdev` does not provide a formatter, linter, task runner, or framework-specific
+dev server. `esdev create` can install dependencies while scaffolding; use your
+package manager to add or update them later. Use tools such as `oxfmt` and
+`oxlint` for formatting and linting. For custom framework servers, esdev
+exposes the bundler and watcher as `runtime:` modules. See [the bundler
+API](/api/build) and [the watcher API](/api/watch).

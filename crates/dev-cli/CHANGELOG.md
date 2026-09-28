@@ -26,6 +26,9 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **Clarified esdev's project build and scaffold help.** A one-off build entry
+  still uses project source settings, and non-interactive scaffolding uses
+  defaults without suppressing progress output.
 - **The React templates opt into OXC's experimental React Compiler.**
   `jsx.reactCompiler` runs the React 19 compiler before JSX lowering in browser,
   server, development, and release builds (using OXC's SSR mode for server

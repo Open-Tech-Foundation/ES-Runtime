@@ -31,12 +31,12 @@ esdev bench parse
 file at a time so that files do not slow each other down. `esdev test` does not
 run benchmark files.
 
-The results are printed as a table:
+The results are printed as a table. Values vary by machine and run:
 
 ```text
-  name           ops/sec    mean     p75     p99     rme  samples
-  parse          901,228  1.11µs  1.13µs  1.44µs  ±0.75%      299  2.97× slower
-  parseFast    2,675,276   374ns   377ns   546ns  ±1.00%      299       fastest
+  name        ops/sec  mean  p75  p99  rme  samples
+  parse       <value>  ...   ...  ...  ...  <count>  <comparison>
+  parseFast   <value>  ...   ...  ...  ...  <count>  <comparison>
 ```
 
 ## Measuring
@@ -76,9 +76,9 @@ bench("sort", (b) => {
 });
 ```
 
-The section is timed on its own each call, so it should take many times the
-clock's step: a microsecond in esdev, and as much as a millisecond in some
-browsers. A function must mark a section on every call or on none.
+The section is timed on its own each call, so keep it long enough for the
+available clock resolution. A function must mark a section on every call or on
+none. The `too short` warning identifies sections that need more work per call.
 
 ## Warnings
 

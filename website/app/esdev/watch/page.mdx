@@ -40,9 +40,9 @@ build assets or explicit permission paths. Those project-aware rules belong to
 [`esdev start`](/esdev/start), which watches its configured build inputs and
 allowed read paths as well.
 
-Each run is a fresh `esdev <file>`, so the program reads the project's settings
-— `jsx`, `alias`, `plugins`, `tsconfig.json` paths — as they are at that run: an
-edit to `esdev.json` or `tsconfig.json` reruns it with the new ones.
+Each run starts a fresh `esdev <file>` process and reads the current project
+settings: `jsx`, `resolve.alias`, plugins and `tsconfig.json` paths. Editing
+`esdev.json` or `tsconfig.json` reruns the program with those settings.
 
 ## When to use `esdev start`
 
