@@ -213,7 +213,7 @@ fn init_new(config: &InitConfig, target: &Path) -> Result<String, String> {
             )
         })?),
         Some(None) => None,
-        None if interactive => crate::create::ask_install(),
+        None if interactive => crate::create::ask_install(None),
         None => None,
     };
 

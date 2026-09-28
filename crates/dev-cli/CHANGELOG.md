@@ -32,6 +32,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`esdev create` asks which package manager the project uses, and the docs
+  name it.** `--package-manager=pnpm` (npm, bun, pnpm or yarn) renders into
+  every usage line via `{{pm}}` instead of a fixed `npm`/`pnpm`;
+  `--install=<manager>` answers the question implicitly, and unattended runs
+  keep npm. The install menu starts on the chosen manager when it is at hand.
 - **Serving any static folder is documented** (site `esdev/start/preview`).
   `esdev preview --dir=<folder>` needs no project and no external package —
   just an `index.html` at the folder's root.

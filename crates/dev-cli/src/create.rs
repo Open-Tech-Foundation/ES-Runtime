@@ -12,16 +12,19 @@
 //!
 //! Which of those depends on whether anybody is there. On a terminal it asks
 //! which template, which *mode* if that template has more than one shape, the
-//! axes the template takes (language, styling, blog), and
-//! whether to install — and away from one it writes the files and says
-//! nothing, because every other command here is a flag grammar that works
-//! unattended and `create` stays one whenever it cannot see a person
-//! ([`crate::prompt::interactive`]). Esc steps back to the nearest question
-//! that was asked; Esc on the first cancels, having written nothing.
+//! axes the template takes (language, styling, blog), which package manager
+//! the project uses, and whether to install — and away from one it writes
+//! the files and says nothing, because every other command here is a flag
+//! grammar that works unattended and `create` stays one whenever it cannot
+//! see a person ([`crate::prompt::interactive`]). Esc steps back to the
+//! nearest question that was asked; Esc on the first cancels, having written
+//! nothing.
 //!
 //! **Everything a prompt asks has a flag**, so the interactive path is a
 //! convenience over the scriptable one and never the only way to an answer.
-//! `--template=api --install=bun` is the same run with nothing to type.
+//! `--template=api --install=bun` is the same run with nothing to type. The
+//! manager question's flag is `--package-manager`; `--install=<manager>`
+//! answers it implicitly, by naming the manager that installs.
 //!
 //! # A template is a scaffold, not a demo
 //!
@@ -213,6 +216,10 @@ pub struct CreateConfig {
     pub blog: Option<bool>,
     /// Whether to write into a directory that already holds something.
     pub force: bool,
+    /// Which package manager the project uses, or `None` to ask (or take
+    /// the default). Rendered into the docs (`{{pm}}`) and printed in the
+    /// next steps; `--install=<manager>` answers this implicitly.
+    pub manager: Option<String>,
     /// Which package manager to install with, `Some(None)` for an explicit
     /// "do not install", and `None` to ask (or, unattended, not to).
     pub install: Option<Option<String>>,
@@ -383,10 +390,36 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
                     },
                 }
             }
+            Step::Manager => match resolve_manager(config.manager.as_deref(), ask)? {
+                ManagerChoice::Chosen(manager) => {
+                    answers.manager = Some(manager);
+                    if config.manager.is_none() && !scripted {
+                        prompted.push(Step::Manager);
+                    }
+                    step += 1;
+                }
+                ManagerChoice::Back => match step_back_index(Step::Manager, &prompted) {
+                    Some(index) => step = index,
+                    None => return Ok(String::new()),
+                },
+            },
         }
     }
     let template = answers.template.expect("the loop answers it");
     let mode = answers.mode;
+    // A flag that names the installer names the project's manager too:
+    // installing with bun means the docs name bun. Validated here, before
+    // anything is written, so an unknown name fails with no directory behind.
+    let install_named = match &config.install {
+        Some(Some(named)) => {
+            Some(crate::install::by_name(named).ok_or_else(|| unknown_manager(named))?)
+        }
+        _ => None,
+    };
+    let manager: String = match install_named {
+        Some(manager) => manager.name.to_string(),
+        None => answers.manager.expect("the loop answers it"),
+    };
     let tailwind = answers.styling.as_deref() == Some("tailwind");
     let otf = match answers.language {
         Some(language) => Some(Otf {
@@ -457,7 +490,7 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
         }
-        write(&destination, contents, &name)?;
+        write(&destination, contents, &name, &manager)?;
         written += 1;
     }
 
@@ -504,33 +537,35 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
 
     // Only now, with the project on disk: an install that fails leaves a
     // project that is complete and one command away, rather than half of one.
-    let installed = match &config.install {
-        Some(Some(named)) => {
-            let manager = crate::install::by_name(named).ok_or_else(|| {
-                format!(
-                    "there is no {named} package manager.\n\nKnown: {}.",
-                    crate::install::MANAGERS
-                        .iter()
-                        .map(|m| m.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })?;
+    // The flag's manager was validated before anything was written, so this
+    // resolves rather than re-checks.
+    let installed = match (&config.install, install_named) {
+        (Some(Some(_)), Some(manager)) => {
             crate::install::run(manager, &target)?;
             Some(manager)
         }
-        Some(None) => None,
-        None if crate::prompt::interactive() => match ask_install() {
-            Some(manager) => {
-                crate::install::run(manager, &target)?;
-                Some(manager)
+        (Some(Some(_)), None) => unreachable!("validated before anything was written"),
+        (Some(None), _) => None,
+        (None, _) if crate::prompt::interactive() => {
+            let preferred = crate::install::by_name(&manager);
+            match ask_install(preferred) {
+                Some(manager) => {
+                    crate::install::run(manager, &target)?;
+                    Some(manager)
+                }
+                None => None,
             }
-            None => None,
-        },
-        None => None,
+        }
+        (None, _) => None,
     };
 
-    report.push_str(&next_steps(&config.dir, &template, installed, paint));
+    report.push_str(&next_steps(
+        &config.dir,
+        &template,
+        installed,
+        &manager,
+        paint,
+    ));
     Ok(report)
 }
 
@@ -539,6 +574,7 @@ fn next_steps(
     dir: &str,
     template: &str,
     installed: Option<crate::install::Manager>,
+    manager: &str,
     paint: crate::style::Palette,
 ) -> String {
     // The command that actually starts it, which is not the same for every
@@ -547,7 +583,9 @@ fn next_steps(
         "lib" | "library" => "test",
         _ => "dev",
     };
-    let manager = installed.map_or("npm", |m| m.name);
+    // What installed is what runs: only a project nobody installed names the
+    // chosen-or-default manager instead.
+    let manager = installed.map_or(manager, |m| m.name);
 
     // Bold, because these are lines to type rather than lines to read.
     let mut steps = format!("\n  {}\n", paint.bold(format_args!("cd {dir}")));
@@ -573,6 +611,7 @@ enum Step {
     Language,
     Styling,
     Blog,
+    Manager,
 }
 
 const STEPS: &[Step] = &[
@@ -581,6 +620,7 @@ const STEPS: &[Step] = &[
     Step::Language,
     Step::Styling,
     Step::Blog,
+    Step::Manager,
 ];
 
 /// The nearest earlier step that showed a menu, or `None` when Esc cancels.
@@ -603,6 +643,7 @@ struct Answers {
     language: Option<String>,
     styling: Option<String>,
     blog: Option<bool>,
+    manager: Option<String>,
 }
 
 /// How one pre-write question resolves.
@@ -947,6 +988,75 @@ fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blo
         Some(_) => Ok(Blog::Off),
         None => Ok(Blog::Back),
     }
+}
+
+/// What resolving `--package-manager` came to.
+#[derive(Debug)]
+enum ManagerChoice {
+    /// The project's package manager, canonical spelling.
+    Chosen(String),
+    /// Esc: back to the question before, or out if there is none.
+    Back,
+}
+
+/// No such manager, from a flag that names one. Shared by the manager
+/// question and the install, so both name the same known set.
+fn unknown_manager(named: &str) -> String {
+    format!(
+        "there is no {named} package manager.\n\nKnown: {}.",
+        crate::install::MANAGERS
+            .iter()
+            .map(|m| m.name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Which package manager the project's docs name, from the flag, a question,
+/// or the default. Every template takes it — a project has an install
+/// command whatever it is built with — so there is no refusal, only an
+/// unknown name.
+fn resolve_manager(asked_for: Option<&str>, ask: Ask) -> Result<ManagerChoice, String> {
+    if let Some(named) = asked_for {
+        return match crate::install::by_name(named) {
+            Some(manager) => Ok(ManagerChoice::Chosen(manager.name.to_string())),
+            None => Err(unknown_manager(named)),
+        };
+    }
+    if ask.scripted || !crate::prompt::interactive() {
+        return Ok(ManagerChoice::Chosen(DEFAULT_MANAGER.to_string()));
+    }
+    match ask_manager(ask) {
+        Some(manager) => Ok(ManagerChoice::Chosen(manager.to_string())),
+        None => Ok(ManagerChoice::Back),
+    }
+}
+
+/// Which package manager, asked on a terminal.
+///
+/// All four, not just the ones installed here: this answers which manager
+/// the *project* uses — what its docs name — and installing is a later,
+/// separate question that only offers what this machine has.
+fn ask_manager(ask: Ask) -> Option<&'static str> {
+    let choices: Vec<crate::prompt::Choice<'_>> = crate::install::MANAGERS
+        .iter()
+        .map(|manager| crate::prompt::Choice {
+            name: manager.name,
+            label: manager.name,
+            description: match manager.name {
+                "npm" => "Node's own — already installed with Node",
+                "bun" => "Fast all-in-one toolchain",
+                "pnpm" => "Strict, disk-efficient installs",
+                "yarn" => "Classic alternative",
+                _ => "",
+            },
+        })
+        .collect();
+    let preselect = choices
+        .iter()
+        .position(|choice| choice.name == DEFAULT_MANAGER);
+    crate::prompt::select("Which Package Manager?", &choices, preselect, ask.esc())
+        .map(|chosen| choices[chosen].name)
 }
 
 /// The extra answers an OTF Web template resolved to. `None` fields are axes
@@ -1368,8 +1478,11 @@ fn ask_template() -> Option<String> {
 /// Whether to install, and with what.
 ///
 /// Only what this machine actually has is offered: naming a package manager
-/// that is not installed is offering an error message.
-pub(crate) fn ask_install() -> Option<crate::install::Manager> {
+/// that is not installed is offering an error message. A preferred manager —
+/// the one the project just declared — starts selected when it is here.
+pub(crate) fn ask_install(
+    preferred: Option<crate::install::Manager>,
+) -> Option<crate::install::Manager> {
     let available = crate::install::available();
     if available.is_empty() {
         return None;
@@ -1392,32 +1505,47 @@ pub(crate) fn ask_install() -> Option<crate::install::Manager> {
     // Esc lands on the same answer `skip` does: the project is already on disk
     // by now, and cancelling the *install* question is not cancelling the
     // project. Either way the next steps say how to install it.
+    let preselect = preferred
+        .and_then(|manager| available.iter().position(|m| *m == manager))
+        .or(Some(0));
     let chosen = crate::prompt::select(
         "Install the Dependencies?",
         &choices,
-        Some(0),
+        preselect,
         crate::prompt::OnEsc::Cancel,
     )?;
     available.get(chosen).copied()
 }
 
-/// Writes one file, substituting the project's name into it.
+/// Writes one file, substituting the project's name and package manager.
 ///
 /// The substitution is attempted only on text. A template is free to hold a
 /// favicon or a font, and running a search and replace over one would corrupt
 /// it — so a file that is not UTF-8 is written exactly as it was embedded.
-fn write(destination: &Path, contents: &[u8], name: &str) -> Result<(), String> {
+fn write(destination: &Path, contents: &[u8], name: &str, manager: &str) -> Result<(), String> {
     match std::str::from_utf8(contents) {
-        Ok(text) if text.contains(PLACEHOLDER) => {
-            std::fs::write(destination, text.replace(PLACEHOLDER, name))
+        Ok(text) if text.contains(PLACEHOLDER) || text.contains(PM_PLACEHOLDER) => {
+            std::fs::write(destination, render(text, name, manager))
         }
         _ => std::fs::write(destination, contents),
     }
     .map_err(|e| format!("cannot write {}: {e}", destination.display()))
 }
 
+/// The placeholders filled in, pure so the rendering tests without files.
+fn render(text: &str, name: &str, manager: &str) -> String {
+    text.replace(PLACEHOLDER, name)
+        .replace(PM_PLACEHOLDER, manager)
+}
+
 /// The one thing a template can ask about the project being created.
 pub(crate) const PLACEHOLDER: &str = "{{name}}";
+
+/// The other thing: which package manager's commands the docs name. A single
+/// placeholder, because `install` and `run <script>` spell the same under
+/// npm, bun, pnpm and yarn — `bun test` excepted, which is Bun's own runner
+/// rather than the manifest's script, so READMEs always write `run test`.
+pub(crate) const PM_PLACEHOLDER: &str = "{{pm}}";
 
 /// The project's name, from the directory it is being created in.
 ///
@@ -1640,13 +1768,99 @@ mod tests {
             resolve_blog("docs", None, SCRIPTED),
             Ok(Blog::On) if DEFAULT_BLOG
         ));
+        assert!(matches!(
+            resolve_manager(None, SCRIPTED),
+            Ok(ManagerChoice::Chosen(manager)) if manager == DEFAULT_MANAGER
+        ));
+    }
+
+    /// The manager question resolves like the others: a flag names it however
+    /// spelled, an unknown name is refused with the known set, and away from
+    /// a terminal the default wins. It applies to every template, so there is
+    /// no refusal for a template that does not take it.
+    #[test]
+    fn the_manager_resolves_from_flag_or_default() {
+        assert!(matches!(
+            resolve_manager(Some("BUN"), ASK),
+            Ok(ManagerChoice::Chosen(manager)) if manager == "bun"
+        ));
+        assert!(matches!(
+            resolve_manager(Some("pnpm"), ASK),
+            Ok(ManagerChoice::Chosen(manager)) if manager == "pnpm"
+        ));
+        let err = resolve_manager(Some("cargo"), ASK).expect_err("cargo is not one");
+        assert!(
+            err.contains("npm, bun, pnpm, yarn"),
+            "the error names the known set: {err}"
+        );
+        assert!(matches!(
+            resolve_manager(None, SCRIPTED),
+            Ok(ManagerChoice::Chosen(manager)) if manager == "npm"
+        ));
+    }
+
+    /// Both placeholders render, and text without them is untouched.
+    #[test]
+    fn placeholders_render() {
+        assert_eq!(
+            render("# {{name}}\n\n```sh\n{{pm}} install\n```\n", "shop", "pnpm"),
+            "# shop\n\n```sh\npnpm install\n```\n"
+        );
+        assert_eq!(render("plain", "shop", "pnpm"), "plain");
+    }
+
+    /// The docs name the chosen manager, never a fixed one: every README and
+    /// every docs prose file carries `{{pm}}`, and no hardcoded install verb
+    /// survives beside it. (`bun test` is deliberately absent everywhere — it
+    /// is Bun's own runner, not the manifest's script, so docs write
+    /// `run test`.)
+    #[test]
+    fn docs_name_the_manager_not_a_fixed_one() {
+        const VERBS: &[&str] = &[
+            "npm install",
+            "npm run",
+            "npm test",
+            "npm start",
+            "pnpm install",
+            "pnpm run",
+            "pnpm test",
+            "pnpm start",
+            "bun install",
+            "bun run",
+            "yarn install",
+            "yarn run",
+            "npx ",
+        ];
+        for (template, files) in TEMPLATES {
+            for (path, contents) in *files {
+                let is_readme = *path == "README.md";
+                let is_prose = path.ends_with(".mdx");
+                let is_manifest = path.ends_with("package.json");
+                if !(is_readme || is_prose || is_manifest) {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(contents);
+                for verb in VERBS {
+                    assert!(
+                        !text.contains(verb),
+                        "{template}/{path} names a fixed manager: {verb}"
+                    );
+                }
+                if is_readme {
+                    assert!(
+                        text.contains(PM_PLACEHOLDER),
+                        "{template}/{path} names no manager at all"
+                    );
+                }
+            }
+        }
     }
 
     /// Esc steps back to the nearest earlier step that showed a menu — past
     /// steps answered by flags, and away from the first step, it cancels.
     #[test]
     fn esc_retreats_to_the_last_menu() {
-        use Step::{Blog, Language, Mode, Styling, Template};
+        use Step::{Blog, Language, Manager, Mode, Styling, Template};
         // Nothing behind: out.
         assert_eq!(step_back_index(Template, &[]), None);
         assert_eq!(step_back_index(Mode, &[]), None);
@@ -1670,6 +1884,11 @@ mod tests {
             step_back_index(Language, &[Template, Template]),
             Some(0),
             "re-asked steps retreat the same way"
+        );
+        assert_eq!(
+            step_back_index(Manager, &[Template, Blog]),
+            Some(4),
+            "the manager is the last question"
         );
     }
 
@@ -2229,7 +2448,9 @@ mod tests {
         // neither has a site to preview.
         for (template, mode) in [("api", None), ("react", Some("fullstack")), ("lib", None)] {
             assert!(
-                scripts(&plain_written(template, mode)).get("preview").is_none(),
+                scripts(&plain_written(template, mode))
+                    .get("preview")
+                    .is_none(),
                 "{template} {mode:?}: nothing servable to preview"
             );
         }

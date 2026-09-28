@@ -3,9 +3,9 @@
 An [OTF Web](https://web.opentechf.org) single-page app. Start with `app/page.jsx`.
 
 ```sh
-pnpm install
-pnpm run dev
-pnpm run build       # dist/
-pnpm run build:ssg   # pre-rendered HTML
-pnpm run preview     # serves dist/ the way it will be served
+{{pm}} install
+{{pm}} run dev
+{{pm}} run build       # dist/
+{{pm}} run build:ssg   # pre-rendered HTML
+{{pm}} run preview     # serves dist/ the way it will be served
 ```

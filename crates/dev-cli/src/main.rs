@@ -427,6 +427,9 @@ OPTIONS:
                                 Asked, never assumed; unattended, nothing is
                                 added
     --blog, --no-blog           docs only: keep the demo blog (default) or not
+    --package-manager=<name>  The project's package manager: npm, bun, pnpm
+                              or yarn. Asked; the docs name it, and
+                              --install=<manager> answers it implicitly
     --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
     --no-install                Write the files and stop
     -y, --yes                   Take every default; never ask
@@ -440,11 +443,13 @@ first run. The templates are baked into this binary, so create works offline
 and always writes a project this esdev can build.
 
 On a terminal it asks which template, which mode where there is a choice, the
-axes the template takes (language, styling, blog), and whether to install. Anywhere else — a pipe, a CI job — it takes the defaults,
+axes the template takes (language, styling, blog), which package manager the
+project uses, and whether to install. Anywhere else — a pipe, a CI job — it takes the defaults,
 installs nothing and says nothing, because a prompt in a script is a script
 that hangs. Every question has a flag:
 
     esdev create my-app --template=api --install=bun
+    esdev create my-app --template=spa --package-manager=pnpm --no-install
     esdev create my-app --yes
 
     The templates:  https://esrun.opentechf.org/esdev/create
@@ -1259,6 +1264,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     let mut language: Option<String> = None;
     let mut styling: Option<String> = None;
     let mut blog: Option<bool> = None;
+    let mut manager: Option<String> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
     let mut yes = false;
@@ -1286,6 +1292,9 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
             "--no-blog" => {
                 reject_value(flag, value)?;
                 blog = Some(false);
+            }
+            "--package-manager" => {
+                manager = Some(require_value(flag, value)?.to_string());
             }
             // `--install` alone means "with npm"; `--install=bun` names one.
             "--install" => {
@@ -1334,6 +1343,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
         styling,
         blog,
         force,
+        manager,
         install,
         yes,
     })

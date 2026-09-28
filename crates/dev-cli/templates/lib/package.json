@@ -15,7 +15,7 @@
     "build": "esdev build --lib src",
     "test": "esdev test",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "{{pm}} run build"
   },
   "devDependencies": {
     "@opentf/esrun-types": "latest",

@@ -3,9 +3,9 @@
 React on [ES Runtime](https://esrun.opentechf.org), built to static files.
 
 ```sh
-npm install
-npm run dev     # http://localhost:8080
-npm test
-npm run build   # dist/, ready for any static host
-npm run preview # serves dist/ the way it will be served
+{{pm}} install
+{{pm}} run dev     # http://localhost:8080
+{{pm}} run test
+{{pm}} run build   # dist/, ready for any static host
+{{pm}} run preview # serves dist/ the way it will be served
 ```

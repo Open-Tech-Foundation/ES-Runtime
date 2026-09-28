@@ -3,10 +3,10 @@
 TypeScript and the DOM on [ES Runtime](https://esrun.opentechf.org), no framework.
 
 ```sh
-npm install
-npm run dev        # http://localhost:8080
-npm test
-npm run test:dom   # tests that need a DOM
-npm run build      # dist/
-npm run preview    # serves dist/ the way it will be served
+{{pm}} install
+{{pm}} run dev        # http://localhost:8080
+{{pm}} run test
+{{pm}} run test:dom   # tests that need a DOM
+{{pm}} run build      # dist/
+{{pm}} run preview    # serves dist/ the way it will be served
 ```

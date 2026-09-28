@@ -11656,6 +11656,72 @@ fn otf_templates_scaffold_from_flags() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+/// The docs name the chosen manager: `--package-manager` renders into every
+/// usage line, the default is npm, and an unknown name fails before writing.
+#[test]
+fn create_names_the_chosen_package_manager_in_its_docs() {
+    let parent = watch_dir("c_pm");
+
+    // pnpm chosen: the README and the next steps speak pnpm throughout.
+    let pnpm = esdev_in(&parent)
+        .args([
+            "create",
+            "shop-pnpm",
+            "--template=spa",
+            "--package-manager=pnpm",
+            "--no-install",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(pnpm.status.success(), "{}", stderr(&pnpm));
+    let readme = std::fs::read_to_string(parent.join("shop-pnpm").join("README.md")).expect("read");
+    assert!(readme.contains("pnpm run dev"), "{readme}");
+    assert!(!readme.contains("{{pm}}"), "a placeholder survived");
+    assert!(
+        !readme.contains("\nnpm "),
+        "the default leaked in: {readme}"
+    );
+    assert!(
+        stdout(&pnpm).contains("pnpm install"),
+        "the next steps name it too: {}",
+        stdout(&pnpm)
+    );
+
+    // Unsaid and unattended: npm, matching the install default.
+    let plain = esdev_in(&parent)
+        .args(["create", "shop-npm", "--template=api"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    let readme = std::fs::read_to_string(parent.join("shop-npm").join("README.md")).expect("read");
+    assert!(readme.contains("npm run dev"), "{readme}");
+    assert!(!readme.contains("{{pm}}"), "a placeholder survived");
+
+    // An unknown name fails before writing, like a bad --install.
+    let dir = parent.join("nope");
+    let unknown = esdev_in(&parent)
+        .args([
+            "create",
+            "nope",
+            "--template=api",
+            "--package-manager=cargo",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("npm, bun, pnpm, yarn"),
+        "{}",
+        stderr(&unknown)
+    );
+    assert!(!dir.exists(), "it wrote a project anyway");
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 /// An axis flag where it does not apply is refused, like a stray `--mode` —
 /// and a value that is not one is refused with the values that are.
 #[test]
