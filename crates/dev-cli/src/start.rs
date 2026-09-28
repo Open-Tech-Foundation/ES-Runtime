@@ -1188,9 +1188,7 @@ mod tests {
     fn the_dev_directory_is_what_the_watcher_ignores() {
         let project = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{ "targets": {
-                   "server": { "entry": "src/s.ts", "out": "build/server.js" },
-                   "web": { "entry": "index.html", "outdir": "public_html" } } }"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "build/server.js"}, "web": {"entry": "index.html", "outdir": "public_html"}}}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1207,10 +1205,7 @@ mod tests {
     fn a_named_dev_directory_is_used_everywhere() {
         let project = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{ "targets": {
-                   "server": { "entry": "src/s.ts", "out": "dist/server.js" },
-                   "web": { "entry": "index.html", "outdir": "dist" } },
-                 "start": { "run": "server", "devdir": "tmp-dev" } }"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"run": "server", "outDir": "tmp-dev"}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1232,8 +1227,7 @@ mod tests {
     fn the_loop_runs_and_serves_the_development_builds() {
         let backend = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{ "targets": { "server": { "entry": "src/s.ts", "out": "dist/server.js" } },
-                 "start": { "run": "server" } }"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}}}, "dev": {"run": "server"}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1248,7 +1242,7 @@ mod tests {
 
         let frontend = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+                r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )

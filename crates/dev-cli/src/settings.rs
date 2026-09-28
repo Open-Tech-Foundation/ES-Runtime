@@ -174,6 +174,81 @@ impl Settings {
         self
     }
 
+    /// Resolve the test command's file settings against its flags. This is the
+    /// only place the project test section is combined with a test invocation.
+    pub fn resolve_test(&self, config: &mut crate::test::TestConfig) -> Result<(), String> {
+        let here = std::env::current_dir().unwrap_or_default();
+        config.global_setup = config
+            .global_setup
+            .iter()
+            .map(|module| module_url(&here, module))
+            .collect::<Result<_, _>>()?;
+        config.run.source = self.source.clone();
+        let root = &self.source.root;
+        let TestSettings {
+            setup,
+            global_setup,
+            timeout,
+            jobs,
+            isolation,
+            reporter,
+            browser,
+            coverage,
+            max_concurrency,
+            tags,
+            strict_tags,
+        } = &self.test;
+        if config.run.setup.is_empty() {
+            config.run.setup = setup
+                .iter()
+                .map(|module| -> Result<_, String> {
+                    let path = root.join(module);
+                    if path.exists() {
+                        url::Url::from_file_path(&path)
+                            .map(|url| url.to_string())
+                            .map_err(|()| {
+                                format!("cannot name setup module {module} as a file URL")
+                            })
+                    } else {
+                        Ok(module.clone())
+                    }
+                })
+                .collect::<Result<_, _>>()?;
+        }
+        config.run.tag_definitions.clone_from(tags);
+        if config.run.max_concurrency.is_none() {
+            config.run.max_concurrency = *max_concurrency;
+        }
+        config.run.strict_tags = strict_tags.unwrap_or(true);
+        if config.global_setup.is_empty() {
+            config.global_setup = global_setup
+                .iter()
+                .map(|module| module_url(root, module))
+                .collect::<Result<_, _>>()?;
+        }
+        if let Some(section) = coverage
+            && (config.coverage.is_some() || section.enabled)
+        {
+            config.coverage = Some(section.settings.clone());
+        }
+        if config.timeout.is_none() {
+            config.timeout = *timeout;
+        }
+        if config.jobs.is_none() {
+            config.jobs = *jobs;
+        }
+        if config.isolation.is_none() {
+            config.isolation = *isolation;
+        }
+        if config.reporter.is_none() {
+            config.reporter.clone_from(reporter);
+        }
+        if config.browser.is_none() {
+            config.browser.clone_from(browser);
+        }
+        Ok(())
+    }
+
     /// The aliases a build resolves with — the project's, or none for a
     /// library.
     ///
@@ -186,6 +261,19 @@ impl Settings {
         } else {
             self.source.alias.clone()
         }
+    }
+}
+
+/// Resolve a module path as a file URL when it names a local file; bare
+/// specifiers stay bare for the project's resolver.
+fn module_url(dir: &std::path::Path, module: &str) -> Result<String, String> {
+    let path = dir.join(module);
+    if path.exists() {
+        url::Url::from_file_path(&path)
+            .map(|url| url.to_string())
+            .map_err(|()| format!("cannot name module {module} as a file URL"))
+    } else {
+        Ok(module.to_string())
     }
 }
 
@@ -281,8 +369,8 @@ mod tests {
 
     fn target(name: &str, lib: bool) -> Target {
         let mut project = crate::config::tests_support::read(&format!(
-            r#"{{ "targets": {{ "{name}": {{ "entry": "src/a.ts", "{key}": "dist", "lib": {lib},
-                  "define": {{ "A": "1" }}, "conditions": ["c"] }} }} }}"#,
+            r#"{{ "build": {{ "targets": {{ "{name}": {{ "entry": "src/a.ts", "{key}": "dist", "lib": {lib},
+                  "define": {{ "A": "1" }}, "conditions": ["c"] }} }} }} }}"#,
             key = "outdir",
         ))
         .expect("parsed");

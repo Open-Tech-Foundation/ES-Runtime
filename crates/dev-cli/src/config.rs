@@ -39,7 +39,7 @@ use serde_json::{Map, Value};
 
 /// The file looked for when `--config` did not name one.
 pub const FILE_NAME: &str = "esdev.json";
-/// Where the dev loop writes when `start` does not name a directory.
+/// Where the dev loop writes when `dev.outDir` does not name a directory.
 ///
 /// A hidden sibling of the deploy outputs rather than one of them, so a save
 /// never overwrites a deployment: `dist/server.js` is built for development
@@ -386,24 +386,19 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "build",
     "dev",
     "resolve",
-    // Kept as input aliases for existing projects; new configs use the
-    // grouped sections above.
-    "targets",
-    "start",
     "permissions",
     "plugins",
-    "alias",
     "test",
     "jsx",
 ];
 
-/// The keys `start` may carry.
+/// The internal keys used after normalizing grouped dev settings.
 ///
 /// Read in full here, and *consumed* by `esdev start`. Validating a key the
 /// command that uses it has not been written yet is deliberate: a typo in
-/// `start` should be reported by the build that read the file, not held until
+/// a dev setting should be reported by the build that read the file, not held until
 /// the day somebody runs the other command.
-const START_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port", "devdir"];
+const NORMALIZED_DEV_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port", "devdir"];
 
 const BUILD_KEYS: &[&str] = &["targets"];
 const RESOLVE_KEYS: &[&str] = &["alias"];
@@ -553,8 +548,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     let root = object(&root, name, "the file")?;
     known_keys(root, name, "", TOP_LEVEL_KEYS)?;
 
-    // The grouped form is the public shape. Existing root-level fields remain
-    // readable as aliases so projects can migrate without a broken build.
+    // Project settings are grouped by domain so related options have one home.
     let build = root
         .get("build")
         .map(|v| object(v, name, "`build`"))
@@ -607,26 +601,9 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
             "{name}: `build` needs a `targets` object. Describe one or more named outputs under `build.targets`."
         ));
     }
-    if grouped_targets.is_some() && root.contains_key("targets") {
-        return Err(format!(
-            "{name} sets both `build.targets` and legacy top-level `targets`; keep one."
-        ));
-    }
-    let targets_value = grouped_targets.or_else(|| root.get("targets"));
+    let targets_value = grouped_targets;
     let alias_value = resolve.and_then(|resolve| resolve.get("alias"));
-    if alias_value.is_some() && root.contains_key("alias") {
-        return Err(format!(
-            "{name} sets both `resolve.alias` and legacy top-level `alias`; keep one."
-        ));
-    }
-    let alias_value = alias_value.or_else(|| root.get("alias"));
     let dev_watch = dev.and_then(|dev| dev.get("watch"));
-    let legacy_start = root.get("start");
-    if dev.is_some() && legacy_start.is_some() {
-        return Err(format!(
-            "{name} sets both `dev` and legacy `start`; keep one."
-        ));
-    }
     if root.contains_key("permissions") {
         return Err(format!(
             "{name}: `permissions` is not an esdev setting. Development runs with esdev's development permissions; pass production grants to `esrun`. Put extra watched files under `dev.watch.paths`."
@@ -639,14 +616,13 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     // than no file. What is refused is a config that says *nothing*.
     // The sections that mean something without a build: how the project is
     // tested, how its JSX compiles, what its specifiers resolve to.
-    const BUILDLESS_KEYS: &[&str] = &["test", "jsx", "alias", "resolve", "plugins"];
+    const BUILDLESS_KEYS: &[&str] = &["test", "jsx", "resolve", "plugins"];
     let targets = match targets_value {
-        Some(targets) => object(targets, name, "`targets`")?.clone(),
+        Some(targets) => object(targets, name, "`build.targets`")?.clone(),
         None => {
-            // `start` builds and serves the targets, so a file that names one
+            // `dev` builds and serves the targets, so a file that names one
             // without them is still incomplete.
-            if legacy_start.is_none()
-                && dev.is_none()
+            if dev.is_none()
                 && root
                     .keys()
                     .any(|key| BUILDLESS_KEYS.contains(&key.as_str()))
@@ -654,19 +630,19 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
                 serde_json::Map::new()
             } else {
                 return Err(format!(
-                    "{name} has no `targets`.\n\n\
+                    "{name} has no `build.targets`.\n\n\
                      A target is one thing the project builds — an entry, and where its \
                      output goes:\n\n  \
-                     \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }}\n\n\
+                     \"build\": {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }} }}\n\n\
                      A config that only says how the project is tested or how its JSX \
-                     compiles — `test`, `jsx`, `alias`, `plugins` — needs no targets."
+                     compiles — `test`, `jsx`, `resolve`, `plugins` — needs no build targets."
                 ));
             }
         }
     };
     if targets_value.is_some() && targets.is_empty() {
         return Err(format!(
-            "{name} has no targets in `targets`.\n\n\
+            "{name} has no targets in `build.targets`.\n\n\
              An empty object builds nothing; remove the key, or name what it builds."
         ));
     }
@@ -692,10 +668,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
 
     let start = match dev {
         Some(dev) => read_dev(dev, &targets, name)?,
-        None => match legacy_start {
-            Some(start) => read_start(start, &targets, name)?,
-            None => Start::default(),
-        },
+        None => Start::default(),
     };
     let watch_paths = read_watch_paths(dev_watch, name)?;
     let alias = aliases(alias_value, name, &dir)?;
@@ -1344,34 +1317,34 @@ fn default_out(entry: &str) -> String {
     format!("dist/{stem}.js")
 }
 
-/// Reads `start`, checking the target names it refers to.
+/// Reads the normalized dev settings, checking the target names they refer to.
 fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, String> {
-    let map = object(value, file, "`start`")?;
-    known_keys(map, file, "`start`", START_KEYS)?;
+    let map = object(value, file, "`dev`")?;
+    known_keys(map, file, "`dev`", NORMALIZED_DEV_KEYS)?;
     let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
 
     let run = match map.get("run") {
         None => None,
         Some(run) => {
-            let run = string(run, file, "`start`'s `run`")?;
+            let run = string(run, file, "`dev`'s `run`")?;
             if !names.contains(&run) {
-                return Err(unknown_target(file, "`start`'s `run`", run, &names));
+                return Err(unknown_target(file, "`dev.run`", run, &names));
             }
             Some(run.to_string())
         }
     };
-    let watch = string_array(map.get("watch"), file, "`start`'s `watch`")?;
+    let watch = string_array(map.get("watch"), file, "`dev.watch.targets`")?;
     for name in &watch {
         if !names.contains(&name.as_str()) {
-            return Err(unknown_target(file, "`start`'s `watch`", name, &names));
+            return Err(unknown_target(file, "`dev.watch.targets`", name, &names));
         }
     }
     let serve = match map.get("serve") {
         None => None,
-        Some(serve) => Some(string(serve, file, "`start`'s `serve`")?.to_string()),
+        Some(serve) => Some(string(serve, file, "`dev`'s `serve`")?.to_string()),
     };
-    let listen = read_port(map, "listen", file)?;
-    let port = read_port(map, "port", file)?;
+    let listen = read_port(map, "listen", "`dev.app.port`", file)?;
+    let port = read_port(map, "port", "`dev.server.port`", file)?;
     let devdir = read_devdir(map, file, targets)?;
     Ok(Start {
         run,
@@ -1439,7 +1412,7 @@ fn read_watch_paths(value: Option<&Value>, file: &str) -> Result<Vec<String>, St
     Ok(paths)
 }
 
-/// `start`'s `devdir`: the directory the dev loop's builds go into.
+/// `dev.outDir`: the directory the dev loop's builds go into.
 ///
 /// Validated against the targets it is defined to stay clear of: a dev
 /// directory that *is* a deploy output, contains one, or sits inside one
@@ -1453,22 +1426,22 @@ fn read_devdir(
     let Some(value) = map.get("devdir") else {
         return Ok(None);
     };
-    let devdir = string(value, file, "`start`'s `devdir`")?;
+    let devdir = string(value, file, "`dev.outDir`")?;
     if devdir.is_empty() {
         return Err(format!(
-            "{file}: `start`'s `devdir` is empty — name the directory the dev loop writes into (\"{DEFAULT_DEV_DIR}\")."
+            "{file}: `dev.outDir` is empty — name the directory the dev loop writes into (\"{DEFAULT_DEV_DIR}\")."
         ));
     }
     let path = Path::new(devdir);
     if path.is_absolute() {
         return Err(format!(
-            "{file}: `start`'s `devdir` is absolute, and the dev loop writes inside the project — write \"{DEFAULT_DEV_DIR}\", not \"{devdir}\"."
+            "{file}: `dev.outDir` is absolute, and the dev loop writes inside the project — write \"{DEFAULT_DEV_DIR}\", not \"{devdir}\"."
         ));
     }
     let flat = flatten(path);
     if flat.as_os_str().is_empty() {
         return Err(format!(
-            "{file}: `start`'s `devdir` is the project root, which is where `esdev build` deploys — \
+            "{file}: `dev.outDir` is the project root, which is where `esdev build` deploys — \
              the dev loop needs a directory of its own (\"{DEFAULT_DEV_DIR}\"), or every save overwrites the deployment."
         ));
     }
@@ -1477,7 +1450,7 @@ fn read_devdir(
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err(format!(
-            "{file}: `start`'s `devdir` escapes the project, and the dev loop writes inside it — keep it under the project (\"{DEFAULT_DEV_DIR}\")."
+            "{file}: `dev.outDir` escapes the project, and the dev loop writes inside it — keep it under the project (\"{DEFAULT_DEV_DIR}\")."
         ));
     }
     for target in targets {
@@ -1486,7 +1459,7 @@ fn read_devdir(
         };
         if overlaps(&flat, &flatten(Path::new(out))) {
             return Err(format!(
-                "{file}: `start`'s `devdir` (\"{devdir}\") overlaps target \"{}\"'s output (\"{out}\") — \
+                "{file}: `dev.outDir` (\"{devdir}\") overlaps target \"{}\"'s output (\"{out}\") — \
                  the dev loop would write into what `esdev build` deploys. Give it a directory of its own.",
                 target.name
             ));
@@ -1508,8 +1481,13 @@ fn overlaps(a: &Path, b: &Path) -> bool {
     a == b || a.starts_with(b) || b.starts_with(a)
 }
 
-/// One of `start`'s port numbers, checked for being one.
-fn read_port(map: &Map<String, Value>, key: &str, file: &str) -> Result<Option<u16>, String> {
+/// A development port number, checked for being one.
+fn read_port(
+    map: &Map<String, Value>,
+    key: &str,
+    label: &str,
+    file: &str,
+) -> Result<Option<u16>, String> {
     match map.get(key) {
         None => Ok(None),
         Some(port) => Ok(Some(
@@ -1517,7 +1495,7 @@ fn read_port(map: &Map<String, Value>, key: &str, file: &str) -> Result<Option<u
                 .filter(|p| *p > 0 && *p <= u64::from(u16::MAX))
                 .and_then(|p| u16::try_from(p).ok())
                 .ok_or_else(|| {
-                    format!("{file}: `start`'s `{key}` is a number from 1 to 65535, not {port}.")
+                    format!("{file}: {label} is a number from 1 to 65535, not {port}.")
                 })?,
         )),
     }
@@ -1643,7 +1621,7 @@ fn refresh(
     Ok(Some(name.to_string()))
 }
 
-/// The error for a `start` key naming a target that is not there.
+/// The error for a dev setting naming a target that is not there.
 fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {
     let suggestion = nearest(named, names)
         .map(|near| format!(" Did you mean \"{near}\"?"))
@@ -2038,7 +2016,7 @@ mod tests {
     #[test]
     fn a_target_is_an_entry_and_where_its_output_goes() {
         let project = read(
-            r#"{ "targets": { "server": { "entry": "src/server.ts", "out": "dist/server.js" } } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}}}}"#,
         )
         .expect("parsed");
         let target = &project.targets[0];
@@ -2053,10 +2031,7 @@ mod tests {
     #[test]
     fn a_library_target_carries_what_the_flags_carry() {
         let project = read(
-            r#"{ "targets": { "std": {
-                 "entry": "src", "lib": true, "outdir": "dist",
-                 "format": ["esm", "cjs"], "minify": true,
-                 "assets": ["README.md", "LICENSE"] } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "cjs"], "minify": true, "assets": ["README.md", "LICENSE"]}}}}"#,
         )
         .expect("parsed");
         let target = &project.targets[0];
@@ -2075,8 +2050,7 @@ mod tests {
     #[test]
     fn a_single_format_needs_no_list() {
         let project = read(
-            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
-                 "format": "cjs" } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": "cjs"}}}}"#,
         )
         .expect("parsed");
         assert_eq!(project.targets[0].formats, ["cjs"]);
@@ -2094,8 +2068,8 @@ mod tests {
             ("dts-bundle", "true"),
         ] {
             let err = read(&format!(
-                r#"{{ "targets": {{ "app": {{ "entry": "src/app.ts",
-                     "out": "dist/app.js", "{key}": {value} }} }} }}"#
+                r#"{{ "build": {{ "targets": {{ "app": {{ "entry": "src/app.ts",
+                     "out": "dist/app.js", "{key}": {value} }} }} }} }}"#
             ))
             .expect_err("refused");
             assert!(err.contains(key), "{err}");
@@ -2107,8 +2081,7 @@ mod tests {
     #[test]
     fn a_library_writing_one_file_is_refused() {
         let err = read(
-            r#"{ "targets": { "std": { "entry": "src", "lib": true,
-                 "out": "dist/std.js" } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "out": "dist/std.js"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("outdir"), "{err}");
@@ -2118,8 +2091,7 @@ mod tests {
     #[test]
     fn a_library_rooted_at_a_document_is_refused() {
         let err = read(
-            r#"{ "targets": { "std": { "entry": "index.html", "lib": true,
-                 "outdir": "dist" } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "index.html", "lib": true, "outdir": "dist"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("source directory"), "{err}");
@@ -2130,8 +2102,7 @@ mod tests {
     #[test]
     fn a_library_that_runs_afterwards_is_refused() {
         let err = read(
-            r#"{ "targets": { "std": { "entry": "src", "lib": true,
-                 "outdir": "dist", "then": "run" } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "then": "run"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("imported"), "{err}");
@@ -2142,16 +2113,14 @@ mod tests {
     #[test]
     fn an_unknown_format_is_named() {
         let err = read(
-            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
-                 "format": ["esm", "umd"] } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "umd"]}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("umd"), "{err}");
         assert!(err.contains("\"cjs\""), "{err}");
 
         let twice = read(
-            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
-                 "format": ["esm", "esm"] } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "esm"]}}}}"#,
         )
         .expect_err("refused");
         assert!(twice.contains("twice"), "{twice}");
@@ -2163,8 +2132,7 @@ mod tests {
     #[test]
     fn dts_bundle_true_with_no_index_says_where_to_look() {
         let err = read(
-            r#"{ "targets": { "std": { "entry": "nowhere", "lib": true,
-                 "outdir": "dist", "dts-bundle": true } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "nowhere", "lib": true, "outdir": "dist", "dts-bundle": true}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("index.ts"), "{err}");
@@ -2175,8 +2143,7 @@ mod tests {
     #[test]
     fn dts_bundle_takes_the_entry_it_is_given() {
         let project = read(
-            r#"{ "targets": { "std": { "entry": "src", "lib": true, "outdir": "dist",
-                 "dts-bundle": "src/public.ts" } } }"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "dts-bundle": "src/public.ts"}}}}"#,
         )
         .expect("parsed");
         assert_eq!(
@@ -2191,14 +2158,7 @@ mod tests {
     #[test]
     fn a_targets_plugins_add_to_the_projects() {
         let project = read(
-            r#"{
-              "plugins": ["./plugins/mdx.js"],
-              "targets": {
-                "api": { "entry": "src/api.ts", "out": "dist/api.js" },
-                "web": { "entry": "src/web.ts", "out": "dist/web.js",
-                         "plugins": ["./plugins/only-web.js"] }
-              }
-            }"#,
+            r#"{"plugins": ["./plugins/mdx.js"], "build": {"targets": {"api": {"entry": "src/api.ts", "out": "dist/api.js"}, "web": {"entry": "src/web.ts", "out": "dist/web.js", "plugins": ["./plugins/only-web.js"]}}}}"#,
         )
         .expect("parsed");
 
@@ -2237,11 +2197,7 @@ mod tests {
     #[test]
     fn a_plugin_may_name_its_export_and_its_options() {
         let project = read(
-            r#"{
-              "plugins": [{ "module": "@otfw/compiler", "export": "compiler",
-                            "options": { "jsx": "automatic" } }],
-              "targets": { "web": { "entry": "src/web.ts", "out": "dist/web.js" } }
-            }"#,
+            r#"{"plugins": [{"module": "@otfw/compiler", "export": "compiler", "options": {"jsx": "automatic"}}], "build": {"targets": {"web": {"entry": "src/web.ts", "out": "dist/web.js"}}}}"#,
         )
         .expect("parsed");
         let plugin = &project.plugins[0];
@@ -2255,15 +2211,13 @@ mod tests {
     #[test]
     fn a_plugin_entry_has_to_name_a_module() {
         let refused = read(
-            r#"{ "plugins": [{ "options": {} }],
-                 "targets": { "web": { "entry": "a.ts", "out": "dist/a.js" } } }"#,
+            r#"{"plugins": [{"options": {}}], "build": {"targets": {"web": {"entry": "a.ts", "out": "dist/a.js"}}}}"#,
         )
         .expect_err("no module");
         assert!(refused.contains("has no `module`"), "{refused}");
 
         let mistyped = read(
-            r#"{ "plugins": [{ "module": "./p.js", "option": {} }],
-                 "targets": { "web": { "entry": "a.ts", "out": "dist/a.js" } } }"#,
+            r#"{"plugins": [{"module": "./p.js", "option": {}}], "build": {"targets": {"web": {"entry": "a.ts", "out": "dist/a.js"}}}}"#,
         )
         .expect_err("mistyped key");
         assert!(mistyped.contains("option"), "{mistyped}");
@@ -2275,8 +2229,7 @@ mod tests {
     #[test]
     fn plugins_is_a_list() {
         let refused = read(
-            r#"{ "plugins": "./p.js",
-                 "targets": { "web": { "entry": "a.ts", "out": "dist/a.js" } } }"#,
+            r#"{"plugins": "./p.js", "build": {"targets": {"web": {"entry": "a.ts", "out": "dist/a.js"}}}}"#,
         )
         .expect_err("not a list");
         assert!(refused.contains("list of plugins"), "{refused}");
@@ -2292,7 +2245,7 @@ mod tests {
     #[test]
     fn a_refresh_scheme_needs_a_plugin_that_could_implement_it() {
         let refused =
-            read(r#"{ "targets": { "web": { "entry": "index.html", "refresh": "otfw" } } }"#)
+            read(r#"{"build": {"targets": {"web": {"entry": "index.html", "refresh": "otfw"}}}}"#)
                 .expect_err("no plugin to implement it");
         assert!(
             refused.contains("no plugins that could implement"),
@@ -2302,14 +2255,14 @@ mod tests {
         // React is not privileged. It was the only name this took for a while,
         // and it is now a plugin like any other — the react template's own.
         let react =
-            read(r#"{ "targets": { "web": { "entry": "index.html", "refresh": "react" } } }"#)
+            read(r#"{"build": {"targets": {"web": {"entry": "index.html", "refresh": "react"}}}}"#)
                 .expect_err("react is not built in either");
         assert!(react.contains("no plugins that could implement"), "{react}");
 
         for scheme in ["otfw", "react"] {
             let accepted = read(&format!(
                 r#"{{ "plugins": ["./plugins/{scheme}.js"],
-                     "targets": {{ "web": {{ "entry": "index.html", "refresh": "{scheme}" }} }} }}"#
+                     "build": {{ "targets": {{ "web": {{ "entry": "index.html", "refresh": "{scheme}" }} }} }} }}"#
             ))
             .expect("a plugin can implement it");
             assert_eq!(accepted.targets[0].refresh.as_deref(), Some(scheme));
@@ -2320,17 +2273,15 @@ mod tests {
     /// command line that omits `--out` must write the same file.
     #[test]
     fn the_output_defaults_to_dist_beside_the_entry_name() {
-        let project = read(r#"{ "targets": { "app": { "entry": "src/app.ts" } } }"#).expect("ok");
+        let project =
+            read(r#"{"build": {"targets": {"app": {"entry": "src/app.ts"}}}}"#).expect("ok");
         assert!(matches!(&project.targets[0].output, Output::File(out) if out == "dist/app.js"));
     }
 
     #[test]
     fn targets_come_back_in_name_order() {
         let project = read(
-            r#"{ "targets": {
-                   "server": { "entry": "s.ts" },
-                   "browser": { "entry": "c.tsx", "outdir": "dist/client", "platform": "browser" }
-                 } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}, "browser": {"entry": "c.tsx", "outdir": "dist/client", "platform": "browser"}}}}"#,
         )
         .expect("parsed");
         let names: Vec<&str> = project.targets.iter().map(|t| t.name.as_str()).collect();
@@ -2342,22 +2293,23 @@ mod tests {
     /// error — and the message names the key it was nearly.
     #[test]
     fn a_mistyped_key_is_named_and_corrected() {
-        let err = read(r#"{ "targets": { "a": { "entry": "a.ts", "outDir": "dist" } } }"#)
+        let err = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "outDir": "dist"}}}}"#)
             .expect_err("refused");
         assert!(err.contains("unknown key `outDir`"), "{err}");
         assert!(err.contains("Did you mean `outdir`?"), "{err}");
 
-        let top = read(r#"{ "target": {} }"#).expect_err("refused");
-        assert!(top.contains("Did you mean `targets`?"), "{top}");
+        let top = read(r#"{ "builds": {} }"#).expect_err("refused");
+        assert!(top.contains("Did you mean `build`?"), "{top}");
     }
 
     /// The two output shapes are different things, and a target that asks for
     /// both has not decided which.
     #[test]
     fn out_and_outdir_are_not_both() {
-        let err =
-            read(r#"{ "targets": { "a": { "entry": "a.ts", "out": "d/a.js", "outdir": "d" } } }"#)
-                .expect_err("refused");
+        let err = read(
+            r#"{"build": {"targets": {"a": {"entry": "a.ts", "out": "d/a.js", "outdir": "d"}}}}"#,
+        )
+        .expect_err("refused");
         assert!(err.contains("both `out` and `outdir`"), "{err}");
     }
 
@@ -2365,24 +2317,26 @@ mod tests {
     /// `dist`, and `outdir` naming a file the reverse.
     #[test]
     fn the_output_shape_must_match_the_key() {
-        let file = read(r#"{ "targets": { "a": { "entry": "a.ts", "out": "dist" } } }"#)
+        let file = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "out": "dist"}}}}"#)
             .expect_err("refused");
         assert!(file.contains("names a directory"), "{file}");
 
-        let dir = read(r#"{ "targets": { "a": { "entry": "a.ts", "outdir": "dist/a.js" } } }"#)
-            .expect_err("refused");
+        let dir =
+            read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "outdir": "dist/a.js"}}}}"#)
+                .expect_err("refused");
         assert!(dir.contains("names a file"), "{dir}");
     }
 
     #[test]
     fn a_target_without_an_entry_is_refused() {
-        let err = read(r#"{ "targets": { "a": { "out": "dist/a.js" } } }"#).expect_err("refused");
+        let err =
+            read(r#"{"build": {"targets": {"a": {"out": "dist/a.js"}}}}"#).expect_err("refused");
         assert!(err.contains("has no `entry`"), "{err}");
     }
 
     #[test]
     fn the_platform_is_one_of_two_words() {
-        let err = read(r#"{ "targets": { "a": { "entry": "a.ts", "platform": "node" } } }"#)
+        let err = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "platform": "node"}}}}"#)
             .expect_err("refused");
         assert!(err.contains("\"server\""), "{err}");
         assert!(err.contains("\"browser\""), "{err}");
@@ -2393,7 +2347,7 @@ mod tests {
     #[test]
     fn a_browser_target_cannot_be_run_after_the_build() {
         let err = read(
-            r#"{ "targets": { "a": { "entry": "a.tsx", "outdir": "d", "platform": "browser", "then": "run" } } }"#,
+            r#"{"build": {"targets": {"a": {"entry": "a.tsx", "outdir": "d", "platform": "browser", "then": "run"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("browser target"), "{err}");
@@ -2401,10 +2355,11 @@ mod tests {
 
     #[test]
     fn then_run_is_the_only_thing_a_build_does_next() {
-        let ok = read(r#"{ "targets": { "a": { "entry": "a.ts", "then": "run" } } }"#).expect("ok");
+        let ok =
+            read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "then": "run"}}}}"#).expect("ok");
         assert!(ok.targets[0].run_after_build);
 
-        let err = read(r#"{ "targets": { "a": { "entry": "a.ts", "then": "deploy" } } }"#)
+        let err = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "then": "deploy"}}}}"#)
             .expect_err("refused");
         assert!(err.contains("\"run\""), "{err}");
     }
@@ -2414,8 +2369,7 @@ mod tests {
     #[test]
     fn a_define_keeps_the_json_type_it_was_written_with() {
         let project = read(
-            r#"{ "targets": { "a": { "entry": "a.ts",
-                 "define": { "MODE": "dev", "PORT": 8080, "DEBUG": false } } } }"#,
+            r#"{"build": {"targets": {"a": {"entry": "a.ts", "define": {"MODE": "dev", "PORT": 8080, "DEBUG": false}}}}}"#,
         )
         .expect("parsed");
         let define = &project.targets[0].define;
@@ -2427,31 +2381,38 @@ mod tests {
     #[test]
     fn a_define_of_a_whole_object_is_refused() {
         let err =
-            read(r#"{ "targets": { "a": { "entry": "a.ts", "define": { "X": { "y": 1 } } } } }"#)
+            read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "define": {"X": {"y": 1}}}}}}"#)
                 .expect_err("refused");
         assert!(err.contains("a single value"), "{err}");
     }
 
-    /// `start` is validated by the command that reads the file, not held until
+    /// `dev` is validated by the command that reads the file, not held until
     /// the day somebody runs `esdev start`.
     #[test]
     fn start_must_name_targets_that_exist() {
         let err = read(
-            r#"{ "targets": { "server": { "entry": "s.ts" } },
-                 "start": { "run": "sever" } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "sever"}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("is not a target"), "{err}");
         assert!(err.contains("Did you mean \"server\"?"), "{err}");
 
+        let conflict = read(
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "server", "watch": {"targets": ["server"]}, "app": {"port": 8080}, "server": {"port": 5173}}}"#,
+        )
+        .expect_err("the full-stack app owns the endpoint");
+        assert!(
+            conflict.contains("cannot be combined with `dev.run`"),
+            "{conflict}"
+        );
+
         let start = read(
-            r#"{ "targets": { "server": { "entry": "s.ts" } },
-                 "start": { "run": "server", "watch": ["server"], "listen": 8080, "port": 5173 } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "server", "watch": {"targets": ["server"]}, "app": {"port": 8080}}}"#,
         )
         .expect("parsed")
         .start;
         assert_eq!(start.listen, Some(8080));
-        assert_eq!(start.port, Some(5173));
+        assert_eq!(start.port, None);
     }
 
     /// The dev loop writes into `.dev` unless the file says otherwise, and the
@@ -2459,15 +2420,15 @@ mod tests {
     /// deploy output recreates the overwrite the separation exists to prevent.
     #[test]
     fn devdir_defaults_and_stays_clear_of_deploy_outputs() {
-        let silent =
-            read(r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } } }"#)
-                .expect("parsed");
+        let silent = read(
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}}}}"#,
+        )
+        .expect("parsed");
         assert_eq!(silent.start.devdir(), DEFAULT_DEV_DIR);
         assert_eq!(silent.start.devdir, None);
 
         let named = read(
-            r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } },
-                 "start": { "devdir": "tmp-dev" } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}}}, "dev": {"outDir": "tmp-dev"}}"#,
         )
         .expect("parsed");
         assert_eq!(named.start.devdir(), "tmp-dev");
@@ -2476,22 +2437,19 @@ mod tests {
         // and a directory beneath an output directory. All three would put
         // dev builds where `esdev build` deploys.
         let err = read(
-            r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } },
-                 "start": { "devdir": "dist/server.js" } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}}}, "dev": {"outDir": "dist/server.js"}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("overlaps"), "{err}");
 
         let err = read(
-            r#"{ "targets": { "server": { "entry": "s.ts", "out": "dist/server.js" } },
-                 "start": { "devdir": "dist" } }"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}}}, "dev": {"outDir": "dist"}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("overlaps"), "{err}");
 
         let err = read(
-            r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } },
-                 "start": { "devdir": "dist/dev" } }"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"outDir": "dist/dev"}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("overlaps"), "{err}");
@@ -2503,18 +2461,16 @@ mod tests {
             ("../shared", "escapes"),
         ] {
             let err = read(&format!(
-                r#"{{ "targets": {{ "server": {{ "entry": "s.ts" }} }},
-                     "start": {{ "devdir": "{devdir}" }} }}"#,
+                r#"{{ "build": {{ "targets": {{ "server": {{ "entry": "s.ts" }} }} }},
+                     "dev": {{ "outDir": "{devdir}" }} }}"#,
             ))
             .expect_err("refused");
             assert!(err.contains(needle), "{err}");
         }
 
-        let empty = read(
-            r#"{ "targets": { "server": { "entry": "s.ts" } },
-                 "start": { "devdir": "" } }"#,
-        )
-        .expect_err("refused");
+        let empty =
+            read(r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"outDir": ""}}"#)
+                .expect_err("refused");
         assert!(empty.contains("empty"), "{empty}");
     }
 
@@ -2574,18 +2530,20 @@ mod tests {
     #[test]
     fn an_html_target_refuses_the_keys_a_document_already_answers() {
         let out = read(
-            r#"{ "targets": { "web": { "entry": "index.html", "out": "dist/index.html" } } }"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "out": "dist/index.html"}}}}"#,
         )
         .expect_err("refused");
         assert!(out.contains("`out` names one output"), "{out}");
 
-        let platform =
-            read(r#"{ "targets": { "web": { "entry": "index.html", "platform": "browser" } } }"#)
-                .expect_err("refused");
+        let platform = read(
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "platform": "browser"}}}}"#,
+        )
+        .expect_err("refused");
         assert!(platform.contains("run in a browser"), "{platform}");
 
-        let then = read(r#"{ "targets": { "web": { "entry": "index.html", "then": "run" } } }"#)
-            .expect_err("refused");
+        let then =
+            read(r#"{"build": {"targets": {"web": {"entry": "index.html", "then": "run"}}}}"#)
+                .expect_err("refused");
         assert!(then.contains("nothing to execute"), "{then}");
     }
 
@@ -2593,21 +2551,31 @@ mod tests {
     /// bundles its scripts became, the chunks those split into.
     #[test]
     fn an_html_target_defaults_to_a_directory() {
-        let project = read(r#"{ "targets": { "web": { "entry": "index.html" } } }"#).expect("ok");
+        let project =
+            read(r#"{"build": {"targets": {"web": {"entry": "index.html"}}}}"#).expect("ok");
         assert!(project.targets[0].is_html());
         assert!(matches!(&project.targets[0].output, Output::Dir(dir) if dir == "dist"));
     }
 
     #[test]
     fn a_file_with_no_targets_says_so() {
-        // `start` builds and serves targets, so a file naming one without them
+        // `dev` builds and serves targets, so a file naming one without them
         // is incomplete — and so is a file that says nothing at all.
-        let missing = read(r#"{ "start": { "run": "a" } }"#).expect_err("refused");
-        assert!(missing.contains("no `targets`"), "{missing}");
+        let missing = read(r#"{"dev": {"run": "a"}}"#).expect_err("refused");
+        assert!(missing.contains("no `build.targets`"), "{missing}");
         assert!(read(r#"{ }"#).is_err());
 
-        let empty = read(r#"{ "targets": {} }"#).expect_err("refused");
+        let empty = read(r#"{"build": {"targets": {}}}"#).expect_err("refused");
         assert!(empty.contains("no targets"), "{empty}");
+    }
+
+    #[test]
+    fn old_root_level_settings_are_rejected_with_their_new_homes() {
+        for (key, new_home) in [("targets", "build"), ("alias", "resolve"), ("start", "dev")] {
+            let err = read(&format!(r#"{{ "{key}": {{}} }}"#)).expect_err("old key refused");
+            assert!(err.contains(&format!("unknown key `{key}`")), "{err}");
+            assert!(err.contains(new_home), "{err}");
+        }
     }
 
     #[test]
@@ -2825,7 +2793,7 @@ mod tests {
 
     #[test]
     fn invalid_json_says_it_is_data() {
-        let err = read(r#"{ "targets": { /* a comment */ } }"#).expect_err("refused");
+        let err = read(r#"{ "build": { "targets": { /* a comment */ } } }"#).expect_err("refused");
         assert!(err.contains("not valid JSON"), "{err}");
         assert!(err.contains("no comments"), "{err}");
     }

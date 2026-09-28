@@ -2237,10 +2237,10 @@ plugins, and permissions-shaped watch paths. The public shape groups outputs
 under `build.targets`, shared aliases under `resolve.alias`, and the dev loop
 under `dev`; `jsx`, `test`, and shared `plugins` stay at the root because they
 apply across targets or commands. Target plugins remain additive. The earlier
-root-level `targets`, `alias`, and `start` spellings stay readable for
-migration, but templates and new examples use the grouped shape. Project
-permissions are refused: `esdev` supplies the development grant and production
-grants belong to `esrun`. Explicit watch roots use `dev.watch.paths`. Proxying
+root-level `targets`, `alias`, and `start` spellings are rejected; move them to
+`build.targets`, `resolve.alias`, and `dev`. Project permissions are refused:
+`esdev` supplies the development grant and production grants belong to
+`esrun`. Explicit watch roots use `dev.watch.paths`. Proxying
 is deferred because the full-stack app owns the HTTP endpoint today; introducing
 a proxy also changes request routing and HMR ownership, so a config key alone
 would promise behavior the runner does not provide.

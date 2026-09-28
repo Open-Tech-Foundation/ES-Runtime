@@ -1493,8 +1493,8 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                 return Err(format!(
                     "esdev start needs a {0}, and there is none here.\n\n\
                      It describes what this project builds and what to run:\n\n  \
-                     {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }},\n    \
-                     \"start\": {{ \"run\": \"server\" }} }}\n\n\
+                     {{ \"build\": {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }} }},\n    \
+                     \"dev\": {{ \"run\": \"server\" }} }}\n\n\
                      See `esdev build --help` for the rest of {0}.",
                     config::FILE_NAME
                 ));
@@ -1994,108 +1994,6 @@ async fn run_module(
     es_runtime_cli_common::run("esdev", config).await
 }
 
-/// A module named relative to `dir`, as the file URL a child imports it by. A
-/// name that is not a file there is left as written: a bare specifier names a
-/// package, and where that lives is the resolver's question.
-fn module_url(dir: &std::path::Path, module: &str) -> Result<String, String> {
-    let path = dir.join(module);
-    if path.exists() {
-        url::Url::from_file_path(&path)
-            .map(|url| url.to_string())
-            .map_err(|()| format!("cannot name module {module} as a file URL"))
-    } else {
-        Ok(module.to_string())
-    }
-}
-
-/// The test flags, resolved against the project: what `esdev.json`'s `test`
-/// section says, where a flag did not already answer.
-///
-/// **A flag beats the file**, the same rule the build uses. Setup modules are
-/// resolved against the project directory and made file URLs, because a child
-/// process is started from wherever the parent was and a relative path would
-/// otherwise mean two different files. A raw absolute Windows path would be
-/// parsed as a `d:` module specifier rather than a local file.
-fn resolve_test(config: &mut TestConfig, settings: &settings::Settings) -> Result<(), String> {
-    // A flag's global setup is named from where the run was started: the
-    // process that runs it is started from here too, but imports by URL.
-    let here = std::env::current_dir().unwrap_or_default();
-    config.global_setup = config
-        .global_setup
-        .iter()
-        .map(|module| module_url(&here, module))
-        .collect::<Result<_, _>>()?;
-    config.run.source = settings.source.clone();
-    let root = &settings.source.root;
-    // Every key of the file's `test` section, named: one added to the file
-    // without a rule here does not compile, rather than being read and dropped
-    // (DECISIONS D125).
-    let config::TestSettings {
-        setup,
-        global_setup,
-        timeout,
-        jobs,
-        isolation,
-        reporter,
-        browser,
-        coverage,
-        max_concurrency,
-        tags,
-        strict_tags,
-    } = &settings.test;
-    if config.run.setup.is_empty() {
-        config.run.setup = setup
-            .iter()
-            .map(|module| -> Result<_, String> {
-                let path = root.join(module);
-                // A bare specifier stays one: `"setup": "my-preset/register"`
-                // names a package, and where that lives is the resolver's
-                // question rather than this file's.
-                if path.exists() {
-                    url::Url::from_file_path(&path)
-                        .map(|url| url.to_string())
-                        .map_err(|()| format!("cannot name setup module {module} as a file URL"))
-                } else {
-                    Ok(module.clone())
-                }
-            })
-            .collect::<Result<_, _>>()?;
-    }
-    config.run.tag_definitions.clone_from(tags);
-    if config.run.max_concurrency.is_none() {
-        config.run.max_concurrency = *max_concurrency;
-    }
-    config.run.strict_tags = strict_tags.unwrap_or(true);
-    if config.global_setup.is_empty() {
-        config.global_setup = global_setup
-            .iter()
-            .map(|module| module_url(root, module))
-            .collect::<Result<_, _>>()?;
-    }
-    // The project's coverage settings, when the flag or the project turns it on.
-    if let Some(section) = coverage
-        && (config.coverage.is_some() || section.enabled)
-    {
-        config.coverage = Some(section.settings.clone());
-    }
-    if config.timeout.is_none() {
-        config.timeout = *timeout;
-    }
-    if config.jobs.is_none() {
-        config.jobs = *jobs;
-    }
-    if config.isolation.is_none() {
-        config.isolation = *isolation;
-    }
-    if config.reporter.is_none() {
-        config.reporter.clone_from(reporter);
-    }
-    if config.browser.is_none() {
-        config.browser.clone_from(browser);
-    }
-    Ok(())
-}
-
 /// Refuses what cannot mean anything once the files run in a browser.
 ///
 /// Checked after the project is read, since `test.browser` in `esdev.json`
@@ -2480,7 +2378,7 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
     let resolved = match config.settings_file.clone() {
         Some(path) => test::FileRun::read(&path).map(|run| config.run = run),
         None => {
-            settings::Settings::load(None).and_then(|project| resolve_test(&mut config, &project))
+            settings::Settings::load(None).and_then(|project| project.resolve_test(&mut config))
         }
     };
     if let Err(err) = resolved {

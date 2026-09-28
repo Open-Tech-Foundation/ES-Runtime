@@ -137,8 +137,8 @@ impl Fixture {
             &dir,
             "esdev.json",
             &format!(
-                r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
-                     "start": {{ "port": {port} }} }}"#
+                r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                     "dev": {{ "server": {{ "port": {port} }} }} }}"#
             ),
         );
 

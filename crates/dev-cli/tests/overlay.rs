@@ -35,7 +35,7 @@ fn project(name: &str) -> PathBuf {
     .expect("write the document");
     std::fs::write(
         dir.join("esdev.json"),
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     )
     .expect("write the config");
     dir

@@ -32,8 +32,8 @@ build targets or to their own command.
 `dev.app.port` is the app server's fallback port. In a static project,
 `dev.server.port` pins esdev's listener instead. The app owns the browser
 endpoint in full-stack mode; request proxying is not available yet. The old
-top-level `targets`, `alias`, and `start` keys remain accepted while projects
-migrate; new configs should use the grouped keys above. A top-level
+top-level `targets`, `alias`, and `start` keys are rejected. Move them to
+`build.targets`, `resolve.alias`, and `dev`. A top-level
 `permissions` block is rejected: development permissions come from esdev, and
 production grants belong on the `esrun` command.
 

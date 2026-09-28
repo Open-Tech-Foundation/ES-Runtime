@@ -183,8 +183,7 @@ fn test_help_names_which_options_live_in_the_file() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "app": { "entry": "app.mjs", "out": "dist/app.js" } },
-             "test": { "updateSnapshots": true } }"#,
+        r#"{"test": {"updateSnapshots": true}, "build": {"targets": {"app": {"entry": "app.mjs", "out": "dist/app.js"}}}}"#,
     );
     let ran = esdev_in(&dir)
         .arg("test")
@@ -754,9 +753,7 @@ fn a_library_target_builds_the_same_thing_the_flags_do() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "lib": {
-             "entry": "src", "lib": true, "outdir": "dist",
-             "format": ["esm", "cjs"], "assets": ["README.md"] } } }"#,
+        r#"{"build": {"targets": {"lib": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "cjs"], "assets": ["README.md"]}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -808,8 +805,8 @@ fn the_library_keys_are_refused_on_an_application_target() {
             &dir,
             "esdev.json",
             &format!(
-                r#"{{ "targets": {{ "app": {{ "entry": "src/app.ts",
-                     "out": "dist/app.js", "{key}": {value} }} }} }}"#
+                r#"{{ "build": {{ "targets": {{ "app": {{ "entry": "src/app.ts",
+                     "out": "dist/app.js", "{key}": {value} }} }} }} }}"#
             ),
         );
         let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -1584,7 +1581,7 @@ fn the_dev_loop_maps_without_being_asked() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
     );
 
     let release = esdev_in(&dir)
@@ -1605,8 +1602,8 @@ fn the_dev_loop_maps_without_being_asked() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\", \
-         \"sourcemap\": \"inline\" } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\", \
+         \"sourcemap\": \"inline\" } } } }\n",
     );
     let mapped = esdev_in(&dir)
         .arg("build")
@@ -1656,7 +1653,7 @@ fn an_imported_asset_is_emitted_hashed_and_referenced_by_url() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
     );
 
     let out = esdev_in(&dir)
@@ -1782,7 +1779,7 @@ fn a_raw_suffix_is_refused_by_name() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"targets\": { \"app\": { \"entry\": \"app.mjs\", \"out\": \"dist/app.js\" } } }",
+        "{ \"build\": { \"targets\": { \"app\": { \"entry\": \"app.mjs\", \"out\": \"dist/app.js\" } } } }",
     );
 
     let out = esdev_in(&dir)
@@ -2064,8 +2061,7 @@ fn a_library_target_is_built_without_the_projects_alias() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "alias": { "@": "./src/a" },
-             "targets": { "pkg": { "entry": "src", "outdir": "libout", "lib": true, "types": false } } }"#,
+        r#"{"build": {"targets": {"pkg": {"entry": "src", "outdir": "libout", "lib": true, "types": false}}}, "resolve": {"alias": {"@": "./src/a"}}}"#,
     );
     let out = esdev_in(&dir)
         .arg("build")
@@ -2135,7 +2131,11 @@ fn aliased_project(name: &str) -> PathBuf {
         "tsconfig.json",
         r#"{ "extends": "./tsconfig.base.json" }"#,
     );
-    write_in(&dir, "esdev.json", r#"{ "alias": { "@db": "./src/db" } }"#);
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"resolve": {"alias": {"@db": "./src/db"}}}"#,
+    );
     dir
 }
 
@@ -2293,9 +2293,9 @@ fn an_alias_is_rewritten_before_it_is_resolved() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"alias\": { \"@\": \"./src\" },\n  \
-         \"targets\": { \"server\": { \"entry\": \"src/server.ts\", \
-         \"out\": \"dist/server.js\" } } }\n",
+        "{ \"resolve\": { \"alias\": { \"@\": \"./src\" } },\n  \
+         \"build\": { \"targets\": { \"server\": { \"entry\": \"src/server.ts\", \
+         \"out\": \"dist/server.js\" } } } }\n",
     );
 
     let out = esdev_in(&dir)
@@ -3090,10 +3090,7 @@ fn a_failed_build_leaves_the_previous_output_where_it_was() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": {
-              "web": { "entry": "src/app.ts", "outdir": "dist" },
-              "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
-                             "then": "run" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "src/app.ts", "outdir": "dist"}, "prerender": {"entry": "src/prerender.ts", "out": "dist/prerender.js", "then": "run"}}}}"#,
     );
     std::fs::create_dir_all(dir.join("dist")).expect("create dist");
     write_in(&dir, "dist/index.html", "the deployment that works\n");
@@ -3145,9 +3142,7 @@ fn a_target_that_fails_to_bundle_leaves_nothing_of_the_run() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": {
-              "first": { "entry": "src/first.ts", "out": "dist/first.js" },
-              "second": { "entry": "src/second.ts", "out": "dist/second.js" } } }"#,
+        r#"{"build": {"targets": {"first": {"entry": "src/first.ts", "out": "dist/first.js"}, "second": {"entry": "src/second.ts", "out": "dist/second.js"}}}}"#,
     );
 
     let out = esdev_in(&dir)
@@ -3179,9 +3174,7 @@ fn a_whole_project_build_clears_the_directories_it_owns() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": {
-              "server": { "entry": "src/server.ts", "out": "dist/server.js" },
-              "web": { "entry": "src/app.ts", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}, "web": {"entry": "src/app.ts", "outdir": "dist"}}}}"#,
     );
     std::fs::create_dir_all(dir.join("dist")).expect("create dist");
     write_in(&dir, "dist/app-0000dead.js", "a build from last week\n");
@@ -3213,9 +3206,7 @@ fn building_one_target_leaves_the_other_s_output_alone() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": {
-              "server": { "entry": "src/server.ts", "out": "dist/server.js" },
-              "web": { "entry": "src/app.ts", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}, "web": {"entry": "src/app.ts", "outdir": "dist"}}}}"#,
     );
 
     assert!(
@@ -3247,7 +3238,7 @@ fn an_outdir_that_holds_the_project_is_refused_rather_than_emptied() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "src/app.ts", "outdir": "." } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "src/app.ts", "outdir": "."}}}}"#,
     );
 
     let out = esdev_in(&dir)
@@ -8578,8 +8569,7 @@ test("the file's setup ran", () => {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "app": { "entry": "c.test.ts", "out": "dist/app.js" } },
-             "test": { "setup": "./setup.ts", "reporter": "json", "jobs": 1 } }"#,
+        r#"{"test": {"setup": "./setup.ts", "reporter": "json", "jobs": 1}, "build": {"targets": {"app": {"entry": "c.test.ts", "out": "dist/app.js"}}}}"#,
     );
 
     let from_file = esdev_in(&dir)
@@ -9627,9 +9617,7 @@ fn a_browser_target_takes_the_browser_build_of_a_dependency() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": {
-               "web": { "entry": "app.mjs", "outdir": "out/web", "platform": "browser" },
-               "srv": { "entry": "app.mjs", "outdir": "out/srv" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "app.mjs", "outdir": "out/web", "platform": "browser"}, "srv": {"entry": "app.mjs", "outdir": "out/srv"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -9719,7 +9707,7 @@ fn a_config_error_names_the_key_and_the_one_it_was_nearly() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "app": { "entry": "app.mjs", "outDir": "dist" } } }"#,
+        r#"{"build": {"targets": {"app": {"entry": "app.mjs", "outDir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -9740,8 +9728,7 @@ fn permissions_are_not_accepted_in_project_config() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "app": { "entry": "app.mjs" } },
-             "permissions": { "deny": ["all"], "allow": { "filesystem": true } } }"#,
+        r#"{"permissions": {"deny": ["all"], "allow": {"filesystem": true}}, "build": {"targets": {"app": {"entry": "app.mjs"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -9816,7 +9803,7 @@ fn html_project(name: &str) -> PathBuf {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
     dir
 }
@@ -9920,7 +9907,7 @@ fn a_stylesheet_is_bundled_with_what_it_imports_and_references() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
 
     let build = || {
@@ -10063,7 +10050,7 @@ fn a_css_module_is_scoped_and_reaches_both_the_bundle_and_a_stylesheet() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -10169,7 +10156,7 @@ fn composes_is_transitive_and_a_plain_stylesheet_is_imported_whole() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -10234,7 +10221,7 @@ fn a_reference_that_is_not_there_stops_the_build() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -10262,7 +10249,7 @@ fn two_module_scripts_that_would_collide_are_refused() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -10307,7 +10294,7 @@ fn preview_serves_the_build_with_a_route_fallback() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
     );
 
     // Nothing built yet: a preview serves what a build wrote, and says so
@@ -10368,8 +10355,8 @@ fn preview_says_a_server_project_is_run_rather_than_served() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"targets\": { \"api\": { \"entry\": \"src/api.ts\", \
-         \"out\": \"dist/api.js\" } } }\n",
+        "{ \"build\": { \"targets\": { \"api\": { \"entry\": \"src/api.ts\", \
+         \"out\": \"dist/api.js\" } } } }\n",
     );
 
     let out = esdev_in(&dir)
@@ -10517,8 +10504,7 @@ fn test_isolation_can_come_from_project_config() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "app": { "entry": "app.mjs", "out": "dist/app.mjs" } },
-             "test": { "isolation": "none" } }"#,
+        r#"{"test": {"isolation": "none"}, "build": {"targets": {"app": {"entry": "app.mjs", "out": "dist/app.mjs"}}}}"#,
     );
     write_in(&dir, "app.mjs", "export {};\n");
     write_in(
@@ -10867,7 +10853,7 @@ fn start_finds_a_free_port_when_none_was_named() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
 
     // The default, held for the length of the test. If this fails, something
@@ -10908,7 +10894,7 @@ fn start_refuses_a_named_port_that_is_taken() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
 
     let _held = std::net::TcpListener::bind(("127.0.0.1", port)).expect("hold the port");
@@ -10958,8 +10944,8 @@ fn the_dev_loop_serves_an_imported_asset_and_maps_its_bundle() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
-                 "start": {{ "port": {port} }} }}"#
+            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
 
@@ -11005,8 +10991,8 @@ fn start_serves_a_frontend_project_and_reloads_it() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
-                 "start": {{ "port": {port} }} }}"#
+            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
 
@@ -12138,14 +12124,7 @@ fn build_loads_the_plugins_the_project_config_names() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": [{ "module": "./plugin.mjs", "options": { "text": "FROM THE CONFIG" } }],
-          "targets": {
-            "server":  { "entry": "src/server.mjs", "out": "dist/server.js" },
-            "browser": { "entry": "src/client.mjs", "outdir": "dist/client",
-                         "platform": "browser" }
-          }
-        }"#,
+        r#"{"plugins": [{"module": "./plugin.mjs", "options": {"text": "FROM THE CONFIG"}}], "build": {"targets": {"server": {"entry": "src/server.mjs", "out": "dist/server.js"}, "browser": {"entry": "src/client.mjs", "outdir": "dist/client", "platform": "browser"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12200,14 +12179,7 @@ export default {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": [{ "module": "./plugin.mjs", "options": { "text": "SHARED" } }],
-          "targets": {
-            "one": { "entry": "src/one.mjs", "out": "dist/one.js",
-                     "plugins": ["./plugin-extra.mjs"] },
-            "two": { "entry": "src/two.mjs", "out": "dist/two.js" }
-          }
-        }"#,
+        r#"{"plugins": [{"module": "./plugin.mjs", "options": {"text": "SHARED"}}], "build": {"targets": {"one": {"entry": "src/one.mjs", "out": "dist/one.js", "plugins": ["./plugin-extra.mjs"]}, "two": {"entry": "src/two.mjs", "out": "dist/two.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12268,12 +12240,7 @@ export default (options) => ({
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": [{ "module": "./framework.mjs", "options": { "greeting": "hi from the plugin" } }],
-          "targets": {
-            "web": { "entry": "greeting.jsx", "out": "dist/web.js", "plugins": ["./only-web.mjs"] }
-          }
-        }"#,
+        r#"{"plugins": [{"module": "./framework.mjs", "options": {"greeting": "hi from the plugin"}}], "build": {"targets": {"web": {"entry": "greeting.jsx", "out": "dist/web.js", "plugins": ["./only-web.mjs"]}}}}"#,
     );
     dir
 }
@@ -12388,10 +12355,7 @@ export default {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": ["./plugin.mjs"],
-          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
-        }"#,
+        r#"{"plugins": ["./plugin.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12425,10 +12389,7 @@ fn css_modules_still_scopes_a_stylesheet_no_plugin_claimed() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": [{ "module": "./plugin.mjs", "options": { "text": "B" } }],
-          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
-        }"#,
+        r#"{"plugins": [{"module": "./plugin.mjs", "options": {"text": "B"}}], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12455,10 +12416,7 @@ fn a_plugin_that_cannot_be_loaded_is_reported_against_the_config() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": ["./plugins/not-here.mjs"],
-          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
-        }"#,
+        r#"{"plugins": ["./plugins/not-here.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12481,10 +12439,7 @@ fn a_plugin_module_with_no_export_says_so() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": ["./plugin.mjs"],
-          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
-        }"#,
+        r#"{"plugins": ["./plugin.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12505,7 +12460,7 @@ fn a_project_without_plugins_is_unchanged() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{ "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } } }"#,
+        r#"{"build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12559,10 +12514,7 @@ export default {
     write_in(
         &dir,
         "esdev.json",
-        r#"{
-          "plugins": ["./plugin.mjs"],
-          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
-        }"#,
+        r#"{"plugins": ["./plugin.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -12650,16 +12602,16 @@ fn refresh_project(dir: &Path, port: Option<u16>) {
          <body><div id=root></div></body></html>\n",
     );
     let start = port.map_or_else(String::new, |port| {
-        format!(r#", "start": {{ "port": {port} }}"#)
+        format!(r#", "dev": {{ "server": {{ "port": {port} }} }}"#)
     });
     write_in(
         dir,
         "esdev.json",
         &format!(
             r#"{{ "jsx": {{ "factory": "h" }},
-                 "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
                                         "refresh": "otfw",
-                                        "plugins": ["./plugins/refresh.mjs"] }} }}{start} }}"#
+                                        "plugins": ["./plugins/refresh.mjs"] }} }} }}{start} }}"#
         ),
     );
 }
@@ -12778,8 +12730,8 @@ export default {
         "esdev.json",
         &format!(
             r#"{{ "plugins": ["./plugin.mjs"],
-                 "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
-                 "start": {{ "port": {port} }} }}"#
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
 

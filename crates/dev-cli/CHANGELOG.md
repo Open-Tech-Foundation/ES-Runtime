@@ -30,8 +30,9 @@ is the point, since none of the three has any business in a deployment.
   `build.targets`, aliases under `resolve.alias`, and development settings
   under `dev`; `dev.watch.paths` replaces permission-shaped watch paths.
   Project permission blocks are rejected: development uses esdev's normal
-  permissions, and deployment grants belong on `esrun`. Existing root-level
-  `targets`, `alias`, and `start` remain accepted as migration aliases.
+  permissions, and deployment grants belong on `esrun`. Former root-level
+  `targets`, `alias`, and `start` keys are rejected;
+  move them to `build.targets`, `resolve.alias`, and `dev`.
 - **`esdev start` runs its server child with esdev's development permissions.**
   `esdev.json` no longer supplies permission flags to that child; production
   grants belong on the `esrun` command. `dev.app.port` declares the app's
