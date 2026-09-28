@@ -328,11 +328,13 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // A handful of slots: every open page holds one reload stream, and a burst
     // of them is a burst of the same word.
     let (reload, _) = broadcast::channel(16);
+    let (error, _) = tokio::sync::watch::channel(None::<String>);
     tokio::spawn(crate::devserver::serve(
         listener,
         Arc::new(DevServer {
             serve: serve.clone(),
             reload: reload.clone(),
+            error: error.clone(),
         }),
     ));
 
@@ -418,6 +420,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         Ok(()) => true,
         Err(err) => {
             eprintln!("esdev: {err}");
+            error.send_replace(Some(crate::devserver::strip_ansi(&err)));
             false
         }
     };
@@ -520,12 +523,10 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // which is why the stop is here and not above.
         if let Err(err) = rebuild(&project, &watched, port, config.hot).await {
             eprintln!("esdev: {err}");
-            // The page shows it rather than sitting on the last good build in
-            // silence; the next successful pass clears it with whatever update
-            // it sends. No cycle line: the codeframe above is the message.
-            let _ = reload.send(Update::Error {
-                message: crate::devserver::strip_ansi(&err),
-            });
+            // Keep this as current state as well as notifying connected pages:
+            // clients that open or reconnect during the failure need the same
+            // message. No cycle line: the codeframe above is the message.
+            error.send_replace(Some(crate::devserver::strip_ansi(&err)));
             continue;
         }
 
@@ -609,6 +610,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             cycle_summary(&update, replaced_the_server),
             format_duration(cycle.elapsed())
         );
+        error.send_replace(None);
         let _ = reload.send(update);
     }
 }

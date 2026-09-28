@@ -168,3 +168,43 @@ async fn a_failed_build_reaches_live_pages_as_an_error() {
     }
     assert!(cleared, "no update after the fix");
 }
+
+/// The first build can fail before any page exists. The current failure must
+/// be replayed to a page that connects after the loop has reported ready.
+#[tokio::test]
+async fn an_initial_failed_build_reaches_late_pages_as_an_error() {
+    let dir = project("initial");
+    std::fs::write(dir.join("src/main.mjs"), "export const broken = ;\n")
+        .expect("break the entry before startup");
+    let (_dev, port) = Loop::start(dir.clone());
+
+    let stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .expect("connect to the loop");
+    let url = format!("ws://127.0.0.1:{port}/@esdev/hmr");
+    let (mut socket, _) = tokio_tungstenite::client_async(url, stream)
+        .await
+        .expect("websocket handshake with the loop");
+
+    let error = next_frame(&mut socket, Duration::from_secs(5))
+        .await
+        .expect("the current initial error should be replayed");
+    assert!(
+        error.contains("\"type\":\"error\""),
+        "not an error frame: {error}"
+    );
+    assert!(error.contains("main.mjs"), "names the file: {error}");
+
+    std::fs::write(
+        dir.join("src/main.mjs"),
+        "document.getElementById(\"out\").textContent = \"fixed\";\n",
+    )
+    .expect("fix the entry");
+    let update = next_frame(&mut socket, Duration::from_secs(10))
+        .await
+        .expect("a successful rebuild should clear the error");
+    assert!(
+        !update.contains("\"type\":\"error\""),
+        "still an error: {update}"
+    );
+}

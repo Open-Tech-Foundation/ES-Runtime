@@ -37,6 +37,7 @@ fn fixture(name: &str) -> PathBuf {
     std::fs::write(dir.join("sub").join("index.html"), "<h1>sub</h1>").expect("sub index");
     std::fs::write(dir.join("index.html"), "<h1>site</h1>").expect("index");
     std::fs::write(dir.join("app.js"), "console.log(1);").expect("js");
+    std::fs::write(dir.join("space name.txt"), "encoded path").expect("encoded path file");
     std::fs::write(dir.join("data.bin"), bytes()).expect("bytes");
     std::fs::write(dir.join("empty.txt"), b"").expect("empty");
     std::fs::write(dir.join("payload.bin"), "console.log('aliased');").expect("payload");
@@ -292,6 +293,17 @@ fn files_serve_with_validators() {
     );
     assert_eq!(status(&h), "200");
     assert_eq!(h.body, bytes());
+}
+
+#[test]
+fn encoded_path_segments_resolve_to_files() {
+    const NAME: &str = "encoded_path_segments_resolve_to_files";
+    let dir = fixture(NAME);
+    let (preview, port) = start(&dir);
+    let _preview = preview;
+    let a = get(port, &req("GET", "/space%20name.txt", &[]));
+    assert_eq!(status(&a), "200", "{}", a.status);
+    assert_eq!(a.body, b"encoded path");
 }
 #[test]
 fn a_rapid_same_size_rewrite_changes_the_etag() {

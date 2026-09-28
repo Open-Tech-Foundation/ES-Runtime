@@ -25,10 +25,11 @@
 //!
 //! # The update channel
 //!
-//! `GET /@esdev/hmr` is a **WebSocket** carrying one message per successful
-//! rebuild. It is esdev's rather than the application's, so no template carries
-//! dev-only code, and it accepts any origin because the page it talks to is
-//! usually on the application's port rather than this one.
+//! `GET /@esdev/hmr` is a **WebSocket** carrying successful rebuild updates and
+//! the current build failure, if there is one. It is esdev's rather than the
+//! application's, so no template carries dev-only code, and it accepts any
+//! origin because the page it talks to is usually on the application's port
+//! rather than this one.
 //!
 //! ## Why a WebSocket and not the event stream it used to be
 //!
@@ -147,6 +148,8 @@ pub struct DevServer {
     pub serve: Option<PathBuf>,
     /// Told after every successful rebuild.
     pub reload: broadcast::Sender<Update>,
+    /// The current build failure, replayed to pages that connect after it.
+    pub error: tokio::sync::watch::Sender<Option<String>>,
 }
 
 /// Accepts connections until the process ends.
@@ -174,7 +177,12 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
         return;
     };
     // The query string belongs to the page, not to the file it names.
-    let path = target.split(['?', '#']).next().unwrap_or("/").to_string();
+    let target_path = target.split(['?', '#']).next().unwrap_or("/");
+    let Some(path) = decode_path(target_path) else {
+        let head_only = matches!(crate::inspect::request_method(&head), Some("HEAD"));
+        respond_error(&mut stream, "400 Bad Request", "bad path", head_only, &[]).await;
+        return;
+    };
 
     if path == HMR_PATH {
         // The handshake is a GET-only upgrade (RFC 6455 §4.1: the method
@@ -183,7 +191,13 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
         // else is refused rather than upgraded.
         match crate::inspect::request_method(&head) {
             Some("GET") => {
-                updates(stream, &head, server.reload.subscribe()).await;
+                updates(
+                    stream,
+                    &head,
+                    server.reload.subscribe(),
+                    server.error.subscribe(),
+                )
+                .await;
                 return;
             }
             Some("HEAD") => {
@@ -255,7 +269,12 @@ async fn respond_error(
 }
 
 /// Holds the connection open, writing an event per rebuild.
-async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Receiver<Update>) {
+async fn updates(
+    mut stream: TcpStream,
+    head: &str,
+    mut reload: broadcast::Receiver<Update>,
+    mut error: tokio::sync::watch::Receiver<Option<String>>,
+) {
     // Not an upgrade, so not this endpoint. Answered rather than dropped: this
     // is the URL somebody reaches for when they want to know whether the dev
     // server is up, and a closed connection tells them nothing.
@@ -284,6 +303,19 @@ async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Recei
     let socket = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
     let (mut sink, mut incoming) = socket.split();
 
+    // A page may connect after the failed build (or reconnect while the error
+    // is still current). Read the state after subscribing so a concurrent
+    // transition is either represented here or wakes the select below.
+    let current_error = { error.borrow_and_update().clone() };
+    if let Some(message) = current_error
+        && sink
+            .send(Message::Text(Update::Error { message }.as_message().into()))
+            .await
+            .is_err()
+    {
+        return;
+    }
+
     // A page has arrived, and it may not hold what the last one was sent. The
     // next patch is computed as though nothing had been delivered, so it carries
     // what this page needs rather than a delta it cannot apply.
@@ -291,6 +323,17 @@ async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Recei
 
     loop {
         tokio::select! {
+            changed = error.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                let current_error = { error.borrow_and_update().clone() };
+                if let Some(message) = current_error
+                    && sink.send(Message::Text(Update::Error { message }.as_message().into())).await.is_err()
+                {
+                    return;
+                }
+            }
             update = reload.recv() => {
                 let message = match update {
                     Ok(update) => update,
@@ -732,6 +775,36 @@ fn safe_path(path: &str) -> Option<PathBuf> {
     Some(safe)
 }
 
+/// Decodes one URL path before filesystem routing. `+` remains a plus (it is
+/// not a space in a URL path), malformed escapes and invalid UTF-8 are refused.
+/// Traversal is checked after decoding by [`safe_path`].
+fn decode_path(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let high = *bytes.get(at + 1)?;
+            let low = *bytes.get(at + 2)?;
+            decoded.push((hex(high)? << 4) | hex(low)?);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// The `Content-Type` for a file, by extension.
 ///
 /// Short and explicit rather than a table of every type there is: what a dev
@@ -898,6 +971,19 @@ mod tests {
         assert_eq!(safe_path("/../../etc/passwd"), None);
         assert_eq!(safe_path("/assets/../../secret"), None);
         assert_eq!(safe_path("/a\\..\\b"), None);
+    }
+
+    #[test]
+    fn url_paths_are_decoded_before_filesystem_safety_checks() {
+        assert_eq!(
+            decode_path("/assets/my%20image-%C3%A9.png"),
+            Some("/assets/my image-é.png".into())
+        );
+        assert_eq!(decode_path("/a+b.txt"), Some("/a+b.txt".into()));
+        assert_eq!(decode_path("/%2e%2e/secret"), Some("/../secret".into()));
+        assert_eq!(safe_path(&decode_path("/%2e%2e/secret").unwrap()), None);
+        assert_eq!(decode_path("/bad%2"), None);
+        assert_eq!(decode_path("/%FF"), None);
     }
 
     #[test]

@@ -94,9 +94,11 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
     // Nothing ever sends on it — a preview has no rebuild to announce — but the
     // server is the dev server, and the dev server has a channel.
     let (reload, _) = tokio::sync::broadcast::channel(1);
+    let (error, _) = tokio::sync::watch::channel(None);
     let server = std::sync::Arc::new(crate::devserver::DevServer {
         serve: Some(dir.clone()),
         reload,
+        error,
     });
 
     let paint = crate::style::Palette::stderr();

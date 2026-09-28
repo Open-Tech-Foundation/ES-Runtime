@@ -52,9 +52,10 @@ is the point, since none of the three has any business in a deployment.
   every usage line via `{{pm}}` instead of a fixed `npm`/`pnpm`;
   `--install=<manager>` answers the question implicitly, and unattended runs
   keep npm. The install menu starts on the chosen manager when it is at hand.
-- **Build failures show in the page as an overlay.** The dev loop broadcasts
-  the failure over the update channel and the page renders what the terminal
-  prints, full-screen, until the fix clears it with the next update.
+- **Build failures show in the page as an overlay.** The dev loop retains the
+  current failure for pages that connect later, including after an initial
+  failed build, and the page renders what the terminal prints until a
+  successful build clears it.
 - **Serving any static folder is documented** (site `esdev/start/preview`).
   `esdev preview --dir=<folder>` needs no project and no external package —
   just an `index.html` at the folder's root.
@@ -62,7 +63,9 @@ is the point, since none of the three has any business in a deployment.
   (frontend-only projects) and `esdev preview` answer validators (`ETag`,
   `Last-Modified`, `304`), single and multi-range requests (`206`,
   `multipart/byteranges`, `416`), `HEAD`, and symlink containment — so a
-  preview revalidates and seeks the way production will. Development only;
+  preview revalidates and seeks the way production will. URL-encoded path
+  segments resolve to their filesystem names, with traversal still refused.
+  Development only;
   production static traffic still belongs on a CDN or proxy.
 
 ### Fixed
