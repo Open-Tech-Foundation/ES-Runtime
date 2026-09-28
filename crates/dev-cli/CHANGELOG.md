@@ -41,6 +41,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **`esdev create --language=ts` scaffolds a `typecheck` script and the
+  `typescript` dependency beside the `tsconfig.json`.** The OTF templates
+  (`spa`, `fullstack`, `docs`, `library`) previously wrote a config nothing
+  could act on; JavaScript mode gains neither.
 - **WebSocket upgrades require a complete opening handshake.** The dev and
   inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
   WebSocket upgrade token, version 13, and a single 16-byte base64 key before

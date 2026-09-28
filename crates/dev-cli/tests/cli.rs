@@ -11557,6 +11557,14 @@ fn otf_templates_scaffold_from_flags() {
     let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
     assert!(manifest.contains(r#""name": "shop-ts""#), "{manifest}");
     assert!(!manifest.contains("{{name}}"), "a placeholder survived");
+    assert!(
+        manifest.contains(r#""typecheck": "tsc --noEmit""#),
+        "the tsconfig has nothing to act on it: {manifest}"
+    );
+    assert!(
+        manifest.contains(r#""typescript""#),
+        "no compiler beside the config: {manifest}"
+    );
 
     // Unattended, the language takes its default and styling adds nothing:
     // a framework is only ever added because somebody chose it.
@@ -11575,6 +11583,10 @@ fn otf_templates_scaffold_from_flags() {
     assert!(
         !manifest.contains("tailwindcss"),
         "nothing was chosen: {manifest}"
+    );
+    assert!(
+        !manifest.contains("typecheck"),
+        "JavaScript has no tsconfig to check: {manifest}"
     );
 
     // The blog is files plus two patches — or neither.

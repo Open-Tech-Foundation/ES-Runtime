@@ -1031,6 +1031,16 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
         {
             bytes = patch_tailwind_dep(text).into_bytes();
         }
+        // The generated `tsconfig.json` needs something to act on it — the
+        // same compiler dependency and `typecheck` script the esdev-native
+        // templates carry in their own manifests. JavaScript mode keeps
+        // `jsconfig.json` and gains neither.
+        if ts
+            && new_path == "package.json"
+            && let Ok(text) = std::str::from_utf8(&bytes)
+        {
+            bytes = otf_patch_typescript(text).into_bytes();
+        }
         // The overlay wins, same as modes: a generated file replaces an
         // embedded one rather than being written beside it.
         match out.iter_mut().find(|(existing, _)| *existing == new_path) {
@@ -1137,6 +1147,27 @@ fn patch_tailwind_dep(content: &str) -> String {
         "\"devDependencies\": {\n",
         "\"devDependencies\": {\n    \"tailwindcss\": \"latest\",\n",
     )
+}
+
+/// A `tsconfig.json` without its compiler is a config nothing can act on:
+/// TypeScript mode also gains the `typescript` dependency and the `typecheck`
+/// script every esdev-native template ships. String surgery, like
+/// [`patch_tailwind_dep`], so the embedded manifest keeps its formatting.
+fn otf_patch_typescript(content: &str) -> String {
+    let mut next = content.to_string();
+    if !next.contains("\"typecheck\"") {
+        next = next.replace(
+            "\"scripts\": {\n",
+            "\"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n",
+        );
+    }
+    if !next.contains("\"typescript\"") {
+        next = next.replace(
+            "\"devDependencies\": {\n",
+            "\"devDependencies\": {\n    \"typescript\": \"^5.9.0\",\n",
+        );
+    }
+    next
 }
 
 /// The compiler macros are build-time, not runtime: their declarations ship
@@ -2119,10 +2150,47 @@ mod tests {
         assert!(!test.contains("bun:test"));
     }
 
+    /// A `tsconfig.json` nothing can act on is a broken promise: TypeScript
+    /// mode gains the compiler dependency and the `typecheck` script the
+    /// esdev-native templates ship, and JavaScript mode gains neither.
+    #[test]
+    fn typescript_gains_its_compiler_and_typecheck() {
+        for (template, styling, blog) in [
+            ("spa", Some("css"), None),
+            ("fullstack", Some("css"), None),
+            ("docs", None, Some(false)),
+            ("library", None, None),
+        ] {
+            let files = otf_written(template, "ts", styling, blog);
+            let manifest: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "package.json")).expect("valid JSON");
+            assert_eq!(
+                manifest["scripts"]["typecheck"],
+                serde_json::json!("tsc --noEmit"),
+                "{template}: no typecheck script"
+            );
+            assert!(
+                manifest["devDependencies"].get("typescript").is_some(),
+                "{template}: no typescript dependency: {manifest}"
+            );
+
+            let js = otf_written(template, "js", styling, blog);
+            let manifest: serde_json::Value =
+                serde_json::from_str(&otf_text(&js, "package.json")).expect("valid JSON");
+            assert!(
+                manifest["scripts"].get("typecheck").is_none(),
+                "{template}: JavaScript gained a typecheck script"
+            );
+            assert!(
+                manifest["devDependencies"].get("typescript").is_none(),
+                "{template}: JavaScript gained a compiler: {manifest}"
+            );
+        }
+    }
+
     /// JavaScript writes what is embedded: no config, no renames.
     #[test]
-    fn javascript_writes_the_embedded_files() {
-        let files = otf_written("spa", "js", Some("css"), None);
+    fn javascript_writes_the_embedded_files() {        let files = otf_written("spa", "js", Some("css"), None);
         let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"app/page.jsx"));
         assert!(paths.contains(&"jsconfig.json"));
