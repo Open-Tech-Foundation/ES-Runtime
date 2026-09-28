@@ -11,6 +11,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **An esbuild leg in the production-build benchmark.** The same 10,000-component
+  React app is bundled with `esbuild --bundle --minify --jsx=automatic`
+  (`bench/dev-server/esbuild-build.mjs`, `NODE_ENV` defined to production),
+  published as `build_time.esbuild` and charted with the other four tools in
+  the home-page "Build time" tab.
+
 ## [0.33.0] - 2026-09-25
 
 ### Added

@@ -1,9 +1,9 @@
 // Production-build benchmark: vite build vs oj build vs esdev build vs
-// bun build on the generated fixture (bench/dev-server/apps/app-<N>).
+// bun build vs esbuild on the generated fixture (bench/dev-server/apps/app-<N>).
 //
 // Each leg runs the tool's default production build into its own outdir,
 // with minification on everywhere it is a flag (vite and oj minify by
-// default; esdev and bun get --minify), so time and size compare like for
+// default; esdev, bun and esbuild get --minify), so time and size compare like for
 // like. Every rep clears the outdir first and records wall time, peak RSS
 // (polled off the child while it runs — a finished build leaves no /proc
 // entry for a VmHWM read, so the high-water mark is sampled, not read once)
@@ -39,6 +39,7 @@ const OUTDIRS = {
   oj: "dist-oj",
   esdev: "dist",
   bun: "dist-bun",
+  esbuild: "dist-esbuild",
 };
 
 const TOOLS = {
@@ -55,11 +56,17 @@ const TOOLS = {
     opts: { cwd: app },
   },
   bun: {
-    // NODE_ENV=production is explicit because bun, unlike the other three,
+    // NODE_ENV=production is explicit because bun, unlike vite, oj and esdev,
     // does not default it at build time — without it React resolves to its
     // development build (+1.5 MB of warnings and DevTools nags).
     cmd: ["bun", ["build", "./index.html", "--outdir", path.join(app, OUTDIRS.bun), "--minify"]],
     opts: { cwd: app, env: { ...process.env, NODE_ENV: "production" } },
+  },
+  esbuild: {
+    // esbuild has no HTML entry mode, so a wrapper bundles src/main.tsx and
+    // writes the index.html shell around it (see esbuild-build.mjs).
+    cmd: [process.execPath, [path.join(here, "esbuild-build.mjs"), app, path.join(app, OUTDIRS.esbuild)]],
+    opts: {},
   },
 };
 
@@ -138,6 +145,9 @@ function toolVersions() {
   try {
     out.esdev = execFileSync(ESDEV_BIN, ["--version"], { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split("\n")[0];
   } catch { out.esdev = null; }
+  try {
+    out.esbuild = JSON.parse(fs.readFileSync(path.join(app, "node_modules", "esbuild", "package.json"), "utf8")).version;
+  } catch { out.esbuild = null; }
   return out;
 }
 
@@ -252,6 +262,7 @@ async function main() {
           oj: "oj build (minified by default)",
           esdev: "esdev build --minify",
           bun: "bun build --minify (NODE_ENV=production, which bun does not default)",
+          esbuild: "esbuild src/main.tsx --bundle --minify --jsx=automatic (NODE_ENV defined to production, which esbuild does not default)",
         },
         iters: ITERS,
         aggregate: "min",

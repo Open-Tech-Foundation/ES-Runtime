@@ -797,17 +797,25 @@ over the three sessions is published, and an edit the page never shows within
 ```sh
 cargo install oj --locked          # oj 0.2.0
 node bench/dev-server/gen.mjs 10000
-(cd bench/dev-server/apps/app-10000 && npm install)   # react + vite
+(cd bench/dev-server/apps/app-10000 && npm install)   # react + vite + esbuild
 node bench/dev-server/run.mjs 10000                   # human table
 SECTIONS=devserver bench/gen-bench-data.sh            # publish as `dev_server`
 ```
 
-### Production build (vite vs oj vs esdev vs bun)
+### Production build (vite vs oj vs esdev vs bun vs esbuild)
 
 Same app, minified production build into per-tool outdirs, min of three runs
 each, plus output bytes and peak RSS (`bench/dev-server/build.mjs`, published as
 `build_time`). Every leg minifies — the default for vite and oj, `--minify`
-for esdev and bun — so time and size compare like for like. Memory is the peak
+for esdev, bun and esbuild — so time and size compare like for like. Bun gets
+`NODE_ENV=production` in the environment and esbuild gets
+`--define:process.env.NODE_ENV="production"` (via
+`bench/dev-server/esbuild-build.mjs`, which bundles `src/main.tsx` and writes
+the `index.html` shell around it — esbuild has no HTML entry mode), because
+neither defaults it the way the other three do. Expect esbuild's output to be
+the largest: every one of the 10,000 components imports `react`, which ships
+CJS, so esbuild pays a per-module `__toESM` interop wrapper (~10k of them)
+where rolldown and bun hoist a shared import binding. Memory is the peak
 RSS polled off the build child while it runs (a finished build leaves no
 `/proc` entry for a `VmHWM` read), taken from the fastest rep. After its reps,
 each tool's output is served statically and must mount in a real browser

@@ -96,7 +96,7 @@ if (!fs.existsSync(path.join(dir, "package.json"))) {
         private: true,
         type: "module",
         dependencies: { react: "^19.1.0", "react-dom": "^19.1.0" },
-        devDependencies: { vite: "^8", "@vitejs/plugin-react": "^6" },
+        devDependencies: { vite: "^8", "@vitejs/plugin-react": "^6", esbuild: "^0.28.0" },
       },
       null,
       2

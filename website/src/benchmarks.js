@@ -263,24 +263,29 @@ export default {
   },
   "build_time": {
     "vite": {
-      "build_ms": 816,
+      "build_ms": 888,
       "out_kb": 1855,
-      "peak_mb": 854
+      "peak_mb": 648
     },
     "oj": {
-      "build_ms": 10085,
+      "build_ms": 11145,
       "out_kb": 1857,
-      "peak_mb": 716
+      "peak_mb": 734
     },
     "esdev": {
-      "build_ms": 1162,
+      "build_ms": 1261,
       "out_kb": 1855,
-      "peak_mb": 383
+      "peak_mb": 390
     },
     "bun": {
-      "build_ms": 233,
+      "build_ms": 240,
       "out_kb": 1488,
-      "peak_mb": 228
+      "peak_mb": 229
+    },
+    "esbuild": {
+      "build_ms": 585,
+      "out_kb": 2224,
+      "peak_mb": 53
     }
   },
   "build_time_method": {
@@ -289,7 +294,8 @@ export default {
       "vite": "vite build (minified by default)",
       "oj": "oj build (minified by default)",
       "esdev": "esdev build --minify",
-      "bun": "bun build --minify (NODE_ENV=production, which bun does not default)"
+      "bun": "bun build --minify (NODE_ENV=production, which bun does not default)",
+      "esbuild": "esbuild src/main.tsx --bundle --minify --jsx=automatic (NODE_ENV defined to production, which esbuild does not default)"
     },
     "iters": 3,
     "aggregate": "min",
@@ -297,7 +303,8 @@ export default {
       "vite": "8.3.1",
       "oj": "oj 0.2.0",
       "bun": "1.4.2",
-      "esdev": "esdev 0.10.0"
+      "esdev": "esdev 0.10.0",
+      "esbuild": "0.28.2"
     }
   },
   "results_pg_qps": {

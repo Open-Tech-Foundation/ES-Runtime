@@ -1,6 +1,7 @@
 // Tab switcher for the homepage Benchmarks section: request throughput
 // (Hono vs Elysia per runtime), dev-server startup (vite vs oj vs esdev vs
-// bun), production build time (same four tools), and database queries/sec
+// bun), production build time (same four tools plus esbuild), and database
+// queries/sec
 // (Postgres and MySQL, side by side in one tab). Every panel reads the
 // generated benchmark data; the tab state is the only thing this component
 // owns.
@@ -95,11 +96,13 @@ export default function FrameworkTabs() {
           </div>
           <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Same app, minified production build, min of three runs — every
-            leg minifies and builds production React (bun needs an explicit{" "}
-            <code className="font-mono">NODE_ENV=production</code>, which the
-            other three default to). Memory is the peak RSS sampled during
-            the fastest run. Each output must mount in a real browser
-            before its numbers publish.
+            leg minifies and builds production React (bun and esbuild need an
+            explicit production flag —{" "}
+            <code className="font-mono">NODE_ENV=production</code> for bun,{" "}
+            <code className="font-mono">--define:process.env.NODE_ENV</code>{" "}
+            for esbuild — which the other three default to). Memory is the peak
+            RSS sampled during the fastest run. Each output must mount in a real
+            browser before its numbers publish.
           </p>
         </div>
       ) : (

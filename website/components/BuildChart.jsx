@@ -1,5 +1,5 @@
-// Production-build chart: wall time, output size and peak RSS for vite
-// build, oj build, esdev build and bun build on the generated 10k-component
+// Production-build chart: wall time, output size and peak RSS for vite build,
+// oj build, esdev build, bun build and esbuild on the generated 10k-component
 // React fixture. Same visual language as DevServerChart (rows are tools, bar
 // columns are metrics, the winner of each column is drawn bold); data comes
 // from bench/dev-server/build.mjs via bench.build_time.
@@ -33,9 +33,15 @@ const TOOL_META = {
     text: "text-rose-700 dark:text-rose-400 font-bold",
     dimText: "text-zinc-600 dark:text-zinc-300 font-medium",
   },
+  esbuild: {
+    label: "esbuild",
+    bar: "bg-yellow-500 dark:bg-yellow-400",
+    text: "text-yellow-700 dark:text-yellow-400 font-bold",
+    dimText: "text-zinc-600 dark:text-zinc-300 font-medium",
+  },
 };
 
-const ORDER = ["vite", "oj", "esdev", "bun"];
+const ORDER = ["vite", "oj", "esdev", "bun", "esbuild"];
 
 function fmtMs(v) {
   if (typeof v !== "number") return "n/a";
