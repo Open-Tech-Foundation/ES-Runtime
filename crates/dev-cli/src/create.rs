@@ -67,7 +67,9 @@
 //! even then an existing file is left alone rather than replaced — `--force`
 //! means "write among what is there", never "write over it".
 
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 
@@ -237,7 +239,7 @@ pub const DEFAULT_TEMPLATE: &str = "react";
 pub const DEFAULT_MANAGER: &str = "npm";
 
 /// Scaffolds a project and reports what to do next.
-pub fn create(config: &CreateConfig) -> Result<String, String> {
+pub async fn create(config: &CreateConfig) -> Result<String, String> {
     // Everything below resolves before anything is written, so a person who
     // changes their mind at a prompt leaves no directory behind.
     let scripted = config.yes || !crate::prompt::interactive();
@@ -474,6 +476,20 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     }
 
     let name = package_name(&target);
+    let pending: Vec<_> = files
+        .iter()
+        .filter(|(path, _)| {
+            let path = RENAMED
+                .iter()
+                .find(|(from, _)| from == path)
+                .map_or(path.as_str(), |(_, to)| *to);
+            !target.join(path).exists()
+        })
+        .map(|(path, contents)| (path.clone(), contents.clone()))
+        .collect();
+    let packages = registry_packages(&pending)?;
+    let versions = resolve_registry_versions(&packages).await?;
+
     let mut written = 0usize;
     let mut skipped = Vec::new();
     for (path, contents) in &files {
@@ -490,7 +506,7 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
         }
-        write(&destination, contents, &name, &manager)?;
+        write(&destination, contents, &name, &manager, &versions)?;
         written += 1;
     }
 
@@ -1265,7 +1281,7 @@ fn otf_patch_library_manifest(content: &str) -> String {
 fn patch_tailwind_dep(content: &str) -> String {
     content.replace(
         "\"devDependencies\": {\n",
-        "\"devDependencies\": {\n    \"tailwindcss\": \"latest\",\n",
+        "\"devDependencies\": {\n    \"tailwindcss\": \"{{registry:tailwindcss}}\",\n",
     )
 }
 
@@ -1287,7 +1303,7 @@ fn otf_patch_typescript(content: &str) -> String {
     if !next.contains("\"typescript\"") {
         next = next.replace(
             "\"devDependencies\": {\n",
-            "\"devDependencies\": {\n    \"typescript\": \"^5.9.0\",\n",
+            "\"devDependencies\": {\n    \"typescript\": \"{{registry:typescript}}\",\n",
         );
     }
     next
@@ -1527,15 +1543,243 @@ pub(crate) fn ask_install(
     available.get(chosen).copied()
 }
 
-/// Writes one file, substituting the project's name and package manager.
+const REGISTRY_PREFIX: &str = "{{registry:";
+const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
+const REGISTRY_BACKOFFS: [Duration; 3] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+];
+
+fn registry_placeholder(package: &str) -> String {
+    format!("{{{{registry:{package}}}}}")
+}
+
+/// Package names named by the not-yet-written manifests. Each unique name is
+/// resolved once even if a package appears in both peer and dev dependencies.
+fn registry_packages(files: &[(String, Vec<u8>)]) -> Result<BTreeSet<String>, String> {
+    let mut packages = BTreeSet::new();
+    for (path, contents) in files {
+        if !path.ends_with("package.json") {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(contents) else {
+            continue;
+        };
+        let mut remaining = text;
+        while let Some(start) = remaining.find(REGISTRY_PREFIX) {
+            let after_prefix = &remaining[start + REGISTRY_PREFIX.len()..];
+            let Some(end) = after_prefix.find("}}") else {
+                return Err(format!(
+                    "{path} has an unterminated registry version placeholder"
+                ));
+            };
+            let package = &after_prefix[..end];
+            if package.is_empty() || package.chars().any(char::is_whitespace) {
+                return Err(format!("{path} has an invalid registry package name"));
+            }
+            packages.insert(package.to_string());
+            remaining = &after_prefix[end + 2..];
+        }
+    }
+    Ok(packages)
+}
+
+#[derive(Debug)]
+struct RegistryFailure {
+    message: String,
+    retryable: bool,
+}
+
+fn registry_url(registry: &str, package: &str) -> String {
+    format!(
+        "{}/{}",
+        registry.trim_end_matches('/'),
+        package.replace('/', "%2F")
+    )
+}
+
+fn configured_registry() -> Result<String, String> {
+    let configured = std::env::var("npm_config_registry")
+        .or_else(|_| std::env::var("NPM_CONFIG_REGISTRY"))
+        .unwrap_or_else(|_| DEFAULT_REGISTRY.to_string());
+    let registry = configured.trim_end_matches('/');
+    let parsed = url::Url::parse(registry)
+        .map_err(|error| format!("invalid npm registry URL {configured:?}: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(format!("invalid npm registry URL {configured:?}"));
+    }
+    Ok(registry.to_string())
+}
+
+async fn registry_version(
+    client: &reqwest::Client,
+    registry: &str,
+    package: &str,
+) -> Result<String, RegistryFailure> {
+    let response = client
+        .get(registry_url(registry, package))
+        .send()
+        .await
+        .map_err(|error| RegistryFailure {
+            message: error.to_string(),
+            retryable: true,
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let retryable = status.is_server_error()
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT;
+        return Err(RegistryFailure {
+            message: format!("registry returned HTTP {status}"),
+            retryable,
+        });
+    }
+    let metadata: serde_json::Value = response.json().await.map_err(|error| RegistryFailure {
+        message: format!("invalid registry response: {error}"),
+        retryable: true,
+    })?;
+    metadata
+        .get("dist-tags")
+        .and_then(|tags| tags.get("latest"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| RegistryFailure {
+            message: "registry response has no dist-tags.latest version".to_string(),
+            retryable: false,
+        })
+}
+
+fn registry_backoff(attempt: usize, retryable: bool) -> Option<Duration> {
+    retryable
+        .then(|| REGISTRY_BACKOFFS.get(attempt).copied())
+        .flatten()
+}
+
+async fn registry_version_with_retries(
+    client: &reqwest::Client,
+    registry: &str,
+    package: &str,
+) -> Result<String, String> {
+    for attempt in 0..=REGISTRY_BACKOFFS.len() {
+        match registry_version(client, registry, package).await {
+            Ok(version) => return Ok(version),
+            Err(failure) => {
+                let Some(backoff) = registry_backoff(attempt, failure.retryable) else {
+                    let attempts = if failure.retryable {
+                        format!(" after {} attempts", REGISTRY_BACKOFFS.len() + 1)
+                    } else {
+                        String::new()
+                    };
+                    return Err(format!(
+                        "could not resolve {package} from the configured npm registry{attempts}: {}",
+                        failure.message
+                    ));
+                };
+                eprintln!(
+                    "npm registry lookup for {package} failed on attempt {}/{}, {}; retrying in {} ms",
+                    attempt + 1,
+                    REGISTRY_BACKOFFS.len() + 1,
+                    failure.message,
+                    backoff.as_millis()
+                );
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
+    unreachable!("the retry loop returns on success or exhaustion")
+}
+
+/// Resolve the package placeholders before writing anything. Requests run in
+/// parallel so a slow package does not hold up the other registry lookups.
+async fn resolve_registry_versions(
+    packages: &BTreeSet<String>,
+) -> Result<HashMap<String, String>, String> {
+    if packages.is_empty() {
+        return Ok(HashMap::new());
+    }
+    eprintln!(
+        "Resolving current versions for {} template packages from {}...",
+        packages.len(),
+        std::env::var("npm_config_registry")
+            .or_else(|_| std::env::var("NPM_CONFIG_REGISTRY"))
+            .unwrap_or_else(|_| DEFAULT_REGISTRY.to_string())
+    );
+    let registry = configured_registry()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(concat!("esdev/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| format!("cannot create npm registry client: {error}"))?;
+    let requests = packages.iter().map(|package| {
+        let client = client.clone();
+        let registry = registry.clone();
+        async move {
+            let result = registry_version_with_retries(&client, &registry, package).await;
+            (package.clone(), result)
+        }
+    });
+    let results = futures_util::future::join_all(requests).await;
+
+    let mut versions = HashMap::new();
+    let mut failures = Vec::new();
+    for (package, result) in results {
+        match result {
+            Ok(version) => {
+                versions.insert(package, version);
+            }
+            Err(error) => failures.push((package, error)),
+        }
+    }
+    if let Some((_, error)) = failures.into_iter().min_by(|a, b| a.0.cmp(&b.0)) {
+        return Err(error);
+    }
+    let mut resolved: Vec<_> = versions.iter().collect();
+    resolved.sort_by(|a, b| a.0.cmp(b.0));
+    for (package, version) in resolved {
+        eprintln!("  {package}@{version}");
+    }
+    Ok(versions)
+}
+
+fn render_registry_versions(
+    mut text: String,
+    versions: &HashMap<String, String>,
+) -> Result<String, String> {
+    for (package, version) in versions {
+        text = text.replace(&registry_placeholder(package), version);
+    }
+    if text.contains(REGISTRY_PREFIX) {
+        return Err(
+            "a template package version was not resolved from the npm registry".to_string(),
+        );
+    }
+    Ok(text)
+}
+
+/// Writes one file, substituting the project's name, package manager, and the
+/// versions resolved for this scaffold.
 ///
 /// The substitution is attempted only on text. A template is free to hold a
 /// favicon or a font, and running a search and replace over one would corrupt
 /// it — so a file that is not UTF-8 is written exactly as it was embedded.
-fn write(destination: &Path, contents: &[u8], name: &str, manager: &str) -> Result<(), String> {
+fn write(
+    destination: &Path,
+    contents: &[u8],
+    name: &str,
+    manager: &str,
+    versions: &HashMap<String, String>,
+) -> Result<(), String> {
     match std::str::from_utf8(contents) {
-        Ok(text) if text.contains(PLACEHOLDER) || text.contains(PM_PLACEHOLDER) => {
-            std::fs::write(destination, render(text, name, manager))
+        Ok(text)
+            if text.contains(PLACEHOLDER)
+                || text.contains(PM_PLACEHOLDER)
+                || text.contains(REGISTRY_PREFIX) =>
+        {
+            let rendered = render(text, name, manager);
+            let rendered = render_registry_versions(rendered, versions)?;
+            std::fs::write(destination, rendered)
         }
         _ => std::fs::write(destination, contents),
     }
@@ -1820,6 +2064,73 @@ mod tests {
         assert_eq!(render("plain", "shop", "pnpm"), "plain");
     }
 
+    #[test]
+    fn package_versions_resolve_into_the_manifest() {
+        let mut versions = HashMap::new();
+        versions.insert("@types/react".to_string(), "19.3.0".to_string());
+        let manifest = format!(
+            "{{\"devDependencies\":{{\"@types/react\":\"{}\"}}}}",
+            registry_placeholder("@types/react")
+        );
+        assert_eq!(
+            render_registry_versions(manifest, &versions).expect("resolved"),
+            r#"{"devDependencies":{"@types/react":"19.3.0"}}"#
+        );
+        assert!(render_registry_versions(registry_placeholder("typescript"), &versions).is_err());
+    }
+
+    #[test]
+    fn registry_placeholders_cover_every_embedded_dependency() {
+        for (template, files) in TEMPLATES {
+            for (path, contents) in *files {
+                if !path.ends_with("package.json") {
+                    continue;
+                }
+                let manifest: serde_json::Value = serde_json::from_slice(contents)
+                    .unwrap_or_else(|error| panic!("{template}/{path}: {error}"));
+                for section in ["dependencies", "devDependencies", "peerDependencies"] {
+                    let Some(dependencies) = manifest.get(section).and_then(|v| v.as_object())
+                    else {
+                        continue;
+                    };
+                    for (package, version) in dependencies {
+                        assert_eq!(
+                            version.as_str(),
+                            Some(registry_placeholder(package).as_str()),
+                            "{template}/{path} {section}.{package} must resolve at scaffold time"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            registry_url(DEFAULT_REGISTRY, "@types/react"),
+            "https://registry.npmjs.org/@types%2Freact"
+        );
+
+        let docs = otf_written("docs", "ts", None, Some(false));
+        assert_eq!(
+            registry_packages(&docs).expect("valid placeholders"),
+            BTreeSet::from([
+                "@opentf/esrun-types".to_string(),
+                "@opentf/web".to_string(),
+                "@opentf/web-cli".to_string(),
+                "@opentf/web-docs".to_string(),
+                "tailwindcss".to_string(),
+                "typescript".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn registry_lookups_use_three_exponential_backoffs() {
+        assert_eq!(registry_backoff(0, true), Some(Duration::from_millis(500)));
+        assert_eq!(registry_backoff(1, true), Some(Duration::from_secs(1)));
+        assert_eq!(registry_backoff(2, true), Some(Duration::from_secs(2)));
+        assert_eq!(registry_backoff(3, true), None);
+        assert_eq!(registry_backoff(0, false), None);
+    }
+
     /// The docs name the chosen manager, never a fixed one: every README and
     /// every docs prose file carries `{{pm}}`, and no hardcoded install verb
     /// survives beside it. (`bun test` is deliberately absent everywhere — it
@@ -2020,15 +2331,9 @@ mod tests {
         assert_eq!(package_name(Path::new("///")), "app");
     }
 
-    /// The type definitions track the runtime, so a scaffold wants whatever is
-    /// current — not whatever was current when the template was written.
-    ///
-    /// This was a pin (`^0.1.0`), and a caret on a `0.x` version does not cross
-    /// the minor: every project scaffolded after `@opentf/esrun-types` 0.2.0
-    /// shipped would have quietly kept resolving 0.1.x, with types describing a
-    /// runtime older than the binary beside them. `esdev --install-types` names
-    /// no version and has always got the latest, so this is also the two doors
-    /// agreeing.
+    /// The type definitions track the runtime. The scaffolder resolves the
+    /// registry's current release and writes that exact version into the new
+    /// project's manifest.
     #[test]
     fn the_types_package_is_never_pinned_in_a_template() {
         for (name, files) in TEMPLATES {
@@ -2046,8 +2351,9 @@ mod tests {
                     continue;
                 };
                 assert_eq!(
-                    version, "latest",
-                    "{name}/{path} pins the type definitions to {version:?}"
+                    version,
+                    registry_placeholder("@opentf/esrun-types"),
+                    "{name}/{path} must resolve the type definitions at scaffold time"
                 );
             }
         }
@@ -2496,6 +2802,11 @@ mod tests {
                 manifest["devDependencies"].get("typescript").is_some(),
                 "{template}: no typescript dependency: {manifest}"
             );
+            assert_eq!(
+                manifest["devDependencies"]["typescript"],
+                registry_placeholder("typescript"),
+                "{template}: TypeScript should resolve at scaffold time"
+            );
 
             let js = otf_written(template, "js", styling, blog);
             let manifest: serde_json::Value =
@@ -2509,6 +2820,53 @@ mod tests {
                 "{template}: JavaScript gained a compiler: {manifest}"
             );
         }
+    }
+
+    #[test]
+    fn native_typescript_templates_resolve_the_registry_release() {
+        for (template, mode) in [
+            ("api", None),
+            ("vanilla", None),
+            ("micro-ui", None),
+            ("lib", None),
+            ("react", Some("static")),
+            ("react", Some("fullstack")),
+        ] {
+            let files = plain_written(template, mode);
+            let manifest: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "package.json"))
+                    .expect("valid template package.json");
+            assert_eq!(
+                manifest["devDependencies"]["typescript"],
+                registry_placeholder("typescript"),
+                "{template} {mode:?}: TypeScript should resolve at scaffold time"
+            );
+        }
+    }
+
+    #[test]
+    fn static_template_readmes_show_their_default_dev_ports() {
+        for (template, mode, port) in [
+            ("vanilla", None, 5173),
+            ("react", Some("static"), 5173),
+            ("react", Some("fullstack"), 8080),
+        ] {
+            let files = plain_written(template, mode);
+            let readme = otf_text(&files, "README.md");
+            assert!(
+                readme.contains(&format!("http://localhost:{port}")),
+                "{template} {mode:?}: README has the wrong dev URL: {readme}"
+            );
+        }
+    }
+
+    #[test]
+    fn react_refresh_template_returns_a_source_map() {
+        let files = plain_written("react", Some("static"));
+        let plugin = otf_text(&files, "plugins/react-refresh.mjs");
+        assert!(plugin.contains("sourcesContent: [code]"));
+        assert!(plugin.contains("const mappings ="));
+        assert!(plugin.contains("\";;;;\" +"));
     }
 
     /// Every template that builds a static site has a `preview` script through
@@ -2603,14 +2961,14 @@ mod tests {
             serde_json::from_str(&otf_text(&tw, "package.json")).expect("valid JSON");
         assert_eq!(
             tw_manifest["devDependencies"]["tailwindcss"],
-            serde_json::json!("latest")
+            serde_json::json!(registry_placeholder("tailwindcss"))
         );
         let docs = otf_written("docs", "js", None, Some(false));
         let docs_manifest: serde_json::Value =
             serde_json::from_str(&otf_text(&docs, "package.json")).expect("valid JSON");
         assert_eq!(
             docs_manifest["devDependencies"]["tailwindcss"],
-            serde_json::json!("latest"),
+            serde_json::json!(registry_placeholder("tailwindcss")),
             "docs always imports it"
         );
     }

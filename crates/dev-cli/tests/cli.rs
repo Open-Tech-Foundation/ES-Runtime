@@ -11,8 +11,12 @@
 // A test reporting why it skipped is talking to whoever reads the run.
 #![allow(clippy::print_stderr)]
 
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 fn temp(name: &str) -> PathBuf {
@@ -30,7 +34,95 @@ fn esdev() -> Command {
     // The sandbox is the working directory (D79): run from the directory these
     // fixtures are written into, as a user runs a program from its own.
     command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    let registry = test_registry();
     command
+        .env("npm_config_registry", registry)
+        .env("NPM_CONFIG_REGISTRY", registry);
+    command
+}
+
+/// A local npm registry fixture keeps scaffold tests deterministic and
+/// verifies that manifests receive exact versions without depending on the
+/// public network.
+fn test_registry() -> &'static str {
+    static REGISTRY: OnceLock<String> = OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test registry");
+            let address = listener.local_addr().expect("test registry address");
+            std::thread::spawn(move || {
+                for incoming in listener.incoming() {
+                    let Ok(mut stream) = incoming else { continue };
+                    std::thread::spawn(move || {
+                        let Ok(clone) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(clone);
+                        let mut line = String::new();
+                        loop {
+                            line.clear();
+                            if reader.read_line(&mut line).is_err()
+                                || line.is_empty()
+                                || line == "\r\n"
+                            {
+                                break;
+                            }
+                        }
+                        let body = r#"{"dist-tags":{"latest":"1.2.3"}}"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    });
+                }
+            });
+            format!("http://{address}")
+        })
+        .as_str()
+}
+
+/// The first request fails transiently; later requests use the normal fixture
+/// response so the caller can assert that create reports and retries it.
+fn retry_registry() -> (&'static str, Arc<AtomicUsize>) {
+    static REGISTRY: OnceLock<(String, Arc<AtomicUsize>)> = OnceLock::new();
+    let (url, attempts) = REGISTRY.get_or_init(|| {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind retry registry");
+        let address = listener.local_addr().expect("retry registry address");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = Arc::clone(&attempts);
+        std::thread::spawn(move || {
+            for incoming in listener.incoming() {
+                let Ok(mut stream) = incoming else { continue };
+                let attempts = Arc::clone(&server_attempts);
+                std::thread::spawn(move || {
+                    let Ok(clone) = stream.try_clone() else { return };
+                    let mut reader = BufReader::new(clone);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).is_err()
+                            || line.is_empty()
+                            || line == "\r\n"
+                        {
+                            break;
+                        }
+                    }
+                    let first = attempts.fetch_add(1, Ordering::SeqCst) == 0;
+                    let (status, body) = if first {
+                        ("503 Service Unavailable", "")
+                    } else {
+                        ("200 OK", r#"{"dist-tags":{"latest":"1.2.3"}}"#)
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                });
+            }
+        });
+        (format!("http://{address}"), attempts)
+    });
+    (url.as_str(), Arc::clone(attempts))
 }
 
 /// Another workspace binary from the same target directory, or `None` if it has
@@ -11229,6 +11321,16 @@ fn create_writes_a_project_that_builds_and_runs() {
     let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read package.json");
     assert!(manifest.contains(r#""name": "weather-app""#), "{manifest}");
     assert!(!manifest.contains("{{name}}"), "a placeholder survived");
+    assert!(
+        !manifest.contains("{{registry:"),
+        "a package version placeholder survived"
+    );
+    assert!(manifest.contains(r#""react": "1.2.3""#), "{manifest}");
+    assert!(
+        stderr(&out).contains("react@1.2.3"),
+        "registry resolutions were not reported: {}",
+        stderr(&out)
+    );
     let document = std::fs::read_to_string(dir.join("index.html")).expect("read index.html");
     assert!(
         document.contains("<title>weather-app</title>"),
@@ -11264,6 +11366,35 @@ fn create_writes_a_project_that_builds_and_runs() {
         stdout(&tested),
         stderr(&tested)
     );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+#[test]
+fn create_reports_and_retries_a_transient_registry_failure() {
+    let parent = watch_dir("c_registry_retry");
+    let (registry, attempts) = retry_registry();
+    let created = esdev_in(&parent)
+        .args(["create", "retry-app", "--template=api", "--no-install"])
+        .env("npm_config_registry", registry)
+        .env("NPM_CONFIG_REGISTRY", registry)
+        .output()
+        .expect("spawn esdev create");
+
+    assert!(created.status.success(), "{}", stderr(&created));
+    assert!(
+        stderr(&created).contains("failed on attempt 1/4")
+            && stderr(&created).contains("retrying in 500 ms"),
+        "retry progress was not reported: {}",
+        stderr(&created)
+    );
+    assert!(
+        attempts.load(Ordering::SeqCst) >= 3,
+        "request was not retried"
+    );
+    let manifest = std::fs::read_to_string(parent.join("retry-app/package.json"))
+        .expect("read generated manifest");
+    assert!(!manifest.contains("{{registry:"), "{manifest}");
 
     let _ = std::fs::remove_dir_all(&parent);
 }
@@ -11334,6 +11465,11 @@ fn every_dependency_free_template_passes_its_own_tests() {
             "{}: {}",
             template,
             stderr(&created)
+        );
+        let manifest = std::fs::read_to_string(dir.join("package.json")).expect("manifest");
+        assert!(
+            !manifest.contains("{{registry:"),
+            "the {template} manifest has an unresolved package version: {manifest}"
         );
 
         let tested = esdev_in(&dir)

@@ -10,10 +10,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opentf/micro-ui": "latest"
+    "@opentf/micro-ui": "{{registry:@opentf/micro-ui}}"
   },
   "devDependencies": {
-    "@opentf/esrun-types": "latest",
-    "typescript": "^5.9.0"
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}",
+    "typescript": "{{registry:typescript}}"
   }
 }

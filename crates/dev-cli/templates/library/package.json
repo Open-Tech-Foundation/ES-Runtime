@@ -14,11 +14,11 @@
     "src"
   ],
   "peerDependencies": {
-    "@opentf/web": "latest"
+    "@opentf/web": "{{registry:@opentf/web}}"
   },
   "devDependencies": {
-    "@opentf/web": "latest",
-    "@opentf/esrun-types": "latest"
+    "@opentf/web": "{{registry:@opentf/web}}",
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   },
   "publishConfig": {
     "access": "public"

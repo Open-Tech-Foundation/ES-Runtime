@@ -441,8 +441,9 @@ OPTIONS:
 What you get is a project that runs and one page — its name, what it was built
 with, and the file to edit — with its esdev.json written, its entry named by
 the script tag in its index.html, and a permission line that is narrow from the
-first run. The templates are baked into this binary, so create works offline
-and always writes a project this esdev can build.
+first run. Template files are baked into this binary; package versions are
+resolved from the npm registry while scaffolding, so create needs registry
+access even with --no-install.
 
 On a terminal it asks which template, which mode where there is a choice, the
 axes the template takes (language, styling, blog), which package manager the
@@ -3078,7 +3079,7 @@ async fn main() -> ExitCode {
             Ok(root) => check::check(&root, &args).await,
             Err(e) => Err(format!("cannot read working directory: {e}")),
         },
-        Ok(Command::Create(config)) => match create::create(&config) {
+        Ok(Command::Create(config)) => match create::create(&config).await {
             Ok(report) => {
                 print!("{report}");
                 Ok(())

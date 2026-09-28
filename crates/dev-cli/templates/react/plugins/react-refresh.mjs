@@ -16,6 +16,14 @@ export default {
     handler(code, id, ctx) {
       if (ctx.refresh !== SCHEME) return null;
 
+      // The wrapper adds four lines before the original module. Keep the
+      // original locations mapped so refresh does not make source locations
+      // inaccurate or trigger the bundler's missing-map warning.
+      const lines = code.split("\n");
+      const mappings =
+        ";;;;" +
+        lines.map((_, index) => (index === 0 ? "AAAA" : "AACA")).join(";");
+
       return {
         code:
           `import * as __refresh from "react-refresh/runtime";\n` +
@@ -24,6 +32,13 @@ export default {
           `globalThis.$RefreshSig$ = __refresh.createSignatureFunctionForTransform;\n` +
           `import.meta.hot.accept(() => __refresh.performReactRefresh());\n` +
           `${code}\n`,
+        map: JSON.stringify({
+          version: 3,
+          sources: [id],
+          sourcesContent: [code],
+          names: [],
+          mappings,
+        }),
       };
     },
   },

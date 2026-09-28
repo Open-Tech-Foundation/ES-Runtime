@@ -1552,6 +1552,7 @@ dependencies = [
  "oxc_resolver",
  "ratatui",
  "regex",
+ "reqwest",
  "rolldown",
  "rolldown_common",
  "rolldown_sourcemap",

@@ -10,14 +10,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react": "{{registry:react}}",
+    "react-dom": "{{registry:react-dom}}"
   },
   "devDependencies": {
-    "@opentf/esrun-types": "latest",
-    "react-refresh": "^0.18.0",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "typescript": "^5.9.0"
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}",
+    "react-refresh": "{{registry:react-refresh}}",
+    "@types/react": "{{registry:@types/react}}",
+    "@types/react-dom": "{{registry:@types/react-dom}}",
+    "typescript": "{{registry:typescript}}"
   }
 }

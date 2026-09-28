@@ -45,8 +45,14 @@ esdev create my-app --template=react --mode=fullstack
 | `docs` | An OTF Web documentation site — MDX docs, sidebar, search, optional blog |
 | `library` | An OTF Web component library — publishable components, `esdev`-tested |
 
-They are **baked into the binary**, so `create` works offline and always writes
-a project the `esdev` that wrote it can build. Nothing is downloaded.
+The template files are **baked into the binary**. While scaffolding, `create`
+queries the npm registry for the current `latest` release of each dependency
+and writes that exact version into the generated `package.json`, regardless of
+which package manager you choose for installation. It reports the versions as
+it resolves them. Temporary registry failures are retried three times with
+increasing delays; if the registry stays unavailable, `create` reports the
+package that failed and stops before writing the project. Scaffolding therefore
+needs registry access.
 
 `react`, `vanilla` and `micro-ui` start without a stylesheet.
 `--styling=tailwind` adds `src/styles.css` importing Tailwind, links it from

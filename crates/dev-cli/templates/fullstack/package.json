@@ -9,10 +9,10 @@
     "serve": "otfw serve"
   },
   "dependencies": {
-    "@opentf/web": "latest"
+    "@opentf/web": "{{registry:@opentf/web}}"
   },
   "devDependencies": {
-    "@opentf/web-cli": "latest",
-    "@opentf/esrun-types": "latest"
+    "@opentf/web-cli": "{{registry:@opentf/web-cli}}",
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   }
 }

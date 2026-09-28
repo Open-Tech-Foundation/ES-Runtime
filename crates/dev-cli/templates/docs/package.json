@@ -9,11 +9,11 @@
     "preview": "esdev preview --dir=dist"
   },
   "dependencies": {
-    "@opentf/web": "latest",
-    "@opentf/web-docs": "latest"
+    "@opentf/web": "{{registry:@opentf/web}}",
+    "@opentf/web-docs": "{{registry:@opentf/web-docs}}"
   },
   "devDependencies": {
-    "@opentf/web-cli": "latest",
-    "@opentf/esrun-types": "latest"
+    "@opentf/web-cli": "{{registry:@opentf/web-cli}}",
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   }
 }

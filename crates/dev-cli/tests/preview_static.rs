@@ -16,14 +16,51 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Deterministic fixture bytes: 0..255 four times over.
 fn bytes() -> Vec<u8> {
     (0..1024u32).map(|i| (i % 256) as u8).collect()
+}
+
+fn test_registry() -> &'static str {
+    static REGISTRY: OnceLock<String> = OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test registry");
+            let address = listener.local_addr().expect("test registry address");
+            std::thread::spawn(move || {
+                for incoming in listener.incoming() {
+                    let Ok(mut stream) = incoming else { continue };
+                    std::thread::spawn(move || {
+                        let Ok(clone) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(clone);
+                        let mut line = String::new();
+                        loop {
+                            line.clear();
+                            if reader.read_line(&mut line).is_err()
+                                || line.is_empty()
+                                || line == "\r\n"
+                            {
+                                break;
+                            }
+                        }
+                        let body = r#"{"dist-tags":{"latest":"1.2.3"}}"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    });
+                }
+            });
+            format!("http://{address}")
+        })
+        .as_str()
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -689,9 +726,9 @@ fn large_bodies_stream_byte_exact() {
 /// A scaffolded project previews what it built: `create` writes it, `build`
 /// writes `dist/`, and the release output serves with an entry document.
 ///
-/// Vanilla, because it needs no registry: every other static template pulls
-/// a framework, and a test that downloads the internet is a test that flakes
-/// on it. stdin is closed throughout, so the scaffold takes its defaults.
+/// Vanilla uses a local registry fixture: a test that downloads the internet
+/// is a test that flakes on it. stdin is closed throughout, so the scaffold
+/// takes its defaults.
 #[test]
 fn a_scaffolded_project_previews_what_it_built() {
     let parent =
@@ -703,6 +740,8 @@ fn a_scaffolded_project_previews_what_it_built() {
         .args(["create", "shop", "--template=vanilla", "--no-install"])
         .current_dir(&parent)
         .stdin(Stdio::null())
+        .env("npm_config_registry", test_registry())
+        .env("NPM_CONFIG_REGISTRY", test_registry())
         .output()
         .expect("spawn esdev create");
     assert!(

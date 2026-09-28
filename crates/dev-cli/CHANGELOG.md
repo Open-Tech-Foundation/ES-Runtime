@@ -26,6 +26,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **`esdev create` resolves every template dependency from npm at scaffold
+  time.** It writes the current `latest` dist-tag as an exact version,
+  independent of the selected package manager, and reports resolved versions.
+  Transient registry failures get three exponential backoffs; if they persist,
+  the command reports the package and stops before writing. Static vanilla and
+  React READMEs now show esdev's default frontend port, `5173`.
 - **Grouped project configuration by concern.** Build outputs now live under
   `build.targets`, aliases under `resolve.alias`, and development settings
   under `dev`; `dev.watch.paths` replaces permission-shaped watch paths.
@@ -82,6 +88,9 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **The React Fast Refresh template preserves source locations.** Its injected
+  wrapper now returns a source map, avoiding the broken-sourcemap warning and
+  keeping edits mapped to the original component code.
 - **`esdev create --language=ts` scaffolds a `typecheck` script and the
   `typescript` dependency beside the `tsconfig.json`.** The OTF templates
   (`spa`, `fullstack`, `docs`, `library`) previously wrote a config nothing
