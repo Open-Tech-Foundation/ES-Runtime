@@ -11624,6 +11624,9 @@ fn otf_templates_scaffold_from_flags() {
     assert!(dir.join("app/blog/hello-world/page.mdx").is_file());
     let config = std::fs::read_to_string(dir.join("otfw.config.js")).expect("read");
     assert!(config.contains("dir: \"blog\""), "{config}");
+    assert!(config.contains("title: \"journal\""), "{config}");
+    let document = std::fs::read_to_string(dir.join("index.html")).expect("read");
+    assert!(document.contains("<title>journal</title>"), "{document}");
 
     // The library ships an `esdev test` suite, not a Bun one — and it passes
     // with no dependencies installed.
@@ -11682,6 +11685,9 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
         !readme.contains("\nnpm "),
         "the default leaked in: {readme}"
     );
+    let document =
+        std::fs::read_to_string(parent.join("shop-pnpm").join("index.html")).expect("read");
+    assert!(document.contains("<title>shop-pnpm</title>"), "{document}");
     assert!(
         stdout(&pnpm).contains("pnpm install"),
         "the next steps name it too: {}",

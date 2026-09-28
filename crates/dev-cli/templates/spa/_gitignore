@@ -1,8 +1,8 @@
 # dependencies
-node_modules
+node_modules/
 
 # build output
-dist
+dist/
 
 # toolchain working dirs (dev server + temp build dirs)
 .dev
@@ -16,3 +16,7 @@ dist
 # environment files
 .env
 .env.local
+*.local
+
+# OS files
+.DS_Store

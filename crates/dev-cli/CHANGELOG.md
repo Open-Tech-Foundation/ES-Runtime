@@ -62,6 +62,19 @@ is the point, since none of the three has any business in a deployment.
   starters serve `dist/` through `esdev preview`. Server templates keep
   `start`/`serve` — servers are run, not served — and libraries build a
   package, not a site, so neither gets one.
+- **`esdev create` scaffolds the project's name into OTF titles.** The
+  `spa`/`fullstack` documents and the `docs` document plus its
+  `otfw.config.js` title and footer named fixed brands; all render
+  `{{name}}` now, like the esdev templates already did.
+- **Ignore files agree on what the toolchain leaves behind.** Every
+  esdev-built template ignores `.esdev-build-*/` (a killed build's staging
+  directory, beside the project) and `lib` ignores `.dev/`; the OTF ignores
+  use directory slashes and cover `*.local`/`DS_Store`; nothing ignores
+  `target/` or `.cache/`, which no tool here writes.
+- **The OTF `fullstack` starter documents `serve` and tells the truth about
+  its example route.** The README names the production serve command, and
+  the page says `/api/hello` is its own example rather than the message's
+  source.
 - **WebSocket upgrades require a complete opening handshake.** The dev and
   inspector endpoints now require HTTP/1.1 GET, `Connection: Upgrade`, the
   WebSocket upgrade token, version 13, and a single 16-byte base64 key before

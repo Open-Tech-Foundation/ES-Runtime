@@ -1856,6 +1856,59 @@ mod tests {
         }
     }
 
+    /// The ignores agree: esdev builds stage beside the project, so every
+    /// esdev-built template ignores the staging prefix — and no template
+    /// ignores a directory no tool here writes (`target/`, `.cache/`).
+    #[test]
+    fn gitignores_agree_on_what_the_toolchain_leaves_behind() {
+        for (template, files) in TEMPLATES {
+            let Some((_, contents)) = files.iter().find(|(path, _)| *path == "_gitignore") else {
+                panic!("{template} ships no ignore file");
+            };
+            let text = String::from_utf8_lossy(contents);
+            assert!(text.contains("node_modules/"), "{template}: dependencies");
+            assert!(text.contains("dist/"), "{template}: build output");
+            assert!(
+                !text.contains("target/") && !text.contains(".cache/"),
+                "{template}: nothing here writes those"
+            );
+            if is_otf(template) {
+                continue;
+            }
+            assert!(
+                text.contains(".esdev-build-"),
+                "{template}: a killed build leaves staging behind"
+            );
+        }
+    }
+
+    /// No scaffolded page ships someone else's brand: every document titles
+    /// itself with the project being created.
+    #[test]
+    fn documents_title_themselves_with_the_project() {
+        const BRANDS: &[&str] = &["My Docs", "My Project", "OTF Web App"];
+        let mut documents = 0;
+        for (template, files) in TEMPLATES {
+            for (path, contents) in *files {
+                let text = String::from_utf8_lossy(contents);
+                for brand in BRANDS {
+                    assert!(
+                        !text.contains(brand),
+                        "{template}/{path} ships a leftover brand: {brand}"
+                    );
+                }
+                if *path == "index.html" {
+                    documents += 1;
+                    assert!(
+                        text.contains(PLACEHOLDER),
+                        "{template}/{path} hardcodes its title"
+                    );
+                }
+            }
+        }
+        assert!(documents > 0, "no document checked anything");
+    }
+
     /// Esc steps back to the nearest earlier step that showed a menu — past
     /// steps answered by flags, and away from the first step, it cancels.
     #[test]
