@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-28
+
 ### Changed
 
 - Update the `ExpectTypeOf` documentation to refer to `esdev typecheck`, the

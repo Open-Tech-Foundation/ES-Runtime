@@ -10,6 +10,10 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-28
+
+_Dependency updates._
+
 ## [0.1.1] - 2026-09-25
 
 ### Added
