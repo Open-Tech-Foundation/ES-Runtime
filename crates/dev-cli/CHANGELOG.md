@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-28
+
 ### Changed
 
 - **Clarified esdev's project build and scaffold help.** A one-off build entry
