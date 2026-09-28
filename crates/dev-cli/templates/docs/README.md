@@ -6,4 +6,5 @@ An [OTF Web](https://web.opentechf.org) documentation site. Pages are MDX files 
 pnpm install
 pnpm run dev
 pnpm run build
+pnpm run preview     # serves dist/ the way it will be served
 ```

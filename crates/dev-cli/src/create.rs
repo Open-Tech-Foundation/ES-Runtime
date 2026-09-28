@@ -2191,6 +2191,64 @@ mod tests {
         }
     }
 
+        /// Every template that builds something servable has a `preview` script:
+    /// static sites through `esdev preview`, servers by building and running
+    /// the production server. A library builds a package, not a site, so a
+    /// preview there would only fail with the command's own "no site" error.
+    #[test]
+    fn every_servable_template_has_a_preview_script() {
+        fn scripts(files: &[(String, Vec<u8>)]) -> serde_json::Value {
+            serde_json::from_str::<serde_json::Value>(&otf_text(files, "package.json"))
+                .map(|manifest| manifest["scripts"].clone())
+                .expect("valid JSON")
+        }
+        for (template, mode, expected) in [
+            ("api", None, "npm run build && npm start"),
+            ("vanilla", None, "esdev preview"),
+            ("micro-ui", None, "esdev preview"),
+            ("react", Some("static"), "esdev preview"),
+            ("react", Some("fullstack"), "npm run build && npm start"),
+        ] {
+            assert_eq!(
+                scripts(&plain_written(template, mode))["preview"],
+                serde_json::json!(expected),
+                "{template} {mode:?}: wrong preview script"
+            );
+        }
+        for (template, language, styling, blog, expected) in [
+            ("spa", "js", Some("css"), None, "esdev preview --dir=dist"),
+            ("spa", "ts", Some("css"), None, "esdev preview --dir=dist"),
+            (
+                "fullstack",
+                "js",
+                Some("css"),
+                None,
+                "npm run build && npm run serve",
+            ),
+            ("docs", "js", None, Some(true), "esdev preview --dir=dist"),
+            ("docs", "ts", None, Some(false), "esdev preview --dir=dist"),
+        ] {
+            assert_eq!(
+                scripts(&otf_written(template, language, styling, blog))["preview"],
+                serde_json::json!(expected),
+                "{template} {language}: wrong preview script"
+            );
+        }
+        // A package is published, not served.
+        assert!(
+            scripts(&plain_written("lib", None)).get("preview").is_none(),
+            "lib: a package has nothing to preview"
+        );
+        for language in ["js", "ts"] {
+            assert!(
+                scripts(&otf_written("library", language, None, None))
+                    .get("preview")
+                    .is_none(),
+                "library {language}: a package has nothing to preview"
+            );
+        }
+    }
+
     /// JavaScript writes what is embedded: no config, no renames.
     #[test]
     fn javascript_writes_the_embedded_files() {        let files = otf_written("spa", "js", Some("css"), None);

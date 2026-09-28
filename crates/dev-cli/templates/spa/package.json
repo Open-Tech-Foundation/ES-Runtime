@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "otfw dev",
     "build": "otfw build",
-    "build:ssg": "otfw build --ssg"
+    "build:ssg": "otfw build --ssg",
+    "preview": "esdev preview --dir=dist"
   },
   "dependencies": {
     "@opentf/web": "latest"

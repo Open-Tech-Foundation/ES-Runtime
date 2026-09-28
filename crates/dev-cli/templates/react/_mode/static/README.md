@@ -7,4 +7,5 @@ npm install
 npm run dev     # http://localhost:8080
 npm test
 npm run build   # dist/, ready for any static host
+npm run preview # serves dist/ the way it will be served
 ```

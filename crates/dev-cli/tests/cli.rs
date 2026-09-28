@@ -11124,6 +11124,11 @@ fn create_writes_a_project_that_builds_and_runs() {
         document.contains("<title>weather-app</title>"),
         "{document}"
     );
+    // A static project previews what it built.
+    assert!(
+        manifest.contains(r#""preview": "esdev preview""#),
+        "{manifest}"
+    );
 
     // `_gitignore` is written under the name it has to have — as itself, it
     // would apply to the template in this repository.
@@ -11565,6 +11570,10 @@ fn otf_templates_scaffold_from_flags() {
         manifest.contains(r#""typescript""#),
         "no compiler beside the config: {manifest}"
     );
+    assert!(
+        manifest.contains(r#""preview": "esdev preview --dir=dist""#),
+        "no preview of what it builds: {manifest}"
+    );
 
     // Unattended, the language takes its default and styling adds nothing:
     // a framework is only ever added because somebody chose it.
@@ -11587,6 +11596,10 @@ fn otf_templates_scaffold_from_flags() {
     assert!(
         !manifest.contains("typecheck"),
         "JavaScript has no tsconfig to check: {manifest}"
+    );
+    assert!(
+        manifest.contains(r#""preview": "npm run build && npm run serve""#),
+        "no production run of what it builds: {manifest}"
     );
 
     // The blog is files plus two patches — or neither.

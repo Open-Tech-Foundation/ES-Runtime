@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build --minify",
+    "preview": "esdev preview",
     "test": "esdev test",
     "test:dom": "esdev test --dom",
     "typecheck": "tsc --noEmit"

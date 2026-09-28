@@ -8,4 +8,5 @@ npm run dev        # http://localhost:8080
 npm test
 npm run test:dom   # tests that need a DOM
 npm run build      # dist/
+npm run preview    # serves dist/ the way it will be served
 ```
