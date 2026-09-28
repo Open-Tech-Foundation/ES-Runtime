@@ -11558,7 +11558,7 @@ fn otf_templates_scaffold_from_flags() {
     assert!(manifest.contains(r#""name": "shop-ts""#), "{manifest}");
     assert!(!manifest.contains("{{name}}"), "a placeholder survived");
     assert!(
-        manifest.contains(r#""typecheck": "tsc --noEmit""#),
+        manifest.contains(r#""typecheck": "esdev typecheck""#),
         "the tsconfig has nothing to act on it: {manifest}"
     );
     assert!(

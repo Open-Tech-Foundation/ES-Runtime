@@ -1151,14 +1151,17 @@ fn patch_tailwind_dep(content: &str) -> String {
 
 /// A `tsconfig.json` without its compiler is a config nothing can act on:
 /// TypeScript mode also gains the `typescript` dependency and the `typecheck`
-/// script every esdev-native template ships. String surgery, like
-/// [`patch_tailwind_dep`], so the embedded manifest keeps its formatting.
+/// script every esdev-native template ships. The script runs `esdev typecheck`
+/// — the project's own `tsc` through its package manager, with a actionable
+/// error when the compiler is not installed — rather than a bare `tsc`.
+/// String surgery, like [`patch_tailwind_dep`], so the embedded manifest
+/// keeps its formatting.
 fn otf_patch_typescript(content: &str) -> String {
     let mut next = content.to_string();
     if !next.contains("\"typecheck\"") {
         next = next.replace(
             "\"scripts\": {\n",
-            "\"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n",
+            "\"scripts\": {\n    \"typecheck\": \"esdev typecheck\",\n",
         );
     }
     if !next.contains("\"typescript\"") {
@@ -2166,7 +2169,7 @@ mod tests {
                 serde_json::from_str(&otf_text(&files, "package.json")).expect("valid JSON");
             assert_eq!(
                 manifest["scripts"]["typecheck"],
-                serde_json::json!("tsc --noEmit"),
+                serde_json::json!("esdev typecheck"),
                 "{template}: no typecheck script"
             );
             assert!(
