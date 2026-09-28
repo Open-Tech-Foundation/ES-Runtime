@@ -39,8 +39,8 @@ const NAV = [
     items: [
       { title: "The dev loop", path: "/esdev/start" },
       { title: "Hot module replacement", path: "/esdev/start/hmr" },
-      { title: "Previewing a release", path: "/esdev/start/preview" },
       { title: "Watch mode", path: "/esdev/watch" },
+      { title: "Previewing a release", path: "/esdev/start/preview" },
     ],
   },
   {
