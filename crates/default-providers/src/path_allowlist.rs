@@ -16,10 +16,8 @@
 
 use std::path::{Path, PathBuf};
 
-use es_runtime_common::ErrorCode;
-use es_runtime_providers::ProviderError;
-
 use crate::path;
+use crate::refusal::Refusal;
 
 /// Which half of the filesystem grant an operation needs. The jail resolves
 /// every path through one choke point, so the choke point has to be told which
@@ -106,24 +104,19 @@ impl PathAllowlist {
         self.entries.iter().any(|entry| real.starts_with(entry))
     }
 
-    /// [`permits`](Self::permits), as a provider error naming the path.
+    /// [`permits`](Self::permits), as a refusal.
     ///
-    /// [`ErrorCode::PermissionDenied`] — a **scoped** denial ("you have `read`,
-    /// but not that path"), distinct both from the `ERR_CAPABILITY_DENIED` of a
-    /// missing capability and from the `ERR_JAIL_ESCAPE` of a path outside the
-    /// project root, which is a different refusal with a different fix.
-    pub(crate) fn check(&self, real: &Path, access: Access) -> Result<(), ProviderError> {
+    /// A **scoped** denial ("you have `read`, but not that path"), which the
+    /// program sees as `ERR_PERMISSION_DENIED` — distinct both from the
+    /// `ERR_CAPABILITY_DENIED` of a missing capability and from the
+    /// `ERR_JAIL_ESCAPE` of a path outside the project root, which is a
+    /// different refusal with a different fix. It carries no path: `real` is
+    /// canonical, and the message names what the program wrote (D141).
+    pub(crate) fn check(&self, real: &Path, access: Access) -> Result<(), Refusal> {
         if self.permits(real) {
             return Ok(());
         }
-        Err(ProviderError::Coded {
-            code: ErrorCode::PermissionDenied,
-            message: format!(
-                "{} is not an allowed path ({})",
-                real.display(),
-                access.as_str()
-            ),
-        })
+        Err(Refusal::NotAllowed(access))
     }
 }
 
@@ -222,15 +215,13 @@ mod tests {
     }
 
     #[test]
-    fn check_names_the_path_and_the_access() {
+    fn check_refuses_by_access_without_carrying_the_path() {
         let root = temp_dir("message");
         let allow = PathAllowlist::parse(["data"], &root).unwrap();
-        let err = allow
+        let refused = allow
             .check(&root.join("secrets.txt"), Access::Read)
             .unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("secrets.txt"), "{message}");
-        assert!(message.contains("read"), "{message}");
-        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+        assert_eq!(refused, Refusal::NotAllowed(Access::Read));
+        assert!(allow.check(&root.join("data/ok.txt"), Access::Read).is_ok());
     }
 }

@@ -39,6 +39,7 @@ mod path_allowlist;
 mod peer_limit;
 mod ports;
 mod process;
+mod refusal;
 mod signals;
 mod system_command;
 mod system_db;

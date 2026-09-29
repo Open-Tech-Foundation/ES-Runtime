@@ -74,8 +74,11 @@ use es_runtime_providers::ProviderError;
 /// A checked path, pinned to where it was checked: the parent directory as an
 /// open descriptor, and the final name to act on inside it.
 ///
-/// The `path` it came from is kept for **diagnostics only**. Nothing in this
-/// module reaches a file through it — that is the whole point of the type.
+/// The `path` it came from is kept for **metadata reads only**. Nothing in this
+/// module reaches a file through it — that is the whole point of the type. What
+/// an error names is `shown`, the path as the program wrote it: `path` is
+/// canonical, and a canonical path is not something a message may repeat
+/// (D141).
 #[derive(Debug)]
 pub struct Anchored {
     #[cfg(unix)]
@@ -85,12 +88,19 @@ pub struct Anchored {
     parent: PathBuf,
     name: OsString,
     path: PathBuf,
+    shown: String,
 }
 
 impl Anchored {
-    /// What it resolved to. For messages — never to open anything with.
+    /// What it resolved to. For metadata — never to open anything with, and
+    /// never to put in a message.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The path as the program wrote it — what an error about it names.
+    pub fn shown(&self) -> &str {
+        &self.shown
     }
 }
 
@@ -101,21 +111,20 @@ impl Anchored {
 /// agree to, and the only reason it did not is that this walk refused to follow
 /// it.
 #[cfg(unix)]
-fn swapped(path: &Path) -> ProviderError {
+fn swapped(shown: &str) -> ProviderError {
     ProviderError::Coded {
         code: ErrorCode::JailEscape,
         message: format!(
-            "{}: a directory in this path was replaced while the path was being used, \
-             so the operation was refused rather than followed to wherever it now leads",
-            path.display()
+            "{shown}: a directory in this path was replaced while the path was being used, \
+             so the operation was refused rather than followed to wherever it now leads"
         ),
     }
 }
 
 /// An ordinary I/O failure, mapped the way the rest of the provider maps them
 /// so a caller sees the same `ERR_*` whichever path reached the syscall.
-fn failed(path: &Path, err: std::io::Error) -> ProviderError {
-    ProviderError::from_io(path.to_string_lossy().as_ref(), &err)
+fn failed(shown: &str, err: std::io::Error) -> ProviderError {
+    ProviderError::from_io(shown, &err)
 }
 
 /// Pins `real` — a path [`confine`](crate::system_fs) has already resolved and
@@ -123,16 +132,17 @@ fn failed(path: &Path, err: std::io::Error) -> ProviderError {
 ///
 /// `roots` is the set it was admitted under; the walk starts at whichever of
 /// them contains it, so only the part of the path the guest had any say over is
-/// walked component by component.
+/// walked component by component. `shown` is the path as the program wrote it,
+/// and the only one an error names.
 #[cfg(unix)]
-pub fn anchor(real: &Path, roots: &[PathBuf]) -> Result<Anchored, ProviderError> {
+pub fn anchor(real: &Path, roots: &[PathBuf], shown: &str) -> Result<Anchored, ProviderError> {
     use rustix::fs::{CWD, Mode, OFlags, openat};
 
     let Some(root) = roots.iter().find(|root| real.starts_with(root)) else {
         // `confine` admitted it, so this cannot happen — and if it ever does,
         // refusing is the only safe reading of "I do not know which root this
         // is under".
-        return Err(swapped(real));
+        return Err(swapped(shown));
     };
 
     // The root is configuration, not guest input: it is canonicalized once when
@@ -144,9 +154,9 @@ pub fn anchor(real: &Path, roots: &[PathBuf]) -> Result<Anchored, ProviderError>
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
     )
-    .map_err(|e| failed(root, e.into()))?;
+    .map_err(|e| failed(shown, e.into()))?;
 
-    let inside = real.strip_prefix(root).map_err(|_| swapped(real))?;
+    let inside = real.strip_prefix(root).map_err(|_| swapped(shown))?;
     let mut components = inside.components().peekable();
     // The root itself: nothing to walk, and nothing to name inside it. Callers
     // that mutate have already refused this case; a read of it is `.`.
@@ -157,7 +167,7 @@ pub fn anchor(real: &Path, roots: &[PathBuf]) -> Result<Anchored, ProviderError>
             // `confine` returns a canonical path, so `.`, `..`, a prefix or a
             // second root cannot appear. One that does means the assumption
             // this walk rests on is wrong, and the answer to that is to stop.
-            return Err(swapped(real));
+            return Err(swapped(shown));
         };
         if components.peek().is_none() {
             name = part.to_os_string();
@@ -169,13 +179,14 @@ pub fn anchor(real: &Path, roots: &[PathBuf]) -> Result<Anchored, ProviderError>
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         )
-        .map_err(|e| refusal(&dir, part, real, e))?;
+        .map_err(|e| refusal(&dir, part, shown, e))?;
     }
 
     Ok(Anchored {
         parent: dir,
         name,
         path: real.to_path_buf(),
+        shown: shown.to_string(),
     })
 }
 
@@ -192,7 +203,7 @@ pub fn anchor(real: &Path, roots: &[PathBuf]) -> Result<Anchored, ProviderError>
 fn refusal(
     dir: &std::os::fd::OwnedFd,
     part: &std::ffi::OsStr,
-    real: &Path,
+    shown: &str,
     err: rustix::io::Errno,
 ) -> ProviderError {
     use rustix::io::Errno;
@@ -205,16 +216,16 @@ fn refusal(
             },
         );
         if link {
-            return swapped(real);
+            return swapped(shown);
         }
     }
-    failed(real, err.into())
+    failed(shown, err.into())
 }
 
 /// Windows: no `*at`, so the path is carried as it always was and the race
 /// stays open. Stated in one place rather than implied by its absence.
 #[cfg(not(unix))]
-pub fn anchor(real: &Path, _roots: &[PathBuf]) -> Result<Anchored, ProviderError> {
+pub fn anchor(real: &Path, _roots: &[PathBuf], shown: &str) -> Result<Anchored, ProviderError> {
     let parent = real.parent().unwrap_or(real).to_path_buf();
     let name = real
         .file_name()
@@ -223,6 +234,7 @@ pub fn anchor(real: &Path, _roots: &[PathBuf]) -> Result<Anchored, ProviderError
         parent,
         name,
         path: real.to_path_buf(),
+        shown: shown.to_string(),
     })
 }
 
@@ -406,7 +418,7 @@ impl Anchored {
 
         if depth > 256 {
             return Err(failed(
-                &self.path,
+                &self.shown,
                 std::io::Error::other("directory tree is too deeply nested to remove"),
             ));
         }
@@ -452,8 +464,8 @@ impl Anchored {
         match err {
             // A link where a file was expected, at the last component. The walk
             // catches the same thing one level up; this catches it here.
-            rustix::io::Errno::LOOP | rustix::io::Errno::MLINK => swapped(&self.path),
-            other => failed(&self.path, other.into()),
+            rustix::io::Errno::LOOP | rustix::io::Errno::MLINK => swapped(&self.shown),
+            other => failed(&self.shown, other.into()),
         }
     }
 }
@@ -553,7 +565,7 @@ impl Anchored {
     }
 
     fn io(&self, err: std::io::Error) -> ProviderError {
-        failed(&self.path, err)
+        failed(&self.shown, err)
     }
 }
 
@@ -622,7 +634,8 @@ mod tests {
         let real = root.join("data/notes.txt");
         let roots = vec![root.clone()];
 
-        let anchored = anchor(&real, &roots).expect("the path is inside the jail");
+        let anchored =
+            anchor(&real, &roots, "data/notes.txt").expect("the path is inside the jail");
 
         swap(&root, &outside);
 
@@ -657,8 +670,15 @@ mod tests {
 
         swap(&root, &outside);
 
-        let refused = anchor(&real, &roots).expect_err("a swapped component must be refused");
+        let refused = anchor(&real, &roots, "data/notes.txt")
+            .expect_err("a swapped component must be refused");
         assert_eq!(refused.code(), Some(ErrorCode::JailEscape), "{refused}");
+        // Named as the program wrote it — not the canonical path, and not the
+        // directory the swap pointed at (D141).
+        let message = refused.to_string();
+        assert!(message.starts_with("data/notes.txt:"), "{message}");
+        assert!(!message.contains(root.to_str().unwrap()), "{message}");
+        assert!(!message.contains(outside.to_str().unwrap()), "{message}");
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -671,7 +691,7 @@ mod tests {
         let real = root.join("data/notes.txt");
         let roots = vec![root.clone()];
 
-        let anchored = anchor(&real, &roots).expect("inside the jail");
+        let anchored = anchor(&real, &roots, "data/notes.txt").expect("inside the jail");
         std::os::unix::fs::symlink(outside.join("notes.txt"), root.join("data/notes.txt")).unwrap();
 
         let refused = anchored
@@ -691,14 +711,14 @@ mod tests {
         let roots = vec![root.clone()];
         std::fs::write(root.join("data/there.txt"), b"hello").unwrap();
 
-        let anchored = anchor(&root.join("data/there.txt"), &roots).unwrap();
+        let anchored = anchor(&root.join("data/there.txt"), &roots, "data/there.txt").unwrap();
         use std::io::Read;
         let mut text = String::new();
         anchored.open().unwrap().read_to_string(&mut text).unwrap();
         assert_eq!(text, "hello");
         assert!(!anchored.is_dir().unwrap());
 
-        let dir = anchor(&root.join("data/made"), &roots).unwrap();
+        let dir = anchor(&root.join("data/made"), &roots, "data/made").unwrap();
         dir.mkdir().unwrap();
         assert!(root.join("data/made").is_dir());
         assert!(dir.is_dir().unwrap());

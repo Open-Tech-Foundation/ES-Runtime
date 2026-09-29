@@ -20,6 +20,7 @@ use walkdir::WalkDir;
 
 use crate::path;
 use crate::path_allowlist::{Access, PathAllowlist};
+use crate::refusal::Refusal;
 
 /// Compiles a glob pattern into a matcher plus a "negated" flag, covering the
 /// full conventional set: `?`, `*` (not crossing `/`), `**` (crossing), `[ab]`,
@@ -131,7 +132,7 @@ impl SystemFileSystem {
     /// elsewhere, so judging the name the guest wrote would let
     /// `--allow-read=./data` admit `./data/link-to-etc/passwd` — the hole the
     /// root jail exists to close, reopened one level in.
-    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, ProviderError> {
+    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, Refusal> {
         match self.allowlist(access) {
             Some(allow) => allow.check(&real, access).map(|()| real),
             None => Ok(real),
@@ -153,10 +154,25 @@ impl SystemFileSystem {
     /// escapes it.
     fn temp_base(&self, dir: &str, access: Access) -> Result<PathBuf, ProviderError> {
         if dir.is_empty() {
-            self.scoped(confine(&self.base.clone(), self.roots(access))?, access)
+            confine(&self.base, self.roots(access))
+                .and_then(|real| self.scoped(real, access))
+                .map_err(|refused| refused.named("."))
         } else {
             self.jailed(dir, access)
         }
+    }
+
+    /// The three refusals every resolution passes, in order — the jail, the
+    /// root-mutation guard, the scope list — on an absolute path.
+    ///
+    /// Nothing here names a path: a [`Refusal`] is turned into an error by the
+    /// caller, which is the one that knows what the program wrote (D141).
+    fn admit(&self, abs: &Path, access: Access) -> Result<PathBuf, Refusal> {
+        let resolved = confine(abs, self.roots(access))?;
+        self.scoped(
+            reject_root_mutation(resolved, self.roots(access), access)?,
+            access,
+        )
     }
 
     /// Like [`jailed`](Self::jailed) but without resolving the **final**
@@ -167,7 +183,16 @@ impl SystemFileSystem {
     /// is being asked about, so it would read the target's target — or, for a
     /// link to a regular file, fail with `EINVAL`. The parent is still fully
     /// resolved and jailed, so the link being read is provably inside the root.
-    fn jailed_nofollow(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
+    ///
+    /// A refusal names `shown` rather than `p`: they differ only for a path
+    /// this provider built from the one the program wrote, such as one level
+    /// of a recursive `mkdir` (D141).
+    fn jailed_nofollow_as(
+        &self,
+        p: &str,
+        shown: &str,
+        access: Access,
+    ) -> Result<PathBuf, ProviderError> {
         let raw = reject_empty(p)?;
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
@@ -188,31 +213,26 @@ impl SystemFileSystem {
         if let Ok(real) = path::canonicalize(&abs)
             && self.roots(access).contains(&real)
         {
-            return self.scoped(
-                reject_root_mutation(real, self.roots(access), access)?,
-                access,
-            );
+            return reject_root_mutation(real, self.roots(access), access)
+                .and_then(|real| self.scoped(real, access))
+                .map_err(|refused| refused.named(shown));
         }
         let (parent, name) = match (abs.parent(), abs.file_name()) {
             (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
             // No final component to hold back (a bare root); fall through.
             _ => {
-                return self.scoped(
-                    reject_root_mutation(
-                        confine(&abs, self.roots(access))?,
-                        self.roots(access),
-                        access,
-                    )?,
-                    access,
-                );
+                return self
+                    .admit(&abs, access)
+                    .map_err(|refused| refused.named(shown));
             }
         };
-        let resolved = confine(&parent, self.roots(access))?.join(name);
+        let resolved = confine(&parent, self.roots(access))
+            .map(|parent| parent.join(name))
+            .and_then(|resolved| reject_root_mutation(resolved, self.roots(access), access))
+            .and_then(|resolved| self.scoped(resolved, access))
+            .map_err(|refused| refused.named(shown))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
-        self.scoped(
-            reject_root_mutation(resolved, self.roots(access), access)?,
-            access,
-        )
+        Ok(resolved)
     }
 
     /// A jailed path, **pinned to the directory it resolved in**, following a
@@ -223,8 +243,18 @@ impl SystemFileSystem {
     /// stick, by holding the parent open so the syscall cannot be pointed at a
     /// different directory than the one that was checked.
     fn anchored(&self, p: &str, access: Access) -> Result<crate::anchor::Anchored, ProviderError> {
-        let real = self.jailed(p, access)?;
-        crate::anchor::anchor(&real, self.roots(access))
+        self.anchored_as(p, p, access)
+    }
+
+    /// [`anchored`](Self::anchored), naming `shown`.
+    fn anchored_as(
+        &self,
+        p: &str,
+        shown: &str,
+        access: Access,
+    ) -> Result<crate::anchor::Anchored, ProviderError> {
+        let real = self.jailed_as(p, shown, access)?;
+        crate::anchor::anchor(&real, self.roots(access), shown)
     }
 
     /// The same, without resolving the final component — for an operation
@@ -234,23 +264,40 @@ impl SystemFileSystem {
         p: &str,
         access: Access,
     ) -> Result<crate::anchor::Anchored, ProviderError> {
-        let real = self.jailed_nofollow(p, access)?;
-        crate::anchor::anchor(&real, self.roots(access))
+        self.anchored_nofollow_as(p, p, access)
+    }
+
+    /// [`anchored_nofollow`](Self::anchored_nofollow), naming `shown`.
+    fn anchored_nofollow_as(
+        &self,
+        p: &str,
+        shown: &str,
+        access: Access,
+    ) -> Result<crate::anchor::Anchored, ProviderError> {
+        let real = self.jailed_nofollow_as(p, shown, access)?;
+        crate::anchor::anchor(&real, self.roots(access), shown)
     }
 
     pub(crate) fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
+        self.jailed_as(p, p, access)
+    }
+
+    /// [`jailed`](Self::jailed), naming `shown` in any refusal instead of `p`.
+    fn jailed_as(&self, p: &str, shown: &str, access: Access) -> Result<PathBuf, ProviderError> {
         let raw = reject_empty(p)?;
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        let resolved = confine(&abs, self.roots(access))?;
+        // The trailing-separator check stats the target, so it runs after the
+        // scope list: whether an unlisted path is a directory is not something
+        // a refusal should answer.
+        let resolved = self
+            .admit(&abs, access)
+            .map_err(|refused| refused.named(shown))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
-        self.scoped(
-            reject_root_mutation(resolved, self.roots(access), access)?,
-            access,
-        )
+        Ok(resolved)
     }
 }
 
@@ -262,11 +309,12 @@ pub(crate) fn roots_with(root: &Path, allow: &PathAllowlist) -> Vec<PathBuf> {
     roots
 }
 
-fn read_all(anchored: &crate::anchor::Anchored, path: &str) -> Result<Vec<u8>, ProviderError> {
+fn read_all(anchored: &crate::anchor::Anchored) -> Result<Vec<u8>, ProviderError> {
     use std::io::Read;
     let mut file = anchored.open()?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|e| other(path, e))?;
+    file.read_to_end(&mut bytes)
+        .map_err(|e| other(anchored.shown(), e))?;
     Ok(bytes)
 }
 
@@ -328,47 +376,22 @@ pub(crate) fn reject_root_mutation(
     resolved: PathBuf,
     roots: &[PathBuf],
     access: Access,
-) -> Result<PathBuf, ProviderError> {
+) -> Result<PathBuf, Refusal> {
     // Every root, not just the jail: a directory the command line granted is a
     // boundary of this run in exactly the same way, and removing it out from
     // under the grant is the same self-destruction one level along.
     if access == Access::Write && roots.contains(&resolved) {
-        return Err(ProviderError::Coded {
-            code: ErrorCode::InvalidPath,
-            message: format!(
-                "refusing to modify the filesystem root {} itself (mutating a root would destroy the sandbox; name an entry inside it)",
-                resolved.display()
-            ),
-        });
+        return Err(Refusal::Root);
     }
     Ok(resolved)
 }
 
-/// Names the jail, and any extra root the command line added — a run with
-/// `--allow-read=/etc/certs` that still cannot reach a path should see why the
-/// grant it was given did not cover it.
-fn escape(p: &Path, roots: &[PathBuf]) -> ProviderError {
-    let jail = roots
-        .first()
-        .map(|r| r.display().to_string())
-        .unwrap_or_default();
-    let extra = match &roots[1..] {
-        [] => String::new(),
-        added => format!(
-            " (nor any granted path: {})",
-            added
-                .iter()
-                .map(|r| r.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    };
-    ProviderError::Coded {
-        code: ErrorCode::JailEscape,
-        message: format!(
-            "path {} escapes the filesystem root jail {jail}{extra} (access outside the root is not permitted)",
-            p.display(),
-        ),
+/// Outside every root. Says whether the command line added any — a run with
+/// `--allow-read=/etc/certs` that still cannot reach a path should see that the
+/// grant did not cover it — without naming them (D141).
+fn escape(roots: &[PathBuf]) -> Refusal {
+    Refusal::Escape {
+        granted: roots.len() > 1,
     }
 }
 
@@ -387,7 +410,7 @@ pub(crate) fn file_stat(md: &std::fs::Metadata) -> FileStat {
     }
 }
 
-pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, ProviderError> {
+pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, Refusal> {
     let mut existing = abs.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
     loop {
@@ -397,7 +420,7 @@ pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, Provider
             // rather than a cleverer structure — the list is the jail plus a
             // handful of explicitly typed paths, never more.
             let Some(root) = roots.iter().find(|root| path::within_root(&real, root)) else {
-                return Err(escape(abs, roots));
+                return Err(escape(roots));
             };
             let mut out = real;
             for seg in tail.iter().rev() {
@@ -406,7 +429,7 @@ pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, Provider
             // Belt and braces: the reattached path must still be under the root
             // that admitted it.
             if !out.starts_with(root) {
-                return Err(escape(abs, roots));
+                return Err(escape(roots));
             }
             return Ok(out);
         }
@@ -419,9 +442,9 @@ pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, Provider
                 existing = existing
                     .parent()
                     .map(Path::to_path_buf)
-                    .ok_or_else(|| escape(abs, roots))?;
+                    .ok_or_else(|| escape(roots))?;
             }
-            None => return Err(escape(abs, roots)),
+            None => return Err(escape(roots)),
         }
     }
 }
@@ -463,6 +486,24 @@ pub(crate) fn reject_trailing_slash_on_a_file(
             message: format!("{input}: not a directory (the trailing separator requires one)"),
         }),
         _ => Ok(()),
+    }
+}
+
+/// A failure partway through a glob walk, naming the entry under the base the
+/// program gave rather than walkdir's absolute path (D141).
+fn walk_error(base: &str, base_real: &Path, e: walkdir::Error) -> ProviderError {
+    let below = e
+        .path()
+        .and_then(|at| at.strip_prefix(base_real).ok())
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .filter(|rel| !rel.is_empty());
+    let shown = match below {
+        Some(rel) => format!("{}/{rel}", base.trim_end_matches('/')),
+        None => base.to_string(),
+    };
+    match e.into_io_error() {
+        Some(io) => ProviderError::from_io(format!("glob scan: {shown}"), &io),
+        None => ProviderError::Other(format!("glob scan: {shown}: filesystem loop")),
     }
 }
 
@@ -518,18 +559,15 @@ impl FileSystem for SystemFileSystem {
             && let Ok(md) = std::fs::metadata(anchored.path())
             && md.len() < 64 * 1024
         {
-            return Box::pin(std::future::ready(read_all(anchored, &path)));
+            return Box::pin(std::future::ready(read_all(anchored)));
         }
         Box::pin(async move {
             let anchored = resolved?;
             // Off the runtime thread, which is what `tokio::fs::read` was
             // doing: a large file is a blocking read however it is spelled.
-            tokio::task::spawn_blocking(move || {
-                let text = anchored.path().to_string_lossy().into_owned();
-                read_all(&anchored, &text)
-            })
-            .await
-            .map_err(|e| other(&path, std::io::Error::other(e)))?
+            tokio::task::spawn_blocking(move || read_all(&anchored))
+                .await
+                .map_err(|e| other(&path, std::io::Error::other(e)))?
         })
     }
 
@@ -675,7 +713,12 @@ impl FileSystem for SystemFileSystem {
                 false => vec![path.clone()],
             };
             for step in &steps {
-                match self.anchored_nofollow(step, Access::Write)?.mkdir() {
+                // Each level is an absolute path built here, not one the
+                // program wrote, so a failure names the path it did write.
+                match self
+                    .anchored_nofollow_as(step, &path, Access::Write)?
+                    .mkdir()
+                {
                     Ok(()) => {}
                     // "Creates missing parents and succeeds if it already
                     // exists" is what `recursive` means, at the last level as
@@ -685,7 +728,7 @@ impl FileSystem for SystemFileSystem {
                     // the last component resolved, which is what `anchored`
                     // does and `anchored_nofollow` deliberately does not.
                     Err(e) if recursive && e.code() == Some(ErrorCode::AlreadyExists) => {
-                        if !self.anchored(step, Access::Write)?.is_dir()? {
+                        if !self.anchored_as(step, &path, Access::Write)?.is_dir()? {
                             return Err(e);
                         }
                     }
@@ -762,7 +805,7 @@ impl FileSystem for SystemFileSystem {
             let real = tokio::fs::canonicalize(&p)
                 .await
                 .map_err(|e| other(&path, e))?;
-            let real = confine(&real, &roots)?;
+            let real = confine(&real, &roots).map_err(|refused| refused.named(&path))?;
             Ok(real.to_string_lossy().into_owned())
         })
     }
@@ -918,7 +961,7 @@ impl FileSystem for SystemFileSystem {
             // caller opts in, follow them but reject any entry whose real path
             // escapes the root.
             for entry in WalkDir::new(&base_real).follow_links(opts.follow_symlinks) {
-                let entry = entry.map_err(|e| ProviderError::Other(format!("glob scan: {e}")))?;
+                let entry = entry.map_err(|e| walk_error(&base, &base_real, e))?;
                 let path = entry.path();
                 if path == base_real {
                     continue; // skip the base itself
@@ -1683,5 +1726,95 @@ mod tests {
             "expected ERR_NOT_FOUND, got {err:?}"
         );
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A refusal names the path as the program wrote it, and nothing the jail
+    /// resolved it to: not the root, not a root the command line granted, not
+    /// where a link really points (D141). Each case here is one a program can
+    /// catch, and each used to carry at least one of those.
+    #[tokio::test]
+    async fn a_refusal_names_the_path_as_written_and_nothing_it_resolved_to() {
+        let base = std::env::temp_dir().join(format!("esrun-fs-spelling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let outside = base.join("outside");
+        let granted = base.join("granted");
+        for dir in [
+            root.join("data"),
+            root.join("out"),
+            outside.clone(),
+            granted.clone(),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(outside.join("secret.txt"), b"s").unwrap();
+        std::fs::write(root.join("out/file"), b"f").unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("data/link")).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let fs = SystemFileSystem::new(&root, &root)
+            .with_read_allowlist(
+                PathAllowlist::parse(["data", granted.to_str().unwrap()], &root).unwrap(),
+            )
+            .with_write_allowlist(PathAllowlist::parse(["out"], &root).unwrap());
+
+        let cases = [
+            (
+                "../outside/secret.txt",
+                fs.read("../outside/secret.txt".into()).await,
+            ),
+            ("data/link", fs.read("data/link".into()).await),
+            ("package.json", fs.read("package.json".into()).await),
+            ("data/missing.txt", fs.read("data/missing.txt".into()).await),
+        ];
+        for (written, result) in cases {
+            let err = result.expect_err(written);
+            let message = err.to_string();
+            assert!(message.contains(written), "{written}: {message}");
+            for host in [&root, &outside, &granted] {
+                assert!(
+                    !message.contains(host.to_str().unwrap()),
+                    "{written} leaked {}: {message}",
+                    host.display()
+                );
+            }
+        }
+        // The same for mutations: the root guard, and a level of a recursive
+        // `mkdir` that fails partway, which resolves paths of its own making.
+        for (written, err) in [
+            (
+                "out/..",
+                fs.remove("out/..".into(), true).await.unwrap_err(),
+            ),
+            (
+                "out/file/sub",
+                fs.mkdir("out/file/sub".into(), true).await.unwrap_err(),
+            ),
+        ] {
+            let message = err.to_string();
+            assert!(message.contains(written), "{written}: {message}");
+            assert!(
+                !message.contains(root.to_str().unwrap()),
+                "{written}: {message}"
+            );
+        }
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// An escape tells a run with a grant outside the jail that the grant did
+    /// not cover it either — without naming the grant.
+    #[tokio::test]
+    async fn an_escape_mentions_a_grant_without_naming_it() {
+        let (root, _) = jail("escape-grant");
+        let granted = std::env::temp_dir().join(format!("esrun-fs-granted-{}", std::process::id()));
+        std::fs::create_dir_all(&granted).unwrap();
+        let fs = SystemFileSystem::new(&root, &root).with_read_allowlist(
+            PathAllowlist::parse([".", granted.to_str().unwrap()], &root).unwrap(),
+        );
+        let err = fs.read("/elsewhere/x".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+        let message = err.to_string();
+        assert!(message.contains("granted on the command line"), "{message}");
+        assert!(!message.contains(granted.to_str().unwrap()), "{message}");
+        std::fs::remove_dir_all(&granted).ok();
     }
 }

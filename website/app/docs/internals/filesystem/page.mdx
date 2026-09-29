@@ -151,6 +151,27 @@ reach by another route.
 The capability is checked before the jail, so a denied run learns nothing about
 the layout of a filesystem it may not read.
 
+## A refusal names what you wrote
+
+Every check above decides on the canonical path: links followed, the base
+directory joined on. A refusal never repeats that path. An escape, a path
+outside the scope list, the root guard, a replaced directory and an ordinary
+I/O failure all name the argument the program passed, and describe the boundary
+("the filesystem root", "every path granted on the command line") without
+printing it.
+
+The canonical path is the one thing the program does not already know. Outside
+the root, it says where a link really points and whether a file exists. A root
+granted on the command line is part of the host the program was never told
+about. Both would also travel into every log the error reaches. The project root
+itself is not a secret: `import.meta.url` and every stack frame are absolute
+`file://` URLs, as in Node, Deno and Bun.
+
+The resolution helpers return refusals that carry no path, and turning one into
+an error takes the program's spelling, so a later change cannot put the
+canonical path back by accident. The decision and what was rejected are
+[D141](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
 ## What it costs
 
 All operations are asynchronous — there are no sync variants, and no callbacks.

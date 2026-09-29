@@ -19,6 +19,7 @@ use es_runtime_providers::{
 
 use crate::path;
 use crate::path_allowlist::{Access, PathAllowlist};
+use crate::refusal::Refusal;
 use crate::system_fs::{
     confine, file_stat, reject_empty, reject_root_mutation, reject_trailing_slash_on_a_file,
 };
@@ -99,7 +100,7 @@ impl SystemSyncFileSystem {
 
     /// Applies the scope list to an already-resolved path — after
     /// canonicalization, never before, or a symlink walks out of the list.
-    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, ProviderError> {
+    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, Refusal> {
         let list = match access {
             Access::Read => self.allow_read.as_deref(),
             Access::Write => self.allow_write.as_deref(),
@@ -120,12 +121,15 @@ impl SystemSyncFileSystem {
         } else {
             self.base.join(raw)
         };
-        let resolved = confine(&abs, self.roots(access))?;
+        // The refusals name what the program wrote, never the canonical path
+        // they were decided on (D141); and the trailing-separator check, which
+        // stats the target, waits until the scope list has admitted it.
+        let resolved = confine(&abs, self.roots(access))
+            .and_then(|resolved| reject_root_mutation(resolved, self.roots(access), access))
+            .and_then(|resolved| self.scoped(resolved, access))
+            .map_err(|refused| refused.named(p))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
-        self.scoped(
-            reject_root_mutation(resolved, self.roots(access), access)?,
-            access,
-        )
+        Ok(resolved)
     }
 
     /// Runs `f` against the handle for `fd`, holding the table lock for the call.
@@ -173,16 +177,14 @@ impl SyncFileSystem for SystemSyncFileSystem {
             || options.create_new;
         let resolved = self.jailed(path, if writes { Access::Write } else { Access::Read })?;
         if writes && options.read {
-            self.scoped(resolved.clone(), Access::Read)?;
+            self.scoped(resolved.clone(), Access::Read)
+                .map_err(|refused| refused.named(path))?;
         }
-        let display = resolved.display().to_string();
 
         let handle = if options.directory {
-            let meta = std::fs::metadata(&resolved).map_err(|e| io(&display, e))?;
+            let meta = std::fs::metadata(&resolved).map_err(|e| io(path, e))?;
             if !meta.is_dir() {
-                return Err(ProviderError::Other(format!(
-                    "{display} is not a directory"
-                )));
+                return Err(ProviderError::Other(format!("{path} is not a directory")));
             }
             Handle::Dir(resolved)
         } else {
@@ -194,7 +196,7 @@ impl SyncFileSystem for SystemSyncFileSystem {
                 .create(options.create)
                 .create_new(options.create_new)
                 .open(&resolved)
-                .map_err(|e| io(&display, e))?;
+                .map_err(|e| io(path, e))?;
             Handle::File(file)
         };
 
@@ -253,18 +255,16 @@ impl SyncFileSystem for SystemSyncFileSystem {
 
     fn stat(&self, path: &str) -> Result<FileStat, ProviderError> {
         let resolved = self.jailed(path, Access::Read)?;
-        let meta =
-            std::fs::metadata(&resolved).map_err(|e| io(&resolved.display().to_string(), e))?;
+        let meta = std::fs::metadata(&resolved).map_err(|e| io(path, e))?;
         Ok(file_stat(&meta))
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, ProviderError> {
         let resolved = self.jailed(path, Access::Read)?;
-        let display = resolved.display().to_string();
         let mut out = Vec::new();
-        for entry in std::fs::read_dir(&resolved).map_err(|e| io(&display, e))? {
-            let entry = entry.map_err(|e| io(&display, e))?;
-            let file_type = entry.file_type().map_err(|e| io(&display, e))?;
+        for entry in std::fs::read_dir(&resolved).map_err(|e| io(path, e))? {
+            let entry = entry.map_err(|e| io(path, e))?;
+            let file_type = entry.file_type().map_err(|e| io(path, e))?;
             out.push(DirEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 is_file: file_type.is_file(),
@@ -277,23 +277,24 @@ impl SyncFileSystem for SystemSyncFileSystem {
 
     fn mkdir(&self, path: &str) -> Result<(), ProviderError> {
         let resolved = self.jailed(path, Access::Write)?;
-        std::fs::create_dir(&resolved).map_err(|e| io(&resolved.display().to_string(), e))
+        std::fs::create_dir(&resolved).map_err(|e| io(path, e))
     }
 
     fn remove_file(&self, path: &str) -> Result<(), ProviderError> {
         let resolved = self.jailed(path, Access::Write)?;
-        std::fs::remove_file(&resolved).map_err(|e| io(&resolved.display().to_string(), e))
+        std::fs::remove_file(&resolved).map_err(|e| io(path, e))
     }
 
     fn remove_dir(&self, path: &str) -> Result<(), ProviderError> {
         let resolved = self.jailed(path, Access::Write)?;
-        std::fs::remove_dir(&resolved).map_err(|e| io(&resolved.display().to_string(), e))
+        std::fs::remove_dir(&resolved).map_err(|e| io(path, e))
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), ProviderError> {
+        let shown = from;
         let from = self.jailed(from, Access::Write)?;
         let to = self.jailed(to, Access::Write)?;
-        std::fs::rename(&from, &to).map_err(|e| io(&from.display().to_string(), e))
+        std::fs::rename(&from, &to).map_err(|e| io(shown, e))
     }
 }
 
@@ -553,6 +554,31 @@ mod tests {
         fs.remove_dir("d").unwrap();
         assert!(fs.stat("d").is_err());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The WASI door names what the program wrote too, not the canonical path
+    /// the jail decided on (D141).
+    #[test]
+    fn a_refusal_names_the_path_as_written_for_wasi_too() {
+        let (_, dir) = fs_in("spelling");
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        let root = std::fs::canonicalize(&dir).unwrap();
+        let fs = SystemSyncFileSystem::new(&root, &root)
+            .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap());
+        for (written, err) in [
+            ("../x", fs.stat("../x").err().unwrap()),
+            ("secrets.env", fs.stat("secrets.env").err().unwrap()),
+            ("data/missing", fs.stat("data/missing").err().unwrap()),
+            (".", fs.remove_dir(".").unwrap_err()),
+        ] {
+            let message = err.to_string();
+            assert!(message.contains(written), "{written}: {message}");
+            assert!(
+                !message.contains(root.to_str().unwrap()),
+                "{written}: {message}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }

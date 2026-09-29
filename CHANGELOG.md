@@ -29,6 +29,19 @@ namespace) is unstable and may change between minor releases until the API freez
   published as `build_time.esbuild` and charted with the other four tools in
   the home-page "Build time" tab.
 
+### Security
+
+- **A filesystem refusal names the path as the program wrote it, and nothing
+  the jail resolved it to** (DECISIONS D141). A jail escape used to print the
+  absolute project root and every root granted on the command line; a scoped
+  `--allow-read`/`--allow-write` denial, the root-mutation guard, a swapped
+  directory and an ordinary I/O failure printed the canonical path, which says
+  where a symlink really points. All of them, in `runtime:fs`, `runtime:wasi`
+  and `runtime:db`, now repeat the argument the program passed and describe
+  the boundary without printing it. Error codes are unchanged. The trailing-
+  separator check now runs after the scope list, so it no longer reports
+  whether an unlisted path is a directory.
+
 ## [0.33.0] - 2026-09-25
 
 ### Added
