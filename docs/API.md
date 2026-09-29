@@ -2294,10 +2294,48 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
+| `Cookie`                          | `class`                                       | One cookie: attributes, `serialize()`, `Cookie.parse()`. See [Cookies](#cookies). |
+| `CookieMap`                       | `class`                                       | Cookies by name, from a `Cookie` header; records `Set-Cookie` changes. See [Cookies](#cookies). |
 | `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.
+The request also has `cookies`, a [`CookieMap`](#cookies) whose changes are sent
+with the response.
+
+#### Cookies
+
+`Cookie` and `CookieMap` (D144) follow Bun's `Bun.Cookie` and `Bun.CookieMap`.
+They are pure JavaScript and need no capability.
+
+| Member | Description |
+| --- | --- |
+| `new Cookie(name, value, options?)`, `new Cookie(init)`, `new Cookie(setCookieString)` | One cookie. `options`: `domain`, `path` (default `"/"`), `expires` (`Date` or ms), `maxAge` (integer seconds), `secure`, `httpOnly`, `sameSite` (`"strict" \| "lax" \| "none"`, any case, default `"lax"`), `partitioned`. |
+| `Cookie.parse(text)`, `Cookie.from(name, value, options?)` | From a `Set-Cookie` value (percent-decoded), or from parts. |
+| `cookie.serialize()` / `toString()` | The `Set-Cookie` value, with the value percent-encoded. |
+| `cookie.isExpired()`, `cookie.toJSON()` | `maxAge` decides expiry when there is one. |
+| `new CookieMap(init?)` | From a `Cookie` header string, an object, or `[name, value]` pairs. Malformed pairs are skipped, the **first** of a duplicated name wins, and values are percent-decoded. |
+| `get`, `has`, `size`, `entries`, `keys`, `values`, `forEach`, iteration | Read the cookies by name. `get` returns `null` when absent. |
+| `set(name, value, options?)`, `set(init)`, `set(cookie)` | Record a cookie to send. |
+| `delete(name, options?)`, `delete({ name, path?, domain?, secure?, partitioned? })` | Record an expired cookie with that `path` and `domain`. A `__Host-`/`__Secure-` cookie needs `secure: true`. |
+| `toSetCookieHeaders()` | What changed, as `Set-Cookie` values. |
+
+**A cookie a browser would discard throws a `TypeError` naming the rule.** This
+happens when it is serialized or recorded with `set`/`delete`, and covers:
+
+- a name that is not a token;
+- a non-integer `maxAge`, or an invalid `expires`;
+- `;` or a control character in `domain` or `path`;
+- `SameSite=None` or `Partitioned` without `Secure`;
+- a `__Secure-` cookie without `Secure`;
+- a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`.
+
+Bun emits these cookies anyway, and the browser drops them without an error.
+
+In a handler, `request.cookies` is a `CookieMap` of the request's cookies, parsed
+on first read. Its `set` and `delete` calls are sent with the response as
+`Set-Cookie` headers, next to the response's own.
+
 
 #### The connection a request came from
 

@@ -2993,3 +2993,26 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Raw mode** (`setRawMode(true)`) is the terminal with no line editing, no echo and no signal keys: each keypress arrives as it is typed, and ^C arrives as the byte `0x03`, as in Node. A line read in raw mode ends at `\r` as well as `\n`, because that is what Enter sends there. **The terminal is always given back:** the original settings are restored by `setRawMode(false)`, and by the CLI on every way out of a run, including `exit()`, an uncaught error, and a signal-driven shutdown. It is refused when stdin is not a terminal. **Unix only for now:** Windows needs its console-mode API, and it is refused there with an unsupported-platform error, as `reusePort` is (D140), until it can be built and tested on that platform.
 
 **Not here:** keypress decoding (arrow keys arrive as the escape sequences the terminal sends), line editing and history in `question()`, and Windows raw mode.
+
+### D144 — Cookies: Bun's `Cookie` and `CookieMap` in `runtime:http`, strict on the way out · *Proposed (2026-09-29)*
+
+**Context:** A server reads cookies from the `Cookie` header and sets them with `Set-Cookie`. The runtime has only `Headers.getSetCookie()`, so every program parses and formats them by hand, and that is where the RFC 6265 details go wrong: quoting, `;` in a value, duplicate names, the `__Host-` prefix. Bun has `Bun.Cookie`/`Bun.CookieMap` and `req.cookies` in `Bun.serve`. Deno has `getCookies`/`setCookie` in `@std/http/cookie`. Run side by side, the two disagree. Bun percent-encodes values and Deno throws on them. Bun keeps the first duplicate and Deno the last. And both emit cookies a browser discards without a word: Bun a `__Host-` cookie with a `Domain`, both `Partitioned` without `Secure`.
+
+**Decision (maintainer, 2026-09-29: Bun's API; invalid cookies throw; Bun's defaults):**
+
+- **`Cookie` and `CookieMap` are exported from `runtime:http`**, with Bun's constructors, properties and methods. `Cookie` has `name`, `value`, `domain`, `path`, `expires`, `maxAge`, `secure`, `httpOnly`, `sameSite`, `partitioned`, `isExpired()`, `serialize()`/`toString()`, `toJSON()`, `Cookie.parse()` and `Cookie.from()`. `CookieMap` has `get`, `has`, `set`, `delete`, `toSetCookieHeaders()`, `toJSON()`, `size` and iteration. They are pure JavaScript and need no capability. **Rejected: Deno's functions over `Headers`**, which have no place for a handler to record a change and have it sent.
+- **`request.cookies` in `serve()`**: a `CookieMap` parsed from the request's `Cookie` header on first access. Every `set` and `delete` on it is appended to the response as a `Set-Cookie` header, as in Bun, so a handler records a change and returns any `Response`. It is a property of requests `serve()` hands out; a `Request` built by the program has none.
+- **Bun's defaults:** a cookie is `Path=/; SameSite=Lax` unless it says otherwise. Code ported from Bun sets the same cookie. **Rejected: `HttpOnly` by default.** It is safer, but it would silently change what a ported program sets, and a client that reads `document.cookie` would break with no error to explain why.
+- **Lenient in, strict out.** Parsing a `Cookie` header skips what is malformed (browsers send junk) and keeps the **first** of a duplicated name, the most specific per RFC 6265 §5.4. Values are percent-decoded, in `CookieMap` and in `Cookie.parse()` alike (Bun decodes in one and not the other), and percent-encoded when serialized. **Serializing refuses, with a `TypeError` naming the rule**, every cookie a browser would discard:
+  - a name that is not an RFC 6265 token;
+  - a `maxAge` that is not a finite integer, and an invalid `Date` for `expires`;
+  - a `domain` or `path` containing `;` or a control character;
+  - `SameSite=None` or `Partitioned` without `Secure`;
+  - a `__Secure-` cookie without `Secure`;
+  - a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`.
+
+  **This is the difference from Bun,** which emits them. A cookie that looks set while the browser has thrown it away is a login that fails with nothing in any log. **Rejected: Deno's rewriting of a `__Host-` cookie into a valid one**, which sets a cookie different from the one the code asked for.
+
+- **The other differences from Bun, each deliberate:** a malformed `%` sequence keeps its raw text instead of becoming U+FFFD, since a value is data. `sameSite` is accepted in any letter case, so Deno's `"Strict"` ports too. `maxAge` must be an integer (Bun writes `Max-Age=1.5`, which no browser parses); a negative one is valid, meaning "already expired". `CookieMap.delete()` also takes `secure` and `partitioned`, because a `__Host-` cookie can only be deleted by a `Set-Cookie` that is itself `Secure`. Everything else matches output recorded from Bun, and a test holds it there.
+
+**Not here:** a cookie jar for `fetch()`, signed or encrypted cookies, and the browser's asynchronous `cookieStore` global.

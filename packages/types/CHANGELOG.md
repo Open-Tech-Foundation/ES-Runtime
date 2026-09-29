@@ -15,6 +15,10 @@ itself.
 
 ### Added
 
+- `runtime:http` declares `Cookie`, `CookieMap`, `CookieInit` and
+  `CookieStoreDeleteOptions`, and a handler's request is a `ServerRequest` with
+  `cookies`.
+
 - `runtime:process` declares `stdin` and its `StdIn` interface (`readable`,
   `lines()`, `question()`, `setRawMode()`, `isRaw`, `isTTY`).
 

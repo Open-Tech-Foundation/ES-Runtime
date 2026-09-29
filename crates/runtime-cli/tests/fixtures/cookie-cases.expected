@@ -1,0 +1,47 @@
+default serialize => "a=b; Path=/; SameSite=Lax"
+value with space; => "a=x%20y%3Bz; Path=/; SameSite=Lax"
+unicode value => "a=%C3%A9; Path=/; SameSite=Lax"
+bad name THROWS TypeError Invalid cookie name: contains invalid characters
+empty name THROWS TypeError name is required
+host prefix no secure THROWS TypeError Cookie "__Host-x" would be rejected by browsers: a __Host- cookie requires Secure
+maxAge -1 => "a=b; Path=/; Max-Age=-1; SameSite=Lax"
+all attrs => "a=b; Domain=ex.com; Path=/p; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=60; Secure; HttpOnly; Partitioned; SameSite=Strict"
+parse set-cookie => {"name":"sid","value":"abc d","path":"/x","maxAge":5,"secure":true,"sameSite":"none","httpOnly":true,"partitioned":false}
+map dupes => {"a":"1","b":" x"}
+map junk => {"d":"\"q\"","e":"1=2"}
+map set/delete headers => ["s=v; Path=/; SameSite=Lax","a=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"]
+partitioned no secure THROWS TypeError Cookie "a" would be rejected by browsers: Partitioned requires Secure
+sameSite none no secure THROWS TypeError Cookie "a" would be rejected by browsers: SameSite=None requires Secure
+expires number => "a=b; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"
+encode set => "a=%3D%2F%3A%3F%26%2B%2C!*'()~%40%24%23%5B%5D%22%5C%20; Path=/; SameSite=Lax"
+bad % in map => {"a":"%E0%A4%A","b":"%zz","c":"ok"}
+quoted in map => {"a":"\"x y\""}
+cookie toJSON full => {"name":"a","value":"b","domain":"d.com","path":"/","expires":"1970-01-01T00:00:01.000Z","maxAge":5,"secure":true,"sameSite":"lax","httpOnly":false,"partitioned":false}
+cookie toJSON min => {"name":"a","value":"b","path":"/","secure":false,"sameSite":"lax","httpOnly":false,"partitioned":false}
+props => [null,"/",null,null,false,false,"lax",false]
+isExpired => [true,true,false,false]
+parse full => {"name":"sid","value":"v","domain":".ex.com","path":"/","expires":"2015-10-21T07:28:00.000Z","secure":false,"sameSite":"strict","httpOnly":false,"partitioned":true}
+parse sameSite bad => {"name":"a","value":"b","path":"/","secure":false,"sameSite":"lax","httpOnly":false,"partitioned":false}
+parse no value THROWS TypeError Invalid cookie string: empty
+parse empty THROWS TypeError Invalid cookie string: empty
+ctor string => {"name":"x","value":"1","path":"/y","secure":false,"sameSite":"lax","httpOnly":false,"partitioned":false}
+ctor options => "n=v; Path=/p; SameSite=Lax"
+from => "a=b; Path=/; HttpOnly; SameSite=Lax"
+sameSite case => "a=b; Path=/; SameSite=Strict"
+sameSite invalid THROWS TypeError Invalid sameSite value. Must be 'strict', 'lax', or 'none'
+map object => [["b","2"],["a","1"]]
+map pairs => [["a","1"],["b","2"],1]
+map set cookie obj => [["a=b; Path=/; HttpOnly; SameSite=Lax","c=d; Path=/; SameSite=Lax"],"b",2]
+map delete opts => [["a=; Domain=d.com; Path=/p; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax","zz=; Path=/q; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"],false,null,0]
+map set then delete => ["a=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax"]
+map set twice => [["a=2; Path=/; SameSite=Lax"],"2"]
+map keys/values/forEach => [["a","b"],["1","2"],[["a","1"],["b","2"]],["a1","b2"]]
+map get missing => null
+map set invalid THROWS TypeError Invalid cookie name: contains invalid characters
+map whitespace => {"a":"1","b":"2"}
+value undefined THROWS TypeError Invalid cookie string: empty
+maxAge float THROWS TypeError Invalid cookie maxAge: 1.5 is not an integer
+expires invalid THROWS RangeError expires must be a valid Date (or Number)
+domain semicolon THROWS TypeError Invalid cookie domain: contains invalid characters
+path semicolon THROWS TypeError Invalid cookie path: contains invalid characters
+toString => "a=b; Path=/; SameSite=Lax"

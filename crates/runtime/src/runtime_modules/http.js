@@ -427,6 +427,7 @@ async function handleRequest(entry, handler) {
   const peerHost = entry[5];
   const peerPort = entry[6];
   let response;
+  let cookies = null;
   try {
     const init = { method, headers };
     // The body streams from the host chunk-by-chunk; nothing is buffered until
@@ -446,10 +447,9 @@ async function handleRequest(entry, handler) {
         },
       });
     }
-    response = await handler(
-      makeServerRequest(url, init, () => watchDisconnect(requestId), requestId),
-      connectionInfo(peerHost, peerPort),
-    );
+    const request = makeServerRequest(url, init, () => watchDisconnect(requestId), requestId);
+    cookies = attachCookies(request);
+    response = await handler(request, connectionInfo(peerHost, peerPort));
     if (!(response instanceof Response)) {
       // A handler that returns something else has a bug, and coercing it with
       // `String(value)` shipped that bug as a 200: `return { ok: true }` went
@@ -516,6 +516,11 @@ async function handleRequest(entry, handler) {
   const declared = Array.isArray(trailerArg) && trailerArg.length > 0;
   const hasTrailerHeader = parts.headers.some(([name]) => name.toLowerCase() === "trailer");
   for (const [name, value] of parts.headers) args.push(name, value);
+  // What the handler changed on `request.cookies`, beside whatever
+  // `Set-Cookie` headers the response carries itself.
+  if (cookies?.map) {
+    for (const header of cookies.map.toSetCookieHeaders()) args.push("set-cookie", header);
+  }
   if (declared && !hasTrailerHeader) {
     const names = [];
     for (let i = 0; i < trailerArg.length; i += 2) names.push(trailerArg[i]);
@@ -699,6 +704,340 @@ function inboundTrace(headers, trust) {
   return null;
 }
 
+// ---- cookies (D144) --------------------------------------------------------
+//
+// Bun's `Cookie` and `CookieMap`, lenient in and strict out. Parsing a `Cookie`
+// header skips what is malformed, because browsers send junk. Serializing
+// refuses every cookie a browser would silently discard (a `__Host-` cookie
+// with a `Domain`, `SameSite=None` without `Secure`, …), because a cookie that
+// looks set while the browser has thrown it away is a login that fails with
+// nothing in any log.
+
+// An RFC 6265 cookie-name: an RFC 7230 token.
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+// What may not appear in a Domain or Path attribute: it would end the attribute
+// or corrupt the header.
+const ATTRIBUTE_BREAK = /[;\x00-\x1f\x7f]/;
+const SAME_SITE = new Set(["strict", "lax", "none"]);
+const EPOCH = new Date(0);
+
+// A cookie value as a program wrote it, decoded: `%XX` sequences become the
+// text they encode. A malformed sequence keeps its raw text rather than being
+// replaced — a value is data, and a substitution character loses it.
+function decodeCookieValue(value) {
+  if (!value.includes("%")) return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function checkCookieName(name) {
+  if (typeof name !== "string" || name === "") throw new TypeError("name is required");
+  if (!COOKIE_NAME.test(name)) {
+    throw new TypeError("Invalid cookie name: contains invalid characters");
+  }
+}
+
+function checkAttribute(kind, value) {
+  if (value != null && ATTRIBUTE_BREAK.test(value)) {
+    throw new TypeError(`Invalid cookie ${kind}: contains invalid characters`);
+  }
+}
+
+function toExpires(expires) {
+  if (expires == null) return null;
+  const date = expires instanceof Date ? new Date(expires.getTime()) : new Date(expires);
+  if (Number.isNaN(date.getTime())) {
+    throw new RangeError("expires must be a valid Date (or Number)");
+  }
+  return date;
+}
+
+function toSameSite(sameSite) {
+  if (sameSite == null) return "lax";
+  // Any letter case: Bun spells these in lower case, Deno capitalised.
+  const lower = String(sameSite).toLowerCase();
+  if (!SAME_SITE.has(lower)) {
+    throw new TypeError("Invalid sameSite value. Must be 'strict', 'lax', or 'none'");
+  }
+  return lower;
+}
+
+// The attributes of a `Set-Cookie` header, as a Cookie's options.
+function parseSetCookie(text) {
+  const parts = String(text).split(";");
+  const pair = parts.shift();
+  const equals = pair.indexOf("=");
+  if (equals === -1) throw new TypeError("Invalid cookie string: empty");
+  const init = {
+    name: pair.slice(0, equals).trim(),
+    value: decodeCookieValue(pair.slice(equals + 1).trim()),
+  };
+  for (const part of parts) {
+    const at = part.indexOf("=");
+    const key = (at === -1 ? part : part.slice(0, at)).trim().toLowerCase();
+    const value = at === -1 ? "" : part.slice(at + 1).trim();
+    switch (key) {
+      case "domain":
+        if (value !== "") init.domain = value.toLowerCase();
+        break;
+      case "path":
+        if (value.startsWith("/")) init.path = value;
+        break;
+      case "expires": {
+        const time = Date.parse(value);
+        if (!Number.isNaN(time)) init.expires = new Date(time);
+        break;
+      }
+      case "max-age":
+        if (/^-?\d+$/.test(value)) init.maxAge = Number(value);
+        break;
+      case "secure":
+        init.secure = true;
+        break;
+      case "httponly":
+        init.httpOnly = true;
+        break;
+      case "partitioned":
+        init.partitioned = true;
+        break;
+      case "samesite":
+        if (SAME_SITE.has(value.toLowerCase())) init.sameSite = value.toLowerCase();
+        break;
+      // Anything else is an attribute this cookie does not use.
+    }
+  }
+  return init;
+}
+
+class Cookie {
+  constructor(nameOrInit, value, options) {
+    let init;
+    if (typeof nameOrInit === "string" && value === undefined && options === undefined) {
+      init = parseSetCookie(nameOrInit);
+    } else if (nameOrInit !== null && typeof nameOrInit === "object") {
+      init = nameOrInit;
+    } else {
+      init = { ...options, name: nameOrInit, value };
+    }
+    checkCookieName(init.name);
+    checkAttribute("domain", init.domain);
+    checkAttribute("path", init.path);
+    this.name = init.name;
+    this.value = init.value == null ? "" : String(init.value);
+    this.domain = init.domain ?? null;
+    this.path = init.path ?? "/";
+    this.expires = toExpires(init.expires);
+    this.maxAge = init.maxAge ?? null;
+    this.secure = Boolean(init.secure);
+    this.httpOnly = Boolean(init.httpOnly);
+    this.sameSite = toSameSite(init.sameSite);
+    this.partitioned = Boolean(init.partitioned);
+  }
+
+  // Parses one `Set-Cookie` header value.
+  static parse(text) {
+    return new Cookie(parseSetCookie(text));
+  }
+
+  static from(name, value, options) {
+    return new Cookie(name, value, options);
+  }
+
+  // `maxAge` decides when there is one, as RFC 6265 requires; a cookie with
+  // neither lasts the session, which has not ended.
+  isExpired() {
+    if (this.maxAge != null) return this.maxAge <= 0;
+    if (this.expires !== null) return this.expires.getTime() <= Date.now();
+    return false;
+  }
+
+  // The `Set-Cookie` header value — or a TypeError naming the rule, for a
+  // cookie a browser would discard.
+  serialize() {
+    checkCookieName(this.name);
+    checkAttribute("domain", this.domain);
+    checkAttribute("path", this.path);
+    const sameSite = toSameSite(this.sameSite);
+    const expires = toExpires(this.expires);
+    if (this.maxAge != null && !Number.isInteger(this.maxAge)) {
+      throw new TypeError(`Invalid cookie maxAge: ${this.maxAge} is not an integer`);
+    }
+    const refuse = (why) => {
+      throw new TypeError(`Cookie "${this.name}" would be rejected by browsers: ${why}`);
+    };
+    if (sameSite === "none" && !this.secure) refuse("SameSite=None requires Secure");
+    if (this.partitioned && !this.secure) refuse("Partitioned requires Secure");
+    if (this.name.startsWith("__Secure-") && !this.secure) {
+      refuse("a __Secure- cookie requires Secure");
+    }
+    if (this.name.startsWith("__Host-")) {
+      if (!this.secure) refuse("a __Host- cookie requires Secure");
+      if (this.domain !== null) refuse("a __Host- cookie must not have a Domain");
+      if (this.path !== "/") refuse('a __Host- cookie must have Path=/');
+    }
+    let out = `${this.name}=${encodeURIComponent(this.value)}`;
+    if (this.domain !== null) out += `; Domain=${this.domain}`;
+    out += `; Path=${this.path}`;
+    if (expires !== null) out += `; Expires=${expires.toUTCString()}`;
+    if (this.maxAge != null) out += `; Max-Age=${this.maxAge}`;
+    if (this.secure) out += "; Secure";
+    if (this.httpOnly) out += "; HttpOnly";
+    if (this.partitioned) out += "; Partitioned";
+    out += `; SameSite=${sameSite[0].toUpperCase()}${sameSite.slice(1)}`;
+    return out;
+  }
+
+  toString() {
+    return this.serialize();
+  }
+
+  toJSON() {
+    const json = { name: this.name, value: this.value };
+    if (this.domain !== null) json.domain = this.domain;
+    json.path = this.path;
+    if (this.expires !== null) json.expires = this.expires.toISOString();
+    if (this.maxAge != null) json.maxAge = this.maxAge;
+    json.secure = this.secure;
+    json.sameSite = this.sameSite;
+    json.httpOnly = this.httpOnly;
+    json.partitioned = this.partitioned;
+    return json;
+  }
+}
+
+// The name → value pairs of a `Cookie` request header. What is malformed is
+// skipped, and the first of a duplicated name wins: browsers send the most
+// specific cookie first (RFC 6265 §5.4).
+function parseCookieHeader(header, into) {
+  for (const part of String(header).split(";")) {
+    const equals = part.indexOf("=");
+    if (equals === -1) continue;
+    const name = part.slice(0, equals).trim();
+    if (name === "" || into.has(name)) continue;
+    into.set(name, decodeCookieValue(part.slice(equals + 1).trim()));
+  }
+}
+
+class CookieMap {
+  #values = new Map();
+  // One `Set-Cookie` per name, the last change made to it.
+  #changes = new Map();
+
+  constructor(init) {
+    if (init == null) return;
+    if (typeof init === "string") {
+      parseCookieHeader(init, this.#values);
+    } else if (Array.isArray(init)) {
+      for (const [name, value] of init) this.#values.set(String(name), String(value));
+    } else if (typeof init === "object") {
+      for (const [name, value] of Object.entries(init)) this.#values.set(name, String(value));
+    } else {
+      throw new TypeError("CookieMap expects a cookie header string, an object, or pairs");
+    }
+  }
+
+  get size() {
+    return this.#values.size;
+  }
+
+  get(name) {
+    return this.#values.get(name) ?? null;
+  }
+
+  has(name) {
+    return this.#values.has(name);
+  }
+
+  // `set(name, value, options?)`, `set(init)` or `set(cookie)`. Serialized
+  // here, so a cookie a browser would reject throws at the line that made it.
+  set(nameOrCookie, value, options) {
+    const cookie =
+      nameOrCookie instanceof Cookie
+        ? nameOrCookie
+        : typeof nameOrCookie === "object" && nameOrCookie !== null
+          ? new Cookie(nameOrCookie)
+          : new Cookie(nameOrCookie, value, options);
+    const header = cookie.serialize();
+    this.#values.set(cookie.name, cookie.value);
+    this.#changes.delete(cookie.name);
+    this.#changes.set(cookie.name, header);
+  }
+
+  // `delete(name, options?)` or `delete({ name, … })`. The cookie is expired
+  // with the `path` and `domain` it was set with, which is what makes a
+  // browser drop it. A `__Host-`/`__Secure-` cookie is deleted with
+  // `secure: true`, since the browser ignores anything else for it.
+  delete(nameOrOptions, options) {
+    const init =
+      typeof nameOrOptions === "object" && nameOrOptions !== null
+        ? { ...nameOrOptions }
+        : { ...options, name: nameOrOptions };
+    const cookie = new Cookie({
+      name: init.name,
+      value: "",
+      domain: init.domain,
+      path: init.path,
+      secure: init.secure,
+      partitioned: init.partitioned,
+      sameSite: init.sameSite,
+      expires: EPOCH,
+    });
+    const header = cookie.serialize();
+    this.#values.delete(cookie.name);
+    this.#changes.delete(cookie.name);
+    this.#changes.set(cookie.name, header);
+  }
+
+  // What changed, as `Set-Cookie` header values. `serve()` sends these itself
+  // for `request.cookies`; this is for building a response any other way.
+  toSetCookieHeaders() {
+    return [...this.#changes.values()];
+  }
+
+  toJSON() {
+    return Object.fromEntries(this.#values);
+  }
+
+  entries() {
+    return this.#values.entries();
+  }
+
+  keys() {
+    return this.#values.keys();
+  }
+
+  values() {
+    return this.#values.values();
+  }
+
+  forEach(callback, thisArg) {
+    for (const [name, value] of this.#values) callback.call(thisArg, value, name, this);
+  }
+
+  [Symbol.iterator]() {
+    return this.#values.entries();
+  }
+}
+
+// `request.cookies` on a request `serve()` hands out: parsed on first read,
+// and its changes sent with the response (D144). The map is kept here rather
+// than on the request, so the handler can reach it only through the getter.
+function attachCookies(request) {
+  const holder = { map: null };
+  Object.defineProperty(request, "cookies", {
+    get() {
+      holder.map ??= new CookieMap(request.headers.get("cookie") ?? "");
+      return holder.map;
+    },
+    enumerable: false,
+    configurable: false,
+  });
+  return holder;
+}
+
 function serve(options, handler) {
   if (typeof options === "function") {
     handler = options;
@@ -723,5 +1062,5 @@ function serve(options, handler) {
   );
 }
 
-export { serve, withTrailers, trailersOf };
-export default { serve, withTrailers, trailersOf };
+export { serve, withTrailers, trailersOf, Cookie, CookieMap };
+export default { serve, withTrailers, trailersOf, Cookie, CookieMap };

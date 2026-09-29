@@ -19,9 +19,108 @@ declare module "runtime:http" {
    * optional to take — a one-parameter handler is unaffected.
    */
   export type Handler = (
-    request: Request,
+    request: ServerRequest,
     info: ConnectionInfo,
   ) => Response | Promise<Response>;
+
+  /** The `Request` a handler is given, with its cookies (D144). */
+  export interface ServerRequest extends Request {
+    /**
+     * The request's `Cookie` header as a {@link CookieMap}, parsed on first
+     * read. Every `set` and `delete` on it is sent with the response as a
+     * `Set-Cookie` header, beside the response's own.
+     */
+    readonly cookies: CookieMap;
+  }
+
+  /** A cookie's attributes, as `Cookie` and `CookieMap.set` take them. */
+  export interface CookieInit {
+    name?: string;
+    value?: string;
+    /** Hosts the cookie is sent to. Default: the host that set it. */
+    domain?: string | null;
+    /** Default: `"/"`. */
+    path?: string;
+    /** A `Date`, or milliseconds since the epoch. */
+    expires?: Date | number | string | null;
+    /** Seconds until it expires; `0` or less expires it now. An integer. */
+    maxAge?: number | null;
+    secure?: boolean;
+    httpOnly?: boolean;
+    /** Default: `"lax"`. Any letter case. `"none"` requires `secure`. */
+    sameSite?: "strict" | "lax" | "none" | "Strict" | "Lax" | "None";
+    /** CHIPS partitioning. Requires `secure`. */
+    partitioned?: boolean;
+  }
+
+  /** What `CookieMap.delete` needs to match the cookie being deleted. */
+  export interface CookieStoreDeleteOptions {
+    name: string;
+    domain?: string | null;
+    path?: string;
+    /** Required to delete a `__Host-` or `__Secure-` cookie. */
+    secure?: boolean;
+    partitioned?: boolean;
+  }
+
+  /**
+   * One cookie — Bun's `Bun.Cookie` (D144). `serialize()` throws a `TypeError`
+   * for a cookie a browser would discard: a `__Host-`/`__Secure-` cookie
+   * breaking its prefix rules, `SameSite=None` or `Partitioned` without
+   * `Secure`, a non-integer `maxAge`, an invalid name, domain or path.
+   */
+  export class Cookie {
+    /** A `Set-Cookie` header value. */
+    constructor(cookieString: string);
+    constructor(init: CookieInit & { name: string });
+    constructor(name: string, value: string, options?: CookieInit);
+    /** Parses a `Set-Cookie` header value. The value is percent-decoded. */
+    static parse(cookieString: string): Cookie;
+    static from(name: string, value: string, options?: CookieInit): Cookie;
+    name: string;
+    value: string;
+    domain: string | null;
+    path: string;
+    expires: Date | null;
+    maxAge: number | null;
+    secure: boolean;
+    httpOnly: boolean;
+    sameSite: "strict" | "lax" | "none";
+    partitioned: boolean;
+    /** Whether it has expired; `maxAge` decides when there is one. */
+    isExpired(): boolean;
+    /** The `Set-Cookie` header value, with the value percent-encoded. */
+    serialize(): string;
+    toString(): string;
+    toJSON(): CookieInit & { name: string; value: string; path: string };
+  }
+
+  /**
+   * The cookies of a request, by name — Bun's `Bun.CookieMap` (D144). Parsing
+   * is lenient: malformed pairs are skipped, the first of a duplicated name
+   * wins, and values are percent-decoded. Every `set` and `delete` is recorded
+   * as a `Set-Cookie` header.
+   */
+  export class CookieMap implements Iterable<[string, string]> {
+    /** A `Cookie` header value, an object of name → value, or pairs. */
+    constructor(init?: string | Record<string, string> | ReadonlyArray<readonly [string, string]>);
+    readonly size: number;
+    get(name: string): string | null;
+    has(name: string): boolean;
+    set(name: string, value: string, options?: CookieInit): void;
+    set(init: CookieInit & { name: string; value: string }): void;
+    set(cookie: Cookie): void;
+    delete(name: string, options?: Omit<CookieStoreDeleteOptions, "name">): void;
+    delete(options: CookieStoreDeleteOptions): void;
+    /** What changed, as `Set-Cookie` header values. */
+    toSetCookieHeaders(): string[];
+    toJSON(): Record<string, string>;
+    entries(): MapIterator<[string, string]>;
+    keys(): MapIterator<string>;
+    values(): MapIterator<string>;
+    forEach(callback: (value: string, name: string, map: CookieMap) => void, thisArg?: unknown): void;
+    [Symbol.iterator](): MapIterator<[string, string]>;
+  }
 
   /** What the handler is told about the connection a request arrived on. */
   export interface ConnectionInfo {
@@ -268,6 +367,8 @@ declare module "runtime:http" {
     serve: typeof serve;
     withTrailers: typeof withTrailers;
     trailersOf: typeof trailersOf;
+    Cookie: typeof Cookie;
+    CookieMap: typeof CookieMap;
   };
   export default http;
 }

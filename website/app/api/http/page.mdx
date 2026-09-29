@@ -26,7 +26,7 @@ An HTTP/1.1 and HTTP/2 server: `serve((request) => response)`. The handler takes
 ## Import
 
 ```js
-import { serve, trailersOf, withTrailers } from "runtime:http";
+import { serve, trailersOf, withTrailers, Cookie, CookieMap } from "runtime:http";
 ```
 
 ## Functions
@@ -231,6 +231,52 @@ await server.stop();                    // stop accepting; finished resolves
 | `finished` | `Promise<void>` | Resolves when the accept loop has ended (after `stop()`). |
 | `stop()` | `Promise<void>` | Stop accepting and shut down; resolves once stopped. |
 
+## Cookies
+
+```js
+import { serve } from "runtime:http";
+
+serve((req) => {
+  const session = req.cookies.get("session");        // null when absent
+  req.cookies.set("visited", "yes", { httpOnly: true });
+  req.cookies.delete("legacy");
+  return new Response(session ? "welcome back" : "hello");
+});
+```
+
+`request.cookies` is a `CookieMap` of the request's `Cookie` header. Anything
+you `set` or `delete` on it is sent as a `Set-Cookie` header with whatever
+`Response` you return. Outside a handler, build `Cookie` and `CookieMap`
+yourself and use `toSetCookieHeaders()`. The API follows Bun's.
+
+| Member | Description |
+| --- | --- |
+| `new Cookie(name, value, options?)`, `new Cookie(init)`, `new Cookie(setCookieString)` | One cookie. `options`: `domain`, `path` (default `"/"`), `expires` (`Date` or ms), `maxAge` (integer seconds), `secure`, `httpOnly`, `sameSite` (`"strict" \| "lax" \| "none"`, any case, default `"lax"`), `partitioned`. |
+| `Cookie.parse(text)`, `Cookie.from(name, value, options?)` | From a `Set-Cookie` value (percent-decoded), or from parts. |
+| `cookie.serialize()` / `toString()` | The `Set-Cookie` value, with the value percent-encoded. |
+| `cookie.isExpired()`, `cookie.toJSON()` | `maxAge` decides expiry when there is one. |
+| `new CookieMap(init?)` | From a `Cookie` header string, an object, or `[name, value]` pairs. Malformed pairs are skipped, the **first** of a duplicated name wins, and values are percent-decoded. |
+| `get`, `has`, `size`, `entries`, `keys`, `values`, `forEach`, iteration | Read the cookies by name. `get` returns `null` when absent. |
+| `set(name, value, options?)`, `set(init)`, `set(cookie)` | Record a cookie to send. |
+| `delete(name, options?)`, `delete({ name, path?, domain?, secure?, partitioned? })` | Record an expired cookie with that `path` and `domain`. A `__Host-`/`__Secure-` cookie needs `secure: true`. |
+| `toSetCookieHeaders()` | What changed, as `Set-Cookie` values. |
+
+**A cookie a browser would discard throws a `TypeError` naming the rule.** This
+happens when it is serialized or recorded with `set`/`delete`, and covers:
+
+- a name that is not a token;
+- a non-integer `maxAge`, or an invalid `expires`;
+- `;` or a control character in `domain` or `path`;
+- `SameSite=None` or `Partitioned` without `Secure`;
+- a `__Secure-` cookie without `Secure`;
+- a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`.
+
+Bun emits these cookies anyway, and the browser drops them without an error.
+
+In a handler, `request.cookies` is a `CookieMap` of the request's cookies, parsed
+on first read. Its `set` and `delete` calls are sent with the response as
+`Set-Cookie` headers, next to the response's own.
+
 ## Errors
 
 | Error | When |
@@ -238,6 +284,8 @@ await server.stop();                    // stop accepting; finished resolves
 | `TypeError` | The `serve()` handler isn't a function; `secureTransport` is `"on"` without both `cert` and `key`, or is a value other than `"on"`/`"off"`; or a `Request` / `Response` is built with an invalid init (the Fetch API's own checks). |
 | `Error` | code `"ERR_TLS"` — the `cert` or `key` could not be parsed. Raised by `serve()` itself, so a bad cert never becomes a port that rejects every handshake. |
 | `DOMException` | name `"NotAllowedError"` — the NetListen capability is not granted. |
+| `TypeError` | A `Cookie` a browser would discard, when serialized or recorded with `CookieMap.set`/`delete` (see [Cookies](#cookies)); a cookie name that is not a token. |
+| `RangeError` | A cookie `expires` that is not a valid date. |
 
 ## See also
 

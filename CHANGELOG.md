@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Cookies in `runtime:http`** (DECISIONS D144): `Cookie` and `CookieMap`,
+  following Bun's, and `request.cookies` in `serve()`, whose `set` and `delete`
+  calls are sent with the response. Parsing is lenient: the first of a
+  duplicated name wins and values are decoded. Serializing refuses every cookie
+  a browser would silently discard: a `__Host-`/`__Secure-` cookie breaking its
+  rules, `SameSite=None` or `Partitioned` without `Secure`, or a non-integer
+  `maxAge`. Output is checked against Bun's, and the deliberate differences are
+  listed in D144.
+
 - **Standard input** (DECISIONS D143). `stdin` in `runtime:process` has
   `readable`, `lines()`, `question(query)`, `isTTY` and `setRawMode(on)`, and
   the web's `prompt()`, `confirm()` and `alert()` are globals. All of them read
