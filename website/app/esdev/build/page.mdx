@@ -113,6 +113,10 @@ Source maps are off unless asked. The available forms are:
 | `--sourcemap=hidden` | Written, with nothing pointing at it — useful for an error reporter |
 | `"sourcemap": true` | The same setting per target in `esdev.json`; `"inline"`, `"hidden"` and `false` are also supported |
 
+A map's `sources` are relative to the map, so a deployment can be copied
+anywhere with its sources and still resolve them. The map names nothing about
+the machine that built it.
+
 `esrun` remaps printed stack traces through the map, while `error.stack` inside
 the program remains the engine's original value.
 

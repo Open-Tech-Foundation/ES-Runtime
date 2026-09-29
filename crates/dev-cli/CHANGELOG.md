@@ -51,6 +51,12 @@ is the point, since none of the three has any business in a deployment.
 - `esdev start` now reports accurately when a rebuild fails: its separate dev
   output may contain files from the failed build, while the deployment output
   stays untouched.
+- **Source maps no longer name the machine that built them.** `sources` were
+  absolute paths, so every deployed `.map` carried the build machine's
+  directory layout (a CI runner's home directory, say). They are now relative
+  to where the map is committed — not to the staging directory the build wrote
+  it in — which is also what lets a deployment move and keep its mapping
+  (DECISIONS D141, amending D86).
 - An import that names a directory with no index module is refused by the
   specifier as written, with `ERR_IS_DIRECTORY`, instead of by the absolute
   `file://` URL it resolved to (DECISIONS D141).

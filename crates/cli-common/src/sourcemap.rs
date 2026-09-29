@@ -120,7 +120,7 @@ fn map_for(file: &Path) -> Option<Arc<SourceMap>> {
         return known.clone();
     }
     let found = read_map(file)
-        .and_then(|text| SourceMap::parse(&text))
+        .and_then(|(text, home)| SourceMap::parse(&text, &home))
         .map(Arc::new);
     held.insert(file.to_path_buf(), found.clone());
     found
@@ -137,7 +137,7 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Option<Arc<SourceMap>>>> {
 /// disk while describing the code that actually ran. It replaces whatever was
 /// found, or not found, for that file before.
 pub fn register(file: &Path, map_json: &str) {
-    let Some(map) = SourceMap::parse(map_json) else {
+    let Some(map) = SourceMap::parse(map_json, &home_of(file)) else {
         return;
     };
     if let Ok(mut held) = cache().lock() {
@@ -145,14 +145,21 @@ pub fn register(file: &Path, map_json: &str) {
     }
 }
 
-/// The map's JSON, from beside the file or from inside it.
-fn read_map(file: &Path) -> Option<String> {
+/// The directory a file is in — where the `sources` of a map beside it or
+/// inside it are resolved from.
+fn home_of(file: &Path) -> PathBuf {
+    file.parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// The map's JSON, from beside the file or from inside it, and the directory
+/// its relative `sources` resolve against.
+fn read_map(file: &Path) -> Option<(String, PathBuf)> {
     let beside = file.with_extension(format!(
         "{}.map",
         file.extension().and_then(|e| e.to_str()).unwrap_or("js")
     ));
     if let Ok(text) = std::fs::read_to_string(&beside) {
-        return Some(text);
+        return Some((text, home_of(file)));
     }
     // An inline map, which is what a dev build writes. The whole file is read
     // because the marker is at the end and the payload runs back from it — and
@@ -178,12 +185,13 @@ fn read_map(file: &Path) -> Option<String> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(payload)
             .ok()?;
-        return String::from_utf8(bytes).ok();
+        return Some((String::from_utf8(bytes).ok()?, home_of(file)));
     }
     // A named map beside the file, when it is not called what this looked for
     // first.
     let named = file.parent()?.join(url);
-    std::fs::read_to_string(named).ok()
+    let text = std::fs::read_to_string(&named).ok()?;
+    Some((text, home_of(&named)))
 }
 
 /// One source map: the files it names, and its segments by generated line.
@@ -196,7 +204,10 @@ struct SourceMap {
 }
 
 impl SourceMap {
-    fn parse(text: &str) -> Option<SourceMap> {
+    /// Parses a map that lives in `home`, which is what a relative source is
+    /// relative to — the form `esdev build` writes, because an absolute one
+    /// names the machine the build ran on (D141).
+    fn parse(text: &str, home: &Path) -> Option<SourceMap> {
         let json: serde_json::Value = serde_json::from_str(text).ok()?;
         let sources = json
             .get("sources")?
@@ -217,6 +228,7 @@ impl SourceMap {
                 root if root.ends_with('/') => format!("{root}{source}"),
                 root => format!("{root}/{source}"),
             })
+            .map(|source| resolve(home, &source))
             .collect();
         let mappings = json.get("mappings")?.as_str()?;
         Some(SourceMap {
@@ -245,6 +257,26 @@ impl SourceMap {
             source_column + 1,
         ))
     }
+}
+
+/// A `sources` entry as a path: an absolute one as it is, a relative one joined
+/// onto `home` with `.` and `..` folded. A URL (`webpack://…`) is left alone —
+/// it is a name, not a location.
+fn resolve(home: &Path, source: &str) -> String {
+    if source.contains("://") || Path::new(source).is_absolute() {
+        return source.to_string();
+    }
+    let mut out = home.to_path_buf();
+    for part in source.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            part => out.push(part),
+        }
+    }
+    out.to_string_lossy().into_owned()
 }
 
 /// The `mappings` field: `;` between generated lines, `,` between segments,
@@ -331,8 +363,11 @@ mod tests {
     /// The map for `const x = 1;` on the second generated line coming from the
     /// fifth line of `src/a.ts`, hand-encoded.
     fn map() -> SourceMap {
-        SourceMap::parse(r#"{"version":3,"sources":["/p/src/a.ts"],"mappings":";AAIA,CAAC"}"#)
-            .expect("a map")
+        SourceMap::parse(
+            r#"{"version":3,"sources":["/p/src/a.ts"],"mappings":";AAIA,CAAC"}"#,
+            Path::new("/elsewhere"),
+        )
+        .expect("a map")
     }
 
     #[test]
@@ -350,6 +385,29 @@ mod tests {
         assert_eq!(map.lookup(1, 1), None);
         // Past the end of the map.
         assert_eq!(map.lookup(99, 1), None);
+    }
+
+    /// A relative source — what `esdev build` writes — is found from where the
+    /// map is, so a deployment that moved is still mapped; an absolute one and
+    /// a URL are taken as they are.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_source_resolves_from_the_map() {
+        let map = SourceMap::parse(
+            r#"{"version":3,"sources":["../src/a.ts"],"mappings":";AAIA"}"#,
+            Path::new("/srv/app/dist"),
+        )
+        .expect("a map");
+        assert_eq!(map.lookup(2, 1), Some(("/srv/app/src/a.ts", 5, 1)));
+        assert_eq!(resolve(Path::new("/x"), "/abs/a.ts"), "/abs/a.ts");
+        assert_eq!(
+            resolve(Path::new("/x"), "webpack://app/a.ts"),
+            "webpack://app/a.ts"
+        );
+        assert_eq!(
+            resolve(Path::new("/x/dist"), "./../src/./a.ts"),
+            "/x/src/a.ts"
+        );
     }
 
     #[test]
@@ -379,8 +437,9 @@ mod tests {
         )
         .expect("write");
 
-        let read = read_map(&file).expect("a map");
+        let (read, home) = read_map(&file).expect("a map");
         assert!(read.contains("/p/src/a.ts"), "{read}");
+        assert_eq!(home, dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

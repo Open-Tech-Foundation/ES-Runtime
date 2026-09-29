@@ -70,6 +70,10 @@ namespace) is unstable and may change between minor releases until the API freez
   on `import.meta.resolve`'s `TypeError`. `path::canonicalize_checked` is
   removed from `es-runtime-default-providers`; its message printed the path.
 
+- **Stack traces are remapped through relative `sources` too.** A map whose
+  sources are relative — what `esdev build` now writes — is resolved from the
+  map's own directory, so a deployment that moved is still mapped (D141).
+
 ## [0.33.0] - 2026-09-25
 
 ### Added

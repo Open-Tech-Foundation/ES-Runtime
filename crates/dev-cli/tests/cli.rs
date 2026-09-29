@@ -1661,15 +1661,19 @@ fn a_source_map_puts_a_stack_trace_back_in_the_source() {
             .expect("read the bundle")
             .contains("//# sourceMappingURL=app.js.map")
     );
-    // Absolute, and naming the real source rather than a path relative to the
-    // staging directory the build wrote it in and then moved out of.
+    // Relative to where the map ended up — not to the staging directory the
+    // build wrote it in and moved out of — and naming nothing about the
+    // machine that built it (D141).
     let sources: serde_json::Value = serde_json::from_str(&map).expect("valid JSON");
     let first = sources["sources"][0].as_str().expect("a source");
-    assert!(first.ends_with("src/util.ts"), "{first}");
+    assert_eq!(first, "../src/util.ts", "{map}");
     assert!(
-        std::path::Path::new(first).is_file(),
+        dir.join("dist").join(first).is_file(),
         "the map names a file that is not there: {first}"
     );
+    let built_in = std::fs::canonicalize(&dir).expect("canonical build dir");
+    assert!(!map.contains(built_in.to_str().expect("utf-8")), "{map}");
+    assert!(!map.contains(".esdev-build-"), "{map}");
 
     // The half only the runtime can do.
     let Some(esrun) = sibling_binary("esrun") else {
@@ -1691,6 +1695,26 @@ fn a_source_map_puts_a_stack_trace_back_in_the_source() {
     assert!(
         !trace.contains("dist/app.js:"),
         "still the bundle:\n{trace}"
+    );
+
+    // Deployed somewhere else, the map still finds its sources: they are
+    // relative to it, so they move with it.
+    let moved = dir.with_file_name(format!(
+        "{}-moved",
+        dir.file_name().and_then(|n| n.to_str()).expect("a name")
+    ));
+    let _ = std::fs::remove_dir_all(&moved);
+    std::fs::rename(&dir, &moved).expect("move the deployment");
+    let ran = Command::new(sibling_binary("esrun").expect("found above"))
+        .current_dir(&moved)
+        .arg("dist/app.js")
+        .output()
+        .expect("spawn esrun");
+    let trace = stderr(&ran);
+    let _ = std::fs::remove_dir_all(&moved);
+    assert!(
+        trace.contains("-moved/src/util.ts:2:"),
+        "unmapped after moving:\n{trace}"
     );
 }
 

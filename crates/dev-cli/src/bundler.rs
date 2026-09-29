@@ -355,13 +355,6 @@ impl OutputOptions {
     }
 }
 
-/// One `sources` entry, resolved against the map that carries it.
-///
-/// `.` and `..` are folded rather than left in the path: `dist/../src/app.ts`
-/// is the same file as `src/app.ts` and only one of them is a name a person
-/// wants to read in a stack trace. Nothing is canonicalized — a symlinked source
-/// directory should keep the name the developer knows it by, and the file may
-/// not even be there any more when the map is read.
 /// The bundler's JSX options: the project's settings, plus the registrations a
 /// refresh scheme asked for. `None` when neither has anything to say, which
 /// leaves the default path exactly as it was.
@@ -397,6 +390,13 @@ fn jsx_transform(
     })
 }
 
+/// One `sources` entry, resolved against the map that carries it.
+///
+/// `.` and `..` are folded rather than left in the path: `dist/../src/app.ts`
+/// is the same file as `src/app.ts` and only one of them is a name a person
+/// wants to read in a stack trace. Nothing is canonicalized — a symlinked source
+/// directory should keep the name the developer knows it by, and the file may
+/// not even be there any more when the map is read.
 fn absolute_source(source: &str, map: &str) -> String {
     let source = PathBuf::from(source);
     if source.is_absolute() {
@@ -415,6 +415,60 @@ fn absolute_source(source: &str, map: &str) -> String {
         }
     }
     resolved.to_string_lossy().into_owned()
+}
+
+/// One `sources` entry as it is published: **relative to where the map will
+/// finally sit**, `/`-separated.
+///
+/// Relative because that is what the source map format resolves against, and
+/// because an absolute path names the machine the build ran on: every deployed
+/// `.map`, and every stack trace remapped through one, would carry the CI
+/// runner's home directory (D141). Relative to the *final* location because a
+/// build writes into a staging directory and moves out of it (D78): the map is
+/// written inside `.esdev-build-*`, and the one component with that prefix is
+/// dropped to find where it is going. A path relative to the staging directory
+/// would be wrong a moment after it was written.
+///
+/// A source that cannot be reached relatively — another drive on Windows —
+/// stays absolute rather than being made up.
+fn published_source(source: &str, map: &str) -> String {
+    let absolute = PathBuf::from(absolute_source(source, map));
+    let home: PathBuf = Path::new(map)
+        .parent()
+        .map(|dir| {
+            dir.components()
+                .filter(|part| {
+                    !part
+                        .as_os_str()
+                        .to_string_lossy()
+                        .starts_with(crate::staging::PREFIX)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    relative_to(&home, &absolute)
+        .unwrap_or(absolute)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// `to` as a path from the directory `from`, or `None` when the two share no
+/// root to climb to.
+fn relative_to(from: &Path, to: &Path) -> Option<PathBuf> {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    if common == 0 {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for _ in common..from.len() {
+        out.push("..");
+    }
+    for part in &to[common..] {
+        out.push(part);
+    }
+    Some(out)
 }
 
 /// Translates a build into the bundler's own options. The only such
@@ -511,22 +565,14 @@ pub fn translate(
             Some("external" | "true") => Some(SourceMapType::File),
             _ => None,
         },
-        // **Absolute, and this is a correctness fix rather than a preference.**
-        // A map's `sources` are written relative to where the map is, and every
-        // build here writes into a staging directory that is then *moved* into
-        // place (D78) — so a relative path correct at write time names a
-        // directory that no longer exists a moment later. The transform runs
-        // while the map is still staged, where joining the two is still right.
-        //
-        // It is also what makes a map useful to a stack trace: a frame carries
-        // an output path, and the answer wanted from it is a source file, not a
-        // path relative to a `.map` the reader would have to find first.
+        // Relative to where the map will be once the build is committed, not
+        // to the staging directory it is written in: see `published_source`.
         sourcemap_path_transform: output.sourcemap.as_deref().and_then(|kind| {
             (kind != "none").then(|| {
                 rolldown_common::SourceMapPathTransform::new(std::sync::Arc::new(
                     |source: &str, map: &str| {
-                        let absolute = absolute_source(source, map);
-                        Box::pin(async move { Ok(absolute) })
+                        let published = published_source(source, map);
+                        Box::pin(async move { Ok(published) })
                             as Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send>>
                     },
                 ))
@@ -580,6 +626,35 @@ pub fn translate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A map's sources are published relative to where the map ends up: the
+    /// staging directory it was written in is not part of the answer, and
+    /// nothing about the build machine is (D141).
+    #[cfg(unix)]
+    #[test]
+    fn map_sources_are_relative_to_the_committed_map() {
+        let staged = "/work/app/.esdev-build-41-0/dist/app.js.map";
+        // Absolute, as the bundler hands them over.
+        assert_eq!(
+            published_source("/work/app/src/util.ts", staged),
+            "../src/util.ts"
+        );
+        // Relative to the staged map, as it may also hand them over.
+        assert_eq!(
+            published_source("../../src/util.ts", staged),
+            "../src/util.ts"
+        );
+        // A dev build writes in place, and gets the same answer.
+        assert_eq!(
+            published_source("/work/app/src/util.ts", "/work/app/dist/app.js.map"),
+            "../src/util.ts"
+        );
+        // A dependency is found the same way.
+        assert_eq!(
+            published_source("/work/app/node_modules/x/index.js", staged),
+            "../node_modules/x/index.js"
+        );
+    }
 
     fn one(target: Target) -> Options {
         Options {
