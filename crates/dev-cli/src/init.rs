@@ -185,11 +185,13 @@ fn init_new(config: &InitConfig, target: &Path) -> Result<String, String> {
                     name: "js",
                     label: "JavaScript",
                     description: "",
+                    disabled: false,
                 },
                 crate::prompt::Choice {
                     name: "ts",
                     label: "TypeScript",
                     description: "",
+                    disabled: false,
                 },
             ];
             match crate::prompt::select("Language?", &choices, None, crate::prompt::OnEsc::Cancel) {

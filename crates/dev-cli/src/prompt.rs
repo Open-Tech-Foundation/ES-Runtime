@@ -76,6 +76,10 @@ pub struct Choice<'a> {
     pub label: &'a str,
     /// One line, for somebody choosing.
     pub description: &'a str,
+    /// Shown but not choosable — e.g. a package manager that is not installed.
+    /// Arrow keys skip it, Enter on it does nothing, and typed answers naming
+    /// it are re-asked rather than taken.
+    pub disabled: bool,
 }
 
 /// What Esc means in a [`select`]. The key always ends the question with no
@@ -98,6 +102,9 @@ pub enum OnEsc {
 /// cursor starts on the first one, and choosing still means pressing enter on
 /// it. `Some` marks the option and is what end of input resolves to.
 ///
+/// A default naming a disabled option falls back to the first enabled one, and
+/// a question with nothing enabled is a cancel without drawing anything.
+///
 /// End of input *is* the default: a closed stdin is not a decision, and looping
 /// on it would hang exactly where this is written not to. With no default it
 /// is a cancel instead, for the same reason.
@@ -107,10 +114,10 @@ pub fn select(
     default: Option<usize>,
     esc: OnEsc,
 ) -> Option<usize> {
-    if choices.is_empty() {
+    if choices.is_empty() || choices.iter().all(|choice| choice.disabled) {
         return None;
     }
-    let default = default.map(|default| default.min(choices.len() - 1));
+    let default = normalize_default(choices, default);
 
     // A terminal that will not go into raw mode is not a terminal this can draw
     // on, and the question still has to be asked. The fallback is the plain
@@ -122,6 +129,34 @@ pub fn select(
 
     answered(question, choices[chosen].label);
     Some(chosen)
+}
+
+/// The default with a disabled choice moved to the first enabled one, or `None`
+/// when the question names no default. Pure, so the fallback tests directly.
+fn normalize_default(choices: &[Choice<'_>], default: Option<usize>) -> Option<usize> {
+    let default = default.map(|default| default.min(choices.len() - 1));
+    match default {
+        Some(index) if !choices[index].disabled => Some(index),
+        _ => choices.iter().position(|choice| !choice.disabled),
+    }
+}
+
+/// The next enabled option from `cursor` in `direction` (+1 down, -1 up),
+/// wrapping. `None` when nothing is enabled — the caller then has nothing to
+/// move to.
+fn step_enabled(choices: &[Choice<'_>], cursor: usize, direction: isize) -> Option<usize> {
+    if choices.iter().all(|choice| choice.disabled) {
+        return None;
+    }
+    let len = choices.len();
+    let mut next = cursor;
+    for _ in 0..len {
+        next = (next as isize + direction).rem_euclid(len as isize) as usize;
+        if !choices[next].disabled {
+            return Some(next);
+        }
+    }
+    None
 }
 
 /// The menu, drawn and driven. `Err` means the terminal would not cooperate.
@@ -150,7 +185,12 @@ fn menu(
     terminal.hide_cursor()?;
 
     let colour = colour();
-    let mut cursor = default.unwrap_or(0);
+    // A `None` default still starts somewhere: the first thing that can be
+    // chosen. `select` guarantees at least one enabled choice above.
+    let mut cursor = default
+        .filter(|index| !choices[*index].disabled)
+        .or_else(|| choices.iter().position(|choice| !choice.disabled))
+        .unwrap_or(0);
     let mut origin = Position::ORIGIN;
     let last = choices.len() - 1;
 
@@ -173,23 +213,44 @@ fn menu(
         match key.code {
             // Wrapping, because a list this short has no scrollback to get lost
             // in and stopping at the end is one keystroke of nothing happening.
+            // Disabled entries are skipped, so choosing means landing on one
+            // that can be taken.
             KeyCode::Up | KeyCode::Char('k') => {
-                cursor = if cursor == 0 { last } else { cursor - 1 }
+                if let Some(next) = step_enabled(choices, cursor, -1) {
+                    cursor = next;
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                cursor = if cursor == last { 0 } else { cursor + 1 }
+                if let Some(next) = step_enabled(choices, cursor, 1) {
+                    cursor = next;
+                }
             }
-            KeyCode::Home => cursor = 0,
-            KeyCode::End => cursor = last,
+            KeyCode::Home => {
+                if let Some(first) = choices.iter().position(|choice| !choice.disabled) {
+                    cursor = first;
+                }
+            }
+            KeyCode::End => {
+                if let Some(last) = choices.iter().rposition(|choice| !choice.disabled) {
+                    cursor = last;
+                }
+            }
             // Somebody who already knows what they want should not have to
             // arrow to it. The digits are the same ones the list is numbered by.
+            // A digit naming a disabled entry stays where it is rather than
+            // moving somewhere that cannot be chosen.
             KeyCode::Char(digit @ '1'..='9') => {
                 let index = digit as usize - '1' as usize;
-                if index <= last {
+                if index <= last && !choices[index].disabled {
                     cursor = index;
                 }
             }
-            KeyCode::Enter => break Some(cursor),
+            // Enter on a disabled entry is not an answer: wait for one that is.
+            KeyCode::Enter => {
+                if !choices[cursor].disabled {
+                    break Some(cursor);
+                }
+            }
             KeyCode::Esc => break None,
             KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 break None;
@@ -239,11 +300,15 @@ fn render<'a>(
     ];
 
     for (index, choice) in choices.iter().enumerate() {
-        let selected = index == cursor;
+        let selected = index == cursor && !choice.disabled;
         // The marker carries the selection on its own, so a terminal with no
         // colour — or somebody who cannot tell cyan from white — still reads it.
+        // A disabled entry never takes the marker, even under the cursor: it
+        // cannot be chosen, so it must not read as the thing Enter would take.
         let marker = if selected { "❯ " } else { "  " };
-        let name = if selected {
+        let name = if choice.disabled {
+            dim
+        } else if selected {
             Style::new().add_modifier(Modifier::BOLD).patch(if colour {
                 accent
             } else {
@@ -259,7 +324,9 @@ fn render<'a>(
         if !choice.description.is_empty() {
             spans.push(Span::styled(format!("  {}", choice.description), dim));
         }
-        if Some(index) == default {
+        if choice.disabled {
+            spans.push(Span::styled("  (not available)", dim));
+        } else if Some(index) == default {
             spans.push(Span::styled("  (default)", dim));
         }
         lines.push(Line::from(spans));
@@ -307,11 +374,12 @@ fn numbered(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> O
     loop {
         eprintln!("\n{question}");
         for (index, choice) in choices.iter().enumerate() {
-            let marker = if Some(index) == default {
-                " (default)"
-            } else {
-                ""
-            };
+            let mut marker = String::new();
+            if choice.disabled {
+                marker.push_str(" (not available)");
+            } else if Some(index) == default {
+                marker.push_str(" (default)");
+            }
             let line = format!(
                 "  {}) {:width$}  {}{}",
                 index + 1,
@@ -337,13 +405,19 @@ fn numbered(question: &str, choices: &[Choice<'_>], default: Option<usize>) -> O
         if let Some(found) = resolve(choices, answer) {
             return Some(found);
         }
-        eprintln!("  `{answer}` is not one of them.");
+        if find(choices, answer).is_some() {
+            eprintln!("  `{answer}` is not available.");
+        } else {
+            eprintln!("  `{answer}` is not one of them.");
+        }
     }
 }
 
-/// One typed answer as an index: by number, by flag spelling, or by the label
-/// the menu showed — `spa`, `SPA` and `1` all reach the same starter.
-fn resolve(choices: &[Choice<'_>], answer: &str) -> Option<usize> {
+/// One typed answer as an index, wherever it sits: by number, by flag spelling,
+/// or by the label the menu showed — `spa`, `SPA` and `1` all reach the same
+/// starter. Disabled entries match here so the caller can tell "not available"
+/// from "not one of them"; [`resolve`] filters them back out.
+fn find(choices: &[Choice<'_>], answer: &str) -> Option<usize> {
     if let Ok(number) = answer.parse::<usize>()
         && (1..=choices.len()).contains(&number)
     {
@@ -352,6 +426,14 @@ fn resolve(choices: &[Choice<'_>], answer: &str) -> Option<usize> {
     choices.iter().position(|choice| {
         choice.name.eq_ignore_ascii_case(answer) || choice.label.eq_ignore_ascii_case(answer)
     })
+}
+
+/// One typed answer as an index: by number, by flag spelling, or by the label
+/// the menu showed — `spa`, `SPA` and `1` all reach the same starter.
+///
+/// A disabled entry never resolves: naming one is re-asked, not taken.
+fn resolve(choices: &[Choice<'_>], answer: &str) -> Option<usize> {
+    find(choices, answer).filter(|index| !choices[*index].disabled)
 }
 
 /// A free-text answer with a default, npm-init style.
@@ -401,11 +483,13 @@ mod tests {
                 name: "react",
                 label: "ReactJS",
                 description: "",
+                disabled: false,
             },
             Choice {
                 name: "api",
                 label: "API",
                 description: "",
+                disabled: false,
             },
         ];
         assert_eq!(resolve(&choices, "API"), Some(1));
@@ -426,11 +510,13 @@ mod tests {
                 name: "static",
                 label: "Static",
                 description: "no server",
+                disabled: false,
             },
             Choice {
                 name: "fullstack",
                 label: "FullStack",
                 description: "a server",
+                disabled: false,
             },
         ];
         let lines = render("Which Mode?", &choices, 1, Some(0), OnEsc::Cancel, false);
@@ -474,11 +560,13 @@ mod tests {
                 name: "spa",
                 label: "SPA",
                 description: "an app",
+                disabled: false,
             },
             Choice {
                 name: "docs",
                 label: "Docs",
                 description: "a site",
+                disabled: false,
             },
         ];
         let lines = render("Which Template?", &choices, 0, None, OnEsc::Back, false);
@@ -511,6 +599,7 @@ mod tests {
             name: "spa",
             label: "SPA",
             description: "an app",
+            disabled: false,
         }];
         let lines = render("Which Template?", &choices, 0, None, OnEsc::Cancel, false);
         let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
@@ -519,5 +608,144 @@ mod tests {
             text.iter().any(|line| line.contains("esc cancel")),
             "cancel is what Esc does here: {text:?}"
         );
+    }
+
+    /// A disabled entry is shown but cannot be taken: the typed answer does not
+    /// resolve, while the enabled neighbour still does by number, name and label.
+    #[test]
+    fn disabled_choices_do_not_resolve() {
+        let choices = [
+            Choice {
+                name: "npm",
+                label: "npm",
+                description: "installed",
+                disabled: false,
+            },
+            Choice {
+                name: "bun",
+                label: "bun",
+                description: "not installed",
+                disabled: true,
+            },
+        ];
+        assert_eq!(resolve(&choices, "npm"), Some(0));
+        assert_eq!(resolve(&choices, "1"), Some(0));
+        assert_eq!(resolve(&choices, "bun"), None);
+        assert_eq!(resolve(&choices, "2"), None);
+        // The name still matches, so the numbered fallback can tell "not
+        // available" from "not one of them".
+        assert_eq!(find(&choices, "bun"), Some(1));
+        assert_eq!(find(&choices, "svelte"), None);
+    }
+
+    /// A default naming a disabled entry moves to the first enabled one, so
+    /// Enter never lands somewhere that cannot be chosen.
+    #[test]
+    fn a_disabled_default_falls_back_to_the_first_enabled_choice() {
+        let choices = [
+            Choice {
+                name: "npm",
+                label: "npm",
+                description: "",
+                disabled: true,
+            },
+            Choice {
+                name: "bun",
+                label: "bun",
+                description: "",
+                disabled: false,
+            },
+        ];
+        assert_eq!(normalize_default(&choices, Some(0)), Some(1));
+        assert_eq!(normalize_default(&choices, Some(1)), Some(1));
+        assert_eq!(normalize_default(&choices, None), Some(1));
+    }
+
+    /// Arrow keys skip what cannot be chosen, wrapping past the ends.
+    #[test]
+    fn stepping_skips_disabled_choices() {
+        let choices = [
+            Choice {
+                name: "npm",
+                label: "npm",
+                description: "",
+                disabled: false,
+            },
+            Choice {
+                name: "bun",
+                label: "bun",
+                description: "",
+                disabled: true,
+            },
+            Choice {
+                name: "pnpm",
+                label: "pnpm",
+                description: "",
+                disabled: false,
+            },
+        ];
+        assert_eq!(step_enabled(&choices, 0, 1), Some(2));
+        assert_eq!(step_enabled(&choices, 2, 1), Some(0));
+        assert_eq!(step_enabled(&choices, 0, -1), Some(2));
+    }
+
+    /// The frame marks what cannot be chosen and never hands it the marker or
+    /// the default — Enter must read as taking something enabled.
+    #[test]
+    fn the_menu_marks_disabled_choices_as_not_available() {
+        let choices = [
+            Choice {
+                name: "npm",
+                label: "npm",
+                description: "installed",
+                disabled: false,
+            },
+            Choice {
+                name: "bun",
+                label: "bun",
+                description: "not installed",
+                disabled: true,
+            },
+        ];
+        let lines = render(
+            "Which Package Manager?",
+            &choices,
+            1,
+            Some(1),
+            OnEsc::Cancel,
+            false,
+        );
+        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+
+        let bun = text
+            .iter()
+            .find(|line| line.contains("bun"))
+            .expect("the disabled entry is drawn");
+        assert!(
+            bun.contains("(not available)"),
+            "a disabled entry says so: {text:?}"
+        );
+        assert!(
+            !bun.contains('❯'),
+            "a disabled entry never takes the marker: {text:?}"
+        );
+        assert!(
+            !bun.contains("(default)"),
+            "a disabled entry is never the default: {text:?}"
+        );
+    }
+
+    /// Nothing enabled is a cancel without drawing: there is nowhere to move.
+    #[test]
+    fn a_question_with_nothing_enabled_is_a_cancel() {
+        let choices = [Choice {
+            name: "npm",
+            label: "npm",
+            description: "",
+            disabled: true,
+        }];
+        assert_eq!(select("Which?", &choices, Some(0), OnEsc::Cancel), None);
+        assert_eq!(normalize_default(&choices, Some(0)), None);
+        assert_eq!(step_enabled(&choices, 0, 1), None);
     }
 }

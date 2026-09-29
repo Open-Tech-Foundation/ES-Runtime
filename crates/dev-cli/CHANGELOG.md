@@ -24,6 +24,14 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- `esdev create` marks installed package managers in the manager menu and
+  disables the rest, so the answer is always something the install step can
+  run. The install step is then a yes/no for exactly that manager instead of
+  the manager list repeated; a flag naming something not installed here still
+  falls back to listing what is.
+
 ### Fixed
 
 - `esdev start` now reports accurately when a rebuild fails: its separate dev

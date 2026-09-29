@@ -734,6 +734,7 @@ fn resolve_mode(template: &str, asked_for: Option<&str>, ask: Ask) -> Result<Mod
             name,
             label: display_name(name),
             description,
+            disabled: false,
         })
         .collect();
     match crate::prompt::select("Which Mode?", &choices, Some(0), ask.esc()) {
@@ -941,6 +942,7 @@ fn resolve_choice(
             name,
             label: display_name(name),
             description,
+            disabled: false,
         })
         .collect();
     // An axis with a real default starts the menu on it; one without starts
@@ -986,11 +988,13 @@ fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blo
             name: "Yes — add demo blog",
             label: "Yes — add demo blog",
             description: "Adds app/blog/, a sample post, and a Blog link in the navbar",
+            disabled: false,
         },
         crate::prompt::Choice {
             name: "No — docs only",
             label: "No — docs only",
             description: "Documentation pages without a blog section",
+            disabled: false,
         },
     ];
     let preselect = if DEFAULT_BLOG { 0 } else { 1 };
@@ -1050,9 +1054,11 @@ fn resolve_manager(asked_for: Option<&str>, ask: Ask) -> Result<ManagerChoice, S
 
 /// Which package manager, asked on a terminal.
 ///
-/// All four, not just the ones installed here: this answers which manager
-/// the *project* uses — what its docs name — and installing is a later,
-/// separate question that only offers what this machine has.
+/// What this machine has is marked and choosable; what it does not have is
+/// shown as not available and cannot be chosen, so the answer is always
+/// something the install step can actually run. When detection finds nothing
+/// at all the menu stays unrestricted — disabling everything would trap the
+/// run — and the install step skips itself as before.
 fn ask_manager(ask: Ask) -> Option<&'static str> {
     manager_menu(ask.esc())
 }
@@ -1063,26 +1069,76 @@ pub(crate) fn ask_manager_choice() -> Option<&'static str> {
     manager_menu(crate::prompt::OnEsc::Cancel)
 }
 
-fn manager_menu(esc: crate::prompt::OnEsc) -> Option<&'static str> {
-    let choices: Vec<crate::prompt::Choice<'_>> = crate::install::MANAGERS
+/// One row of the manager menu: the base description plus install status, and
+/// whether the row can be chosen. Pure over the detected set, so the status
+/// and the disabled rule test without touching the machine.
+struct ManagerEntry {
+    name: &'static str,
+    description: String,
+    disabled: bool,
+}
+
+/// The base line each manager is described with, before the install status.
+fn manager_base_description(name: &str) -> &'static str {
+    match name {
+        "npm" => "Node's own — already installed with Node",
+        "bun" => "Fast all-in-one toolchain",
+        "pnpm" => "Strict, disk-efficient installs",
+        "yarn" => "Classic alternative",
+        _ => "",
+    }
+}
+
+/// The manager menu's rows for what `available` holds. An empty detection
+/// leaves every row enabled rather than trapping the run with nothing to pick.
+fn manager_entries(available: &[crate::install::Manager]) -> Vec<ManagerEntry> {
+    let unrestricted = available.is_empty();
+    crate::install::MANAGERS
         .iter()
-        .map(|manager| crate::prompt::Choice {
-            name: manager.name,
-            label: manager.name,
-            description: match manager.name {
-                "npm" => "Node's own — already installed with Node",
-                "bun" => "Fast all-in-one toolchain",
-                "pnpm" => "Strict, disk-efficient installs",
-                "yarn" => "Classic alternative",
-                _ => "",
-            },
+        .map(|manager| {
+            let installed = available.contains(manager);
+            let description = if unrestricted {
+                manager_base_description(manager.name).to_string()
+            } else if installed {
+                format!("{} · installed", manager_base_description(manager.name))
+            } else {
+                format!("{} · not installed", manager_base_description(manager.name))
+            };
+            ManagerEntry {
+                name: manager.name,
+                description,
+                disabled: !unrestricted && !installed,
+            }
+        })
+        .collect()
+}
+
+/// Where the manager menu starts: the default when it can be chosen, else the
+/// first thing that can be. Pure, so the fallback tests directly.
+fn manager_preselect(entries: &[ManagerEntry], default: &str) -> Option<usize> {
+    entries
+        .iter()
+        .position(|entry| entry.name == default && !entry.disabled)
+        .or_else(|| entries.iter().position(|entry| !entry.disabled))
+}
+
+fn manager_menu(esc: crate::prompt::OnEsc) -> Option<&'static str> {
+    let available = crate::install::available();
+    let entries = manager_entries(&available);
+    let choices: Vec<crate::prompt::Choice<'_>> = entries
+        .iter()
+        .map(|entry| crate::prompt::Choice {
+            name: entry.name,
+            label: entry.name,
+            description: entry.description.as_str(),
+            disabled: entry.disabled,
         })
         .collect();
-    let preselect = choices
-        .iter()
-        .position(|choice| choice.name == DEFAULT_MANAGER);
-    crate::prompt::select("Which Package Manager?", &choices, preselect, esc)
-        .map(|chosen| choices[chosen].name)
+    let preselect = manager_preselect(&entries, DEFAULT_MANAGER);
+    let chosen = crate::prompt::select("Which Package Manager?", &choices, preselect, esc)?;
+    // Into `entries`, not `choices`: the name is `'static`, while `choices`
+    // borrows the owned descriptions beside them.
+    entries.get(chosen).map(|entry| entry.name)
 }
 
 /// The extra answers an OTF Web template resolved to. `None` fields are axes
@@ -1474,6 +1530,7 @@ fn ask_template() -> Option<String> {
             name,
             label: display_name(name),
             description,
+            disabled: false,
         })
         .collect();
     loop {
@@ -1488,6 +1545,7 @@ fn ask_template() -> Option<String> {
                 name,
                 label: display_name(name),
                 description,
+                disabled: false,
             })
             .collect();
         if let Some(chosen) = crate::prompt::select(
@@ -1503,9 +1561,12 @@ fn ask_template() -> Option<String> {
 
 /// Whether to install, and with what.
 ///
-/// Only what this machine actually has is offered: naming a package manager
-/// that is not installed is offering an error message. A preferred manager —
-/// the one the project just declared — starts selected when it is here.
+/// When the project already named a manager that is here, this is a yes/no
+/// for exactly that manager — the choice was made one question ago, and
+/// listing every installer again is what made the second question read as the
+/// first one repeated. Otherwise only what this machine actually has is
+/// offered, since naming a package manager that is not installed is offering
+/// an error message.
 pub(crate) fn ask_install(
     preferred: Option<crate::install::Manager>,
 ) -> Option<crate::install::Manager> {
@@ -1514,18 +1575,55 @@ pub(crate) fn ask_install(
         return None;
     }
 
+    // The common path out of `create`: the manager menu only lets somebody
+    // pick what is installed, so confirming here is confirming something that
+    // runs. A preferred manager that is not here — a flag, or `init`'s
+    // install-first order — falls through to the list below.
+    if let Some(wanted) = preferred
+        && install_confirms(Some(wanted), &available)
+    {
+        let question = format!("Install with {}?", wanted.name);
+        let confirm = format!("install now with {}", wanted.name);
+        let choices = [
+            crate::prompt::Choice {
+                name: wanted.name,
+                label: "Yes",
+                description: confirm.as_str(),
+                disabled: false,
+            },
+            crate::prompt::Choice {
+                name: "skip",
+                label: "No",
+                description: "write the files and stop",
+                disabled: false,
+            },
+        ];
+        // Esc lands on the same answer `No` does: the project is already on
+        // disk by now, and cancelling the *install* question is not cancelling
+        // the project. Either way the next steps say how to install it.
+        let chosen = crate::prompt::select(
+            question.as_str(),
+            &choices,
+            Some(0),
+            crate::prompt::OnEsc::Cancel,
+        )?;
+        return if chosen == 0 { Some(wanted) } else { None };
+    }
+
     let mut choices: Vec<crate::prompt::Choice<'_>> = available
         .iter()
         .map(|manager| crate::prompt::Choice {
             name: manager.name,
             label: manager.name,
             description: "",
+            disabled: false,
         })
         .collect();
     choices.push(crate::prompt::Choice {
         name: "skip",
         label: "Skip",
         description: "write the files and stop",
+        disabled: false,
     });
 
     // Esc lands on the same answer `skip` does: the project is already on disk
@@ -1541,6 +1639,16 @@ pub(crate) fn ask_install(
         crate::prompt::OnEsc::Cancel,
     )?;
     available.get(chosen).copied()
+}
+
+/// Whether the install step is a yes/no for the project's manager rather than
+/// a list of installers: exactly when that manager is here to run. Pure, so
+/// the two paths test without touching the machine.
+fn install_confirms(
+    preferred: Option<crate::install::Manager>,
+    available: &[crate::install::Manager],
+) -> bool {
+    preferred.is_some_and(|wanted| available.contains(&wanted))
 }
 
 const REGISTRY_PREFIX: &str = "{{registry:";
@@ -2052,6 +2160,67 @@ mod tests {
             resolve_manager(None, SCRIPTED),
             Ok(ManagerChoice::Chosen(manager)) if manager == "npm"
         ));
+    }
+
+    /// The menu marks what the machine has and disables the rest, so the
+    /// answer is always something the install step can run. A flag still names
+    /// anything known — the detection only narrows the interactive menu.
+    #[test]
+    fn the_manager_menu_disables_what_is_not_installed() {
+        use crate::install::MANAGERS;
+        let npm = MANAGERS.iter().find(|m| m.name == "npm").copied().unwrap();
+        let entries = manager_entries(&[npm]);
+        assert_eq!(entries.len(), MANAGERS.len());
+        let npm_entry = entries.iter().find(|e| e.name == "npm").unwrap();
+        assert!(!npm_entry.disabled);
+        assert!(npm_entry.description.contains("installed"));
+        assert!(!npm_entry.description.contains("not installed"));
+        for name in ["bun", "pnpm", "yarn"] {
+            let entry = entries.iter().find(|e| e.name == name).unwrap();
+            assert!(entry.disabled, "{name} is not here, so it cannot be picked");
+            assert!(
+                entry.description.contains("not installed"),
+                "{name} says why it cannot be picked: {}",
+                entry.description
+            );
+        }
+        // Nothing detected leaves every row enabled rather than trapping the
+        // run with nothing to pick.
+        for entry in manager_entries(&[]) {
+            assert!(!entry.disabled, "{} stays pickable", entry.name);
+        }
+    }
+
+    /// The menu starts on the default when it can be chosen, else on the first
+    /// thing that can be.
+    #[test]
+    fn the_manager_menu_starts_on_something_choosable() {
+        use crate::install::MANAGERS;
+        let bun = MANAGERS.iter().find(|m| m.name == "bun").copied().unwrap();
+        let pnpm = MANAGERS.iter().find(|m| m.name == "pnpm").copied().unwrap();
+        let entries = manager_entries(&[bun, pnpm]);
+        let preselect = manager_preselect(&entries, DEFAULT_MANAGER);
+        assert_eq!(
+            preselect,
+            Some(1),
+            "npm is gone, so bun is first: {preselect:?}"
+        );
+        let npm = MANAGERS.iter().find(|m| m.name == "npm").copied().unwrap();
+        let entries = manager_entries(&[npm, bun]);
+        assert_eq!(manager_preselect(&entries, DEFAULT_MANAGER), Some(0));
+    }
+
+    /// The install step is a yes/no for the project's manager exactly when
+    /// that manager is here; otherwise it lists what is, as before.
+    #[test]
+    fn the_install_step_confirms_the_chosen_manager_when_it_is_here() {
+        use crate::install::MANAGERS;
+        let npm = MANAGERS.iter().find(|m| m.name == "npm").copied().unwrap();
+        let bun = MANAGERS.iter().find(|m| m.name == "bun").copied().unwrap();
+        assert!(install_confirms(Some(npm), &[npm, bun]));
+        assert!(!install_confirms(Some(bun), &[npm]));
+        assert!(!install_confirms(None, &[npm]));
+        assert!(!install_confirms(Some(npm), &[]));
     }
 
     /// Both placeholders render, and text without them is untouched.

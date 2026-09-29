@@ -181,9 +181,11 @@ esdev create my-app --yes            # defaults, no questions
 esdev create my-app --no-install
 ```
 
-The manager question offers all four — it declares what the project uses, and
-the scaffolded docs name it. The install question only offers what this
-machine actually has, starting on the chosen one when it is here; an explicit
+The manager question marks what this machine has — installed entries are
+choosable, the rest read as not installed and cannot be picked — and the
+scaffolded docs name the answer. The install question is then a yes/no for
+exactly that manager; where the manager came from a flag naming something not
+installed here, it lists what is instead. An explicit
 `--install=<manager>` answers both at once. Unattended it installs nothing:
 there is no lockfile yet to say which one this project uses, and guessing
 wrong leaves the wrong one behind — which is a reason not to guess, not a
