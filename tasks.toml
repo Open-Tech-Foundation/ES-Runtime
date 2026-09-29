@@ -108,8 +108,13 @@ run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filte
 # `skipLibCheck: false`, which is what makes the declarations themselves the
 # thing being checked, and `test/` holds the `@ts-expect-error` cases that fail
 # when a declaration quietly widens to `any`.
+# The check runs through `esdev typecheck` rather than bare `tsc`, so each
+# package is checked with the TypeScript it installed, through its package
+# manager — the same invocation a scaffolded project's `typecheck` script
+# uses. `esdev` is already on PATH wherever this runs: the JS packages build
+# with it, and CI installs it before this task.
 [tasks.typecheck]
-run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --filter @opentf/esrun-types --parallel exec tsc --noEmit"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --filter @opentf/esrun-types --parallel exec esdev typecheck"
 
 [tasks.lint]
 run = "biome check"
