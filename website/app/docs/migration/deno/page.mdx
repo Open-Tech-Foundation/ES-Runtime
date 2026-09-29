@@ -59,7 +59,51 @@ const { code, stdout } = await new Command("git", {
 }).output();
 ```
 
-### 4. Async context (`node:async_hooks`)
+### 4. Cookies (`@std/http/cookie`)
+
+`runtime:http` has a cookie API built in. It follows Bun's rather than
+`@std/http`'s: a `CookieMap` on the request instead of functions over `Headers`.
+
+```js
+// ❌ Deno
+import { getCookies, setCookie, deleteCookie } from "jsr:@std/http/cookie";
+
+Deno.serve((req) => {
+  const { sid } = getCookies(req.headers);
+  const headers = new Headers();
+  setCookie(headers, { name: "theme", value: "dark", sameSite: "Lax" });
+  deleteCookie(headers, "old");
+  return new Response("ok", { headers });
+});
+
+// ✅ esrun
+import { serve } from "runtime:http";
+
+serve((req) => {
+  const sid = req.cookies.get("sid"); // null, not undefined, when absent
+  req.cookies.set("theme", "dark", { sameSite: "Lax" });
+  req.cookies.delete("old");
+  return new Response("ok");
+});
+```
+
+| `@std/http/cookie` | esrun |
+| --- | --- |
+| `getCookies(headers)` | `req.cookies`, or `new CookieMap(headers.get("cookie") ?? "")` |
+| `setCookie(headers, cookie)` | `req.cookies.set(name, value, options)` |
+| `deleteCookie(headers, name, attrs)` | `req.cookies.delete(name, attrs)` |
+| `getSetCookies(headers)` | `headers.getSetCookie().map((h) => Cookie.parse(h))` |
+
+Behaviour differs in four ways:
+
+- **Encoding:** values are percent-encoded, where `@std` throws on a space.
+- **Duplicates:** the **first** of a duplicated name wins, where `@std` keeps the last.
+- **Defaults:** cookies default to `Path=/; SameSite=Lax`.
+- **`__Host-` cookies:** one that breaks its rules throws, where `@std` quietly rewrites it into a valid one.
+
+`sameSite` takes `"Lax"` as well as `"lax"`.
+
+### 5. Async context (`node:async_hooks`)
 
 ```js
 // ❌ Deno
@@ -82,7 +126,7 @@ store.get().tenant;
 | `.run(store, fn)` | `.run(value, fn)` |
 | `.enterWith()` | Removed — `snapshot()` |
 
-### 5. Observability and process metrics
+### 6. Observability and process metrics
 
 Deno exports OpenTelemetry from the runtime rather than from the program, and so
 does esrun — the flag is `--otel` instead of an environment variable, and it

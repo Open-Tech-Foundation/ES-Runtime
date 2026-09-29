@@ -59,7 +59,36 @@ const digest = new Hasher("sha256").update("data").digest("hex");
 const stored = await password.hash(input);
 ```
 
-### 4. Async context (`node:async_hooks`)
+### 4. Cookies (`Bun.Cookie`, `Bun.CookieMap`)
+
+The same classes, imported from `runtime:http`. `request.cookies` works the same
+way in `serve()`: changes are sent with the response.
+
+```js
+// ❌ Bun
+Bun.serve({ fetch(req) { req.cookies.set("theme", "dark"); return new Response("ok"); } });
+const cookie = new Bun.Cookie("sid", id, { httpOnly: true });
+
+// ✅ esrun
+import { serve, Cookie } from "runtime:http";
+
+serve((req) => { req.cookies.set("theme", "dark"); return new Response("ok"); });
+const cookie = new Cookie("sid", id, { httpOnly: true });
+```
+
+Output matches Bun's, with one intentional difference: a cookie a browser would
+drop **throws** instead of being sent. That covers:
+
+- `SameSite=None` or `Partitioned` without `secure`;
+- a `__Host-`/`__Secure-` cookie that breaks its prefix rules;
+- a fractional `maxAge`.
+
+When you delete a `__Host-` or `__Secure-` cookie, pass
+`{ secure: true }`. Otherwise the deletion is refused, where in Bun the browser
+would have ignored it. `Cookie.parse` also decodes the value, as `CookieMap`
+does in both runtimes.
+
+### 5. Async context (`node:async_hooks`)
 
 Bun's `AsyncLocalStorage` becomes [`runtime:context`](/api/context) — a rename,
 with no `async_hooks` shim.
@@ -86,7 +115,7 @@ store.get().tenant;
 | `.enterWith()` | Removed — `snapshot()` |
 | `AsyncResource` | Removed |
 
-### 5. Observability and process metrics
+### 6. Observability and process metrics
 
 ```js
 // ❌ Bun

@@ -81,6 +81,57 @@ serve({ port: 8080 }, () => {
 `new Response(request.body)` pipes an upload straight back out without buffering
 either side.
 
+## Cookies
+
+`request.cookies` holds the request's cookies. Read from it, and `set` or
+`delete` on it: the changes go out as `Set-Cookie` headers with whatever
+`Response` the handler returns.
+
+```js
+import { serve } from "runtime:http";
+
+serve(async (request) => {
+  const url = new URL(request.url);
+
+  if (url.pathname === "/login" && request.method === "POST") {
+    const session = await createSession(await request.formData());
+    request.cookies.set("__Host-session", session.id, {
+      secure: true,
+      httpOnly: true,
+      maxAge: 60 * 60 * 24,
+    });
+    return Response.redirect(new URL("/", url), 303);
+  }
+
+  if (url.pathname === "/logout") {
+    request.cookies.delete("__Host-session", { secure: true });
+    return Response.redirect(new URL("/", url), 303);
+  }
+
+  const id = request.cookies.get("__Host-session"); // null when absent
+  return new Response(id ? "signed in" : "signed out");
+});
+```
+
+A new cookie is `Path=/; SameSite=Lax` unless you say otherwise. For a session
+cookie, the `__Host-` prefix is the strongest choice: the browser only accepts
+it over HTTPS, for this host alone, on every path.
+
+**A cookie the browser would reject throws a `TypeError`** at the `set` or
+`delete` that made it, naming the rule it breaks. A browser drops such a
+cookie without reporting anything, which makes a login fail with no clue why:
+
+- `SameSite=None` or `Partitioned` without `secure`;
+- a `__Host-` cookie with a `domain` or a path other than `/`;
+- a `__Secure-` or `__Host-` cookie without `secure`, which includes deleting one.
+
+A plain-HTTP development server cannot set `secure` cookies that a browser will
+keep. Use a name without the prefix locally, or serve HTTPS.
+
+To set cookies outside a handler, build them with `Cookie` or `CookieMap` and
+add `toSetCookieHeaders()` to the response yourself. See the
+[`runtime:http` reference](/api/http#cookies) for every option.
+
 ## Client disconnects
 
 `request.signal` aborts when the client hangs up before your handler produced a

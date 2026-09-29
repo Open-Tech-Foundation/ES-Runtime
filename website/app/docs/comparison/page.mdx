@@ -34,6 +34,7 @@ experimental or flag-gated one is <Partial />.
 | Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | HTTP/3 server (QUIC) | <No /> | <No /> | <Partial /> | <No /> |
+| Cookie parse / serialize API | <Yes /> | <No /> | <Yes /> | <Partial /> |
 | Stalled-connection timeouts by default | <Yes /> | <Partial /> | <Yes /> | <No /> |
 | UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
@@ -75,6 +76,13 @@ every line that decides how a run behaves, so a program cannot behave one way
 there and another in production. Marked <Partial /> rather than <Yes /> because
 the answer is "in the toolchain, not in the runtime", which is a real difference
 from the other three.
+
+**On the cookie row.** esrun and Bun ship `Cookie` and `CookieMap`, and Deno's
+is a standard-library package (`@std/http/cookie`) rather than runtime API.
+Node.js has none. esrun's follows Bun's API, with one difference: a cookie a
+browser would silently drop, such as `SameSite=None` without `Secure` or a
+`__Host-` cookie with a `Domain`, throws when it is set rather than being sent.
+See [Cookies](/docs/http/basics#cookies).
 
 **On the UDP rows.** All four have it. In Deno the stable path is `node:dgram`,
 which binds, joins multicast groups and connects; Deno's own
