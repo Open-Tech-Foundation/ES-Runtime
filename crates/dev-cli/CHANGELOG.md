@@ -51,6 +51,9 @@ is the point, since none of the three has any business in a deployment.
 - `esdev start` now reports accurately when a rebuild fails: its separate dev
   output may contain files from the failed build, while the deployment output
   stays untouched.
+- An import that names a directory with no index module is refused by the
+  specifier as written, with `ERR_IS_DIRECTORY`, instead of by the absolute
+  `file://` URL it resolved to (DECISIONS D141).
 
 ## [0.12.0] - 2026-09-28
 

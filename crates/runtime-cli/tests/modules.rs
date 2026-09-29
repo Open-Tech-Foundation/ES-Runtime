@@ -837,7 +837,7 @@ fn an_installed_program_is_still_jailed_to_the_project() {
     let _ = std::fs::remove_dir_all(&proj);
     let _ = std::fs::remove_file(&outside);
     assert!(!out.status.success(), "should exit non-zero: {err}");
-    assert!(err.contains("escapes the sandbox root"), "{err}");
+    assert!(err.contains("resolves outside the project root"), "{err}");
 }
 
 /// The root is the working directory, exactly: from the workspace top a package
@@ -889,14 +889,13 @@ fn the_root_is_the_directory_the_run_was_started_in() {
     assert!(from_top.status.success(), "stderr: {top_err}");
     assert!(top_out.contains("APP=shared"), "{top_out}");
     assert!(!from_package.status.success(), "{pkg_out}");
-    // The path is rendered by `Display`, so it carries the platform's own
-    // separator — the assertion has to ask for the same one rather than for the
-    // `/` a specifier would use.
-    let in_the_package = ["packages", "app"].join(std::path::MAIN_SEPARATOR_STR);
+    // The walk started at the package's own root, and the message says so
+    // without printing where on the host that is (D141).
     assert!(
-        pkg_err.contains("cannot find package") && pkg_err.contains(&in_the_package),
+        pkg_err.contains("cannot find package \"shared\" imported from the project root"),
         "{pkg_err}"
     );
+    assert!(!pkg_err.contains(proj.to_str().unwrap()), "{pkg_err}");
 }
 
 /// An entry outside the project the run started in is refused before the

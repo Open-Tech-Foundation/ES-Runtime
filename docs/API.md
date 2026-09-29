@@ -4601,6 +4601,10 @@ reworded at any time; codes never change meaning. An error with no stable
 classification simply has no `code`, so test `e.code === "ERR_X"`, never
 exhaustively.
 
+A rejected `import()` and a throwing `import.meta.resolve` carry the same codes:
+a missing module is `ERR_NOT_FOUND`, one outside the root `ERR_JAIL_ESCAPE`, and
+one the import policy refuses `ERR_PERMISSION_DENIED`.
+
 ```js
 try {
   await file("config.json").text();
@@ -4615,12 +4619,12 @@ try {
 | `ERR_CAPABILITY_DENIED` | A required capability was not granted (deny-by-default). |
 | `ERR_FOREIGN_HANDLE` | A socket, child process, server, file descriptor or request belonging to another agent. Handles are usable only by the agent that created them. |
 | `ERR_PROVIDER_UNAVAILABLE` | The backing provider for this API is not installed. |
-| `ERR_NOT_FOUND` | The path does not exist. |
+| `ERR_NOT_FOUND` | The path, module or package does not exist. |
 | `ERR_ALREADY_EXISTS` | The target already exists. |
-| `ERR_PERMISSION_DENIED` | The OS denied access (distinct from a capability denial). |
+| `ERR_PERMISSION_DENIED` | Access was refused — by the OS, by a scoped `--allow-read`/`--allow-write` list, or by the import policy (distinct from a capability denial). |
 | `ERR_IS_DIRECTORY` / `ERR_NOT_DIRECTORY` | A file op hit a directory / a directory op hit a non-directory. |
 | `ERR_DIRECTORY_NOT_EMPTY` | The directory is not empty. |
-| `ERR_JAIL_ESCAPE` | The real (canonicalized) path escapes the filesystem root jail. |
+| `ERR_JAIL_ESCAPE` | The real (canonicalized) path, or a module being imported, lies outside the filesystem root jail. |
 | `ERR_DURABLE_LOCKED` | Another process has this durable-worker directory open. |
 | `ERR_DURABLE_BUSY` | A durable worker's mailbox is full — more calls are waiting than `mailbox` allows. |
 | `ERR_DURABLE_STATE_TOO_LARGE` | A stored value, or a worker's whole state, is over the limit. |

@@ -57,7 +57,12 @@ pub(crate) fn install(engine: &mut dyn Engine, loader: LoaderSlot) -> Result<()>
 
             match loader.resolve_sync(&specifier, &referrer) {
                 Some(Ok(id)) => Ok(Value::String(id)),
-                Some(Err(e)) => Err(OpError::new(ExceptionClass::TypeError, e.to_string())),
+                // With the loader's code, as `import()` rejects: the two answer
+                // one question and must not disagree about what the refusal was.
+                Some(Err(e)) => {
+                    Err(OpError::new(ExceptionClass::TypeError, e.to_string())
+                        .with_code_opt(e.code()))
+                }
                 // This loader has no synchronous path; the prelude explains.
                 None => Ok(Value::Null),
             }

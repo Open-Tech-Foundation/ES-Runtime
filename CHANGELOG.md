@@ -42,6 +42,24 @@ namespace) is unstable and may change between minor releases until the API freez
   separator check now runs after the scope list, so it no longer reports
   whether an unlisted path is a directory.
 
+- **A module that fails to load names the specifier the program wrote**, and a
+  path only when it is inside the project, relative to it (D141). A module
+  outside the root is now refused as outside whether or not the file exists;
+  before, a missing one answered "No such file" with its absolute path and an
+  existing one answered "escapes", which told the program what was there. The
+  project root no longer appears in "cannot find package", and a policy-refused
+  file is named by its specifier.
+
+### Changed
+
+- **A rejected `import()` carries the loader's `code`.** The runtime used to
+  flatten a loader error to text, so the rejection had no `code` at all. It now
+  has the one `runtime:fs` gives for the same refusal: `ERR_NOT_FOUND` for a
+  missing module or package, `ERR_JAIL_ESCAPE` for one outside the root, and
+  `ERR_PERMISSION_DENIED` for one the import policy refuses. The same codes are
+  on `import.meta.resolve`'s `TypeError`. `path::canonicalize_checked` is
+  removed from `es-runtime-default-providers`; its message printed the path.
+
 ## [0.33.0] - 2026-09-25
 
 ### Added

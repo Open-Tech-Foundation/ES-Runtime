@@ -169,8 +169,13 @@ itself is not a secret: `import.meta.url` and every stack frame are absolute
 
 The resolution helpers return refusals that carry no path, and turning one into
 an error takes the program's spelling, so a later change cannot put the
-canonical path back by accident. The decision and what was rejected are
-[D141](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+canonical path back by accident.
+
+The module loader follows the same rule. A module that fails to load is named
+by its specifier, a path is shown only relative to the project, and a module
+outside the root is refused as outside whether or not the file exists, so an
+`import()` cannot be used to test for one. The decision and what was rejected
+are [D141](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
 
 ## What it costs
 

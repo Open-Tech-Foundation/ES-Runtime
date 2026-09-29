@@ -114,6 +114,15 @@ pub enum Error {
     #[error("module loading failed: {0}")]
     ModuleLoad(String),
 
+    /// The [`ModuleLoader`] refused a specifier or could not read a module.
+    ///
+    /// Kept whole rather than flattened to text, so the refusal's `code`
+    /// survives to the guest: an `import()` refused by the import policy is
+    /// `ERR_PERMISSION_DENIED` and one outside the root `ERR_JAIL_ESCAPE`, the
+    /// same codes `runtime:fs` gives for the same refusals (D141).
+    #[error("module loading failed: {0}")]
+    Loader(es_runtime_providers::ProviderError),
+
     /// An import was refused because the agent lacks the `FileSystem`
     /// capability, worded for the agent that hit it — see
     /// [`Runtime::require_module_capability`].
@@ -131,7 +140,7 @@ impl es_runtime_common::IntoException for Error {
         match self {
             Error::Engine(e) => e.exception_class(),
             Error::Common(e) => e.exception_class(),
-            Error::ModuleLoad(_) => es_runtime_common::ExceptionClass::Error,
+            Error::ModuleLoad(_) | Error::Loader(_) => es_runtime_common::ExceptionClass::Error,
             Error::ImportDenied(_) => es_runtime_common::ExceptionClass::NOT_ALLOWED,
         }
     }
@@ -141,6 +150,7 @@ impl es_runtime_common::IntoException for Error {
             Error::Engine(e) => e.exception_code(),
             Error::Common(e) => e.exception_code(),
             Error::ModuleLoad(_) => None,
+            Error::Loader(e) => e.code(),
             // The same code the bare capability denial carried, so a guest that
             // branches on `e.code` sees no difference from the better wording.
             Error::ImportDenied(_) => {
@@ -1131,14 +1141,11 @@ impl Runtime {
                     let canonical = loader
                         .resolve(&raw, &referrer_spec)
                         .await
-                        .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                        .map_err(Error::Loader)?;
                     match self.module_map.get(&canonical) {
                         Some(&id) => (id, None),
                         None => {
-                            let loaded = loader
-                                .load(&canonical)
-                                .await
-                                .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                            let loaded = loader.load(&canonical).await.map_err(Error::Loader)?;
                             let source = self.module_source(loaded, is_json)?;
                             let id = self.engine.compile_module(&canonical, &source)?;
                             self.module_map.insert(canonical.clone(), id);
@@ -1247,14 +1254,11 @@ impl Runtime {
         let canonical = loader
             .resolve(specifier, referrer)
             .await
-            .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+            .map_err(Error::Loader)?;
         let id = match self.module_map.get(&canonical) {
             Some(&id) => id,
             None => {
-                let loaded = loader
-                    .load(&canonical)
-                    .await
-                    .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                let loaded = loader.load(&canonical).await.map_err(Error::Loader)?;
                 let source = self.module_source(loaded, import_type == Some("json"))?;
                 let id = self.engine.compile_module(&canonical, &source)?;
                 self.module_map.insert(canonical.clone(), id);
@@ -6711,7 +6715,24 @@ mod tests {
         let loader = MapLoader::new(&[]); // ./gone.mjs is absent
         let err = block_on(rt.load_module_source(ENTRY, "import './gone.mjs';", loader.clone()))
             .unwrap_err();
-        assert!(matches!(err, Error::ModuleLoad(_)), "got {err:?}");
+        assert!(matches!(err, Error::Loader(_)), "got {err:?}");
+    }
+
+    /// The loader's refusal reaches the guest with its code, not flattened to
+    /// text: an `import()` refused by the loader rejects with the same `code`
+    /// the loader gave (D141).
+    #[test]
+    fn a_loader_refusal_keeps_its_code() {
+        use es_runtime_common::{ErrorCode, IntoException};
+        let err = Error::Loader(es_runtime_providers::ProviderError::Coded {
+            code: ErrorCode::PermissionDenied,
+            message: "module \"./x.js\" is denied by the import policy".into(),
+        });
+        assert_eq!(err.exception_code(), Some(ErrorCode::PermissionDenied));
+        assert!(
+            err.to_string().starts_with("module loading failed: "),
+            "{err}"
+        );
     }
 
     #[test]

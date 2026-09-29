@@ -177,13 +177,16 @@ impl ImportPolicy {
 
     /// [`permits`](Self::permits), as a provider error naming what was refused
     /// and which list refused it.
-    pub(crate) fn check(&self, real: &Path) -> Result<(), ProviderError> {
+    ///
+    /// What is named is the package, or else the `specifier` the program wrote
+    /// — never `real`, which is canonical (D141).
+    pub(crate) fn check(&self, real: &Path, specifier: &str) -> Result<(), ProviderError> {
         if self.permits(real) {
             return Ok(());
         }
         let what = match package_of(real) {
             Some(name) => format!("package {name}"),
-            None => real.display().to_string(),
+            None => format!("module {specifier:?}"),
         };
         let why = if self.deny.matches(real) {
             "denied by the import policy"
@@ -397,14 +400,14 @@ mod tests {
         let root = temp_dir("message");
         let p = policy(r#"{ "allow": ["lodash"], "deny": ["aws-sdk"] }"#, &root);
         let denied = p
-            .check(Path::new("/proj/node_modules/aws-sdk/index.js"))
+            .check(Path::new("/proj/node_modules/aws-sdk/index.js"), "aws-sdk")
             .unwrap_err();
         assert!(
             denied.to_string().contains("denied by the import policy"),
             "{denied}"
         );
         let unlisted = p
-            .check(Path::new("/proj/node_modules/other/index.js"))
+            .check(Path::new("/proj/node_modules/other/index.js"), "other")
             .unwrap_err();
         assert!(
             unlisted
@@ -413,5 +416,19 @@ mod tests {
             "{unlisted}"
         );
         assert_eq!(unlisted.code(), Some(ErrorCode::PermissionDenied));
+    }
+
+    /// A refused file that is not a package is named by the specifier the
+    /// program wrote, not by where it resolved (D141).
+    #[test]
+    fn a_refused_file_is_named_as_written() {
+        let root = temp_dir("spelling");
+        let p = policy(r#"{ "allow": ["./src"] }"#, &root);
+        let refused = p
+            .check(&root.join("lib/secret.js"), "../lib/secret.js")
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("\"../lib/secret.js\""), "{refused}");
+        assert!(!refused.contains(root.to_str().unwrap()), "{refused}");
     }
 }

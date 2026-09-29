@@ -26,13 +26,6 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     dunce::canonicalize(path)
 }
 
-/// [`canonicalize`] mapping the IO error to a [`ProviderError`] naming the path.
-pub fn canonicalize_checked(path: impl AsRef<Path>) -> Result<PathBuf, ProviderError> {
-    let path = path.as_ref();
-    canonicalize(path)
-        .map_err(|e| ProviderError::Other(format!("cannot resolve path {}: {e}", path.display())))
-}
-
 /// Converts an absolute path to a `file:` URL string.
 pub fn to_file_url(path: &Path) -> Result<String, ProviderError> {
     Url::from_file_path(path)

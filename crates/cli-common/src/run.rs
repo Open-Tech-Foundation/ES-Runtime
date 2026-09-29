@@ -423,6 +423,17 @@ impl BundlerStyleLoader {
     }
 }
 
+/// A specifier that resolved to a directory and to no index inside it. Named as
+/// written: the id it resolved to is an absolute URL (D141).
+fn names_a_directory(specifier: &str) -> ProviderError {
+    ProviderError::Coded {
+        code: es_runtime_common::ErrorCode::IsDirectory,
+        message: format!(
+            "cannot import {specifier:?}: it names a directory, with no index module in it"
+        ),
+    }
+}
+
 impl ModuleLoader for BundlerStyleLoader {
     fn resolve(
         &self,
@@ -435,7 +446,7 @@ impl ModuleLoader for BundlerStyleLoader {
         Box::pin(async move {
             let strict = match inner.resolve(&specifier, &referrer).await {
                 Ok(id) if !Self::is_a_directory(&id) => return Ok(id),
-                Ok(id) => ProviderError::Other(format!("cannot read {id}: it is a directory")),
+                Ok(_) => names_a_directory(&specifier),
                 Err(strict) => strict,
             };
             for candidate in Self::candidates(&specifier) {
@@ -461,7 +472,7 @@ impl ModuleLoader for BundlerStyleLoader {
     ) -> Option<Result<String, ProviderError>> {
         let strict = match self.inner.resolve_sync(specifier, referrer)? {
             Ok(id) if !Self::is_a_directory(&id) => return Some(Ok(id)),
-            Ok(id) => ProviderError::Other(format!("cannot read {id}: it is a directory")),
+            Ok(_) => names_a_directory(specifier),
             Err(strict) => strict,
         };
         for candidate in Self::candidates(specifier) {
@@ -1256,6 +1267,21 @@ fn heap_limits(max_heap_bytes: Option<usize>) -> es_runtime_common::Limits {
 #[cfg(test)]
 mod bundler_style {
     use super::BundlerStyleLoader as Loader;
+
+    /// A directory with no index is refused by the specifier the program
+    /// wrote, not by the absolute URL it resolved to (D141).
+    #[test]
+    fn a_directory_without_an_index_is_named_as_written() {
+        let err = super::names_a_directory("./src");
+        assert_eq!(
+            err.code(),
+            Some(es_runtime_common::ErrorCode::IsDirectory),
+            "{err}"
+        );
+        let message = err.to_string();
+        assert!(message.contains("\"./src\""), "{message}");
+        assert!(!message.contains("file://"), "{message}");
+    }
 
     /// A relative specifier with no extension is the whole reason this exists.
     #[test]
