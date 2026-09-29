@@ -2565,6 +2565,41 @@ mod tests {
         }
     }
 
+    /// The check runs through esdev, not bare `tsc`: `esdev typecheck` uses the
+    /// project's own compiler through its package manager and reports an
+    /// actionable error when it is not installed, while a bare `tsc` is a
+    /// command the scaffold never ensured was on `PATH`.
+    ///
+    /// `react` is checked in both modes since each carries its own manifest.
+    #[test]
+    fn esdev_templates_typecheck_through_esdev() {
+        for (template, mode) in [
+            ("api", None),
+            ("lib", None),
+            ("vanilla", None),
+            ("micro-ui", None),
+            ("react", Some("static")),
+            ("react", Some("fullstack")),
+        ] {
+            let (_, files) = TEMPLATES
+                .iter()
+                .find(|(name, _)| *name == template)
+                .expect("the template is embedded");
+            let files = files_for(files, mode);
+            let (_, manifest) = files
+                .iter()
+                .find(|(path, _)| path == "package.json")
+                .unwrap_or_else(|| panic!("{template} {mode:?} has no package.json"));
+            let manifest: serde_json::Value = serde_json::from_slice(manifest)
+                .unwrap_or_else(|e| panic!("{template} {mode:?}: {e}"));
+            assert_eq!(
+                manifest["scripts"]["typecheck"],
+                serde_json::json!("esdev typecheck"),
+                "{template} {mode:?}: typecheck bypasses esdev"
+            );
+        }
+    }
+
     /// A scaffolder must not choose the user's license. Caught here rather
     /// than by whoever publishes and finds the registry took them at their
     /// template's word.

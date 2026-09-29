@@ -7,7 +7,7 @@
     "build": "esdev build --minify",
     "preview": "esdev preview",
     "test": "esdev test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "esdev typecheck"
   },
   "dependencies": {
     "@opentf/micro-ui": "{{registry:@opentf/micro-ui}}"

@@ -7,7 +7,7 @@
     "build": "esdev build --minify",
     "start": "esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 dist/server.js",
     "test": "esdev test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "esdev typecheck"
   },
   "dependencies": {
     "react": "{{registry:react}}",

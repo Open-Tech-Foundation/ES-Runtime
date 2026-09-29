@@ -7,7 +7,7 @@
     "build": "esdev build --minify",
     "start": "esrun --allow-listen=8080 --allow-env=PORT dist/server.js",
     "test": "esdev test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "esdev typecheck"
   },
   "devDependencies": {
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}",

@@ -8,7 +8,7 @@
     "preview": "esdev preview",
     "test": "esdev test",
     "test:dom": "esdev test --dom",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "esdev typecheck"
   },
   "devDependencies": {
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}",

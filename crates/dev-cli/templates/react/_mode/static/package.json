@@ -8,7 +8,7 @@
     "build:spa": "esdev build --target=web --minify",
     "preview": "esdev preview",
     "test": "esdev test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "esdev typecheck"
   },
   "dependencies": {
     "react": "{{registry:react}}",

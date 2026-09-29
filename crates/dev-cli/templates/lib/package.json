@@ -14,7 +14,7 @@
   "scripts": {
     "build": "esdev build --lib src",
     "test": "esdev test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "esdev typecheck",
     "prepublishOnly": "{{pm}} run build"
   },
   "devDependencies": {

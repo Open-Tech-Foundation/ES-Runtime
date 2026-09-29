@@ -627,6 +627,33 @@ mod tests {
         assert!(ts.iter().any(|(path, _)| path == "tsconfig.json"));
     }
 
+    /// The bare TypeScript project checks through esdev, like `create`'s
+    /// templates — and the JavaScript one checks nothing, having no compiler.
+    #[test]
+    fn bare_ts_typechecks_through_esdev() {
+        let ts = bare("ts");
+        let (_, manifest) = ts
+            .iter()
+            .find(|(path, _)| path == "package.json")
+            .expect("a manifest");
+        let manifest: serde_json::Value = serde_json::from_slice(manifest).expect("valid JSON");
+        assert_eq!(
+            manifest["scripts"]["typecheck"],
+            serde_json::json!("esdev typecheck"),
+            "ts: typecheck bypasses esdev"
+        );
+        let js = bare("js");
+        let (_, manifest) = js
+            .iter()
+            .find(|(path, _)| path == "package.json")
+            .expect("a manifest");
+        let manifest: serde_json::Value = serde_json::from_slice(manifest).expect("valid JSON");
+        assert!(
+            manifest["scripts"].get("typecheck").is_none(),
+            "js: nothing to check with"
+        );
+    }
+
     /// The bare docs name the chosen manager and nothing fixed — the same
     /// rule as `create`'s templates — and no bare manifest keeps a debug
     /// build beside the minified one.

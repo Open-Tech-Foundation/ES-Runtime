@@ -31,6 +31,9 @@ is the point, since none of the three has any business in a deployment.
   run. The install step is then a yes/no for exactly that manager instead of
   the manager list repeated; a flag naming something not installed here still
   falls back to listing what is.
+- Scaffolded `typecheck` scripts run `esdev typecheck` instead of bare `tsc`:
+  the check uses the project's own compiler through its package manager, with
+  an actionable error when it is not installed.
 
 ### Fixed
 
