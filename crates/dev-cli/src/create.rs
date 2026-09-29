@@ -806,10 +806,11 @@ const STYLINGS: &[(&str, &str)] = &[
 /// it falls back to adding nothing, not to a framework.
 const UNSTYLED: &str = "css";
 
-/// This repository's own templates that have a page to style. Their plain
-/// choice writes no stylesheet at all — they are hello worlds, and a starter
-/// stylesheet is one more file to delete (D100) — so Tailwind is the only
-/// choice that adds anything.
+/// This repository's own templates that have a page to style. Each ships a
+/// plain `src/styles.css` linked from its `index.html`, so the page shows the
+/// CSS pipeline — bundled by esdev, swapped without reload in the dev loop —
+/// with nothing to install. Tailwind replaces that stylesheet's contents with
+/// its import and adds the dependency that provides it.
 const ESDEV_STYLED: &[&str] = &["react", "vanilla", "micro-ui"];
 
 const ESDEV_STYLINGS: &[(&str, &str)] = &[
@@ -832,20 +833,23 @@ fn stylings(template: &str) -> Option<&'static [(&'static str, &'static str)]> {
 /// Where the Tailwind choice puts its stylesheet in one of [`ESDEV_STYLED`].
 const TAILWIND_STYLESHEET: &str = "src/styles.css";
 
-/// Tailwind for one of this repository's own templates: a stylesheet that
-/// imports it, the `<link>` that loads it, and the dependency that provides
-/// it. esdev compiles it (D135); nothing else is configured.
+/// Tailwind for one of this repository's own templates: the shared
+/// stylesheet's contents become its import, and the dependency that provides
+/// it is declared. esdev compiles it (D135); nothing else is configured.
 ///
-/// Linked from `index.html`, which every one of them builds from — the
-/// `react` modes included, since both render into it — so the stylesheet is
-/// part of the build rather than an import some module has to remember.
+/// The `<link>` is already in `index.html`, which every one of them builds
+/// from — the `react` modes included, since both render into it — so the
+/// stylesheet is part of the build rather than an import some module has to
+/// remember. Replacing in place, rather than adding beside, is what keeps the
+/// scaffold one stylesheet: a Tailwind project with a plain one beside it
+/// would ship two looks and build neither cleanly.
 fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
     for (path, bytes) in &mut files {
         let Ok(text) = std::str::from_utf8(bytes) else {
             continue;
         };
         let patched = match path.as_str() {
-            "index.html" => text.replacen(
+            "index.html" if !text.contains(&format!("./{TAILWIND_STYLESHEET}")) => text.replacen(
                 "    <script type=\"module\"",
                 &format!(
                     "    <link rel=\"stylesheet\" href=\"./{TAILWIND_STYLESHEET}\" />\n    <script type=\"module\""
@@ -857,10 +861,16 @@ fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
         };
         *bytes = patched.into_bytes();
     }
-    files.push((
-        TAILWIND_STYLESHEET.to_string(),
-        b"@import \"tailwindcss\";\n".to_vec(),
-    ));
+    match files
+        .iter_mut()
+        .find(|(path, _)| path == TAILWIND_STYLESHEET)
+    {
+        Some((_, bytes)) => *bytes = b"@import \"tailwindcss\";\n".to_vec(),
+        None => files.push((
+            TAILWIND_STYLESHEET.to_string(),
+            b"@import \"tailwindcss\";\n".to_vec(),
+        )),
+    }
     files
 }
 
@@ -1999,6 +2009,7 @@ mod tests {
             "index.html",
             "src/App.tsx",
             "src/entry.client.tsx",
+            "src/styles.css",
             "_gitignore",
         ] {
             assert!(
@@ -2008,7 +2019,13 @@ mod tests {
         }
 
         let micro_ui = resolved("micro-ui", None);
-        for expected in ["package.json", "esdev.json", "index.html", "src/main.ts"] {
+        for expected in [
+            "package.json",
+            "esdev.json",
+            "index.html",
+            "src/main.ts",
+            "src/styles.css",
+        ] {
             assert!(
                 micro_ui.iter().any(|path| path == expected),
                 "{expected} is not in the micro-ui template: {micro_ui:?}"
@@ -3246,8 +3263,9 @@ mod tests {
         }
     }
 
-    /// Tailwind is three things — the stylesheet, the `<link>` in the head,
-    /// the dependency — in every template and every mode that takes it.
+    /// Tailwind replaces the shared stylesheet in place — its contents, never
+    /// a second file beside it — and the `<link>` already in the head stays
+    /// the one, in every template and every mode that takes it.
     #[test]
     fn tailwind_adds_a_linked_stylesheet_and_its_dependency() {
         for (template, mode) in [
@@ -3262,10 +3280,24 @@ mod tests {
                 "@import \"tailwindcss\";\n",
                 "{template}"
             );
+            assert_eq!(
+                files
+                    .iter()
+                    .filter(|(path, _)| path == TAILWIND_STYLESHEET)
+                    .count(),
+                1,
+                "{template}: two stylesheets"
+            );
             let html = otf_text(&files, "index.html");
+            assert_eq!(
+                html.matches("<link rel=\"stylesheet\" href=\"./src/styles.css\" />")
+                    .count(),
+                1,
+                "{template}: the link duplicated or missing in\n{html}"
+            );
             let link = html
                 .find("<link rel=\"stylesheet\" href=\"./src/styles.css\" />")
-                .unwrap_or_else(|| panic!("{template}: no link in\n{html}"));
+                .unwrap();
             assert!(link < html.find("</head>").expect("a head"), "{template}");
             let manifest: serde_json::Value =
                 serde_json::from_str(&otf_text(&files, "package.json")).expect("still JSON");
@@ -3276,11 +3308,48 @@ mod tests {
         }
     }
 
-    /// Plain writes what it always wrote: no stylesheet, no dependency.
+    /// Plain writes the template as it is: the shared stylesheet, linked, with
+    /// no framework import and no compiler dependency.
     #[test]
     fn plain_css_leaves_the_template_as_it_was() {
         let files = plain_written("vanilla", None);
-        assert!(files.iter().all(|(path, _)| path != TAILWIND_STYLESHEET));
+        let css = otf_text(&files, TAILWIND_STYLESHEET);
+        assert!(
+            css.contains("font-family"),
+            "the starter styles shipped: {css}"
+        );
+        assert!(!css.contains("@import"), "plain CSS pulls no import");
+        let html = otf_text(&files, "index.html");
+        assert!(
+            html.contains("<link rel=\"stylesheet\" href=\"./src/styles.css\" />"),
+            "the page loads it: {html}"
+        );
         assert!(!otf_text(&files, "package.json").contains("tailwindcss"));
+    }
+
+    /// One look, shared: the page templates ship byte for byte the same
+    /// stylesheet, so the three starters cannot drift into three designs.
+    /// `react` is checked in both modes since each carries its own manifest
+    /// but the same shared files.
+    #[test]
+    fn page_templates_share_one_stylesheet() {
+        let mut contents = Vec::new();
+        for (template, mode) in [
+            ("vanilla", None),
+            ("micro-ui", None),
+            ("react", Some("static")),
+            ("react", Some("fullstack")),
+        ] {
+            let files = plain_written(template, mode);
+            contents.push(otf_text(&files, TAILWIND_STYLESHEET));
+            let html = otf_text(&files, "index.html");
+            assert!(
+                html.contains("<link rel=\"stylesheet\" href=\"./src/styles.css\" />"),
+                "{template} {mode:?}: the page does not load it"
+            );
+        }
+        for css in &contents[1..] {
+            assert_eq!(css, &contents[0], "the stylesheets drifted apart");
+        }
     }
 }

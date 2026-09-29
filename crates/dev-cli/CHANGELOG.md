@@ -41,6 +41,10 @@ is the point, since none of the three has any business in a deployment.
 - Scaffolded `typecheck` scripts run `esdev typecheck` instead of bare `tsc`:
   the check uses the project's own compiler through its package manager, with
   an actionable error when it is not installed.
+- The `react`, `vanilla` and `micro-ui` templates ship a shared plain
+  `src/styles.css` linked from `index.html`, so a fresh page shows the CSS
+  pipeline with nothing to install. `--styling=tailwind` replaces its contents
+  with the Tailwind import instead of adding a second stylesheet.
 
 ### Fixed
 

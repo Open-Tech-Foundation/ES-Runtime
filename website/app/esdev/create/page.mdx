@@ -54,9 +54,11 @@ If a lookup fails, esdev retries it three times with increasing delays. If the
 registry is still unavailable, it reports the package and stops before writing
 the project.
 
-`react`, `vanilla` and `micro-ui` start without a stylesheet.
-`--styling=tailwind` adds `src/styles.css` importing Tailwind, links it from
-`index.html`, and adds `tailwindcss` to `devDependencies`; `esdev` compiles it
+`react`, `vanilla` and `micro-ui` start with a plain `src/styles.css`,
+linked from `index.html` and bundled by `esdev` — the page shows the CSS
+pipeline with nothing to install.
+`--styling=tailwind` replaces that stylesheet with one importing Tailwind
+and adds `tailwindcss` to `devDependencies`; `esdev` compiles it
 ([Tailwind CSS](/esdev/build/tailwind)).
 
 ```sh
