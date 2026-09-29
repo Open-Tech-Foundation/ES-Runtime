@@ -73,6 +73,45 @@ A relay on the same host that speaks only plaintext needs both
 `security: "none"` and, if it asks for a login, `allowPlaintextAuth: true`. The
 client refuses a login over plaintext otherwise.
 
+## Sign with DKIM
+
+A relay such as SES, Postmark, Gmail or Microsoft 365 signs for the domains you
+verify with it. When you send through a server that does not, sign the messages
+yourself.
+
+Generate a key and publish its public half:
+
+```sh
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out dkim.pem
+openssl pkey -in dkim.pem -pubout -outform DER | base64 -w0
+```
+
+```text
+mail._domainkey.example.com.  TXT  "v=DKIM1; k=rsa; p=<the base64 above>"
+```
+
+Pass the private key to the transport:
+
+```js
+import { file } from "runtime:fs";
+
+const mail = createTransport({
+  host: "smtp.example.com",
+  user: "app",
+  password,
+  dkim: {
+    domain: "example.com",
+    selector: "mail",
+    privateKey: await file("secrets/dkim.pem").text(),
+  },
+});
+```
+
+Every message the transport sends is then signed. For DMARC, `domain` must be
+the domain of the `From` address or a parent of it. To add an Ed25519 signature
+beside the RSA one, pass a list with a second key published under its own
+selector (`k=ed25519`, and `p=` the raw 32-byte public key in base64).
+
 ## Attachments and inline images
 
 ```js

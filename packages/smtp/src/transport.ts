@@ -16,6 +16,7 @@ import {
   type SendResult,
   SmtpConnection,
 } from "./connection.js";
+import { type DkimOptions, prepareSigner, type Signer, sign } from "./dkim.js";
 import { SmtpError, SmtpErrorCode } from "./errors.js";
 import { needsSmtpUtf8, parseAddress } from "./mime/address.js";
 import { type Built, buildMessage, type Message } from "./mime/message.js";
@@ -54,6 +55,11 @@ export interface TransportOptions {
   maxMessages?: number;
   /** Milliseconds an unused session is kept. Defaults to 30 000. */
   idleTimeout?: number;
+  /**
+   * Signs every message, raw ones included, with DKIM. Several signers add a
+   * signature each — an RSA key and an Ed25519 key, as RFC 8463 suggests.
+   */
+  dkim?: DkimOptions | DkimOptions[];
 }
 
 export interface Sent extends SendResult {
@@ -70,6 +76,9 @@ export class Transport {
   readonly #maxConnections: number;
   readonly #maxMessages: number;
   readonly #idleTimeout: number;
+  readonly #dkim: DkimOptions[];
+  /** The keys, imported on first use and kept. */
+  #signers: Promise<Signer[]> | undefined;
   #idle: Idle[] = [];
   #open = 0;
   #waiting: Array<(connection: SmtpConnection | Error) => void> = [];
@@ -105,6 +114,7 @@ export class Transport {
     this.#maxConnections = Math.max(1, o.maxConnections ?? 2);
     this.#maxMessages = Math.max(1, o.maxMessages ?? 100);
     this.#idleTimeout = o.idleTimeout ?? 30_000;
+    this.#dkim = o.dkim === undefined ? [] : Array.isArray(o.dkim) ? o.dkim : [o.dkim];
   }
 
   /** Builds `message` and sends it. */
@@ -130,8 +140,12 @@ export class Transport {
     return this.#deliver({ text: "", messageId: "", envelope, smtpUtf8 }, message);
   }
 
-  /** Opens a session — connect, TLS, login — and returns it to the pool: proof the settings work. */
+  /**
+   * Imports the DKIM keys and opens a session — connect, TLS, login — then
+   * returns it to the pool: proof the settings work.
+   */
   async verify(): Promise<void> {
+    await this.#prepareSigners();
     const connection = await this.#acquire();
     this.#release(connection);
   }
@@ -148,7 +162,9 @@ export class Transport {
   }
 
   async #deliver(built: Built, raw?: string | Uint8Array): Promise<SendResult> {
-    const framed = frame(raw ?? built.text);
+    const message = raw ?? built.text;
+    const signers = await this.#prepareSigners();
+    const framed = frame(signers.length === 0 ? message : await sign(message, signers));
     // A pooled session the server has since dropped fails on its first
     // command. That is not the message's fault, so it is tried once more on a
     // fresh session — and only then, and only for a lost connection.
@@ -166,6 +182,16 @@ export class Transport {
         throw e;
       }
     }
+  }
+
+  #prepareSigners(): Promise<Signer[]> {
+    if (this.#signers === undefined) {
+      this.#signers = Promise.all(this.#dkim.map(prepareSigner));
+      // A key that fails to import fails every send the same way; it is not
+      // retried, but it is not left as an unhandled rejection either.
+      this.#signers.catch(() => {});
+    }
+    return this.#signers;
   }
 
   async #acquire(): Promise<SmtpConnection> {

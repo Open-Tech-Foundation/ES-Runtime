@@ -679,6 +679,15 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 **Verification plan:** unit tests for header encoding (RFC 2047 encoded-words), MIME structure, dot-stuffing and line limits; a small SMTP server in JavaScript over `runtime:net` for protocol tests, including a server that advertises nothing and one that fails each step; end-to-end sends to a real server (Mailpit) that check the delivered message byte for byte; and a feature probe beside `bench/db/redis/features.mjs`, so any table comparing it with nodemailer is regenerated rather than typed.
 
+**Amendment (DKIM, 2026-09-29; maintainer chose DKIM as the increment after v1, sign-off on the shape pending):**
+
+- **A transport option, not a message field.** `dkim: { domain, selector, privateKey }`, or a list for one signature each. Signing is a property of the sending domain, not of one email, and a transport option signs `sendRaw` too, so no path sends unsigned by oversight. **Rejected: nodemailer's names** (`domainName`, `keySelector`) — `follow, not copy`: the tag names `d=`/`s=` are what the DNS record and every guide call a domain and a selector.
+- **The key decides the algorithm.** `rsa-sha256` or `ed25519-sha256` (RFC 8463), from a PEM (PKCS#8, or PKCS#1 wrapped into PKCS#8, because older `openssl genrsa` writes it and WebCrypto does not import it) or a `CryptoKey`. RSA under 1024 bits is refused (RFC 8301: receivers ignore it). Encrypted PEMs are refused with the command that decrypts them, rather than taking a passphrase. **Rejected: `rsa-sha1`**, which RFC 8301 forbids signers to use.
+- **`relaxed/relaxed`, a fixed header list, oversigned, no `l=`.** Relaxed survives what relays do; `simple` does not. The list is the headers a reader trusts plus `List-Unsubscribe`/`-Post` (RFC 8058 requires them signed); each is listed once more than it occurs, so an added `From` or `Cc` breaks the signature. `l=` lets anyone append to a signed body, so it is never written. **Rejected for now: a configurable header list** — nothing asks for it, and the common mistake it enables is signing too little.
+- **Signed after building, before framing:** CRLF-normalised octets, the same the server receives once it removes the dot-stuffing. A new error code, `ERR_SMTP_DKIM`, permanent, raised before anything is sent.
+
+**Verification:** both algorithms are deterministic, so unit tests reproduce RFC 8463 Appendix A's two published signatures byte for byte from its keys (the RSA one PKCS#1), and its body hash; a verifier in the tests checks signatures made here, that relay changes (an added `Received`, refolding, trailing whitespace) keep them valid and that forgeries (a second `From`, an added `Cc`, a changed or extended body) do not; the protocol tests check both signatures on a sent and a raw message and a bad key failing before sending; Mailpit checks both on the message as the receiving server stored it.
+
 ---
 
 ### D135 — Tailwind CSS in `esdev`: the project's compiler, our scanner, the CSS pipeline we already have · *Proposed (2026-09-26)* · *extends D67*

@@ -52,6 +52,7 @@ esrun --allow-net=smtp.example.com --allow-env=SMTP_PASSWORD app.js
 | `maxConnections` | Sessions open at once. Defaults to 2. |
 | `maxMessages` | Messages per session before it is replaced. Defaults to 100. |
 | `idleTimeout` | Milliseconds an unused session is kept. Defaults to 30 000. |
+| `dkim` | Signs every message — raw ones included — with DKIM. `{ domain, selector, privateKey }`, or a list of them for one signature each. See [DKIM](#dkim). |
 
 A URL works too: `createTransport("smtps://user:pass@smtp.example.com")`, with
 `smtp:` for STARTTLS on 587 and `?security=none` for plaintext.
@@ -126,6 +127,7 @@ try {
 | `ERR_SMTP_TOO_LARGE` | Larger than the server's `SIZE`; nothing was sent. |
 | `ERR_SMTP_UNSUPPORTED` | Needs `STARTTLS`, `SMTPUTF8` or `8BITMIME`, which the server lacks. |
 | `ERR_SMTP_INVALID_MESSAGE` | A header with a line break, no recipient, a line over 998 octets. |
+| `ERR_SMTP_DKIM` | A DKIM key that cannot sign, a `domain` or `selector` that is not a DNS name, or a message without `From`. Nothing was sent. |
 | `ERR_SMTP_TIMEOUT` | No reply within `timeout`. |
 | `ERR_SMTP_PROTOCOL` | The server's reply was not SMTP. |
 | `ERR_SMTP_CLOSED` | The transport was closed. |
@@ -142,8 +144,23 @@ all.
 With the server's `PIPELINING`, `MAIL FROM`, every `RCPT TO` and `DATA` go in one
 write — one round trip for the lot, however many recipients.
 
+## DKIM
+
+| Option | |
+| --- | --- |
+| `domain` | The signing domain (`d=`). For DMARC it must be the `From` address's domain or a parent of it. An internationalised domain goes in its `xn--` form. |
+| `selector` | The selector (`s=`): receivers fetch the public key from `<selector>._domainkey.<domain>`. |
+| `privateKey` | A PEM — `PRIVATE KEY` (PKCS#8, RSA or Ed25519) or `RSA PRIVATE KEY` (PKCS#1) — or a `CryptoKey` for `RSASSA-PKCS1-v1_5` with SHA-256, or `Ed25519`. An RSA key must be at least 1024 bits; generate 2048. An encrypted PEM is refused. |
+
+The algorithm follows the key: `rsa-sha256` or `ed25519-sha256` (RFC 8463).
+Canonicalization is `relaxed/relaxed`. The signature covers the whole body and,
+when present, `From`, `Sender`, `Reply-To`, `To`, `Cc`, `Subject`, `Date`,
+`Message-ID`, `In-Reply-To`, `References`, `MIME-Version`, `Content-Type`,
+`Content-Transfer-Encoding`, `List-Unsubscribe` and `List-Unsubscribe-Post`,
+each listed once more than it occurs, so a header added in transit cannot
+change what the reader sees. The key is imported on the first send, or by
+`verify()`.
+
 ## Not yet
 
-DKIM signing, delivery status notifications (DSN) and `CHUNKING`. Most
-applications send through a relay — SES, Postmark, Gmail, Microsoft 365 — that
-signs for them.
+Delivery status notifications (DSN) and `CHUNKING`.

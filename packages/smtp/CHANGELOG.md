@@ -10,6 +10,17 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ## [Unreleased]
 
+### Added
+
+- **DKIM signing** (DECISIONS D136, amended). `createTransport({ dkim })` signs
+  every message, raw ones included, with `rsa-sha256` or `ed25519-sha256`
+  (RFC 8463), chosen by the key: a PKCS#8 or PKCS#1 PEM, or a `CryptoKey`.
+  `relaxed/relaxed`, the whole body, and the identity headers oversigned; a list
+  of signers adds one signature each. A key that cannot sign fails with the new
+  `ERR_SMTP_DKIM` before anything is sent, or at `verify()`. Checked against
+  RFC 8463's published signatures byte for byte, and on the message Mailpit
+  stored.
+
 ## [0.1.2] - 2026-09-28
 
 _Dependency updates._

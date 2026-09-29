@@ -9,7 +9,7 @@ esrun="${ESRUN:-$here/../../../../target/release/esrun}"
 [ -f "$here/../../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
 
 status=0
-for test in reply data mime auth; do
+for test in reply data mime auth dkim; do
   # --allow-imports: esrun grants nothing by default (DECISIONS D65), and these
   # load the built package out of dist/. None of them touches the network.
   "$esrun" --allow-imports "$here/$test.mjs" || status=1

@@ -8,6 +8,7 @@
 import { env } from "runtime:process";
 import { createTransport, SmtpErrorCode } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
+import { verify } from "./unit/dkim-verify.mjs";
 
 if (env.SMTP_STARTTLS === undefined) {
   console.log("skip mailpit — run test/mailpit-server.sh first (it prints the environment)");
@@ -170,6 +171,52 @@ for (const base of [env.SMTP_STARTTLS_API, env.SMTP_TLS_API])
   ok(
     got.raw?.endsWith(`${body}\r\n`) || got.raw?.endsWith(body),
     "a raw message's body arrives byte for byte, dots and all",
+  );
+  await mail.close();
+}
+
+// --- DKIM, as the receiving server stored it ------------------------------------------------
+
+{
+  // Mailpit adds its own headers on receipt, as any receiving server does; the
+  // signatures must survive that and the dot-stuffing on the way.
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+  const rsa = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    false,
+    ["sign", "verify"],
+  );
+  const mail = createTransport({
+    host,
+    port: Number(tlsPort),
+    security: "tls",
+    ca,
+    user: "app",
+    password: "s3cret",
+    dkim: [
+      { domain: "example.com", selector: "ed", privateKey: pair.privateKey },
+      { domain: "example.com", selector: "rsa", privateKey: rsa.privateKey },
+    ],
+  });
+  const sent = await mail.send({
+    from: "App <app@example.com>",
+    to: "ada@example.com",
+    subject: "Signed — Grüße",
+    text: "Hello.\n.\nA lone dot.",
+    html: "<p>Hello.</p>",
+    attachments: [{ filename: "a.txt", content: "attached" }],
+  });
+  const got = await received(env.SMTP_TLS_API, sent.messageId);
+  const results = await verify(got.raw ?? "", { ed: pair.publicKey, rsa: rsa.publicKey });
+  is(
+    results.map((r) => `${r.algorithm} ${r.pass}`),
+    ["ed25519-sha256 true", "rsa-sha256 true"],
+    "both DKIM signatures verify on the message the server stored",
   );
   await mail.close();
 }

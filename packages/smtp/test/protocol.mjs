@@ -4,6 +4,7 @@ import { listen } from "runtime:net";
 import { createTransport, SmtpErrorCode } from "../dist/index.js";
 import { startServer } from "./server.mjs";
 import { is, ok, report } from "./unit/assert.mjs";
+import { verify } from "./unit/dkim-verify.mjs";
 
 const plain = (port, extra = {}) =>
   createTransport({ host: "127.0.0.1", port, security: "none", timeout: 2000, ...extra });
@@ -233,6 +234,61 @@ for (const [extensions, credentials, mechanism] of [
     "lines starting with a dot arrive intact (stuffed on the wire)",
   );
   await mail.close();
+  server.close();
+}
+
+// --- DKIM ----------------------------------------------------------------------------
+
+{
+  const ed = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", ed.privateKey));
+  const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...pkcs8))}\n-----END PRIVATE KEY-----\n`;
+  const rsa = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    false,
+    ["sign", "verify"],
+  );
+  const keys = { ed: ed.publicKey, rsa: rsa.publicKey };
+  const server = await startServer();
+  const mail = plain(server.port, {
+    dkim: [
+      { domain: "example.com", selector: "ed", privateKey: pem },
+      { domain: "example.com", selector: "rsa", privateKey: rsa.privateKey },
+    ],
+  });
+  await mail.verify();
+  await mail.send({ ...message, text: "Hello.\n.\nA lone dot, stuffed on the wire." });
+  await mail.sendRaw(
+    { from: "app@example.com", to: ["ada@example.com"] },
+    "From: app@example.com\nSubject: raw\n\n.leading dot\n",
+  );
+  const [built, raw] = server.state.messages;
+  is(
+    (await verify(built.data, keys)).map((r) => r.pass),
+    [true, true],
+    "dkim: a sent message arrives with both signatures valid",
+  );
+  is(
+    (await verify(raw.data, keys)).map((r) => r.pass),
+    [true, true],
+    "dkim: so does a raw one",
+  );
+  await mail.close();
+
+  const broken = plain(server.port, {
+    dkim: { domain: "example.com", selector: "s", privateKey: "-----BEGIN PRIVATE KEY-----" },
+  });
+  await rejects(() => broken.verify(), SmtpErrorCode.Dkim, "dkim: verify() imports the key");
+  const before = server.state.messages.length;
+  const e = await rejects(() => broken.send(message), SmtpErrorCode.Dkim, "dkim: a bad key");
+  ok(e?.permanent === true, "dkim: is permanent");
+  is(server.state.messages.length, before, "dkim: and nothing was sent");
+  await broken.close();
   server.close();
 }
 

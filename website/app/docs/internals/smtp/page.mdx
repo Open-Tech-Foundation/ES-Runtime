@@ -95,8 +95,32 @@ a refused recipient is an answer, and retrying it would send it twice.
 The idle timer is unreferenced, so a script that has sent its mail exits rather
 than waiting out `idleTimeout`.
 
+## DKIM
+
+A signature is added after the message is built and before it is framed, so it
+covers the bytes the server receives: line breaks are already CRLF, and the
+dot-stuffing the framing adds is removed again by the receiver. Raw messages
+are signed the same way, as octets, so 8-bit content is hashed exactly as sent.
+
+Canonicalization is `relaxed/relaxed` because relays refold headers and strip
+trailing whitespace, and `simple` fails on both. The signed headers are
+**oversigned**: each is listed in `h=` once more than it occurs. A verifier
+reads a listed header that is not there as empty, so a second `From` or an
+added `Cc` breaks the signature instead of changing what the reader sees. `l=`,
+which signs only a prefix of the body, is never written, because it lets anyone
+append content that still verifies.
+
+The key decides the algorithm. RSA keys under 1024 bits are refused, since
+receivers ignore their signatures (RFC 8301). Ed25519 signs the SHA-256 hash of
+the data rather than the data (RFC 8463 §3); receivers that do not know
+`ed25519-sha256` ignore such a signature, which is why a transport takes a list
+of signers and an RSA and Ed25519 pair is the usual deployment. A PKCS#1 RSA
+key (`BEGIN RSA PRIVATE KEY`, which older `openssl genrsa` writes) is wrapped
+into PKCS#8 before import, since WebCrypto imports only the latter.
+
+Both algorithms are deterministic, so the tests reproduce RFC 8463's published
+signatures byte for byte from its keys and message.
+
 ## Not here
 
-DKIM signing, delivery status notifications (DSN), `CHUNKING`/`BDAT`, and
-receiving mail. DKIM is the next increment; until then, a relay such as SES,
-Postmark, Gmail or Microsoft 365 signs on the sender's behalf.
+Delivery status notifications (DSN), `CHUNKING`/`BDAT`, and receiving mail.

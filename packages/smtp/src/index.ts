@@ -16,6 +16,7 @@
  */
 
 export type { ConnectionOptions, Rejected, Security, SendResult } from "./connection.js";
+export type { DkimOptions } from "./dkim.js";
 export { type Reply, SmtpError, SmtpErrorCode } from "./errors.js";
 export type { Address, AddressInput } from "./mime/address.js";
 export {

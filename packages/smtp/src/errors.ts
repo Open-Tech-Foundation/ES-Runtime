@@ -33,6 +33,8 @@ export const SmtpErrorCode = {
   Unsupported: "ERR_SMTP_UNSUPPORTED",
   /** The message could not be built: a header with a line break, no recipient. */
   InvalidMessage: "ERR_SMTP_INVALID_MESSAGE",
+  /** The DKIM settings are unusable: a key that cannot sign, a domain that is not one. Nothing was sent. */
+  Dkim: "ERR_SMTP_DKIM",
   /** No reply came within the timeout. */
   Timeout: "ERR_SMTP_TIMEOUT",
   /** The server's reply was not SMTP. */
@@ -70,6 +72,7 @@ const PERMANENT: ReadonlySet<SmtpErrorCode> = new Set<SmtpErrorCode>([
   SmtpErrorCode.TooLarge,
   SmtpErrorCode.Unsupported,
   SmtpErrorCode.InvalidMessage,
+  SmtpErrorCode.Dkim,
   SmtpErrorCode.Tls,
 ]);
 
