@@ -18,7 +18,7 @@ signals, and exit. Aligned in spirit with the WinterTC CLI-API proposal.
 ## Import
 
 ```js
-import { env, args, platform, arch, cwd, exit, unmask } from "runtime:process";
+import { env, args, parseArgs, platform, arch, cwd, exit, unmask } from "runtime:process";
 
 // Or the default aggregate:
 import process from "runtime:process";
@@ -30,6 +30,7 @@ import process from "runtime:process";
 | --- | --- | --- |
 | `env` | `Record<string, string \| Secret>` | Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes. Assigned values are coerced to strings (`env.PORT = 8080` stores `"8080"`; a symbol throws). Secret-keyed values are `Secret` wrappers (see below). |
 | `args` | `readonly string[]` | Program arguments after the runtime binary and the script (or `-e` snippet). Frozen. Excludes the executable and script path. |
+| `parseArgs(config?)` | `(config?) => { values, positionals, tokens? }` | Parse `args` against declared options — Node's `util.parseArgs`. **No capability.** |
 | `platform` | `string` | Host operating system — the OS-native std value (`"linux" \| "macos" \| "windows"`). |
 | `arch` | `string` | Host CPU architecture — the OS-native std value (`"x86_64" \| "aarch64" \| "arm"`). |
 | `cwd()` | `() => string` | Current working directory. A function (not a value) because it can change during a run. |
@@ -65,6 +66,37 @@ import { args } from "runtime:process";
 
 console.log(args); // ["build", "--watch"]
 ```
+
+## parseArgs — options and flags
+
+Node's `util.parseArgs`, reading `args` by default:
+
+```js
+// esrun server.js start -p 3000 --verbose
+import { parseArgs } from "runtime:process";
+
+const { values, positionals } = parseArgs({
+  options: {
+    port: { type: "string", short: "p", default: "8080" },
+    verbose: { type: "boolean", short: "v" },
+  },
+  allowPositionals: true,
+});
+
+console.log(values.port, values.verbose, positionals); // "3000" true ["start"]
+```
+
+| Config | Default | Meaning |
+| --- | --- | --- |
+| `args` | `args` | The strings to parse. |
+| `options` | `{}` | By long name: `type` (`"string"` or `"boolean"`), `short` (one character), `multiple`, `default`. |
+| `strict` | `true` | Throw on an unknown option or a missing or unexpected value. |
+| `allowPositionals` | `!strict` | Accept arguments that are not options. |
+| `allowNegative` | `false` | Accept `--no-<name>` for a boolean, storing `false`. |
+| `tokens` | `false` | Also return the parsed tokens. |
+
+`values` has no prototype. `--name=value`, `-nvalue`, `-abc` groups and `--`
+(everything after it is positional) are understood.
 
 ## signals — graceful shutdown
 
@@ -278,6 +310,7 @@ number, so it is reported nowhere rather than on two platforms out of three.
 | `TypeError` | `unmask()` gets something other than a string or a `Secret` from env. |
 | `DOMException` | name `"NotAllowedError"` — the Env capability is not granted (env access), or Signals (signal access). |
 | `TypeError` | `onSignal()` gets a name this runtime does not know. |
+| `TypeError` | `parseArgs()`: `code` `ERR_PARSE_ARGS_UNKNOWN_OPTION`, `ERR_PARSE_ARGS_INVALID_OPTION_VALUE` or `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL` for the command line; `ERR_INVALID_ARG_TYPE` / `ERR_INVALID_ARG_VALUE` for `config`. |
 | `Error` | `onSignal()` gets a signal this platform cannot deliver — better than a handler that never fires. |
 
 <Callout type="note">

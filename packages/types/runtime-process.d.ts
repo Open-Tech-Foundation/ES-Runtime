@@ -41,6 +41,98 @@ declare module "runtime:process" {
    */
   export const args: readonly string[];
 
+  /** One declared option for {@link parseArgs}. */
+  export interface ParseArgsOptionConfig {
+    /** Whether the option takes a value (`"string"`) or is a flag (`"boolean"`). */
+    type: "string" | "boolean";
+    /** A one-character alias: `short: "v"` makes `-v` mean `--verbose`. */
+    short?: string;
+    /** Collect every occurrence into an array instead of keeping the last. */
+    multiple?: boolean;
+    /** The value when the option is absent. Must match `type` (and `multiple`). */
+    default?: string | boolean | string[] | boolean[];
+  }
+
+  /** The options {@link parseArgs} recognises, by long name. */
+  export interface ParseArgsOptionsConfig {
+    [longOption: string]: ParseArgsOptionConfig;
+  }
+
+  /** What {@link parseArgs} parses, and how strictly. */
+  export interface ParseArgsConfig {
+    /** The arguments to parse. Default: {@link args}. */
+    args?: readonly string[];
+    /** The declared options. */
+    options?: ParseArgsOptionsConfig;
+    /** Throw on an unknown option or a missing or unexpected value. Default: `true`. */
+    strict?: boolean;
+    /** Accept arguments that are not options. Default: `!strict`. */
+    allowPositionals?: boolean;
+    /** Accept `--no-<name>` for a boolean option, setting it to `false`. Default: `false`. */
+    allowNegative?: boolean;
+    /** Also return the tokens the arguments were split into. Default: `false`. */
+    tokens?: boolean;
+  }
+
+  /** One piece of the command line, as {@link parseArgs} split it. */
+  export type ParseArgsToken =
+    | {
+        kind: "option";
+        index: number;
+        /** The long name, with `--no-` removed for a negated boolean. */
+        name: string;
+        /** As written: `"-f"` or `"--foo"`. */
+        rawName: string;
+        value: string | undefined;
+        /** Whether the value was attached (`--foo=bar`, `-fbar`). */
+        inlineValue: boolean | undefined;
+      }
+    | { kind: "positional"; index: number; value: string }
+    | { kind: "option-terminator"; index: number };
+
+  type ParseArgsOptionValue<O extends ParseArgsOptionConfig> = O extends { type: "string" }
+    ? O extends { multiple: true }
+      ? string[]
+      : string
+    : O extends { multiple: true }
+      ? boolean[]
+      : boolean;
+
+  type ParseArgsValues<T extends ParseArgsConfig> = T extends { strict: false }
+    ? Record<string, string | boolean | (string | boolean)[] | undefined>
+    : T extends { options: infer O extends ParseArgsOptionsConfig }
+      ? {
+          -readonly [K in keyof O as O[K] extends { default: unknown } ? K : never]: ParseArgsOptionValue<O[K]>;
+        } & {
+          -readonly [K in keyof O as O[K] extends { default: unknown } ? never : K]?: ParseArgsOptionValue<O[K]>;
+        }
+      : Record<string, never>;
+
+  /** What {@link parseArgs} returns for `config`. */
+  export type ParsedResults<T extends ParseArgsConfig> = {
+    /** Option values by long name, on an object with no prototype. */
+    values: ParseArgsValues<T>;
+    /** The arguments that were not options, in order. */
+    positionals: string[];
+  } & (T extends { tokens: true } ? { tokens: ParseArgsToken[] } : { tokens?: undefined });
+
+  /**
+   * Parses command-line arguments against declared options — Node's
+   * `util.parseArgs`, reading {@link args} by default. No capability.
+   *
+   * Throws a `TypeError` whose `code` is `ERR_PARSE_ARGS_UNKNOWN_OPTION`,
+   * `ERR_PARSE_ARGS_INVALID_OPTION_VALUE` or `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL`
+   * for a bad command line, and `ERR_INVALID_ARG_TYPE` / `ERR_INVALID_ARG_VALUE`
+   * for a malformed `config`.
+   *
+   * @example
+   * const { values, positionals } = parseArgs({
+   *   options: { port: { type: "string", short: "p", default: "8080" }, verbose: { type: "boolean" } },
+   *   allowPositionals: true,
+   * });
+   */
+  export function parseArgs<const T extends ParseArgsConfig = {}>(config?: T): ParsedResults<T>;
+
   /** Host operating system — the OS-native value (`"linux"`, `"macos"`, `"windows"`, …). */
   export const platform: string;
 
@@ -264,6 +356,7 @@ declare module "runtime:process" {
   const process: {
     env: typeof env;
     args: typeof args;
+    parseArgs: typeof parseArgs;
     platform: typeof platform;
     arch: typeof arch;
     cwd: typeof cwd;

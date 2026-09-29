@@ -463,9 +463,284 @@ function refTimer(id) {
   timerRef("refTimer", id, true);
 }
 
+// `parseArgs(config)`: Node's `util.parseArgs`, reading this program's `args`
+// by default (DECISIONS D142). Same options, same tokenizer, same result shape
+// and the same `e.code`s, so a parser written for `node:util` ports by changing
+// its import. Ungated, like `args`: it reads nothing else.
+//
+// Three phases, as in Node: split the arguments into tokens, check and store
+// each token against the declared options, then fill in defaults.
+
+function argError(code, message) {
+  const err = new TypeError(message);
+  err.code = code;
+  return err;
+}
+
+function own(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key) ? object[key] : undefined;
+}
+
+function optionGet(options, name, key) {
+  return Object.prototype.hasOwnProperty.call(options, name)
+    ? own(options[name], key)
+    : undefined;
+}
+
+function checkType(value, name, expected, ok) {
+  if (!ok(value)) {
+    throw argError("ERR_INVALID_ARG_TYPE", `The "${name}" argument must be ${expected}`);
+  }
+}
+
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isBoolean = (v) => typeof v === "boolean";
+const isString = (v) => typeof v === "string";
+
+// The long name for `-x`: the option that declared it as its `short`, or the
+// letter itself, so an undeclared `-x` is reported as `-x`.
+function longFor(short, options) {
+  for (const [name, config] of Object.entries(options)) {
+    if (own(config, "short") === short) return name;
+  }
+  return short;
+}
+
+const isLoneShort = (arg) => arg.length === 2 && arg[0] === "-" && arg[1] !== "-";
+const isLoneLong = (arg) => arg.length > 2 && arg.startsWith("--") && !arg.includes("=", 3);
+const isLongWithValue = (arg) => arg.length > 2 && arg.startsWith("--") && arg.includes("=", 3);
+const isShortCluster = (arg) => arg.length > 2 && arg[0] === "-" && arg[1] !== "-";
+// A value that reads like an option: `--name --verbose` took `--verbose` as the
+// name, which strict mode refuses as ambiguous.
+const looksLikeOption = (value) => value != null && value.length > 1 && value[0] === "-";
+
+function tokenize(argv, options) {
+  const tokens = [];
+  const rest = argv.slice();
+  let index = -1;
+  // Arguments expanded from a short group share the group's index.
+  let grouped = 0;
+  while (rest.length > 0) {
+    const arg = rest.shift();
+    const next = rest[0];
+    if (grouped > 0) grouped--;
+    else index++;
+
+    if (arg === "--") {
+      tokens.push({ kind: "option-terminator", index });
+      for (const value of rest) tokens.push({ kind: "positional", index: ++index, value });
+      break;
+    }
+    if (isLoneShort(arg)) {
+      const name = longFor(arg[1], options);
+      let value;
+      let inlineValue;
+      if (optionGet(options, name, "type") === "string" && next != null) {
+        value = rest.shift();
+        inlineValue = false;
+      }
+      tokens.push({ kind: "option", name, rawName: arg, index, value, inlineValue });
+      if (value != null) index++;
+      continue;
+    }
+    if (isShortCluster(arg)) {
+      const name = longFor(arg[1], options);
+      if (optionGet(options, name, "type") === "string") {
+        // `-fFILE`: a string option with its value attached.
+        tokens.push({
+          kind: "option",
+          name,
+          rawName: `-${arg[1]}`,
+          index,
+          value: arg.slice(2),
+          inlineValue: true,
+        });
+        continue;
+      }
+      // `-abc` is `-a -b -c`; a string option inside it takes the rest, so
+      // `-abfFILE` is `-a -b -fFILE`.
+      const expanded = [];
+      for (let at = 1; at < arg.length; at++) {
+        const short = arg[at];
+        const type = optionGet(options, longFor(short, options), "type");
+        if (type !== "string" || at === arg.length - 1) {
+          expanded.push(`-${short}`);
+        } else {
+          expanded.push(`-${arg.slice(at)}`);
+          break;
+        }
+      }
+      rest.unshift(...expanded);
+      grouped = expanded.length;
+      continue;
+    }
+    if (isLoneLong(arg)) {
+      const name = arg.slice(2);
+      let value;
+      let inlineValue;
+      if (optionGet(options, name, "type") === "string" && next != null) {
+        value = rest.shift();
+        inlineValue = false;
+      }
+      tokens.push({ kind: "option", name, rawName: arg, index, value, inlineValue });
+      if (value != null) index++;
+      continue;
+    }
+    if (isLongWithValue(arg)) {
+      const equals = arg.indexOf("=");
+      const name = arg.slice(2, equals);
+      tokens.push({
+        kind: "option",
+        name,
+        rawName: `--${name}`,
+        index,
+        value: arg.slice(equals + 1),
+        inlineValue: true,
+      });
+      continue;
+    }
+    tokens.push({ kind: "positional", index, value: arg });
+  }
+  return tokens;
+}
+
+function checkUsage(token, options, allowPositionals, allowNegative) {
+  let name = token.name;
+  if (!Object.prototype.hasOwnProperty.call(options, name)) {
+    const negated = allowNegative && name.startsWith("no-") ? name.slice(3) : undefined;
+    if (negated === undefined || optionGet(options, negated, "type") !== "boolean") {
+      const hint = allowPositionals
+        ? `. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- ${JSON.stringify(token.rawName)}'`
+        : "";
+      throw argError("ERR_PARSE_ARGS_UNKNOWN_OPTION", `Unknown option '${token.rawName}'${hint}`);
+    }
+    name = negated;
+  }
+  const short = optionGet(options, name, "short");
+  const spelled = `${short ? `-${short}, ` : ""}--${name}`;
+  const type = optionGet(options, name, "type");
+  if (type === "string" && typeof token.value !== "string") {
+    throw argError(
+      "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+      `Option '${spelled} <value>' argument missing`,
+    );
+  }
+  if (type === "boolean" && token.value != null) {
+    throw argError(
+      "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+      `Option '${spelled}' does not take an argument`,
+    );
+  }
+  if (!token.inlineValue && looksLikeOption(token.value)) {
+    const example = token.rawName.startsWith("--")
+      ? `'${token.rawName}=-XYZ'`
+      : `'--${token.name}=-XYZ' or '${token.rawName}-XYZ'`;
+    throw argError(
+      "ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+      `Option '${token.rawName}' argument is ambiguous.\nDid you forget to specify the option argument for '${token.rawName}'?\nTo specify an option argument starting with a dash use ${example}.`,
+    );
+  }
+}
+
+function store(token, options, values, allowNegative) {
+  let name = token.name;
+  let value = token.value;
+  // Never a key on `values`: it would be the one name that reaches a prototype.
+  if (name === "__proto__") return;
+  if (allowNegative && name.startsWith("no-") && value === undefined) {
+    name = name.slice(3);
+    token.name = name;
+    value = false;
+  }
+  // Stored by what was written rather than by declared type, so a non-strict
+  // parse keeps the program's intent for it to judge.
+  const stored = value ?? true;
+  if (optionGet(options, name, "multiple")) {
+    if (values[name]) values[name].push(stored);
+    else values[name] = [stored];
+  } else {
+    values[name] = stored;
+  }
+}
+
+function parseArgs(config = {}) {
+  checkType(config, "config", "an object", isObject);
+  const argv = own(config, "args") ?? args;
+  const strict = own(config, "strict") ?? true;
+  const allowPositionals = own(config, "allowPositionals") ?? !strict;
+  const wantTokens = own(config, "tokens") ?? false;
+  const allowNegative = own(config, "allowNegative") ?? false;
+  const options = own(config, "options") ?? { __proto__: null };
+
+  checkType(argv, "args", "an array", Array.isArray);
+  checkType(strict, "strict", "of type boolean", isBoolean);
+  checkType(allowPositionals, "allowPositionals", "of type boolean", isBoolean);
+  checkType(wantTokens, "tokens", "of type boolean", isBoolean);
+  checkType(allowNegative, "allowNegative", "of type boolean", isBoolean);
+  checkType(options, "options", "an object", isObject);
+  for (const arg of argv) checkType(arg, "args", "an array of strings", isString);
+  for (const [name, option] of Object.entries(options)) {
+    checkType(option, `options.${name}`, "an object", isObject);
+    const type = own(option, "type");
+    if (type !== "string" && type !== "boolean") {
+      throw argError(
+        "ERR_INVALID_ARG_TYPE",
+        `The "options.${name}.type" argument must be one of: 'string', 'boolean'. Received ${JSON.stringify(type) ?? String(type)}`,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(option, "short")) {
+      const short = option.short;
+      checkType(short, `options.${name}.short`, "of type string", isString);
+      if (short.length !== 1) {
+        throw argError(
+          "ERR_INVALID_ARG_VALUE",
+          `The property 'options.${name}.short' must be a single character. Received ${JSON.stringify(short)}`,
+        );
+      }
+    }
+    const multiple = own(option, "multiple");
+    if (Object.prototype.hasOwnProperty.call(option, "multiple")) {
+      checkType(multiple, `options.${name}.multiple`, "of type boolean", isBoolean);
+    }
+    const fallback = own(option, "default");
+    if (fallback !== undefined) {
+      const one = type === "string" ? isString : isBoolean;
+      const ok = multiple ? (v) => Array.isArray(v) && v.every(one) : one;
+      const expected = `${multiple ? "an array of " : "of type "}${type}${multiple ? "s" : ""}`;
+      checkType(fallback, `options.${name}.default`, expected, ok);
+    }
+  }
+
+  const tokens = tokenize(argv, options);
+  const result = { values: { __proto__: null }, positionals: [] };
+  if (wantTokens) result.tokens = tokens;
+  for (const token of tokens) {
+    if (token.kind === "option") {
+      if (strict) checkUsage(token, options, allowPositionals, allowNegative);
+      store(token, options, result.values, allowNegative);
+    } else if (token.kind === "positional") {
+      if (!allowPositionals) {
+        throw argError(
+          "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL",
+          `Unexpected argument '${token.value}'. This command does not take positional arguments`,
+        );
+      }
+      result.positionals.push(token.value);
+    }
+  }
+  for (const [name, option] of Object.entries(options)) {
+    const fallback = own(option, "default");
+    if (name !== "__proto__" && fallback !== undefined && result.values[name] === undefined) {
+      result.values[name] = fallback;
+    }
+  }
+  return result;
+}
+
 export {
   env,
   args,
+  parseArgs,
   platform,
   arch,
   cwd,
@@ -487,6 +762,7 @@ export {
 export default {
   env,
   args,
+  parseArgs,
   platform,
   arch,
   cwd,

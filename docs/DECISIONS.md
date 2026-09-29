@@ -2965,3 +2965,17 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Relativizing every path to the root.** An escape reported as `../../../etc/passwd` tells the program how deep the root is and still names the file outside it.
 - **Two messages per error, one for the guest and one for the operator.** An uncaught error reaches the operator as the guest's text anyway, so a second channel would only ever be read for errors caught and re-thrown. `--trace-permissions` is where the operator's detail goes.
 - **Virtual module URLs, to hide the root itself.** Every tool that reads a stack, and every guest that resolves a file next to itself, would have to learn a second coordinate system, to protect a value the operator can see in a shell prompt.
+
+### D142 — `parseArgs` in `runtime:process`: Node's parser, reading this program's `args` · *Proposed (2026-09-29)* · *extends D65*
+
+**Context:** `runtime:process` hands a program its arguments as `args`, a frozen list of strings, and nothing more. Every command-line tool written for esrun parses them by hand or pulls in a package. Node ships `util.parseArgs` and Deno ships `parseArgs` in `@std/cli`, so a program that parses its own command line in either one does something here that it cannot do.
+
+**Decision (maintainer, 2026-09-29: `runtime:process`, Node's API):**
+
+- **`parseArgs(config)` is exported from `runtime:process`**, beside the `args` it reads. `config.args` defaults to `args`, which already excludes the binary and the script (or `-e` code), so no `slice(2)` is needed. In a worker it is the worker's own arguments. It needs **no capability**, because `args` needs none (D65) and parsing reads nothing else.
+- **Node's semantics, option for option.** Declared `options` (`type: "string" | "boolean"`, `short`, `multiple`, `default`), `strict` (default `true`), `allowPositionals` (default `!strict`), `allowNegative` (`--no-x` for a boolean), and `tokens`. The same tokenizer handles `--x=v`, `--x v`, `-x v`, `-xv`, `-abc` groups, a string option in the middle of a group taking the rest, and `--` ending options. The result is `{ values, positionals, tokens? }` with a null-prototype `values`. Code written against `node:util` ports by changing the import. **Rejected: Deno's minimist-style parser.** It accepts any flag and guesses types, so a typo becomes a value instead of an error, and a secure-by-default runtime should not make "unknown input is silently accepted" the default.
+- **Errors are `TypeError`s carrying Node's codes**: `ERR_PARSE_ARGS_UNKNOWN_OPTION`, `ERR_PARSE_ARGS_INVALID_OPTION_VALUE`, `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL`, and `ERR_INVALID_ARG_TYPE` / `ERR_INVALID_ARG_VALUE` for a malformed `config`. A program that branches on `e.code` behaves the same as it does under Node.
+- **One deliberate difference:** a non-string entry in `args` is an `ERR_INVALID_ARG_TYPE`. Node does not check the entries, so `parseArgs({ args: [1] })` reports `1` as an unexpected positional, which describes a caller's type error as a user's typo.
+- **Pure JavaScript in the module**, with no op. Parsing is string manipulation over a list the program already holds.
+
+**Not here:** generated help or usage text, subcommands, number or enum option types, and required options. Each is a policy about a program's interface rather than about parsing, and each is a few lines over `values`.

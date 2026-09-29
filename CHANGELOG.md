@@ -13,6 +13,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`parseArgs` in `runtime:process`** (DECISIONS D142). Node's
+  `util.parseArgs`, with the same options (`type`, `short`, `multiple`,
+  `default`), `strict`, `allowPositionals`, `allowNegative` and `tokens`, the
+  same `{ values, positionals }` result, and the same `ERR_PARSE_ARGS_*` codes.
+  It reads the program's own `args` by default and needs no capability.
+  Checked against output recorded from Node's own parser.
+
 - **Unix domain stream sockets in `runtime:net`** (DECISIONS D140).
   `connect({ path })` and `listen({ path })` reach a local service on a socket
   path — the Docker Engine API, PostgreSQL, Redis, a sidecar — with the same

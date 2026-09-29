@@ -1513,6 +1513,7 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | ----------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Assigned values are **coerced to strings** — an environment holds nothing else, so `env.PORT = 8080` stores `"8080"` and a symbol throws, matching Node and Deno. Secret-keyed values are `Secret` wrappers (see below) — including ones the program **assigns at runtime**, so `env.MY_API_KEY = "…"` masks on the same convention the snapshot does. |
 | `args`            | `readonly string[]`                 | Program arguments after the runtime binary and the script (or `-e` snippet). **Frozen.** Excludes the executable and script path.                                                          |
+| `parseArgs(config?)` | `(config?: ParseArgsConfig) => { values, positionals, tokens? }` | Parses `config.args` (default: `args`) against declared `options` — Node's `util.parseArgs`, with the same options, result and error codes. **No capability.** See [Parsing arguments](#parsing-arguments). |
 | `platform`        | `string`                            | Host OS — the OS-native value (`std::env::consts::OS`): `"linux"`, `"macos"`, `"windows"`, …                                                                                              |
 | `arch`            | `string`                            | Host CPU architecture — the OS-native value (`std::env::consts::ARCH`): `"x86_64"`, `"aarch64"`, `"arm"`, …                                                                               |
 | `cwd()`           | `() => string`                      | Current working directory. A **function** (not a value) because the directory can change during a run.                                                                                    |
@@ -1526,6 +1527,34 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | `stderr`          | `StdStream`                         | The same, for standard error.                                                                                                                                                             |
 | `permissions`     | `object`                            | What this process is allowed to reach — see **Permissions** below. **Needs no capability.**                                                                                               |
 | `default`         | `object`                            | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+
+### Parsing arguments
+
+`parseArgs(config)` is Node's `util.parseArgs` (D142). It reads `args` unless
+`config.args` is given, so nothing needs slicing off.
+
+| `config` field      | Default   | Meaning |
+| ------------------- | --------- | ------- |
+| `args`              | `args`    | The strings to parse. |
+| `options`           | `{}`      | By long name: `{ type: "string" \| "boolean", short?, multiple?, default? }`. `short` is one character; `default` matches `type` (an array when `multiple`). |
+| `strict`            | `true`    | Throw on an unknown option, a string option with no value, or a boolean given one. |
+| `allowPositionals`  | `!strict` | Accept arguments that are not options. |
+| `allowNegative`     | `false`   | Accept `--no-<name>` for a boolean option, storing `false`. |
+| `tokens`            | `false`   | Also return `tokens`: `{ kind: "option", name, rawName, index, value, inlineValue }`, `{ kind: "positional", index, value }` and `{ kind: "option-terminator", index }`. |
+
+It returns `{ values, positionals }`, plus `tokens` when asked. `values` has no
+prototype, holds each option by its long name, and is filled from `default`
+for an option that did not appear. The accepted spellings are `--name value`,
+`--name=value`, `-n value`, `-nvalue`, and `-abc` for `-a -b -c`. A string
+option in the middle of a group takes the rest of it, and `--` ends option
+parsing.
+
+Errors are `TypeError`s: `ERR_PARSE_ARGS_UNKNOWN_OPTION`,
+`ERR_PARSE_ARGS_INVALID_OPTION_VALUE` (including a value that looks like an
+option, such as `--name --verbose`), and `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL`
+for the command line; `ERR_INVALID_ARG_TYPE` and `ERR_INVALID_ARG_VALUE` for
+`config`. A non-string in `args` is `ERR_INVALID_ARG_TYPE`, where Node reports
+it as a positional.
 
 ### Drawing on a terminal
 
