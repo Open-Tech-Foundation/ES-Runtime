@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-09-29
+
 ### Added
 
 - **Cookies in `runtime:http`** (DECISIONS D144): `Cookie` and `CookieMap`,

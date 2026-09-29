@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-29
+
 ### Added
 
 - Programs run by `esdev` can use `runtime:net`'s new Unix domain sockets
