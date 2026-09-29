@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-29
+
 ### Added
 
 - `runtime:http` declares `Cookie`, `CookieMap`, `CookieInit` and

@@ -10,6 +10,8 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
 ### Added
 
 - **DKIM signing** (DECISIONS D136, amended). `createTransport({ dkim })` signs
