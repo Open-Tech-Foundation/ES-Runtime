@@ -260,6 +260,86 @@ function size() {
 const stdout = stream("stdout");
 const stderr = stream("stderr");
 
+// ---- standard input (D143) -------------------------------------------------
+//
+//   import { stdin } from "runtime:process";
+//
+//   const name = await stdin.question("Name? ");
+//   for await (const line of stdin.lines()) { … }
+//
+// Every way of reading takes from one buffer on the host, so bytes read past a
+// line end by one of them are the next one's — a `question()` followed by
+// `lines()` loses nothing. Ungated, like `stdout`: this is the stream the
+// program was started with. A worker's reads throw; a process has one input.
+
+const lineDecoder = new TextDecoder();
+
+// A line's bytes as text, without its terminator (`\n`, `\r\n`, or the lone
+// `\r` raw mode's Enter sends).
+function lineText(bytes) {
+  let end = bytes.length;
+  if (end > 0 && bytes[end - 1] === 0x0a) end--;
+  if (end > 0 && bytes[end - 1] === 0x0d) end--;
+  return lineDecoder.decode(bytes.subarray(0, end));
+}
+
+let rawMode = false;
+let readable;
+
+const stdin = Object.freeze({
+  /** The name of this stream: "stdin". */
+  name: "stdin",
+  get isTTY() {
+    return ops.process_is_terminal("stdin");
+  },
+  // Raw bytes as they arrive. One stream, made on first use, pulling only when
+  // read (a high-water mark of 0): an eager pull would take input out of the
+  // shared buffer that nobody asked this stream for.
+  get readable() {
+    readable ??= new ReadableStream(
+      {
+        async pull(controller) {
+          const chunk = await ops.process_stdin_read(false);
+          if (chunk === null) controller.close();
+          else controller.enqueue(chunk);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return readable;
+  },
+  // Lines without their terminators, until the end of input.
+  async *lines() {
+    for (;;) {
+      const line = await ops.process_stdin_read(true);
+      if (line === null) return;
+      yield lineText(line);
+    }
+  },
+  // Writes `query` to standard error — where a question belongs when standard
+  // output may be a file — and resolves with the next line, or `null` at the
+  // end of input. It works on a pipe too, which is what makes a program that
+  // asks questions scriptable.
+  async question(query = "") {
+    if (query !== "") ops.process_write("stderr", toBytes(`${query}`));
+    const line = await ops.process_stdin_read(true);
+    return line === null ? null : lineText(line);
+  },
+  // Keypresses as they are typed: no echo, no line editing, and ^C arrives as
+  // the byte 0x03 rather than as a signal. The runtime gives the terminal back
+  // when the program ends, however it ends. Throws when stdin is not a
+  // terminal. Returns `stdin`, as Node's does.
+  setRawMode(on) {
+    const raw = Boolean(on);
+    ops.process_stdin_set_raw(raw);
+    rawMode = raw;
+    return stdin;
+  },
+  get isRaw() {
+    return rawMode;
+  },
+});
+
 // ---- signals ---------------------------------------------------------------
 //
 // Gated on Capability::Signals, not Env: watching a signal suppresses its
@@ -741,6 +821,7 @@ export {
   env,
   args,
   parseArgs,
+  stdin,
   platform,
   arch,
   cwd,
@@ -763,6 +844,7 @@ export default {
   env,
   args,
   parseArgs,
+  stdin,
   platform,
   arch,
   cwd,

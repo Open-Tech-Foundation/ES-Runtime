@@ -198,6 +198,47 @@ pub(crate) fn install(
         ))
     }))?;
 
+    // The process's own standard input (D143). **Ungated**, like the writes
+    // above: reading the stream this program was started with reaches nothing
+    // it was not handed. A worker's provider refuses, so a worker gets an
+    // error rather than half of somebody else's lines.
+    //
+    // `process_stdin_read(line)` resolves with bytes — everything available,
+    // or one line with its terminator — and `null` at the end of input.
+    let p = process.clone();
+    engine.register_op(OpDecl::r#async("process_stdin_read", move |args| {
+        let p = p.clone();
+        let line = matches!(args.first(), Some(Value::Bool(true)));
+        Box::pin(async move {
+            let proc = require(&p)?;
+            match proc.read_stdin(line).await {
+                Ok(Some(bytes)) => Ok(Value::Bytes(bytes)),
+                Ok(None) => Ok(Value::Null),
+                Err(e) => Err(OpError::new(ExceptionClass::Error, stdin_message(e))),
+            }
+        })
+    }))?;
+
+    // One line, blocking the agent: `prompt()` is synchronous by definition.
+    let p = process.clone();
+    engine.register_op(OpDecl::sync("process_stdin_read_line_sync", move |_args| {
+        let proc = require(&p)?;
+        match proc.read_stdin_line_blocking() {
+            Ok(Some(bytes)) => Ok(Value::Bytes(bytes)),
+            Ok(None) => Ok(Value::Null),
+            Err(e) => Err(OpError::new(ExceptionClass::Error, stdin_message(e))),
+        }
+    }))?;
+
+    let p = process.clone();
+    engine.register_op(OpDecl::sync("process_stdin_set_raw", move |args| {
+        let proc = require(&p)?;
+        let raw = matches!(args.first(), Some(Value::Bool(true)));
+        proc.set_stdin_raw(raw)
+            .map(|()| Value::Undefined)
+            .map_err(|e| OpError::new(ExceptionClass::Error, stdin_message(e)))
+    }))?;
+
     let p = process.clone();
     engine.register_op(OpDecl::sync("process_terminal_size", move |_args| {
         Ok(match p.as_ref().and_then(|proc| proc.terminal_size()) {
@@ -360,6 +401,15 @@ fn require_signals(
         )
         .with_code(ErrorCode::ProviderUnavailable)
     })
+}
+
+/// A stdin failure as its own sentence: the provider's messages say what went
+/// wrong, and "provider error:" in front of each says nothing a program reads.
+fn stdin_message(e: es_runtime_providers::ProviderError) -> String {
+    match e {
+        es_runtime_providers::ProviderError::Other(message) => message,
+        other => other.to_string(),
+    }
 }
 
 fn require(process: &Option<Arc<dyn Process>>) -> std::result::Result<Arc<dyn Process>, OpError> {

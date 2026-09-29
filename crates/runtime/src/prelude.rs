@@ -22,6 +22,8 @@ pub(crate) fn source() -> String {
         include_str!("prelude/console.js"),
         include_str!("prelude/performance.js"),
         include_str!("prelude/navigator.js"),
+        // prompt/confirm/alert (D143): host ops only, nothing from later fragments.
+        include_str!("prelude/prompt.js"),
         include_str!("prelude/globals.js"),
         include_str!("prelude/encoding.js"),
         include_str!("prelude/base64.js"),

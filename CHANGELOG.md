@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Standard input** (DECISIONS D143). `stdin` in `runtime:process` has
+  `readable`, `lines()`, `question(query)`, `isTTY` and `setRawMode(on)`, and
+  the web's `prompt()`, `confirm()` and `alert()` are globals. All of them read
+  from one buffer, so no reader loses a line another read past. Questions are
+  written to standard error. With no terminal on stdin, the globals return at
+  once rather than wait. Raw mode delivers keys as they are pressed, and the
+  terminal is restored however the run ends; it is Unix only for now. No
+  capability is needed. A worker cannot read stdin.
+
 - **`parseArgs` in `runtime:process`** (DECISIONS D142). Node's
   `util.parseArgs`, with the same options (`type`, `short`, `multiple`,
   `default`), `strict`, `allowPositionals`, `allowNegative` and `tokens`, the

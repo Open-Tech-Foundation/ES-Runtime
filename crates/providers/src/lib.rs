@@ -615,6 +615,38 @@ pub trait Process: Send + Sync {
     fn terminal_size(&self) -> Option<(u16, u16)> {
         None
     }
+
+    /// The next bytes from the process's own standard input (D143): whatever
+    /// is available, or — with `line` — one line, up to and including its
+    /// terminator. `None` at the end of input.
+    ///
+    /// Every reader takes from one buffer, so bytes read past a line end by
+    /// one call are the next call's, whichever kind it is.
+    ///
+    /// Default: refused, for a host with no standard input — which is every
+    /// worker agent, since a process has one standard input and two agents
+    /// racing for its lines would each get an unpredictable half.
+    fn read_stdin(&self, line: bool) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>> {
+        let _ = line;
+        Box::pin(std::future::ready(Err(no_stdin())))
+    }
+
+    /// One line, **blocking the calling thread** until it arrives: what the
+    /// web's `prompt()` needs, which is synchronous by definition.
+    fn read_stdin_line_blocking(&self) -> Result<Option<Vec<u8>>, ProviderError> {
+        Err(no_stdin())
+    }
+
+    /// Puts the terminal on standard input into raw mode, or back (D143).
+    /// Default: refused.
+    fn set_stdin_raw(&self, raw: bool) -> Result<(), ProviderError> {
+        let _ = raw;
+        Err(no_stdin())
+    }
+}
+
+fn no_stdin() -> ProviderError {
+    ProviderError::Other("this host has no standard input".to_string())
 }
 
 /// One of the process's own standard streams.

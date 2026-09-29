@@ -66,6 +66,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` — `"ES-Runtime/<version>"` — and `hardwareConcurrency`)
 - **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — the standard one-argument form: pure URL resolution against the current module, with no I/O and no existence check. **Bare and `#private` specifiers resolve too**, through the module loader — useful for locating a file *inside* a dependency (a migration, a `.proto`, a template) whose install path you cannot hardcode. That reads `package.json` files, so it needs the same `FileSystem` grant an import does, and it obeys the same root jail and import policy; a denied run gets a `NotAllowedError` rather than a location. Resolving from somewhere other than the current module is `esdev`'s `resolve(specifier, from)` in `runtime:build` (D127). A module is its URL, query included: `./m.js?v=2` is a module of its own (D126).
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
+- **Questions:** `prompt(message?, default?)`, `confirm(message?)`, `alert(message?)` — synchronous, as on the web: they block the agent until a line is typed. The question goes to **standard error**. When stdin is not a terminal they do not wait: `prompt` returns `null`, `confirm` returns `false`, `alert` returns at once. An empty answer to `prompt` is its default, shown in brackets. No capability. See [Standard input](#standard-input).
 - **URL:** `URL` (incl. `canParse`, `parse`, and `createObjectURL`/`revokeObjectURL` for in-process `blob:` URLs), `URLSearchParams`, `URLPattern`
 - **Fetch:** `fetch`, `Request`, `Response` (incl. `Response.json`/`error`/`redirect`), `Headers` (incl. `getSetCookie`) — a `ReadableStream` request body streams as a chunked upload (response bodies stream too), and all three [redirect modes](#redirects) are honoured
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa` — `TextDecoder` accepts every label the WHATWG Encoding Standard defines (`utf-8`, `utf-16le`/`be`, `windows-1252`, `shift_jis`, `gb18030`, …), with `fatal`, `ignoreBOM` and streaming decode
@@ -1513,6 +1514,7 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | ----------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Assigned values are **coerced to strings** — an environment holds nothing else, so `env.PORT = 8080` stores `"8080"` and a symbol throws, matching Node and Deno. Secret-keyed values are `Secret` wrappers (see below) — including ones the program **assigns at runtime**, so `env.MY_API_KEY = "…"` masks on the same convention the snapshot does. |
 | `args`            | `readonly string[]`                 | Program arguments after the runtime binary and the script (or `-e` snippet). **Frozen.** Excludes the executable and script path.                                                          |
+| `stdin`           | `StdIn`                             | The process's standard input: `isTTY`, `readable`, `lines()`, `question(query)`, `setRawMode(on)`, `isRaw`. **No capability**; main agent only. See [Standard input](#standard-input). |
 | `parseArgs(config?)` | `(config?: ParseArgsConfig) => { values, positionals, tokens? }` | Parses `config.args` (default: `args`) against declared `options` — Node's `util.parseArgs`, with the same options, result and error codes. **No capability.** See [Parsing arguments](#parsing-arguments). |
 | `platform`        | `string`                            | Host OS — the OS-native value (`std::env::consts::OS`): `"linux"`, `"macos"`, `"windows"`, …                                                                                              |
 | `arch`            | `string`                            | Host CPU architecture — the OS-native value (`std::env::consts::ARCH`): `"x86_64"`, `"aarch64"`, `"arm"`, …                                                                               |
@@ -1527,6 +1529,26 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | `stderr`          | `StdStream`                         | The same, for standard error.                                                                                                                                                             |
 | `permissions`     | `object`                            | What this process is allowed to reach — see **Permissions** below. **Needs no capability.**                                                                                               |
 | `default`         | `object`                            | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+
+### Standard input
+
+`stdin` reads the process's own standard input (D143). All of its readers, and
+the global `prompt()`, take from one buffer, so bytes one reader read past a
+line end are the next reader's.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `isTTY` | `boolean` | Whether stdin is a terminal. |
+| `readable` | `ReadableStream<Uint8Array>` | The bytes as they arrive. One stream, pulling only when read. |
+| `lines()` | `AsyncIterableIterator<string>` | Each line without its terminator (`\n`, `\r\n`, or raw mode's `\r`), until the end of input. |
+| `question(query?)` | `Promise<string \| null>` | Writes `query` to **standard error** and resolves with the next line, or `null` at the end of input. Works on a pipe. |
+| `setRawMode(on)` | `(boolean) => StdIn` | Keys as they are pressed: no echo, no line editing, and ^C arrives as the byte `0x03` rather than as a signal. The terminal is restored when the run ends, however it ends (`exit()`, an uncaught error, a signal). Throws when stdin is not a terminal. **Unix only**: throws on Windows for now. |
+| `isRaw` | `boolean` | Whether raw mode is on. |
+
+No capability is needed: this is the stream the program was started with, as
+`stdout` is. A worker's reads throw `this host has no standard input`, because a
+process has one input. The host starts reading stdin on the first read, so a
+program that never reads it leaves it untouched for its children.
 
 ### Parsing arguments
 

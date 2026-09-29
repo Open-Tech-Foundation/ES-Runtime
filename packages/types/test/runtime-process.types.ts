@@ -42,3 +42,23 @@ for (const token of withTokens.tokens) {
 const loose = parseArgs({ strict: false });
 const anything: string | boolean | (string | boolean)[] | undefined = loose.values.whatever;
 void [port, verbose, tags, rest, wrong, anything];
+
+// `stdin`: lines are strings, a question may meet the end of input.
+import { stdin } from "runtime:process";
+
+async function stdinTypes() {
+  const answer: string | null = await stdin.question("Name? ");
+  for await (const line of stdin.lines()) {
+    const text: string = line;
+    void text;
+  }
+  const reader = stdin.readable.getReader();
+  const chunk: Uint8Array | undefined = (await reader.read()).value;
+  const raw: boolean = stdin.setRawMode(true).isRaw;
+  // @ts-expect-error — a question can meet the end of input.
+  const always: string = await stdin.question();
+  const name: string | null = prompt("Name?", "anon");
+  const sure: boolean = confirm("Sure?");
+  void [answer, chunk, raw, always, name, sure];
+}
+void stdinTypes;

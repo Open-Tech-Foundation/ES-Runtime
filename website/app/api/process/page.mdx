@@ -18,7 +18,7 @@ signals, and exit. Aligned in spirit with the WinterTC CLI-API proposal.
 ## Import
 
 ```js
-import { env, args, parseArgs, platform, arch, cwd, exit, unmask } from "runtime:process";
+import { env, args, parseArgs, stdin, platform, arch, cwd, exit, unmask } from "runtime:process";
 
 // Or the default aggregate:
 import process from "runtime:process";
@@ -40,6 +40,7 @@ import process from "runtime:process";
 | `signals()` | `() => SignalName[]` | Signal names this platform can deliver. **Signals.** |
 | `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Signals.** |
 | `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one restores the default action. **Signals.** |
+| `stdin` | `StdIn` | The process's standard input: `readable`, `lines()`, `question()`, `setRawMode()`. **No capability.** |
 | `stdout` | `StdStream` | The process's own standard output — `write(chunk)`, `isTTY`, `columns`, `rows`. **No capability**, like `console.log`. |
 | `stderr` | `StdStream` | The same, for standard error. |
 | `permissions` | `object` | What this run may reach (see below). **No capability.** |
@@ -132,6 +133,47 @@ import { exit } from "runtime:process";
 if (failed) exit(1); // records the code and halts immediately
 exit();              // defaults to 0
 ```
+
+## stdin — reading input
+
+```js
+import { stdin } from "runtime:process";
+
+// A question on standard error, the answer from standard input.
+const name = await stdin.question("Name? ");
+
+// A filter: `cat data.txt | esrun count.js`
+let count = 0;
+for await (const line of stdin.lines()) count++;
+console.log(count);
+```
+
+| Member | Description |
+| --- | --- |
+| `isTTY` | Whether stdin is a terminal. |
+| `readable` | A `ReadableStream<Uint8Array>` of the bytes as they arrive. |
+| `lines()` | Each line without its terminator, until the end of input. |
+| `question(query?)` | Writes `query` to standard error, resolves with the next line, or `null` at the end of input. |
+| `setRawMode(on)` | Keys as they are pressed, with no echo or line editing. ^C arrives as the byte `0x03`. Throws when stdin is not a terminal; Unix only for now. |
+| `isRaw` | Whether raw mode is on. |
+
+All of these, and the global `prompt()`, read from one buffer, so a line one of
+them read past is not lost to the next. The runtime restores the terminal from
+raw mode when the program ends, however it ends.
+
+```js
+// One keypress, without Enter.
+stdin.setRawMode(true);
+const { value } = await stdin.readable.getReader().read();
+stdin.setRawMode(false);
+```
+
+For a quick synchronous question, the web's `prompt()`, `confirm()` and
+`alert()` are globals. When stdin is not a terminal, they return at once rather
+than wait.
+
+No capability is needed. A worker cannot read stdin, because a process has one
+input.
 
 ## stdout — drawing on a terminal
 
@@ -310,6 +352,7 @@ number, so it is reported nowhere rather than on two platforms out of three.
 | `TypeError` | `unmask()` gets something other than a string or a `Secret` from env. |
 | `DOMException` | name `"NotAllowedError"` — the Env capability is not granted (env access), or Signals (signal access). |
 | `TypeError` | `onSignal()` gets a name this runtime does not know. |
+| `Error` | `stdin` read in a worker (a process has one input), or `setRawMode()` when stdin is not a terminal or on Windows. |
 | `TypeError` | `parseArgs()`: `code` `ERR_PARSE_ARGS_UNKNOWN_OPTION`, `ERR_PARSE_ARGS_INVALID_OPTION_VALUE` or `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL` for the command line; `ERR_INVALID_ARG_TYPE` / `ERR_INVALID_ARG_VALUE` for `config`. |
 | `Error` | `onSignal()` gets a signal this platform cannot deliver — better than a handler that never fires. |
 

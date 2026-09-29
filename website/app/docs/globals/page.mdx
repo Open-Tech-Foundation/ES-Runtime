@@ -21,6 +21,7 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | `structuredClone` | |
 | `reportError` | |
 | `navigator` | `userAgent` — `"ES-Runtime/<version>"`; `hardwareConcurrency` — the CPU count a [worker](/docs/guides/workers) pool is sized from |
+| `prompt`, `confirm`, `alert` | Ask the person at the terminal, synchronously, as on the web. The question goes to standard error. With no terminal on stdin they return at once (`null`, `false`, `undefined`). See [`stdin`](/api/process). |
 
 ## console
 

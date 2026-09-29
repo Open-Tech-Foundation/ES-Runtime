@@ -15,6 +15,9 @@ itself.
 
 ### Added
 
+- `runtime:process` declares `stdin` and its `StdIn` interface (`readable`,
+  `lines()`, `question()`, `setRawMode()`, `isRaw`, `isTTY`).
+
 - `runtime:process` declares `parseArgs` with `ParseArgsConfig`,
   `ParseArgsOptionConfig`, `ParseArgsToken` and `ParsedResults`. `values` is
   typed from the declared options: a `string` or `boolean` (an array for

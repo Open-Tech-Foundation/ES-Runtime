@@ -38,7 +38,7 @@ impl Console for StdoutConsole {
             // Any other write failure is equally unactionable from inside a
             // console sink, so it is dropped rather than raised into guest code.
             if err.kind() == std::io::ErrorKind::BrokenPipe {
-                std::process::exit(0);
+                crate::run::leave(0);
             }
         }
     }

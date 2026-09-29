@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
-use es_runtime_providers::{Process, ProviderError, StdStream};
+use es_runtime_providers::{BoxFuture, Process, ProviderError, StdStream};
 
 /// A [`Process`] reading the host environment/cwd/platform, with caller-provided
 /// program arguments, an optional env overlay, and a recorded exit code.
@@ -206,6 +206,20 @@ impl Process for SystemProcess {
             }
         }
         None
+    }
+
+    /// The real standard input, through the one reader every caller shares
+    /// (D143, [`crate::stdin`]).
+    fn read_stdin(&self, line: bool) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>> {
+        Box::pin(async move { crate::stdin::read(line).await.map_err(ProviderError::Other) })
+    }
+
+    fn read_stdin_line_blocking(&self) -> Result<Option<Vec<u8>>, ProviderError> {
+        crate::stdin::read_line_blocking().map_err(ProviderError::Other)
+    }
+
+    fn set_stdin_raw(&self, raw: bool) -> Result<(), ProviderError> {
+        crate::stdin::set_raw(raw).map_err(ProviderError::Other)
     }
 }
 

@@ -569,9 +569,33 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     // run a developer most wants a report from is the one that *failed* for want
     // of a permission, and that one leaves through an early `return Err`.
     let observer = config.observer.clone();
+    // Held for the whole run, so an ordinary return, an error and a panic all
+    // give the terminal back; the exits that bypass destructors go through
+    // [`leave`] instead.
+    let _terminal = TerminalGuard;
     let result = execute(bin, config).await;
     finish_trace(observer.as_ref());
     result
+}
+
+/// Gives the terminal back when the run ends, if the program put it into raw
+/// mode (D143). A shell left raw echoes nothing, and nobody at it knows why.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        es_runtime_default_providers::restore_terminal();
+    }
+}
+
+/// Ends the process with `code` — the one way a run leaves without returning.
+///
+/// `std::process::exit` runs no destructors, so everything a run has to put
+/// back on its way out is put back here, rather than at each of the places that
+/// exit: today that is the terminal a program put into raw mode (D143).
+pub(crate) fn leave(code: i32) -> ! {
+    es_runtime_default_providers::restore_terminal();
+    std::process::exit(code)
 }
 
 /// The run itself. Everything that can end it early lives in here, so its one
@@ -1009,7 +1033,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // load via the interrupt; exit with that code (not as an error).
     if let Some(code) = process.requested_exit_code() {
         finish_trace(config.observer.as_ref());
-        std::process::exit(code);
+        leave(code);
     }
     if let Err(err) = loaded {
         if timed_out.load(Ordering::SeqCst) {
@@ -1100,7 +1124,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // interrupt; exit with that code rather than reporting the termination.
     if let Some(code) = process.requested_exit_code() {
         finish_trace(config.observer.as_ref());
-        std::process::exit(code);
+        leave(code);
     }
 
     // The drive returned because a graceful shutdown drained the servers. The
@@ -1114,7 +1138,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             eprintln!("{bin}: shutdown grace expired with requests still in flight");
         }
         finish_trace(config.observer.as_ref());
-        std::process::exit(shutdown_code);
+        leave(shutdown_code);
     }
 
     // A top-level throw (or a rejected top-level await) fails the module's

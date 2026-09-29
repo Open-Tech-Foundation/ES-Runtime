@@ -1465,6 +1465,7 @@ dependencies = [
  "es-runtime-cli-common",
  "es-runtime-common",
  "rcgen",
+ "rustix 1.1.4",
  "tokio",
  "url",
 ]

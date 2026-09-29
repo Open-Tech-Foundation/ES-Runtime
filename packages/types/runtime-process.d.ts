@@ -178,6 +178,39 @@ declare module "runtime:process" {
   export const stderr: StdStream;
 
   /**
+   * The process's standard input (D143). Every way of reading takes from one
+   * buffer, so a line one reader read past is the next reader's. No
+   * capability; a worker's reads throw, since a process has one input.
+   */
+  export interface StdIn {
+    /** `"stdin"`. */
+    readonly name: "stdin";
+    /** Whether standard input is a terminal — somebody who can answer. */
+    readonly isTTY: boolean;
+    /** The bytes as they arrive. One stream, pulling only when read. */
+    readonly readable: ReadableStream<Uint8Array>;
+    /** Each line without its terminator (`\n`, `\r\n`), until the end of input. */
+    lines(): AsyncIterableIterator<string>;
+    /**
+     * Writes `query` to **standard error** and resolves with the next line, or
+     * `null` at the end of input. Works on a pipe too.
+     */
+    question(query?: string): Promise<string | null>;
+    /**
+     * Raw mode: each key as it is pressed, no echo, no line editing, and ^C as
+     * the byte `0x03` rather than a signal. The terminal is given back when the
+     * program ends, however it ends. Throws when stdin is not a terminal, and
+     * on Windows for now. Returns `stdin`.
+     */
+    setRawMode(on: boolean): StdIn;
+    /** Whether raw mode is on. */
+    readonly isRaw: boolean;
+  }
+
+  /** The process's standard input. */
+  export const stdin: StdIn;
+
+  /**
    * Records the exit code and halts execution immediately — code after the call
    * does not run.
    */
@@ -361,6 +394,7 @@ declare module "runtime:process" {
     arch: typeof arch;
     cwd: typeof cwd;
     exit: typeof exit;
+    stdin: typeof stdin;
     stdout: typeof stdout;
     stderr: typeof stderr;
     unmask: typeof unmask;

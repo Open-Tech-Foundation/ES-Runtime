@@ -62,12 +62,12 @@ pub fn spawn_shutdown_watcher(
                 }
                 if draining.swap(true, Ordering::SeqCst) {
                     // Second interrupt while draining — stop waiting.
-                    std::process::exit(signal.exit_code());
+                    crate::run::leave(signal.exit_code());
                 }
                 if http.shutdown_all() == 0 {
                     // Nothing in flight to protect; behave as the default action
                     // would have.
-                    std::process::exit(signal.exit_code());
+                    crate::run::leave(signal.exit_code());
                 }
                 eprintln!(
                     "{bin}: {} received, draining in-flight requests (up to {}ms)",
@@ -81,7 +81,7 @@ pub fn spawn_shutdown_watcher(
                 tokio::spawn(async move {
                     tokio::time::sleep(grace).await;
                     handle.terminate();
-                    std::process::exit(signal.exit_code());
+                    crate::run::leave(signal.exit_code());
                 });
                 // The drive loop reaches quiescence once the servers have
                 // drained; record the code it should exit with.

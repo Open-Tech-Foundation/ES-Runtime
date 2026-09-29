@@ -31,5 +31,10 @@ url.workspace = true
 # runtime does rather than in the verbatim `\\?\` form (D25).
 dunce.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+# Test-only: a pseudo-terminal, so the stdin tests can drive `prompt()` and raw
+# mode through a real terminal and check it is given back afterwards (D143).
+rustix = { workspace = true, features = ["std", "pty", "termios", "fs"] }
+
 [lints]
 workspace = true
