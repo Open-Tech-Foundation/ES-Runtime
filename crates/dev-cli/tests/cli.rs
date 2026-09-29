@@ -11203,12 +11203,10 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
     write_in(
         &dir,
         "esdev.json",
-        &format!(
-            r#"{{ "build": {{ "targets": {{
-                   "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }},
-                   "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
-                 "dev": {{ "run": "server" }} }}"#
-        ),
+        r#"{ "build": { "targets": {
+                   "server": { "entry": "src/server.mjs", "out": "dist/server.js" },
+                   "web": { "entry": "index.html", "outdir": "dist" } } },
+                 "dev": { "run": "server" } }"#,
     );
 
     let (_supervisor, log) = start_in_logging(&dir, &[]);
@@ -11295,10 +11293,8 @@ fn a_failed_build_leaves_the_running_server_alone() {
     write_in(
         &dir,
         "esdev.json",
-        &format!(
-            r#"{{ "build": {{ "targets": {{ "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }} }},
-                 "dev": {{ "run": "server" }} }}"#
-        ),
+        r#"{ "build": { "targets": { "server": { "entry": "src/server.mjs", "out": "dist/server.js" } } },
+                 "dev": { "run": "server" } }"#,
     );
 
     let _supervisor = start_in(&dir);

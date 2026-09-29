@@ -51,7 +51,7 @@ pub async fn check_to(dir: &Path, args: &[String], to_stderr: bool) -> Result<()
         // A declared manager that is not installed is the project's answer
         // anyway: say that rather than leaking the spawn failure.
         if e.kind() == std::io::ErrorKind::NotFound {
-                format!(
+            format!(
                 "this project uses {name}, which is not installed here.\n\n\
                      Install it and run `esdev typecheck` again.",
                 name = manager.name(),
@@ -181,7 +181,8 @@ mod tests {
 
     /// A directory holding a fixture project root.
     fn root(name: &str, files: &[(&str, &str)]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("esdev-typecheck-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("esdev-typecheck-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the fixture");
         for (name, contents) in files {
