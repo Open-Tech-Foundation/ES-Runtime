@@ -719,6 +719,7 @@ fn parse_args() -> Result<Command, String> {
                         args: rest,
                         capabilities: permissions.resolve()?,
                         scopes: permissions.scopes()?,
+                        permissive: permissions.permissive(),
                         options,
                         stripper: TypeStripper::new(),
                         extensions: guest::extensions(),
@@ -774,6 +775,7 @@ fn parse_args() -> Result<Command, String> {
                         args: rest,
                         capabilities: permissions.resolve()?,
                         scopes: permissions.scopes()?,
+                        permissive: permissions.permissive(),
                         options,
                         stripper: TypeStripper::new(),
                         extensions: guest::extensions(),
@@ -1929,6 +1931,7 @@ fn test_capabilities(
     (
         es_runtime_common::CapabilitySet,
         es_runtime_cli_common::permissions::Scopes,
+        bool,
     ),
     String,
 > {
@@ -1941,7 +1944,11 @@ fn test_capabilities(
             return Err(format!("{arg} is not a permission flag."));
         }
     }
-    Ok((permissions.resolve()?, permissions.scopes()?))
+    Ok((
+        permissions.resolve()?,
+        permissions.scopes()?,
+        permissions.permissive(),
+    ))
 }
 
 /// The grant a test file runs under: its own `@permissions`, resolved from
@@ -1954,6 +1961,7 @@ fn file_capabilities(
     (
         es_runtime_common::CapabilitySet,
         es_runtime_cli_common::permissions::Scopes,
+        bool,
     ),
     String,
 > {
@@ -1978,7 +1986,13 @@ fn file_capabilities(
     }
     let resolved = permissions
         .resolve()
-        .and_then(|capabilities| Ok((capabilities, permissions.scopes()?)))
+        .and_then(|capabilities| {
+            Ok((
+                capabilities,
+                permissions.scopes()?,
+                permissions.permissive(),
+            ))
+        })
         .map_err(|err| format!("{}: @permissions: {err}", file.display()))?;
     Ok(resolved)
 }
@@ -2785,7 +2799,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     // restricted parent executes, and the flags arrived on its command
     // line for exactly this run. A file that declares its own grant runs
     // under that instead.
-    let (capabilities, scopes) =
+    let (capabilities, scopes, permissive) =
         match file_capabilities(std::path::Path::new(&file), &config.run.permission_args) {
             Ok(resolved) => resolved,
             Err(err) => {
@@ -2801,6 +2815,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             args: Vec::new(),
             capabilities,
             scopes,
+            permissive,
             options: RunOptions {
                 track_pending_work: config.run.detect_leaks,
                 ..RunOptions::default()
@@ -2990,7 +3005,7 @@ pub(crate) async fn run_tests_unisolated(
     }
     // A rehearsal resolved like any run: these files execute here rather than
     // in children, so there is no command line for them to re-parse.
-    let (capabilities, scopes) = match test_capabilities(&config.run.permission_args) {
+    let (capabilities, scopes, permissive) = match test_capabilities(&config.run.permission_args) {
         Ok(resolved) => resolved,
         Err(err) => {
             print_error(&err);
@@ -3006,6 +3021,7 @@ pub(crate) async fn run_tests_unisolated(
             args: Vec::new(),
             capabilities,
             scopes,
+            permissive,
             options: RunOptions::default(),
             stripper: TypeStripper::new(),
             extensions: guest::test_extensions(config.run.dom),

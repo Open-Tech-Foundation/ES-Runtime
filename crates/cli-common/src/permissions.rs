@@ -162,7 +162,7 @@ impl Permissions {
 
     /// Whether this command line starts from everything rather than nothing —
     /// set outright by an `--all` flag, and otherwise by the binary's baseline.
-    fn permissive(&self) -> bool {
+    pub fn permissive(&self) -> bool {
         match (self.allow_all, self.deny_all) {
             (true, _) => true,
             (_, true) => false,
@@ -254,7 +254,8 @@ impl Permissions {
                         format!(
                             "{flag}: {e}\n\n\
                              An entry is a host (`example.com`), a host and port \
-                             (`db.internal:5432`), or a bare port (`8080`, any interface). \
+                             (`db.internal:5432`), a bare port (`8080`, any interface), or \
+                             an absolute Unix socket path (`unix:/run/app.sock`). \
                              Bracket an IPv6 address that carries a port: `[::1]:8080`."
                         )
                     })?;

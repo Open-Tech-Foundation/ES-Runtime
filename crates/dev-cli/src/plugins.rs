@@ -259,6 +259,8 @@ pub(crate) async fn launch(
                 args: Vec::new(),
                 capabilities: es_runtime_common::CapabilitySet::all(),
                 scopes: std::collections::HashMap::new(),
+                // Granted everything above, so every socket path too (D140).
+                permissive: true,
                 options: es_runtime_cli_common::args::RunOptions::default(),
                 transform: Some(Arc::new(crate::transform::TypeStripper::new())),
                 // A plugin is source somebody is editing, like everything else

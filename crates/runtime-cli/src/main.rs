@@ -219,6 +219,7 @@ fn parse_args() -> Result<Config, String> {
                     args: rest,
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
+                    permissive: permissions.permissive(),
                     options,
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
@@ -267,6 +268,7 @@ fn parse_args() -> Result<Config, String> {
                     args: rest,
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
+                    permissive: permissions.permissive(),
                     options,
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.

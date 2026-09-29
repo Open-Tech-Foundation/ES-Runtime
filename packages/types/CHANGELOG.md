@@ -13,6 +13,12 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:net` declares Unix domain sockets: `connect({ path })` with
+  `UnixAddress` and `UnixConnectOptions`, and `listen({ path })` returning a
+  `UnixListener` whose `addr` is `{ path }`.
+
 ## [0.10.0] - 2026-09-28
 
 ### Changed

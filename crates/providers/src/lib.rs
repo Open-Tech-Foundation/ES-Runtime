@@ -1283,6 +1283,27 @@ pub trait NetProvider: Send + Sync {
         Box::pin(async { Err(ProviderError::Other("startTls is not supported".into())) })
     }
 
+    /// Opens a Unix domain stream socket to `path` (D140); resolves to (socket
+    /// id, info), with the path as [`SocketInfo::remote_address`] and port `0`.
+    /// The socket is then read, written and closed by id like a TCP one.
+    ///
+    /// Plaintext only, and `path` is absolute — the runtime has checked both.
+    /// The default errors: a provider reaches socket paths only if it says so.
+    fn connect_unix(&self, path: String) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let _ = path;
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED_UNIX.into())) })
+    }
+
+    /// Binds a Unix domain stream socket at `path` (D140); resolves to
+    /// (listener id, info), with the path as [`SocketInfo::local_address`].
+    /// Connections are taken with [`accept`](Self::accept), and
+    /// [`close_listener`](Self::close_listener) removes the socket file this
+    /// call created — only that file, never one it finds already there.
+    fn listen_unix(&self, path: String) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let _ = path;
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED_UNIX.into())) })
+    }
+
     /// Binds a UDP socket; resolves to (socket id, bound-address info). `port`
     /// `0` picks an ephemeral one, read back from the returned [`SocketInfo`]
     /// — and an ephemeral port is still a port this process can be reached on.
@@ -1423,6 +1444,7 @@ pub trait NetProvider: Send + Sync {
 /// What a [`NetProvider`] with no datagram support says. One spelling, so the
 /// six default methods cannot drift into six different messages.
 const UNSUPPORTED: &str = "datagram sockets are not supported by this NetProvider";
+const UNSUPPORTED_UNIX: &str = "Unix domain sockets are not supported by this NetProvider";
 
 /// Metadata about an opened WebSocket, from [`WebSocketProvider::connect`].
 #[derive(Default)]

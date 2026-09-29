@@ -68,16 +68,18 @@ function parseAddress(address) {
 // A duplex socket. `conn` is a Promise resolving to { id, remoteAddress, … } —
 // the streams await it, so connect() can return synchronously.
 class Socket {
-  constructor(conn, { upgrade = null, allowHalfOpen = false } = {}) {
+  constructor(conn, { upgrade = null, allowHalfOpen = false, unix = false } = {}) {
     // Wrap once: every consumer (opened, the streams, close, a later startTls)
     // awaits _conn, so a connect/TLS failure surfaces uniformly as a SocketError.
     this._conn = socketOp(conn);
     // WinterTC SocketInfo: combined "host:port" addresses + the negotiated alpn.
-    // remotePort/localPort are kept as a convenience superset.
+    // remotePort/localPort are kept as a convenience superset. On a Unix socket
+    // (D140) an address is the path itself, and an unnamed end is "".
+    const address = unix ? (host) => host : hostPort;
     this.opened = this._conn.then((c) => ({
-      remoteAddress: hostPort(c.remoteAddress, c.remotePort),
+      remoteAddress: address(c.remoteAddress, c.remotePort),
       remotePort: c.remotePort,
-      localAddress: hostPort(c.localAddress, c.localPort),
+      localAddress: address(c.localAddress, c.localPort),
       localPort: c.localPort,
       alpn: c.alpn ?? null,
     }));
@@ -191,8 +193,34 @@ class Socket {
   }
 }
 
+// A Unix socket path (D140), checked here for what the host cannot say as
+// clearly: that a path replaces the host and port rather than joining them, and
+// that it is plaintext. Absolute-ness and the allowlist are the host's to check.
+function socketPath(options, what, extra) {
+  const path = options.path;
+  if (typeof path !== "string" || path === "") {
+    throw socketError(`${what}: path must be a non-empty string`);
+  }
+  for (const key of ["hostname", "host", "port", ...extra]) {
+    if (options[key] !== undefined) {
+      throw socketError(`${what}: path names a Unix socket, so ${key} cannot be given with it`);
+    }
+  }
+  return path;
+}
+
 // WinterTC connect(): returns a Socket immediately; .opened settles on connect.
 function connect(address, options = {}) {
+  if (address && typeof address === "object" && "path" in address) {
+    const path = socketPath(address, "connect", []);
+    if ((options.secureTransport ?? "off") !== "off") {
+      throw socketError("connect: a Unix socket is plaintext — secureTransport must be 'off'");
+    }
+    return new Socket(ops.net_connect_unix(path), {
+      allowHalfOpen: options.allowHalfOpen === true,
+      unix: true,
+    });
+  }
   const parsed = parseAddress(address);
   const hostname = parsed.hostname;
   const port = validPort(parsed.port, { allowZero: false });
@@ -221,9 +249,12 @@ function connect(address, options = {}) {
 
 // A listening socket: an async iterator of incoming Sockets.
 class Listener {
-  constructor(ready) {
+  constructor(ready, { unix = false } = {}) {
     this._ready = ready; // Promise<{ id, localAddress, localPort }>
-    this.addr = ready.then((s) => ({ hostname: s.localAddress, port: s.localPort }));
+    this._unix = unix;
+    this.addr = ready.then((s) =>
+      unix ? { path: s.localAddress } : { hostname: s.localAddress, port: s.localPort },
+    );
     // Same shape as Socket.opened above: `addr` is built eagerly, so a bind
     // that fails (a denied address, a port already in use) rejects it whether
     // or not anyone asked for the address. A caller that handles the failure on
@@ -239,7 +270,7 @@ class Listener {
     if (this._closed) return null;
     const { id } = await this._ready;
     const s = await ops.net_accept(id);
-    return s === null ? null : new Socket(Promise.resolve(s));
+    return s === null ? null : new Socket(Promise.resolve(s), { unix: this._unix });
   }
 
   close() {
@@ -260,6 +291,10 @@ class Listener {
 }
 
 function listen(options = {}) {
+  if ("path" in options) {
+    const path = socketPath(options, "listen", ["secureTransport", "cert", "key", "alpn", "reusePort"]);
+    return new Listener(socketOp(ops.net_listen_unix(path)), { unix: true });
+  }
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
   const port = validPort(options.port, { allowZero: true });
   // secureTransport: "on" terminates TLS — every accepted Socket is encrypted.

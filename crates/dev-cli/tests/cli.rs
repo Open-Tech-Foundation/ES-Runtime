@@ -156,6 +156,44 @@ fn runs_a_module_file() {
     assert_eq!(stdout(&out).trim(), "ran 42");
 }
 
+/// esdev starts from everything, so a Unix socket path needs no flag there —
+/// and under `--deny-all` it must be named, as in esrun (D140).
+#[cfg(unix)]
+#[test]
+fn a_socket_path_follows_the_grant_esdev_starts_from() {
+    let dir = std::env::temp_dir().join(format!("esdev-uds-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join("app.sock").display().to_string();
+    let code = format!(
+        "-e=import {{ listen }} from 'runtime:net';\
+         try {{ const l = listen({{ path: '{path}' }}); await l.addr; await l.close(); console.log('ok'); }}\
+         catch (e) {{ console.log(e.code); }}"
+    );
+    let out = esdev().arg(&code).output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ok");
+
+    let out = esdev()
+        .args(["--deny-all", "--allow-listen"])
+        .arg(&code)
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(
+        stdout(&out).trim(),
+        "ERR_PERMISSION_DENIED",
+        "{}",
+        stderr(&out)
+    );
+
+    let out = esdev()
+        .args(["--deny-all", &format!("--allow-listen=unix:{path}")])
+        .arg(&code)
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(stdout(&out).trim(), "ok", "{}", stderr(&out));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn runs_an_inline_snippet() {
     let out = esdev()

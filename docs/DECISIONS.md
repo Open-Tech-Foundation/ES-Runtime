@@ -2925,3 +2925,21 @@ The day before, the same reasoning had been taken one step further and an out-of
 **Rejected:** importing `oxc-transform-react` from a template plugin (it requires NAPI and Node built-ins); enabling compilation globally for every JSX framework (the compiler targets React and should not affect Preact or other runtimes).
 
 **Consequences:** esdev builds include OXC's experimental compiler and its current limitations; projects opt in explicitly with `jsx.reactCompiler: true`. This adds a native Rust compiler dependency to esdev, not to generated projects.
+
+---
+
+### D140 — Unix domain stream sockets in `runtime:net`: a path is an address, and it is always named · *Proposed (2026-09-29)* · *extends D28, D38*
+
+**Context:** `runtime:net` reaches TCP and UDP addresses only. The local services a server most often talks to listen on a filesystem path as well or instead: the Docker Engine API (`/var/run/docker.sock`), PostgreSQL, MySQL and Redis on the same host, PHP-FPM, and sidecars that expose nothing on the network. Node (`net.connect({ path })`), Deno (`Deno.connect({ transport: "unix", path })`) and Bun all reach them; esrun cannot. D58 listed unix-domain datagram sockets as not done; the stream case was never written down.
+
+**Decision (maintainer, 2026-09-29: stream only; net grants with `unix:` entries; a path is always named; absolute paths; Unix only):**
+
+- **`connect({ path })` and `listen({ path })`**, returning the same `Socket` and `Listener` as TCP. A path takes the place of `hostname`/`port`; giving both is an error. `SocketInfo` reports the path as the address and `0` as the port, and `listener.addr` is `{ path }`. **Rejected: Deno's `transport: "unix"`** — the path already says which transport it is, and a second field that must agree with it is one more way to be wrong.
+- **Gated on the net grants, not the filesystem ones.** Connecting needs `Net` and a `unix:<path>` entry in `--allow-net`; listening needs `NetListen` and one in `--allow-listen`. Talking to a daemon is reaching a service, whatever the address looks like, and a `--allow-write` given for a data directory must not also hand over the Docker socket. **Rejected: Deno's read/write grants**, for that reason; **rejected: requiring both**, which costs two flags per socket and bounds nothing the net entry does not.
+- **A path is always named.** A bare `--allow-net` or `--allow-listen` grants every *network* address and no socket path: a run given the network for its HTTP APIs must not gain a root-equivalent daemon socket when it upgrades. Matching is exact, like every other entry (D38) — no directory prefixes, no wildcards. A run that starts from everything (`--allow-all`, or esdev's baseline) covers paths too, because nothing in that mode can name one and "everything" is what it says.
+- **Absolute paths only**, in the program and in the flags. A relative path would have to resolve against the entry file (D25) in one place and the working directory in the other, and the two differ for every bundled server. Refused with the fix in the message. The 108-byte `sun_path` limit is reported, not worked around.
+- **Plaintext only.** `secureTransport` other than `"off"` with a `path` is refused: a local socket is authenticated by its file permissions, and TLS over one is rare enough to wait for a caller.
+- **The listener removes the socket file it created** when it is closed, and only if the file at that path is still the one it bound (same device and inode), so a successor that has already rebound the path is left alone. A path already taken — including a stale file from a crash — is an `EADDRINUSE` error naming the path; the runtime never removes a file it did not create.
+- **Unix only.** Windows has `AF_UNIX` since 10 1803, but tokio does not expose it there; a `path` is refused with an unsupported-platform error, as `reusePort` is. Entries parse on every platform, so one command line works everywhere.
+
+**Not here:** datagram sockets on a path (syslog's `/dev/log`, systemd's notify socket), Linux abstract-namespace names, passing file descriptors (`SCM_RIGHTS`), peer credentials (`SO_PEERCRED`), `serve()` and `fetch()` over a path, and Windows.

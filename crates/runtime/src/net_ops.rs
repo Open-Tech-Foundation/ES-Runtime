@@ -213,7 +213,7 @@ pub(crate) fn install(
     // gets the provider's "this listener is done" rather than a refusal aimed at
     // a different mistake. The high-cardinality handles (sockets, requests,
     // children) are the ones that must give their ids back.
-    let owned = listeners;
+    let owned = listeners.clone();
     let n = net.clone();
     engine.register_op(OpDecl::r#async("net_close_listener", move |args| {
         let n = n.clone();
@@ -227,6 +227,40 @@ pub(crate) fn install(
             Ok(Value::Undefined)
         })
     }))?;
+
+    // Unix domain sockets (D140): the same capabilities as their TCP
+    // counterparts, and the same registries — a socket on a path is read,
+    // written and closed exactly like one on a port. Which paths are allowed is
+    // the provider's check, as which hosts are.
+    let n = net.clone();
+    let owned = sockets.clone();
+    engine.register_op(
+        OpDecl::r#async("net_connect_unix", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let path = arg_str(&args, 0);
+            Box::pin(async move {
+                let (id, info) = require(&n)?.connect_unix(path).await.map_err(map_err)?;
+                Ok(socket_value(owned.own(id), &info))
+            })
+        })
+        .requires(Capability::Net),
+    )?;
+
+    let n = net.clone();
+    let owned = listeners.clone();
+    engine.register_op(
+        OpDecl::r#async("net_listen_unix", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let path = arg_str(&args, 0);
+            Box::pin(async move {
+                let (id, info) = require(&n)?.listen_unix(path).await.map_err(map_err)?;
+                Ok(socket_value(owned.own(id), &info))
+            })
+        })
+        .requires(Capability::NetListen),
+    )?;
 
     install_datagram(engine, net, datagrams, handle_refs)?;
 

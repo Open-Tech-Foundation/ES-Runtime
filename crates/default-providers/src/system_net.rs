@@ -51,7 +51,9 @@ type ConnectorKey = (Vec<String>, Vec<u8>);
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
-type AcceptRx = mpsc::Receiver<(Accepted, SocketAddr)>;
+/// An accepted stream and its peer's address — `None` for a Unix socket, whose
+/// peer is almost always unnamed.
+type AcceptRx = mpsc::Receiver<(Accepted, Option<SocketAddr>)>;
 type TcpRead = tokio::io::ReadHalf<TcpStream>;
 type TcpWrite = tokio::io::WriteHalf<TcpStream>;
 
@@ -62,6 +64,9 @@ type TcpWrite = tokio::io::WriteHalf<TcpStream>;
 enum Accepted {
     Plain(TcpStream),
     Tls(Box<tokio_rustls::server::TlsStream<TcpStream>>),
+    /// From a listener on a socket path (D140). Always plaintext.
+    #[cfg(unix)]
+    Unix(tokio::net::UnixStream),
 }
 
 /// Handles that pull a plaintext socket's raw halves back out of its reader and
@@ -141,6 +146,37 @@ pub struct SystemNet {
     /// and being reachable are separate capabilities (`Net` / `NetListen`), and
     /// the addresses that make sense for each have nothing to do with the other.
     allow_listen: Option<Arc<crate::HostAllowlist>>,
+    /// Whether a Unix socket path is reachable without being named in either
+    /// list (D140). Set only for a run that started from everything; a bare
+    /// `--allow-net` or `--allow-listen` grants network addresses, not paths.
+    any_socket_path: bool,
+    /// The socket file each Unix listener created, removed when the listener
+    /// is closed or this registry is dropped (see [`SocketFile`]).
+    socket_files: Arc<Mutex<HashMap<u64, SocketFile>>>,
+}
+
+/// A socket file a listener created, identified by device and inode as well as
+/// by path, so that removing it can never remove something else: if a
+/// successor has already bound the same path, the file there is a different
+/// one, and it is left alone.
+struct SocketFile {
+    path: std::path::PathBuf,
+    #[cfg(unix)]
+    id: (u64, u64),
+}
+
+impl Drop for SocketFile {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(meta) = std::fs::symlink_metadata(&self.path)
+                && (meta.dev(), meta.ino()) == self.id
+            {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
 }
 
 impl SystemNet {
@@ -166,6 +202,46 @@ impl SystemNet {
     pub fn with_listen_allowlist(mut self, allow: crate::HostAllowlist) -> Self {
         self.allow_listen = Some(Arc::new(allow));
         self
+    }
+
+    /// Lets `connect` and `listen` use any Unix socket path, named or not
+    /// (D140). For a run granted everything (`--allow-all`, esdev's baseline);
+    /// without it, a path must be named by a `unix:` entry in the matching list.
+    #[must_use]
+    pub fn with_any_socket_path(mut self) -> Self {
+        self.any_socket_path = true;
+        self
+    }
+
+    /// Refuses a socket path this run may not use: one that is not absolute, or
+    /// one no entry names. `flag` is the grant that would name it.
+    fn check_socket_path(
+        &self,
+        allow: Option<&crate::HostAllowlist>,
+        path: &str,
+        action: &str,
+        flag: &str,
+    ) -> Result<(), ProviderError> {
+        let p = std::path::Path::new(path);
+        if !p.is_absolute() {
+            return Err(ProviderError::Coded {
+                code: ErrorCode::InvalidPath,
+                message: format!(
+                    "{action} {path}: a socket path must be absolute — resolve it first, \
+                     e.g. with runtime:path's resolve()"
+                ),
+            });
+        }
+        if self.any_socket_path || allow.is_some_and(|allow| allow.permits_path(p)) {
+            return Ok(());
+        }
+        Err(ProviderError::Coded {
+            code: ErrorCode::PermissionDenied,
+            message: format!(
+                "{path} is not an allowed socket path ({action}) — a socket path is never \
+                 covered by a bare grant; name it: {flag}=unix:{path}"
+            ),
+        })
     }
 
     /// Like [`new`](Self::new), but trusting `roots` for TLS instead of the
@@ -453,6 +529,34 @@ fn tls_err(e: impl ToString) -> ProviderError {
     }
 }
 
+/// A Unix socket's info: its path in the address fields, port `0`. An unnamed
+/// end (the client side, nearly always) is an empty string.
+#[cfg(unix)]
+fn unix_info(
+    local: Option<tokio::net::unix::SocketAddr>,
+    remote: Option<tokio::net::unix::SocketAddr>,
+) -> SocketInfo {
+    let name = |a: Option<tokio::net::unix::SocketAddr>| {
+        a.and_then(|a| a.as_pathname().map(|p| p.display().to_string()))
+            .unwrap_or_default()
+    };
+    SocketInfo {
+        remote_address: name(remote),
+        remote_port: 0,
+        local_address: name(local),
+        local_port: 0,
+        alpn: None,
+    }
+}
+
+/// The refusal on a platform without Unix domain sockets in tokio (D140).
+#[cfg(not(unix))]
+fn no_unix_sockets(action: &str, path: &str) -> ProviderError {
+    ProviderError::Other(format!(
+        "{action} {path}: Unix domain sockets are not supported on this platform"
+    ))
+}
+
 fn info_of(local: Option<SocketAddr>, remote: Option<SocketAddr>) -> SocketInfo {
     SocketInfo {
         remote_address: remote.map(|a| a.ip().to_string()).unwrap_or_default(),
@@ -607,7 +711,7 @@ impl NetProvider for SystemNet {
             // including `SO_REUSEPORT` when it was asked for.
             let listener = crate::listener::bind(host.as_str(), port, opts.reuse_port).await?;
             let local = listener.local_addr().ok();
-            let (tx, rx) = mpsc::channel::<(Accepted, SocketAddr)>(8);
+            let (tx, rx) = mpsc::channel::<(Accepted, Option<SocketAddr>)>(8);
             // One task owns the sole `tx` so `close_listener` aborting it drops the
             // sender and resolves a parked accept to `None`. TLS handshakes run
             // concurrently inside it (a `FuturesUnordered`) rather than in spawned
@@ -645,7 +749,7 @@ impl NetProvider for SystemNet {
                             let _ = tcp.set_nodelay(true);
                             match &acceptor {
                                 None => {
-                                    if tx.send((Accepted::Plain(tcp), remote)).await.is_err() {
+                                    if tx.send((Accepted::Plain(tcp), Some(remote))).await.is_err() {
                                         break; // listener closed (rx dropped)
                                     }
                                 }
@@ -695,7 +799,7 @@ impl NetProvider for SystemNet {
                             // logged for itself above, and ends this connection
                             // only — never the acceptor.
                             if let Some((tls, remote)) = done
-                                && tx.send((Accepted::Tls(Box::new(tls)), remote)).await.is_err()
+                                && tx.send((Accepted::Tls(Box::new(tls)), Some(remote))).await.is_err()
                             {
                                 break; // listener closed (rx dropped)
                             }
@@ -734,12 +838,17 @@ impl NetProvider for SystemNet {
                     // ALPN from the handshake.
                     let (slot, info) = match accepted {
                         Accepted::Plain(tcp) => {
-                            let info = info_of(tcp.local_addr().ok(), Some(remote));
+                            let info = info_of(tcp.local_addr().ok(), remote);
                             (SystemNet::spawn_socket(tcp), info)
+                        }
+                        #[cfg(unix)]
+                        Accepted::Unix(stream) => {
+                            let info = unix_info(stream.local_addr().ok(), stream.peer_addr().ok());
+                            (SystemNet::spawn_socket(stream), info)
                         }
                         Accepted::Tls(tls) => {
                             let (io, conn) = tls.get_ref();
-                            let mut info = info_of(io.local_addr().ok(), Some(remote));
+                            let mut info = info_of(io.local_addr().ok(), remote);
                             info.alpn = conn
                                 .alpn_protocol()
                                 .map(|p| String::from_utf8_lossy(p).into_owned());
@@ -763,6 +872,7 @@ impl NetProvider for SystemNet {
     fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
         let listeners = self.listeners.clone();
         let listener_tasks = self.listener_tasks.clone();
+        let socket_files = self.socket_files.clone();
         Box::pin(async move {
             listeners.lock().unwrap().remove(&id);
             // Abort the accept task so its sender drops, unblocking any parked
@@ -771,7 +881,112 @@ impl NetProvider for SystemNet {
             if let Some(task) = listener_tasks.lock().unwrap().remove(&id) {
                 task.abort();
             }
+            // Dropping it removes the socket file, if it is still ours.
+            socket_files.lock().unwrap().remove(&id);
             Ok(())
+        })
+    }
+
+    fn connect_unix(&self, path: String) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            this.check_socket_path(
+                this.allow_connect.as_deref(),
+                &path,
+                "connect",
+                "--allow-net",
+            )?;
+            #[cfg(unix)]
+            {
+                let stream = tokio::net::UnixStream::connect(&path)
+                    .await
+                    .map_err(|e| io_err(format!("connect {path}"), e))?;
+                // The client end is unnamed; the peer is the path it asked for.
+                let mut info = unix_info(None, None);
+                info.remote_address = path;
+                let id = this.id();
+                this.sockets
+                    .lock()
+                    .unwrap()
+                    .insert(id, SystemNet::spawn_socket(stream));
+                Ok((id, info))
+            }
+            #[cfg(not(unix))]
+            Err(no_unix_sockets("connect", &path))
+        })
+    }
+
+    fn listen_unix(&self, path: String) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            // Before anything touches the filesystem: a refused bind leaves
+            // nothing behind.
+            this.check_socket_path(
+                this.allow_listen.as_deref(),
+                &path,
+                "listen",
+                "--allow-listen",
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let listener = tokio::net::UnixListener::bind(&path).map_err(|e| {
+                    if e.kind() == io::ErrorKind::AddrInUse {
+                        ProviderError::Coded {
+                            code: ErrorCode::AddressInUse,
+                            message: format!(
+                                "listen {path}: the path is already taken — by a running \
+                                 server, or a socket file a stopped one left behind. The \
+                                 runtime removes only files it created; remove a stale one \
+                                 before listening."
+                            ),
+                        }
+                    } else {
+                        io_err(format!("listen {path}"), e)
+                    }
+                })?;
+                let meta = std::fs::symlink_metadata(&path)
+                    .map_err(|e| io_err(format!("listen {path}"), e))?;
+                let file = SocketFile {
+                    path: std::path::PathBuf::from(&path),
+                    id: (meta.dev(), meta.ino()),
+                };
+                let (tx, rx) = mpsc::channel::<(Accepted, Option<SocketAddr>)>(8);
+                // The TCP accept loop without TLS: one task owns the only `tx`,
+                // so aborting it on close resolves a parked accept to `None`.
+                let task = tokio::spawn(async move {
+                    let mut backoff = AcceptBackoff::new();
+                    loop {
+                        match listener.accept().await {
+                            Ok((stream, _)) => {
+                                backoff.reset();
+                                if tx.send((Accepted::Unix(stream), None)).await.is_err() {
+                                    break; // listener closed (rx dropped)
+                                }
+                            }
+                            Err(e) => {
+                                let delay = backoff.next_delay();
+                                tracing::warn!(
+                                    target: "runtime::net",
+                                    error = %e,
+                                    backoff_ms = delay.as_millis() as u64,
+                                    "accept failed; retrying",
+                                );
+                                tokio::time::sleep(delay).await;
+                            }
+                        }
+                    }
+                });
+                let id = this.id();
+                this.listeners.lock().unwrap().insert(id, rx);
+                this.listener_tasks.lock().unwrap().insert(id, task);
+                this.socket_files.lock().unwrap().insert(id, file);
+                let mut info = unix_info(None, None);
+                info.local_address = path;
+                Ok((id, info))
+            }
+            #[cfg(not(unix))]
+            Err(no_unix_sockets("listen", &path))
         })
     }
 
@@ -2411,5 +2626,193 @@ mod tracing_tests {
             "the reason is the whole point of the event: {line}",
         );
         net.close_listener(lid).await.unwrap();
+    }
+}
+
+/// Unix domain stream sockets (D140), over real socket files in a temporary
+/// directory.
+#[cfg(all(test, unix))]
+mod unix_socket_tests {
+    use super::*;
+    use crate::HostAllowlist;
+
+    fn sock(dir: &tempfile::TempDir, name: &str) -> String {
+        dir.path().join(name).display().to_string()
+    }
+
+    fn allowing(path: &str) -> HostAllowlist {
+        HostAllowlist::parse([format!("unix:{path}")]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_socket_path_round_trips_with_its_path_as_the_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "app.sock");
+        let net = SystemNet::new()
+            .with_allowlist(allowing(&path))
+            .with_listen_allowlist(allowing(&path));
+        let (listener, info) = net.listen_unix(path.clone()).await.unwrap();
+        assert_eq!(info.local_address, path);
+        assert_eq!(info.local_port, 0);
+
+        let (client, info) = net.connect_unix(path.clone()).await.unwrap();
+        assert_eq!(info.remote_address, path);
+        let (server, info) = net.accept(listener).await.unwrap().unwrap();
+        assert_eq!(
+            info.local_address, path,
+            "the accepted end is the listener's path"
+        );
+        assert_eq!(info.remote_address, "", "the client end is unnamed");
+
+        net.write(client, b"ping".to_vec()).await.unwrap();
+        assert_eq!(net.read(server).await.unwrap().unwrap(), b"ping");
+        net.write(server, b"pong".to_vec()).await.unwrap();
+        assert_eq!(net.read(client).await.unwrap().unwrap(), b"pong");
+        net.shutdown(client).await.unwrap();
+        assert_eq!(net.read(server).await.unwrap(), None, "a half-close is EOF");
+
+        net.close(client).await.unwrap();
+        net.close(server).await.unwrap();
+        net.close_listener(listener).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_bare_grant_covers_no_path_and_a_named_one_covers_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "a.sock");
+        // No list at all: a bare --allow-net / --allow-listen.
+        let bare = SystemNet::new();
+        let err = bare.listen_unix(path.clone()).await.err().unwrap();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+        assert!(
+            err.to_string()
+                .contains(&format!("--allow-listen=unix:{path}")),
+            "{err}"
+        );
+        assert!(
+            !std::path::Path::new(&path).exists(),
+            "a refused bind creates nothing"
+        );
+        let err = bare.connect_unix(path.clone()).await.err().unwrap();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+        assert!(err.to_string().contains("--allow-net=unix:"), "{err}");
+
+        // A list naming another path, or only hosts.
+        let other = SystemNet::new()
+            .with_listen_allowlist(HostAllowlist::parse(["unix:/tmp/other.sock", "8080"]).unwrap());
+        let err = other.listen_unix(path.clone()).await.err().unwrap();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+
+        // Everything: any path, named or not.
+        let all = SystemNet::new().with_any_socket_path();
+        let (id, _) = all.listen_unix(path.clone()).await.unwrap();
+        all.close_listener(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_relative_path_is_refused_even_under_everything() {
+        let net = SystemNet::new().with_any_socket_path();
+        for path in ["app.sock", "./run/app.sock"] {
+            let err = net.listen_unix(path.to_string()).await.err().unwrap();
+            assert_eq!(err.code(), Some(ErrorCode::InvalidPath), "{path}");
+            assert!(err.to_string().contains("absolute"), "{err}");
+            let err = net.connect_unix(path.to_string()).await.err().unwrap();
+            assert_eq!(err.code(), Some(ErrorCode::InvalidPath), "{path}");
+        }
+        assert!(!std::path::Path::new("app.sock").exists());
+    }
+
+    #[tokio::test]
+    async fn closing_removes_the_file_and_a_taken_path_is_not_touched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "app.sock");
+        let net = SystemNet::new().with_any_socket_path();
+        let (id, _) = net.listen_unix(path.clone()).await.unwrap();
+        assert!(std::path::Path::new(&path).exists());
+
+        // Taken: an error naming the path, and the running listener's file
+        // stays where it is.
+        let err = net.listen_unix(path.clone()).await.err().unwrap();
+        assert_eq!(err.code(), Some(ErrorCode::AddressInUse));
+        assert!(err.to_string().contains(&path), "{err}");
+        assert!(std::path::Path::new(&path).exists());
+
+        net.close_listener(id).await.unwrap();
+        assert!(
+            !std::path::Path::new(&path).exists(),
+            "close removes what listen created"
+        );
+
+        // A stale file — not a socket this registry made — is never removed.
+        std::fs::write(&path, b"left behind").unwrap();
+        let err = net.listen_unix(path.clone()).await.err().unwrap();
+        assert_eq!(err.code(), Some(ErrorCode::AddressInUse));
+        assert_eq!(std::fs::read(&path).unwrap(), b"left behind");
+    }
+
+    #[tokio::test]
+    async fn a_successor_on_the_same_path_keeps_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "app.sock");
+        let net = SystemNet::new().with_any_socket_path();
+        let (first, _) = net.listen_unix(path.clone()).await.unwrap();
+        // Someone replaces the file under the first listener and binds anew —
+        // a restart that unlinked the old path before binding.
+        std::fs::remove_file(&path).unwrap();
+        let (second, _) = net.listen_unix(path.clone()).await.unwrap();
+        net.close_listener(first).await.unwrap();
+        assert!(
+            std::path::Path::new(&path).exists(),
+            "closing the first listener must not remove the second one's file"
+        );
+        net.close_listener(second).await.unwrap();
+        assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[tokio::test]
+    async fn the_file_goes_when_the_registry_does() {
+        // A program that exits without closing its listener: the runtime drops
+        // its providers on the way out.
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "app.sock");
+        let net = SystemNet::new().with_any_socket_path();
+        net.listen_unix(path.clone()).await.unwrap();
+        assert!(std::path::Path::new(&path).exists());
+        drop(net);
+        assert!(!std::path::Path::new(&path).exists());
+    }
+
+    #[tokio::test]
+    async fn close_listener_unblocks_a_parked_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "app.sock");
+        let net = SystemNet::new().with_any_socket_path();
+        let (id, _) = net.listen_unix(path).await.unwrap();
+        let parked = tokio::spawn({
+            let net = net.clone();
+            async move { net.accept(id).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        net.close_listener(id).await.unwrap();
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(2), parked)
+            .await
+            .expect("the parked accept ends")
+            .unwrap()
+            .unwrap();
+        assert!(accepted.is_none());
+    }
+
+    #[tokio::test]
+    async fn nothing_listening_is_a_coded_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir, "missing.sock");
+        let err = SystemNet::new()
+            .with_any_socket_path()
+            .connect_unix(path.clone())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err.code(), Some(ErrorCode::NotFound));
+        assert!(err.to_string().contains(&path), "{err}");
     }
 }

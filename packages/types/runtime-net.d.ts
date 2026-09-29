@@ -2,6 +2,32 @@ declare module "runtime:net" {
   /** A connection target: "host:port" or an object. */
   export type Address = string | { hostname?: string; host?: string; port: number };
 
+  /**
+   * A Unix domain socket to connect to: an absolute path, given alone. Unix
+   * only; refused on Windows. The path must be named in `--allow-net` as
+   * `unix:<path>` — a bare `--allow-net` does not cover socket paths.
+   */
+  export interface UnixAddress {
+    path: string;
+  }
+
+  /** Options for {@link connect} to a {@link UnixAddress}: always plaintext. */
+  export interface UnixConnectOptions {
+    secureTransport?: "off";
+    /** Keep the writable open after the peer's FIN. */
+    allowHalfOpen?: boolean;
+  }
+
+  /**
+   * Options for {@link listen} on a Unix domain socket: an absolute path, given
+   * alone. It must be named in `--allow-listen` as `unix:<path>`. A path that
+   * is already taken is `ERR_ADDRESS_IN_USE`; the file this listener creates is
+   * removed when it is closed.
+   */
+  export interface UnixListenOptions {
+    path: string;
+  }
+
   /** Metadata about an established socket. */
   export interface SocketInfo {
     /** Remote peer as WinterTC `"host:port"` (IPv6 host bracketed). */
@@ -97,6 +123,12 @@ declare module "runtime:net" {
     reusePort?: boolean;
     /** ALPN protocols to advertise, in preference order. */
     alpn?: string[];
+  }
+
+  /** A listener on a Unix socket path. Its accepted sockets report the path as `localAddress`. */
+  export interface UnixListener extends Omit<Listener, "addr"> {
+    /** The socket path (resolves after the bind completes). */
+    readonly addr: Promise<{ path: string }>;
   }
 
   /** A listening socket — an async-iterable of incoming {@link Socket}s. */
@@ -293,9 +325,13 @@ declare module "runtime:net" {
 
   /** Open an outbound TCP connection (capability: `Net`). Returns immediately. */
   export function connect(address: Address, options?: ConnectOptions): Socket;
+  /** Connect to a Unix domain socket (capability: `Net`, the path named). */
+  export function connect(address: UnixAddress, options?: UnixConnectOptions): Socket;
 
   /** Bind a listening socket (capability: `NetListen`). */
   export function listen(options: ListenOptions): Listener;
+  /** Listen on a Unix domain socket (capability: `NetListen`, the path named). */
+  export function listen(options: UnixListenOptions): UnixListener;
 
   /**
    * Bind a UDP socket (capability: `NetListen` — this takes a port, and a port

@@ -13,6 +13,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Unix domain stream sockets in `runtime:net`** (DECISIONS D140).
+  `connect({ path })` and `listen({ path })` reach a local service on a socket
+  path — the Docker Engine API, PostgreSQL, Redis, a sidecar — with the same
+  `Socket` and `Listener` as TCP. The path is named in the flags,
+  `--allow-net=unix:<path>` and `--allow-listen=unix:<path>`; a bare
+  `--allow-net` or `--allow-listen` does not cover socket paths, while
+  `--allow-all` (and esdev's default) does. Paths are absolute and plaintext;
+  closing a listener removes the socket file it created, and never a file it
+  did not. Unix only.
+
 - **An esbuild leg in the production-build benchmark.** The same 10,000-component
   React app is bundled with `esbuild --bundle --minify --jsx=automatic`
   (`bench/dev-server/esbuild-build.mjs`, `NODE_ENV` defined to production),

@@ -1021,9 +1021,11 @@ written) and a spawn is admitted only if it lands on the same file. So
 spellings — and refuses `/tmp/git`, which is a different program that happens to
 share a name.
 
-**An address** is a host (any port), a `host:port`, or a bare port (any
-interface — usually what a `--allow-listen` wants). Bracket an IPv6 literal that
-carries a port: `[::1]:8080`. Matching is exact and never widens:
+**An address** is a host (any port), a `host:port`, a bare port (any
+interface — usually what a `--allow-listen` wants), or `unix:` and an absolute
+Unix socket path (`unix:/var/run/docker.sock`). Bracket an IPv6 literal that
+carries a port: `[::1]:8080`. A socket path is only ever reached by naming it: a
+bare `--allow-net` or `--allow-listen` covers network addresses, not paths. Matching is exact and never widens:
 `--allow-net=example.com` does not admit `api.example.com`, and there are no
 wildcards. Hosts are judged **as written, before resolution** — an IP entry
 never silently admits a name that resolves to it, and DNS is not part of the
@@ -2111,6 +2113,7 @@ const tlsServer = listen({
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
 | `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
 | `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn?, reusePort? }) => Listener` | Bind a listening socket. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols; `reusePort` shares the port with other processes (see below). `NetListen`. |
+| `connect({ path }, options?)` / `listen({ path })` | `({ path }, { allowHalfOpen? }) => Socket` / `({ path }) => UnixListener` | A **Unix domain stream socket** at an absolute `path`, given alone (no `hostname`/`port`), plaintext only. The path must be named — `--allow-net=unix:<path>` to connect, `--allow-listen=unix:<path>` to listen; a bare `--allow-net`/`--allow-listen` covers no path (`--allow-all` covers all). `SocketInfo` addresses are the path (an unnamed end is `""`), ports `0`; `UnixListener.addr` is `{ path }`. A taken path is `ERR_ADDRESS_IN_USE`; `close()` removes the file the listener created. A relative path is `ERR_INVALID_PATH`. Unix only — refused on Windows. `Net` / `NetListen`. |
 | `bind(options)`              | `({ hostname?, port, reusePort?, reuseAddress?, broadcast?, ttl?, multicastTtl?, multicastLoopback? }) => DatagramSocket` | Bind a UDP socket (see [UDP](#udp)). `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for loopback-only; a locked-down host may refuse a wildcard bind). `NetListen` to bind, `Net` to send. |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,

@@ -24,8 +24,15 @@
 //! Bounding the *machine* is what an IP entry is for, and an IP entry is never
 //! satisfied by a name; the two say different things on purpose, and the CLI
 //! docs say which to reach for.
+//!
+//! **A Unix socket path is an entry of its own** (`unix:/var/run/docker.sock`,
+//! D140). It matches that path, written the same way, and nothing else; no host
+//! entry ever matches a path. Whether an *unscoped* grant covers paths is not
+//! this list's business — the provider decides that — but a list that exists
+//! permits exactly the paths it names.
 
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::ProviderError;
@@ -69,6 +76,8 @@ enum Entry {
     /// port is usually the whole intent and the interface is the deployment's
     /// business.
     AnyHost(u16),
+    /// `unix:/run/app.sock` — that socket path, and no other.
+    Path(PathBuf),
 }
 
 /// Addresses a capability may be used with. An empty list permits nothing.
@@ -103,7 +112,18 @@ impl HostAllowlist {
             Entry::AnyPort(h) => h.matches(host),
             Entry::Exact(h, p) => *p == port && h.matches(host),
             Entry::AnyHost(p) => *p == port,
+            Entry::Path(_) => false,
         })
+    }
+
+    /// Whether the Unix socket at `path` is named by an entry. Compared as
+    /// written, like a host name: `/var/run/x.sock` and `/run/x.sock` are two
+    /// entries even where one is a symlink to the other, because resolving
+    /// links would let whoever controls the link choose the socket.
+    pub fn permits_path(&self, path: &Path) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Path(p) if p == path))
     }
 
     /// [`permits`](Self::permits), as a provider error naming what was refused.
@@ -150,6 +170,16 @@ impl HostAllowlist {
 /// list item that vanished would leave the run *narrower* than it reads, which
 /// fails a working program mysteriously, or (if it was the only entry) wider.
 fn parse_entry(entry: &str) -> Result<Entry, String> {
+    if let Some(path) = entry.strip_prefix("unix:") {
+        // Absolute on every platform's terms, or starting at `/`, so that one
+        // command line parses everywhere even where the socket cannot be used.
+        if !(path.starts_with('/') || Path::new(path).is_absolute()) {
+            return Err(format!(
+                "{entry} is not an absolute socket path — write unix:/full/path/to.sock"
+            ));
+        }
+        return Ok(Entry::Path(PathBuf::from(path)));
+    }
     // Bracketed IPv6, with or without a port: [::1] / [::1]:8080.
     if let Some(rest) = entry.strip_prefix('[') {
         let (inside, after) = rest
@@ -201,6 +231,25 @@ mod tests {
 
     fn list(entries: &[&str]) -> HostAllowlist {
         HostAllowlist::parse(entries).expect("parse")
+    }
+
+    #[test]
+    fn a_unix_entry_names_one_path_and_no_host() {
+        let allow = list(&["unix:/var/run/docker.sock", "db.internal"]);
+        assert!(allow.permits_path(Path::new("/var/run/docker.sock")));
+        assert!(!allow.permits_path(Path::new("/run/docker.sock")));
+        assert!(!allow.permits_path(Path::new("/var/run")));
+        assert!(!allow.permits("unix", 0));
+        assert!(!allow.permits("/var/run/docker.sock", 0));
+        // A host entry never admits a path.
+        assert!(!list(&["db.internal", "8080"]).permits_path(Path::new("/tmp/a.sock")));
+    }
+
+    #[test]
+    fn a_relative_unix_entry_is_refused() {
+        let e = HostAllowlist::parse(["unix:app.sock"]).unwrap_err();
+        assert!(e.contains("absolute"), "{e}");
+        assert!(HostAllowlist::parse(["unix:"]).is_err());
     }
 
     #[test]

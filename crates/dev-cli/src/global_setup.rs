@@ -149,7 +149,7 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
     crate::guest::test::configure_global_setup(out.to_path_buf());
     // Global setup is the suite's infrastructure, not code under test, so it
     // runs with esdev's own grant rather than a rehearsed one.
-    let (capabilities, scopes) = match crate::test_capabilities(&[]) {
+    let (capabilities, scopes, permissive) = match crate::test_capabilities(&[]) {
         Ok(granted) => granted,
         Err(err) => {
             es_runtime_cli_common::diagnostics::print_error(&err);
@@ -164,6 +164,7 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
             args: Vec::new(),
             capabilities,
             scopes,
+            permissive,
             options: RunOptions::default(),
             stripper: TypeStripper::new(),
             extensions: crate::guest::test_extensions(false),

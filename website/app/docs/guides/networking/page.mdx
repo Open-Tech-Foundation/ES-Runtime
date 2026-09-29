@@ -115,6 +115,45 @@ for await (const conn of server) {
 }
 ```
 
+## Unix domain sockets
+
+A local service that listens on a path — the Docker Engine API, PostgreSQL or
+Redis on the same host, a sidecar — is reached with `path` in place of the host
+and port. The rest of the `Socket` is the same.
+
+```js
+import { connect } from "runtime:net";
+
+const docker = connect({ path: "/var/run/docker.sock" });
+const writer = docker.writable.getWriter();
+await writer.write(new TextEncoder().encode(
+  "GET /version HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n",
+));
+```
+
+```sh
+esrun --allow-net=unix:/var/run/docker.sock app.js
+```
+
+A server listens on a path the same way:
+
+```js
+import { listen } from "runtime:net";
+
+const server = listen({ path: "/run/app/app.sock" });
+for await (const conn of server) conn.readable.pipeTo(conn.writable);
+```
+
+```sh
+esrun --allow-listen=unix:/run/app/app.sock server.js
+```
+
+The path must be absolute, and it must be named in the flag: a bare
+`--allow-net` reaches the network, not the sockets on the machine. Closing the
+listener removes its socket file. A file left by a server that was killed makes
+the next `listen` fail with `ERR_ADDRESS_IN_USE`; remove it before starting
+again. Unix domain sockets are not available on Windows.
+
 ## UDP
 
 `bind()` is a datagram socket: `send`/`receive` instead of streams, and two

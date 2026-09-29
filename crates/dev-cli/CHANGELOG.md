@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- Programs run by `esdev` can use `runtime:net`'s new Unix domain sockets
+  (`connect({ path })`, `listen({ path })`). esdev's default grant covers
+  every socket path; under `--deny-all`, name each one with
+  `--allow-net=unix:<path>` or `--allow-listen=unix:<path>`.
+
 ### Changed
 
 - `esdev create` marks installed package managers in the manager menu and

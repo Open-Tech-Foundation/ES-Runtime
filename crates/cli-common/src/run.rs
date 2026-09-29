@@ -71,6 +71,13 @@ pub struct Config {
     /// the narrowing itself is enforced provider-side, not by the capability
     /// bit — the bit only says whether the door exists.
     pub scopes: Scopes,
+    /// Whether the run started from everything — `--allow-all`, or a binary
+    /// whose baseline is everything (esdev) — rather than from nothing.
+    ///
+    /// Only Unix socket paths read it (D140): a bare `--allow-net` grants every
+    /// network address but no path, and a path must be named. A run that
+    /// started from everything cannot name one, so there it covers them all.
+    pub permissive: bool,
     /// The shared flags that shape the run.
     pub options: RunOptions,
     /// An optional rewrite applied to every module's source before the engine
@@ -730,6 +737,9 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     }
     if let Some(allow) = allow_listen {
         system_net = system_net.with_listen_allowlist(allow);
+    }
+    if config.permissive {
+        system_net = system_net.with_any_socket_path();
     }
     let web_socket = match allow_net {
         Some(allow) => SystemWebSocket::new().with_allowlist(allow),

@@ -292,6 +292,8 @@ capabilities with separate allowlists:
 | `listen()` | `NetListen` | `--allow-listen=<addresses>` |
 | `bind()` (UDP) | `NetListen` | `--allow-listen=<addresses>` |
 | `send()` / `connect()` on a datagram socket | `Net` | `--allow-net=<hosts>` |
+| `connect({ path })` | `Net` | `--allow-net=unix:<path>` |
+| `listen({ path })` | `NetListen` | `--allow-listen=unix:<path>` |
 
 The check happens **before** the socket is created — a denied `listen` claims no
 port and leaves nothing behind.
@@ -310,6 +312,41 @@ a name, so a denied name cannot be smuggled past the list by an
 attacker-controlled DNS answer, and an allowed IP never silently admits a name
 that happens to resolve to it. It also means allowing `example.com` does not
 allow the address it resolves to, if the guest connects by address.
+
+## Unix domain sockets
+
+A socket on a path is gated by the **net** grants, not the filesystem ones. What
+it reaches is a service — often a privileged one: the Docker socket is root on
+the host — and a `--allow-write` given for a data directory should not also
+hand that over. For the same reason a path is never covered by a bare
+`--allow-net` or `--allow-listen`. Those grant the network; a program given
+them for its HTTP APIs does not gain the machine's daemon sockets on an upgrade.
+A run granted everything (`--allow-all`, or esdev's default) covers every path,
+because nothing in that mode can name one.
+
+Paths are compared as written, like host names. `/var/run/x.sock` and
+`/run/x.sock` are different entries even where one links to the other, because
+resolving the link would let whoever controls it choose the socket. Paths must
+be absolute: a relative one would resolve against the entry file in the program
+(D25) and against the working directory in the flag, and the two differ for any
+bundled server.
+
+Once connected, a Unix socket is a `Socket` like any other: the same reader and
+writer tasks carry its bytes, and it is read, written and closed by the same
+ids. It is never TLS — its file permissions are its authentication — so it
+cannot `startTls()`.
+
+**The socket file.** Binding creates a file, and a file outlives the process
+that made it. The listener records the file's device and inode when it binds,
+and removes it on `close()` — or when the runtime shuts down — only if the file
+at that path is still the one it created. A server that restarted and rebound
+the path in the meantime keeps its file. The runtime never removes a file it
+did not create, so a file left by a killed process makes the next `listen` fail
+with `ERR_ADDRESS_IN_USE` rather than silently taking the path over.
+
+Tokio has no Unix sockets on Windows, so a `path` is refused there. Datagram
+sockets on a path, abstract-namespace names, descriptor passing and peer
+credentials are not implemented (D140).
 
 ## What is not bounded
 

@@ -309,6 +309,9 @@ pub struct Run {
     pub args: Vec<String>,
     pub capabilities: es_runtime_common::CapabilitySet,
     pub scopes: es_runtime_cli_common::permissions::Scopes,
+    /// Whether the grant started from everything (D140); see
+    /// [`es_runtime_cli_common::Config::permissive`].
+    pub permissive: bool,
     pub options: es_runtime_cli_common::args::RunOptions,
     /// The transform, with anything the caller adds — a test's setup prelude.
     /// How it compiles JSX is the project's, and is set from [`Source`].
@@ -343,6 +346,7 @@ impl Source {
             args: run.args,
             capabilities: run.capabilities,
             scopes: run.scopes,
+            permissive: run.permissive,
             options: run.options,
             transform: Some(transform),
             // The file being edited resolves the way the build that bundles
