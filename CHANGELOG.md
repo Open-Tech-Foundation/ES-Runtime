@@ -50,6 +50,16 @@ namespace) is unstable and may change between minor releases until the API freez
   project root no longer appears in "cannot find package", and a policy-refused
   file is named by its specifier.
 
+- **A failed `fetch` no longer repeats its URL's credentials, query or
+  fragment** (D141). The message and its `cause` both carried the whole URL,
+  `user:password@` and `?token=` included, into whatever logged the error; they
+  now name the origin and path. The same applies to a `redirect: "error"`
+  refusal and to an allowlist refusal of a URL with no host or port.
+
+- **A spawn that fails names the program as written** (`cannot spawn ./tool`),
+  not the path the host resolved it to, which described the machine's layout
+  (D141).
+
 ### Changed
 
 - **A rejected `import()` carries the loader's `code`.** The runtime used to

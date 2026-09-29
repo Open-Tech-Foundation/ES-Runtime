@@ -230,11 +230,27 @@
   // flattening them into `TypeError` would lose the distinction callers act on.
   function asNetworkError(e, url) {
     if (e instanceof DOMException || e instanceof TypeError) return e;
-    const wrapped = new TypeError(`Failed to fetch ${url}: ${(e && e.message) || e}`, { cause: e });
+    const wrapped = new TypeError(`Failed to fetch ${shownUrl(url)}: ${(e && e.message) || e}`, {
+      cause: e,
+    });
     // Host failures carry a stable `code` (ERR_TOO_MANY_REDIRECTS &c.); it is
     // the contract guests branch on, so it survives the rewrap.
     if (e && e.code !== undefined) wrapped.code = e.code;
     return wrapped;
+  }
+
+  // A URL as an error message names it: its origin and path. Credentials, the
+  // query and the fragment are left out — they are where a program's secrets
+  // travel, the program already has the URL, and a message is text that ends
+  // up in logs (D141). A `data:` URL is its own content, so only its scheme.
+  function shownUrl(url) {
+    try {
+      const parsed = new URL(String(url));
+      if (parsed.origin === "null") return `a ${parsed.protocol} URL`;
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return "the request URL";
+    }
   }
 
   // The body half of `clone()` — and of `new Request(otherRequest)`, which the
@@ -906,7 +922,7 @@
     if (request.redirect === "error" && REDIRECT_STATUS.has(meta.status)) {
       ops.fetch_body_cancel(bodyId);
       throw new TypeError(
-        `Failed to fetch: ${request.url} answered ${meta.status} and redirect mode is "error"`,
+        `Failed to fetch: ${shownUrl(request.url)} answered ${meta.status} and redirect mode is "error"`,
       );
     }
 

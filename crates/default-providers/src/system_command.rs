@@ -253,7 +253,7 @@ fn usable(candidate: &Path) -> Option<PathBuf> {
 /// (CVE-2024-27980). Refusing with an explanation beats silently spawning a
 /// shell.
 #[cfg(windows)]
-fn reject_batch_files(resolved: &Path) -> Result<(), ProviderError> {
+fn reject_batch_files(resolved: &Path, program: &str) -> Result<(), ProviderError> {
     let ext = resolved
         .extension()
         .and_then(|e| e.to_str())
@@ -261,16 +261,15 @@ fn reject_batch_files(resolved: &Path) -> Result<(), ProviderError> {
         .to_ascii_lowercase();
     if ext == "bat" || ext == "cmd" {
         return Err(ProviderError::Other(format!(
-            "{} is a batch file: running one requires the command interpreter, \
-             which this runtime does not spawn. Invoke the underlying executable instead.",
-            resolved.display()
+            "{program} is a batch file: running one requires the command interpreter, \
+             which this runtime does not spawn. Invoke the underlying executable instead."
         )));
     }
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn reject_batch_files(_resolved: &Path) -> Result<(), ProviderError> {
+fn reject_batch_files(_resolved: &Path, _program: &str) -> Result<(), ProviderError> {
     Ok(())
 }
 
@@ -443,7 +442,7 @@ impl CommandProvider for SystemCommands {
 
             let cwd = spec.cwd.as_ref().map(PathBuf::from);
             let resolved = resolve_program(&spec.program, cwd.as_deref())?;
-            reject_batch_files(&resolved)?;
+            reject_batch_files(&resolved, &spec.program)?;
             if let Some(allow) = &this.inner.allow {
                 // Compared as a real path, never as a name. The basename of
                 // what a spawn resolved to says nothing about which program it
@@ -477,8 +476,11 @@ impl CommandProvider for SystemCommands {
                 command.current_dir(dir);
             }
 
+            // Named as the program wrote it: `resolved` is where the host keeps
+            // it, which is the machine's layout rather than anything the
+            // program asked about (D141).
             let mut child = command.spawn().map_err(|e| {
-                ProviderError::from_io(format!("cannot spawn {}", resolved.display()), &e)
+                ProviderError::from_io(format!("cannot spawn {}", spec.program), &e)
             })?;
             let pid = child.id().unwrap_or_default();
 
@@ -659,6 +661,29 @@ mod tests {
             out.extend_from_slice(&chunk);
         }
         String::from_utf8(out).unwrap()
+    }
+
+    /// A program that resolves but will not start is named as the program
+    /// wrote it, not by where the host found it (D141).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_spawn_failure_names_the_program_as_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("esrun-spawn-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Executable, with an interpreter that is not there: resolution finds
+        // the file and the spawn itself fails.
+        let tool = dir.join("tool");
+        std::fs::write(&tool, "#!/nonexistent/interpreter\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut request = spec("./tool", &[]);
+        request.cwd = Some(dir.to_string_lossy().into_owned());
+        let err = SystemCommands::new().spawn(request).await.unwrap_err();
+        let message = err.to_string();
+        assert!(message.starts_with("cannot spawn ./tool:"), "{message}");
+        assert!(!message.contains(dir.to_str().unwrap()), "{message}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

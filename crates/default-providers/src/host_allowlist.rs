@@ -149,7 +149,12 @@ impl HostAllowlist {
     pub fn check_url(&self, url: &url::Url, action: &str) -> Result<(), ProviderError> {
         let host = url.host_str().ok_or_else(|| ProviderError::Coded {
             code: ErrorCode::PermissionDenied,
-            message: format!("{url} has no host to check against the allowed addresses"),
+            // The scheme only: a URL's credentials and query are the program's
+            // secrets, and a refusal is text that ends up in logs (D141).
+            message: format!(
+                "a {}: URL has no host to check against the allowed addresses",
+                url.scheme()
+            ),
         })?;
         // `host_str` keeps IPv6 brackets; the entries store bare addresses.
         let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -158,7 +163,10 @@ impl HostAllowlist {
             // to match, and guessing would be the wrong direction to guess in.
             ProviderError::Coded {
                 code: ErrorCode::PermissionDenied,
-                message: format!("{url} has no port to check against the allowed addresses"),
+                message: format!(
+                    "a {}: URL to {host} has no port to check against the allowed addresses",
+                    url.scheme()
+                ),
             }
         })?;
         self.check(host, port, action)

@@ -123,3 +123,27 @@ fn a_caught_refusal_names_no_host_path() {
     }
     let _ = std::fs::remove_dir_all(Path::new(&base));
 }
+
+/// A failed fetch names the origin and path it tried — not the credentials,
+/// query or fragment, which are where a program's secrets travel, in either
+/// the error or its cause (D141). Port 1 on loopback refuses without a network.
+#[test]
+fn a_failed_fetch_names_no_secret_from_its_url() {
+    let code = r#"
+      try {
+        await fetch("http://user:hunter2@127.0.0.1:1/api?token=s3cret#frag");
+      } catch (e) {
+        console.log([e.code, e.message, e.cause && e.cause.message].join("\t"));
+      }
+    "#;
+    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .args(["--allow-net", &format!("-e={code}")])
+        .output()
+        .expect("spawn esrun");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.starts_with("ERR_CONNECTION_REFUSED\t"), "{stdout}");
+    assert!(stdout.contains("http://127.0.0.1:1/api"), "{stdout}");
+    for secret in ["hunter2", "user", "s3cret", "token", "frag"] {
+        assert!(!stdout.contains(secret), "leaked {secret}: {stdout}");
+    }
+}

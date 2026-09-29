@@ -109,6 +109,16 @@ because they are the same privilege: reaching out. The allowlist is checked
 against the host **as written**, before DNS resolution, for the reasons set out
 in [the sockets page](/docs/internals/sockets#capabilities).
 
+## Failures name the origin and path
+
+A request that does not complete rejects with a `TypeError` whose `code` says
+why (`ERR_CONNECTION_REFUSED`, `ERR_DNS`, `ERR_TLS`, …). Its message names the
+URL by origin and path only. Credentials, the query string and the fragment are
+left out of the message and of its `cause`, because that is where a program's
+tokens travel, and error text is what logs and error collectors keep. The
+program still has the full URL; it built it. See
+[D141](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
 ## See also
 
 - [Internals: sockets](/docs/internals/sockets) — `runtime:net`, and how the allowlist is judged

@@ -165,6 +165,10 @@ impl std::error::Error for TooManyRedirects {}
 /// `ERR_TLS`; name-resolution failures to `ERR_DNS`. Anything else stays an
 /// uncoded provider error.
 fn classify_reqwest(e: reqwest::Error) -> ProviderError {
+    // Without the URL: reqwest repeats the whole of it — credentials, query and
+    // all — and the program's secrets travel in exactly those parts. The
+    // program knows what it fetched; the message is for logs (D141).
+    let e = e.without_url();
     let message = format!("request failed: {e}");
     if e.is_timeout() {
         return ProviderError::Coded {
