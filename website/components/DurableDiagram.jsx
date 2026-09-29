@@ -88,7 +88,7 @@ const STEPS = [
     saved: "",
     disk: "left: 0",
     crash: true,
-    told: { Ana: "ok", Ben: "ok", Chloé: "out" },
+    told: { Ana: "ok", Ben: "ok" },
     caption: "SIGKILL. The process dies with no warning and no chance to tidy up.",
   },
   {
