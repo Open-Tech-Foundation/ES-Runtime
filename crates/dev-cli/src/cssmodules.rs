@@ -11,10 +11,11 @@
 //! This is a [`Pass`](crate::contract::Pass) against this project's own plugin
 //! contract — the same contract a plugin written in guest JavaScript
 //! implements, and the same one adapted onto whatever bundler is underneath.
-//! It declares a `transform` filtered to `.css`, which the adapter matches
-//! before calling, and replaces the module's source:
+//! It declares a `transform`, acts on any module whose type is `css` — a
+//! `.css` file, or what a plugin compiled to CSS (D149) — and replaces the
+//! module's source:
 //!
-//! * **`*.module.css`** becomes a JavaScript object literal — the name mapping
+//! * **`*.module.css`** (or `*.module.scss` once compiled) becomes a JavaScript object literal — the name mapping
 //!   — so the graph sees an ordinary module and the importing component gets
 //!   `styles.button` with no runtime.
 //! * **any other `.css`** becomes an empty module. Nothing is exported because
@@ -46,7 +47,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::contract::{self, Answer, Filter, HookSpec, Hooks, ModuleResult, Pattern};
+use crate::contract::{self, Answer, HookSpec, Hooks, ModuleResult};
 
 /// The scoped CSS gathered during a bundler run, in the order the modules were
 /// transformed.
@@ -137,8 +138,15 @@ impl Files {
 /// other tool uses, it is visible at the import site, and it lets a project mix
 /// scoped and global stylesheets without a list somewhere else saying which is
 /// which.
+///
+/// Any extension, so `Button.module.scss` is scoped once a plugin has compiled
+/// it to CSS (D149): the name says it is a module, the type says it is CSS.
 pub fn is_css_module(id: &str) -> bool {
-    id.ends_with(".module.css")
+    std::path::Path::new(id)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.split_once(".module."))
+        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty())
 }
 
 /// The pass that turns a `.module.css` import into its name mapping.
@@ -165,19 +173,18 @@ impl CssModules {
             root: root.to_path_buf(),
             collected,
             minify,
-            // Declared rather than checked at the top of the hook. The contract
-            // matches it before the call, which for a pass in this binary saves
-            // a function call and for a pass in the isolate saves a round trip
-            // — and stating it in the declaration is what lets both be true of
-            // one adapter.
+            // No filter on the id: a module is a stylesheet because its type
+            // is `css`, which is what a plugin compiling `.scss` says it made
+            // (D149), and the type is only known when the hook is called. The
+            // call costs nothing across a boundary; this pass is in this
+            // binary.
+            //
+            // `post`, so it finishes what the plugins made: a stylesheet
+            // language compiled to CSS, or CSS a plugin rewrote, reaches it
+            // whatever order the plugin declared.
             hooks: Hooks {
                 transform: Some(HookSpec {
-                    filter: Filter {
-                        id: vec![Pattern::Regex(
-                            regex::Regex::new(r"\.css$").expect("a literal pattern"),
-                        )],
-                        code: Vec::new(),
-                    },
+                    order: contract::Order::Post,
                     ..HookSpec::default()
                 }),
                 ..Hooks::default()
@@ -197,19 +204,17 @@ impl contract::Pass for CssModules {
 
     fn transform<'a>(
         &'a self,
-        _code: &'a str,
+        code: &'a str,
         id: &'a str,
         module_type: &'a str,
         _ctx: &'a Arc<dyn contract::Context>,
     ) -> Answer<'a, Option<ModuleResult>> {
         Box::pin(async move {
-            // Somebody got here first. A plugin ordered `pre` — a Tailwind
-            // compiler, a CSS-in-JS pass — turns a stylesheet into JavaScript,
-            // and this pass filters on the *id*, which is still `.css`. Running
-            // anyway would read the file off disk again (below, deliberately:
-            // an `@import` chain is a set of files, not the one string a
-            // transform is handed) and hand back the unprocessed stylesheet,
-            // undoing the plugin's whole reason for claiming it.
+            // A stylesheet is what its type says. A plugin ordered `pre` — a
+            // Tailwind compiler, a CSS-in-JS pass — may have turned a `.css`
+            // into JavaScript already, and working on it anyway would undo the
+            // plugin's whole reason for claiming it; a plugin compiling `.scss`
+            // says it made `css`, and that is this pass's to finish (D149).
             //
             // This is what makes `order: "pre"` mean something against a
             // built-in pass rather than only against the other plugins.
@@ -219,7 +224,7 @@ impl contract::Pass for CssModules {
             let path = Path::new(id);
             let read = Files::default();
             let names = self
-                .stylesheet(path, &read)
+                .stylesheet(path, code, &read)
                 .map_err(|e| format!("{}: {e}", self.ident(path)))?;
 
             Ok(Some(ModuleResult {
@@ -261,15 +266,17 @@ impl CssModules {
 
     /// Bundles one stylesheet and, if it is a module, scopes it.
     ///
-    /// Read from disk rather than from `args.code`, because a stylesheet may
-    /// `@import` others and only [`crate::css::bundle`] resolves those — the
-    /// bundler hands over one file's text and knows nothing about the rest.
+    /// From the code the bundler handed over, which is what a plugin before
+    /// this one made of the file; its `@import`s are then followed from the
+    /// file's own directory by [`crate::css::bundle`], because the bundler
+    /// hands over one file's text and knows nothing about the rest.
     fn stylesheet(
         &self,
         path: &Path,
+        code: &str,
         read: &Files,
     ) -> Result<Option<BTreeMap<String, String>>, String> {
-        let bundled = crate::css::load(path)?;
+        let bundled = crate::css::load_source(path, Some(code.to_string()))?;
         read.extend(bundled.read_files);
 
         let (sheet, names) = if is_css_module(&path.to_string_lossy()) {
@@ -413,12 +420,17 @@ fn quote(text: &str) -> String {
 mod tests {
     use super::*;
 
+    /// `*.module.*`, whatever the language: the name says it is a module, and
+    /// the type — `css`, once a plugin has compiled it — says it is a
+    /// stylesheet (D149).
     #[test]
     fn the_convention_is_the_filename() {
         assert!(is_css_module("/p/Button.module.css"));
+        assert!(is_css_module("/p/Button.module.scss"));
         assert!(!is_css_module("/p/styles.css"));
         assert!(!is_css_module("/p/module.css"));
-        assert!(!is_css_module("/p/Button.module.scss"));
+        assert!(!is_css_module("/p/.module.css"));
+        assert!(!is_css_module("/p/a.module/styles.css"));
     }
 
     #[test]

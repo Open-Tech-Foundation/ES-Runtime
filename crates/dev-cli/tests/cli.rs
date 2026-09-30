@@ -12529,6 +12529,165 @@ fn a_plugin_reads_where_each_build_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A stand-in for a Sass plugin: it compiles `.scss` to CSS (variables only)
+/// and says so with `type: "css"`, which is all a stylesheet language has to
+/// do for esdev to bundle, scope and link what it made (D149).
+fn fake_sass_plugin(dir: &Path) {
+    write_in(
+        dir,
+        "sass.mjs",
+        r#"
+export default {
+  name: "fake-sass",
+  transform: {
+    filter: { id: /\.scss$/ },
+    handler(code) {
+      const vars = {};
+      const body = code.replace(/^\$(\w+):\s*([^;]+);\s*$/gm, (_, name, value) => {
+        vars[name] = value;
+        return "";
+      });
+      return { code: body.replace(/\$(\w+)/g, (_, name) => vars[name]), type: "css" };
+    },
+  },
+};
+"#,
+    );
+}
+
+#[test]
+fn a_plugin_compiled_stylesheet_is_bundled_scoped_and_linked() {
+    let dir = build_dir("p_css_sass");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    fake_sass_plugin(&dir);
+    write_in(
+        &dir,
+        "src/card.module.scss",
+        "$accent: rebeccapurple;\n.card { color: $accent }\n",
+    );
+    write_in(
+        &dir,
+        "src/theme.scss",
+        "$page: papayawhip;\nbody { background: $page }\n",
+    );
+    write_in(
+        &dir,
+        "src/main.js",
+        "import styles from './card.module.scss';\ndocument.body.className = styles.card;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <link rel=\"stylesheet\" href=\"./src/theme.scss\">\
+         <script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./sass.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let written: Vec<PathBuf> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    let css: String = written
+        .iter()
+        .filter(|path| path.extension().is_some_and(|e| e == "css"))
+        .map(|path| std::fs::read_to_string(path).expect("css"))
+        .collect();
+    assert!(css.contains("papayawhip"), "the linked sheet: {css}");
+    assert!(css.contains("rebeccapurple"), "the imported module: {css}");
+    assert!(!css.contains('$'), "uncompiled: {css}");
+    assert!(
+        !written
+            .iter()
+            .any(|path| path.extension().is_some_and(|e| e == "scss")),
+        "a .scss was copied as it was: {written:?}"
+    );
+    let bundle: String = written
+        .iter()
+        .filter(|path| path.extension().is_some_and(|e| e == "js"))
+        .map(|path| std::fs::read_to_string(path).expect("js"))
+        .collect();
+    assert!(bundle.contains("card_"), "no scoped name: {bundle}");
+    let html = std::fs::read_to_string(dir.join("dist/index.html")).expect("html");
+    assert!(html.contains(".css\""), "the link: {html}");
+
+    // And under test, where the same plugin compiles the same module.
+    write_in(
+        &dir,
+        "src/card.test.mjs",
+        "import { test, assert } from 'runtime:test';\n\
+         import styles from './card.module.scss';\n\
+         test('scoped', () => assert(styles.card.startsWith('card_'), styles.card));\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A plugin that rewrites CSS and keeps it CSS — PostCSS's shape — runs
+/// `pre`, and esdev bundles what it wrote rather than reading the file again.
+#[test]
+fn a_pre_plugin_rewrites_css_that_esdev_then_bundles() {
+    let dir = build_dir("p_css_postcss");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "postcss.mjs",
+        r#"
+export default {
+  name: "fake-postcss",
+  transform: {
+    order: "pre",
+    filter: { id: /\.css$/ },
+    handler: (code) => ({ code: code.replaceAll("OLD", "NEW"), type: "css" }),
+  },
+};
+"#,
+    );
+    write_in(&dir, "src/linked.css", ".linked { content: 'OLD' }\n");
+    write_in(&dir, "src/imported.css", ".imported { content: 'OLD' }\n");
+    write_in(&dir, "src/main.js", "import './imported.css';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <link rel=\"stylesheet\" href=\"./src/linked.css\">\
+         <script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./postcss.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let css: String = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "css"))
+        .map(|path| std::fs::read_to_string(path).expect("css"))
+        .collect();
+    assert!(css.contains(".linked"), "{css}");
+    assert!(css.contains(".imported"), "{css}");
+    assert!(
+        !css.contains("OLD"),
+        "the plugin's output was dropped: {css}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A `load` that throws is reported with what the plugin said. The bundler
 /// turns any other error from a `load` into "Could not load x — plugin `p`
 /// threw an error" and drops the cause, which is the only part that says what

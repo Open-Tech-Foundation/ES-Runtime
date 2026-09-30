@@ -92,10 +92,10 @@ order: pre-one -> normal -> post-one
 ```
 
 **It orders you against esdev's own passes too, not only against the other
-plugins.** That is the point of it for a CSS compiler: `esdev:css-modules` is
-unordered, so a plugin that says `pre` gets the stylesheet first, and the
-built-in pass then sees `ctx.type` is no longer `"css"` and steps aside rather
-than re-reading the file off disk and undoing the work.
+plugins.** `esdev:css-modules` runs `post`: it finishes whatever the plugins
+made CSS, and steps aside for a module whose `ctx.type` is no longer `"css"`.
+A plugin that turns a stylesheet into JavaScript says `pre`, so a plugin that
+expects CSS still sees the stylesheet before it does:
 
 ```js
 transform: {

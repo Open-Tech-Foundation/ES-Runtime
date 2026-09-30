@@ -91,7 +91,13 @@ pub struct Stylesheet {
 /// What every reader of a stylesheet starts from — a linked one, an imported
 /// one, an entry — so a sheet means the same thing whichever way it arrived.
 pub fn load(entry: &Path) -> Result<bundle::Bundled, String> {
-    let mut bundled = bundle::bundle(entry)?;
+    load_source(entry, None)
+}
+
+/// The same, starting from `source` as the entry's text when a plugin produced
+/// it (D149).
+pub fn load_source(entry: &Path, source: Option<String>) -> Result<bundle::Bundled, String> {
+    let mut bundled = bundle::bundle(entry, source)?;
     crate::tailwind::apply(entry, &mut bundled)?;
     Ok(bundled)
 }
@@ -101,7 +107,17 @@ pub fn load(entry: &Path) -> Result<bundle::Bundled, String> {
 /// The one entry point [`crate::html`] uses. The layers behind it are public so
 /// that a new pass can be added without routing it through here.
 pub fn build(entry: &Path, minify: bool) -> Result<Stylesheet, String> {
-    let mut bundled = load(entry)?;
+    build_source(entry, None, minify)
+}
+
+/// The same, starting from `source` as the entry's text when a plugin produced
+/// it (D149).
+pub fn build_source(
+    entry: &Path,
+    source: Option<String>,
+    minify: bool,
+) -> Result<Stylesheet, String> {
+    let mut bundled = load_source(entry, source)?;
     if minify {
         minify::apply(&mut bundled.sheet);
     }
@@ -529,7 +545,7 @@ mod tests {
                 "@import \"tailwindcss\";\n@import \"./gone.css\";\n",
             )],
         );
-        let message = bundle::bundle(&entry).expect_err("./gone.css is not there");
+        let message = bundle::bundle(&entry, None).expect_err("./gone.css is not there");
         assert!(message.contains("imports ./gone.css"), "{message}");
     }
 
@@ -551,7 +567,7 @@ mod tests {
                 ),
             ],
         );
-        let bundled = bundle::bundle(&entry).expect("a Tailwind sheet bundles");
+        let bundled = bundle::bundle(&entry, None).expect("a Tailwind sheet bundles");
         let text = print::print(&bundled.sheet);
         let root = entry
             .parent()
@@ -586,7 +602,7 @@ mod tests {
             "tailwind-quote\"dir",
             &[("app.css", "@import \"tailwindcss\";\n@source \"./src\";\n")],
         );
-        let bundled = bundle::bundle(&entry).expect("bundles");
+        let bundled = bundle::bundle(&entry, None).expect("bundles");
         let text = print::print(&bundled.sheet);
         assert!(text.contains("tailwind-quote\\\"dir/src\""), "{text}");
         let reparsed = parse::parse(&text);

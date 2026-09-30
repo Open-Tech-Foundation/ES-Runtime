@@ -3088,3 +3088,20 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **`apply`/`enforce` switches per command, as Vite has.** A plugin that should do nothing somewhere reads `ctx.command` and returns `null`; a second vocabulary for the same fact is not needed.
 
 **Consequences:** a breaking change to `esdev.json` for any project with target plugins or `refresh`, and to plugins that read `ctx.refresh`; the templates move with it. Web-App-Framework moves its target plugins to the top level and reads `ctx.platform` for the codegen backend. A test and the build agree about what a module is, including a stylesheet and an image. **Checked and left alone:** a module generated from a folder (a route map) needs no directory in `dependsOn` for `esdev start`, which rebuilds on a file added anywhere in the project and runs `load` again; verified by adding a page under a running loop. A `runtime:build` program that matches changes against `watchFiles` still cannot learn of a file that did not exist. **Not solved here:** an HTML transform hook, dev-server middleware, and output hooks (`renderChunk`, `generateBundle`); a hook that acts on a hot update. Each is its own decision.
+
+### D149 — A plugin can hand esdev CSS · *Proposed (2026-09-30)* · *extends D148*
+
+**Context:** esdev's stylesheet pipeline (bundling `@import`, scoping CSS Modules, hashing, the `<link>`) was reachable only from a file named `.css`, and it read that file from disk. A plugin could not feed it. A Sass, Less or Stylus plugin had nowhere to put the CSS it compiled, so it had to invent a JavaScript module and lose scoping, bundling and the link. A PostCSS-style plugin that rewrote a `.css` had its output ignored, because the pass re-read the file. A `<link rel="stylesheet">` in `index.html` never reached a plugin at all.
+
+**Decision (maintainer, 2026-09-30):**
+
+- **A module is a stylesheet when its type is `css`, whatever its name.** The CSS pass acts on any module whose current type is `css`, and starts from the code it is handed rather than from the file. A plugin compiling `.scss` returns `{ code, type: "css" }` from `load` or `transform`, and esdev does the rest. The file's own directory is still where its `@import`s and `url()`s resolve.
+- **A CSS Module is named `*.module.*`**, so `Button.module.scss` is scoped once a plugin has made it CSS.
+- **A linked stylesheet goes through the plugins.** A `<link>`'d file is offered to the plugins' `load` and `transform`, as an imported one is; a file that comes out as `css` is bundled and linked as a stylesheet, whatever its extension, and written as `.css`. A linked `.css` no plugin touches is bundled as before.
+- **The CSS pass runs last.** It is ordered `post`, so it finishes whatever the plugins made: a stylesheet language compiled to CSS and CSS a plugin rewrote reach it whatever order the plugin declared, and a plugin that turns a stylesheet into JavaScript (a Tailwind compiler, CSS-in-JS) is still stepped around. It was unordered, and a Sass plugin declared the ordinary way ran after it and handed the bundler CSS it cannot bundle.
+
+**Rejected:**
+- **Built-in Sass, Less or PostCSS.** Each is a dependency with its own release cycle and configuration; a plugin is the place for one, and esdev's part is to accept what it produces.
+- **A separate `css` hook.** A stylesheet is a module with a type, and `load`/`transform` already say what a module is.
+
+**Consequences:** a stylesheet language is a plugin that returns CSS. **Not solved here:** source maps for CSS output, and hot-swapping a linked stylesheet whose extension is not `.css` (it reloads the page instead).

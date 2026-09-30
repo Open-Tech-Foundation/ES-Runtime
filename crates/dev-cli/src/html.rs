@@ -497,13 +497,14 @@ fn is_stylesheet(path: &Path) -> bool {
 /// visited before the change.
 fn stylesheet(
     path: &Path,
+    source: Option<String>,
     assets: &Path,
     hash: bool,
     minify: bool,
     sources: &mut usize,
     written: &mut usize,
 ) -> Result<Vec<u8>, String> {
-    let bundled = crate::css::build(path, minify)?;
+    let bundled = crate::css::build_source(path, source, minify)?;
     let mut code = bundled.code;
     // Every stylesheet that went in, not every `<link>` that named one: an
     // `@import` is a file this build read, and counting tags instead would
@@ -583,6 +584,9 @@ pub async fn build(
     let mut styled = 0usize;
     let mut pulled_in = 0usize;
     let mut copied = 0usize;
+    // What a plugin's hook is handed while a linked file is read here rather
+    // than by the bundler.
+    let ctx = crate::unbundled::run_context(root);
 
     for reference in &references {
         if reference.at == Where::Rooted {
@@ -629,17 +633,41 @@ pub async fn build(
                 modules.push((name, path.to_string_lossy().into_owned()));
             }
             Kind::Asset => {
-                let bytes = if is_stylesheet(&path) {
-                    stylesheet(&path, &assets, hash, minify, &mut styled, &mut pulled_in)?
+                // Offered to the plugins first, as an imported stylesheet is
+                // (D149): a linked `.scss` a plugin compiles to CSS is a
+                // stylesheet, and a `.css` a plugin rewrites is bundled from
+                // what it wrote. What comes out as anything else is copied as
+                // the file it is.
+                let compiled = crate::unbundled::through(plugins, &path, &ctx)
+                    .await?
+                    .filter(|(_, kind)| kind == "css")
+                    .map(|(code, _)| code);
+                let (bytes, named) = if compiled.is_some() || is_stylesheet(&path) {
+                    (
+                        stylesheet(
+                            &path,
+                            compiled,
+                            &assets,
+                            hash,
+                            minify,
+                            &mut styled,
+                            &mut pulled_in,
+                        )?,
+                        path.with_extension("css"),
+                    )
                 } else {
                     copied += 1;
-                    std::fs::read(&path)
-                        .map_err(|e| format!("cannot read {}: {e}", reference.url))?
+                    (
+                        std::fs::read(&path)
+                            .map_err(|e| format!("cannot read {}: {e}", reference.url))?,
+                        path.clone(),
+                    )
                 };
                 let name = if hash {
-                    hashed_name(&path, &bytes)
+                    hashed_name(&named, &bytes)
                 } else {
-                    path.file_name()
+                    named
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("asset")
                         .to_string()

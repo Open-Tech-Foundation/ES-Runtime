@@ -3865,7 +3865,7 @@ keeps it, where rollup's `this` is silently lost:
 | `ctx.platform` | `"server"`, `"browser"` or `"node"`: what the compiled code runs against. `"browser"` for `esdev test --dom` and `--browser` |
 | `ctx.target` | the project target being built, by name; absent outside a project build |
 | `ctx.hot` | `true` only for a browser build in `esdev start`'s hot loop, so a refresh scheme installs its per-module wrapper where it means something and nowhere else |
-| `ctx.type` | on `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. It is how a pass declines work somebody else has done: `esdev:css-modules` filters on `.css` and steps aside for a plugin that claimed the stylesheet first. |
+| `ctx.type` | on `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. It is how a pass declines work somebody else has done: `esdev:css-modules` acts on any module whose type is `"css"` — a `.css`, or what a plugin compiled to CSS — and steps aside for one a plugin turned into JavaScript. |
 
 It is live only while its hook runs; stashing it and calling `resolve()` later
 throws.

@@ -106,28 +106,14 @@ impl Pipeline {
         Pipeline {
             passes,
             then,
-            ctx: Arc::new(RunContext {
-                dir: root.to_path_buf(),
-            }),
+            ctx: run_context(root),
             root: root.to_path_buf(),
             loaded: Mutex::new(HashMap::new()),
         }
     }
 
-    /// The passes that declared `hook`, in the order a build calls them: `pre`,
-    /// then unordered, then `post`, each in the order they were installed.
     fn ordered(&self, hook: Hook) -> Vec<&Arc<dyn contract::Pass>> {
-        let mut passes: Vec<_> = self
-            .passes
-            .iter()
-            .filter(|pass| pass.hooks().get(hook).is_some())
-            .collect();
-        passes.sort_by_key(|pass| match pass.hooks().get(hook).map(|h| h.order) {
-            Some(contract::Order::Pre) => 0,
-            Some(contract::Order::Post) => 2,
-            _ => 1,
-        });
-        passes
+        ordered(&self.passes, hook)
     }
 
     fn admits(pass: &Arc<dyn contract::Pass>, hook: Hook, id: &str, code: Option<&str>) -> bool {
@@ -321,6 +307,90 @@ impl SourceTransform for Pipeline {
         }
         Ok(compiled)
     }
+}
+
+/// The passes that declared `hook`, in the order a build calls them: `pre`,
+/// then unordered, then `post`, each in the order they were installed.
+fn ordered(passes: &[Arc<dyn contract::Pass>], hook: Hook) -> Vec<&Arc<dyn contract::Pass>> {
+    let mut passes: Vec<_> = passes
+        .iter()
+        .filter(|pass| pass.hooks().get(hook).is_some())
+        .collect();
+    passes.sort_by_key(|pass| match pass.hooks().get(hook).map(|h| h.order) {
+        Some(contract::Order::Pre) => 0,
+        Some(contract::Order::Post) => 2,
+        _ => 1,
+    });
+    passes
+}
+
+/// A hook context for a file esdev reads itself, outside any bundle: it can
+/// find a file for `ctx.resolve()` and cannot emit.
+pub fn run_context(root: &Path) -> Arc<dyn contract::Context> {
+    Arc::new(RunContext {
+        dir: root.to_path_buf(),
+    })
+}
+
+/// A file's code after the plugins' `load` and `transform`, and the type it
+/// came out as — for a file esdev reads itself rather than through a bundler,
+/// such as a stylesheet a document links (D149).
+///
+/// `None` when no plugin's filter admits the file, so a file no plugin is
+/// interested in is never read as text: most linked files are images.
+pub async fn through(
+    passes: &[Arc<dyn contract::Pass>],
+    path: &Path,
+    ctx: &Arc<dyn contract::Context>,
+) -> Result<Option<(String, String)>, String> {
+    let id = path.to_string_lossy().into_owned();
+    let admitted = |hook| {
+        ordered(passes, hook)
+            .into_iter()
+            .filter(|pass| Pipeline::admits(pass, hook, &id, None))
+            .collect::<Vec<_>>()
+    };
+    let loaders = admitted(Hook::Load);
+    if loaders.is_empty() && admitted(Hook::Transform).is_empty() {
+        return Ok(None);
+    }
+    let mut loaded = None;
+    for pass in loaders {
+        if let Some(result) = pass
+            .load(&id, ctx)
+            .await
+            .map_err(|e| format!("[plugin {}] {id}\n{e}", pass.name()))?
+        {
+            loaded = Some(result);
+            break;
+        }
+    }
+    let (mut code, mut kind) = match loaded {
+        Some(result) => (
+            result.code,
+            result.module_type.unwrap_or_else(|| module_type(&id)),
+        ),
+        None => (
+            std::fs::read_to_string(path).map_err(|e| format!("cannot read {id}: {e}"))?,
+            module_type(&id),
+        ),
+    };
+    for pass in ordered(passes, Hook::Transform) {
+        if !Pipeline::admits(pass, Hook::Transform, &id, Some(&code)) {
+            continue;
+        }
+        if let Some(result) = pass
+            .transform(&code, &id, &kind, ctx)
+            .await
+            .map_err(|e| format!("[plugin {}] {id}\n{e}", pass.name()))?
+        {
+            code = result.code;
+            if let Some(changed) = result.module_type {
+                kind = changed;
+            }
+        }
+    }
+    Ok(Some((code, kind)))
 }
 
 /// One map from the end of `chain` back to its start, as JSON: each map names

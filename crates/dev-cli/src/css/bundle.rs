@@ -62,7 +62,11 @@ pub struct Bundled {
 }
 
 /// Reads `entry` and everything it imports.
-pub fn bundle(entry: &Path) -> Result<Bundled, String> {
+///
+/// `source` is the entry's text when it is given: what a plugin compiled
+/// (Sass) or rewrote (PostCSS) rather than what is on disk (D149). Its
+/// `@import`s and `url()`s still resolve from the entry's own directory.
+pub fn bundle(entry: &Path, source: Option<String>) -> Result<Bundled, String> {
     let mut out = Bundled {
         sheet: Stylesheet::default(),
         referenced: Vec::new(),
@@ -71,7 +75,7 @@ pub fn bundle(entry: &Path) -> Result<Bundled, String> {
         missing: Vec::new(),
     };
     let mut stack = Vec::new();
-    let items = read(entry, &mut out, &mut stack)?;
+    let items = read(entry, source, &mut out, &mut stack)?;
     out.sheet.items = items;
     if let Some(missing) = out.missing.first()
         && !crate::tailwind::uses(&out.sheet)
@@ -87,7 +91,12 @@ pub fn bundle(entry: &Path) -> Result<Bundled, String> {
 /// cycle terminate. Two stylesheets importing each other is a mistake, but it
 /// is the author's mistake to see reported rather than a build that never
 /// returns.
-fn read(file: &Path, out: &mut Bundled, stack: &mut Vec<PathBuf>) -> Result<Vec<Item>, String> {
+fn read(
+    file: &Path,
+    source: Option<String>,
+    out: &mut Bundled,
+    stack: &mut Vec<PathBuf>,
+) -> Result<Vec<Item>, String> {
     let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     if stack.contains(&canonical) {
         return Err(format!(
@@ -103,8 +112,11 @@ fn read(file: &Path, out: &mut Bundled, stack: &mut Vec<PathBuf>) -> Result<Vec<
         ));
     }
 
-    let source =
-        std::fs::read_to_string(file).map_err(|e| format!("cannot read {}: {e}", display(file)))?;
+    let source = match source {
+        Some(source) => source,
+        None => std::fs::read_to_string(file)
+            .map_err(|e| format!("cannot read {}: {e}", display(file)))?,
+    };
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     // Against the canonical directory, because an absolute path is the point
@@ -176,7 +188,7 @@ fn inline_import(
         return Ok(());
     }
 
-    let inlined = read(&target, out, stack)?;
+    let inlined = read(&target, None, out, stack)?;
 
     if conditions.is_empty() {
         items.extend(inlined);

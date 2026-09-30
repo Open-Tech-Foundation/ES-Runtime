@@ -37,6 +37,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **A plugin can hand esdev CSS** (DECISIONS D149). A module whose type is
+  `css` is bundled, scoped and linked whatever its extension, from the code a
+  plugin produced: a Sass plugin returns `{ code, type: "css" }` for
+  `Card.module.scss`, and a `<link rel="stylesheet">` to a `.scss` is written as
+  a hashed `.css`. A PostCSS-style plugin's rewrite of a `.css` is no longer
+  replaced by the file on disk. esdev's CSS pass now runs `post`.
 - **A plugin is told where it runs**: `ctx.command` (`build`, `start`,
   `test`, `run`), `ctx.platform` (`browser` or `server`), `ctx.target` (the
   target's name) and `ctx.hot`. One plugin entry can compile a component for

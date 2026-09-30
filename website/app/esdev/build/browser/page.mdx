@@ -122,6 +122,27 @@ mapping's value becomes a transitive list of class names. A `.css` that is not
 A stylesheet that imports `tailwindcss` is compiled with the project's
 Tailwind in any of these paths — see [Tailwind CSS](/esdev/build/tailwind).
 
+### Sass, Less and other stylesheet languages
+
+A [plugin](/esdev/plugins) that compiles a stylesheet language returns
+`{ code, type: "css" }`, and esdev bundles, scopes and links what it made, as
+if it were a `.css` file: `import styles from "./Card.module.scss"` gets scoped
+names, and `<link rel="stylesheet" href="./theme.scss">` is written as a hashed
+`.css`. A plugin that rewrites CSS and keeps it CSS (PostCSS) works the same
+way. `@import` and `url()` resolve from the source file's directory.
+
+```js
+import * as sass from "sass";
+
+export default {
+  name: "sass",
+  transform: {
+    filter: { id: /\.scss$/ },
+    handler: (code, id) => ({ code: sass.compileString(code, { url: new URL(`file://${id}`) }).css, type: "css" }),
+  },
+};
+```
+
 <Callout type="note" title="What the CSS pipeline does not do">
   No syntax lowering or vendor prefixing, and no per-file typed class names.
 </Callout>
