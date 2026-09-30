@@ -20,6 +20,12 @@ namespace) is unstable and may change between minor releases until the API freez
   allowlist `runtime:net` uses. On the Postgres QPS benchmark it answers 22%
   more queries than `@opentf/esrun-postgres` with less memory. It runs
   scripts, cancels statements, and subscribes with `LISTEN`/`NOTIFY`.
+- A built-in MySQL and MariaDB driver: `import { mysql } from "runtime:db"`,
+  the same way as `postgres` — its protocol in Rust (handshake and TLS,
+  `caching_sha2_password` and `mysql_native_password`, prepared statements, rows
+  transcoded into the shared layout), through the same network permission. On
+  the MySQL QPS benchmark it answers 27% more queries than
+  `@opentf/esrun-mysql` with less memory.
 
 ### Added
 

@@ -34,6 +34,8 @@ mod hashing_ops;
 mod http_ops;
 mod module_ops;
 mod msgpack;
+mod my_ops;
+mod mysql;
 mod net_ops;
 pub mod otlp;
 mod pg_ops;

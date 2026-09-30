@@ -18,8 +18,6 @@ export MYSQL_URL="${MYSQL_URL:-mysql://root:esrun@127.0.0.1:3307/esrun_test?ssl-
 [ -x "$esrun" ] || { echo "no esrun at $esrun — cargo build --release -p es-runtime-cli" >&2; exit 1; }
 [ -f "$here/../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
 
-printf "\n== unit ==\n"
-"$here/unit/run.sh" || exit 1
 
 status=0
 # `tls` runs only when test/tls-server.sh has set MYSQL_TLS_URL, and says so.

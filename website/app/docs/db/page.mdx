@@ -193,7 +193,7 @@ const db = await connect("sqlite:./secret.db", { driver: sqlite, key });
 
 ## Other databases
 
-`sqlite` and `postgres` ship **in** the runtime. Every other driver is a package
+`sqlite`, `postgres` and `mysql` ship **in** the runtime. Every other driver is a package
 over [`runtime:net`](/docs/guides/networking). Either way the driver is passed
 the same way:
 
@@ -214,13 +214,13 @@ exactly what one connection does.
 Every driver package exports its driver under the same name — `driver` — and
 nothing as a default, so the import reads the same whichever backend it is and
 `{ driver }` is the whole of the option. Two of them in one module are
-`import { driver as mysql }`.
+`import { driver as redis }`.
 
 | Package | Schemes | |
 | --- | --- | --- |
 | built in: `sqlite` | `sqlite:` | a file format and a SQL dialect |
 | built in: `postgres` | `postgres:` `postgresql:` | the wire protocol (in the runtime), Temporal types, LISTEN/NOTIFY |
-| `@opentf/esrun-mysql` | `mysql:` `mariadb:` | the client/server protocol, verified TLS, Temporal types; MySQL and MariaDB |
+| built in: `mysql` | `mysql:` `mariadb:` | the client/server protocol (in the runtime), verified TLS, Temporal types; MySQL and MariaDB |
 | [`@opentf/esrun-redis`](/docs/db/redis) | `redis:` `rediss:` | RESP3, pub/sub, pipelining, cluster, Sentinel, and a Redis client alongside the backend |
 
 ### A backend that is not a SQL database

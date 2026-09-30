@@ -66,7 +66,7 @@ refused rather than read, since they can only be an injection.
 PLAIN, LOGIN and XOAUTH2 all send the secret itself, base64-encoded rather than
 protected. A login over an unencrypted session is therefore refused before
 anything is sent, unless `allowPlaintextAuth` is set for a relay on the same
-host. It is the rule the MySQL driver (`@opentf/esrun-mysql`) applies to
+host. It is the rule the MySQL driver (`mysql` in `runtime:db`) applies to
 fetching a server's public key over plaintext. Error messages name the command
 (`AUTH PLAIN`), never the line, so a refused login does not put the credential
 in a log.

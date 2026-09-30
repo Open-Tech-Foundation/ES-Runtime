@@ -486,6 +486,106 @@ declare module "runtime:db" {
   export const postgres: Driver<PgConnection, PgOptions, PgPooled>;
 
   /**
+   * Options for the built-in {@link mysql} driver. The connection string carries
+   * the same things; explicit options win over it, and it wins over
+   * `MYSQL_HOST`, `MYSQL_TCP_PORT` and `MYSQL_PWD` (read only with `env`).
+   */
+  export interface MySqlOptions {
+    host?: string;
+    port?: number;
+    user?: string;
+    password?: string;
+    database?: string;
+    /**
+     * `"prefer"` (default) uses TLS when offered; `"require"` insists;
+     * `"disable"` never asks. TLS is verified, so a stock server's self-signed
+     * certificate needs `sslRootCert` — or `"disable"`.
+     */
+    sslmode?: "require" | "prefer" | "disable";
+    /** A certificate authority (PEM) to trust besides the public roots. */
+    sslRootCert?: string | Uint8Array;
+    /** Milliseconds for the connection and its handshake. Default 10 000; `0` waits forever. */
+    connectTimeout?: number;
+    /**
+     * A per-statement limit in milliseconds, enforced by the server: MySQL's
+     * `max_execution_time` (SELECT only), MariaDB's `max_statement_time`.
+     */
+    statementTimeout?: number;
+    /** Prepared statements kept per connection. Default 100. */
+    preparedStatementCacheSize?: number;
+    /** Decode date and time columns to Temporal values. Default `true`. */
+    temporal?: boolean;
+    /**
+     * The server's RSA public key (PEM), for `caching_sha2_password` full
+     * authentication over a connection without TLS.
+     */
+    serverPublicKey?: string;
+    /**
+     * Ask the server for its key when `serverPublicKey` is not given. Default
+     * `false`: the key arrives over the connection it protects. The URL spells
+     * it `allowPublicKeyRetrieval=true`.
+     */
+    allowPublicKeyRetrieval?: boolean;
+  }
+
+  /** Connection options, plus how big the pool is. */
+  export interface MySqlPoolOptions extends MySqlOptions, PoolSettings {}
+
+  /** What a MySQL column can produce: numbers, bigints, strings, bytes, documents, Temporal values. */
+  export type MySqlValue = DbOutput | Date | object;
+
+  /** A row from the {@link mysql} driver. */
+  export type MySqlRow = Row<MySqlValue>;
+
+  /** A connection opened with the built-in {@link mysql} driver. */
+  export interface MySqlConnection extends Connection {
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<MySqlRow>>;
+    transaction<T>(fn: (tx: MySqlConnection) => Promise<T>): Promise<T>;
+    withConnection<T>(fn: (connection: MySqlConnection) => Promise<T>): Promise<T>;
+    /** The server's version string, from its greeting. */
+    readonly serverVersion: string;
+    /** This connection's id on the server — what `KILL QUERY` names. */
+    readonly connectionId: number;
+    /** Whether the server is MariaDB. */
+    readonly mariadb: boolean;
+    /**
+     * Runs a script — several statements — through the text protocol. **No
+     * parameters.** MySQL does not wrap a script in a transaction, and DDL
+     * commits implicitly.
+     */
+    executeScript(
+      sql: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ changes: number; lastInsertRowid: number | null }[]>;
+    /**
+     * Stops the running statement: a second connection runs `KILL QUERY`. The
+     * statement fails with `ER_QUERY_INTERRUPTED`; this connection stays usable.
+     */
+    cancel(): Promise<void>;
+    /** Asks the server whether it is still there. */
+    ping(): Promise<void>;
+  }
+
+  /** A pool of {@link MySqlConnection}s, with the surface one connection has. */
+  export interface MySqlPooled extends PooledConnection {
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<MySqlRow>>;
+    transaction<T>(fn: (tx: MySqlConnection) => Promise<T>): Promise<T>;
+    withConnection<T>(fn: (connection: MySqlConnection) => Promise<T>): Promise<T>;
+    /** Runs a script on a borrowed connection. */
+    executeScript(
+      sql: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ changes: number; lastInsertRowid: number | null }[]>;
+  }
+
+  /**
+   * The built-in MySQL (and MariaDB) driver, for `mysql:` and `mariadb:` URLs.
+   * Its client/server protocol runs in the runtime; connecting needs `net` for
+   * the server's host and port.
+   */
+  export const mysql: Driver<MySqlConnection, MySqlOptions, MySqlPooled>;
+
+  /**
    * The `sql` tagged template: every interpolation becomes a parameter, never
    * text. A nested `Query` splices with its own values, so fragments compose.
    *
@@ -1004,6 +1104,7 @@ declare module "runtime:db" {
     queryAst: typeof queryAst;
     sqlite: typeof sqlite;
     postgres: typeof postgres;
+    mysql: typeof mysql;
     defineDriver: typeof defineDriver;
     DbError: typeof DbError;
     DbErrorCode: typeof DbErrorCode;

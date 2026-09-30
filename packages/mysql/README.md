@@ -1,11 +1,17 @@
 # @opentf/esrun-mysql
 
-A MySQL and MariaDB driver for [ES Runtime](https://esrun.opentechf.org)
-(`esrun`), written **entirely in JavaScript** over `runtime:net`.
+The MySQL and MariaDB driver for [ES Runtime](https://esrun.opentechf.org)
+(`esrun`).
 
-There is no native code in this package and none was added to the runtime for
-it. That is the point of `runtime:db`: adding a database to this runtime does
-not mean adding anything to the runtime.
+**The driver is built into the runtime** (from esrun 0.35): its protocol runs in
+Rust, and `import { mysql } from "runtime:db"` is the same driver. This package
+re-exports it, so code written against the package keeps working unchanged. New
+code needs no package at all:
+
+```js
+import { connect, mysql } from "runtime:db";
+const db = await connect("mysql://user:secret@localhost/app", { driver: mysql });
+```
 
 ```sh
 npm install @opentf/esrun-mysql

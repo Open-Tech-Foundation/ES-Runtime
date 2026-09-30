@@ -368,7 +368,7 @@ fn pss_verify(
     )
 }
 
-fn oaep_encrypt(
+pub(crate) fn oaep_encrypt(
     entropy: &dyn Entropy,
     hash: &str,
     label: &[u8],

@@ -8,13 +8,13 @@ import { Callout } from "@opentf/web-docs";
 # Connections and pooling
 
 ```js
-import { connect, postgres, sqlite, sql } from "runtime:db";
+import { connect, mysql, postgres, sqlite, sql } from "runtime:db";
 ```
 
 ## `connect(url, options)`
 
-Opens a connection with the **driver** you pass. `sqlite` and `postgres` are
-built in; every other driver is a package export.
+Opens a connection with the **driver** you pass. `sqlite`, `postgres` and
+`mysql` are built in; every other driver is a package export.
 
 ```js
 const db  = await connect("sqlite:./app.db", { driver: sqlite });
@@ -22,6 +22,7 @@ const mem = await connect("sqlite::memory:", { driver: sqlite });
 const enc = await connect("sqlite:./secret.db", { driver: sqlite, key });
 
 const pg = await connect("postgres://user@host/app", { driver: postgres });
+const my = await connect("mysql://user@host/app", { driver: mysql });
 
 // Every driver package exports its driver as `driver`, and nothing as a
 // default. Two of them in one module are told apart with `as`.
@@ -60,6 +61,21 @@ and the URL over the `PG*` environment variables, which are read only with the
 A `postgres` connection also has `executeScript(sql)` (several statements, no
 parameters, a `{ command, changes }` per statement), `cancel()`, `status`,
 `parameters` and `onNotice`, and it subscribes with `LISTEN`/`NOTIFY`.
+
+`mysql` takes `mysql:` and `mariadb:` URLs, for MySQL and MariaDB alike, and
+reads `MYSQL_HOST`, `MYSQL_TCP_PORT` and `MYSQL_PWD` below the URL. Its options
+are `postgres`'s connection options, minus `applicationName`, plus:
+
+| `mysql` option | Type | Meaning |
+| --- | --- | --- |
+| `serverPublicKey` | `string` | The server's RSA key (PEM), for `caching_sha2_password` full authentication without TLS. |
+| `allowPublicKeyRetrieval` | `boolean` | Ask the server for that key instead. Off by default: the key arrives over the connection it protects. |
+
+TLS is verified, so a stock MySQL server's self-signed certificate needs
+`sslRootCert`, or `sslmode: "disable"`. A `mysql` connection also has
+`executeScript(sql)` (a `{ changes, lastInsertRowid }` per statement),
+`cancel()` (a `KILL QUERY` from a second connection), `ping()`,
+`serverVersion`, `connectionId` and `mariadb`.
 
 What comes back is **that driver's** connection, so a driver's own surface is on
 the object `connect` returned and needs no second entry point: Redis's commands,

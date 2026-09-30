@@ -17,6 +17,9 @@ itself.
 
 - `runtime:db`'s built-in `postgres` driver, with `PgConnection`, `PgOptions`,
   `PgPooled`, `PgPoolOptions`, `PgRow`, `PgServerMessage` and `PgValue`.
+- `runtime:db`'s built-in `mysql` driver, with `MySqlConnection`,
+  `MySqlOptions`, `MySqlPooled`, `MySqlPoolOptions`, `MySqlRow` and
+  `MySqlValue`.
 
 ## [0.11.0] - 2026-09-29
 

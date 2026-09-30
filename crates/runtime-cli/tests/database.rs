@@ -1206,3 +1206,32 @@ fn the_postgres_driver_connects_only_with_what_net_grants() {
         assert_eq!(stdout(&out).trim(), expected, "{name}");
     }
 }
+
+/// The built-in MySQL driver (D147) holds no authority of its own either: the
+/// same three answers as PostgreSQL's, from the same network provider.
+#[test]
+fn the_mysql_driver_connects_only_with_what_net_grants() {
+    let source = r#"
+        import { connect, mysql } from "runtime:db";
+        try {
+          await connect("mysql://root@127.0.0.1:1/x?ssl-mode=DISABLED", { driver: mysql });
+          console.log("connected");
+        } catch (e) {
+          console.log(e.code);
+        }
+    "#;
+    let cases: [(&str, &[&str], &str); 3] = [
+        ("my-no-net", &["--allow-read"], "ERR_CAPABILITY_DENIED"),
+        (
+            "my-allowlist",
+            &["--allow-net=127.0.0.1:2"],
+            "ERR_PERMISSION_DENIED",
+        ),
+        ("my-no-env", &["--allow-net"], "ERR_DB_CONNECTION_LOST"),
+    ];
+    for (name, flags, expected) in cases {
+        let out = run(name, source, flags);
+        assert!(out.status.success(), "{name}: {}", stderr(&out));
+        assert_eq!(stdout(&out).trim(), expected, "{name}");
+    }
+}

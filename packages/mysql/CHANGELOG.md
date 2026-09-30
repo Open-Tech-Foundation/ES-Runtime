@@ -11,6 +11,23 @@ pace of the MySQL protocol rather than the runtime's. See the root
 
 ## [Unreleased]
 
+### Changed
+
+- **The package re-exports the driver built into `runtime:db`** (esrun 0.35 and
+  later; DECISIONS D147). Its protocol now runs in the runtime, in Rust, and
+  `import { mysql } from "runtime:db"` is the same driver. Code that imports
+  `driver` from this package keeps working unchanged, and every test in the
+  package's suite passes against it, on MySQL 8.4 and MariaDB 11.
+- `engines.esrun` is now `>=0.35.0`.
+
+### Removed
+
+- The JavaScript implementation, and with it the value exports
+  `MySqlConnection`, `MySqlPooled`, `MYSQL_DIALECT`, `environmentDefaults` and
+  `parseConnectionString`. The types `MySqlConnection`, `MySqlOptions`,
+  `MySqlPooled`, `MySqlPoolOptions`, `MySqlRow` and `MySqlValue` are still
+  exported, from `runtime:db`'s declarations.
+
 ## [0.1.3] - 2026-09-29
 
 _Dependency updates._

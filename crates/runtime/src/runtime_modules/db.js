@@ -2627,6 +2627,6 @@ export {
   runBackendConformance,
 };
 
-// The default export is at the end of db_postgres.js, which is appended to this
-// file: it names the `postgres` driver, and nothing may refer to that before it
-// is defined.
+// The default export is at the end of db_mysql.js, the last of the driver files
+// appended to this one: it names the built-in drivers, and nothing may refer to
+// one before it is defined.

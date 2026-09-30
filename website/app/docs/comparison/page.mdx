@@ -44,7 +44,7 @@ experimental or flag-gated one is <Partial />.
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | Built-in SQLite | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Built-in Postgres / MySQL client | <Partial /> | <No /> | <Yes /> | <No /> |
+| Built-in Postgres / MySQL client | <Yes /> | <No /> | <Yes /> | <No /> |
 | Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
 | First-party SMTP client | <Partial /> | <No /> | <No /> | <No /> |
@@ -94,10 +94,10 @@ service expressible. See the [UDP guide](/docs/guides/udp#coming-from-node-deno-
 for the call-by-call mapping, and [the benchmarks](/docs/benchmarks) for the two
 UDP rows.
 
-**On the database client rows.** PostgreSQL is built in: `postgres` from
-`runtime:db`, with its wire protocol in the runtime. MySQL (and MariaDB) and
-Redis are first-party *packages*, `@opentf/esrun-mysql` and
-`@opentf/esrun-redis`, which is why those rows are <Partial />. All of them are
+**On the database client rows.** PostgreSQL and MySQL (with MariaDB) are built
+in: `postgres` and `mysql` from `runtime:db`, with their protocols in the
+runtime. Redis is a first-party *package*, `@opentf/esrun-redis`, which is why
+its row is <Partial />. All of them are
 built on the public driver tier in the row below, which Bun's are not: its
 drivers' internals are not exported, so a third party's backend starts from
 nothing. Node and Deno leave both to npm.

@@ -2,7 +2,7 @@
 import { connect } from "runtime:db";
 import { env } from "runtime:process";
 import { driver } from "../dist/index.js";
-import { is, ok, report } from "./unit/assert.mjs";
+import { is, ok, report } from "./assert.mjs";
 
 // Set by test/tls-server.sh. The server requires secure transport, so a login
 // that succeeds at all has negotiated TLS.

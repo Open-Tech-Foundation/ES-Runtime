@@ -135,7 +135,7 @@ run = "biome ci"
 # `@opentf/esrun-types` and `esrun-serialization` too, and a member with no
 # such file fails the task rather than being passed over.
 [tasks."test:protocol"]
-run = "pnpm --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --parallel exec bash ./test/unit/run.sh"
+run = "pnpm --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --parallel exec bash ./test/unit/run.sh"
 
 # Run with our own `esdev`, not another JavaScript runtime — the same reasoning as `build` above. This
 # is the runtime's largest hand-written JS subsystem, and running it on the
