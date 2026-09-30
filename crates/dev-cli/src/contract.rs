@@ -232,11 +232,54 @@ pub struct Jsx {
     /// Insert the component registrations a refresh scheme's runtime matches
     /// components up by.
     ///
-    /// Honoured **only in a hot dev build of a target that named a refresh
-    /// scheme**, and that is a safety property rather than a policy: the
-    /// registrations call globals that only a hot loop installs, so emitting
-    /// them into a release build would ship calls to something undefined.
+    /// Honoured **only in a hot dev build**, and that is a safety property
+    /// rather than a policy: the registrations call globals that only a hot
+    /// loop installs, so emitting them into a release build would ship calls to
+    /// something undefined.
     pub refresh: bool,
+}
+
+/// Where a pass is running: facts about the build or run it is part of, which
+/// a plugin reads as `ctx.command`, `ctx.platform`, `ctx.target` and
+/// `ctx.hot` (D148).
+///
+/// Facts, not modes. esdev does not know what a framework's SPA, SSG or SSR
+/// mean; a plugin combines its own options with these to decide what to emit.
+/// Carried per pass rather than per plugin, because one loaded plugin serves
+/// every target, and the browser build beside a server build is hot while the
+/// server build is not.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Site {
+    /// `"build"`, `"start"`, `"test"` or `"run"`. `None` for a build a program
+    /// started through `runtime:build`, which is its own description.
+    pub command: Option<&'static str>,
+    /// `"browser"` or `"server"`: what the code being compiled runs against.
+    pub platform: Option<&'static str>,
+    /// The project target this build is, by name. `None` outside a project
+    /// build.
+    pub target: Option<String>,
+    /// A hot dev-loop build: modules may be replaced in place, so a refresh
+    /// scheme installs itself. Never true in anything shipped.
+    pub hot: bool,
+}
+
+impl Site {
+    /// The facts as the hook's context carries them. `hot` is always present;
+    /// the rest only when known, so a plugin reads absence, not `null`.
+    pub fn meta(&self) -> Vec<(String, Value)> {
+        let mut meta = Vec::with_capacity(4);
+        if let Some(command) = self.command {
+            meta.push(("command".to_string(), Value::String(command.to_string())));
+        }
+        if let Some(platform) = self.platform {
+            meta.push(("platform".to_string(), Value::String(platform.to_string())));
+        }
+        if let Some(target) = &self.target {
+            meta.push(("target".to_string(), Value::String(target.clone())));
+        }
+        meta.push(("hot".to_string(), Value::Bool(self.hot)));
+        meta
+    }
 }
 
 /// What a hook's answer looks like on its way back: fallible, and possibly

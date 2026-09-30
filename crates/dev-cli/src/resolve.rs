@@ -45,6 +45,19 @@ pub enum Target {
     Library,
 }
 
+impl Target {
+    /// The name a plugin reads as `ctx.platform` (D148). A library is built to
+    /// run wherever its consumer runs it, so it names none.
+    pub fn platform_name(self) -> Option<&'static str> {
+        match self {
+            Target::Server => Some("server"),
+            Target::Browser => Some("browser"),
+            Target::Node => Some("node"),
+            Target::Library => None,
+        }
+    }
+}
+
 /// The condition a Web-API-targeting package uses for the build that does not
 /// reach for `node:` modules.
 ///

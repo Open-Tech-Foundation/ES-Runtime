@@ -1,4 +1,7 @@
 {
+  "plugins": [
+    "./plugins/react-refresh.mjs"
+  ],
   "jsx": {
     "importSource": "react",
     "reactCompiler": true
@@ -7,11 +10,7 @@
     "targets": {
       "web": {
         "entry": "index.html",
-        "outdir": "dist",
-        "refresh": "react",
-        "plugins": [
-          "./plugins/react-refresh.mjs"
-        ]
+        "outdir": "dist"
       },
       "prerender": {
         "entry": "src/prerender.tsx",

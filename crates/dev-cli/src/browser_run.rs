@@ -484,11 +484,10 @@ impl Job {
         entries.push(("test".to_string(), self.file.display().to_string()));
         // Bundled with the project's plugins, as its browser build is.
         let source = &config.run.source;
-        let host = crate::plugins::host(source, &source.plugins).await?;
-        let every: Vec<usize> = (0..source.plugins.len()).collect();
+        let host = crate::plugins::host(source).await?;
         let passes = host
             .as_ref()
-            .map(|host| host.passes(&every, None))
+            .map(|host| host.passes(&crate::test::site(true)))
             .unwrap_or_default();
         let (written, sheets, _) = crate::build::bundle_browser_entries(
             entries,
@@ -509,9 +508,7 @@ impl Job {
             .collect(),
             Some("external".to_string()),
             None,
-            host.as_ref()
-                .map(|host| host.jsx(&every))
-                .unwrap_or_default(),
+            host.as_ref().map(|host| host.jsx()).unwrap_or_default(),
             source.jsx.clone(),
             source.tsconfig.clone(),
             &passes,

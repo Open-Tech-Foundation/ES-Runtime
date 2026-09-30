@@ -11,9 +11,8 @@ import { Callout } from "@opentf/web-docs";
 
 Configuration is grouped by concern: `build.targets` describes outputs,
 `resolve.alias` describes shared import resolution, and `dev` describes the
-development loop. Project plugins stay at the top level and target plugins add
-to them. `jsx` and `test` also stay at the top level because they apply across
-build targets or to their own command.
+development loop. `plugins`, `jsx` and `test` stay at the top level because
+they apply across build targets or to their own command.
 
 ```json
 {
@@ -77,7 +76,6 @@ esdev build src/app.ts           # one-off entry; project source settings still 
 | `types` | `false` — skip declarations |
 | `dts-bundle` | `true`, or the entry to link from |
 | `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
-| `plugins` | Plugins for this target, **added** to the project's |
 
 `resolve.alias` is a project-level setting shared by targets and source
 commands; it is not a target option. See [Aliases](#aliases).
@@ -201,43 +199,45 @@ if (import.meta.env.DEV) { /* development-only code */ }
 
 ## Plugins in a project
 
-A project can name plugins in data, and every command that reads its source
-loads them:
+Plugins are declared once, at the top level, and every command loads them:
 
 ```json
 {
   "plugins": [
     "./plugins/mdx.js",
-    { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }
+    { "module": "@otfw/compiler", "options": { "mode": "ssr" } }
   ],
   "build": {
     "targets": {
-      "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
-                   "platform": "browser", "plugins": ["./plugins/only-web.js"] }
+      "server": { "entry": "src/server.tsx", "out": "dist/server.js" },
+      "web": { "entry": "index.html", "outdir": "dist" }
     }
   }
 }
 ```
 
-Top-level plugins are the project's; a target's `plugins` are added to them for
-that target rather than replacing them. See [Writing a plugin](/esdev/plugins)
-for the hook contract.
+A target has no `plugins` of its own. A plugin that compiles differently per
+build reads where it is running from its hook context: `ctx.platform`,
+`ctx.target`, `ctx.command` and `ctx.hot`
+([context](/esdev/plugins/context#where-a-hook-runs)). A framework's rendering
+mode is the plugin's own option. See [Writing a plugin](/esdev/plugins) for the
+hook contract.
 
 ### Where plugins run
 
-| Command | Which plugins | Which hooks |
-| --- | --- | --- |
-| `esdev build`, `esdev start` | The project's, and each target's own | All six |
-| `esdev build <entry>` | The project's | All six |
-| `esdev test`, `esdev <file>` | The project's | `transform` only |
-| `esdev test --browser` | The project's | All six: the test is bundled |
+| Command | Which hooks |
+| --- | --- |
+| `esdev build`, `esdev start`, `esdev build <entry>` | All six |
+| `esdev test --browser` | All six: the test is bundled |
+| `esdev test`, `esdev test --dom`, `esdev <file>` | `resolve`, `load`, `transform` |
 
-A module run unbundled is not in a bundle, so there is no graph for `resolve` or
-`load` to answer, and `ctx.emit()` fails. `ctx.resolve()` finds a relative or
-absolute path, with the extensions and `index` files a bundler tries, and
-answers `null` for a package. A `transform` runs on every module
-the run loads, before the project's `jsx` compiles what is left — which is what
-a framework whose JSX compiler is a plugin needs.
+A module run unbundled goes through the same `resolve`, `load` and `transform`
+hooks a build calls, in the same order, and esdev's own passes run with them: a
+test importing a CSS Module gets its scoped names, and an image gets its URL. A
+virtual module a plugin serves is loaded under the `esdev-virtual:` scheme.
+There is no bundle, so `start`, `end` and `bundle` do not run and `ctx.emit()`
+fails. `ctx.resolve()` finds a relative or absolute path, with the extensions
+and `index` files a bundler tries, and answers `null` for a package.
 
 | Key | |
 | --- | --- |

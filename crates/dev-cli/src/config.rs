@@ -83,28 +83,14 @@ pub struct Project {
     pub alias: Vec<(String, String)>,
     /// What `esdev test` does here, if the file says.
     pub test: TestSettings,
-    /// Every plugin this project loads, in the order they are loaded — the
-    /// top-level ones first, then each target's own.
+    /// The project's plugins, in the order they are declared: the one list
+    /// every command loads (D148).
     ///
-    /// One flat list rather than a list per target because they are loaded
-    /// **once**, into one isolate that lives for the run
-    /// ([`crate::plugins`]); a target names the ones that apply to it by
-    /// index. A dev loop rebuilds forty times a minute and a plugin is a
-    /// module with a module's initialisation, so paying for it per build would
-    /// be paying for it forty times.
+    /// Loaded **once**, into one isolate that lives for the run
+    /// ([`crate::plugins`]). A dev loop rebuilds forty times a minute and a
+    /// plugin is a module with a module's initialisation, so paying for it per
+    /// build would be paying for it forty times.
     pub plugins: Vec<PluginSpec>,
-    /// How many of [`Project::plugins`] are the project's own — the top-level
-    /// `plugins`, which come first — rather than one target's.
-    shared_plugins: usize,
-}
-
-impl Project {
-    /// The top-level `plugins`: every target's, and the ones `esdev test`
-    /// compiles with. A target's own list describes that target's bundle, and
-    /// a test is not any one target.
-    pub fn project_plugins(&self) -> &[PluginSpec] {
-        &self.plugins[..self.shared_plugins]
-    }
 }
 
 /// One plugin, as the file names it.
@@ -259,17 +245,6 @@ pub struct Target {
     /// `None` is "the build decides", which for a release build is none and for
     /// the dev loop is inline ([`crate::build::sourcemap_for`]).
     pub sourcemap: Option<String>,
-    /// `"refresh": "<scheme>"` — the hot-reload scheme this target's modules
-    /// should be prepared for, applied in the dev loop only.
-    ///
-    /// A name rather than a boolean because the schemes are not one thing:
-    /// React's registers components and matches hook signatures, and another
-    /// framework's does something else entirely. **esdev implements none of
-    /// them.** It provides the generic half — `import.meta.hot`, the update
-    /// channel, and the compiler's component registrations on request — and the
-    /// name is what a plugin reads (as `ctx.refresh`) to know which scheme it is
-    /// installing, and that this build is the hot one.
-    pub refresh: Option<String>,
     /// `"lib": true` — this target publishes a library rather than deploying an
     /// application, exactly as `esdev build --lib` does.
     ///
@@ -297,14 +272,6 @@ pub struct Target {
     pub define: Vec<(String, String)>,
     /// Extra `exports` conditions, as `--conditions` adds them.
     pub conditions: Vec<String>,
-    /// The plugins that apply to this target, as indices into
-    /// [`Project::plugins`] — the project's own first, then this target's.
-    ///
-    /// Indices rather than the specs themselves because a plugin is *loaded*
-    /// once and used by however many targets name it: two targets that both
-    /// take the project's `plugins` share the one instance, and the module
-    /// they came from is evaluated once.
-    pub plugins: Vec<usize>,
     /// Whether the built output is *executed* once the build finishes.
     ///
     /// This is how a static site gets generated without esdev knowing what a
@@ -324,6 +291,16 @@ impl Target {
     /// different setting on the same one ([`crate::html`]).
     pub fn is_html(&self) -> bool {
         is_html_entry(&self.entry)
+    }
+
+    /// Where this target's code runs. A document is loaded by a browser
+    /// whatever `platform` says, and its scripts are bundled for one.
+    pub fn runs_in(&self) -> Platform {
+        if self.is_html() {
+            Platform::Browser
+        } else {
+            self.platform
+        }
     }
 }
 
@@ -360,10 +337,19 @@ pub enum Platform {
     Browser,
 }
 
+impl Platform {
+    /// The name a plugin reads as `ctx.platform` (D148).
+    pub fn name(self) -> &'static str {
+        match self {
+            Platform::Server => "server",
+            Platform::Browser => "browser",
+        }
+    }
+}
+
 /// The keys a target may carry.
 const TARGET_KEYS: &[&str] = &[
     "entry",
-    "plugins",
     "out",
     "outdir",
     "platform",
@@ -373,7 +359,6 @@ const TARGET_KEYS: &[&str] = &[
     "define",
     "conditions",
     "then",
-    "refresh",
     "lib",
     "format",
     "types",
@@ -653,18 +638,11 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         ));
     }
     let targets = &targets;
-    // The project's own plugins load first, and every target gets them. A
-    // target's list adds to that rather than replacing it: a project that
-    // compiles `.mdx` compiles it for the server bundle and the browser one,
-    // and a config where naming one extra plugin silently dropped the shared
-    // ones would be a build that differs between targets for no stated reason.
-    let mut plugins = plugin_specs(root.get("plugins"), name, "`plugins`")?;
-    let shared_plugins = plugins.len();
-    let shared: Vec<usize> = (0..shared_plugins).collect();
+    let plugins = plugin_specs(root.get("plugins"), name, "`plugins`")?;
 
     let mut targets = targets
         .iter()
-        .map(|(target_name, value)| target(target_name, value, name, &dir, &shared, &mut plugins))
+        .map(|(target_name, value)| target(target_name, value, name, &dir))
         .collect::<Result<Vec<_>, _>>()?;
     // Sorted here rather than taken as they came. `serde_json` keeps insertion
     // order only when a feature enables it, and that feature is currently on
@@ -686,7 +664,6 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         start,
         watch_paths,
         plugins,
-        shared_plugins,
         alias,
         test,
         jsx,
@@ -1088,14 +1065,7 @@ fn read_coverage(value: &Value, file: &str) -> Result<CoverageSection, String> {
 }
 
 /// Parses one entry of `targets`.
-fn target(
-    name: &str,
-    value: &Value,
-    file: &str,
-    dir: &Path,
-    shared: &[usize],
-    plugins: &mut Vec<PluginSpec>,
-) -> Result<Target, String> {
+fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, String> {
     let at = format!("target \"{name}\"");
     if name.trim().is_empty() || name.chars().any(char::is_whitespace) {
         return Err(format!(
@@ -1105,6 +1075,7 @@ fn target(
         ));
     }
     let map = object(value, file, &at)?;
+    moved_to_the_project(map, file, &at)?;
     known_keys(map, file, &at, TARGET_KEYS)?;
 
     let entry = match map.get("entry") {
@@ -1194,15 +1165,6 @@ fn target(
         ));
     }
 
-    // Resolved before the target is built, because two of its fields depend on
-    // it: which plugins apply, and whether a `refresh` scheme esdev does not
-    // implement has anything that could.
-    let mut mine = shared.to_vec();
-    for spec in plugin_specs(map.get("plugins"), file, &format!("{at}'s `plugins`"))? {
-        mine.push(plugins.len());
-        plugins.push(spec);
-    }
-
     let lib = flag(map.get("lib"), file, &format!("{at}'s `lib`"))?;
     let formats = library_formats(map.get("format"), file, &at)?;
     let types = match map.get("types") {
@@ -1288,8 +1250,6 @@ fn target(
         sourcemap: sourcemap(map.get("sourcemap"), file, &at)?,
         define: defines(map.get("define"), file, &at)?,
         conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
-        refresh: refresh(map.get("refresh"), file, &at, !mine.is_empty())?,
-        plugins: mine,
         run_after_build,
         lib,
         formats,
@@ -1610,43 +1570,30 @@ fn plugin_spec(value: &Value, file: &str, at: &str) -> Result<PluginSpec, String
     })
 }
 
-/// `refresh`, checked against what could actually implement it.
-///
-/// A name is refused rather than ignored, because a name that is quietly
-/// dropped is a project whose components stop keeping their state one day, with
-/// the reason sitting unread in a config file.
-///
-/// **esdev implements no scheme, and knows the name of none.** It used to
-/// implement React's, and `"react"` was for a while the only name this would
-/// accept — which meant every other framework took a full page reload on each
-/// edit, not because the mechanism was missing but because the config would not
-/// let a target say it had a scheme. Both halves of that are gone: the React
-/// pass moved out into a plugin the template loads, and what is left here is
-/// generic. A scheme is a plugin, so a target that names one and has no plugins
-/// has named something nothing can implement — which is the one case worth
-/// refusing, and the only check left.
-fn refresh(
-    value: Option<&Value>,
-    file: &str,
-    at: &str,
-    has_plugins: bool,
-) -> Result<Option<String>, String> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let name = string(value, file, &format!("{at}'s `refresh`"))?;
-    if !has_plugins {
+/// Refuses the two keys a target no longer carries (D148), naming where each
+/// went. They were accepted for a while, so a project written then gets the
+/// migration rather than an unknown key.
+fn moved_to_the_project(map: &Map<String, Value>, file: &str, at: &str) -> Result<(), String> {
+    if map.contains_key("plugins") {
         return Err(format!(
-            "{file}: {at}'s `refresh` is \"{name}\", and this target has no plugins \
-             that could implement it.\n\n\
-             It names the hot-reload convention this target's modules are prepared \
-             for — registering components, matching hook signatures, whatever the \
-             framework's scheme is. esdev provides the generic half (`import.meta.hot` \
-             and the update channel); the scheme itself is a `plugins` entry, which \
-             reads this name as `ctx.refresh`."
+            "{file}: {at} has `plugins`. Plugins are declared once, in the top-level \
+             `plugins`, and every command loads them — build, start and test alike.\n\n\
+             Move them there:\n\n  \
+             \"plugins\": [\"./plugins/mdx.js\"],\n  \
+             \"build\": {{ \"targets\": {{ … }} }}\n\n\
+             A plugin that compiles differently per build reads `ctx.platform` \
+             (\"browser\" or \"server\") and `ctx.target` (the target's name)."
         ));
     }
-    Ok(Some(name.to_string()))
+    if map.contains_key("refresh") {
+        return Err(format!(
+            "{file}: {at} has `refresh`, which esdev no longer reads.\n\n\
+             A refresh scheme is a plugin in the top-level `plugins`, and it reads \
+             `ctx.hot` — true for a browser build in a hot dev loop — to know when \
+             to install itself. Remove the key."
+        ));
+    }
+    Ok(())
 }
 
 /// The error for a dev setting naming a target that is not there.
@@ -2182,36 +2129,21 @@ mod tests {
         );
     }
 
-    /// The project's plugins are every target's, and a target's own are added
-    /// to them rather than replacing them: a project that compiles `.mdx`
-    /// compiles it for the server bundle and the browser one.
+    /// Plugins are declared once, at the top level (D148). A target that
+    /// still carries its own is refused with where they went, rather than an
+    /// unknown key: it was accepted for a while.
     #[test]
-    fn a_targets_plugins_add_to_the_projects() {
-        let project = read(
-            r#"{"plugins": ["./plugins/mdx.js"], "build": {"targets": {"api": {"entry": "src/api.ts", "out": "dist/api.js"}, "web": {"entry": "src/web.ts", "out": "dist/web.js", "plugins": ["./plugins/only-web.js"]}}}}"#,
+    fn a_targets_plugins_are_refused_with_where_they_went() {
+        let refused = read(
+            r#"{"plugins": ["./plugins/mdx.js"], "build": {"targets": {"web": {"entry": "src/web.ts", "out": "dist/web.js", "plugins": ["./plugins/only-web.js"]}}}}"#,
         )
-        .expect("parsed");
-
-        assert_eq!(
-            project
-                .plugins
-                .iter()
-                .map(|p| p.module.as_str())
-                .collect::<Vec<_>>(),
-            ["./plugins/mdx.js", "./plugins/only-web.js"],
+        .expect_err("a target's plugins");
+        assert!(
+            refused.contains("target \"web\" has `plugins`"),
+            "{refused}"
         );
-        // Sorted by name, so `api` is first.
-        assert_eq!(project.targets[0].plugins, [0]);
-        assert_eq!(project.targets[1].plugins, [0, 1]);
-        // A test run compiles with the project's, not with any one target's.
-        assert_eq!(
-            project
-                .project_plugins()
-                .iter()
-                .map(|p| p.module.as_str())
-                .collect::<Vec<_>>(),
-            ["./plugins/mdx.js"],
-        );
+        assert!(refused.contains("top-level"), "{refused}");
+        assert!(refused.contains("ctx.platform"), "{refused}");
     }
 
     /// A buildless project — one that only tests — still has plugins to
@@ -2219,7 +2151,7 @@ mod tests {
     #[test]
     fn a_project_with_no_targets_keeps_its_plugins_for_tests() {
         let project = read(r#"{ "plugins": ["./plugins/framework.js"] }"#).expect("parsed");
-        assert_eq!(project.project_plugins().len(), 1);
+        assert_eq!(project.plugins.len(), 1);
     }
 
     /// The call a JSON file cannot make. A plugin that takes options is a
@@ -2265,38 +2197,17 @@ mod tests {
         assert!(refused.contains("list of plugins"), "{refused}");
     }
 
-    /// `refresh` names a scheme, and **esdev implements none**. It provides
-    /// the generic half — `import.meta.hot`, the update channel — and a scheme
-    /// is a plugin. So a target that names one and has no plugins has named
-    /// something nothing can implement, which is the one case worth refusing:
-    /// a `refresh` that silently did nothing is a project whose components
-    /// stop keeping their state one day, with the reason unread in a config
-    /// file.
+    /// `refresh` is gone: a refresh scheme is a plugin, and the plugin reads
+    /// `ctx.hot` (D148). A target that still names one is told so.
     #[test]
-    fn a_refresh_scheme_needs_a_plugin_that_could_implement_it() {
-        let refused =
-            read(r#"{"build": {"targets": {"web": {"entry": "index.html", "refresh": "otfw"}}}}"#)
-                .expect_err("no plugin to implement it");
-        assert!(
-            refused.contains("no plugins that could implement"),
-            "{refused}"
-        );
-
-        // React is not privileged. It was the only name this took for a while,
-        // and it is now a plugin like any other — the react template's own.
-        let react =
-            read(r#"{"build": {"targets": {"web": {"entry": "index.html", "refresh": "react"}}}}"#)
-                .expect_err("react is not built in either");
-        assert!(react.contains("no plugins that could implement"), "{react}");
-
-        for scheme in ["otfw", "react"] {
-            let accepted = read(&format!(
-                r#"{{ "plugins": ["./plugins/{scheme}.js"],
-                     "build": {{ "targets": {{ "web": {{ "entry": "index.html", "refresh": "{scheme}" }} }} }} }}"#
-            ))
-            .expect("a plugin can implement it");
-            assert_eq!(accepted.targets[0].refresh.as_deref(), Some(scheme));
-        }
+    fn a_targets_refresh_is_refused_with_what_replaced_it() {
+        let refused = read(
+            r#"{ "plugins": ["./plugins/otfw.js"],
+                 "build": { "targets": { "web": { "entry": "index.html", "refresh": "otfw" } } } }"#,
+        )
+        .expect_err("refresh");
+        assert!(refused.contains("`refresh`"), "{refused}");
+        assert!(refused.contains("ctx.hot"), "{refused}");
     }
 
     /// The same default the command line has: a config that omits `out` and a

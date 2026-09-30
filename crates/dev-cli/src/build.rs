@@ -1769,11 +1769,15 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             let verb = if config.lib { "built" } else { "bundled" };
             // The project's own plugins: an entry named on the command line is
             // still source in this project.
-            let host = crate::plugins::host(&settings.source, &settings.source.plugins).await?;
-            let own: Vec<usize> = (0..settings.source.plugins.len()).collect();
+            let host = crate::plugins::host(&settings.source).await?;
+            let site = crate::contract::Site {
+                command: Some("build"),
+                platform: Some(config.platform.name()),
+                ..crate::contract::Site::default()
+            };
             config.plugins = host
                 .as_ref()
-                .map(|host| host.passes(&own, None))
+                .map(|host| host.passes(&site))
                 .unwrap_or_default();
             let written = build_single(config).await?;
             let paint = crate::style::Palette::stdout();
@@ -1864,7 +1868,7 @@ async fn build_targets(
     // and whatever it initialises — per keystroke would be paying a startup
     // cost forty times a minute. A project with no `plugins` starts nothing.
     let settings = &project.settings;
-    let host = crate::plugins::host(&settings.source, &settings.plugins).await?;
+    let host = crate::plugins::host(&settings.source).await?;
 
     // Where a target writes. A release build writes its outputs — the
     // deployment. A dev-loop build writes them mirrored under its own
@@ -1876,19 +1880,27 @@ async fn build_targets(
     };
 
     for target in selected {
-        // The scheme this target named, and only where it can mean anything: a
-        // hot dev loop. A release build has no replacement to keep state
-        // across, and the per-module wrapper a scheme installs is pure weight
-        // in anything shipped — so a plugin implementing one is told when to
-        // install it rather than having to guess.
-        let refresh = project
-            .dev
-            .as_ref()
-            .filter(|dev| dev.hot)
-            .and(target.refresh.as_deref());
+        // Where this build is, for the plugins to read (D148). Hot only for a
+        // browser build in a hot loop: that is the one a page is running and
+        // can have modules replaced in. A server bundle is restarted, and a
+        // refresh scheme's per-module wrapper is pure weight in anything
+        // shipped — so a plugin implementing one is told when to install it
+        // rather than having to guess.
+        let platform = target.runs_in();
+        let site = crate::contract::Site {
+            command: Some(if project.dev.is_some() {
+                "start"
+            } else {
+                "build"
+            }),
+            platform: Some(platform.name()),
+            target: Some(target.name.clone()),
+            hot: project.dev.as_ref().is_some_and(|dev| dev.hot)
+                && platform == crate::config::Platform::Browser,
+        };
         let plugins = host
             .as_ref()
-            .map(|host| host.passes(&target.plugins, refresh))
+            .map(|host| host.passes(&site))
             .unwrap_or_default();
         // The project's `.env` and the environment first, so a `define` in the
         // file or on the command line overrides one rather than fighting it.
@@ -1918,9 +1930,7 @@ async fn build_targets(
                 settings.alias(target.lib),
                 sourcemap_for(target, project.dev.is_some()),
                 &plugins,
-                host.as_ref()
-                    .map(|host| host.jsx(&target.plugins))
-                    .unwrap_or_default(),
+                host.as_ref().map(|host| host.jsx()).unwrap_or_default(),
                 settings.source.jsx.clone(),
                 settings.source.tsconfig.clone(),
             )

@@ -169,6 +169,7 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
             stripper: TypeStripper::new(),
             extensions: crate::guest::test_extensions(false),
             observer: None,
+            site: crate::test::site(false),
         })
         .await;
     let run = match run {

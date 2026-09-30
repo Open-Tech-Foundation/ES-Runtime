@@ -241,23 +241,34 @@ and only the plugin knows.
 ## The same plugins outside a build
 
 `esdev test` and `esdev <file>` run modules unbundled, and a project's plugins
-compile them there too ([where plugins run](/esdev/build/project#where-plugins-run)).
-The bridge is the same one; what differs is who asks. A run's module loader asks
-for a module's source **synchronously** — a load has nowhere to await — while a
-hook's answer comes from the plugin isolate's thread. So the load **waits**: it
-posts the `transform`, parks its thread, and is woken by the reply.
+shape them there too ([where plugins run](/esdev/build/project#where-plugins-run)).
+The bridge is the same one; what differs is who asks. The runtime's module
+loader asks the plugins, and esdev's own CSS Modules and asset passes, the three
+questions a bundler asks: where a specifier points (`resolve`), what a module
+contains (`load`), and what it becomes (`transform`). It asks them in the order
+a build would, and the first `resolve` or `load` answer wins.
 
-That is safe because the two never wait on each other. The plugin isolate
-answers hooks and never asks the running program for anything; `ctx.resolve()`
-there is answered by a plain file lookup on the waiting side's behalf, not by
-the program's loader. Only `transform` crosses: there is no graph for `resolve`
-or `load` to answer, and `ctx.emit()` has no output to add to, so it fails.
+The loader asks **synchronously**: `import.meta.resolve` returns a string and a
+load has nowhere to await, while a hook's answer comes from the plugin isolate's
+thread. So the loading thread **waits**: it posts the hook, parks, and is woken
+by the reply. That is safe because the two never wait on each other. The plugin
+isolate answers hooks and never asks the running program for anything;
+`ctx.resolve()` there is answered by a plain file lookup on the waiting side's
+behalf, not by the program's loader.
 
-**The cost** is one round trip per module the filter admits, paid on the
+A module a plugin invents, with no file behind it, is loaded under the
+`esdev-virtual:` scheme, so the runtime's file read never sees it and it cannot
+be mistaken for a path. What it imports resolves from the project root. `start`,
+`end` and `bundle` describe a bundle and are not called; `ctx.emit()` has no
+output to add to, so it fails.
+
+**The cost** is one round trip per hook call the filter admits, paid on the
 loading thread — the same crossing a build pays, serialised with the load
 instead of overlapping other modules' work. A test file importing a hundred
 modules with a plugin that claims `.jsx` pays for its `.jsx` files and nothing
-else, because the filter is matched before anything crosses.
+else, because the filter is matched before anything crosses. A `resolve` hook
+with no filter crosses for every import, which is why the filter is part of the
+contract.
 
 ## Costs
 

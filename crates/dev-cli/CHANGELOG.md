@@ -24,7 +24,32 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: plugins are declared once, in the top-level `plugins`, and
+  every command loads them** (DECISIONS D148). A target's own `plugins` and
+  its `refresh` key are refused with where each went: move target plugins to
+  the top level, and have a refresh plugin read `ctx.hot` instead of
+  `ctx.refresh`. The React template does this already.
+- **`esdev test` and `esdev <file>` call a plugin's `resolve` and `load`, not
+  only `transform`.** A virtual module a plugin serves (a route map) and a file
+  type a plugin loads work under test as they do in a build.
+
+### Added
+
+- **A plugin is told where it runs**: `ctx.command` (`build`, `start`,
+  `test`, `run`), `ctx.platform` (`browser` or `server`), `ctx.target` (the
+  target's name) and `ctx.hot`. One plugin entry can compile a component for
+  the browser and for the server; a framework's SPA/SSG/SSR choice stays the
+  plugin's own option.
+
 ### Fixed
+
+- **A test can import a stylesheet or an image.** `import styles from
+  "./x.module.css"`, a plain `.css` and an imported `.png` failed with a
+  syntax error, because CSS Modules and assets were handled only in a build.
+  They now resolve as the build resolves them: scoped names, nothing, and the
+  asset's URL.
 
 - **Windows: `esdev create` applies every template patch again.** A Windows
   checkout converted the embedded templates to CRLF, so the Tailwind

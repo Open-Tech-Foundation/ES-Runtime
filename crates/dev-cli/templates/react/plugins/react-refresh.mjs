@@ -3,9 +3,6 @@
  * general; this plugin adds React's scheme on top of it.
  */
 
-/** The scheme this plugin implements, as `esdev.json`'s `refresh` names it. */
-const SCHEME = "react";
-
 export default {
   name: "react-refresh",
   jsx: { refresh: true },
@@ -14,7 +11,8 @@ export default {
     filter: { id: /\.[jt]sx$/ },
 
     handler(code, id, ctx) {
-      if (ctx.refresh !== SCHEME) return null;
+      // Only a browser build in a hot dev loop can replace modules in place.
+      if (!ctx.hot) return null;
 
       // The wrapper adds four lines before the original module. Keep the
       // original locations mapped so refresh does not make source locations

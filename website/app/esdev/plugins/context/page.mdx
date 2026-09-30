@@ -16,7 +16,10 @@ The last argument of every handler, never `this`.
 | `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
 | `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
 | `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |
-| `ctx.refresh` | The hot-reload scheme the target named ([`refresh`](/esdev/start/hmr#component-refresh-is-a-plugin)), **only** while the dev loop is running it hot. Absent in a release build. |
+| `ctx.command` | `"build"`, `"start"`, `"test"` or `"run"`. Absent in a build a program starts with `runtime:build`. |
+| `ctx.platform` | `"browser"` or `"server"` (`"node"` for a `runtime:build` that asked for it): what the compiled code runs against. |
+| `ctx.target` | The project target being built, by name. Absent outside a project build. |
+| `ctx.hot` | `true` for a browser build in a hot dev loop, where modules are replaced in place ([component refresh](/esdev/start/hmr#component-refresh-is-a-plugin)). |
 | `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
 
 It is an argument so that an arrow-function handler keeps it. Rollup's
@@ -25,6 +28,38 @@ is undefined fails a long way from the arrow that caused it.
 
 It is also live only while its hook runs. Stash `ctx` and call it later and it
 throws — by then it may name a build that no longer exists.
+
+## Where a hook runs
+
+One plugin serves every build and every command, so it is told where it is
+running rather than declared per target. These are facts, not modes: a
+framework's SPA, SSG or SSR is the plugin's own option, and the plugin combines
+it with `ctx.platform`.
+
+```js
+export default (options) => ({
+  name: "framework",
+  transform: {
+    filter: { id: /\.jsx$/ },
+    handler(code, id, ctx) {
+      const mode =
+        ctx.platform === "server" ? options.mode : options.mode === "spa" ? "csr" : "hydrate";
+      return { code: compile(code, id, mode), type: "js" };
+    },
+  },
+});
+```
+
+| Where | `command` | `platform` | `target` | `hot` |
+| --- | --- | --- | --- | --- |
+| `esdev build`, a server target | `build` | `server` | its name | `false` |
+| `esdev start`, a browser target | `start` | `browser` | its name | `true` unless `--no-hot` |
+| `esdev build <entry>` | `build` | the entry's | — | `false` |
+| `esdev test` | `test` | `server` | — | `false` |
+| `esdev test --dom`, `--browser` | `test` | `browser` | — | `false` |
+| `esdev <file>` | `run` | `server` | — | `false` |
+
+A value that does not apply is absent, not `null`.
 
 <Callout type="warning" title="Calling ctx.resolve from your own resolve hook">
   Pass `{ skipSelf: true }`, or your hook resolves through itself and the build

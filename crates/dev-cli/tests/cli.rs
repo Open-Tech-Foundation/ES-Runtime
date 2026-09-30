@@ -12477,62 +12477,122 @@ fn build_loads_the_plugins_the_project_config_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A target's own `plugins` add to the project's rather than replacing them,
-/// and only that target gets them.
-#[test]
-fn a_targets_own_plugins_are_added_to_the_projects() {
-    let dir = build_dir("p_plugins_target");
-    std::fs::create_dir_all(dir.join("src")).expect("create src");
-    banner_plugin(&dir);
+/// Where a build runs, as a plugin reads it (D148): one declaration, and each
+/// target's build tells the plugin its command, platform and name. This is how
+/// a framework compiles for the browser and the server from one `plugins`
+/// entry without esdev knowing what either means to it.
+fn site_plugin(dir: &Path) {
     write_in(
-        &dir,
-        "plugin-extra.mjs",
+        dir,
+        "site.mjs",
         r#"
 export default {
-  name: "extra",
+  name: "site",
   resolve: {
-    filter: { id: "virtual:extra" },
-    handler: () => ({ id: "virtual:extra", virtual: true }),
+    filter: { id: "virtual:site" },
+    handler: () => ({ id: "virtual:site", virtual: true }),
   },
   load: {
-    filter: { id: "virtual:extra" },
-    handler: () => ({ code: 'export default "EXTRA";' }),
+    filter: { id: "virtual:site" },
+    handler: (id, ctx) => ({
+      code: `export default ${JSON.stringify(`${ctx.command}/${ctx.platform}/${ctx.target}/${ctx.hot}`)};`,
+    }),
   },
 };
 "#,
     );
+}
+
+#[test]
+fn a_plugin_reads_where_each_build_runs() {
+    let dir = build_dir("p_plugins_site");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    site_plugin(&dir);
     write_in(
         &dir,
-        "src/one.mjs",
-        "import banner from 'virtual:banner';\nimport extra from 'virtual:extra';\n\
-         console.log(banner, extra);\n",
-    );
-    // The second target gets the project's plugin only, and reaching for the
-    // first target's would be a build that fails — which is the assertion.
-    write_in(
-        &dir,
-        "src/two.mjs",
-        "import banner from 'virtual:banner';\nconsole.log(banner);\n",
+        "src/app.mjs",
+        "import site from 'virtual:site';\nconsole.log(site);\n",
     );
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": [{"module": "./plugin.mjs", "options": {"text": "SHARED"}}], "build": {"targets": {"one": {"entry": "src/one.mjs", "out": "dist/one.js", "plugins": ["./plugin-extra.mjs"]}, "two": {"entry": "src/two.mjs", "out": "dist/two.js"}}}}"#,
+        r#"{"plugins": ["./site.mjs"], "build": {"targets": {"api": {"entry": "src/app.mjs", "out": "dist/api.js"}, "web": {"entry": "src/app.mjs", "outdir": "dist/web", "platform": "browser"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let api = std::fs::read_to_string(dir.join("dist/api.js")).expect("api");
+    assert!(api.contains("build/server/api/false"), "{api}");
+    let web = std::fs::read_to_string(dir.join("dist/web/app.js")).expect("web");
+    assert!(web.contains("build/browser/web/false"), "{web}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
-    let one = std::fs::read_to_string(dir.join("dist/one.js")).expect("one");
-    assert!(one.contains("SHARED"), "{one}");
-    assert!(one.contains("EXTRA"), "{one}");
-    let two = std::fs::read_to_string(dir.join("dist/two.js")).expect("two");
-    assert!(two.contains("SHARED"), "{two}");
-    assert!(
-        !two.contains("EXTRA"),
-        "a target's plugin reached another: {two}"
+/// A test resolves and loads through the plugins as a build does, so a
+/// virtual module exists under test too — and the plugin is told it is a test,
+/// against a DOM or not.
+#[test]
+fn a_test_loads_a_plugins_virtual_module() {
+    let dir = build_dir("p_plugins_test_virtual");
+    site_plugin(&dir);
+    write_in(
+        &dir,
+        "site.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import site from 'virtual:site';\n\
+         const expected = typeof document === 'undefined' ? 'test/server/undefined/false' : 'test/browser/undefined/false';\n\
+         test('the plugin served it', () => assertEquals(site, expected));\n",
     );
+    write_in(&dir, "esdev.json", r#"{"plugins": ["./site.mjs"]}"#);
+    for args in [
+        vec!["test"],
+        vec!["test", "--dom"],
+        vec!["test", "--isolation=none"],
+    ] {
+        let out = esdev_in(&dir)
+            .args(&args)
+            .output()
+            .expect("spawn esdev test");
+        assert!(
+            out.status.success(),
+            "{args:?}\n{}{}",
+            stdout(&out),
+            stderr(&out)
+        );
+        assert!(
+            stdout(&out).contains("1 passed"),
+            "{args:?}\n{}",
+            stdout(&out)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
+/// A component imports its stylesheet and its images, and a test imports the
+/// component: esdev's own passes answer under test as in the build. A CSS
+/// Module gives its scoped names, a plain stylesheet nothing, an image its URL.
+#[test]
+fn a_test_imports_stylesheets_and_assets_as_the_build_does() {
+    let dir = build_dir("p_test_css_assets");
+    write_in(&dir, "card.module.css", ".card { color: red }\n");
+    write_in(&dir, "global.css", "body { margin: 0 }\n");
+    std::fs::write(dir.join("logo.png"), b"\x89PNG\r\n\x1a\n\xff\xfe").expect("write png");
+    write_in(
+        &dir,
+        "card.test.mjs",
+        "import { test, assert, assertEquals } from 'runtime:test';\n\
+         import styles from './card.module.css';\n\
+         import './global.css';\n\
+         import logo from './logo.png';\n\
+         test('scoped names', () => assert(styles.card.startsWith('card_')));\n\
+         test('an asset URL', () => assert(/^\\/assets\\/logo-[0-9a-f]+\\.png$/.test(logo), logo));\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("2 passed"), "{}", stdout(&out));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -12560,11 +12620,6 @@ export default (options) => ({
     );
     write_in(
         &dir,
-        "only-web.mjs",
-        r#"export default { name: "only-web", transform: { handler() { throw new Error("a target's plugin ran in a test"); } } };"#,
-    );
-    write_in(
-        &dir,
         "greeting.jsx",
         "export const greeting = <Greeting />;\n",
     );
@@ -12578,13 +12633,13 @@ export default (options) => ({
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": [{"module": "./framework.mjs", "options": {"greeting": "hi from the plugin"}}], "build": {"targets": {"web": {"entry": "greeting.jsx", "out": "dist/web.js", "plugins": ["./only-web.mjs"]}}}}"#,
+        r#"{"plugins": [{"module": "./framework.mjs", "options": {"greeting": "hi from the plugin"}}], "build": {"targets": {"web": {"entry": "greeting.jsx", "out": "dist/web.js"}}}}"#,
     );
     dir
 }
 
 /// `esdev test` compiles what a test imports through the project's plugins,
-/// as `esdev build` does — and only the project's, not one target's.
+/// as `esdev build` does.
 #[test]
 fn test_compiles_modules_through_the_projects_plugins() {
     let dir = framework_project("p_plugins_test");
@@ -12976,10 +13031,10 @@ export default {
     filter: { id: /\.[jt]sx?$/ },
     handler(code, id, ctx) {
       // A wrapper that makes every module a hot boundary is exactly wrong in
-      // anything shipped, so it goes in only where a scheme was named and the
-      // loop is running it hot.
-      if (ctx.refresh !== "otfw") return null;
-      return { code: `globalThis.__otfw_hot = ${JSON.stringify(ctx.refresh)};\n${code}` };
+      // anything shipped, so it goes in only where the loop is running this
+      // build hot.
+      if (!ctx.hot) return null;
+      return { code: `globalThis.__otfw_hot = ${JSON.stringify(ctx.target)};\n${code}` };
     },
   },
 };
@@ -13015,19 +13070,17 @@ fn refresh_project(dir: &Path, port: Option<u16>) {
         dir,
         "esdev.json",
         &format!(
-            r#"{{ "jsx": {{ "factory": "h" }},
-                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
-                                        "refresh": "otfw",
-                                        "plugins": ["./plugins/refresh.mjs"] }} }} }}{start} }}"#
+            r#"{{ "jsx": {{ "factory": "h" }}, "plugins": ["./plugins/refresh.mjs"],
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }}{start} }}"#
         ),
     );
 }
 
-/// A release build names no scheme, so the wrapper is not installed. Without
-/// this half, `refresh` would be a config key a plugin had to ignore — it would
-/// have to inject its wrapper into everything, including what you ship.
+/// A release build is not hot, so the wrapper is not installed. Without this
+/// half, a plugin would have to inject its wrapper into everything, including
+/// what you ship.
 #[test]
-fn a_release_build_tells_a_plugin_no_refresh_scheme() {
+fn a_release_build_tells_a_plugin_it_is_not_hot() {
     let dir = build_dir("p_refresh_release");
     refresh_project(&dir, None);
 
@@ -13059,10 +13112,10 @@ fn a_release_build_tells_a_plugin_no_refresh_scheme() {
 /// them.** `"react"` was for a while the only name the config would take *and*
 /// the only implementation, both inside esdev — so every other framework took a
 /// full page reload on each edit. Both halves a scheme needs are generic now:
-/// the plugin is told which scheme (`ctx.refresh`) and the compiler is asked
+/// the plugin is told the build is hot (`ctx.hot`) and the compiler is asked
 /// for the component registrations by the plugin's own declaration.
 #[test]
-fn the_hot_dev_loop_tells_a_plugin_which_refresh_scheme() {
+fn the_hot_dev_loop_tells_a_plugin_its_build_is_hot() {
     let dir = watch_dir("s_refresh");
     let port = test_port("s_refresh");
     refresh_project(&dir, Some(port));
@@ -13070,10 +13123,11 @@ fn the_hot_dev_loop_tells_a_plugin_which_refresh_scheme() {
     let _supervisor = start_in(&dir);
 
     let bundle = wait_for_http(port, "/assets/main.js", |body| body.contains("__otfw_hot"));
-    // The plugin's half: it was told which scheme, so it installed its wrapper.
+    // The plugin's half: it was told this build is hot, so it installed its
+    // wrapper.
     assert!(
-        bundle.contains(r#"__otfw_hot = "otfw""#),
-        "the scheme never reached the plugin: {bundle}"
+        bundle.contains(r#"__otfw_hot = "web""#),
+        "the hot build never reached the plugin: {bundle}"
     );
     // The compiler's half: `jsx: { refresh: true }` on the plugin's own
     // declaration asked for the registrations, and nothing in esdev knows what

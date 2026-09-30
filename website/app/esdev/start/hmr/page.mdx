@@ -73,24 +73,17 @@ Made once, returned every time after — one call site, where `dispose` plus
 provides is the generic half, and it is the same for everyone:
 
 - `import.meta.hot` and the update channel, on in any hot loop;
-- `ctx.refresh` — the scheme your target named, handed to your plugins, and
-  present *only* while the loop is running that target hot;
+- `ctx.hot` — `true` for a browser build the loop is running hot, and only
+  there;
 - the compiler's component registrations, when a plugin asks for them.
 
-A scheme is a [plugin](/esdev/plugins) on top of that:
+A scheme is a [plugin](/esdev/plugins) on top of that, declared with the
+project's other plugins:
 
 ```json
 {
-  "build": {
-    "targets": {
-      "web": {
-        "entry": "index.html",
-        "outdir": "dist",
-        "refresh": "otfw",
-        "plugins": ["./plugins/otfw-refresh.mjs"]
-      }
-    }
-  }
+  "plugins": ["./plugins/otfw-refresh.mjs"],
+  "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }
 }
 ```
 
@@ -100,8 +93,7 @@ export default {
   jsx: { refresh: true },
   transform: {
     filter: { id: /\.[jt]sx$/ },
-    handler: (code, id, ctx) =>
-      ctx.refresh === "otfw" ? { code: wrapForHot(code, id) } : null,
+    handler: (code, id, ctx) => (ctx.hot ? { code: wrapForHot(code, id) } : null),
   },
 };
 ```
@@ -113,11 +105,10 @@ of the hot API rather than something esdev knows about.
 
 Already wired up in the React template: edit a component and it re-renders with
 its `useState` intact. It is React Fast Refresh, implemented by the template's
-`plugins/react-refresh.mjs` and named by its `esdev.json`:
+`plugins/react-refresh.mjs` and listed in its `esdev.json`:
 
 ```json
-"web": { "entry": "index.html", "outdir": "dist",
-         "refresh": "react", "plugins": ["./plugins/react-refresh.mjs"] }
+"plugins": ["./plugins/react-refresh.mjs"]
 ```
 
 React has no privileges here: delete the plugin entry and the React template

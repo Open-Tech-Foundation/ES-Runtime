@@ -111,6 +111,13 @@ pub struct Config {
     /// `esrun` passes `None`: what it runs is a bundle whose specifiers the
     /// build already settled. See [`SpecifierAlias`].
     pub specifier_alias: Option<Arc<dyn SpecifierAlias>>,
+    /// A build's `resolve` and `load` hooks, asked before the runtime's own
+    /// resolution and file read — how `esdev` runs a project's plugins, and
+    /// its own passes, on a module it runs unbundled.
+    ///
+    /// `esrun` passes `None`: what it runs is a bundle, which the hooks already
+    /// shaped. See [`ModuleHooks`].
+    pub module_hooks: Option<Arc<dyn ModuleHooks>>,
     /// Watches what the run actually reaches for — how `esdev` serves
     /// `--trace-permissions` (D59).
     ///
@@ -216,6 +223,93 @@ pub trait SpecifierAlias: Send + Sync {
     /// What to resolve in place of `specifier`, written in `referrer`, or
     /// `None` to resolve it as written.
     fn alias(&self, specifier: &str, referrer: &str) -> Option<String>;
+}
+
+/// A build's `resolve` and `load` hooks, for a module run unbundled.
+///
+/// A bundler asks its plugins where a specifier points and what a module
+/// contains before it looks for itself; that is how a virtual module (a route
+/// map, a generated manifest) or a file type the runtime cannot read (an image,
+/// a stylesheet) exists at all. A module run unbundled — a test file — went
+/// straight to the runtime's resolver and read the file, so the same import
+/// built and failed under test.
+///
+/// Synchronous, as [`SourceTransform`] is: `import.meta.resolve` has nowhere to
+/// await, and it must reach the id an `import` does.
+pub trait ModuleHooks: Send + Sync {
+    /// The id `specifier`, written in `referrer`, resolves to when a hook
+    /// claims it. `Ok(None)` resolves it as written.
+    fn resolve(&self, specifier: &str, referrer: &str) -> Result<Option<String>, String>;
+
+    /// What the runtime's own resolver should resolve against in place of
+    /// `referrer`, when `referrer` is an id [`resolve`](Self::resolve) invented
+    /// and names no file: a virtual module has no directory to be relative to.
+    fn referrer(&self, referrer: &str) -> Option<String>;
+
+    /// The source of `id` when a hook supplies it. `Ok(None)` reads the file,
+    /// which an id with no file behind it has to refuse.
+    fn load(&self, id: &str) -> Result<Option<String>, String>;
+}
+
+/// Wraps a [`ModuleLoader`] so [`ModuleHooks`] are asked first.
+struct HookedLoader {
+    inner: Arc<dyn ModuleLoader>,
+    hooks: Arc<dyn ModuleHooks>,
+}
+
+impl HookedLoader {
+    /// The hooks' answer, or where the runtime's own resolver should start.
+    fn claim(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Result<Result<String, String>, ProviderError> {
+        match self.hooks.resolve(specifier, referrer) {
+            Ok(Some(id)) => Ok(Ok(id)),
+            Ok(None) => Ok(Err(self
+                .hooks
+                .referrer(referrer)
+                .unwrap_or_else(|| referrer.to_string()))),
+            Err(e) => Err(ProviderError::Other(e)),
+        }
+    }
+}
+
+impl ModuleLoader for HookedLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<String, ProviderError>> {
+        match self.claim(specifier, referrer) {
+            Ok(Ok(id)) => Box::pin(async move { Ok(id) }),
+            Ok(Err(referrer)) => self.inner.resolve(specifier, &referrer),
+            Err(e) => Box::pin(async move { Err(e) }),
+        }
+    }
+
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        match self.claim(specifier, referrer) {
+            Ok(Ok(id)) => Some(Ok(id)),
+            Ok(Err(referrer)) => self.inner.resolve_sync(specifier, &referrer),
+            Err(e) => Some(Err(e)),
+        }
+    }
+
+    fn load(
+        &self,
+        specifier: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<ModuleSource, ProviderError>> {
+        match self.hooks.load(specifier) {
+            Ok(Some(code)) => Box::pin(async move { Ok(ModuleSource::Text(code)) }),
+            Ok(None) => self.inner.load(specifier),
+            Err(e) => Box::pin(async move { Err(ProviderError::Other(e)) }),
+        }
+    }
 }
 
 /// Wraps a [`ModuleLoader`] so every specifier passes a [`SpecifierAlias`]
@@ -872,6 +966,16 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         Some(alias) => Arc::new(AliasingLoader {
             inner: resolved,
             alias: alias.clone(),
+        }),
+        None => resolved,
+    };
+    // Outside the alias, as a bundler asks its plugins before applying its own
+    // `resolve.alias`; inside the transform, so what a hook loads is compiled
+    // like a file.
+    let resolved: Arc<dyn ModuleLoader> = match &config.module_hooks {
+        Some(hooks) => Arc::new(HookedLoader {
+            inner: resolved,
+            hooks: hooks.clone(),
         }),
         None => resolved,
     };

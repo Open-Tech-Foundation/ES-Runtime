@@ -93,8 +93,8 @@ syntax tree the compiler already has. **The per-module half is yours**, in a
 `transform`: the registrations are a global call, and it has to mean "register
 under this module's id" while this module is evaluating.
 
-It is honoured **only in a hot dev build of a target that named a
-[`refresh`](/esdev/start/hmr#component-refresh-is-a-plugin) scheme** — the calls it
+It is honoured **only in a hot dev build**
+([`ctx.hot`](/esdev/start/hmr#component-refresh-is-a-plugin)) — the calls it
 inserts reach globals that only a hot loop installs, so emitting them into a
 release build would ship calls to something undefined.
 

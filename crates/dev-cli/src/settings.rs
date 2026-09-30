@@ -52,7 +52,7 @@ pub struct Source {
     /// Specifier rewrites: the file's `alias` with the flags' applied, longest
     /// name first, a path already absolute.
     pub alias: Vec<(String, String)>,
-    /// The project's top-level `plugins` — every target's, and a test's.
+    /// The project's `plugins`, which every command loads (D148).
     pub plugins: Vec<PluginSpec>,
     /// The tsconfig whose `paths` and `baseUrl` resolution reads when it
     /// cannot be found by looking: a JavaScript project's `jsconfig.json`, at
@@ -75,9 +75,6 @@ pub struct Settings {
     /// and a command that needs one says so.
     pub has_project: bool,
     pub source: Source,
-    /// Every plugin the project loads — its own first, then each target's —
-    /// which a target names by index.
-    pub plugins: Vec<PluginSpec>,
     /// The targets, in name order, with the build flags applied.
     pub targets: Vec<Target>,
     pub start: Start,
@@ -108,7 +105,6 @@ impl Settings {
 
     /// A parsed project, before any flag.
     pub fn from_project(project: Project) -> Settings {
-        let shared = project.project_plugins().to_vec();
         Settings {
             has_project: true,
             source: Source {
@@ -116,9 +112,8 @@ impl Settings {
                 root: project.dir.clone(),
                 jsx: project.jsx,
                 alias: project.alias,
-                plugins: shared,
+                plugins: project.plugins,
             },
-            plugins: project.plugins,
             targets: project.targets,
             start: project.start,
             watch_paths: project.watch_paths,
@@ -134,7 +129,6 @@ impl Settings {
                 root,
                 ..Source::default()
             },
-            plugins: Vec::new(),
             targets: Vec::new(),
             start: Start::default(),
             watch_paths: Vec::new(),
@@ -318,6 +312,19 @@ pub struct Run {
     pub stripper: TypeStripper,
     pub extensions: Vec<Box<dyn es_runtime_cli_common::HostExtension>>,
     pub observer: Option<es_runtime_cli_common::SharedObserver>,
+    /// Where the run is, as the project's plugins read it (`ctx.command`,
+    /// `ctx.platform`): `esdev test` or `esdev <file>`, against a DOM or not.
+    pub site: crate::contract::Site,
+}
+
+/// Where `esdev <file>` runs, as the project's plugins read it: a program, on
+/// this runtime.
+pub fn run_site() -> crate::contract::Site {
+    crate::contract::Site {
+        command: Some("run"),
+        platform: Some("server"),
+        ..crate::contract::Site::default()
+    }
 }
 
 impl Source {
@@ -338,8 +345,11 @@ impl Source {
     /// reaches every run or none.
     pub async fn run_config(&self, run: Run) -> Result<es_runtime_cli_common::Config, String> {
         let stripper = run.stripper.compiling_jsx(self.jsx.clone());
-        let transform: Arc<dyn SourceTransform> =
-            crate::plugins::transform(self, Arc::new(stripper)).await?;
+        // The passes a build would run, so a module means the same thing
+        // unbundled (D148): the plugins' and esdev's own `resolve`, `load` and
+        // `transform`, then the compiler.
+        let pipeline = crate::unbundled::pipeline(self, &run.site, Arc::new(stripper)).await?;
+        let transform: Arc<dyn SourceTransform> = pipeline.clone();
         let resolution = self.resolution();
         Ok(es_runtime_cli_common::Config {
             source: run.source,
@@ -354,6 +364,7 @@ impl Source {
             bundler_style_resolution: true,
             package_converter: Some(resolution.converter),
             specifier_alias: Some(resolution.alias),
+            module_hooks: Some(pipeline),
             extensions: run.extensions,
             observer: run.observer,
             inspector: None,

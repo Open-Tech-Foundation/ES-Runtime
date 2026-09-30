@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::Adapter;
 use crate::bundler::Failure;
+use crate::contract;
 use crate::failures;
 
 use super::plugin::{Bridge, GuestPass};
@@ -291,12 +292,19 @@ async fn run(
     // Then one per declaration, each carrying its own filters. Built per build
     // rather than kept, because a build is where they are used and the options
     // they came from outlive them.
+    let site = contract::Site {
+        platform: options.bundler.platform.platform_name(),
+        ..contract::Site::default()
+    };
     plugins.extend(options.plugins.iter().map(|declared| {
-        // No refresh scheme: `build()` is a program describing its own build,
-        // and `refresh` is a *target's* key in `esdev.json`. A program that
-        // wants its plugins to know is the one that decided, and says so in
-        // the options it already writes.
-        let pass = Arc::new(GuestPass::new(bridge.clone(), Arc::clone(declared), None));
+        // No command, target or hot loop: `build()` is a program describing
+        // its own build, and a program that wants its plugins to know more is
+        // the one that decided, and says so in the options it already writes.
+        let pass = Arc::new(GuestPass::new(
+            bridge.clone(),
+            Arc::clone(declared),
+            site.clone(),
+        ));
         Arc::new(Adapter::new(pass)) as rolldown::plugin::__inner::SharedPluginable
     }));
 

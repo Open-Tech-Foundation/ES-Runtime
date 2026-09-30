@@ -672,12 +672,12 @@ pub async fn build(
             alias,
             sourcemap,
             dev.filter(|dev| dev.hot).map(|_| hot_runtime()),
-            // Only in a hot dev loop, and only for a target that named a
-            // refresh scheme. The registrations the compiler inserts call
-            // globals that only a hot loop installs, so emitting them anywhere
-            // else would ship calls to something undefined — and a build that
-            // replaces nothing has no component state to keep anyway.
-            if dev.is_some_and(|dev| dev.hot) && target.refresh.is_some() {
+            // Only in a hot dev loop, and only when a plugin asked for them.
+            // The registrations the compiler inserts call globals that only a
+            // hot loop installs, so emitting them anywhere else would ship
+            // calls to something undefined — and a build that replaces nothing
+            // has no component state to keep anyway.
+            if dev.is_some_and(|dev| dev.hot) {
                 jsx
             } else {
                 crate::contract::Jsx::default()

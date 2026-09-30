@@ -1,4 +1,7 @@
 {
+  "plugins": [
+    "./plugins/react-refresh.mjs"
+  ],
   "jsx": {
     "importSource": "react",
     "reactCompiler": true
@@ -11,11 +14,7 @@
       },
       "web": {
         "entry": "index.html",
-        "outdir": "dist",
-        "refresh": "react",
-        "plugins": [
-          "./plugins/react-refresh.mjs"
-        ]
+        "outdir": "dist"
       }
     }
   },

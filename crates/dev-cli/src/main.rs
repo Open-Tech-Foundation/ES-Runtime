@@ -86,6 +86,7 @@ mod test;
 mod trace;
 mod transform;
 mod types;
+mod unbundled;
 mod watch;
 mod watch_keys;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
@@ -727,6 +728,7 @@ fn parse_args() -> Result<Command, String> {
                         // named, so it is one a reader can copy. For `-e` there
                         // is nothing to name, and the placeholder says so.
                         observer: permission_trace(tracing_permissions, "-e=<code>"),
+                        site: settings::run_site(),
                     }),
                     inspect,
                     config_path,
@@ -780,6 +782,7 @@ fn parse_args() -> Result<Command, String> {
                         stripper: TypeStripper::new(),
                         extensions: guest::extensions(),
                         observer: permission_trace(tracing_permissions, path),
+                        site: settings::run_site(),
                     }),
                     inspect,
                     config_path,
@@ -2822,6 +2825,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             stripper,
             extensions: guest::test_extensions(config.run.dom),
             observer: None,
+            site: test::site(config.run.dom),
         })
         .await;
     let mut run = match run {
@@ -3025,6 +3029,7 @@ pub(crate) async fn run_tests_unisolated(
             stripper: TypeStripper::new(),
             extensions: guest::test_extensions(config.run.dom),
             observer: None,
+            site: test::site(config.run.dom),
         })
         .await;
     let mut run = match run {

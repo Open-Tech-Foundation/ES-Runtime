@@ -301,7 +301,9 @@ declaration order. Anything else is refused.
 | `ctx.error(msg)` | Fails the build. Throws — it does not return. |
 | `ctx.isEntry` | On `resolve`: whether the specifier is an entry. |
 | `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
-| `ctx.refresh` | The hot-reload scheme the target named in `esdev.json`, on **every** hook's context — `start` included, since a scheme's runtime is often a virtual module a `load` serves. Present only while the dev loop is running that target hot: absent under `esdev build`, under `--no-hot`, and in a target that named no scheme. |
+| `ctx.command`, `ctx.target` | Absent from a `build()` a program starts: it describes its own build. Under `esdev.json` they name the command and the target ([where a hook runs](/esdev/plugins/context#where-a-hook-runs)). |
+| `ctx.platform` | `"server"`, `"browser"` or `"node"`, from the build's `platform`. On **every** hook's context. |
+| `ctx.hot` | `false` from `build()`; `true` for a browser build in `esdev start`'s hot loop. |
 
 An argument, so an arrow-function handler keeps it. Live only while its hook
 runs: stashing `ctx` and calling it later throws.

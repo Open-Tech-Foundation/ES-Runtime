@@ -3090,6 +3090,30 @@ mod tests {
         assert!(plugin.contains("\";;;;\" +"));
     }
 
+    /// Fast Refresh is a project plugin that installs itself in a hot build
+    /// (D148): declared at the top level, with no target naming a scheme.
+    #[test]
+    fn react_refresh_is_a_project_plugin_reading_ctx_hot() {
+        for mode in ["static", "fullstack"] {
+            let files = plain_written("react", Some(mode));
+            let config: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+            assert_eq!(
+                config["plugins"][0], "./plugins/react-refresh.mjs",
+                "{mode}"
+            );
+            for (name, target) in config["build"]["targets"].as_object().expect("targets") {
+                assert!(target.get("plugins").is_none(), "{mode} {name}");
+                assert!(target.get("refresh").is_none(), "{mode} {name}");
+            }
+        }
+        let plugin = otf_text(
+            &plain_written("react", Some("static")),
+            "plugins/react-refresh.mjs",
+        );
+        assert!(plugin.contains("if (!ctx.hot) return null;"), "{plugin}");
+    }
+
     #[test]
     fn both_react_modes_opt_into_oxc_react_compiler() {
         for mode in ["static", "fullstack"] {

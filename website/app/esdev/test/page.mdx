@@ -29,8 +29,9 @@ about it is refused rather than compiled for a framework nobody named.
 The same setting compiles the bundle, so a component means the same thing in a
 test and in a build.
 
-When a framework's compiler is a plugin, the project's `plugins` compile every
-module a test loads, before the `jsx` setting does. See
+The project's `plugins` resolve, load and compile every module a test loads,
+as in a build, before the `jsx` setting does: a framework's `.jsx`, a virtual
+module, a stylesheet or an image means the same thing in a test. See
 [Where plugins run](/esdev/build/project#where-plugins-run).
 
 ## DOM tests

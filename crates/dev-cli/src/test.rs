@@ -188,6 +188,17 @@ pub struct FileRun {
     pub permission_args: Vec<String>,
 }
 
+/// Where a test file runs, as the project's plugins read it (D148). A file
+/// under `--dom` or `--browser` runs against a document, so it is the browser's
+/// code that is being compiled.
+pub fn site(dom: bool) -> crate::contract::Site {
+    crate::contract::Site {
+        command: Some("test"),
+        platform: Some(if dom { "browser" } else { "server" }),
+        ..crate::contract::Site::default()
+    }
+}
+
 /// Where a run leaves [`FileRun`] for its children: one file per parent,
 /// removed when the run ends ([`remove_settings`]).
 fn settings_path() -> PathBuf {

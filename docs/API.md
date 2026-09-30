@@ -3817,8 +3817,8 @@ const refresh = {
 hook-using function — what a component-refresh scheme matches components up by.
 Finding them needs the syntax tree the compiler already has, so a plugin cannot
 do it; the per-module half it writes itself. It is honoured **only in a hot dev
-build of a target that named a `refresh` scheme in `esdev.json`**, because the calls
-inserted reach globals that only a hot loop installs.
+build** (`ctx.hot`), because the calls inserted reach globals that only a hot
+loop installs.
 
 Each hook may declare, alongside its handler:
 
@@ -3861,7 +3861,10 @@ keeps it, where rollup's `this` is silently lost:
 | `ctx.warn` / `info` / `debug` | diagnostics; warnings come back in `warnings` |
 | `ctx.error(msg)` | fails the build — throws. The diagnostic names the module the hook was called about and the plugin that reported it |
 | `ctx.isEntry` | on `resolve`: whether the specifier is an entry |
-| `ctx.refresh` | the hot-reload scheme the target named (`esdev.json`'s `refresh`), on **every** hook's context — `start` included, since a scheme's runtime is often a virtual module a `load` serves. Present **only** while the dev loop is running that target hot: absent under `esdev build`, absent in a target that named no scheme, and absent under `esdev start --no-hot`, so a plugin implementing a scheme installs its per-module wrapper where it means something and nowhere else. |
+| `ctx.command` | `"build"`, `"start"`, `"test"` or `"run"`, on **every** hook's context. Absent from a `build()` a program starts, which describes its own build |
+| `ctx.platform` | `"server"`, `"browser"` or `"node"`: what the compiled code runs against. `"browser"` for `esdev test --dom` and `--browser` |
+| `ctx.target` | the project target being built, by name; absent outside a project build |
+| `ctx.hot` | `true` only for a browser build in `esdev start`'s hot loop, so a refresh scheme installs its per-module wrapper where it means something and nowhere else |
 | `ctx.type` | on `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. It is how a pass declines work somebody else has done: `esdev:css-modules` filters on `.css` and steps aside for a plugin that claimed the stylesheet first. |
 
 It is live only while its hook runs; stashing it and calling `resolve()` later

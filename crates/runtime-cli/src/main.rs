@@ -230,6 +230,7 @@ fn parse_args() -> Result<Config, String> {
                     bundler_style_resolution: false,
                     package_converter: None,
                     specifier_alias: None,
+                    module_hooks: None,
                     // Nothing is added to the `runtime:` namespace here. A
                     // production binary offers the standard modules and only
                     // those, so `runtime:build` and `runtime:watch` — `esdev`'s
@@ -279,6 +280,7 @@ fn parse_args() -> Result<Config, String> {
                     bundler_style_resolution: false,
                     package_converter: None,
                     specifier_alias: None,
+                    module_hooks: None,
                     // Nothing is added to the `runtime:` namespace here. A
                     // production binary offers the standard modules and only
                     // those, so `runtime:build` and `runtime:watch` — `esdev`'s
