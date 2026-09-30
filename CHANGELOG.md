@@ -11,6 +11,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- `serve()` no longer allocates a cookie accessor closure and property for every
+  request. Cookie parsing and its map are created only when a handler reads
+  `request.cookies`.
+- File `arrayBuffer()` results reuse the fresh file-read backing store, and
+  streamed fetch uploads and HTTP responses move marshalled byte buffers into
+  their channels instead of cloning them.
+
 ## [0.34.0] - 2026-09-29
 
 ### Added

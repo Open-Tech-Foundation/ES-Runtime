@@ -72,6 +72,39 @@ fn request_cookies_changes_are_sent_with_the_response() {
     assert_eq!(lines[2], "[]");
 }
 
+/// Server requests retain the standard Request interface, while the cookie
+/// getter lives on their shared prototype instead of being installed per
+/// request. Requests constructed by application code do not gain the server
+/// cookie API.
+#[test]
+fn server_cookie_accessor_is_shared_and_client_requests_are_unchanged() {
+    let code = "import { serve } from 'runtime:http'; \
+        const server = serve({ hostname: '127.0.0.1', port: 0 }, (req) => { \
+          console.log(req instanceof Request, 'cookies' in req, Object.hasOwn(req, 'cookies')); \
+          console.log(req.constructor === Request); \
+          console.log(req); \
+          const ordinary = new Request('http://example.test/'); \
+          console.log(ordinary instanceof Request, 'cookies' in ordinary, Object.hasOwn(ordinary, 'cookies')); \
+          return new Response('ok'); \
+        }); \
+        const { port } = await server.addr; \
+        const res = await fetch(`http://127.0.0.1:${port}/`, { headers: { cookie: 'sid=a' } }); \
+        await res.text(); \
+        await server.stop();";
+    let out = esrun(&["--allow-listen", "--allow-net", &format!("-e={code}")]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = stdout(&out);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines[0], "true true false");
+    assert_eq!(lines[1], "true");
+    assert!(lines[2].starts_with("Request {"), "{printed}");
+    assert_eq!(lines.last(), Some(&"true false false"));
+}
+
 /// A cookie a browser would discard is an error at the line that made it, not
 /// a header that looks sent.
 #[test]

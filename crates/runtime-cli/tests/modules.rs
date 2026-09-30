@@ -1257,6 +1257,8 @@ fn runtime_fs_read_write_stat_and_jail() {
         await mkdir('sub', { recursive: true });\
         console.log('WROTE=' + await write('sub/a.txt', 'hi'));\
         console.log('TEXT=' + await file('sub/a.txt').text());\
+        const ab = await file('sub/a.txt').arrayBuffer();\
+        console.log('ARRAYBUFFER=' + new Uint8Array(ab).join(',') + '/' + ab.byteLength);\
         const s = await stat('sub/a.txt');\
         console.log('SIZE=' + s.size + ' ISFILE=' + s.isFile);\
         console.log('DIR=' + (await readDir('sub')).map(e => e.name).join(','));\
@@ -1276,6 +1278,7 @@ fn runtime_fs_read_write_stat_and_jail() {
     for expected in [
         "WROTE=2",
         "TEXT=hi",
+        "ARRAYBUFFER=104,105/2",
         "SIZE=2 ISFILE=true",
         "DIR=a.txt",
         "EXISTS=true",

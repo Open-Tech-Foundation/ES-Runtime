@@ -427,6 +427,7 @@ async function handleRequest(entry, handler) {
   const peerHost = entry[5];
   const peerPort = entry[6];
   let response;
+  let request;
   let cookies = null;
   try {
     const init = { method, headers };
@@ -447,9 +448,15 @@ async function handleRequest(entry, handler) {
         },
       });
     }
-    const request = makeServerRequest(url, init, () => watchDisconnect(requestId), requestId);
-    cookies = attachCookies(request);
+    request = makeServerRequest(
+      url,
+      init,
+      () => watchDisconnect(requestId),
+      requestId,
+      ServerRequest,
+    );
     response = await handler(request, connectionInfo(peerHost, peerPort));
+    cookies = requestCookieMaps.get(request) ?? null;
     if (!(response instanceof Response)) {
       // A handler that returns something else has a bug, and coercing it with
       // `String(value)` shipped that bug as a 200: `return { ok: true }` went
@@ -464,6 +471,7 @@ async function handleRequest(entry, handler) {
       response = new Response("Internal Server Error", { status: 500 });
     }
   } catch (e) {
+    cookies = request ? (requestCookieMaps.get(request) ?? null) : null;
     // Same reasoning: a thrown handler is a 500 to the client and a reported
     // error to the developer, rather than a silent one.
     reportError(e);
@@ -518,8 +526,8 @@ async function handleRequest(entry, handler) {
   for (const [name, value] of parts.headers) args.push(name, value);
   // What the handler changed on `request.cookies`, beside whatever
   // `Set-Cookie` headers the response carries itself.
-  if (cookies?.map) {
-    for (const header of cookies.map.toSetCookieHeaders()) args.push("set-cookie", header);
+  if (cookies) {
+    for (const header of cookies.toSetCookieHeaders()) args.push("set-cookie", header);
   }
   if (declared && !hasTrailerHeader) {
     const names = [];
@@ -1022,21 +1030,28 @@ class CookieMap {
   }
 }
 
-// `request.cookies` on a request `serve()` hands out: parsed on first read,
-// and its changes sent with the response (D144). The map is kept here rather
-// than on the request, so the handler can reach it only through the getter.
-function attachCookies(request) {
-  const holder = { map: null };
-  Object.defineProperty(request, "cookies", {
-    get() {
-      holder.map ??= new CookieMap(request.headers.get("cookie") ?? "");
-      return holder.map;
-    },
-    enumerable: false,
-    configurable: false,
-  });
-  return holder;
+// Most handlers never read cookies. Keep the accessor on one shared prototype,
+// and allocate the map only on first access (D144). In particular, don't add a
+// closure and own-property descriptor to every incoming request.
+const requestCookieMaps = new WeakMap();
+class ServerRequest extends Request {
+  get cookies() {
+    let cookies = requestCookieMaps.get(this);
+    if (cookies === undefined) {
+      cookies = new CookieMap(this.headers.get("cookie") ?? "");
+      requestCookieMaps.set(this, cookies);
+    }
+    return cookies;
+  }
 }
+// The subclass is how the accessor is shared, not a type a handler should see:
+// `req.constructor === Request` and `console.log(req)` stay what they were.
+Object.defineProperty(ServerRequest.prototype, "constructor", {
+  value: Request,
+  writable: true,
+  enumerable: false,
+  configurable: true,
+});
 
 function serve(options, handler) {
   if (typeof options === "function") {

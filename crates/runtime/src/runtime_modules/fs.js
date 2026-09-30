@@ -36,6 +36,11 @@ class FsFile {
   }
   async arrayBuffer() {
     const b = await this.bytes();
+    // `fs_read` returns a fresh Uint8Array backed by exactly the file's bytes.
+    // It is not shared with another FsFile read or caller, so hand its buffer
+    // through directly. Keep the slice fallback for any future provider that
+    // returns a view into a larger backing store.
+    if (b.byteOffset === 0 && b.byteLength === b.buffer.byteLength) return b.buffer;
     return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
   }
   async text() {

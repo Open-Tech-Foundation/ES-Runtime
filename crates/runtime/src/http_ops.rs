@@ -399,15 +399,21 @@ pub(crate) fn install(
         let resp_senders = resp_senders.clone();
         engine.register_op(OpDecl::r#async("http_response_body_push", move |args| {
             let resp_senders = resp_senders.clone();
+            let mut args = args;
             let id = arg_u64(&args, 0);
-            let chunk = args.get(1).and_then(Value::as_bytes).map(<[u8]>::to_vec);
+            // `marshal` already copied the JS view into this owned Vec. Move
+            // that allocation into the response channel rather than copying it.
+            let chunk = args
+                .get_mut(1)
+                .map(|value| std::mem::replace(value, Value::Undefined))
+                .and_then(Value::into_bytes)
+                .unwrap_or_default();
             Box::pin(async move {
                 // Take the sender out so no borrow is held across the send await;
                 // the guest pump is sequential per id, so there is no contention.
                 let Some(mut tx) = resp_senders.borrow_mut().remove(&id) else {
                     return Ok(Value::Bool(false)); // unknown/closed id
                 };
-                let chunk = chunk.unwrap_or_default();
                 match tx.send(Ok(chunk)).await {
                     // Accepted (channel had room or the provider drained one):
                     // put the sender back for the next chunk.

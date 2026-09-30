@@ -1015,8 +1015,8 @@
   // read it off an object a handler was given.
   const serverRequestIds = new WeakMap();
   Object.defineProperty(globalThis, "__serverRequest", {
-    value: (url, init, signalThunk, requestId) => {
-      const request = new Request(url, {
+    value: (url, init, signalThunk, requestId, RequestClass = Request) => {
+      const request = new RequestClass(url, {
         ...init,
         [TRUSTED_URL]: true,
         [LAZY_SIGNAL]: signalThunk,

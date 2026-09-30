@@ -152,8 +152,8 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                 // the await, so the receiver is owned by the request. Same for the
                 // abort receiver, so an abort fired before the first poll still
                 // lands on this request.
-                let request = parse_request(&args, &req_receivers);
                 let abort_id = args.get(4).and_then(Value::as_number).map(|n| n as u64);
+                let request = parse_request(args, &req_receivers);
                 let abort_rx = abort_id.and_then(|id| abort_rxs.borrow_mut().remove(&id));
                 Box::pin(async move {
                     let result = match abort_rx {
@@ -294,15 +294,21 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
         engine.register_op(
             OpDecl::r#async("fetch_request_body_push", move |args| {
                 let req_senders = req_senders.clone();
+                let mut args = args;
                 let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-                let chunk = args.get(1).and_then(Value::as_bytes).map(<[u8]>::to_vec);
+                // `marshal` already copied the JS view into this owned Vec.
+                // Move it into the bounded body channel instead of cloning it.
+                let chunk = args
+                    .get_mut(1)
+                    .map(|value| std::mem::replace(value, Value::Undefined))
+                    .and_then(Value::into_bytes)
+                    .unwrap_or_default();
                 Box::pin(async move {
                     // Take the sender out so no borrow is held across the send await;
                     // the guest pump is sequential per id, so there is no contention.
                     let Some(mut tx) = req_senders.borrow_mut().remove(&id) else {
                         return Ok(Value::Bool(false)); // unknown/closed id
                     };
-                    let chunk = chunk.unwrap_or_default();
                     match tx.send(Ok(chunk)).await {
                         // Accepted (channel had room or the transport drained one):
                         // put the sender back for the next chunk.
@@ -360,7 +366,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
 /// rule about the response, so the prelude asks for `"manual"` and rejects on a
 /// redirect status itself (see `RedirectMode`).
 fn parse_request(
-    args: &[Value],
+    mut args: Vec<Value>,
     req_receivers: &Rc<RefCell<HashMap<u64, mpsc::Receiver<ReqBodyItem>>>>,
 ) -> HttpRequest {
     let method = args
@@ -380,8 +386,12 @@ fn parse_request(
             Some(rx) => RequestBody::Stream(Box::pin(rx)),
             None => RequestBody::Empty, // id already consumed; treat as no body
         }
-    } else if let Some(bytes) = args.get(2).and_then(Value::as_bytes) {
-        RequestBody::Bytes(bytes.to_vec())
+    } else if let Some(bytes) = args
+        .get_mut(2)
+        .map(|value| std::mem::replace(value, Value::Undefined))
+        .and_then(Value::into_bytes)
+    {
+        RequestBody::Bytes(bytes)
     } else {
         RequestBody::Empty
     };
