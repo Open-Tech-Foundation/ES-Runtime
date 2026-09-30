@@ -210,7 +210,10 @@ class ByteWriter {
 
   // Back-fills a reserved length. `inclusive` counts the length field itself,
   // which is how Postgres frames a message and how a row is framed here.
-  endLength(at, { inclusive = true } = {}) {
+  // Read off `options` rather than destructured with a `= {}` default, which
+  // builds an empty object on every call — and this closes every message.
+  endLength(at, options) {
+    const inclusive = options?.inclusive === undefined ? true : options.inclusive;
     const size = this.length - at - (inclusive ? 0 : 4);
     this._view.setInt32(at, size);
     return this;

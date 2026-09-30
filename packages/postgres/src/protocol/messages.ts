@@ -176,6 +176,45 @@ export function bind(
 }
 
 /**
+ * `Bind`, `Execute` and `Sync` for a prepared statement, written straight into
+ * one buffer: the whole request of a query whose statement is already cached.
+ *
+ * The same bytes `concat([bind(…), execute(""), sync()])` produces, without the
+ * three messages, their writers and the copy between them. Every query that
+ * hits the statement cache sends this, so what it allocates is what each of
+ * those queries allocates.
+ *
+ * `statement` is the name's UTF-8 bytes, encoded once when it was prepared.
+ */
+export function bindExecuteSync(
+  statement: Uint8Array,
+  params: (Uint8Array | null)[],
+  formats: readonly number[],
+): Uint8Array {
+  let size = 1 + 4 + 1 + statement.length + 1 + 2 + 2 + 2 + 2 * formats.length;
+  for (const value of params) size += 4 + (value === null ? 0 : value.length);
+  const w = new ByteWriter(size + EXECUTE_SYNC.length);
+  w.u8(F.Bind);
+  const at = w.beginLength();
+  w.u8(0); // the unnamed portal
+  w.bytes(statement).u8(0);
+  w.i16(0); // every parameter in text format
+  w.i16(params.length);
+  for (const value of params) {
+    if (value === null) {
+      w.i32(-1);
+    } else {
+      w.i32(value.length).bytes(value);
+    }
+  }
+  w.i16(formats.length);
+  for (const format of formats) w.i16(format);
+  w.endLength(at);
+  w.bytes(EXECUTE_SYNC);
+  return w.finish();
+}
+
+/**
  * `Describe` for a prepared statement, which answers with the parameter types
  * *and* the row shape — before anything is bound.
  *
@@ -219,6 +258,9 @@ export function sync(): Uint8Array {
 export function terminate(): Uint8Array {
   return tagged(F.Terminate, () => {});
 }
+
+/** `Execute` of the unnamed portal, then `Sync`: the same bytes every time. */
+const EXECUTE_SYNC = concat([execute(""), sync()]);
 
 /** Concatenates messages so a whole exchange leaves in one write. */
 export function concat(parts: Uint8Array[]): Uint8Array {

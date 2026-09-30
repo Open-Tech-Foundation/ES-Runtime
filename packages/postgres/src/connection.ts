@@ -48,10 +48,18 @@ interface Columns {
 /** A statement prepared on the server, and what its rows will look like. */
 interface Prepared {
   name: string;
+  /** `name` as UTF-8, encoded once rather than on every `Bind`. */
+  nameBytes: Uint8Array;
   /** `null` when the statement returns no rows. */
   columns: Columns | null;
   /** Result format per column; empty means text throughout. */
   formats: number[];
+  /**
+   * The row class, looked up on first use. `rowShape` builds its cache key
+   * from every column's name and type, which is a handful of strings per query
+   * for an answer that cannot change while the statement is cached.
+   */
+  shape?: ReturnType<typeof rowShape>;
 }
 
 /** Reads a `RowDescription` body into names and type OIDs. */
@@ -248,8 +256,19 @@ export class PgConnection extends BaseConnection {
    * first result is still coming back, and then two readers take turns on one
    * socket. That does not corrupt the stream so much as stop it: both sides
    * wait for the other's message and neither arrives.
+   *
+   * A flag and a queue, not a chain of promises: the connection is free for
+   * nearly every exchange a pool hands it, and taking a free lock should cost
+   * nothing. Waiters are woken in arrival order, and a release with someone
+   * waiting passes the lock straight to them, so it is never free in between.
    */
-  #lock: Promise<unknown> = Promise.resolve();
+  #locked = false;
+  #waiters: (() => void)[] = [];
+  #unlock = (): void => {
+    const next = this.#waiters.shift();
+    if (next === undefined) this.#locked = false;
+    else next();
+  };
   /**
    * Set while a result set is open and unread.
    *
@@ -441,6 +460,25 @@ export class PgConnection extends BaseConnection {
     }
   }
 
+  /**
+   * The next message if it has already arrived, or `null` — without a promise.
+   *
+   * Readers take `this.#poll() ?? (await this.#next())`. By the time a reply is
+   * being read most of it is usually buffered, and an `async` call per message
+   * is a promise and a suspended frame for an answer that was already there.
+   */
+  #poll(): { tag: number; frame: Uint8Array } | null {
+    if (this.#fatal !== null) throw this.#fatal;
+    const frames = this.#frames;
+    if (frames === null)
+      throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
+    try {
+      return frames.poll();
+    } catch (e) {
+      throw this.#die(e);
+    }
+  }
+
   async #next(): Promise<{ tag: number; frame: Uint8Array }> {
     if (this.#fatal !== null) throw this.#fatal;
     const frames = this.#frames;
@@ -461,6 +499,18 @@ export class PgConnection extends BaseConnection {
    * the connection would be lost rather than merely broken.
    */
   async #acquire(): Promise<() => void> {
+    const release = this.#tryAcquire();
+    if (release !== null) return release;
+    await new Promise<void>((resolve) => this.#waiters.push(resolve));
+    return this.#unlock;
+  }
+
+  /**
+   * Takes the connection if it is free — no promise, which is the point — or
+   * returns `null` when it is held and the caller has to wait (`#acquire`).
+   * Throws, like `#acquire`, when the connection cannot run an exchange at all.
+   */
+  #tryAcquire(): (() => void) | null {
     // A dead connection answers immediately rather than queueing behind an
     // exchange that will never finish.
     if (this.#fatal !== null) throw this.#fatal;
@@ -476,21 +526,15 @@ export class PgConnection extends BaseConnection {
         { code: DbErrorCode.ConnectionBusy },
       );
     }
-    let release: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const previous = this.#lock;
-    this.#lock = held;
-    // A failed exchange must not poison the ones behind it.
-    await previous.catch(() => {});
-    return release;
+    if (this.#locked) return null;
+    this.#locked = true;
+    return this.#unlock;
   }
 
   async #authenticate(options: PgOptions): Promise<void> {
     let session: Awaited<ReturnType<ReturnType<typeof scram>["final"]>> | null = null;
     for (;;) {
-      const { tag, frame } = await this.#next();
+      const { tag, frame } = this.#poll() ?? (await this.#next());
       const fields = new Fields(frame);
       switch (tag) {
         case B.Authentication: {
@@ -607,13 +651,8 @@ export class PgConnection extends BaseConnection {
    * exactly what the statement cache already made cheap.
    */
   async #prepare(text: string): Promise<Prepared> {
-    const cached = this.#statements.get(text);
-    if (cached !== undefined) {
-      // Re-inserting moves it to the back, making eviction least-recently-used.
-      this.#statements.delete(text);
-      this.#statements.set(text, cached);
-      return cached;
-    }
+    const cached = this.#cached(text);
+    if (cached !== undefined) return cached;
 
     const parts: Uint8Array[] = [];
     while (this.#statements.size >= this.#cacheLimit) {
@@ -634,6 +673,7 @@ export class PgConnection extends BaseConnection {
       columns === null ? [] : columns.oids.map((oid) => (prefersBinary(oid, this.#decode) ? 1 : 0));
     const entry: Prepared = {
       name,
+      nameBytes: new TextEncoder().encode(name),
       columns,
       formats: formats.includes(1) ? formats : [],
     };
@@ -641,12 +681,26 @@ export class PgConnection extends BaseConnection {
     return entry;
   }
 
+  /**
+   * The cached statement for `text`, marked most recently used — synchronous,
+   * so a cache hit does not pay for `#prepare`'s promise.
+   */
+  #cached(text: string): Prepared | undefined {
+    const cached = this.#statements.get(text);
+    if (cached !== undefined) {
+      // Re-inserting moves it to the back, making eviction least-recently-used.
+      this.#statements.delete(text);
+      this.#statements.set(text, cached);
+    }
+    return cached;
+  }
+
   /** Reads the answer to a statement-level `Describe`, up to `ReadyForQuery`. */
   async #readShape(): Promise<Columns | null> {
     let columns: Columns | null = null;
     let failure: unknown = null;
     for (;;) {
-      const { tag, frame } = await this.#next();
+      const { tag, frame } = this.#poll() ?? (await this.#next());
       const fields = new Fields(frame);
       switch (tag) {
         case B.RowDescription:
@@ -677,7 +731,7 @@ export class PgConnection extends BaseConnection {
    * columns in text.
    */
   async #start(text: string, params: unknown[]): Promise<Columns | null> {
-    const bound = params.map((value) => encodeParam(value));
+    const bound = params.length === 0 ? NO_PARAMS : params.map((value) => encodeParam(value));
     if (this.#cacheLimit === 0) {
       await this.#send(
         msg.concat([
@@ -691,14 +745,8 @@ export class PgConnection extends BaseConnection {
       return this.#describe();
     }
 
-    const prepared = await this.#prepare(text);
-    await this.#send(
-      msg.concat([
-        msg.bind("", prepared.name, bound, prepared.formats),
-        msg.execute("", 0),
-        msg.sync(),
-      ]),
-    );
+    const prepared = this.#cached(text) ?? (await this.#prepare(text));
+    await this.#send(msg.bindExecuteSync(prepared.nameBytes, bound, prepared.formats));
     await this.#awaitBindComplete();
     return prepared.columns;
   }
@@ -706,7 +754,7 @@ export class PgConnection extends BaseConnection {
   /** Reads up to `BindComplete`, leaving the rows for the batch reader. */
   async #awaitBindComplete(): Promise<void> {
     for (;;) {
-      const { tag, frame } = await this.#next();
+      const { tag, frame } = this.#poll() ?? (await this.#next());
       if (tag === B.BindComplete) return;
       const fields = new Fields(frame);
       if (tag === B.ErrorResponse) {
@@ -743,7 +791,7 @@ export class PgConnection extends BaseConnection {
    */
   async #describe(): Promise<Columns | null> {
     for (;;) {
-      const { tag, frame } = await this.#next();
+      const { tag, frame } = this.#poll() ?? (await this.#next());
       const fields = new Fields(frame);
       switch (tag) {
         case B.ParseComplete:
@@ -788,7 +836,7 @@ export class PgConnection extends BaseConnection {
         }
         if (batch.size >= BATCH_BYTES) return done(false);
       }
-      const { tag, frame } = await this.#next();
+      const { tag, frame } = this.#poll() ?? (await this.#next());
       if (tag === B.DataRow) {
         batch.append(frame, 0, frame.length);
         if (batch.size >= BATCH_BYTES) return done(false);
@@ -820,7 +868,7 @@ export class PgConnection extends BaseConnection {
   /** Reads and discards until `ReadyForQuery`, so the connection is reusable. */
   async #drainToReady(): Promise<void> {
     for (;;) {
-      const { tag, frame } = await this.#next();
+      const { tag, frame } = this.#poll() ?? (await this.#next());
       if (tag === B.ReadyForQuery) {
         this.status = String.fromCharCode(new Fields(frame).u8());
         return;
@@ -858,7 +906,7 @@ export class PgConnection extends BaseConnection {
   protected async _query(query: NormalizedQuery): Promise<Rows<PgRow>> {
     const q = this.#sql(query);
     this.#rejectNamed(q.named);
-    const release = await this.#acquire();
+    const release = this.#tryAcquire() ?? (await this.#acquire());
     let held = true;
     // Released exactly once, however this ends: an early return, a throw, or
     // the result set finishing much later.
@@ -879,7 +927,12 @@ export class PgConnection extends BaseConnection {
         releaseOnce();
         return new Rows(emptySource(), defineRowShape([]));
       }
-      const shape = rowShape(described, this.#statements.get(q.text)?.formats ?? [], this.#decode);
+      const statement = this.#statements.get(q.text);
+      let shape = statement?.shape;
+      if (shape === undefined) {
+        shape = rowShape(described, statement?.formats ?? [], this.#decode);
+        if (statement !== undefined) statement.shape = shape;
+      }
 
       let first: Batch | null = await this.#batch();
       if (first.done) {
@@ -939,7 +992,7 @@ export class PgConnection extends BaseConnection {
   ): Promise<{ changes: number; lastInsertRowid: number | null }> {
     const q = this.#sql(query);
     this.#rejectNamed(q.named);
-    const release = await this.#acquire();
+    const release = this.#tryAcquire() ?? (await this.#acquire());
     try {
       await this.#askAndDescribe(q.text, q.positional);
       await this.#batch();
@@ -979,7 +1032,7 @@ export class PgConnection extends BaseConnection {
   }
 
   async #runScript(sql: string): Promise<{ command: string; changes: number }[]> {
-    const release = await this.#acquire();
+    const release = this.#tryAcquire() ?? (await this.#acquire());
     try {
       // A script is where DDL and DISCARD live, and both can invalidate plans
       // the cache is holding. Forgetting them costs a re-parse each; keeping a
@@ -988,7 +1041,7 @@ export class PgConnection extends BaseConnection {
       await this.#send(msg.simpleQuery(sql));
       const results: { command: string; changes: number }[] = [];
       for (;;) {
-        const { tag, frame } = await this.#next();
+        const { tag, frame } = this.#poll() ?? (await this.#next());
         if (tag === B.DataRow) continue; // a script reports, it does not return
         const fields = new Fields(frame);
         switch (tag) {
@@ -1134,7 +1187,7 @@ export class PgConnection extends BaseConnection {
     if (this.#pump !== null) return;
     this.#pump = (async () => {
       for (;;) {
-        const { tag, frame } = await this.#next();
+        const { tag, frame } = this.#poll() ?? (await this.#next());
         const fields = new Fields(frame);
         switch (tag) {
           case B.NotificationResponse: {
@@ -1254,6 +1307,8 @@ export class PgConnection extends BaseConnection {
 }
 
 const NOTHING: Batch = { bytes: new Uint8Array(0), rows: 0, done: true };
+/** A query without parameters binds this rather than a fresh empty array. Never written to. */
+const NO_PARAMS: (Uint8Array | null)[] = [];
 
 /** A finished result: one batch to hand over, then nothing, and no cursor. */
 function oneBatch(batch: Batch) {

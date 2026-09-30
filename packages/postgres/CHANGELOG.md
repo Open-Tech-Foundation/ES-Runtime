@@ -13,6 +13,15 @@ the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
 
 ## [Unreleased]
 
+### Changed
+
+- A query allocates about a quarter less. A cached statement's `Bind`,
+  `Execute` and `Sync` are written into one buffer instead of three messages
+  and a copy; replies already buffered are read without a promise per message;
+  a free connection is taken without allocating a lock promise; and the row
+  shape is kept with the cached statement instead of being looked up by a
+  freshly built key on every query.
+
 ## [0.2.2] - 2026-09-29
 
 _Dependency updates._

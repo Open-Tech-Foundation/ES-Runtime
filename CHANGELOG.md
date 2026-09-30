@@ -30,6 +30,8 @@ namespace) is unstable and may change between minor releases until the API freez
   streamed fetch uploads and HTTP responses move marshalled byte buffers into
   their channels instead of cloning them.
 - `new Response(file(path))` sent the text `[object Object]` instead of the file.
+- `ByteWriter.endLength()` no longer allocates an options object on every call
+  that passes none.
 
 ## [0.34.0] - 2026-09-29
 
