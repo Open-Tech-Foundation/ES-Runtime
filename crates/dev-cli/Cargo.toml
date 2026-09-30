@@ -69,6 +69,11 @@ string_wizard.workspace = true
 # A pass failure as the diagnostic rolldown keeps whole, so a plugin's own
 # message reaches the report (see `adapter::Adapter::failed`).
 rolldown_error.workspace = true
+# `dev.server.proxy` to an https target (D150): the TLS client and the bundled
+# Mozilla roots `fetch` verifies against. Already in the graph via
+# `default-providers`.
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
 # The vocabulary a hot update is assembled in. See the workspace manifest.
 rolldown_utils.workspace = true
 oxc_resolver.workspace = true

@@ -160,12 +160,17 @@ impl Drop for Preview {
 }
 
 fn start(dir: &Path) -> (Preview, u16) {
+    start_with(dir, &[])
+}
+
+fn start_with(dir: &Path, extra: &[String]) -> (Preview, u16) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esdev"))
         .args([
             "preview".to_string(),
             format!("--dir={}", dir.display()),
             "--port=0".to_string(),
         ])
+        .args(extra)
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn esdev preview");
@@ -774,4 +779,167 @@ fn a_scaffolded_project_previews_what_it_built() {
     assert!(index.headers.contains_key("etag"), "no validator");
 
     let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// A stand-in API server: it answers every request with what it received —
+/// the request line, `Host`, `X-Forwarded-Host` and the body — and a
+/// WebSocket-style upgrade with `101`, then echoes whatever bytes follow.
+fn api_server() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the API server");
+    let port = listener.local_addr().expect("address").port();
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(mut stream) = incoming else { continue };
+            std::thread::spawn(move || {
+                let Ok(clone) = stream.try_clone() else {
+                    return;
+                };
+                let mut reader = BufReader::new(clone);
+                let mut head = Vec::new();
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    head.push(line.trim_end().to_string());
+                }
+                let header = |name: &str| {
+                    head.iter()
+                        .skip(1)
+                        .find_map(|l| {
+                            let (n, v) = l.split_once(':')?;
+                            n.trim()
+                                .eq_ignore_ascii_case(name)
+                                .then(|| v.trim().to_string())
+                        })
+                        .unwrap_or_default()
+                };
+                if header("upgrade").eq_ignore_ascii_case("websocket") {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+                    );
+                    let mut buf = [0u8; 64];
+                    while let Ok(n) = reader.read(&mut buf) {
+                        if n == 0 || stream.write_all(&buf[..n]).is_err() {
+                            break;
+                        }
+                    }
+                    return;
+                }
+                let length: usize = header("content-length").parse().unwrap_or(0);
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let echo = format!(
+                    "{}\nhost={}\nforwarded-host={}\nconnection={}\nbody={}",
+                    head[0],
+                    header("host"),
+                    header("x-forwarded-host"),
+                    header("connection"),
+                    String::from_utf8_lossy(&body)
+                );
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{echo}",
+                        echo.len()
+                    )
+                    .as_bytes(),
+                );
+            });
+        }
+    });
+    port
+}
+
+/// `dev.server.proxy` sends a path prefix to another server and leaves every
+/// other path to the files (D150).
+#[test]
+fn a_path_prefix_is_forwarded_to_the_api_server() {
+    const NAME: &str = "proxy_forwards";
+    let dir = fixture(NAME);
+    let api = api_server();
+    // A port nothing listens on: bound, read, and let go.
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .expect("bind")
+        .local_addr()
+        .expect("address")
+        .port();
+    let config = dir.with_extension("esdev.json");
+    std::fs::write(
+        &config,
+        format!(
+            r#"{{ "dev": {{ "server": {{ "proxy": {{
+                "/api": "http://127.0.0.1:{api}/v1",
+                "/down": "http://127.0.0.1:{closed}"
+            }} }} }}, "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }} }}"#
+        ),
+    )
+    .expect("config");
+    let (preview, port) = start_with(&dir, &[format!("--config={}", config.display())]);
+    let _preview = preview;
+
+    let a = get(port, &req("GET", "/api/users?page=2", &[]));
+    assert_eq!(status(&a), "200", "{}", a.status);
+    let echo = String::from_utf8_lossy(&a.body).into_owned();
+    assert!(
+        echo.starts_with("GET /v1/api/users?page=2 HTTP/1.1"),
+        "{echo}"
+    );
+    assert!(echo.contains(&format!("host=127.0.0.1:{api}")), "{echo}");
+    assert!(echo.contains("forwarded-host=x"), "{echo}");
+    assert!(echo.contains("connection=close"), "{echo}");
+
+    let posted = get(
+        port,
+        "POST /api/items HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+         Content-Length: 10\r\nConnection: close\r\n\r\n{\"a\":true}",
+    );
+    assert_eq!(status(&posted), "200", "{}", posted.status);
+    assert!(
+        String::from_utf8_lossy(&posted.body).ends_with("body={\"a\":true}"),
+        "{}",
+        String::from_utf8_lossy(&posted.body)
+    );
+
+    // Not a prefix: the preview's own files.
+    let page = get(port, &req("GET", "/index.html", &[]));
+    assert_eq!(status(&page), "200");
+    assert_eq!(page.body, b"<h1>site</h1>");
+
+    // A target that is not running is a 502 that says which.
+    let down = get(port, &req("GET", "/down/x", &[]));
+    assert_eq!(status(&down), "502", "{}", down.status);
+    assert!(
+        String::from_utf8_lossy(&down.body).contains(&format!("127.0.0.1:{closed}")),
+        "{}",
+        String::from_utf8_lossy(&down.body)
+    );
+
+    // An upgrade is a tunnel: the 101 comes back, and bytes go both ways.
+    let mut ws = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    ws.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    ws.write_all(
+        b"GET /api/socket HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+    )
+    .expect("upgrade");
+    let mut reader = BufReader::new(ws.try_clone().expect("clone"));
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line).expect("status");
+    assert!(status_line.starts_with("HTTP/1.1 101"), "{status_line}");
+    let mut line = String::new();
+    loop {
+        line.clear();
+        reader.read_line(&mut line).expect("header");
+        if line == "\r\n" {
+            break;
+        }
+    }
+    ws.write_all(b"ping").expect("send");
+    let mut echoed = [0u8; 4];
+    reader.read_exact(&mut echoed).expect("echo");
+    assert_eq!(&echoed, b"ping");
+
+    let _ = std::fs::remove_file(&config);
 }

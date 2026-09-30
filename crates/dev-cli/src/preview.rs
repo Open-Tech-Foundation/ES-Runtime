@@ -53,10 +53,12 @@ pub const DEFAULT_PORT: u16 = 4173;
 pub async fn run(config: PreviewConfig) -> Result<(), String> {
     let root =
         std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
+    // Read even when `--dir` names what to serve: the page calls the same API
+    // it does in development, through `dev.server.proxy` (D150).
+    let project = crate::settings::Settings::load(config.config.as_deref())?;
     let dir = match &config.dir {
         Some(dir) => root.join(dir),
         None => {
-            let project = crate::settings::Settings::load(config.config.as_deref())?;
             if !project.has_project {
                 return Err(format!(
                     "there is no {} here, so nothing says what was built.\n\n\
@@ -99,6 +101,7 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
         serve: Some(dir.clone()),
         reload,
         error,
+        proxy: crate::proxy::Rule::from_config(&project.start.proxy),
     });
 
     let paint = crate::style::Palette::stderr();

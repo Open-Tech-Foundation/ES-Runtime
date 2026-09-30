@@ -150,6 +150,9 @@ pub struct DevServer {
     pub reload: broadcast::Sender<Update>,
     /// The current build failure, replayed to pages that connect after it.
     pub error: tokio::sync::watch::Sender<Option<String>>,
+    /// Path prefixes forwarded to another server (`dev.server.proxy`, D150),
+    /// longest first. Asked after esdev's own paths and before the files.
+    pub proxy: Vec<crate::proxy::Rule>,
 }
 
 /// Accepts connections until the process ends.
@@ -225,6 +228,12 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
                 return;
             }
         }
+    }
+    // Matched on the path as the page wrote it, which is what the prefix in
+    // esdev.json was written against, and forwarded with its query.
+    if let Some(rule) = crate::proxy::matching(&server.proxy, target_path) {
+        crate::proxy::forward(stream, &head, rule).await;
+        return;
     }
     // Errors below honour HEAD like everything else: the same headers a GET
     // would name, no body bytes.

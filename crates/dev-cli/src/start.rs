@@ -291,6 +291,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             serve: serve.clone(),
             reload: reload.clone(),
             error: error.clone(),
+            proxy: crate::proxy::Rule::from_config(&project.start.proxy),
         }),
     ));
 

@@ -141,6 +141,10 @@ pub struct Start {
     /// spelling of an output: it may not overlap any target's `out` or
     /// `outdir`, and it stays inside the project.
     pub devdir: Option<String>,
+    /// `dev.server.proxy`: path prefixes forwarded to another server, as
+    /// `(prefix, target URL)`, longest prefix first (D150). Only where esdev
+    /// serves the page itself.
+    pub proxy: Vec<(String, String)>,
 }
 
 impl Start {
@@ -390,7 +394,7 @@ const RESOLVE_KEYS: &[&str] = &["alias"];
 const DEV_KEYS: &[&str] = &["run", "watch", "serve", "app", "server", "outDir"];
 const DEV_WATCH_KEYS: &[&str] = &["targets", "paths"];
 const DEV_APP_KEYS: &[&str] = &["port"];
-const DEV_SERVER_KEYS: &[&str] = &["port"];
+const DEV_SERVER_KEYS: &[&str] = &["port", "proxy"];
 
 /// The keys `test` may carry.
 const TEST_KEYS: &[&str] = &[
@@ -578,11 +582,6 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         }
         if let Some(server) = dev.get("server") {
             let server = object(server, name, "`dev.server`")?;
-            if server.contains_key("proxy") {
-                return Err(format!(
-                    "{name}: `dev.server.proxy` is not available yet. Full-stack apps own the HTTP endpoint, and esdev does not proxy requests or HMR traffic."
-                ));
-            }
             known_keys(server, name, "`dev.server`", DEV_SERVER_KEYS)?;
         }
     }
@@ -1333,6 +1332,7 @@ fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, St
         listen,
         port,
         devdir,
+        proxy: Vec::new(),
     })
 }
 
@@ -1367,7 +1367,11 @@ fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Resul
     if let Some(out_dir) = value.get("outDir") {
         normalized.insert("devdir".to_string(), out_dir.clone());
     }
-    let start = read_start(&Value::Object(normalized), targets, file)?;
+    let mut start = read_start(&Value::Object(normalized), targets, file)?;
+    if let Some(server) = value.get("server") {
+        let server = object(server, file, "`dev.server`")?;
+        start.proxy = read_proxy(server.get("proxy"), file)?;
+    }
     if start.run.is_some() && value.get("server").is_some() {
         return Err(format!(
             "{file}: `dev.server` configures esdev's static-site listener and cannot be combined with `dev.run`; the app owns the endpoint in full-stack mode."
@@ -1379,6 +1383,43 @@ fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Resul
         ));
     }
     Ok(start)
+}
+
+/// `dev.server.proxy`: `{ "/api": "http://localhost:8080" }` (D150).
+///
+/// A prefix is a path, so it starts with `/`; a target is an `http` or `https`
+/// origin with an optional path, which is prepended to what is forwarded.
+fn read_proxy(value: Option<&Value>, file: &str) -> Result<Vec<(String, String)>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let map = object(value, file, "`dev.server.proxy`")?;
+    let mut rules = Vec::with_capacity(map.len());
+    for (prefix, target) in map {
+        let at = format!("`dev.server.proxy` \"{prefix}\"");
+        if !prefix.starts_with('/') {
+            return Err(format!(
+                "{file}: {at} is not a path. A prefix is the start of a request path, \
+                 such as \"/api\"."
+            ));
+        }
+        let target = string(target, file, &at)?;
+        let url = url::Url::parse(target)
+            .map_err(|e| format!("{file}: {at} is \"{target}\", which is not a URL: {e}"))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(format!(
+                "{file}: {at} is \"{target}\". A target is an http or https origin, \
+                 with a path if requests go under one: \"http://localhost:8080\"."
+            ));
+        }
+        rules.push((prefix.clone(), target.to_string()));
+    }
+    rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    Ok(rules)
 }
 
 /// Additional source paths for the dev watcher. They are deliberately plain
@@ -2464,16 +2505,54 @@ mod tests {
         .expect("static dev server config");
         assert_eq!(static_site.start.port, Some(5174));
 
+        // Longest prefix first, so `/api/admin` is not taken by `/api`.
         let proxy = read(
             r#"{
                 "build": { "targets": { "web": { "entry": "index.html" } } },
-                "dev": { "server": { "proxy": { "/api": "http://localhost:8080" } } }
+                "dev": { "server": { "proxy": {
+                    "/api": "http://localhost:8080",
+                    "/api/admin": "https://admin.example.com/v1"
+                } } }
             }"#,
         )
-        .expect_err("proxy behavior is not implemented");
+        .expect("a proxy");
+        assert_eq!(
+            proxy.start.proxy,
+            [
+                (
+                    "/api/admin".to_string(),
+                    "https://admin.example.com/v1".to_string()
+                ),
+                ("/api".to_string(), "http://localhost:8080".to_string()),
+            ]
+        );
+    }
+
+    /// A proxy forwards a path to an http or https origin, and only where esdev
+    /// serves the page: with `dev.run` the application owns the endpoint.
+    #[test]
+    fn a_proxy_names_a_path_and_an_http_origin() {
+        let with = |proxy: &str| {
+            read(&format!(
+                r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }},
+                     "dev": {{ "server": {{ "proxy": {proxy} }} }} }}"#
+            ))
+        };
+        let not_a_path = with(r#"{ "api": "http://localhost:8080" }"#).expect_err("a path");
+        assert!(not_a_path.contains("is not a path"), "{not_a_path}");
+        let not_http = with(r#"{ "/api": "ftp://localhost" }"#).expect_err("http");
+        assert!(not_http.contains("http or https origin"), "{not_http}");
+        let not_a_url = with(r#"{ "/api": "localhost:8080" }"#).expect_err("a URL");
+        assert!(not_a_url.contains("http or https origin"), "{not_a_url}");
+
+        let full_stack = read(
+            r#"{ "build": { "targets": { "server": { "entry": "src/server.ts", "out": "dist/server.js" } } },
+                 "dev": { "run": "server", "server": { "proxy": { "/api": "http://localhost:8080" } } } }"#,
+        )
+        .expect_err("the app owns the endpoint");
         assert!(
-            proxy.contains("`dev.server.proxy` is not available yet"),
-            "{proxy}"
+            full_stack.contains("the app owns the endpoint"),
+            "{full_stack}"
         );
     }
 

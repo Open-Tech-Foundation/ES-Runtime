@@ -1568,8 +1568,10 @@ dependencies = [
  "sha1 0.11.0",
  "string_wizard",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]

@@ -70,6 +70,7 @@ mod module_url;
 mod plugins;
 mod preview;
 mod prompt;
+mod proxy;
 mod react_compiler;
 mod related;
 mod report;

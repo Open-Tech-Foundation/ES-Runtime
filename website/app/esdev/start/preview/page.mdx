@@ -25,6 +25,10 @@ when a range cannot be satisfied).
 A server bundle has no static output to preview. Run it under `esrun`, as it
 will run in production.
 
+The project's [`dev.server.proxy`](/esdev/start#forward-api-requests) applies
+here too, so a page that calls `/api` reaches the same API server it does in
+the dev loop.
+
 ## Any static folder, no packages
 
 `--dir` serves whatever folder you point it at — no project, no `esdev.json`,

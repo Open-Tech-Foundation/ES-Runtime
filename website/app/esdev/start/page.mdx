@@ -132,9 +132,28 @@ These `dev` settings control what the loop rebuilds and serves:
   listener for a frontend-only project.
 
 In full-stack mode, the app owns the browser endpoint; esdev's listener is an
-internal HMR channel. Request proxying is not available yet. Any future proxy
-setting will live under `dev.server.proxy` once its request and HMR behavior is
-defined.
+internal HMR channel.
+
+## Forward API requests
+
+A frontend that calls a separate API server with relative URLs
+(`fetch("/api/users")`) names it in `dev.server.proxy`:
+
+```json
+"dev": { "server": { "proxy": { "/api": "http://localhost:8080" } } }
+```
+
+A request whose path starts with a prefix goes to its target, the longest prefix
+first; everything else is served from the build. The target's path is prepended,
+so `"http://localhost:8080/v1"` receives `/v1/api/users`. Bodies, streamed
+responses, server-sent events and WebSocket upgrades pass through as they are.
+The target sees its own `Host`, with the page's in `X-Forwarded-Host`. An
+`https` target is verified like `fetch` verifies one, and a target that is not
+running answers `502` with its address.
+
+It applies where esdev serves the page: `esdev start` without `dev.run`, and
+[`esdev preview`](/esdev/start/preview). With `dev.run`, the application owns
+the endpoint and routes its own requests, so the key is refused there.
 
 ## What is watched
 

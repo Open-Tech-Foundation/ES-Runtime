@@ -37,6 +37,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`dev.server.proxy` forwards API requests** (DECISIONS D150).
+  `{ "/api": "http://localhost:8080" }` sends every request under `/api` from
+  the page `esdev start` or `esdev preview` serves to that server, bodies,
+  streams and WebSocket upgrades included, so a frontend calls its API with
+  relative URLs in development as it does in production. `http` and `https`
+  targets; not with `dev.run`, where the application owns the endpoint.
 - **A plugin can hand esdev CSS** (DECISIONS D149). A module whose type is
   `css` is bundled, scoped and linked whatever its extension, from the code a
   plugin produced: a Sass plugin returns `{ code, type: "css" }` for

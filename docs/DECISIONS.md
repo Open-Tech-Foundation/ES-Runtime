@@ -3105,3 +3105,21 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **A separate `css` hook.** A stylesheet is a module with a type, and `load`/`transform` already say what a module is.
 
 **Consequences:** a stylesheet language is a plugin that returns CSS. **Not solved here:** source maps for CSS output, and hot-swapping a linked stylesheet whose extension is not `.css` (it reloads the page instead).
+
+### D150 — The dev server forwards a path prefix to an API server · *Proposed (2026-09-30)* · *amends the grouped-config amendment's deferral*
+
+**Context:** a frontend developed against a separate API server (a Go or Python service, another esrun program, a staging host) calls it with relative URLs — `fetch("/api/users")` — so the same build works behind the deployment's reverse proxy. In development the page is served by `esdev start` or `esdev preview`, which answered `/api/users` with a 404. The only way round it was a cross-origin URL and CORS configuration that exists for development alone. `dev.server.proxy` was refused as "not available yet", because in a full-stack project the application owns the endpoint and a key alone would promise routing the runner did not do.
+
+**Decision (maintainer, 2026-09-30):**
+
+- **`dev.server.proxy` maps a path prefix to a URL**: `{ "/api": "http://localhost:8080" }`. A request whose path starts with the prefix is forwarded, the longest prefix first. The target's own path is prepended (`http://localhost:8080/v1` sends `/api/users` to `/v1/api/users`), which is what Vite's string form does.
+- **Only where esdev serves the page**: `esdev start` for a project with no `dev.run` target, and `esdev preview`. With a `dev.run` target the application owns the page's origin and esdev's listener carries only the update channel, so the key is refused there with that reason; the application routes its own requests.
+- **A tunnel, not a client.** The request head is rewritten and the rest of the connection is piped both ways, so a body, a streamed response, server-sent events and a WebSocket upgrade all pass through without esdev parsing them. `Host` becomes the target's, as a reverse proxy sends it, with the page's in `X-Forwarded-Host` and `X-Forwarded-Proto`/`X-Forwarded-For` beside it. A forwarded request asks for `Connection: close`, because the next request on a kept-alive connection may be for a file esdev serves itself; an upgrade keeps its `Connection: Upgrade`.
+- **`http` and `https` targets.** An `https` target is verified against the bundled Mozilla roots, as `fetch` is. An unreachable target is a `502` naming it, and a line in the terminal.
+- **esdev's own paths are never forwarded**: the update channel (`/@esdev/hmr`) is matched first.
+
+**Rejected:**
+- **Vite's object form now** (`changeOrigin`, `rewrite`, `ws`, `secure`). `rewrite` is a function a JSON file cannot hold; `ws` is a switch for a limitation a tunnel does not have; `Host` is rewritten always, as nginx's `proxy_pass` does, because a virtual-hosted or TLS target needs its own name; `secure: false` (accepting any certificate) waits for a project that needs it. The value is a string today so that an object can be added beside it.
+- **Proxying in full-stack mode**, through esdev's listener. The page is not on that origin.
+
+**Consequences:** a frontend calls its API with relative URLs in development as in production. **Not solved here:** path rewriting, a target with a self-signed certificate, and HTTP/2 to the target.
