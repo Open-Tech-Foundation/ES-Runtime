@@ -57,8 +57,9 @@ and the URL over the `PG*` environment variables, which are read only with the
 | `temporal` | `boolean` | Decode dates and times to Temporal values (default) or to `Date` and strings. |
 | `applicationName` | `string` | Reported to the server as `application_name`. |
 
-The built-in `postgres` driver does not yet run scripts (`executeScript`),
-cancel a running statement, or `LISTEN`. `@opentf/esrun-postgres` still does.
+A `postgres` connection also has `executeScript(sql)` (several statements, no
+parameters, a `{ command, changes }` per statement), `cancel()`, `status`,
+`parameters` and `onNotice`, and it subscribes with `LISTEN`/`NOTIFY`.
 
 What comes back is **that driver's** connection, so a driver's own surface is on
 the object `connect` returned and needs no second entry point: Redis's commands,

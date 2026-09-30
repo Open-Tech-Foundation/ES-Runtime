@@ -11,7 +11,7 @@
 //! `runtime:net`, and it holds no authority `runtime:net` would not.
 
 mod scram;
-mod wire;
+pub(crate) mod wire;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -101,6 +101,32 @@ pub(crate) struct Started {
     /// Statements dropped from the cache, whose row classes can go too.
     pub evicted: Vec<u64>,
     pub first: Batch,
+}
+
+/// Something a subscribed connection's read loop saw.
+pub(crate) enum Event {
+    /// A `NOTIFY` on a channel this connection listens to.
+    Notification {
+        process_id: i32,
+        channel: String,
+        payload: String,
+    },
+    /// A command written under the loop (`LISTEN`, `UNLISTEN`) finished.
+    Ready,
+    /// A command written under the loop failed; its `Ready` follows.
+    Failed(Vec<(u8, String)>),
+}
+
+/// Where a connection's server is and how it was reached — what a cancel
+/// needs to reach the same server the same way — and who it is there.
+#[derive(Clone)]
+pub(crate) struct CancelTarget {
+    pub host: String,
+    pub port: u16,
+    pub sslmode: SslMode,
+    pub ca: Vec<u8>,
+    pub process_id: i32,
+    pub secret_key: i32,
 }
 
 /// What the server said on the side while an operation ran.
@@ -335,6 +361,90 @@ impl Connection {
                 _ => self.observe(message)?,
             }
         }
+    }
+
+    /// The socket this connection speaks on, once the handshake is done.
+    pub(crate) fn socket(&self) -> u64 {
+        self.socket
+    }
+
+    /// Runs `sql` — which may hold several statements — through the simple
+    /// query protocol, returning each statement's command tag.
+    ///
+    /// A script is where DDL and `DISCARD` live, and both can invalidate plans
+    /// the cache holds, so the cache is emptied first: forgetting a statement
+    /// costs a re-parse, keeping a stale one an error the caller did not cause.
+    /// The ids of the forgotten statements are returned with the tags.
+    pub(crate) async fn script(&mut self, sql: &str) -> Result<(Vec<String>, Vec<u64>), Failure> {
+        self.check()?;
+        let evicted: Vec<u64> = self.statements.drain().map(|(_, p)| p.id).collect();
+        let mut out = Out::default();
+        wire::simple_query(&mut out, sql);
+        self.write(out).await?;
+        let mut tags = Vec::new();
+        let mut failure = None;
+        loop {
+            let message = self.message().await?;
+            match message.tag {
+                // A script reports what it did, not what it returned.
+                back::DATA_ROW | back::ROW_DESCRIPTION | back::EMPTY_QUERY => {}
+                back::COMMAND_COMPLETE => {
+                    let parsed = Fields::new(self.inbox.slice(message.body)).cstr();
+                    tags.push(parsed.map_err(|e| self.die(e))?);
+                }
+                back::ERROR_RESPONSE => failure = Some(self.server_fields(message)?),
+                back::READY_FOR_QUERY => {
+                    self.ready(message)?;
+                    break;
+                }
+                _ => self.observe(message)?,
+            }
+        }
+        match failure {
+            Some(fields) => Err(Failure::Server(fields)),
+            None => Ok((tags, evicted)),
+        }
+    }
+
+    /// The read loop of a subscribed connection: waits for at least one
+    /// message, then takes every one already buffered.
+    ///
+    /// Commands reach the server underneath it (`LISTEN`, written straight to
+    /// the socket), and their completions come back here as [`Event::Ready`]
+    /// or [`Event::Failed`], in the order they were sent.
+    pub(crate) async fn listen_next(&mut self) -> Result<Vec<Event>, Failure> {
+        let mut events = Vec::new();
+        let first = self.message().await?;
+        self.event(first, &mut events)?;
+        loop {
+            let next = self.inbox.next();
+            match next.map_err(|e| self.die(e))? {
+                Some(message) => self.event(message, &mut events)?,
+                None => return Ok(events),
+            }
+        }
+    }
+
+    fn event(&mut self, message: Message, events: &mut Vec<Event>) -> Result<(), Failure> {
+        match message.tag {
+            back::NOTIFICATION => {
+                let parsed = read_notification(self.inbox.slice(message.body));
+                let (process_id, channel, payload) = parsed.map_err(|e| self.die(e))?;
+                events.push(Event::Notification {
+                    process_id,
+                    channel,
+                    payload,
+                });
+            }
+            back::READY_FOR_QUERY => {
+                self.ready(message)?;
+                events.push(Event::Ready);
+            }
+            back::ERROR_RESPONSE => events.push(Event::Failed(self.server_fields(message)?)),
+            back::COMMAND_COMPLETE => {}
+            _ => self.observe(message)?,
+        }
+        Ok(())
     }
 
     /// Takes what the server said on the side since the last call.
@@ -641,9 +751,8 @@ impl Connection {
                 let fields = self.server_fields(message)?;
                 self.aside.notices.push(fields);
             }
-            // Notifications arrive only on a subscribed connection, which is
-            // the next phase (D147); anything else is not ours to act on.
-            back::NOTIFICATION => {}
+            // A notification outside the read loop has nobody to go to: only a
+            // subscribed connection delivers them, and it reads them itself.
             _ => {}
         }
         Ok(())
@@ -707,6 +816,69 @@ impl Connection {
         self.streaming = false;
         Failure::Lost(message)
     }
+}
+
+/// Asks the server to cancel whatever `target`'s backend is running, on a
+/// connection of its own — the one running the query is busy reading its
+/// answer — negotiated the same way, since a cancel that skipped TLS against a
+/// server requiring it would simply be refused.
+///
+/// The server replies to nothing and closes, so this returns once the request
+/// is sent; the outcome shows up at the query (`57014`), or not at all if it
+/// had already finished.
+pub(crate) async fn cancel(net: Arc<dyn NetProvider>, target: CancelTarget) -> Result<(), Failure> {
+    let (mut socket, _) = net
+        .connect(
+            target.host.clone(),
+            target.port,
+            ConnectOptions {
+                secure: false,
+                ca: Vec::new(),
+                sni: None,
+                alpn: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|e| Failure::Lost(provider_message(&e)))?;
+    let result = async {
+        if target.sslmode != SslMode::Disable {
+            let mut out = Out::default();
+            wire::ssl_request(&mut out);
+            net.write(socket, out.into_bytes())
+                .await
+                .map_err(|e| Failure::Lost(provider_message(&e)))?;
+            let answer = match net.read(socket).await {
+                Ok(Some(chunk)) if !chunk.is_empty() => chunk[0],
+                Ok(_) => return Err(Failure::Lost("the server closed the connection".into())),
+                Err(e) => return Err(Failure::Lost(provider_message(&e))),
+            };
+            if answer == b'S' {
+                socket = net
+                    .start_tls(socket, target.host.clone(), Vec::new(), target.ca.clone())
+                    .await
+                    .map_err(|e| Failure::Lost(provider_message(&e)))?
+                    .0;
+            } else if target.sslmode == SslMode::Require {
+                return Err(Failure::Unsupported(
+                    "the server refused TLS and sslmode is 'require'".into(),
+                ));
+            }
+        }
+        let mut out = Out::default();
+        wire::cancel_request(&mut out, target.process_id, target.secret_key);
+        net.write(socket, out.into_bytes())
+            .await
+            .map_err(|e| Failure::Lost(provider_message(&e)))
+    }
+    .await;
+    let _ = net.close(socket).await;
+    result
+}
+
+/// A `NotificationResponse`: the notifying backend, the channel, the payload.
+fn read_notification(body: &[u8]) -> Result<(i32, String, String), String> {
+    let mut fields = Fields::new(body);
+    Ok((fields.i32()?, fields.cstr()?, fields.cstr()?))
 }
 
 /// An `Authentication` message: its kind, and whatever follows it.

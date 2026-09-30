@@ -393,9 +393,8 @@ const POSTGRES_DIALECT = new Dialect({
     savepoints: true,
     // The wire protocol binds by position only.
     namedParameters: false,
-    // LISTEN/NOTIFY is the next phase of D147; until it lands the driver says
-    // so rather than accepting a subscribe it cannot deliver.
-    subscriptions: false,
+    // LISTEN/NOTIFY: the portable subscription surface is over it.
+    subscriptions: true,
   },
 });
 
@@ -549,6 +548,13 @@ class PgConnection extends BaseConnection {
     };
     this._target = null;
     this._processId = 0;
+    /// The delivery loop, once `subscribe()` has given the connection to it.
+    this._pump = null;
+    /// Commands written under the loop, awaiting their ReadyForQuery.
+    this._pumpCommands = [];
+    this._channels = new Set();
+    /// Handlers by channel, called before `onMessage`.
+    this._handlers = new Map();
   }
 
   /// Whether the connection can run another exchange.
@@ -671,6 +677,12 @@ class PgConnection extends BaseConnection {
     if (this._id === null) {
       throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
     }
+    if (this._pump !== null) {
+      throw new DbError(
+        "this connection is subscribed and runs no queries — use another connection, or a pool",
+        { code: DbErrorCode.ConnectionBusy },
+      );
+    }
     if (this._streaming) {
       throw new DbError(
         "this connection is streaming a result set — finish it (await rows.toArray(), or let the for-await end), or run the second query on another connection",
@@ -787,6 +799,151 @@ class PgConnection extends BaseConnection {
     }
   }
 
+  /// A script — several statements in one string — through the simple query
+  /// protocol, which is the only one that takes more than one. No parameters:
+  /// it has nowhere to put them, so use it for schema and fixed statements,
+  /// not for data from outside. PostgreSQL runs a multi-statement string in one
+  /// implicit transaction unless the script manages its own. Rows are
+  /// discarded: this reports what each statement did.
+  async executeScript(sql, options = {}) {
+    this._open();
+    return this._withSignal(options.signal, () => this._runScript(sql));
+  }
+
+  async _runScript(sql) {
+    const waiting = this._acquire();
+    if (waiting !== null) await waiting;
+    try {
+      // The engine empties its statement cache for a script (DDL and DISCARD
+      // live there), and the row classes keyed on those statements go with it.
+      this._shapes.clear();
+      const result = await ops.pg_script(this._id, sql);
+      this._aside(result);
+      if (result.error !== undefined) throw pgError(result.error);
+      return result.tags.map((tag) => ({
+        command: tag.split(" ")[0] ?? tag,
+        changes: pgAffectedRows(tag),
+      }));
+    } finally {
+      this._unlock();
+    }
+  }
+
+  /// Asks the server to cancel whatever this connection is running, on a
+  /// connection of its own. Returns once the request is sent: the outcome
+  /// shows up at the query (a `57014`), or not at all if it had finished.
+  async cancel() {
+    if (this._id === null || this._processId === 0) return;
+    const result = await ops.pg_cancel(this._id);
+    if (result?.error !== undefined) throw pgError(result.error);
+  }
+
+  async _cancel() {
+    await this.cancel();
+  }
+
+  // -- subscriptions, which here are LISTEN/NOTIFY ---------------------------
+  //
+  // A handler receives `(payload, { channel, processId })`; `processId` is the
+  // backend that sent it, which is how a connection recognises its own
+  // notifications, since PostgreSQL delivers them to the sender too.
+
+  get subscriptions() {
+    return [...this._channels];
+  }
+
+  get subscribed() {
+    return this._pump !== null;
+  }
+
+  /// The first subscribe gives the connection to a read loop, since a
+  /// connection only sees a notification while reading; from then on it runs
+  /// no queries. `LISTEN` is written underneath the loop and confirmed by its
+  /// ReadyForQuery, so a misspelled channel fails here and a `NOTIFY` sent
+  /// right after cannot race the subscription.
+  async _subscribe(channels, handler) {
+    this._startPump();
+    for (const channel of channels) {
+      await this._pumpCommand(`LISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
+      this._channels.add(channel);
+      if (handler !== undefined) {
+        let handlers = this._handlers.get(channel);
+        if (handlers === undefined) this._handlers.set(channel, (handlers = new Set()));
+        handlers.add(handler);
+      }
+    }
+  }
+
+  /// The read loop stays, and so do the other channels.
+  async _unsubscribe(channels) {
+    if (this._pump === null) return;
+    const names = channels ?? [...this._channels];
+    for (const channel of names) {
+      await this._pumpCommand(`UNLISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
+      this._channels.delete(channel);
+      this._handlers.delete(channel);
+    }
+  }
+
+  _pumpCommand(sql) {
+    return new Promise((resolve, reject) => {
+      this._pumpCommands.push({ resolve, reject });
+      ops.pg_send(this._id, sql).then((result) => {
+        if (result?.error !== undefined) reject(pgError(result.error));
+      }, reject);
+    });
+  }
+
+  /// One notification: the channel's own handlers, then the catch-all. A
+  /// handler that throws goes to `onSubscribeError` and the loop continues —
+  /// one bad handler must not stop every other subscription.
+  _deliver(channel, payload, processId) {
+    const context = { channel, processId };
+    for (const handler of this._handlers.get(channel) ?? []) {
+      try {
+        handler(payload, context);
+      } catch (e) {
+        this.onSubscribeError?.(e);
+      }
+    }
+    if (this.onMessage !== undefined) {
+      try {
+        this.onMessage(payload, context);
+      } catch (e) {
+        this.onSubscribeError?.(e);
+      }
+    }
+  }
+
+  _settle(error) {
+    const pending = this._pumpCommands.shift();
+    if (pending === undefined) return;
+    if (error === undefined) pending.resolve();
+    else pending.reject(error);
+  }
+
+  _startPump() {
+    if (this._pump !== null) return;
+    this._pump = (async () => {
+      for (;;) {
+        const result = await ops.pg_listen_next(this._id);
+        this._aside(result);
+        if (result.error !== undefined) throw pgError(result.error);
+        for (const event of result.events) {
+          if (event[0] === "n") this._deliver(event[2], event[3], event[1]);
+          else if (event[0] === "r") this._settle();
+          else this._settle(pgError({ kind: "server", fields: event[1] }));
+        }
+      }
+    })().catch((e) => {
+      // The loop ends only when the connection does. Everyone still waiting on
+      // a command hears about it, and the failure goes to a handler rather than
+      // becoming an unhandled rejection nobody asked for.
+      for (const pending of this._pumpCommands.splice(0)) pending.reject(e);
+      this.onSubscribeError?.(e);
+    });
+  }
+
   async _close() {
     const id = this._id;
     if (id === null) return;
@@ -808,8 +965,13 @@ function pgOneBatch(batch) {
   };
 }
 
-/// A pool of PostgreSQL connections, presenting the surface one connection does.
-class PgPooled extends PooledConnection {}
+/// A pool of PostgreSQL connections, presenting the surface one connection
+/// does, plus PostgreSQL's own `executeScript` on a borrowed connection.
+class PgPooled extends PooledConnection {
+  executeScript(sql, options = {}) {
+    return this.withConnection((connection) => connection.executeScript(sql, options));
+  }
+}
 
 /// The built-in PostgreSQL driver: `postgres:` and `postgresql:` URLs, both in
 /// the wild and neither more correct. Explicit options win over the URL, and

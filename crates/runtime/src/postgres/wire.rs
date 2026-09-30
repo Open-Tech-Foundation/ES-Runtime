@@ -13,6 +13,7 @@ pub(super) mod front {
     pub const EXECUTE: u8 = b'E';
     pub const PARSE: u8 = b'P';
     pub const PASSWORD: u8 = b'p';
+    pub const QUERY: u8 = b'Q';
     pub const SYNC: u8 = b'S';
     pub const TERMINATE: u8 = b'X';
 }
@@ -126,6 +127,13 @@ pub(super) fn ssl_request(out: &mut Out) {
     out.end(at);
 }
 
+/// `CancelRequest`, sent on a connection of its own.
+pub(super) fn cancel_request(out: &mut Out, process_id: i32, secret_key: i32) {
+    let at = out.untagged();
+    out.i32(80_877_102).i32(process_id).i32(secret_key);
+    out.end(at);
+}
+
 /// A `PasswordMessage` carrying `body` as-is (cleartext, or a SASL response).
 pub(super) fn password(out: &mut Out, body: &[u8]) {
     let at = out.begin(front::PASSWORD);
@@ -193,6 +201,21 @@ pub(super) fn execute(out: &mut Out) {
 pub(super) fn sync(out: &mut Out) {
     let at = out.begin(front::SYNC);
     out.end(at);
+}
+
+/// The simple query protocol: one string, which may hold several statements,
+/// run as written and with no parameters.
+pub(super) fn simple_query(out: &mut Out, sql: &str) {
+    let at = out.begin(front::QUERY);
+    out.cstr(sql);
+    out.end(at);
+}
+
+/// A simple query as bytes, for writing under a read loop (`LISTEN`).
+pub(crate) fn simple_query_bytes(sql: &str) -> Vec<u8> {
+    let mut out = Out::default();
+    simple_query(&mut out, sql);
+    out.into_bytes()
 }
 
 pub(super) fn terminate(out: &mut Out) {

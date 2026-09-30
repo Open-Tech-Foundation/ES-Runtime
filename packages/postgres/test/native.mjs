@@ -92,6 +92,51 @@ const changed = await db.transaction(async (tx) => {
 is([changed.changes, db.status], [2, "I"], "a transaction commits and the connection is idle");
 await db.close();
 
+// Scripts: several statements, one string, each reporting its command.
+const scripted = await connect(url, { driver: postgres });
+const done = await scripted.executeScript(
+  "CREATE TEMP TABLE native_s (x int); INSERT INTO native_s VALUES (1), (2); DELETE FROM native_s",
+);
+is(
+  done.map((d) => [d.command, d.changes]),
+  [
+    ["CREATE", 0],
+    ["INSERT", 2],
+    ["DELETE", 2],
+  ],
+  "a script reports each statement",
+);
+
+// Cancelling from another task lands as the server's 57014 on the query.
+const sleeping = scripted.query("SELECT pg_sleep(5)").then(
+  () => "finished",
+  (e) => e.server?.code,
+);
+await new Promise((resolve) => setTimeout(resolve, 200));
+await scripted.cancel();
+is(await sleeping, "57014", "cancel() stops a running statement");
+is((await (await scripted.query("SELECT 6 AS n")).first()).n, 6, "and the connection survives it");
+await scripted.close();
+
+// LISTEN/NOTIFY: the subscribed connection delivers, and runs no queries.
+const listener = await connect(url, { driver: postgres });
+const notifier = await connect(url, { driver: postgres });
+const heard = new Promise((resolve) =>
+  listener.subscribe("native_channel", (payload, { channel }) => resolve([channel, payload])),
+);
+await new Promise((resolve) => setTimeout(resolve, 50));
+await notifier.execute("SELECT pg_notify('native_channel', 'hello')");
+is(await heard, ["native_channel", "hello"], "a NOTIFY reaches the subscriber");
+is(listener.subscriptions, ["native_channel"], "the subscription is listed");
+try {
+  await listener.query("SELECT 1");
+  ok(false, "a subscribed connection refuses queries");
+} catch (e) {
+  is(e.code, DbErrorCode.ConnectionBusy, "a subscribed connection refuses queries");
+}
+await listener.close();
+await notifier.close();
+
 // `postgres://` names nothing, so everything comes from the PG* variables
 // run.sh exports — for one connection and for each a pool opens.
 const bare = await connect("postgres://", { driver: postgres });

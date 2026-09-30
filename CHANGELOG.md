@@ -18,8 +18,8 @@ namespace) is unstable and may change between minor releases until the API freez
   Rust (D147) — the handshake, TLS, SCRAM-SHA-256, the statement cache and the
   extended query protocol — through the same network permission and host
   allowlist `runtime:net` uses. On the Postgres QPS benchmark it answers 22%
-  more queries than `@opentf/esrun-postgres` with less memory. Scripts,
-  cancellation and `LISTEN` are not in it yet.
+  more queries than `@opentf/esrun-postgres` with less memory. It runs
+  scripts, cancels statements, and subscribes with `LISTEN`/`NOTIFY`.
 
 ### Added
 
