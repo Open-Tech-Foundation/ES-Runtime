@@ -3046,3 +3046,25 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **12 MiB, and `--optimize-for-size`** (1 MiB semi-spaces). Worse still on both counts.
 - **Deno's settings.** Deno sets no memory flags. Its `--external-memory-max-reasonable-size=0` only disables a sanity check on external memory above 32 GiB, and its heap sizing is the same system-memory call esrun already makes.
 - **A process-wide `--max-semi-space-size` flag.** The cap is an isolate constraint, set where each isolate is created, and V8 flags are global state that every embedder of the engine crate would inherit.
+
+### D147 — Wire protocols of the built-in database drivers move to Rust · *Proposed (2026-09-30)* · *amends D56*
+
+**Context:** D56 put every wire protocol in JavaScript over `runtime:net`, with the rule that a socket backend must need no new Rust. `@opentf/esrun-postgres` proved the rule could be kept, and profiling showed what keeping it costs. Under a 100-connection pool a `SELECT 1` allocated about 21 KB of JavaScript garbage, and 15 KB still after the driver's own hot path was tightened. That garbage came from the protocol state machine, the message codec, and the WHATWG streams under every socket read and write. It is what grew V8's young generation (D146), and it left esrun at 105 MB on the Postgres benchmark against Bun's 60 MB. Bun's driver is native, and per query its JavaScript sees one promise and the row objects.
+
+**Decision (maintainer, 2026-09-30):**
+
+- **The built-in drivers speak their protocols in Rust.** Postgres first, MySQL after it. Rust owns the connection: TLS negotiation, authentication, the statement cache, the extended and simple query protocols, framing, gathering `DataRow`s into a batch, errors, notices, notifications and cancellation. JavaScript owns what is about values rather than bytes on a wire: parsing the connection string and the `PG*` environment, encoding parameters, the type decoders, and the pool.
+- **It is a driver like `sqlite`.** `import { postgres } from "runtime:db"` and `connect(url, { driver: postgres })`. It is defined with `defineDriver` and has no privileged scheme. `@opentf/esrun-postgres` re-exports it, so code that imports the package keeps working, and the package's JavaScript implementation is retired.
+- **The shape of the ops is the embedded backend's.** Connect, query, fetch, execute, close, with a cursor for a result larger than one batch, and rows crossing as one buffer in the `DataRow` layout D56 fixed. A query is **one** async op on the hot path, so D56's argument against a provider-side pool still holds and the pool stays in JavaScript.
+- **No new authority.** The engine reaches the server through the `NetProvider` the agent already has: its host allowlist (D38), its TLS roots and its socket ownership (D50) apply unchanged, and connecting needs `Net` exactly as `runtime:net`'s `connect` does.
+- **The driver kit stays public.** `defineDriver`, `BaseConnection`, `FrameReader`, `ByteWriter`, row shapes and the conformance suite remain for third-party drivers. **What changes in D56** is the rule "adding a socket backend must require zero new Rust": it now applies to third parties, not to the drivers the runtime ships.
+
+**Rejected:**
+- **A Rust op for one query's exchange, under the JavaScript driver** (write the request, then read and frame until `ReadyForQuery`). It removes the stream cost but leaves the protocol split across the op boundary, where every rare message (a notice, a parameter change, an error mid-result) has to cross back to JavaScript to be understood.
+- **`tokio-postgres`.** It decodes rows into its own values, and the whole point of D56's row layout is that a `DataRow` is copied into a batch and never transcoded. It also brings its own TLS and socket code, so the allowlist and socket ownership would have to be enforced a second time.
+
+**Phases**, each shipped on its own and each passing the driver's existing live test suite:
+1. Connect (TLS, SCRAM-SHA-256, cleartext password, timeouts), query, fetch, execute, transactions, the statement cache, and the type decoders moved into `runtime:db`.
+2. Scripts (the simple query protocol), `executeMany`, cancellation, `LISTEN`/`NOTIFY`.
+3. `@opentf/esrun-postgres` re-exports the built-in; its JavaScript implementation is removed.
+4. MySQL, the same way.
