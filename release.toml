@@ -119,6 +119,15 @@ artifacts = ""
 manifest = "packages/types/package.json"
 
 [[package]]
+name = "@opentf/esdev-plugin-react"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = ""
+artifacts = ""
+manifest = "packages/esdev-plugin-react/package.json"
+
+[[package]]
 name = "es-runtime-cli"
 adapter = "crates.io"
 mode = "build-only"

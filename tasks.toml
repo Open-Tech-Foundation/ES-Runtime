@@ -11,7 +11,7 @@
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
-members = ["packages/postgres", "packages/mysql", "packages/redis", "packages/smtp", "packages/types", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
+members = ["packages/postgres", "packages/mysql", "packages/redis", "packages/smtp", "packages/types", "packages/esdev-plugin-react", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
 
 # --- the runtime (Rust) ------------------------------------------------------
 
@@ -215,7 +215,11 @@ run = "deno run --allow-read wpt/dom-matrix/parity-doc.js --check"
 deps = ["test:dom-unit", "test:dom-wpt", "test:dom-matrix", "test:dom-surface"]
 
 [tasks."test:unit"]
-deps = ["test:protocol", "test:serialization", "test:dom-unit"]
+deps = ["test:protocol", "test:serialization", "test:dom-unit", "test:plugin-react"]
+
+[tasks."test:plugin-react"]
+run = "esdev test test"
+dir = "packages/esdev-plugin-react"
 
 # The full driver suites — these need a live server, and say so when they cannot
 # reach one. One task each rather than a fan-out, because CI gives each its own

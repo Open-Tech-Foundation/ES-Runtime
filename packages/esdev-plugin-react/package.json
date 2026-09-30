@@ -1,0 +1,21 @@
+{
+  "name": "@opentf/esdev-plugin-react",
+  "version": "0.1.0",
+  "description": "React Fast Refresh for esdev's plugin system.",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
+    "./runtime": { "types": "./src/runtime.d.ts", "default": "./src/runtime.js" }
+  },
+  "files": ["src", "README.md"],
+  "sideEffects": ["./src/runtime.js"],
+  "scripts": { "test": "esdev test test" },
+  "peerDependencies": { "react-refresh": "^0.19.0" },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/esdev-plugin-react"
+  },
+  "publishConfig": { "access": "public" }
+}

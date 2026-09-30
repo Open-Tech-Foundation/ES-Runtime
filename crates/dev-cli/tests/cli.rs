@@ -13468,6 +13468,116 @@ fn a_plugin_module_with_no_export_says_so() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The reusable React package resolves from node_modules, initializes once,
+/// and adds refresh code only to the hot browser build.
+#[test]
+fn the_react_plugin_package_bootstraps_hot_builds_only() {
+    let dir = build_dir("p_react_package");
+    let package = "node_modules/@opentf/esdev-plugin-react";
+    for (name, contents) in [
+        (
+            "package.json",
+            include_str!("../../../packages/esdev-plugin-react/package.json"),
+        ),
+        (
+            "src/index.js",
+            include_str!("../../../packages/esdev-plugin-react/src/index.js"),
+        ),
+        (
+            "src/runtime.js",
+            include_str!("../../../packages/esdev-plugin-react/src/runtime.js"),
+        ),
+    ] {
+        let path = dir.join(package).join(name);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("package directory");
+        std::fs::write(path, contents).expect("package file");
+    }
+    std::fs::create_dir_all(dir.join("node_modules/react-refresh")).expect("peer directory");
+    write_in(
+        &dir,
+        "node_modules/react-refresh/package.json",
+        r#"{"name":"react-refresh","type":"module","exports":{"./runtime":"./runtime.js"}}"#,
+    );
+    write_in(
+        &dir,
+        "node_modules/react-refresh/runtime.js",
+        r#"
+export function injectIntoGlobalHook(target) {
+  target.__reactPluginInjected = (target.__reactPluginInjected ?? 0) + 1;
+  console.log('REACT-PLUGIN-INJECTED');
+}
+export function register() {}
+export function createSignatureFunctionForTransform() { return () => {}; }
+export function performReactRefresh() { console.log('REACT-PLUGIN-REFRESH'); }
+"#,
+    );
+    write_in(
+        &dir,
+        "bootstrap.test.js",
+        r#"
+import '@opentf/esdev-plugin-react/runtime';
+import '@opentf/esdev-plugin-react/runtime';
+import { test, assertEquals } from 'runtime:test';
+test('initializes once', () => {
+  assertEquals(globalThis.__reactPluginInjected, 1);
+  assertEquals(typeof globalThis.$RefreshReg$, 'function');
+  assertEquals(typeof globalThis.$RefreshSig$, 'function');
+});
+"#,
+    );
+    write_in(&dir, "app.jsx", "console.log('REACT-PACKAGE-APP');\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<html><head><script type=\"module\" src=\"./app.jsx\"></script></head><body></body></html>",
+    );
+    let port = test_port("p_react_package");
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{
+      "plugins": ["@opentf/esdev-plugin-react"],
+      "build": {{"targets": {{"web": {{"entry":"index.html","outdir":"dist"}}}}}},
+      "dev": {{"server": {{"port":{port}}}}}
+    }}"#
+        ),
+    );
+    let tested = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("test bootstrap");
+    assert!(
+        tested.status.success(),
+        "{}{}",
+        stdout(&tested),
+        stderr(&tested)
+    );
+    let built = esdev_in(&dir).arg("build").output().expect("release build");
+    assert!(
+        built.status.success(),
+        "{}{}",
+        stdout(&built),
+        stderr(&built)
+    );
+    let release: String = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("assets")
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "js"))
+        .map(|entry| std::fs::read_to_string(entry.path()).expect("chunk"))
+        .collect();
+    assert!(!release.contains("REACT-PLUGIN-"), "{release}");
+    {
+        let _supervisor = start_in(&dir);
+        let hot = wait_for_http(port, "/assets/app.js", |code| {
+            code.contains("REACT-PACKAGE-APP")
+        });
+        assert!(hot.contains("REACT-PLUGIN-INJECTED"), "{hot}");
+        assert!(hot.contains("REACT-PLUGIN-REFRESH"), "{hot}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A project with no `plugins` starts no isolate and builds exactly as it
 /// always did — the cost of the feature is paid only by projects that use it.
 #[test]
