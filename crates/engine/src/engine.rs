@@ -156,6 +156,34 @@ impl InterruptHandle {
 /// usable, the fixed default stands in — a guard on a wrong ceiling is worse
 /// than a conservative one.
 fn sized_params(limits: &Limits, params: v8::CreateParams) -> (v8::CreateParams, usize) {
+    let (params, ceiling) = heap_sized_params(limits, params);
+    let young = params
+        .max_young_generation_size_in_bytes()
+        .min(MAX_YOUNG_GENERATION_BYTES);
+    (
+        params.set_max_young_generation_size_in_bytes(young),
+        ceiling,
+    )
+}
+
+/// The most V8's young generation may grow to (DECISIONS.md D146): three
+/// 16 MiB semi-spaces.
+///
+/// V8 sizes the young generation from the heap ceiling — a semi-space is a
+/// thirty-second of it, capped at 32 MiB — so the ceiling taken from system
+/// memory above puts it at the cap on any ordinary host. A program that makes
+/// garbage quickly then grows it that far and keeps it: a Postgres pool under
+/// load held 64 MiB of heap committed against 26 MiB used. Measured across the
+/// benchmark rows, 48 MiB never cost memory and bought 24–62 MiB where it
+/// mattered, for at most a few percent of time on the most allocation-heavy
+/// row; half of it made that row slower *and* bigger, because survivors that
+/// no longer fit are promoted to the old generation instead of dying young.
+///
+/// A smaller ceiling (`--max-heap`) already gives a smaller young generation,
+/// and keeps it: this lowers V8's choice, never raises it.
+const MAX_YOUNG_GENERATION_BYTES: usize = 48 << 20;
+
+fn heap_sized_params(limits: &Limits, params: v8::CreateParams) -> (v8::CreateParams, usize) {
     let Some(bytes) = limits.heap_limit_bytes else {
         let params = params.heap_limits_from_system_memory(crate::sysmem::available_bytes(), 0);
         let chosen = params.max_old_generation_size_in_bytes();
@@ -1331,6 +1359,39 @@ impl Engine for V8Engine {
 
     fn has_pending_dynamic_imports(&self) -> bool {
         crate::module::has_pending_dynamic(&self.modules)
+    }
+}
+
+#[cfg(test)]
+mod young_generation_tests {
+    use super::*;
+
+    /// esrun's ceiling comes from system memory, which on any host with a
+    /// gigabyte or more puts V8's own choice above the cap — so the cap is what
+    /// applies.
+    #[test]
+    fn a_system_sized_heap_has_its_young_generation_capped() {
+        crate::ensure_v8_initialized();
+        let limits = Limits::default().with_system_heap_limit();
+        let (params, _) = sized_params(&limits, v8::CreateParams::default());
+        assert_eq!(
+            params.max_young_generation_size_in_bytes(),
+            MAX_YOUNG_GENERATION_BYTES
+        );
+    }
+
+    /// A small heap already gets a small young generation from V8, and the cap
+    /// never raises it.
+    #[test]
+    fn a_small_heap_keeps_its_smaller_young_generation() {
+        crate::ensure_v8_initialized();
+        let limits = Limits::default().with_heap_limit_bytes(64 << 20);
+        let (unclamped, _) = heap_sized_params(&limits, v8::CreateParams::default());
+        let expected = unclamped.max_young_generation_size_in_bytes();
+        assert!(expected < MAX_YOUNG_GENERATION_BYTES, "{expected}");
+        let (params, ceiling) = sized_params(&limits, v8::CreateParams::default());
+        assert_eq!(params.max_young_generation_size_in_bytes(), expected);
+        assert_eq!(ceiling, 64 << 20, "the heap ceiling is untouched");
     }
 }
 

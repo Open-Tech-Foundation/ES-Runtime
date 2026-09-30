@@ -3032,3 +3032,17 @@ The day before, the same reasoning had been taken one step further and an out-of
 **Rejected: a host-side id registry** (read the bytes in a FileRead op, park them under an id, and hand the id to `http_respond`). A body the handler never sends is then held until something frees it; one op that reads and answers leaves nothing behind.
 
 **Not here:** zero-copy `sendfile(2)`, and streaming a large file in chunks. The whole file is read into host memory for the response, which is where it was before, minus the JS copy.
+
+### D146 — V8's young generation is capped at 48 MiB · *Proposed (2026-09-30)*
+
+**Context:** V8 sizes its young generation from the heap ceiling: a semi-space is a thirty-second of the ceiling, capped at 32 MiB, and the young generation is three of them. esrun takes its ceiling from system memory (as Deno does), so on any host with a gigabyte or more the young generation may reach 96 MiB. A program that makes garbage quickly grows it that far and keeps it. A Postgres pool under load measured 64 MiB of heap committed against 26 MiB used, and that difference was most of esrun's peak-memory gap to Bun on the database benchmark. Bun runs on JavaScriptCore, whose collector has no separate young space to grow.
+
+**Decision:** every isolate's young generation is the smaller of V8's own choice and **48 MiB** (16 MiB semi-spaces). It lowers V8's choice and never raises it, so `--max-heap` and the embedder's fixed default, which already give a smaller one, are unchanged. The heap ceiling itself is untouched.
+
+**Measured** (a sweep over the allocation-heavy and I/O benchmark rows, five runs each, V8 15.2): at 48 MiB no row used more memory. `jsonbig` peaked at 92 MiB instead of 135, `protobuf_large` 168 instead of 222, `wasm_compile` 155 instead of 217, and the Postgres QPS benchmark 106 instead of 130. The cost was at most a few percent of time on the most allocation-heavy rows and none elsewhere.
+
+**Rejected:**
+- **24 MiB.** `jsonbig` became 11% slower *and* larger (171 MiB), because survivors that no longer fit are promoted to the old generation instead of dying young, and the old generation is collected far less often.
+- **12 MiB, and `--optimize-for-size`** (1 MiB semi-spaces). Worse still on both counts.
+- **Deno's settings.** Deno sets no memory flags. Its `--external-memory-max-reasonable-size=0` only disables a sanity check on external memory above 32 GiB, and its heap sizing is the same system-memory call esrun already makes.
+- **A process-wide `--max-semi-space-size` flag.** The cap is an isolate constraint, set where each isolate is created, and V8 flags are global state that every embedder of the engine crate would inherit.

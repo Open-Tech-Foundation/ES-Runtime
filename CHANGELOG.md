@@ -21,6 +21,13 @@ namespace) is unstable and may change between minor releases until the API freez
   Sending one needs the `read` permission; a file that can't be read is a `500`
   with the error reported.
 
+### Changed
+
+- V8's young generation is capped at 48 MB. It had been sized from system
+  memory, up to 96 MB, and a program making garbage quickly grew it that far
+  and kept it: peak memory drops by 25–60 MB on the allocation-heavy benchmarks
+  and the Postgres pool benchmark, for at most a few percent of time.
+
 ### Fixed
 
 - `serve()` no longer allocates a cookie accessor closure and property for every
