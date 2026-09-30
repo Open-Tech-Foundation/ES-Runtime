@@ -965,9 +965,9 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         // a top-level `await` is a module in CommonJS's case and nothing at all
         // in ESM's, and without the line a reader has no way to tell which of
         // the two they are looking at.
-        bundler
-            .write()
-            .await
+        let written = bundler.write().await;
+        record_inputs(&bundler);
+        written
             .map_err(reported!())
             .map_err(|failed| {
                 // The backend renders a plugin's refusal as "plugin `x` threw an
@@ -1256,7 +1256,9 @@ pub async fn bundle_browser_entries(
             ))
             .build()
             .map_err(reported!())?;
-        let output = bundler.write().await.map_err(reported!())?;
+        let written = bundler.write().await;
+        record_inputs(&bundler);
+        let output = written.map_err(reported!())?;
         crate::print_warnings!(output);
         (styles.take(), assets)
     };
@@ -1333,6 +1335,69 @@ fn installed(
                 as std::sync::Arc<dyn rolldown::plugin::Pluginable>
         })
         .collect()
+}
+
+/// Every file a build in this process has read: the module graph, what a
+/// plugin declared it depends on (`dependsOn`), and what a linked stylesheet
+/// pulled in.
+///
+/// The dev loop rebuilds for a change to any of them, whatever its extension.
+/// A fixed list of extensions cannot know that a plugin made `.scss`, `.vue`
+/// or `.mdx` a source, and a save that rebuilds nothing looks exactly like a
+/// plugin that ignored the edit. Only added to: a file that stopped being an
+/// input costs at most a rebuild nobody needed.
+static INPUTS: std::sync::OnceLock<std::sync::RwLock<std::collections::HashSet<PathBuf>>> =
+    std::sync::OnceLock::new();
+
+fn inputs() -> &'static std::sync::RwLock<std::collections::HashSet<PathBuf>> {
+    INPUTS.get_or_init(Default::default)
+}
+
+/// Records files a build read.
+pub fn record_input_files(files: impl IntoIterator<Item = PathBuf>) {
+    if let Ok(mut held) = inputs().write() {
+        held.extend(files);
+    }
+}
+
+/// Records what a bundler read in its last build, after it ran — failed builds
+/// included, since the file being fixed is one of them.
+fn record_inputs(bundler: &rolldown::Bundler) {
+    record_input_files(
+        bundler
+            .watch_files()
+            .iter()
+            .map(|file| PathBuf::from(file.as_str())),
+    );
+}
+
+/// Whether a build in this process read `path`.
+pub fn is_input(path: &Path) -> bool {
+    inputs().read().is_ok_and(|held| held.contains(path))
+}
+
+/// The inputs that were read **as stylesheets**: a linked sheet, a CSS
+/// Module, what either `@import`ed — `.scss` as much as `.css` once a plugin
+/// made it CSS. A change to only these is a stylesheet swap, not a reload.
+static STYLESHEETS: std::sync::OnceLock<std::sync::RwLock<std::collections::HashSet<PathBuf>>> =
+    std::sync::OnceLock::new();
+
+fn stylesheets() -> &'static std::sync::RwLock<std::collections::HashSet<PathBuf>> {
+    STYLESHEETS.get_or_init(Default::default)
+}
+
+/// Records files a build read as stylesheets. They are inputs too.
+pub fn record_stylesheet_files(files: impl IntoIterator<Item = PathBuf>) {
+    let files: Vec<PathBuf> = files.into_iter().collect();
+    if let Ok(mut held) = stylesheets().write() {
+        held.extend(files.iter().cloned());
+    }
+    record_input_files(files);
+}
+
+/// Whether a build in this process read `path` as a stylesheet.
+pub fn is_stylesheet_input(path: &Path) -> bool {
+    stylesheets().read().is_ok_and(|held| held.contains(path))
 }
 
 /// The browser bundler, held across the rebuilds of one `esdev start`.
@@ -1594,7 +1659,9 @@ async fn build_warm(
     // A failed build must not leave the next one reading half a graph, and
     // rolldown keeps its own cache coherent across a failure — so the handle
     // stays held either way and the error is simply reported.
-    let output = warm.bundler.write().await.map_err(reported!())?;
+    let written = warm.bundler.write().await;
+    record_inputs(&warm.bundler);
+    let output = written.map_err(reported!())?;
     crate::print_warnings!(output);
     // Drained, not read: the same collector serves every rebuild, and sheets
     // left in it would be emitted again next time. The assets collector is the

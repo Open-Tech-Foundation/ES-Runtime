@@ -83,6 +83,8 @@ pub struct Stylesheet {
     pub referenced: Vec<Referenced>,
     /// How many files were merged into it, the entry included.
     pub sources: usize,
+    /// Which files those were, entry first: what a watcher rebuilds it for.
+    pub read_files: Vec<std::path::PathBuf>,
 }
 
 /// Reads `entry` and everything it imports, and compiles the result with
@@ -130,6 +132,7 @@ pub fn build_source(
         code,
         referenced: bundled.referenced,
         sources: bundled.sources,
+        read_files: bundled.read_files,
     })
 }
 

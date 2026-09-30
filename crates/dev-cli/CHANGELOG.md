@@ -57,6 +57,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **The dev loop rebuilds for any file a build read.** `esdev start` decided
+  by a fixed list of extensions, so editing a `.scss` (or `.vue`, `.svelte`,
+  `.mdx`) that a plugin compiles changed nothing until some other file was
+  saved. It now also rebuilds for every file the last builds read — the module
+  graph, a plugin's `dependsOn`, a linked stylesheet and its imports — and a
+  change to one read as a stylesheet swaps it instead of reloading the page.
 - **An unbundled module is compiled as the type a plugin gave it.** A plugin
   returning `{ code, type: "jsx" }` for `widget.component` built, and failed
   under `esdev <file>` and `esdev test` with `Unexpected token '<'`, because

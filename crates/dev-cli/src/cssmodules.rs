@@ -277,6 +277,11 @@ impl CssModules {
         read: &Files,
     ) -> Result<Option<BTreeMap<String, String>>, String> {
         let bundled = crate::css::load_source(path, Some(code.to_string()))?;
+        // For the dev loop: a save to one of these is a stylesheet swap,
+        // whatever its extension.
+        crate::build::record_stylesheet_files(
+            std::iter::once(path.to_path_buf()).chain(bundled.read_files.iter().cloned()),
+        );
         read.extend(bundled.read_files);
 
         let (sheet, names) = if is_css_module(&path.to_string_lossy()) {

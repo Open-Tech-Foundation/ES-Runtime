@@ -12635,6 +12635,92 @@ fn a_plugin_compiled_stylesheet_is_bundled_scoped_and_linked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The dev loop rebuilds for a file a build read, whatever its extension: a
+/// `.scss` a plugin compiles is an input, as a `.ts` is, and a change to one
+/// is a stylesheet swap rather than a reload.
+#[test]
+fn the_dev_loop_rebuilds_for_a_file_a_plugin_compiles() {
+    let dir = watch_dir("s_plugin_stylesheet");
+    let port = test_port("s_plugin_stylesheet");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    fake_sass_plugin(&dir);
+    write_in(
+        &dir,
+        "src/theme.scss",
+        "$page: papayawhip;\nbody { background: $page }\n",
+    );
+    write_in(
+        &dir,
+        "src/card.module.scss",
+        "$accent: rebeccapurple;\n.card { color: $accent }\n",
+    );
+    write_in(
+        &dir,
+        "src/main.js",
+        "import styles from './card.module.scss';\ndocument.body.className = styles.card;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <link rel=\"stylesheet\" href=\"./src/theme.scss\">\
+         <script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{"plugins": ["./sass.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outdir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+        ),
+    );
+    let css = |dir: &Path| -> String {
+        std::fs::read_dir(dir.join(".dev/dist/assets"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|e| e == "css"))
+                    .map(|path| std::fs::read_to_string(path).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let wait = |want: &str| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            if css(&dir).contains(want) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("never built {want}: {}", css(&dir));
+    };
+
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
+    wait("papayawhip");
+    wait("rebeccapurple");
+    write_in(
+        &dir,
+        "src/theme.scss",
+        "$page: honeydew;\nbody { background: $page }\n",
+    );
+    wait("honeydew");
+    write_in(
+        &dir,
+        "src/card.module.scss",
+        "$accent: teal;\n.card { color: $accent }\n",
+    );
+    wait("teal");
+    let printed = wait_for_file(&log, Duration::from_secs(10), |text| {
+        text.matches("swapped stylesheet").count() >= 2
+    });
+    assert!(
+        printed.matches("swapped stylesheet").count() >= 2,
+        "a .scss change reloaded instead of swapping:\n{printed}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A plugin that rewrites CSS and keeps it CSS — PostCSS's shape — runs
 /// `pre`, and esdev bundles what it wrote rather than reading the file again.
 #[test]

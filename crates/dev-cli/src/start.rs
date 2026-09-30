@@ -697,7 +697,9 @@ async fn wait_until_listening(port: u16) {
     }
 }
 
-/// Whether a path is a stylesheet, by extension.
+/// Whether a path is a stylesheet: by extension, or because a build read it
+/// as one — a `.scss` a plugin compiled to CSS is a stylesheet as much as a
+/// `.css` is.
 ///
 /// `.module.css` counts: a CSS Module's class names are derived from its
 /// *path*, so editing its contents renames nothing and what comes out is the
@@ -706,6 +708,9 @@ fn is_stylesheet(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        || crate::build::is_stylesheet_input(path)
+        || dunce::canonicalize(path)
+            .is_ok_and(|canonical| crate::build::is_stylesheet_input(&canonical))
 }
 
 /// Where the output that `dev.run` names lands.
@@ -852,7 +857,17 @@ fn is_source(path: &Path, root: &Path, outputs: &[PathBuf], gitignore: Option<&G
     }) {
         return false;
     }
-    crate::watch::is_interesting(path, root) || crate::watch::is_asset(path, root)
+    crate::watch::is_interesting(path, root)
+        || crate::watch::is_asset(path, root)
+        || is_read_by_a_build(path)
+}
+
+/// Whether the last builds read `path`: a module a plugin compiles, whatever
+/// its extension, or a file a plugin said its output depends on. The
+/// extensions above cover what could become an input; this covers what is one.
+fn is_read_by_a_build(path: &Path) -> bool {
+    crate::build::is_input(path)
+        || dunce::canonicalize(path).is_ok_and(|canonical| crate::build::is_input(&canonical))
 }
 
 /// The project's `.gitignore`, kept current while the loop runs.

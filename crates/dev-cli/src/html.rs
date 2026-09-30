@@ -505,6 +505,11 @@ fn stylesheet(
     written: &mut usize,
 ) -> Result<Vec<u8>, String> {
     let bundled = crate::css::build_source(path, source, minify)?;
+    // Read here rather than by the bundler, so no bundler knows to watch it:
+    // the linked file itself (a `.scss` included) and every `@import` behind it.
+    crate::build::record_stylesheet_files(
+        std::iter::once(path.to_path_buf()).chain(bundled.read_files.iter().cloned()),
+    );
     let mut code = bundled.code;
     // Every stylesheet that went in, not every `<link>` that named one: an
     // `@import` is a file this build read, and counting tags instead would

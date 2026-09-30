@@ -3104,7 +3104,7 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Built-in Sass, Less or PostCSS.** Each is a dependency with its own release cycle and configuration; a plugin is the place for one, and esdev's part is to accept what it produces.
 - **A separate `css` hook.** A stylesheet is a module with a type, and `load`/`transform` already say what a module is.
 
-**Consequences:** a stylesheet language is a plugin that returns CSS. **Not solved here:** source maps for CSS output, and hot-swapping a linked stylesheet whose extension is not `.css` (it reloads the page instead).
+**Consequences:** a stylesheet language is a plugin that returns CSS. **Amended (2026-10-01):** the dev loop decided what to rebuild for by extension, so a `.scss` edit rebuilt nothing; it now also rebuilds for every file a build read, and a change to one read as a stylesheet is swapped like a `.css`. **Not solved here:** source maps for CSS output.
 
 ### D150 — The dev server forwards a path prefix to an API server · *Proposed (2026-09-30)* · *amends the grouped-config amendment's deferral*
 
