@@ -57,6 +57,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **An unbundled module is compiled as the type a plugin gave it.** A plugin
+  returning `{ code, type: "jsx" }` for `widget.component` built, and failed
+  under `esdev <file>` and `esdev test` with `Unexpected token '<'`, because
+  the compiler went by the file's name. It now goes by the type, as the
+  bundler does.
 - **A plugin's `load` error says what went wrong.** A `load` hook that threw
   was reported as "Could not load x — plugin `p` threw an error", in `build`
   and in `start`, with the plugin's own message and stack dropped. The report

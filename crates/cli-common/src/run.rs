@@ -171,6 +171,20 @@ pub trait SourceTransform: Send + Sync {
     /// answer for a file this transform has nothing to do with.
     fn transform(&self, specifier: &str, source: String) -> Result<String, String>;
 
+    /// The same, for a module an earlier step says is `module_type` (`"js"`,
+    /// `"jsx"`, `"ts"`, `"tsx"`) whatever its name says: a build plugin that
+    /// compiled `widget.component` to JSX, or served a virtual module. The
+    /// default ignores it and goes by the name.
+    fn transform_as(
+        &self,
+        specifier: &str,
+        source: String,
+        module_type: &str,
+    ) -> Result<String, String> {
+        let _ = module_type;
+        self.transform(specifier, source)
+    }
+
     /// A query this transform reserves on module ids: an import of
     /// `file:///a.ts?<query>` loads the same file as a **separate module**,
     /// and the transform sees the query in the specifier it is handed.

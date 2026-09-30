@@ -12688,6 +12688,71 @@ export default {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What a plugin says a module now is decides how it is compiled, unbundled as
+/// in a build: a `.component` a plugin turns into JSX is compiled as JSX, not
+/// passed to the engine as the JavaScript its name does not claim to be.
+#[test]
+fn an_unbundled_run_compiles_a_module_as_the_type_a_plugin_gave_it() {
+    let dir = build_dir("p_plugins_type");
+    write_in(
+        &dir,
+        "component.mjs",
+        r#"
+export default {
+  name: "component",
+  transform: {
+    filter: { id: /\.component$/ },
+    handler: (code) => ({ code: `export default () => ${code.trim()};`, type: "jsx" }),
+  },
+};
+"#,
+    );
+    write_in(&dir, "widget.component", "<b>hi</b>\n");
+    // The factory is a global, set before the component module is loaded, so
+    // the compiled module needs no import of its own.
+    write_in(
+        &dir,
+        "jsx.js",
+        "globalThis.h = (tag, props, ...children) => ({ tag, children });\n",
+    );
+    write_in(
+        &dir,
+        "main.js",
+        "import './jsx.js';\n\
+         const { default: widget } = await import('./widget.component');\n\
+         console.log(JSON.stringify(widget()));\n",
+    );
+    write_in(
+        &dir,
+        "widget.test.js",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import './jsx.js';\n\
+         const { default: widget } = await import('./widget.component');\n\
+         test('compiled as JSX', () => assertEquals(widget().tag, 'b'));\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./component.mjs"], "jsx": {"factory": "h"}}"#,
+    );
+
+    let run = esdev_in(&dir).arg("main.js").output().expect("spawn esdev");
+    assert!(run.status.success(), "{}{}", stdout(&run), stderr(&run));
+    assert!(
+        stdout(&run).contains(r#"{"tag":"b","children":["hi"]}"#),
+        "{}",
+        stdout(&run)
+    );
+
+    let test = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(test.status.success(), "{}{}", stdout(&test), stderr(&test));
+    assert!(stdout(&test).contains("1 passed"), "{}", stdout(&test));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A `load` that throws is reported with what the plugin said. The bundler
 /// turns any other error from a `load` into "Could not load x — plugin `p`
 /// threw an error" and drops the cause, which is the only part that says what

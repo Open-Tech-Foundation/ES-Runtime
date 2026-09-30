@@ -133,7 +133,7 @@ impl Pipeline {
         &self,
         id: &str,
         mut source: String,
-    ) -> Result<(String, Option<Vec<String>>), String> {
+    ) -> Result<(String, String, Option<Vec<String>>), String> {
         let loaded = self.loaded.lock().ok().and_then(|mut held| held.remove(id));
         let mut module_type = loaded
             .as_ref()
@@ -160,7 +160,7 @@ impl Pipeline {
                 }
             }
         }
-        Ok((source, maps))
+        Ok((source, module_type, maps))
     }
 
     /// The id a pass names a module by: a path for a file, the id a `resolve`
@@ -288,19 +288,30 @@ impl SourceTransform for Pipeline {
         let Some(id) = Self::pass_id(specifier) else {
             return self.then.transform(specifier, source);
         };
-        let (source, maps) = self.through_passes(&id, source)?;
+        let (source, kind, maps) = self.through_passes(&id, source)?;
+        // What the passes say the code now is, when that is not what the name
+        // says: a plugin that compiled `widget.component` to JSX, or turned a
+        // `.jsx` into plain JavaScript. The compiler goes by it, as the
+        // bundler does.
+        let compile = |source: String| {
+            if kind == module_type(&id) {
+                self.then.transform(specifier, source)
+            } else {
+                self.then.transform_as(specifier, source, &kind)
+            }
+        };
         let path = Path::new(&id);
         let Some(mut chain) = maps
             .filter(|maps| !maps.is_empty())
             .filter(|_| !specifier.starts_with(VIRTUAL))
         else {
-            return self.then.transform(specifier, source);
+            return compile(source);
         };
         // What the compiler registers maps its output to the passes' output,
         // not to the file. Forgotten first, so a map registered by an earlier
         // load of this file is not mistaken for this one's.
         es_runtime_cli_common::sourcemap::forget(path);
-        let compiled = self.then.transform(specifier, source)?;
+        let compiled = compile(source)?;
         chain.extend(es_runtime_cli_common::sourcemap::registered(path));
         if let Some(whole) = collapse(&chain) {
             es_runtime_cli_common::sourcemap::register(path, &whole);

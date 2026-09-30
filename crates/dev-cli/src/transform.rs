@@ -599,7 +599,31 @@ impl SourceTransform for TypeStripper {
     }
 
     fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
-        let output = self.transform_source(specifier, source)?;
+        self.transform_recorded(specifier, source, None)
+    }
+
+    fn transform_as(
+        &self,
+        specifier: &str,
+        source: String,
+        module_type: &str,
+    ) -> Result<String, String> {
+        self.transform_recorded(specifier, source, Some(module_type))
+    }
+}
+
+impl TypeStripper {
+    /// A module for this process to run, recorded for coverage when a run is
+    /// collecting it.
+    fn transform_recorded(
+        &self,
+        specifier: &str,
+        source: String,
+        module_type: Option<&str>,
+    ) -> Result<String, String> {
+        let output = self
+            .compile(specifier, source, module_type, Registration::Runtime)
+            .map(|(code, _)| code)?;
         // Under coverage, what V8 is about to compile, and where it came from.
         if crate::coverage::collect::recording() {
             let path = specifier.strip_prefix("file://").map_or(specifier, |rest| {
@@ -626,11 +650,6 @@ thread_local! {
 }
 
 impl TypeStripper {
-    fn transform_source(&self, specifier: &str, source: String) -> Result<String, String> {
-        self.compile(specifier, source, Registration::Runtime)
-            .map(|(code, _)| code)
-    }
-
     /// Compiles one module for a bundler rather than for a run, and returns the
     /// map from what was written to what came out. The bundler chains it into
     /// the output's map, so nothing is registered for this process's stack
@@ -640,13 +659,17 @@ impl TypeStripper {
         id: &str,
         source: String,
     ) -> Result<(String, Option<String>), String> {
-        self.compile(id, source, Registration::Bundle)
+        self.compile(id, source, None, Registration::Bundle)
     }
 
+    /// `module_type` is what an earlier step says the code is, which wins
+    /// over the name when it is one this compiles; the name still decides
+    /// where a stack frame points.
     fn compile(
         &self,
         specifier: &str,
         source: String,
+        module_type: Option<&str>,
         registration: Registration,
     ) -> Result<(String, Option<String>), String> {
         PRINTED.with_borrow_mut(|printed| *printed = None);
@@ -675,7 +698,11 @@ impl TypeStripper {
         // which the engine cannot parse. The word is the trigger, not the
         // answer: the parse below decides, and a file that turns out to have
         // none is returned byte for byte as it always was.
-        let javascript = !needs_transform(path);
+        let module_type = module_type.filter(|kind| matches!(*kind, "js" | "jsx" | "ts" | "tsx"));
+        let javascript = match module_type {
+            Some(kind) => kind == "js",
+            None => !needs_transform(path),
+        };
         if javascript && !source.contains("accessor") {
             return Ok((
                 if prelude.is_empty() {
@@ -688,12 +715,15 @@ impl TypeStripper {
         }
 
         let path = Path::new(path);
-        let source_type = SourceType::from_path(path)
-            .map_err(|e| format!("cannot determine the source type: {e}"))?
-            // Always a module. This runtime has no script goal and no CommonJS
-            // (D22), so a `.ts` here is an ES module regardless of what the
-            // extension would mean to Node.
-            .with_module(true);
+        let source_type = match module_type {
+            Some(kind) => SourceType::from_extension(kind),
+            None => SourceType::from_path(path),
+        }
+        .map_err(|e| format!("cannot determine the source type: {e}"))?
+        // Always a module. This runtime has no script goal and no CommonJS
+        // (D22), so a `.ts` here is an ES module regardless of what the
+        // extension would mean to Node.
+        .with_module(true);
 
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, &source, source_type).parse();
