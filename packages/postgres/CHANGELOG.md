@@ -15,12 +15,20 @@ the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
 
 ### Changed
 
-- A query allocates about a quarter less. A cached statement's `Bind`,
-  `Execute` and `Sync` are written into one buffer instead of three messages
-  and a copy; replies already buffered are read without a promise per message;
-  a free connection is taken without allocating a lock promise; and the row
-  shape is kept with the cached statement instead of being looked up by a
-  freshly built key on every query.
+- **The package re-exports the driver built into `runtime:db`** (esrun 0.35 and
+  later; DECISIONS D147). Its wire protocol now runs in the runtime, in Rust,
+  and `import { postgres } from "runtime:db"` is the same driver. Code that
+  imports `driver` from this package keeps working unchanged, and every test in
+  the package's suite passes against it.
+- `engines.esrun` is now `>=0.35.0`.
+
+### Removed
+
+- The JavaScript implementation, and with it the value exports `PgConnection`,
+  `PgPooled`, `POSTGRES_DIALECT`, `environmentDefaults` and
+  `parseConnectionString`. The types `PgConnection`, `PgOptions`, `PgPooled`,
+  `PgPoolOptions`, `PgRow`, `PgServerMessage` and `PgValue` are still exported,
+  from `runtime:db`'s declarations.
 
 ## [0.2.2] - 2026-09-29
 

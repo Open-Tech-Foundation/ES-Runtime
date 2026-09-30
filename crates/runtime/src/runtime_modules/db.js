@@ -1693,7 +1693,7 @@ const sqlite = defineDriver({
 ///     import { connect, sqlite } from "runtime:db";
 ///     const db = await connect("sqlite:./app.db", { driver: sqlite });
 ///
-///     import postgres from "@opentf/esrun-postgres";
+///     import { postgres } from "runtime:db";
 ///     const pg = await connect("postgres://user@host/app", { driver: postgres });
 ///
 /// `pool: true` — or `pool: { max: 20 }` — gives a pool that presents the same
@@ -1711,7 +1711,7 @@ async function connect(url, options = {}) {
   if (!(driver instanceof Driver)) {
     throw dbError(
       driver === undefined
-        ? 'a driver is required: connect(url, { driver }). The built-in is `import { sqlite } from "runtime:db"`; others are packages, e.g. `import postgres from "@opentf/esrun-postgres"`.'
+        ? 'a driver is required: connect(url, { driver }). The built-ins are `sqlite` and `postgres` from "runtime:db"; others are packages, e.g. `import { driver } from "@opentf/esrun-redis"`.'
         : "options.driver must be a driver from defineDriver()",
       DbErrorCode.Unsupported,
     );
@@ -2627,4 +2627,6 @@ export {
   runBackendConformance,
 };
 
-export default { connect, sql, queryAst, sqlite, defineDriver, DbError, DbErrorCode };
+// The default export is at the end of db_postgres.js, which is appended to this
+// file: it names the `postgres` driver, and nothing may refer to that before it
+// is defined.

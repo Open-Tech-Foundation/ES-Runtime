@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use es_runtime_common::{Capability, ErrorCode, ExceptionClass};
+use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{Entropy, NetProvider};
 
@@ -151,7 +151,7 @@ pub(crate) fn install(
                             push_aside(&mut out, aside);
                             Ok(Value::Object(out))
                         }
-                        Err(failure) => Ok(failure_value(failure, Aside::default())),
+                        Err(failure) => answer(failure, Aside::default()),
                     }
                 })
             })
@@ -332,10 +332,10 @@ pub(crate) fn install(
                 if target.process_id == 0 {
                     return Ok(Value::Undefined);
                 }
-                Ok(match crate::postgres::cancel(net, target).await {
-                    Ok(()) => Value::Undefined,
-                    Err(failure) => failure_value(failure, Aside::default()),
-                })
+                match crate::postgres::cancel(net, target).await {
+                    Ok(()) => Ok(Value::Undefined),
+                    Err(failure) => answer(failure, Aside::default()),
+                }
             })
         }))?;
     }
@@ -550,6 +550,17 @@ fn batch_fields(batch: Batch) -> Vec<(String, Value)> {
     ]
 }
 
+/// An op's answer to a failure: a refusal throws, as `runtime:net`'s does; the
+/// rest resolve to `{ error }` for the driver to turn into a `DbError`.
+fn answer(failure: Failure, aside: Aside) -> std::result::Result<Value, OpError> {
+    match failure {
+        Failure::Refused(e) => {
+            Err(OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code()))
+        }
+        other => Ok(failure_value(other, aside)),
+    }
+}
+
 fn failure_value(failure: Failure, aside: Aside) -> Value {
     let (kind, message, fields) = match failure {
         Failure::Server(fields) => {
@@ -564,6 +575,7 @@ fn failure_value(failure: Failure, aside: Aside) -> Value {
         Failure::Auth(message) => ("auth", message, None),
         Failure::Busy(message) => ("busy", message, None),
         Failure::Unsupported(message) => ("unsupported", message, None),
+        Failure::Refused(e) => ("lost", e.exception_message(), None),
     };
     let mut error = vec![
         ("kind".to_string(), Value::String(kind.to_string())),

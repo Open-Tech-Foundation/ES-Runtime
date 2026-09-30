@@ -58,7 +58,7 @@ arrives as a `Uint8Array`.
 
 **What a column produces is the backend's decision.** `DbOutput` — the union
 above — is what `sqlite` produces, and `Row<V>` is generic so a driver can say
-what it produces instead: `@opentf/esrun-postgres` decodes `timestamptz` into a
+what it produces instead: `postgres` decodes `timestamptz` into a
 `Temporal.Instant` and `jsonb` into the document, and types its rows
 accordingly. Held through the portable `Connection` type, a row's values are
 `unknown`, because an unknown backend decodes what it likes.

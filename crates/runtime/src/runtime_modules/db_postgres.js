@@ -995,3 +995,5 @@ const postgres = defineDriver({
 });
 
 export { postgres };
+
+export default { connect, sql, queryAst, sqlite, postgres, defineDriver, DbError, DbErrorCode };

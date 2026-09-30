@@ -1,47 +1,27 @@
+// The PG* variables are defaults below the URL and explicit options, as libpq
+// has them. run.sh exports the ones for the test server, so each rung of the
+// precedence is visible by what the server answers.
 import { connect } from "runtime:db";
-import { env } from "runtime:process";
-import { environmentDefaults, parseConnectionString, driver as postgres } from "../dist/index.js";
+import { driver as postgres } from "../dist/index.js";
 
-const show = (o) =>
-  JSON.stringify({
-    host: o.host,
-    port: o.port,
-    user: o.user,
-    database: o.database,
-    sslmode: o.sslmode,
-    connectTimeout: o.connectTimeout,
-    applicationName: o.applicationName,
-  });
+// `postgres://` names nothing, so everything comes from the environment.
+const bare = await connect("postgres://", { driver: postgres });
+console.log("connected from env:", (await (await bare.query("SELECT 5 AS n")).first()).n);
+await bare.close();
 
-// The environment fills what the URL left out.
-console.log("env seen:", JSON.stringify(environmentDefaults()));
-console.log("bare url:", show(parseConnectionString("postgres://")));
-
-// The URL wins over the environment — a program that spelled out a host should
-// get that host whatever the shell exported.
-console.log("url wins:", show(parseConnectionString("postgres://someone@elsewhere:6000/other")));
+// The URL wins over the environment: it names a database the server does not
+// have, and the server says so, rather than PGDATABASE's being used.
+try {
+  await connect("postgres://127.0.0.1:5433/esrun_no_such_db", { driver: postgres });
+  console.log("url wins: connected (should not happen)");
+} catch (e) {
+  console.log("url wins:", e.server?.code === "3D000", e.message.includes("esrun_no_such_db"));
+}
 
 // Explicit options win over both.
-console.log(
-  "options win:",
-  show(
-    parseConnectionString("postgres://someone@elsewhere:6000/other", { host: "explicit", port: 1 }),
-  ),
-);
-
-// Reading the environment needs the Env capability, and the driver treats a
-// refusal as "no defaults" rather than as a failure — a connection string that
-// named everything it needed should still work with nothing else granted.
-let granted = false;
-try {
-  granted = Boolean(env.PGHOST);
-} catch {
-  console.log("env denied, defaults empty:", JSON.stringify(environmentDefaults()) === "{}");
-}
-
-// And it actually connects using only the environment.
-if (granted) {
-  const db = await connect("postgres://", { driver: postgres });
-  console.log("connected from env:", (await (await db.query("SELECT 5 AS n")).first()).n);
-  await db.close();
-}
+const explicit = await connect("postgres://127.0.0.1:5433/esrun_no_such_db", {
+  driver: postgres,
+  database: "esrun_test",
+});
+console.log("options win:", (await (await explicit.query("SELECT 6 AS n")).first()).n);
+await explicit.close();

@@ -64,6 +64,19 @@ pub(crate) enum Failure {
     Busy(String),
     /// What was asked cannot be done here.
     Unsupported(String),
+    /// The provider refused to connect at all — an address outside the host
+    /// allowlist. Surfaced as the provider's own error, exactly as
+    /// `runtime:net` surfaces it: a refusal is not a network failure.
+    Refused(ProviderError),
+}
+
+/// A connect that failed: refused by the provider's rules, or lost.
+fn connect_failure(e: ProviderError) -> Failure {
+    if e.code() == Some(es_runtime_common::ErrorCode::PermissionDenied) {
+        Failure::Refused(e)
+    } else {
+        Failure::Lost(provider_message(&e))
+    }
 }
 
 /// A statement's result columns.
@@ -181,7 +194,7 @@ impl Connection {
                 },
             )
             .await
-            .map_err(|e| Failure::Lost(provider_message(&e)))?;
+            .map_err(connect_failure)?;
         *opened.lock().unwrap() = Some(socket);
         let mut connection = Connection {
             net,
@@ -839,7 +852,7 @@ pub(crate) async fn cancel(net: Arc<dyn NetProvider>, target: CancelTarget) -> R
             },
         )
         .await
-        .map_err(|e| Failure::Lost(provider_message(&e)))?;
+        .map_err(connect_failure)?;
     let result = async {
         if target.sslmode != SslMode::Disable {
             let mut out = Out::default();

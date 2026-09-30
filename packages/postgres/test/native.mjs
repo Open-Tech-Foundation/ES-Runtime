@@ -5,7 +5,7 @@
 import { connect, DbErrorCode, postgres, runBackendConformance } from "runtime:db";
 import { listen } from "runtime:net";
 import { env, exit } from "runtime:process";
-import { is, ok, report } from "./unit/assert.mjs";
+import { is, ok, report } from "./assert.mjs";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 

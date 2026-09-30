@@ -232,7 +232,7 @@ declare module "runtime:db" {
      * column produces is the backend's decision: `DbOutput` describes the
      * built-in one, and a driver decoding `timestamptz` into a
      * `Temporal.Instant` is doing its job. A concrete driver narrows this —
-     * `sqlite` to {@link DbOutput}, `@opentf/esrun-postgres` to its `PgValue` —
+     * `sqlite` to {@link DbOutput}, `postgres` to its {@link PgValue} —
      * so precision is lost only where the backend genuinely is not known.
      */
     query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<Row<unknown>>>;
@@ -327,7 +327,7 @@ declare module "runtime:db" {
    * import { connect, sqlite } from "runtime:db";
    * const db = await connect("sqlite:./app.db", { driver: sqlite });
    *
-   * import postgres from "@opentf/esrun-postgres";
+   * import { postgres } from "runtime:db";
    * const pg = await connect("postgres://user@host/app", { driver: postgres });
    * ```
    *
@@ -366,6 +366,124 @@ declare module "runtime:db" {
 
   /** The built-in SQLite driver — an ordinary driver, passed the ordinary way. */
   export const sqlite: Driver<SqliteConnection, SqliteOptions, PooledConnection>;
+
+  /**
+   * Options for the built-in {@link postgres} driver. The connection string
+   * carries the same things; explicit options win over it, and it wins over
+   * the `PG*` environment variables (read only with the `env` permission).
+   */
+  export interface PgOptions {
+    host?: string;
+    port?: number;
+    user?: string;
+    password?: string;
+    database?: string;
+    applicationName?: string;
+    /** `"prefer"` (default) asks for TLS; `"require"` insists; `"disable"` never asks. */
+    sslmode?: "require" | "prefer" | "disable";
+    /**
+     * Milliseconds to wait for the connection **and its handshake**. Default
+     * 10 000; `0` waits forever. The URL spells it `connect_timeout`, in
+     * seconds, as libpq does.
+     */
+    connectTimeout?: number;
+    /**
+     * `statement_timeout`, in milliseconds, applied to every statement and
+     * enforced by the server, which cancels the statement and keeps the
+     * connection. Default unset.
+     */
+    statementTimeout?: number;
+    /** Prepared statements kept per connection. Default 100; `0` prepares every query. */
+    preparedStatementCacheSize?: number;
+    /**
+     * Decode date and time columns to Temporal values. Default `true`; `false`
+     * gives `Date` for timestamps and strings for dates, times and intervals.
+     */
+    temporal?: boolean;
+    /**
+     * A certificate authority (PEM) to trust besides the public roots. The URL
+     * spells it `sslrootcert` and takes the certificate itself, not a path:
+     * reading a file needs a permission a URL should not exercise.
+     */
+    sslRootCert?: string | Uint8Array;
+  }
+
+  /** Connection options, plus how big the pool is. */
+  export interface PgPoolOptions extends PgOptions, PoolSettings {}
+
+  /** A `NOTICE`, `WARNING` or error, as the server sent it. */
+  export interface PgServerMessage {
+    severity: string;
+    /** The SQLSTATE, e.g. `"23505"`. */
+    code: string;
+    message: string;
+    detail?: string;
+    hint?: string;
+    position?: string;
+    schema?: string;
+    table?: string;
+    column?: string;
+    constraint?: string;
+  }
+
+  /**
+   * What a PostgreSQL column can produce: wider than {@link DbOutput}, since
+   * `timestamptz` decodes to a `Temporal.Instant`, `jsonb` to the document and
+   * an array type to an array.
+   */
+  export type PgValue = DbOutput | boolean | Date | readonly unknown[] | object;
+
+  /** A row from the {@link postgres} driver. */
+  export type PgRow = Row<PgValue>;
+
+  /** A connection opened with the built-in {@link postgres} driver. */
+  export interface PgConnection extends Connection {
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<PgRow>>;
+    transaction<T>(fn: (tx: PgConnection) => Promise<T>): Promise<T>;
+    withConnection<T>(fn: (connection: PgConnection) => Promise<T>): Promise<T>;
+    /** Server parameters, as reported at the handshake and whenever one changes. */
+    readonly parameters: Record<string, string>;
+    /** The last `ReadyForQuery` status: `I` idle, `T` in a transaction, `E` failed. */
+    readonly status: string;
+    /** Called for each `NOTICE`/`WARNING` the server sends. Unset, they are discarded. */
+    onNotice: ((notice: PgServerMessage) => void) | undefined;
+    /**
+     * Runs a script — several statements in one string — through the simple
+     * query protocol, reporting what each statement did. **No parameters**:
+     * use it for schema and fixed statements, not for data from outside. A
+     * multi-statement string runs in one implicit transaction unless it manages
+     * its own.
+     */
+    executeScript(
+      sql: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ command: string; changes: number }[]>;
+    /**
+     * Asks the server to cancel what this connection is running. Resolves once
+     * the request is sent; the outcome shows up at the query as a `57014`
+     * error, or not at all if it had already finished.
+     */
+    cancel(): Promise<void>;
+  }
+
+  /** A pool of {@link PgConnection}s, with the surface one connection has. */
+  export interface PgPooled extends PooledConnection {
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<PgRow>>;
+    transaction<T>(fn: (tx: PgConnection) => Promise<T>): Promise<T>;
+    withConnection<T>(fn: (connection: PgConnection) => Promise<T>): Promise<T>;
+    /** Runs a script on a borrowed connection. */
+    executeScript(
+      sql: string,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ command: string; changes: number }[]>;
+  }
+
+  /**
+   * The built-in PostgreSQL driver, for `postgres:` and `postgresql:` URLs. Its
+   * wire protocol runs in the runtime; connecting needs `net` for the server's
+   * host and port.
+   */
+  export const postgres: Driver<PgConnection, PgOptions, PgPooled>;
 
   /**
    * The `sql` tagged template: every interpolation becomes a parameter, never
@@ -885,6 +1003,7 @@ declare module "runtime:db" {
     sql: typeof sql;
     queryAst: typeof queryAst;
     sqlite: typeof sqlite;
+    postgres: typeof postgres;
     defineDriver: typeof defineDriver;
     DbError: typeof DbError;
     DbErrorCode: typeof DbErrorCode;

@@ -15,8 +15,6 @@ export PG_URL="${PG_URL:-postgres://postgres:esrun@127.0.0.1:5433/esrun_test?ssl
 [ -f "$here/../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
 [ "$here/../dist/index.js" -nt "$here/../src/connection.ts" ] || echo "warning: dist is older than src — run 'tsr build'" >&2
 
-printf "\n== unit ==\n"
-"$here/unit/run.sh" || exit 1
 
 # The PG* variables, derived from PG_URL, so the environment test exercises the
 # path libpq tools take rather than only the parsing around it.

@@ -193,16 +193,16 @@ const db = await connect("sqlite:./secret.db", { driver: sqlite, key });
 
 ## Other databases
 
-`sqlite` is the driver that ships **in** the runtime. Every other one is
-ordinary JavaScript over [`runtime:net`](/docs/guides/networking) — no native
-code, and nothing added to the runtime for it. Importing one gives you a driver,
-and the call is the call you already know:
+`sqlite` and `postgres` ship **in** the runtime. Every other driver is a package
+over [`runtime:net`](/docs/guides/networking). Either way the driver is passed
+the same way:
 
 ```js
-import { connect } from "runtime:db";
-import { driver } from "@opentf/esrun-postgres";
+import { connect, postgres } from "runtime:db";
+import { driver as redis } from "@opentf/esrun-redis";
 
-const db = await connect("postgres://user@host/db", { driver });
+const db = await connect("postgres://user@host/db", { driver: postgres });
+const cache = await connect("redis://localhost", { driver: redis });
 ```
 
 Everything above — `sql`, streaming rows, transactions, the portable error
@@ -214,12 +214,12 @@ exactly what one connection does.
 Every driver package exports its driver under the same name — `driver` — and
 nothing as a default, so the import reads the same whichever backend it is and
 `{ driver }` is the whole of the option. Two of them in one module are
-`import { driver as postgres }`.
+`import { driver as mysql }`.
 
 | Package | Schemes | |
 | --- | --- | --- |
-| built in | `sqlite:` | a file format and a SQL dialect |
-| `@opentf/esrun-postgres` | `postgres:` `postgresql:` | the wire protocol, Temporal types, LISTEN/NOTIFY |
+| built in: `sqlite` | `sqlite:` | a file format and a SQL dialect |
+| built in: `postgres` | `postgres:` `postgresql:` | the wire protocol (in the runtime), Temporal types, LISTEN/NOTIFY |
 | `@opentf/esrun-mysql` | `mysql:` `mariadb:` | the client/server protocol, verified TLS, Temporal types; MySQL and MariaDB |
 | [`@opentf/esrun-redis`](/docs/db/redis) | `redis:` `rediss:` | RESP3, pub/sub, pipelining, cluster, Sentinel, and a Redis client alongside the backend |
 

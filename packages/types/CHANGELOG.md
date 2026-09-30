@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:db`'s built-in `postgres` driver, with `PgConnection`, `PgOptions`,
+  `PgPooled`, `PgPoolOptions`, `PgRow`, `PgServerMessage` and `PgValue`.
+
 ## [0.11.0] - 2026-09-29
 
 ### Added

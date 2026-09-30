@@ -94,13 +94,13 @@ service expressible. See the [UDP guide](/docs/guides/udp#coming-from-node-deno-
 for the call-by-call mapping, and [the benchmarks](/docs/benchmarks) for the two
 UDP rows.
 
-**On the database client rows.** esrun is <Partial /> because the drivers are
-first-party *packages* rather than runtime API — `@opentf/esrun-postgres`,
-`@opentf/esrun-mysql` (MySQL and MariaDB) and `@opentf/esrun-redis`, all
-entirely JavaScript over `runtime:net`, adding no native code to the runtime. That is the point of the row below them: Bun ships a
-driver per backend as runtime API and its internals are not exported, so a third
-party's second backend starts from nothing, while esrun's ship on the same public
-driver tier anyone else would use. Node and Deno leave both to npm.
+**On the database client rows.** PostgreSQL is built in: `postgres` from
+`runtime:db`, with its wire protocol in the runtime. MySQL (and MariaDB) and
+Redis are first-party *packages*, `@opentf/esrun-mysql` and
+`@opentf/esrun-redis`, which is why those rows are <Partial />. All of them are
+built on the public driver tier in the row below, which Bun's are not: its
+drivers' internals are not exported, so a third party's backend starts from
+nothing. Node and Deno leave both to npm.
 
 **On the TypeScript row for Node.** Node runs `.ts` files by stripping types:
 erasable syntax works, while an `enum` or a `namespace` fails without

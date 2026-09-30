@@ -1173,3 +1173,36 @@ fn a_query_ast_is_refused_by_name() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "true true");
 }
+
+/// The built-in PostgreSQL driver (D147) holds no authority of its own: it
+/// reaches the server through the agent's network provider. So connecting
+/// needs `net`; an address outside `--allow-net`'s list is refused with the
+/// same code `runtime:net` gives; and without `env` the `PG*` defaults are
+/// simply absent — the connection is attempted, and fails only because nothing
+/// listens on port 1. No server is needed for any of it.
+#[test]
+fn the_postgres_driver_connects_only_with_what_net_grants() {
+    let source = r#"
+        import { connect, postgres } from "runtime:db";
+        try {
+          await connect("postgres://u@127.0.0.1:1/x?sslmode=disable", { driver: postgres });
+          console.log("connected");
+        } catch (e) {
+          console.log(e.code);
+        }
+    "#;
+    let cases: [(&str, &[&str], &str); 3] = [
+        ("pg-no-net", &["--allow-read"], "ERR_CAPABILITY_DENIED"),
+        (
+            "pg-allowlist",
+            &["--allow-net=127.0.0.1:2"],
+            "ERR_PERMISSION_DENIED",
+        ),
+        ("pg-no-env", &["--allow-net"], "ERR_DB_CONNECTION_LOST"),
+    ];
+    for (name, flags, expected) in cases {
+        let out = run(name, source, flags);
+        assert!(out.status.success(), "{name}: {}", stderr(&out));
+        assert_eq!(stdout(&out).trim(), expected, "{name}");
+    }
+}

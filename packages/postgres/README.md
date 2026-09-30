@@ -1,11 +1,16 @@
 # @opentf/esrun-postgres
 
-A PostgreSQL driver for [ES Runtime](https://esrun.opentechf.org) (`esrun`),
-written **entirely in JavaScript** over `runtime:net`.
+The PostgreSQL driver for [ES Runtime](https://esrun.opentechf.org) (`esrun`).
 
-There is no native code in this package and none was added to the runtime for
-it. That is the point of `runtime:db`: adding a database to this runtime does
-not mean adding anything to the runtime.
+**The driver is built into the runtime** (from esrun 0.35): its wire protocol
+runs in Rust, and `import { postgres } from "runtime:db"` is the same driver.
+This package re-exports it, so code written against the package keeps working
+unchanged. New code needs no package at all:
+
+```js
+import { connect, postgres } from "runtime:db";
+const db = await connect("postgres://user:secret@localhost/app", { driver: postgres });
+```
 
 ```sh
 npm install @opentf/esrun-postgres
@@ -429,9 +434,8 @@ SQL in the driver, which is the one thing a driver should not do.
 
 ## Authentication
 
-**SCRAM-SHA-256** (the default since PostgreSQL 14) and cleartext, both over
-WebCrypto. `md5` is not implemented: it is deprecated upstream, and the runtime
-has no MD5 to implement it with. The server proves itself to the client as well
+**SCRAM-SHA-256** (the default since PostgreSQL 14) and cleartext. `md5` is
+not implemented: it is deprecated upstream. The server proves itself to the client as well
 as the reverse — the mutual half of SCRAM is verified, not skipped.
 
 ## What is not here yet
@@ -443,37 +447,24 @@ as the reverse — the mutual half of SCRAM is verified, not skipped.
 
 ## Development
 
-Every command below is a task in the repo's `tasks.toml`, so what runs here and
-what runs in CI cannot drift.
-
-The tests come in two halves. The **unit** tests need no database — a wire
-codec is checkable on its own, and the cases worth pinning (a message split
-across three chunks, a quoted `NULL` inside an array, RFC 7677's published SCRAM
-vectors) are exactly the ones a live server will not produce on demand:
-
-```sh
-tsr install
-tsr build
-tsr test:protocol
-```
-
-The **integration** tests need a real server, because speaking to one is the
-whole point of the package:
+The driver lives in the runtime (`crates/runtime/src/postgres/` and
+`runtime:db`); this package's tests are the integration suite it has to pass,
+run against a real server:
 
 ```sh
 docker run -d --name esrun-pg-test \
   -e POSTGRES_PASSWORD=esrun -e POSTGRES_DB=esrun_test \
   -p 127.0.0.1:5433:5432 postgres:latest
 
-tsr test:postgres             # unit, then the suite against the server
+tsr build
+tsr test:postgres
 docker rm -f esrun-pg-test
 ```
 
 `PG_URL` overrides the connection string and `ESRUN` the binary. The TLS test
 needs a server with a certificate from a private authority; `test/tls-server.sh`
-stands one up and prints the environment for it.
-
-Both halves run in CI, against a `postgres:18` service container.
+stands one up and prints the environment for it. The suite runs in CI against a
+`postgres:18` service container.
 
 ## License
 
