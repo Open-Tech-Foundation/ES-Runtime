@@ -114,7 +114,8 @@ instead, the heap is full and the collector has been running throughout.
 
 A 64 KiB file per response, driven by an external load generator on separate
 cores — the server alone, unlike the in-process row above. Bun and Deno hand a
-file handle to the kernel; Node streams it; esrun reads it into a buffer.
+file handle to the kernel; Node streams it; esrun reads it host-side, outside
+the JavaScript heap.
 
 <RpsChart server="staticserver" title="HTTP requests/sec · 64 KiB static file" />
 

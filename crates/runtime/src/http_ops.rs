@@ -40,8 +40,8 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ByteStream, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerResponse,
-    HttpServerTls, HttpTimeouts, ProviderError, SocketInfo,
+    ByteStream, FileSystem, HttpServeOptions, HttpServerBody, HttpServerProvider,
+    HttpServerResponse, HttpServerTls, HttpTimeouts, ProviderError, SocketInfo,
 };
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
@@ -70,6 +70,7 @@ fn trailer_pairs(items: Vec<Value>) -> Trailers {
 pub(crate) fn install(
     engine: &mut dyn Engine,
     http: Option<Arc<dyn HttpServerProvider>>,
+    fs: Option<Arc<dyn FileSystem>>,
     requests: Handles,
     inventory: &crate::handles::Inventory,
 ) -> Result<()> {
@@ -299,15 +300,34 @@ pub(crate) fn install(
     // trailers already in hand, or `true` for "they will arrive with the body's
     // close" — the streamed case, where their values depend on the body that has
     // not been produced yet.
-    {
+    //
+    // ---- http_respond_file ----------------------------------------------------
+    // The same arguments, with `body` a path: `new Response(file(path))`. The
+    // file is read here, host-side, and goes to the provider without ever
+    // becoming a JS `ArrayBuffer` (D145). That is the point: a buffer handed to
+    // JS lives until V8 collects it, and one that outlives a young-generation
+    // collection — as a response body awaited across a read does — waits for a
+    // full one, so a busy static server held hundreds of megabytes of dead
+    // bodies. Reading a file is FileRead's to grant, so this op requires it at
+    // dispatch, as `fs_read` does. A read that fails answers the request with
+    // an empty 500 and rejects, so the guest reports the error — the contract a
+    // thrown handler has.
+    for file_body in [false, true] {
         let h = http.clone();
+        let fs = fs.clone();
         let req_bodies = req_bodies.clone();
-        let resp_receivers = resp_receivers;
+        let resp_receivers = resp_receivers.clone();
         let resp_rids = resp_rids.clone();
         let resp_trailers = resp_trailers.clone();
         let owned = requests.clone();
-        engine.register_op(OpDecl::r#async("http_respond", move |args| {
+        let name = if file_body {
+            "http_respond_file"
+        } else {
+            "http_respond"
+        };
+        let decl = OpDecl::r#async(name, move |args| {
             let h = h.clone();
+            let fs = fs.clone();
             let resp_trailers_for_respond = resp_trailers.clone();
             let mut it = args.into_iter();
             let rid = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u64;
@@ -323,11 +343,13 @@ pub(crate) fn install(
                 Err(e) => return Box::pin(std::future::ready(Err(e))),
             };
 
-            let buffered = match it.next() {
-                Some(Value::String(s)) => Some(s.into_bytes()),
-                Some(Value::Bytes(b)) => Some(b),
-                Some(Value::Other(s)) => Some(s.into_bytes()),
-                _ => None,
+            let (buffered, file_path) = match (file_body, it.next()) {
+                (true, Some(Value::String(path))) => (None, Some(path)),
+                (true, _) => (None, Some(String::new())),
+                (false, Some(Value::String(s))) => (Some(s.into_bytes()), None),
+                (false, Some(Value::Bytes(b))) => (Some(b), None),
+                (false, Some(Value::Other(s))) => (Some(s.into_bytes()), None),
+                (false, _) => (None, None),
             };
             let stream_id = it.next().and_then(|v| v.as_number()).map(|n| n as u64);
             let trailers_arg = it.next();
@@ -382,16 +404,41 @@ pub(crate) fn install(
             };
 
             Box::pin(async move {
+                let server = require(&h)?;
+                let body = match file_path {
+                    None => body,
+                    Some(path) => match read_file_body(&fs, path).await {
+                        Ok(bytes) => HttpServerBody::Bytes(bytes),
+                        Err(e) => {
+                            // The request was given up above; answer it rather
+                            // than leave the client waiting, then report.
+                            let failed = HttpServerResponse {
+                                status: 500,
+                                headers: Vec::new(),
+                                body: HttpServerBody::Empty,
+                                trailers: None,
+                            };
+                            let _ = server.respond(rid, failed).await;
+                            return Err(e);
+                        }
+                    },
+                };
                 let response = HttpServerResponse {
                     status,
                     headers,
                     body,
                     trailers,
                 };
-                require(&h)?.respond(rid, response).await.map_err(map_err)?;
+                server.respond(rid, response).await.map_err(map_err)?;
                 Ok(Value::Undefined)
             })
-        }))?;
+        });
+        let decl = if file_body {
+            decl.requires(Capability::FileRead)
+        } else {
+            decl
+        };
+        engine.register_op(decl)?;
     }
 
     // ---- http_response_body_push ---------------------------------------------
@@ -571,6 +618,22 @@ fn arg_timeout(
 
 fn arg_u64(args: &[Value], i: usize) -> u64 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u64
+}
+
+/// A `http_respond_file` body: the whole file, read through the jailed
+/// [`FileSystem`] provider exactly as `fs_read` reads it.
+async fn read_file_body(
+    fs: &Option<Arc<dyn FileSystem>>,
+    path: String,
+) -> std::result::Result<Vec<u8>, OpError> {
+    let fs = fs.clone().ok_or_else(|| {
+        OpError::new(
+            ExceptionClass::Error,
+            "filesystem is unavailable (no FileSystem provider configured)",
+        )
+        .with_code(ErrorCode::ProviderUnavailable)
+    })?;
+    fs.read(path).await.map_err(map_err)
 }
 
 fn require(

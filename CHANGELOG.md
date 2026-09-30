@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- A `runtime:fs` file is a Fetch body: `new Response(file(path))`,
+  `new Request(url, { body: file(path) })` and `fetch(url, { body: file(path) })`.
+  `serve()` sends a file body host-side, so its bytes never become a JavaScript
+  buffer that waits for a full garbage collection; a static-file server no
+  longer holds hundreds of megabytes of dead response bodies under load.
+  Sending one needs the `read` permission; a file that can't be read is a `500`
+  with the error reported.
+
 ### Fixed
 
 - `serve()` no longer allocates a cookie accessor closure and property for every
@@ -19,6 +29,7 @@ namespace) is unstable and may change between minor releases until the API freez
 - File `arrayBuffer()` results reuse the fresh file-read backing store, and
   streamed fetch uploads and HTTP responses move marshalled byte buffers into
   their channels instead of cloning them.
+- `new Response(file(path))` sent the text `[object Object]` instead of the file.
 
 ## [0.34.0] - 2026-09-29
 

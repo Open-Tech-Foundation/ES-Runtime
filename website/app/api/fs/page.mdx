@@ -75,6 +75,9 @@ import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "r
 | `writable(options?)` | `WritableStream` | A sink for piped/incremental writes. First chunk truncates unless `{ append: true }` is set, rest append. |
 | `delete()` | `Promise<void>` | Delete this file. |
 
+An `FsFile` is also a Fetch body: `new Response(file(path))`,
+`fetch(url, { body: file(path) })`. The file is read when the body is read.
+
 ## Temporary entries
 
 `makeTempDir` / `makeTempFile` default to the **base directory**, not the OS

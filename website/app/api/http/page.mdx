@@ -212,6 +212,20 @@ The per-connection limits it multiplies against are fixed:
 | Request | `request.body` pulls chunks as they arrive | `request.text()` / `.json()` / `.arrayBuffer()` materialize the full body |
 | Response | Chunked transfer-encoding, backpressured | `Content-Length` buffered fast path |
 
+A `runtime:fs` file is a body too: `new Response(file(path))` sends the file
+without reading it into JavaScript. Sending it needs the `read` permission. A file
+that can't be read is a `500` with an empty body, and the error is reported. No
+`Content-Type` is inferred; set it in the response headers.
+
+```js
+import { file } from "runtime:fs";
+
+serve({ port: 8080 }, () =>
+  new Response(file("public/index.html"), {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  }));
+```
+
 ## Lifecycle
 
 `serve()` returns a `Server` immediately; the accept loop runs in the background.

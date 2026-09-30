@@ -74,6 +74,10 @@ class FsFile {
       },
     });
   }
+  // `new Response(file(path))` and `fetch(url, { body: file(path) })`.
+  [globalThis.__internal.fileBody]() {
+    return this.path;
+  }
   stream() {
     const path = this.path;
     return new ReadableStream({

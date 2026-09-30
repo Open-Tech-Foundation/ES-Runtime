@@ -251,6 +251,54 @@ fn disconnects_stalled_clients_and_leaves_working_ones_alone() {
     assert!(stdout.contains("TIMEOUTS_OK"), "{stdout}");
 }
 
+/// `new Response(file(path))` (D145): `serve` reads the file host-side and
+/// keeps the handler's status and headers; a file that cannot be read is a bare
+/// 500 to the client and a reported error to the developer, the contract a
+/// thrown handler has. Every other reader of a file body — `clone()`, `text()`,
+/// `.body`, a fetch upload — still gets the file's bytes.
+#[test]
+fn a_file_body_is_served_host_side_and_readable_everywhere_else() {
+    let out = run_file("http-file-body.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    let body = r#""a file body, sent host-side\n""#;
+    for line in [
+        format!("file status:201 kind:file body:{body}"),
+        r#"missing status:500 body:"""#.to_string(),
+        format!("clone original:{body}"),
+        format!("clone status:200 body:{body}"),
+        format!("upload body:{body}"),
+        format!("text:{body}"),
+        format!("stream:{body}"),
+        "FILE_BODY_OK".to_string(),
+    ] {
+        assert!(s.lines().any(|l| l == line), "missing {line:?} in:\n{s}");
+    }
+    assert!(
+        stderr(&out).contains("no-such-file.txt"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// A file body is a file read, so it needs FileRead like `file().text()`: a
+/// server without the grant answers 500 and reports the refusal.
+#[test]
+fn a_file_body_without_file_read_is_a_500() {
+    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .args(["--allow-listen", "--allow-net"])
+        .arg(fixture("http-file-body-denied.mjs"))
+        .output()
+        .expect("failed to spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "denied status:500 body:\"\"\n");
+    assert!(
+        stderr(&out).contains("capability denied: FileRead"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// `serve`'s documented failure contract, against the real server: a thrown
 /// handler *and* a non-Response return are both a 500. The second used to be
 /// coerced with `String(value)` and sent as a 200, so `return { ok: true }`

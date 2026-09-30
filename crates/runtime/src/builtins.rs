@@ -91,6 +91,7 @@ pub(crate) fn install(
     crate::http_ops::install(
         engine,
         providers.http_server(),
+        providers.file_system(),
         requests.clone(),
         &inventory,
     )?;

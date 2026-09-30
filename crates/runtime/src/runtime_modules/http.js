@@ -487,6 +487,8 @@ async function handleRequest(entry, handler) {
   let stream = null;
   if (parts.str !== null && parts.str !== undefined) {
     out = parts.str;
+  } else if (parts.file !== null) {
+    out = parts.file;
   } else if (parts.bytes !== null) {
     out = parts.bytes;
   } else if (parts.stream) {
@@ -538,7 +540,20 @@ async function handleRequest(entry, handler) {
   // microtask/tick per request. http_respond only sends on a oneshot (never
   // rejects), so there is no rejection to surface. For a streaming body the
   // status/headers go out now and the chunks flow behind them via the pump.
-  ops.http_respond(...args);
+  if (parts.file !== null) {
+    // `new Response(file(path))`: the host reads the file and answers, so its
+    // bytes never become a JS buffer (D145). A read that fails there has
+    // already answered with a 500; one refused FileRead is thrown here, before
+    // the request was given up, so it is answered here.
+    try {
+      ops.http_respond_file(...args).catch(reportError);
+    } catch (e) {
+      reportError(e);
+      ops.http_respond(requestId, 500, null, null, null);
+    }
+  } else {
+    ops.http_respond(...args);
+  }
   if (stream) {
     await pumpResponseBody(stream, streamId, trailers);
     answered.done = true;

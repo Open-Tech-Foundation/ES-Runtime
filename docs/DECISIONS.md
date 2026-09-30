@@ -3016,3 +3016,19 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **The other differences from Bun, each deliberate:** a malformed `%` sequence keeps its raw text instead of becoming U+FFFD, since a value is data. `sameSite` is accepted in any letter case, so Deno's `"Strict"` ports too. `maxAge` must be an integer (Bun writes `Max-Age=1.5`, which no browser parses); a negative one is valid, meaning "already expired". `CookieMap.delete()` also takes `secure` and `partitioned`, because a `__Host-` cookie can only be deleted by a `Set-Cookie` that is itself `Secure`. Everything else matches output recorded from Bun, and a test holds it there.
 
 **Not here:** a cookie jar for `fetch()`, signed or encrypted cookies, and the browser's asynchronous `cookieStore` global.
+
+### D145 — A `runtime:fs` file is a body, and `serve` sends it host-side · *Proposed (2026-09-30)* · *extends D25, D144*
+
+**Context:** `new Response(file(path))` sent the string `[object Object]`: an `FsFile` was not a body the Fetch API knew, so it fell through to `String(input)`. The working spelling, `new Response(await file(path).arrayBuffer())`, is also the expensive one. Every response body becomes a JS `ArrayBuffer`. A handler that awaits the read has its promises promoted out of V8's young generation while it waits, and the old-generation promise that resolves with the buffer keeps it alive until a full collection. V8 schedules that collection by external memory growth, so dead bodies pile up to around a hundred megabytes before they go. Measured on `bench/scripts/staticserver.js`, esrun's peak resident set under load was several times Bun's. Node and Deno pay the same cost for the same reason. Bun does not, because `new Response(Bun.file(path))` never makes a JS buffer.
+
+**Decision:**
+
+- **An `FsFile` is a body** wherever the Fetch API takes one: `new Response(file(path))`, `new Request(url, { body: file(path) })`, `fetch(url, { body: file(path) })`. The body is the file's bytes, read when the body is read, not when the object is built. This is Bun's `Bun.file` shape, which `FsFile` was already modelled on.
+- **`serve` reads a file body host-side.** The path crosses to the host, and the bytes go from the `FileSystem` provider to the socket without entering the isolate. The read needs **FileRead**, checked when the response is sent, as `fs_read` checks it: a file body gives a handler no access that `file(path).text()` would not.
+- **A file body that cannot be read is a 500 with an empty body, and the error is reported**, which is the contract a thrown handler has. A handler that wants a 404 checks `exists()` first. **Rejected: a 404 for a missing file.** Serving the file is the handler's decision, and a missing file there is its bug, not the client's.
+- **Every other reader sees an ordinary body:** `text()`, `.body` and a `fetch` upload read the file as a stream, and `clone()` gives both sides the file, not a tee.
+- **No `Content-Type` is inferred.** `FsFile` has no `type`, and guessing one from the extension is a MIME table the runtime would own; the handler sets the header.
+
+**Rejected: a host-side id registry** (read the bytes in a FileRead op, park them under an id, and hand the id to `http_respond`). A body the handler never sends is then held until something frees it; one op that reads and answers leaves nothing behind.
+
+**Not here:** zero-copy `sendfile(2)`, and streaming a large file in chunks. The whole file is read into host memory for the response, which is where it was before, minus the JS copy.

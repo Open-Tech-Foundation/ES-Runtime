@@ -15,6 +15,7 @@
   const BYTES = __internal.bytes;
   const ENCODE = __internal.encode;
   const PARTS = __internal.parts;
+  const FILE_BODY = __internal.fileBody;
   // Closure-private marker: a Request built from an already-validated absolute
   // URL (the runtime:http server path) may skip re-parsing it. Not reachable
   // from guest code, so the public constructor's eager validation is unaffected.
@@ -169,16 +170,27 @@
   // ---- Body ---------------------------------------------------------------
 
   function makeBodyState(source) {
-    // source: { bytes, str, stream, type } — at most one of bytes/str/stream.
-    // `str` defers UTF-8 encoding (the utf8_encode op) until the body is read,
-    // so a string body that is never consumed as bytes — or that crosses
-    // straight to a host op that encodes Rust-side — pays nothing here.
+    // source: { bytes, str, stream, file, type } — at most one of
+    // bytes/str/stream/file. `str` defers UTF-8 encoding (the utf8_encode op)
+    // until the body is read, so a string body that is never consumed as bytes
+    // — or that crosses straight to a host op that encodes Rust-side — pays
+    // nothing here. `file` defers the read the same way: `serve` sends it
+    // host-side (D145), and anything else that reads the body opens a stream.
     return {
       bytes: source.bytes ?? null,
       str: source.str ?? null,
       stream: source.stream ?? null,
+      file: source.file ?? null,
       used: false,
     };
+  }
+  // A file body, the first time anything but `serve` reads it, becomes the
+  // file's stream; from then on it is an ordinary stream body.
+  function fileToStream(state) {
+    if (state.file !== null) {
+      state.stream = state.file.stream();
+      state.file = null;
+    }
   }
   // Materializes a body state's bytes, encoding a deferred string on first read.
   function bodyBytes(state) {
@@ -213,6 +225,7 @@
       };
     }
     if (input instanceof ReadableStream) return { stream: input };
+    if (typeof input[FILE_BODY] === "function") return { file: input };
     return { bytes: encoder.encode(String(input)), type: "text/plain;charset=UTF-8" };
   }
 
@@ -273,19 +286,24 @@
       throw new TypeError(`Cannot clone ${what}: its body stream is locked`);
     }
     if (state.bytes !== null || state.str !== null) {
-      return { bytes: state.bytes, str: state.str, stream: null, used: false };
+      return { bytes: state.bytes, str: state.str, stream: null, file: null, used: false };
+    }
+    // A file is re-read by each side, like bytes are shared: no tee.
+    if (state.file !== null) {
+      return { bytes: null, str: null, stream: null, file: state.file, used: false };
     }
     if (state.stream !== null) {
       const [mine, theirs] = state.stream.tee();
       state.stream = mine;
-      return { bytes: null, str: null, stream: theirs, used: false };
+      return { bytes: null, str: null, stream: theirs, file: null, used: false };
     }
-    return { bytes: null, str: null, stream: null, used: false };
+    return { bytes: null, str: null, stream: null, file: null, used: false };
   }
 
   async function consumeBody(state) {
     if (state.used) throw new TypeError("Body has already been consumed");
     state.used = true;
+    fileToStream(state);
     const bytes = bodyBytes(state);
     if (bytes !== null) return bytes;
     if (state.stream) {
@@ -404,6 +422,7 @@
         configurable: true,
         get() {
           const state = this[BODY];
+          fileToStream(state);
           if (state.stream) return state.stream;
           const bytes = bodyBytes(state);
           if (bytes === null) return null;
@@ -781,6 +800,8 @@
         str: s.str,
         bytes: s.bytes,
         stream: s.stream,
+        // A file body nothing has read yet: its path, sent host-side.
+        file: s.file === null ? null : s.file[FILE_BODY](),
       };
     }
   }
@@ -861,6 +882,7 @@
     let bodyStreamId = null;
     let bodyBytes = null;
     if (!state.used) {
+      fileToStream(state);
       if (state.stream && state.bytes === null && state.str === null) {
         bodyStreamId = ops.fetch_request_body_new();
         state.used = true;

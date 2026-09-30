@@ -6,6 +6,8 @@
 // differ structurally: Bun and Deno can hand a file handle to the kernel and let
 // `sendfile` move the bytes without them ever entering the process, while a
 // runtime that reads into a buffer and writes it back pays a copy per request.
+// esrun reads the file host-side (D145): a copy, but never a JS buffer, so the
+// garbage collector is not what decides how long each body stays resident.
 // The `fsread` rows measure reading a file; this measures reading it *and*
 // getting it onto a socket, which is where that difference shows up.
 //
@@ -60,8 +62,8 @@ if (typeof Deno !== "undefined") {
   const fs = await import("runtime:fs");
   const { serve } = await import("runtime:http");
   await fs.write(FILE, payload);
-  serve({ hostname: "127.0.0.1", port: PORT }, async () => {
-    const bytes = await fs.file(FILE).arrayBuffer();
-    return new Response(bytes, { headers: { "content-type": "text/plain" } });
+  serve({ hostname: "127.0.0.1", port: PORT }, () => {
+    // Handing file() to Response is the host-side path.
+    return new Response(fs.file(FILE), { headers: { "content-type": "text/plain" } });
   });
 }
