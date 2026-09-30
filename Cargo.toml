@@ -338,6 +338,11 @@ rolldown_common = "=1.2.3"
 # sends has to become this type. Already in the graph via rolldown; pinned with
 # it, since a hook signature and its types travel together.
 rolldown_sourcemap = "=1.2.3"
+# The string editor rolldown's own passes use: edits a module in place and
+# reports the map from what was written to what came out. Named for esdev's
+# built-in passes that rewrite part of a module. Already in the graph via
+# rolldown; pinned with it.
+string_wizard = "=1.2.3"
 # The types `compute_hmr_update_for_file_changes` speaks: the changed-file map it
 # takes, the ship map each client carries, and the interned module id both are
 # keyed by. Named here because a hot update is assembled in our code and has to

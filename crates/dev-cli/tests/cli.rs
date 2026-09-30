@@ -1779,6 +1779,64 @@ fn the_dev_loop_maps_without_being_asked() {
     );
 }
 
+/// esdev's own passes that change a module hand the bundler a map, so a build
+/// that asks for one gets no "sourcemap is likely to be incorrect" warning and
+/// a stack frame lands on the line that was written. A CSS Module is generated
+/// code (an empty map), a `new URL(…, import.meta.url)` is edited in place, and
+/// a file whose JSX pragma differs from the project's is recompiled.
+#[test]
+fn built_in_passes_keep_the_source_map_whole() {
+    let dir = build_dir("b_sourcemap_passes");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/card.module.css", ".card { color: red }\n");
+    write_in(&dir, "src/worker.js", "export const worker = 1;\n");
+    write_in(
+        &dir,
+        "src/view.jsx",
+        "/** @jsx h */\n\
+         const h = (tag) => tag;\n\
+         export function view(n) {\n  \
+           if (n > 1) throw new Error('too big');\n  \
+           return <p />;\n\
+         }\n",
+    );
+    write_in(
+        &dir,
+        "src/app.ts",
+        "import styles from './card.module.css';\n\
+         import { view } from './view.jsx';\n\
+         const worker: URL = new URL('./worker.js', import.meta.url);\n\
+         console.log(styles.card, String(worker).length > 0);\n\
+         console.log(view(5));\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "jsx": { "factory": "React.createElement" } }"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["build", "src/app.ts", "--out=dist/app.js", "--sourcemap"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!printed.contains("SOURCEMAP_BROKEN"), "{printed}");
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let ran = Command::new(esrun)
+        .current_dir(&dir)
+        .arg("dist/app.js")
+        .output()
+        .expect("spawn esrun");
+    assert!(!ran.status.success());
+    let trace = stderr(&ran);
+    assert!(trace.contains("src/view.jsx:4:"), "unmapped:\n{trace}");
+    assert!(trace.contains("src/app.ts:5:"), "unmapped:\n{trace}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // Assets a module imports
 // ---------------------------------------------------------------------------
@@ -12539,6 +12597,22 @@ fn test_compiles_modules_through_the_projects_plugins() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `esdev test --config=<file>` reads that file, as `build` and `start` do.
+/// It was parsed and then ignored, so the run read `./esdev.json` — here, a
+/// file that does not exist, which left the plugin out and the JSX unknown.
+#[test]
+fn test_reads_the_project_file_config_names() {
+    let dir = framework_project("p_plugins_test_config");
+    std::fs::rename(dir.join("esdev.json"), dir.join("esdev.other.json")).expect("rename");
+    let out = esdev_in(&dir)
+        .args(["test", "--config=esdev.other.json"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same with every file in one process.
 #[test]
 fn test_compiles_through_the_plugins_without_isolation() {
@@ -12571,6 +12645,59 @@ fn test_without_isolation_compiles_jsx_with_the_projects_settings() {
         .expect("spawn esdev test");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
     assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A test run chains the map a plugin returns under the compiler's, so a
+/// failure in a module a plugin rewrote names the line that was written, not
+/// the line the plugin produced. The plugin here moves every line down three.
+#[test]
+fn test_maps_a_failure_through_a_plugins_source_map() {
+    let dir = build_dir("p_plugins_test_map");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"
+export default {
+  name: "shift",
+  transform: {
+    filter: { id: /\.shift\.ts$/ },
+    handler(code, id) {
+      const lines = code.split("\n");
+      const mappings = ";;;" + lines.map((_, i) => (i === 0 ? "AAAA" : "AACA")).join(";");
+      return { code: "\n\n\n" + code, map: { version: 3, sources: [id], names: [], mappings } };
+    },
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "boom.shift.ts",
+        "export function boom(n: number): number {\n  \
+         if (n > 1) throw new Error('too big');\n  \
+         return n;\n\
+         }\n",
+    );
+    write_in(
+        &dir,
+        "boom.test.ts",
+        "import { test } from 'runtime:test';\n\
+         import { boom } from './boom.shift.ts';\n\
+         test('throws', () => { boom(5); });\n",
+    );
+    write_in(&dir, "esdev.json", r#"{"plugins": ["./plugin.mjs"]}"#);
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("boom.shift.ts:2:"), "unmapped:\n{text}");
+    assert!(
+        !text.contains("boom.shift.ts:5:"),
+        "the plugin's line:\n{text}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

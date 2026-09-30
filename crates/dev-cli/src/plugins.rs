@@ -464,9 +464,19 @@ impl PluginTransform {
         }
     }
 
-    /// `source` after every plugin whose filter admits `id`.
-    fn through_plugins(&self, id: &str, mut source: String) -> Result<String, String> {
+    /// `source` after every plugin whose filter admits `id`, and the maps the
+    /// plugins that changed it returned, in the order they ran.
+    ///
+    /// The maps are `None` when a plugin changed the module without one: the
+    /// chain back to the file is broken, and a stack frame is better left on
+    /// the compiled line than moved to a wrong one.
+    fn through_plugins(
+        &self,
+        id: &str,
+        mut source: String,
+    ) -> Result<(String, Option<Vec<String>>), String> {
         let mut module_type = module_type(id);
+        let mut maps = Some(Vec::new());
         for pass in &self.passes {
             let admitted = pass
                 .hooks()
@@ -479,13 +489,40 @@ impl PluginTransform {
             let answer = wait(pass.transform(&source, id, &module_type, &self.ctx))
                 .map_err(|e| format!("[plugin {}] {id}\n{e}", pass.name()))?;
             if let Some(result) = answer {
+                if result.code != source {
+                    match (&mut maps, result.map) {
+                        (Some(maps), Some(map)) => maps.push(map),
+                        _ => maps = None,
+                    }
+                }
                 source = result.code;
                 if let Some(changed) = result.module_type {
                     module_type = changed;
                 }
             }
         }
-        Ok(source)
+        Ok((source, maps))
+    }
+}
+
+/// One map from the end of `chain` back to its start, as JSON: each map names
+/// positions in the text the one before it produced.
+fn collapse(chain: &[String]) -> Option<String> {
+    let parsed = chain
+        .iter()
+        .map(|json| {
+            rolldown_sourcemap::OwnedSourceMap::from_json_string(json)
+                .ok()
+                .map(rolldown_sourcemap::SourceMap::from)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    match parsed.as_slice() {
+        [] => None,
+        [one] => Some(one.to_json_string()),
+        many => {
+            let refs: Vec<_> = many.iter().collect();
+            Some(rolldown_sourcemap::collapse_sourcemaps(&refs).to_json_string())
+        }
     }
 }
 
@@ -510,11 +547,23 @@ impl es_runtime_cli_common::run::SourceTransform for PluginTransform {
                 url.set_fragment(None);
                 url.to_file_path().ok()
             });
-        let source = match path {
-            Some(path) => self.through_plugins(&path.to_string_lossy(), source)?,
-            None => source,
+        let Some(path) = path else {
+            return self.then.transform(specifier, source);
         };
-        self.then.transform(specifier, source)
+        let (source, maps) = self.through_plugins(&path.to_string_lossy(), source)?;
+        let Some(mut chain) = maps.filter(|maps| !maps.is_empty()) else {
+            return self.then.transform(specifier, source);
+        };
+        // What the compiler registers maps its output to the plugins' output,
+        // not to the file. Forgotten first, so a map registered by an earlier
+        // load of this file is not mistaken for this one's.
+        es_runtime_cli_common::sourcemap::forget(&path);
+        let compiled = self.then.transform(specifier, source)?;
+        chain.extend(es_runtime_cli_common::sourcemap::registered(&path));
+        if let Some(whole) = collapse(&chain) {
+            es_runtime_cli_common::sourcemap::register(&path, &whole);
+        }
+        Ok(compiled)
     }
 }
 

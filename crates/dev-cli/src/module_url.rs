@@ -82,6 +82,12 @@ fn matches(code: &str) -> Vec<(std::ops::Range<usize>, String)> {
         .collect()
 }
 
+/// A byte offset as the editor counts them. A module over 4 GiB is refused
+/// rather than edited at the wrong place.
+fn offset(at: usize) -> Result<u32, String> {
+    u32::try_from(at).map_err(|_| "a module this large cannot be rewritten".to_string())
+}
+
 /// The name an emitted chunk is given: the module's file stem, which the
 /// output's `[name]` pattern turns into its file name.
 fn chunk_name(id: &str) -> Option<String> {
@@ -117,8 +123,10 @@ impl contract::Pass for ModuleUrl {
             if found.is_empty() {
                 return Ok(None);
             }
-            let mut out = String::with_capacity(code.len());
-            let mut last = 0;
+            // Edited in place rather than rebuilt, so every byte that is not a
+            // rewritten `new URL(…)` keeps its position in the map: a stack
+            // frame in this module still names the line that was written.
+            let mut out = string_wizard::MagicString::new(code);
             let mut changed = false;
             for (range, path) in found {
                 let resolved = ctx.resolve(&path, Some(id), false).await?;
@@ -130,19 +138,24 @@ impl contract::Pass for ModuleUrl {
                     name: chunk_name(&resolved.id),
                     file_name: None,
                 })?;
-                out.push_str(&code[last..range.start]);
-                out.push_str(&format!("new URL(import.meta.ROLLUP_FILE_URL_{reference})"));
-                last = range.end;
+                out.update(
+                    offset(range.start)?,
+                    offset(range.end)?,
+                    format!("new URL(import.meta.ROLLUP_FILE_URL_{reference})"),
+                )?;
                 changed = true;
             }
             if !changed {
                 return Ok(None);
             }
-            out.push_str(&code[last..]);
+            let map = out.source_map(string_wizard::SourceMapOptions {
+                source: id.into(),
+                ..string_wizard::SourceMapOptions::default()
+            });
             Ok(Some(ModuleResult {
-                code: out,
+                code: out.to_string(),
                 module_type: None,
-                map: None,
+                map: Some(map.to_json_string()),
                 depends_on: Vec::new(),
             }))
         })

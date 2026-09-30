@@ -143,6 +143,34 @@ pub fn register(file: &Path, map_json: &str) {
     if let Ok(mut held) = cache().lock() {
         held.insert(file.to_path_buf(), Some(Arc::new(map)));
     }
+    if let Ok(mut raw) = registered_json().lock() {
+        raw.insert(file.to_path_buf(), map_json.to_string());
+    }
+}
+
+/// The map last [`register`]ed for `file`, as it was given.
+///
+/// For a caller that changed a module *before* the step that registered its
+/// map, and has to chain its own map under that one: the registered map names
+/// positions in the text that caller produced, not in the file.
+pub fn registered(file: &Path) -> Option<String> {
+    registered_json().lock().ok()?.get(file).cloned()
+}
+
+/// Drops what is known about `file`'s map, registered or looked up, so the
+/// next [`registered`] answers only for a registration made after this.
+pub fn forget(file: &Path) {
+    if let Ok(mut held) = cache().lock() {
+        held.remove(file);
+    }
+    if let Ok(mut raw) = registered_json().lock() {
+        raw.remove(file);
+    }
+}
+
+fn registered_json() -> &'static Mutex<HashMap<PathBuf, String>> {
+    static RAW: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    RAW.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// The directory a file is in — where the `sources` of a map beside it or

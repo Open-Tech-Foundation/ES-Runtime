@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use crate::contract::{Answer, Context, Filter, HookSpec, Hooks, ModuleResult, Order, Pass};
 use crate::transform::{JsxSettings, TypeStripper};
-use es_runtime_cli_common::run::SourceTransform;
 
 #[derive(Debug)]
 pub struct JsxPass {
@@ -81,10 +80,11 @@ impl Pass for JsxPass {
             }
             // The file disagrees with the project, and the bundler reads options
             // rather than comments — so this is where the file gets its way.
-            let compiled = TypeStripper::with_jsx(settings).transform(id, code.to_string())?;
+            let (compiled, map) =
+                TypeStripper::with_jsx(settings).compile_for_bundle(id, code.to_string())?;
             Ok(Some(ModuleResult {
                 code: compiled,
-                map: None,
+                map,
                 module_type: Some("js".to_string()),
                 depends_on: Vec::new(),
             }))

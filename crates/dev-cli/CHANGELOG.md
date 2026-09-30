@@ -38,6 +38,17 @@ is the point, since none of the three has any business in a deployment.
   form treats `/` as part of a name, so `@lib/shared` resolved to a file that
   could not exist and `--changed`/`--related` never reached a test through
   the alias.
+- **Source maps survive esdev's own passes.** A build with source maps no
+  longer warns `SOURCEMAP_BROKEN … esdev:css-modules` on every CSS Module
+  import. A file whose JSX pragma differs from the project's, and a module
+  with `new URL(…, import.meta.url)`, now keep their maps too, so a stack
+  frame in one names the line that was written.
+- **`esdev test` maps failures through plugins.** A source map a plugin's
+  `transform` returns is chained under the compiler's, so a failure in a
+  plugin-compiled module (a framework's `.jsx`) names the source line rather
+  than the plugin's output line.
+- **`esdev test --config=<file>` reads that file.** The flag was accepted and
+  ignored, so the run used `./esdev.json` and its plugins and `jsx` instead.
 
 ## [0.13.0] - 2026-09-29
 

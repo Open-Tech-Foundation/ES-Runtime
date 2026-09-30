@@ -2393,9 +2393,8 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
     // child never reads the project.
     let resolved = match config.settings_file.clone() {
         Some(path) => test::FileRun::read(&path).map(|run| config.run = run),
-        None => {
-            settings::Settings::load(None).and_then(|project| project.resolve_test(&mut config))
-        }
+        None => settings::Settings::load(config.config_path.as_deref())
+            .and_then(|project| project.resolve_test(&mut config)),
     };
     if let Err(err) = resolved {
         eprintln!("error: {err}");

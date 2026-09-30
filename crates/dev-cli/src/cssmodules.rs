@@ -233,7 +233,11 @@ impl contract::Pass for CssModules {
                     None => "export {};\n".to_string(),
                 },
                 module_type: Some("js".to_string()),
-                map: None,
+                // Generated, so nothing in it came from a line of the
+                // stylesheet. An empty map says exactly that. No map at all
+                // would tell the bundler the chain is broken, and it would warn
+                // on every build that asked for source maps.
+                map: Some(rolldown_sourcemap::empty_sourcemap().to_json_string()),
                 // Every stylesheet this read that the graph cannot see: the
                 // files an `@import` chain pulled in, and the modules a
                 // `composes … from` reached. Nothing imports either, so without

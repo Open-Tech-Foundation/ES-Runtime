@@ -627,11 +627,33 @@ thread_local! {
 
 impl TypeStripper {
     fn transform_source(&self, specifier: &str, source: String) -> Result<String, String> {
+        self.compile(specifier, source, Registration::Runtime)
+            .map(|(code, _)| code)
+    }
+
+    /// Compiles one module for a bundler rather than for a run, and returns the
+    /// map from what was written to what came out. The bundler chains it into
+    /// the output's map, so nothing is registered for this process's stack
+    /// traces: no code of the module runs here.
+    pub fn compile_for_bundle(
+        &self,
+        id: &str,
+        source: String,
+    ) -> Result<(String, Option<String>), String> {
+        self.compile(id, source, Registration::Bundle)
+    }
+
+    fn compile(
+        &self,
+        specifier: &str,
+        source: String,
+        registration: Registration,
+    ) -> Result<(String, Option<String>), String> {
         PRINTED.with_borrow_mut(|printed| *printed = None);
         // A mocked module is replaced whole (D101); its real source is loaded
         // under the reserved query, which is a different id.
         if let Some(mocked) = crate::module_mocks::synthetic(specifier) {
-            return Ok(mocked);
+            return Ok((mocked, None));
         }
         // The specifier is a file: URL; oxc wants a path, and only to read the
         // extension off it. A URL that will not convert (there should be none —
@@ -655,11 +677,14 @@ impl TypeStripper {
         // none is returned byte for byte as it always was.
         let javascript = !needs_transform(path);
         if javascript && !source.contains("accessor") {
-            return Ok(if prelude.is_empty() {
-                source
-            } else {
-                format!("{prelude}{source}")
-            });
+            return Ok((
+                if prelude.is_empty() {
+                    source
+                } else {
+                    format!("{prelude}{source}")
+                },
+                None,
+            ));
         }
 
         let path = Path::new(path);
@@ -702,11 +727,14 @@ impl TypeStripper {
         // The word was in a comment or a name, so this is the ordinary
         // JavaScript file it was before: hand back the bytes, not a reprint.
         if javascript && !lowered {
-            return Ok(if prelude.is_empty() {
-                source
-            } else {
-                format!("{prelude}{source}")
-            });
+            return Ok((
+                if prelude.is_empty() {
+                    source
+                } else {
+                    format!("{prelude}{source}")
+                },
+                None,
+            ));
         }
 
         // The transformer needs scoping information to rename and resolve as it
@@ -735,7 +763,8 @@ impl TypeStripper {
             if let Some(error) = first_error(&result.diagnostics) {
                 return Err(error);
             }
-            return Ok(format!("{prelude}{}", print(&program, path)));
+            let (code, map) = print(&program, path, registration);
+            return Ok((format!("{prelude}{code}"), map));
         };
         let options = TransformOptions {
             jsx,
@@ -749,7 +778,8 @@ impl TypeStripper {
 
         // No newline between them: the prelude shares line 1 with whatever the
         // printer put there, so every line below keeps the number it had.
-        Ok(format!("{prelude}{}", print(&program, path)))
+        let (code, map) = print(&program, path, registration);
+        Ok((format!("{prelude}{code}"), map))
     }
 }
 
@@ -758,31 +788,52 @@ impl TypeStripper {
 /// a line no longer is the line that was written; the map is how a stack frame
 /// naming the file is put back on the line that was, by the same remapping an
 /// uncaught error's stack goes through.
-fn print(program: &oxc::ast::ast::Program<'_>, path: &Path) -> String {
+fn print(
+    program: &oxc::ast::ast::Program<'_>,
+    path: &Path,
+    registration: Registration,
+) -> (String, Option<String>) {
     let printed = Codegen::new()
         .with_options(oxc::codegen::CodegenOptions {
             source_map_path: Some(path.to_path_buf()),
             ..oxc::codegen::CodegenOptions::default()
         })
         .build(program);
-    if let Some(map) = printed.map {
-        es_runtime_cli_common::sourcemap::register(path, &map.to_json_string());
-        if crate::coverage::collect::recording() {
-            let mappings = map
-                .get_tokens()
-                .map(|token| {
-                    [
-                        token.get_dst_line(),
-                        token.get_dst_col(),
-                        token.get_src_line(),
-                        token.get_src_col(),
-                    ]
-                })
-                .collect();
-            PRINTED.with_borrow_mut(|printed| *printed = Some(mappings));
-        }
+    let Some(map) = printed.map else {
+        return (printed.code, None);
+    };
+    let json = map.to_json_string();
+    if registration == Registration::Bundle {
+        return (printed.code, Some(json));
     }
-    printed.code
+    es_runtime_cli_common::sourcemap::register(path, &json);
+    if crate::coverage::collect::recording() {
+        let mappings = map
+            .get_tokens()
+            .map(|token| {
+                [
+                    token.get_dst_line(),
+                    token.get_dst_col(),
+                    token.get_src_line(),
+                    token.get_src_col(),
+                ]
+            })
+            .collect();
+        PRINTED.with_borrow_mut(|printed| *printed = Some(mappings));
+    }
+    (printed.code, Some(json))
+}
+
+/// Who a compiled module is for, which decides what its map is used for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Registration {
+    /// The module runs in this process: its map is how a stack frame naming
+    /// the file is put back on the line that was written, and what coverage
+    /// reads.
+    Runtime,
+    /// A bundler is compiling it. The map goes back with the code and nothing
+    /// else is recorded.
+    Bundle,
 }
 
 #[cfg(test)]

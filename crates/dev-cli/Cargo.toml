@@ -63,6 +63,9 @@ rolldown_common.workspace = true
 # makes one already has. Same pin and same graph as rolldown itself — this is
 # the crate rolldown's own hook signatures name, not a second implementation.
 rolldown_sourcemap.workspace = true
+# Editing a module in place with a map, for the passes that rewrite part of
+# one (`new URL(…, import.meta.url)`).
+string_wizard.workspace = true
 # The vocabulary a hot update is assembled in. See the workspace manifest.
 rolldown_utils.workspace = true
 oxc_resolver.workspace = true
