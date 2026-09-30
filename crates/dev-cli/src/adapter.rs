@@ -235,6 +235,24 @@ impl Adapter {
         anyhow!(blamed(self.pass.name(), id, &message))
     }
 
+    /// A `load` hook's failure, as the error handed back to the bundler.
+    ///
+    /// Wrapped in the bundler's own diagnostic type, because that is the one
+    /// form it keeps whole from a `load`. Any other error becomes "Could not
+    /// load x — plugin `p` threw an error", and the plugin's own message, which
+    /// is the only part that says what went wrong, is dropped with the rest of
+    /// the chain. What is lost instead is the frame at the importing line: the
+    /// bundler draws it only for its own error, and a `load` is never told its
+    /// importer. The module that failed is named either way.
+    fn failed_load(&self, id: &str, message: String) -> anyhow::Error {
+        anyhow::Error::from(rolldown_error::BuildDiagnostic::plugin_error(
+            rolldown_error::CausedPlugin::new(std::borrow::Cow::Owned(
+                self.pass.name().to_string(),
+            )),
+            anyhow!(blamed(self.pass.name(), Some(id), &message)),
+        ))
+    }
+
     fn order(&self, hook: Hook) -> Option<PluginHookMeta> {
         let order = match self.pass.hooks().get(hook)?.order {
             Order::Pre => PluginOrder::Pre,
@@ -346,7 +364,7 @@ impl Plugin for Adapter {
             .pass
             .load(id, &ctx)
             .await
-            .map_err(|e| self.failed(Some(id), e))?
+            .map_err(|e| self.failed_load(id, e))?
         else {
             return Ok(None);
         };

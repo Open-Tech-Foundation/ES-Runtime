@@ -45,6 +45,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **A plugin's `load` error says what went wrong.** A `load` hook that threw
+  was reported as "Could not load x — plugin `p` threw an error", in `build`
+  and in `start`, with the plugin's own message and stack dropped. The report
+  now names the plugin and the module and carries what the plugin said.
 - **A test can import a stylesheet or an image.** `import styles from
   "./x.module.css"`, a plain `.css` and an imported `.png` failed with a
   syntax error, because CSS Modules and assets were handled only in a build.

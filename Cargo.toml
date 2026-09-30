@@ -343,6 +343,11 @@ rolldown_sourcemap = "=1.2.3"
 # built-in passes that rewrite part of a module. Already in the graph via
 # rolldown; pinned with it.
 string_wizard = "=1.2.3"
+# The diagnostic type rolldown keeps whole when a hook fails. A pass failure is
+# handed back as one so the plugin's own message survives; any other error a
+# `load` returns is flattened to "plugin `x` threw an error". Already in the
+# graph via rolldown; pinned with it.
+rolldown_error = "=1.2.3"
 # The types `compute_hmr_update_for_file_changes` speaks: the changed-file map it
 # takes, the ship map each client carries, and the interned module id both are
 # keyed by. Named here because a hot update is assembled in our code and has to

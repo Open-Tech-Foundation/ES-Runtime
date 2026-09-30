@@ -1970,8 +1970,9 @@ fn a_library_refuses_an_asset_import_and_says_why() {
         .expect("spawn esdev build --lib");
     assert!(!out.status.success(), "{}", stdout(&out));
     let message = slash_paths(&stderr(&out));
-    // The frame points at the import, and the explanation says what to do.
-    assert!(message.contains("src/index.ts"), "{message}");
+    // The asset is named, with the pass that refused it, and the explanation
+    // says what to do.
+    assert!(message.contains("[esdev:assets] src/logo.png"), "{message}");
     assert!(message.contains("--lib cannot know one"), "{message}");
     assert!(message.contains("data:"), "{message}");
 }
@@ -12525,6 +12526,49 @@ fn a_plugin_reads_where_each_build_runs() {
     assert!(api.contains("build/server/api/false"), "{api}");
     let web = std::fs::read_to_string(dir.join("dist/web/app.js")).expect("web");
     assert!(web.contains("build/browser/web/false"), "{web}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `load` that throws is reported with what the plugin said. The bundler
+/// turns any other error from a `load` into "Could not load x — plugin `p`
+/// threw an error" and drops the cause, which is the only part that says what
+/// went wrong.
+#[test]
+fn a_failing_load_reports_the_plugins_own_message() {
+    let dir = build_dir("p_plugins_load_fails");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"
+export default {
+  name: "pages",
+  resolve: {
+    filter: { id: "virtual:pages" },
+    handler: () => ({ id: "virtual:pages", virtual: true }),
+  },
+  load: {
+    filter: { id: "virtual:pages" },
+    handler() { throw new Error("the app directory is missing"); },
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "src/app.mjs",
+        "import pages from 'virtual:pages';\nconsole.log(pages);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./plugin.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("the app directory is missing"), "{text}");
+    assert!(text.contains("[pages] virtual:pages"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
