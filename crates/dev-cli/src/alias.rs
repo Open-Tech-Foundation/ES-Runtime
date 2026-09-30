@@ -66,15 +66,14 @@ impl Aliases {
             if !(rest.is_empty() || rest.starts_with('/')) {
                 return None;
             }
-            let replaced = format!("{to}{rest}");
             if Path::new(to).is_absolute() {
                 // A path: the file it names, found as the build finds it —
                 // otherwise the path as written, so a miss is reported
                 // against the file the alias pointed at.
-                let path = PathBuf::from(&replaced);
+                let path = join(Path::new(to), rest);
                 Some(file_url(&probe(&path).unwrap_or(path)))
             } else {
-                Some(replaced)
+                Some(format!("{to}{rest}"))
             }
         })
     }
@@ -172,6 +171,25 @@ fn probe(path: &Path) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// `base` with the `/`-separated `relative` appended one segment at a time.
+/// A Windows verbatim path (`\\?\C:\…`, which `canonicalize` returns) takes
+/// every character literally — `/` is no separator there and `..` no parent —
+/// so pasting `lib/shared` onto one names a file that cannot exist.
+pub(crate) fn join(base: &Path, relative: &str) -> PathBuf {
+    let mut path = base.to_path_buf();
+    let separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+    for segment in relative.split(separator) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                path.pop();
+            }
+            _ => path.push(segment),
+        }
+    }
+    path
+}
+
 fn file_url(path: &Path) -> String {
     url::Url::from_file_path(path)
         .map(|url| url.to_string())
@@ -203,6 +221,28 @@ mod tests {
 
     /// The longest name wins, and a name matches whole or up to a `/` — `@`
     /// is not a prefix of `@scope/pkg`.
+    #[test]
+    fn a_path_is_joined_a_segment_at_a_time() {
+        let base = Path::new("/project/src");
+        assert_eq!(join(base, "/lib/shared"), base.join("lib").join("shared"));
+        assert_eq!(join(base, "./lib/./a"), base.join("lib").join("a"));
+        assert_eq!(join(base, "../shared"), Path::new("/project/shared"));
+        assert_eq!(join(base, ""), base);
+    }
+
+    /// `canonicalize` hands back `\\?\C:\…` on Windows, where `/` is a
+    /// character of the name: the segments must be pushed, not pasted.
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_windows_path_is_joined_with_its_own_separator() {
+        let base = Path::new(r"\\?\C:\project\lib");
+        assert_eq!(
+            join(base, "/shared"),
+            Path::new(r"\\?\C:\project\lib\shared")
+        );
+        assert_eq!(join(base, "../x/y"), Path::new(r"\\?\C:\project\x\y"));
+    }
+
     #[test]
     fn a_project_alias_is_a_whole_name_or_a_path_prefix() {
         let dir = project(&[("src/ui/button.ts", ""), ("src/lib/index.ts", "")]);

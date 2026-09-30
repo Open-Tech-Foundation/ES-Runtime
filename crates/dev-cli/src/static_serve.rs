@@ -601,10 +601,11 @@ mod tests {
         assert_eq!(etag(100, t), "W/\"100-1700000000.000000000\"");
         assert_eq!(etag(100, t), etag(100, t));
         // Same size, same second, different instants: still different tags,
-        // so a rapid rebuild cannot keep a stale one.
+        // so a rapid rebuild cannot keep a stale one. 100 ns apart: the
+        // finest step a Windows `SystemTime` holds.
         assert_ne!(
-            etag(100, t + Duration::from_nanos(1)),
-            etag(100, t + Duration::from_nanos(2))
+            etag(100, t + Duration::from_nanos(100)),
+            etag(100, t + Duration::from_nanos(200))
         );
     }
 

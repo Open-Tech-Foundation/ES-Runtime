@@ -24,6 +24,21 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `esdev create` applies every template patch again.** A Windows
+  checkout converted the embedded templates to CRLF, so the Tailwind
+  dependency, the TypeScript compiler and `typecheck` script, and the demo
+  blog section were silently left out of scaffolded projects. The repository
+  now pins LF line endings (`.gitattributes`).
+- **Windows: `dev.outDir` refuses `/tmp/dev` and `C:dev`.** Windows does not
+  call a rooted path without a drive, or a drive without a root, absolute, so
+  both were accepted as a directory inside the project.
+- **Windows: a path `alias` resolves.** A project directory in `\\?\C:\…`
+  form treats `/` as part of a name, so `@lib/shared` resolved to a file that
+  could not exist and `--changed`/`--related` never reached a test through
+  the alias.
+
 ## [0.13.0] - 2026-09-29
 
 ### Added

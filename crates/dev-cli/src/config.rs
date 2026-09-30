@@ -1453,7 +1453,15 @@ fn read_devdir(
         ));
     }
     let path = Path::new(devdir);
-    if path.is_absolute() {
+    // Windows calls `/tmp/dev` and `C:dev` relative — rooted, or on a drive,
+    // but not both — and either one still lands outside the project.
+    if path.is_absolute()
+        || path.has_root()
+        || matches!(
+            path.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+    {
         return Err(format!(
             "{file}: `dev.outDir` is absolute, and the dev loop writes inside the project — write \"{DEFAULT_DEV_DIR}\", not \"{devdir}\"."
         ));
@@ -1874,7 +1882,9 @@ fn aliases(value: Option<&Value>, file: &str, dir: &Path) -> Result<Vec<(String,
             || replacement.starts_with("../")
             || Path::new(replacement).is_absolute();
         let to = if is_path {
-            dir.join(replacement).to_string_lossy().into_owned()
+            crate::alias::join(dir, replacement)
+                .to_string_lossy()
+                .into_owned()
         } else {
             replacement.clone()
         };
@@ -2486,6 +2496,17 @@ mod tests {
             ))
             .expect_err("refused");
             assert!(err.contains(needle), "{err}");
+        }
+        // Windows spells a path outside the project two more ways: on a
+        // drive without a root, and on a drive with one.
+        #[cfg(windows)]
+        for devdir in ["C:dev", "C:/dev"] {
+            let err = read(&format!(
+                r#"{{ "build": {{ "targets": {{ "server": {{ "entry": "s.ts" }} }} }},
+                     "dev": {{ "outDir": "{devdir}" }} }}"#,
+            ))
+            .expect_err("refused");
+            assert!(err.contains("absolute"), "{err}");
         }
 
         let empty =

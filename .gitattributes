@@ -1,0 +1,7 @@
+# The repository is LF, and a Windows checkout stays LF: `esdev create`
+# embeds its templates byte for byte and patches them by matching "\n", so a
+# CRLF checkout builds an `esdev` whose scaffolds silently miss every patch.
+* text=auto eol=lf
+
+# Fuzz seeds are inputs, byte for byte.
+fuzz/seeds/** -text
