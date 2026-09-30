@@ -4,8 +4,8 @@
 //! A test file is affected when it, or anything it imports — followed through
 //! static imports, re-exports and `import()` of a literal, as the runtime
 //! would resolve them — is one of the files. A few files change what every
-//! test means (the project's config, its dependencies, a setup module), and a
-//! change to one of them affects every test file.
+//! test means (the project's config, its dependencies, a setup module, a
+//! plugin), and a change to one of them affects every test file.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -120,6 +120,16 @@ pub fn affected(
     {
         return Ok(tests.to_vec());
     }
+    // A plugin decides what the modules a test imports compile to, and which
+    // modules those are is not something the graph records: a changed plugin,
+    // or anything it imports, affects every test (D148).
+    let plugins = graph.plugin_modules(source);
+    if plugins
+        .iter()
+        .any(|module| graph.reaches(module, &changed, deleted))
+    {
+        return Ok(tests.to_vec());
+    }
     Ok(tests
         .iter()
         .filter(|test| graph.reaches(&canonical(test), &changed, deleted))
@@ -148,6 +158,27 @@ impl Graph {
             resolver: SourceResolver::new(root)?.with_alias(source.resolution().alias),
             imports: HashMap::new(),
         })
+    }
+
+    /// The project's plugin modules, as files: `plugins` entries resolve from
+    /// the project, as the plugin host resolves them. One that resolves to
+    /// nothing is the host's to report.
+    fn plugin_modules(&self, source: &crate::settings::Source) -> Vec<PathBuf> {
+        let Ok(referrer) = url::Url::from_file_path(source.root.join(crate::config::FILE_NAME))
+        else {
+            return Vec::new();
+        };
+        source
+            .plugins
+            .iter()
+            .filter_map(|spec| {
+                self.resolver
+                    .resolve(&spec.module, referrer.as_str())
+                    .and_then(|url| url::Url::parse(&url).ok())
+                    .and_then(|url| url.to_file_path().ok())
+                    .map(|path| canonical(&path))
+            })
+            .collect()
     }
 
     /// Whether `from`, or anything it imports, is one of `changed`.

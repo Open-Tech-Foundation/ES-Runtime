@@ -13071,6 +13071,44 @@ fn test_reads_the_project_file_config_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A plugin decides what a test's modules compile to, so `--related` counts a
+/// change to it — or to anything it imports — as reaching every test. It
+/// selected none: nothing a test imports imports the plugin.
+#[test]
+fn a_changed_plugin_is_related_to_every_test() {
+    let dir = framework_project("p_plugins_related");
+    write_in(&dir, "greeting.helper.mjs", "export const unused = 1;\n");
+    let framework = std::fs::read_to_string(dir.join("framework.mjs")).expect("framework");
+    write_in(
+        &dir,
+        "framework.mjs",
+        &format!("import './greeting.helper.mjs';\n{framework}"),
+    );
+    for named in ["framework.mjs", "greeting.helper.mjs"] {
+        let out = esdev_in(&dir)
+            .args(["test", "--related", named])
+            .output()
+            .expect("spawn esdev test");
+        assert!(
+            out.status.success(),
+            "{named}: {}{}",
+            stdout(&out),
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains("1 of 1 test files reach it"),
+            "{named}: {}",
+            stderr(&out)
+        );
+        assert!(
+            stdout(&out).contains("1 passed"),
+            "{named}: {}",
+            stdout(&out)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same with every file in one process.
 #[test]
 fn test_compiles_through_the_plugins_without_isolation() {

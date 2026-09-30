@@ -57,6 +57,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **`--related` and `--changed` count a plugin change.** A test's modules
+  compile through the project's plugins, but the affected-test graph followed
+  only the application's imports, so `esdev test --related plugin.mjs`
+  selected no tests. A change to a plugin module, or to anything it imports,
+  now affects every test.
 - **Editing a plugin applies on the next rebuild.** `esdev start` keeps the
   loaded plugins across saves for the state they hold, and so kept applying
   the old transform after the plugin itself — or a module it imports — was
