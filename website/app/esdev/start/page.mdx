@@ -34,12 +34,9 @@ esdev <version> — ready in <duration>
 ```
 
 A project with a server of its own names the app's URL instead of the
-endpoint's. A failed build prints its error and nothing more; the loop keeps
-running, and the next save gets its own line.
-
-A failed build also shows in the page: the same error, full-screen, until the
-fix clears it with the next update. Fresh loads never see it — a build that
-fails writes nothing, so a new page opens the last good output.
+endpoint's. A failed build prints its error; the loop keeps running, and the
+next save gets its own line. See [Build failures](#build-failures) for browser
+errors and output behavior.
 
 ## The server is yours
 
@@ -83,15 +80,23 @@ A project with no server of its own — a static site or single-page app — has
 nothing to run, so esdev serves the output directory itself: files, an
 `index.html` fallback for client-side routes, and nothing else.
 
-## A failed build changes nothing
+## Build failures
 
 ```text
 esdev: src/App.tsx: Unexpected token
 ```
 
-The server you were about to fix is still running, still serving, and the
-browser is not told anything. The rebuild happens **before** anything is
-stopped, so the old server also answers during it.
+The running server keeps serving when a rebuild fails. The rebuild happens
+before the server is stopped, so it also answers while the build runs.
+
+The error is sent to the browser and shown in an overlay until a successful
+update clears it. A page that opens or reconnects during the failure receives
+the current error too.
+
+Development outputs are written in place: a failed build may already have
+updated some files. The loop's output directory is separate from the release
+output. [`esdev build`](/esdev/build/project#safe-output-replacement) stages
+release outputs before replacing them.
 
 ## The update channel
 

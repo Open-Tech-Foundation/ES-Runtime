@@ -113,7 +113,9 @@ resolved as a run resolves it — through the project's
 [aliases](/esdev/test/imports#aliases) too. Type-only imports do not, since they
 are gone at run time. A change to `esdev.json`, `package.json`, a
 `tsconfig.*.json` or `jsconfig.*.json`, a lockfile, or a setup module runs every
-test file.
+test file. A change to a configured plugin, or any module it imports, also
+runs every test file, since the plugin can change how test imports resolve
+and compile.
 
 The run says what it chose on stderr:
 

@@ -105,17 +105,18 @@ The cheap design is a pipe: send source to a bundler process, read the bundle
 back. It was considered, and it fails on the first real plugin — because
 `transform` is only one of the hooks a real plugin uses.
 
-| Hook | Used for | Why a pipe cannot serve it |
+| Operation | Used for | Why a pipe cannot serve it |
 | --- | --- | --- |
 | `transform(code, id)` | compiling MDX, CSS modules | this one alone *would* work as a pipe |
-| `resolveId` + `load` | virtual modules — `@framework/nav`, `/posts` | they serve modules that exist on **no disk**; there is nothing to pipe |
-| `this.addWatchFile(f)` | those same modules | they depend on files they never import; without saying so, invalidation is wrong in the direction that serves stale output |
-| `this.resolve(spec, importer)` | asset plugins | needs the **bundler's own resolver**, mid-hook |
-| `this.emitFile({...})` | worker/asset emission | adds to a build that is already running |
-| `this.warn` / `this.error` | the error overlay | diagnostics have to reach the program, not a log nobody reads |
+| `resolve` + `load` | virtual modules — `@framework/nav`, `/posts` | they serve modules that exist on **no disk**; there is nothing to pipe |
+| Returned `dependsOn` | those same modules | they depend on files they never import; without saying so, invalidation is wrong in the direction that serves stale output |
+| `ctx.resolve(spec, importer)` | asset plugins | needs the **bundler's own resolver**, mid-hook |
+| `ctx.emit({...})` | worker/asset emission | adds to a build that is already running |
+| `ctx.warn` / `ctx.error` | the error overlay | diagnostics have to reach the program, not a log nobody reads |
 
-Four of the six need the plugin and the bundler in one conversation. So the
-plugin API takes functions, and the functions run in the guest isolate.
+Resolution and file emission need access to the running build, and diagnostics
+have to return to its caller. The plugin API therefore takes functions that run
+in the guest isolate.
 
 ## The threading, which is the whole problem
 
@@ -195,15 +196,16 @@ The consequence to know: **a hook that blocks the isolate synchronously blocks
 everything**, including the server the dev tool is running. An `async` hook that
 awaits I/O does not.
 
-### `this`, and its lifetime
+### Context lifetime
 
-`this.resolve()` and `this.emitFile()` reach into the bundler while a build is
-running, so the context has to survive the crossing. Rolldown's `PluginContext`
+`ctx.resolve()` and `ctx.emit()` reach into the bundler while a build is
+running, so the context has to survive the crossing. The public API passes
+`ctx` as the handler's last argument. Behind it, Rolldown's `PluginContext`
 is `Arc`-backed and `Send`, so each in-flight call parks its context beside its
 reply channel, keyed by call id, and the context ops find it by that id.
 
 It is dropped the moment the hook returns. Holding one past its hook — stashing
-`this` and calling `resolve()` later — throws, because by then it may name a
+`ctx` and calling `resolve()` later — throws, because by then it may name a
 build that no longer exists.
 
 ### Why a pending pump does not hold the process open

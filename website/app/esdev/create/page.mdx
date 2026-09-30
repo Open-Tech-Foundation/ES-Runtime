@@ -105,10 +105,11 @@ src/main.ts         shows it (App.tsx and entry.client.tsx for react)
 
 The OTF starters are pages rather than packages: one page — the file to edit
 named in it — and the scripts to run it. Every template's scripts are there
-from the start: `dev` and `build` everywhere, `test` and `typecheck` where the
-project runs under `esdev`, `test:dom` where it has a DOM test, and `preview`
-where it builds a static site. Nothing chooses a license for you; add one when
-you publish.
+from the start: applications have `dev` and `build`; `lib` has `build`, `test`
+and `typecheck`, without a `dev` script. The OTF `library` publishes its source
+and has `test`, plus `typecheck` when TypeScript is selected. Templates add
+`test:dom` where they have a DOM test and `preview` where they build a static
+site. Nothing chooses a license for you; add one when you publish.
 
 ## Modes
 

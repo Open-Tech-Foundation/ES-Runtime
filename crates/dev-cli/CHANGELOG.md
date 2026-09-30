@@ -63,6 +63,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **Site development documentation matches the current tooling**: guard HMR
+  examples outside hot builds, distinguish configured and programmatic plugin
+  isolation, explain build-error overlays and development writes, correct the
+  standalone watch root and template scripts, and document plugin changes in
+  test selection and the unpublished reusable React refresh package.
 - **`--related` and `--changed` count a plugin change.** A test's modules
   compile through the project's plugins, but the affected-test graph followed
   only the application's imports, so `esdev test --related plugin.mjs`

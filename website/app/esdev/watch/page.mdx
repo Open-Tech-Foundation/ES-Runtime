@@ -29,9 +29,10 @@ killed. A program that exits leaves the watcher running.
 
 ## What is watched
 
-The watcher starts at the project root (the nearest directory with a
-`package.json`) or, without one, the entry file's directory. It walks that
-directory recursively and watches source extensions.
+The watcher starts at the working directory, which is also where the child
+program runs. If the working directory cannot be obtained, it falls back to
+the entry file's directory. It walks that directory recursively and watches
+source extensions.
 
 The generic watcher excludes esdev's own output: its staging directories and
 any `.esdev` directory, which holds converted CommonJS packages and screenshot

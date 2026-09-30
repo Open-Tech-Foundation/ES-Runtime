@@ -18,7 +18,7 @@ import { render } from "./view.js";
 
 render();
 
-import.meta.hot.accept();
+import.meta.hot?.accept();
 ```
 
 If nothing on the way up accepts a change, the page reloads.
@@ -47,25 +47,29 @@ is how a module says “dev only” and still typechecks.
 tears itself down:
 
 ```js
-addEventListener("resize", onResize, { signal: import.meta.hot.signal });
+addEventListener("resize", onResize, { signal: import.meta.hot?.signal });
 ```
 
-That line is also correct in production, where the signal is never aborted. For
-APIs that do not take a signal:
+In production the signal is `undefined`, so the listener stays registered.
+For APIs that do not take a signal, register cleanup only in a hot build:
 
 ```js
 const timer = setInterval(tick, 1000);
-import.meta.hot.signal.addEventListener("abort", () => clearInterval(timer));
+if (import.meta.hot) {
+  import.meta.hot.signal.addEventListener("abort", () => clearInterval(timer));
+}
 ```
 
 ## State across replacements
 
 ```js
-const cache = import.meta.hot.keep("cache", () => new Map());
+const cache = import.meta.hot
+  ? import.meta.hot.keep("cache", () => new Map())
+  : new Map();
 ```
 
-Made once, returned every time after — one call site, where `dispose` plus
-`data` is two that have to agree.
+In a hot build, made once and returned on every replacement. In production,
+the module creates its own map.
 
 ## Component refresh is a plugin
 
@@ -113,6 +117,34 @@ its `useState` intact. It is React Fast Refresh, implemented by the template's
 
 React has no privileges here: delete the plugin entry and the React template
 loses Fast Refresh like any other framework would.
+
+### Add refresh to an existing project
+
+`@opentf/esdev-plugin-react` provides a reusable refresh plugin. Its initial
+release is not published yet. From an ES-Runtime checkout, run
+`npm pack ./packages/esdev-plugin-react`, then install the resulting tarball
+and `react-refresh` as development dependencies in your application:
+
+```sh
+npm install --save-dev /path/to/opentf-esdev-plugin-react-0.1.0.tgz react-refresh@^0.19.0
+```
+
+Add the package to the project's top-level plugin list:
+
+```json
+{
+  "plugins": ["@opentf/esdev-plugin-react"],
+  "jsx": { "importSource": "react" },
+  "build": {
+    "targets": { "web": { "entry": "index.html", "outdir": "dist" } }
+  }
+}
+```
+
+Run `esdev start`. The package initializes the refresh runtime itself, so the
+application entry needs no refresh bootstrap. When replacing an existing
+template plugin, remove its plugin entry and the template's refresh bootstrap
+import. The embedded React templates still use their local plugin.
 
 <Callout type="note" title="What it costs">
   Dev mode turns treeshaking off, so the React template's dev bundle is larger
