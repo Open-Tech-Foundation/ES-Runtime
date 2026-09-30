@@ -1,6 +1,6 @@
 ---
 title: Plugin lifecycle and hooks
-description: Define an esdev plugin object, filter work, and use its six build hooks.
+description: Define an esdev plugin object, filter work, and use its seven hooks.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -55,7 +55,7 @@ side as a string literal instead of an `export`. Set it whenever the code you
 return is a different language from the file it came from: `"js"`, `"jsx"`,
 `"ts"`, `"css"`.
 
-## The six hooks
+## The seven hooks
 
 | Hook | Handler | Returns |
 | --- | --- | --- |
@@ -65,12 +65,54 @@ return is a different language from the file it came from: `"js"`, `"jsx"`,
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
 | `bundle` | `(output, ctx)` | nothing |
+| `html` | `(html, id, ctx)` | `{ html?, tags? }`, or `null` — esdev's HTML targets only |
 
-Six, against rollup's twenty-odd. Each is a promise whatever bundler sits
+Seven, against rollup's twenty-odd. Each is a promise whatever bundler sits
 behind this has to keep, so the list is short on purpose. Data comes first and
 the context comes last, with nothing positional in between: anything one
 particular hook needs to say — `isEntry`, on a resolve — rides on the context
 rather than shifting the signature.
+
+## html: the document
+
+An HTML target's document goes through the plugins too. `id` is its path, and
+the answer is a replacement document, tags to insert, or both:
+
+```js
+html: {
+  order: "pre",
+  handler: (html, id, ctx) => ({
+    tags: [{ tag: "script", attrs: { type: "module", src: "./src/boot.ts" }, injectTo: "body" }],
+  }),
+}
+```
+
+| Tag field | |
+| --- | --- |
+| `tag` | The element's name |
+| `attrs` | Values are escaped; `true` writes the attribute bare, `false` leaves it out |
+| `children` | Written as given |
+| `injectTo` | `"head"` (default, before `</head>`), `"head-prepend"`, `"body"`, `"body-prepend"` |
+
+**`order: "pre"` sees the source**, before esdev reads its references, so a
+script or stylesheet it adds is built exactly as if the author had written it.
+Unordered and `"post"` see the **written** document, with `ctx.bundle` listing
+what the build produced; `fileName` is relative to the output directory, so a
+file's URL is `/` + it:
+
+```js
+html: {
+  handler: (html, id, ctx) => ({
+    tags: ctx.bundle
+      .filter((file) => file.type === "chunk" && file.isEntry)
+      .flatMap((file) => file.imports)
+      .map((file) => ({ tag: "link", attrs: { rel: "modulepreload", href: `/${file}` } })),
+  }),
+}
+```
+
+It runs in `esdev build` and `esdev start` alike; the dev loop's update client
+is added after every plugin. The rest of the document is left byte for byte.
 
 ## jsx: what only the compiler can do
 

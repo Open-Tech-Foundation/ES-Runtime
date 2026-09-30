@@ -211,6 +211,7 @@ const mdx = {
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
 | `bundle` | `(output, ctx)` | nothing |
+| `html` | `(html, id, ctx)` | `{ html?, tags? }`, or `null` — esdev's HTML targets only |
 
 `null` or nothing means *not mine*, and the next plugin gets a turn. Anything
 else must be the object — a bare string of code is refused by name. Data comes

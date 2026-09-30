@@ -39,3 +39,31 @@ ctx.addWatchFile("a");
 // @ts-expect-error — the method is `emit`.
 ctx.emitFile({ type: "asset", source: "" });
 ctx.emit({ type: "asset", source: "" });
+
+// An `html` hook adds tags, or replaces the document, or both (D151).
+export const preload: Plugin = {
+  name: "preload",
+  html: {
+    filter: { id: /index\.html$/ },
+    handler(html, id, ctx) {
+      const imports = (ctx.bundle ?? []).flatMap((file) =>
+        file.type === "chunk" && file.isEntry ? file.imports : [],
+      );
+      return {
+        html: html.replace("<title>", `<title data-id="${id}">`),
+        tags: imports.map((file) => ({
+          tag: "link",
+          attrs: { rel: "modulepreload", href: `/${file}`, crossorigin: true },
+          injectTo: "head-prepend" as const,
+        })),
+      };
+    },
+  },
+};
+
+export const refused: Plugin = {
+  html: {
+    // @ts-expect-error — one form of answer: `{ html }`, not a bare string.
+    handler: (html) => html,
+  },
+};

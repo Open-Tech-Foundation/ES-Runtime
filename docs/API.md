@@ -3781,11 +3781,15 @@ const mdx = {
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
 | `bundle` | `(output, ctx)` | nothing |
+| `html` | `(html, id, ctx)` | `{ html?, tags? }`, or `null` — esdev's HTML targets only |
 
-Six, against rollup's twenty-odd: each is a promise a future backend has to
+Seven, against rollup's twenty-odd: each is a promise a future backend has to
 keep, so the list is short deliberately. `null` means *not mine*; anything else
 must be the object, and a bare string of code is refused with a message saying
 so. `resolve` + `load` together are what makes a **virtual module** possible.
+`html` shapes an `esdev.json` HTML target's document: ordered `pre` it sees the
+source before its references are read, otherwise the written document with
+`ctx.bundle` describing the output (esdev D151).
 
 `bundle` is what the build **produced**, before any of it is written: one entry
 per chunk (`{ type: "chunk", fileName, name, isEntry, isDynamicEntry,

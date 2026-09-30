@@ -463,7 +463,7 @@ impl Plugin for Adapter {
 /// Read from the backend's listing and copied, rather than handed over: the
 /// contract's [`bundle`](contract::Pass::bundle) is read-only, and a `&mut Vec`
 /// crossing into an isolate could not be anything else anyway.
-fn produced(bundle: &[rolldown_common::Output]) -> Vec<contract::Output> {
+pub(crate) fn produced(bundle: &[rolldown_common::Output]) -> Vec<contract::Output> {
     bundle
         .iter()
         .map(|output| match output {

@@ -1162,7 +1162,7 @@ pub async fn bundle_browser_entries(
     jsx_settings: crate::transform::JsxSettings,
     tsconfig: Option<PathBuf>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
-) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>, usize), String> {
+) -> Result<BrowserBundle, String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
     let hash = !dev;
@@ -1234,7 +1234,7 @@ pub async fn bundle_browser_entries(
     // it. Which is why the collector is the bundler's rather than the caller's:
     // a held plugin keeps the handle it was constructed with, so a caller that
     // made a fresh one each build would be reading an empty one.
-    let (styles, assets) = if dev {
+    let (styles, assets, mut produced) = if dev {
         let held = warm().lock().await;
         build_warm(held, &key, root, out_dir, &options, minify, plugins).await?
     } else {
@@ -1259,8 +1259,9 @@ pub async fn bundle_browser_entries(
         let written = bundler.write().await;
         record_inputs(&bundler);
         let output = written.map_err(reported!())?;
+        let produced = crate::adapter::produced(&output.assets);
         crate::print_warnings!(output);
-        (styles.take(), assets)
+        (styles.take(), assets, produced)
     };
     // Into the same directory the bundle and its chunks go: a document's build
     // writes everything hashed under one `assets/`, and an imported file is one
@@ -1279,9 +1280,37 @@ pub async fn bundle_browser_entries(
         let filename = crate::html::hashed_name(&path, &bytes);
         std::fs::rename(&path, out_dir.join(&filename))
             .map_err(|e| format!("cannot name {filename}: {e}"))?;
+        // The listing names what is on disk, and an entry was renamed after
+        // the bundler wrote it.
+        let unhashed = format!("{name}.js");
+        for output in &mut produced {
+            if let crate::contract::Output::Chunk { file_name, .. } = output
+                && *file_name == unhashed
+            {
+                file_name.clone_from(&filename);
+            }
+        }
         written.push((name, filename));
     }
-    Ok((written, styles, emitted))
+    Ok(BrowserBundle {
+        entries: written,
+        sheets: styles,
+        assets: emitted,
+        produced,
+    })
+}
+
+/// What [`bundle_browser_entries`] wrote.
+pub struct BrowserBundle {
+    /// Each entry's name, and the file it became.
+    pub entries: Vec<(String, String)>,
+    /// The CSS the modules imported, for the caller to write and link.
+    pub sheets: Vec<crate::cssmodules::Sheet>,
+    /// How many imported assets were written beside the bundle.
+    pub assets: usize,
+    /// Every chunk and asset, by the name it has on disk relative to the
+    /// output directory: what an `html` hook is shown (D151).
+    pub produced: Vec<crate::contract::Output>,
 }
 
 /// The passes a browser build runs, in the order they are declared.
@@ -1629,7 +1658,14 @@ async fn build_warm(
     options: &crate::bundler::Options,
     minify: bool,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
-) -> Result<(Vec<crate::cssmodules::Sheet>, crate::assets::Emitted), String> {
+) -> Result<
+    (
+        Vec<crate::cssmodules::Sheet>,
+        crate::assets::Emitted,
+        Vec<crate::contract::Output>,
+    ),
+    String,
+> {
     if held.as_ref().is_none_or(|warm| warm.key != key) {
         let styles = crate::cssmodules::Collected::new();
         let assets = crate::assets::Emitted::new();
@@ -1670,11 +1706,12 @@ async fn build_warm(
     let written = warm.bundler.write().await;
     record_inputs(&warm.bundler);
     let output = written.map_err(reported!())?;
+    let produced = crate::adapter::produced(&output.assets);
     crate::print_warnings!(output);
     // Drained, not read: the same collector serves every rebuild, and sheets
     // left in it would be emitted again next time. The assets collector is the
     // other way round — see [`Warm::assets`].
-    Ok((warm.styles.take(), warm.assets.clone()))
+    Ok((warm.styles.take(), warm.assets.clone(), produced))
 }
 
 /// Copies a target's `assets` into its output directory, and reports how many.

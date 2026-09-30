@@ -24,6 +24,9 @@ itself.
 
 ### Added
 
+- `runtime:build`'s `Plugin.html` hook, with `HtmlResult`, `HtmlTag` and
+  `PluginContext.bundle` (esdev D151).
+
 - `runtime:db`'s built-in `postgres` driver, with `PgConnection`, `PgOptions`,
   `PgPooled`, `PgPoolOptions`, `PgRow`, `PgServerMessage` and `PgValue`.
 - `runtime:db`'s built-in `mysql` driver, with `MySqlConnection`,

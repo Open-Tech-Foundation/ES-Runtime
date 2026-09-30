@@ -489,7 +489,11 @@ impl Job {
             .as_ref()
             .map(|host| host.passes(&crate::test::site(true)))
             .unwrap_or_default();
-        let (written, sheets, _) = crate::build::bundle_browser_entries(
+        let crate::build::BrowserBundle {
+            entries: written,
+            sheets,
+            ..
+        } = crate::build::bundle_browser_entries(
             entries,
             &self.root,
             &self.dir,

@@ -92,7 +92,30 @@ declare module "runtime:build" {
      * a hot boundary, which is exactly wrong in what you ship.
      */
     readonly hot: boolean;
+    /**
+     * On an `html` hook that is not ordered `pre`: what the build produced,
+     * with `fileName` relative to the output directory — the URL is `/` + it.
+     * What a `modulepreload` for the chunks an entry imports is written from.
+     */
+    readonly bundle?: BundledFile[];
   }
+
+  /** One element an `html` hook adds to the document. */
+  export interface HtmlTag {
+    tag: string;
+    /** `true` writes the attribute bare; `false`, `null` or absent leaves it out. */
+    attrs?: Record<string, string | number | boolean | null | undefined>;
+    /** Written as given: a script's or a style's text, or markup. */
+    children?: string;
+    /** Where it goes. Default: `"head"`, before `</head>`. */
+    injectTo?: "head" | "head-prepend" | "body" | "body-prepend";
+  }
+
+  /**
+   * What an `html` hook may return: a replacement document, tags to insert, or
+   * both — the replacement first. `null` leaves the document alone.
+   */
+  export type HtmlResult = null | undefined | { html?: string; tags?: HtmlTag[] };
 
   /** One pattern: a string is an **exact** match, a RegExp is tested. */
   export type FilterPattern = string | RegExp | (string | RegExp)[];
@@ -189,6 +212,16 @@ declare module "runtime:build" {
     end?: WholeBuildHook<(error: string | null, ctx: PluginContext) => void | Promise<void>>;
     bundle?: WholeBuildHook<
       (output: BundledFile[], ctx: PluginContext) => void | Promise<void>
+    >;
+    /**
+     * An HTML target's document; `id` is its path. Ordered `pre`, it sees the
+     * **source**, before esdev reads its references, so a script or stylesheet
+     * it adds is built like one the author wrote. Otherwise it sees the
+     * **written** document, with `ctx.bundle` describing the output. esdev
+     * only: a `build()` a program starts has no document.
+     */
+    html?: Hook<
+      (html: string, id: string, ctx: PluginContext) => HtmlResult | Promise<HtmlResult>
     >;
   }
 

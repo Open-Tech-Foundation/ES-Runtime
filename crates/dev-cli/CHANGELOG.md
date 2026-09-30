@@ -37,6 +37,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **An `html` hook** (DECISIONS D151). A plugin shapes an HTML target's
+  document in `esdev build` and `esdev start`: it returns a replacement, tags
+  to insert (`{ tag, attrs, children, injectTo }`), or both. Ordered `pre`, it
+  sees the source, so a script or stylesheet it adds is built like one the
+  author wrote; otherwise it sees the written document with `ctx.bundle`, for
+  `modulepreload` links and the like.
 - **`dev.server.proxy` forwards API requests** (DECISIONS D150).
   `{ "/api": "http://localhost:8080" }` sends every request under `/api` from
   the page `esdev start` or `esdev preview` serves to that server, bodies,

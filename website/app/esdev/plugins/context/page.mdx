@@ -20,6 +20,7 @@ The last argument of every handler, never `this`.
 | `ctx.platform` | `"browser"` or `"server"` (`"node"` for a `runtime:build` that asked for it): what the compiled code runs against. |
 | `ctx.target` | The project target being built, by name. Absent outside a project build. |
 | `ctx.hot` | `true` for a browser build in a hot dev loop, where modules are replaced in place ([component refresh](/esdev/start/hmr#component-refresh-is-a-plugin)). |
+| `ctx.bundle` | On an `html` hook not ordered `pre`: what the build produced, `fileName` relative to the output directory ([html](/esdev/plugins/lifecycle#html-the-document)). |
 | `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
 
 It is an argument so that an arrow-function handler keeps it. Rollup's

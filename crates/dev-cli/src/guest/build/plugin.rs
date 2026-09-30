@@ -372,6 +372,41 @@ impl contract::Pass for GuestPass {
         })
     }
 
+    fn html<'a>(
+        &'a self,
+        html: &'a str,
+        id: &'a str,
+        output: Option<&'a [contract::Output]>,
+        ctx: &'a Arc<dyn contract::Context>,
+    ) -> contract::Answer<'a, Option<contract::HtmlResult>> {
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            // What the build produced rides on the context, as `ctx.bundle`:
+            // the handler's arguments are the document and its id, as a
+            // `transform`'s are a module and its id.
+            let meta = output
+                .map(|output| {
+                    vec![(
+                        "bundle".to_string(),
+                        Value::Array(output.iter().map(output_value).collect()),
+                    )]
+                })
+                .unwrap_or_default();
+            let out = self
+                .call(
+                    Hook::Html,
+                    vec![
+                        Value::String(html.to_string()),
+                        Value::String(id.to_string()),
+                    ],
+                    meta,
+                    ctx,
+                )
+                .await?;
+            contract::html_result(&out)
+        })
+    }
+
     fn end<'a>(
         &'a self,
         error: Option<&'a str>,

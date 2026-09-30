@@ -3123,3 +3123,21 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Proxying in full-stack mode**, through esdev's listener. The page is not on that origin.
 
 **Consequences:** a frontend calls its API with relative URLs in development as in production. **Not solved here:** path rewriting, a target with a self-signed certificate, and HTTP/2 to the target.
+
+### D151 — A plugin can shape the HTML document · *Proposed (2026-10-01)* · *extends D148*
+
+**Context:** an HTML target is the browser build's entry, and a plugin could not touch it. A framework needs to put things in the document that only the framework knows: its bootstrap script, the stylesheet for its runtime, `<meta>` from a route, `modulepreload` links for the chunks the entry imports, an SSG shell. The only way was a step after `esdev build` rewriting `dist/index.html`, which the dev loop does not run, so development and the build served different documents.
+
+**Decision (maintainer, 2026-10-01):**
+
+- **One hook, `html(html, id, ctx)`**, where `id` is the document's path. It returns `null` to leave the document alone, or `{ html?, tags? }`: `html` replaces the document, and each tag `{ tag, attrs?, children?, injectTo? }` is written where it says — `"head"` (the default, before `</head>`), `"head-prepend"`, `"body"` or `"body-prepend"`. Tags are there so a plugin adding a line does not have to find `</head>` in someone else's markup. An `id` filter may scope it to one document.
+- **`order` decides which document it sees.** `order: "pre"` runs on the **source** document, before esdev reads its references: a `<script type="module" src="./boot.ts">` or a `<link rel="stylesheet" href="./theme.scss">` it adds is built exactly as if the author had written it. Unordered and `"post"` run on the **written** document, after every reference points at its output, with `ctx.bundle` listing what the build produced (the `bundle` hook's shape, `fileName` relative to the output directory, so the URL is `/` + it) — which is what a `modulepreload` needs. This is Vite's `transformIndexHtml` split, and the same reason for it: what a plugin adds before the build is an input; what it adds after is output.
+- **The same in `esdev build` and `esdev start`**, with the hook context's facts (`ctx.command`, `ctx.hot`) for anything that differs. The dev loop's own update client is added after every plugin, so a plugin replacing the document cannot drop it.
+- **Nothing is re-serialised.** Replaced HTML is taken as written, and tags are inserted as text; the rest of the document stays byte for byte, as D86 requires of esdev's own rewriting.
+
+**Rejected:**
+- **A bare string or a list of tags as the return value**, which Vite accepts. The contract's rule is one object form, so a hook's answer means one thing (D123).
+- **A DOM for the plugin to edit.** It would re-serialise the whole document and own every byte of it.
+- **Running it for `esdev test --browser`'s page.** That page is esdev's harness, not a document the project wrote.
+
+**Consequences:** a framework's bootstrapping, head management and preload links live in its plugin and are the same in development and in the build.

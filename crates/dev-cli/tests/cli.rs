@@ -12888,6 +12888,121 @@ export default {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A plugin shapes the document (D151). A `pre` hook's script is an input, so
+/// it is bundled and hashed like one the author wrote; a later hook sees the
+/// written document and what was built, and preloads the chunks the entries
+/// import.
+#[test]
+fn a_plugin_shapes_the_html_document() {
+    let dir = build_dir("p_plugins_html");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "boot.mjs",
+        r#"
+export default {
+  name: "boot",
+  html: {
+    order: "pre",
+    handler: (html, id, ctx) => ({
+      html: html.replace("<title>app</title>", "<title>framework app</title>"),
+      tags: [
+        { tag: "script", attrs: { type: "module", src: "./src/boot.js" }, injectTo: "body" },
+        { tag: "meta", attrs: { name: "built-by", content: `${ctx.command}/${ctx.platform}/${ctx.target}` } },
+      ],
+    }),
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "preload.mjs",
+        r#"
+export default {
+  name: "preload",
+  html: {
+    filter: { id: /index\.html$/ },
+    handler(html, id, ctx) {
+      const shared = ctx.bundle
+        .filter((file) => file.type === "chunk" && file.isEntry)
+        .flatMap((file) => file.imports);
+      return {
+        tags: [...new Set(shared)].map((file) => ({
+          tag: "link",
+          attrs: { rel: "modulepreload", href: `/${file}` },
+          injectTo: "head-prepend",
+        })),
+      };
+    },
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "src/shared.js",
+        "export const shared = () => 'SHARED';\n",
+    );
+    write_in(
+        &dir,
+        "src/main.js",
+        "import { shared } from './shared.js';\nconsole.log('MAIN', shared());\n",
+    );
+    write_in(
+        &dir,
+        "src/boot.js",
+        "import { shared } from './shared.js';\nconsole.log('BOOT', shared());\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head><title>app</title>\
+         <script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./boot.mjs", "./preload.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let html = std::fs::read_to_string(dir.join("dist/index.html")).expect("html");
+    assert!(html.contains("<title>framework app</title>"), "{html}");
+    assert!(
+        html.contains(r#"<meta name="built-by" content="build/browser/web">"#),
+        "{html}"
+    );
+    // The injected script was built: its reference points at a hashed bundle.
+    assert!(!html.contains("./src/boot.js"), "{html}");
+    let boot = regex_like_find(&html, "/assets/boot-", ".js").expect("the boot bundle");
+    assert!(dir.join("dist").join(&boot[1..]).is_file(), "{boot}");
+    // And the preload names the shared chunk, which is on disk.
+    let preload = html
+        .split("<link rel=\"modulepreload\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no preload: {html}"))
+        .to_string();
+    assert!(preload.starts_with("/assets/"), "{preload}");
+    assert!(dir.join("dist").join(&preload[1..]).is_file(), "{preload}");
+    assert!(
+        html.find("modulepreload").unwrap() < html.find("<title>").unwrap(),
+        "head-prepend: {html}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The first `start…end` span in `text` that begins with `start` and runs to
+/// the next `end`.
+fn regex_like_find(text: &str, start: &str, end: &str) -> Option<String> {
+    let at = text.find(start)?;
+    let rest = &text[at..];
+    let stop = rest.find(end)? + end.len();
+    Some(rest[..stop].to_string())
+}
+
 /// A `load` that throws is reported with what the plugin said. The bundler
 /// turns any other error from a `load` into "Could not load x — plugin `p`
 /// threw an error" and drops the cause, which is the only part that says what

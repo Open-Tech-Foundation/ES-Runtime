@@ -227,8 +227,8 @@ hook contract.
 
 | Command | Which hooks |
 | --- | --- |
-| `esdev build`, `esdev start`, `esdev build <entry>` | All six |
-| `esdev test --browser` | All six: the test is bundled |
+| `esdev build`, `esdev start`, `esdev build <entry>` | All seven (`html` for an HTML target) |
+| `esdev test --browser` | All but `html`: the test is bundled into esdev's own page |
 | `esdev test`, `esdev test --dom`, `esdev <file>` | `resolve`, `load`, `transform` |
 
 A module run unbundled goes through the same `resolve`, `load` and `transform`

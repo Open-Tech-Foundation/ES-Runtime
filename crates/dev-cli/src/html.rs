@@ -458,6 +458,91 @@ fn head_end(html: &str) -> Option<usize> {
     None
 }
 
+/// The document after the plugins' `html` hooks for one stage (D151): `pre`
+/// when `output` is `None`, the others — unordered, then `post` — when it is
+/// what the build produced. Each sees what the one before it returned.
+async fn through_html_hooks(
+    passes: &[std::sync::Arc<dyn crate::contract::Pass>],
+    mut document: String,
+    id: &str,
+    output: Option<&[crate::contract::Output]>,
+    ctx: &std::sync::Arc<dyn crate::contract::Context>,
+) -> Result<String, String> {
+    use crate::contract::{Hook, Order};
+    let mut stage: Vec<_> = passes
+        .iter()
+        .filter(|pass| {
+            pass.hooks().get(Hook::Html).is_some_and(|spec| {
+                (spec.order == Order::Pre) == output.is_none() && spec.filter.admits(id, None)
+            })
+        })
+        .collect();
+    stage.sort_by_key(|pass| {
+        pass.hooks()
+            .get(Hook::Html)
+            .is_some_and(|spec| spec.order == Order::Post)
+    });
+    for pass in stage {
+        let Some(answer) = pass
+            .html(&document, id, output, ctx)
+            .await
+            .map_err(|e| format!("[plugin {}] {id}\n{e}", pass.name()))?
+        else {
+            continue;
+        };
+        if let Some(html) = answer.html {
+            document = html;
+        }
+        for place in [
+            crate::contract::InjectTo::HeadPrepend,
+            crate::contract::InjectTo::Head,
+            crate::contract::InjectTo::BodyPrepend,
+            crate::contract::InjectTo::Body,
+        ] {
+            let markup: String = answer
+                .tags
+                .iter()
+                .filter(|tag| tag.inject_to == place)
+                .map(crate::contract::HtmlTag::render)
+                .collect();
+            if !markup.is_empty() {
+                document.insert_str(tag_point(&document, place), &markup);
+            }
+        }
+    }
+    Ok(document)
+}
+
+/// Where a tag a plugin asked for goes. A document missing the element it
+/// names gets the tag where the browser would have put that element: a head's
+/// before everything else, a body's at the end.
+fn tag_point(html: &str, place: crate::contract::InjectTo) -> usize {
+    use crate::contract::InjectTo;
+    let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
+    emitter.naively_switch_states(true);
+    let (mut head_open, mut head_close, mut body_open) = (None, None, None);
+    for token in Tokenizer::new_with_emitter(html, emitter).flatten() {
+        match token {
+            Token::StartTag(tag) if tag.name.as_slice() == b"head" => {
+                head_open = head_open.or(Some(tag.span.end));
+            }
+            Token::StartTag(tag) if tag.name.as_slice() == b"body" => {
+                body_open = body_open.or(Some(tag.span.end));
+            }
+            Token::EndTag(tag) if tag.name.as_slice() == b"head" => {
+                head_close = head_close.or(Some(tag.span.start));
+            }
+            _ => {}
+        }
+    }
+    match place {
+        InjectTo::HeadPrepend => head_open.or(head_close).unwrap_or(0),
+        InjectTo::Head => head_close.or(head_open).unwrap_or(0),
+        InjectTo::BodyPrepend => body_open.unwrap_or_else(|| injection_point(html)),
+        InjectTo::Body => injection_point(html),
+    }
+}
+
 fn injection_point(html: &str) -> usize {
     let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
     emitter.naively_switch_states(true);
@@ -570,6 +655,13 @@ pub async fn build(
     let entry = root.join(&target.entry);
     let html = std::fs::read_to_string(&entry)
         .map_err(|e| format!("cannot read {}: {e}", target.entry))?;
+    // What a plugin's hook is handed while a file is read here rather than by
+    // the bundler.
+    let ctx = crate::unbundled::run_context(root);
+    let id = entry.to_string_lossy().into_owned();
+    // The plugins' `pre` stage sees the source, so what they add to it is
+    // built as though the author had written it (D151).
+    let html = through_html_hooks(plugins, html, &id, None, &ctx).await?;
     // References are relative to the *document*, the way a browser reads them —
     // not to the project root, which is only the same directory by convention.
     let base = entry
@@ -589,9 +681,6 @@ pub async fn build(
     let mut styled = 0usize;
     let mut pulled_in = 0usize;
     let mut copied = 0usize;
-    // What a plugin's hook is handed while a linked file is read here rather
-    // than by the bundler.
-    let ctx = crate::unbundled::run_context(root);
 
     for reference in &references {
         if reference.at == Where::Rooted {
@@ -691,8 +780,18 @@ pub async fn build(
     // written as a stylesheet and linked below. Returned rather than filled into
     // a handle passed down, because in the dev loop the plugin outlives the
     // build and keeps whichever handle it was constructed with.
-    let (bundled, sheets, imported) = if modules.is_empty() {
-        (Vec::new(), Vec::new(), 0)
+    let crate::build::BrowserBundle {
+        entries: bundled,
+        sheets,
+        assets: imported,
+        produced,
+    } = if modules.is_empty() {
+        crate::build::BrowserBundle {
+            entries: Vec::new(),
+            sheets: Vec::new(),
+            assets: 0,
+            produced: Vec::new(),
+        }
     } else {
         crate::build::bundle_browser_entries(
             modules,
@@ -792,9 +891,48 @@ pub async fn build(
         }
     }
 
+    // The rest of the plugins see the written document, and what the build
+    // produced, named from the output directory: a `modulepreload` for a chunk
+    // is `/` + its name.
+    let listing: Vec<crate::contract::Output> = produced
+        .into_iter()
+        .map(|output| match output {
+            crate::contract::Output::Chunk {
+                file_name,
+                name,
+                is_entry,
+                is_dynamic_entry,
+                facade_module_id,
+                module_ids,
+                imports,
+                dynamic_imports,
+            } => crate::contract::Output::Chunk {
+                file_name: format!("{ASSET_DIR}/{file_name}"),
+                name,
+                is_entry,
+                is_dynamic_entry,
+                facade_module_id,
+                module_ids,
+                imports: imports
+                    .into_iter()
+                    .map(|import| format!("{ASSET_DIR}/{import}"))
+                    .collect(),
+                dynamic_imports: dynamic_imports
+                    .into_iter()
+                    .map(|import| format!("{ASSET_DIR}/{import}"))
+                    .collect(),
+            },
+            crate::contract::Output::Asset { file_name } => crate::contract::Output::Asset {
+                file_name: format!("{ASSET_DIR}/{file_name}"),
+            },
+        })
+        .collect();
+    let mut document = through_html_hooks(plugins, document, &id, Some(&listing), &ctx).await?;
+
     if let Some(dev) = dev {
         // Into the *output*, never the source. The file the developer edits is
-        // never written to by a build.
+        // never written to by a build. After the plugins, so one replacing the
+        // document cannot drop it.
         document.insert_str(injection_point(&document), &reload_client(dev.reload_port));
     }
     std::fs::create_dir_all(out_dir)
@@ -1069,6 +1207,22 @@ globalThis.__rolldown_runtime__ ??= new EsdevRuntime("esdev");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin's tag lands where it said: after `<head …>`, before
+    /// `</head>`, after `<body …>`, before `</body>`.
+    #[test]
+    fn a_tag_goes_where_it_was_asked_to() {
+        use crate::contract::InjectTo;
+        let html = "<!doctype html><html><head lang=\"en\"><title>t</title></head>\
+                    <body class=\"x\"><p>hi</p></body></html>";
+        let at = |place| &html[tag_point(html, place)..];
+        assert!(at(InjectTo::HeadPrepend).starts_with("<title>"));
+        assert!(at(InjectTo::Head).starts_with("</head>"));
+        assert!(at(InjectTo::BodyPrepend).starts_with("<p>hi"));
+        assert!(at(InjectTo::Body).starts_with("</body>"));
+        // No head at all: the start, where the browser would put one.
+        assert_eq!(tag_point("<p>x</p>", InjectTo::Head), 0);
+    }
 
     /// The injected client shows build errors and clears them: the error
     /// branch, the dismissal on every other update, the overlay id — and no

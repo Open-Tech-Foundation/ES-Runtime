@@ -80,7 +80,7 @@ function register(value) {
 // The hooks the contract carries. Five, against rollup's twenty-odd: each one
 // is a promise some future bundler behind this has to keep, so the list is
 // short on purpose and grows only when something cannot be written without it.
-const HOOKS = ["start", "resolve", "load", "transform", "end", "bundle"];
+const HOOKS = ["start", "resolve", "load", "transform", "end", "bundle", "html"];
 
 // The pump. One for the whole program: hook calls carry the handle of the
 // plugin they are for, so there is nothing to keep separate.

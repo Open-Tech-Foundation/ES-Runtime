@@ -64,7 +64,7 @@ use es_runtime_cli_common::{OpError, Value};
 
 /// Which hook of a plugin a call is for.
 ///
-/// Six, deliberately, against rollup's twenty-odd: every hook carried here is
+/// Seven, deliberately, against rollup's twenty-odd: every hook carried here is
 /// a promise some future backend has to keep, so the list is short on purpose
 /// and grows only when something cannot be written without it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -81,6 +81,9 @@ pub enum Hook {
     End,
     /// The chunks and assets the build produced, before they are written.
     Bundle,
+    /// An HTML target's document, before its references are read (`pre`) or
+    /// once they point at the output (D151).
+    Html,
 }
 
 impl Hook {
@@ -93,6 +96,7 @@ impl Hook {
             Hook::Transform => "transform",
             Hook::End => "end",
             Hook::Bundle => "bundle",
+            Hook::Html => "html",
         }
     }
 }
@@ -187,6 +191,7 @@ pub struct Hooks {
     pub transform: Option<HookSpec>,
     pub end: Option<HookSpec>,
     pub bundle: Option<HookSpec>,
+    pub html: Option<HookSpec>,
 }
 
 impl Hooks {
@@ -198,6 +203,7 @@ impl Hooks {
             Hook::Transform => self.transform.as_ref(),
             Hook::End => self.end.as_ref(),
             Hook::Bundle => self.bundle.as_ref(),
+            Hook::Html => self.html.as_ref(),
         }
     }
 }
@@ -423,6 +429,181 @@ pub trait Pass: Send + Sync + std::fmt::Debug {
     fn bundle<'a>(&'a self, _output: &'a [Output], _ctx: &'a Arc<dyn Context>) -> Answer<'a, ()> {
         Box::pin(async { Ok(()) })
     }
+
+    /// An HTML target's document (D151). `output` is `None` for a hook ordered
+    /// `pre`, which sees the source before its references are read, and what
+    /// the build produced for the others, which see the written document.
+    /// `None` leaves it alone.
+    fn html<'a>(
+        &'a self,
+        _html: &'a str,
+        _id: &'a str,
+        _output: Option<&'a [Output]>,
+        _ctx: &'a Arc<dyn Context>,
+    ) -> Answer<'a, Option<HtmlResult>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+/// What an `html` hook answered: a replacement document, tags to insert, or
+/// both — the replacement first.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct HtmlResult {
+    pub html: Option<String>,
+    pub tags: Vec<HtmlTag>,
+}
+
+/// One element an `html` hook asked for.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HtmlTag {
+    pub tag: String,
+    /// In the order given. `None` is a boolean attribute written bare.
+    pub attrs: Vec<(String, Option<String>)>,
+    /// Written as given: a script's or a style's text, or markup.
+    pub children: Option<String>,
+    pub inject_to: InjectTo,
+}
+
+/// Where an [`HtmlTag`] goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InjectTo {
+    /// Before `</head>`.
+    #[default]
+    Head,
+    /// After `<head>`.
+    HeadPrepend,
+    /// Before `</body>`.
+    Body,
+    /// After `<body>`.
+    BodyPrepend,
+}
+
+/// Elements with no end tag, which a tag must not be given one for.
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
+];
+
+impl HtmlTag {
+    /// The element as markup. Attribute values are escaped; children are not,
+    /// because a script's text or a style's is not HTML to escape.
+    pub fn render(&self) -> String {
+        let mut out = format!("<{}", self.tag);
+        for (name, value) in &self.attrs {
+            match value {
+                Some(value) => {
+                    let escaped = value
+                        .replace('&', "&amp;")
+                        .replace('"', "&quot;")
+                        .replace('<', "&lt;");
+                    out.push_str(&format!(" {name}=\"{escaped}\""));
+                }
+                None => out.push_str(&format!(" {name}")),
+            }
+        }
+        out.push('>');
+        if VOID_ELEMENTS.contains(&self.tag.to_ascii_lowercase().as_str()) {
+            return out;
+        }
+        if let Some(children) = &self.children {
+            out.push_str(children);
+        }
+        out.push_str(&format!("</{}>", self.tag));
+        out
+    }
+}
+
+/// Reads an `html` hook's answer.
+///
+/// `null` leaves the document alone. Anything else is the object: a bare
+/// string or a list of tags is another tool's shorthand, and this contract has
+/// one form for an answer (D123).
+pub fn html_result(value: &Value) -> Result<Option<HtmlResult>, String> {
+    let object = match value {
+        Value::Null | Value::Undefined => return Ok(None),
+        Value::Object(_) => value,
+        other => {
+            return Err(format!(
+                "html must return {{ html?, tags? }} or null, got {}",
+                describe(other)
+            ));
+        }
+    };
+    let html = match field(object, "html") {
+        None | Some(Value::Null | Value::Undefined) => None,
+        Some(Value::String(html)) => Some(html.clone()),
+        Some(other) => {
+            return Err(format!(
+                "html: `html` must be a string, got {}",
+                describe(other)
+            ));
+        }
+    };
+    let tags = match field(object, "tags") {
+        None | Some(Value::Null | Value::Undefined) => Vec::new(),
+        Some(Value::Array(tags)) => tags.iter().map(html_tag).collect::<Result<_, _>>()?,
+        Some(other) => {
+            return Err(format!(
+                "html: `tags` must be a list, got {}",
+                describe(other)
+            ));
+        }
+    };
+    Ok(Some(HtmlResult { html, tags }))
+}
+
+fn html_tag(value: &Value) -> Result<HtmlTag, String> {
+    let tag = field(value, "tag")
+        .and_then(Value::as_str)
+        .filter(|tag| !tag.is_empty() && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .ok_or_else(|| "html: each tag needs a `tag` name, such as \"script\"".to_string())?
+        .to_string();
+    let mut attrs = Vec::new();
+    if let Some(Value::Object(fields)) = field(value, "attrs") {
+        for (name, value) in fields {
+            if name.is_empty()
+                || name
+                    .chars()
+                    .any(|c| c.is_whitespace() || "\"'<>/=".contains(c))
+            {
+                return Err(format!(
+                    "html: <{tag}> has an attribute named {name:?}, which is not one"
+                ));
+            }
+            match value {
+                Value::Bool(false) | Value::Null | Value::Undefined => {}
+                Value::Bool(true) => attrs.push((name.clone(), None)),
+                Value::String(text) => attrs.push((name.clone(), Some(text.clone()))),
+                Value::Number(number) => attrs.push((name.clone(), Some(number.to_string()))),
+                other => {
+                    return Err(format!(
+                        "html: <{tag}>'s {name:?} must be a string, a number or a boolean, got {}",
+                        describe(other)
+                    ));
+                }
+            }
+        }
+    }
+    let children = field(value, "children")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let inject_to = match field(value, "injectTo").and_then(Value::as_str) {
+        None | Some("head") => InjectTo::Head,
+        Some("head-prepend") => InjectTo::HeadPrepend,
+        Some("body") => InjectTo::Body,
+        Some("body-prepend") => InjectTo::BodyPrepend,
+        Some(other) => {
+            return Err(format!(
+                "html: <{tag}>'s injectTo is {other:?}; it is \"head\", \"head-prepend\", \"body\" or \"body-prepend\""
+            ));
+        }
+    };
+    Ok(HtmlTag {
+        tag,
+        attrs,
+        children,
+        inject_to,
+    })
 }
 
 /// One file a build produced, as [`Pass::bundle`] describes it.
@@ -643,7 +824,15 @@ fn kind(value: &Value) -> &'static str {
 // --- reading the guest's declaration ----------------------------------------
 
 /// Every hook name, for the "did you mean" in a rejection.
-const HOOK_NAMES: [&str; 6] = ["start", "resolve", "load", "transform", "end", "bundle"];
+const HOOK_NAMES: [&str; 7] = [
+    "start",
+    "resolve",
+    "load",
+    "transform",
+    "end",
+    "bundle",
+    "html",
+];
 
 /// Reads one plugin's declaration.
 ///
@@ -686,6 +875,7 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             "transform" => Hook::Transform,
             "end" => Hook::End,
             "bundle" => Hook::Bundle,
+            "html" => Hook::Html,
             other => return Err(unknown_hook(&name, other)),
         };
         let spec = hook_spec(&name, hook, spec)?;
@@ -696,6 +886,7 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             Hook::Transform => hooks.transform = Some(spec),
             Hook::End => hooks.end = Some(spec),
             Hook::Bundle => hooks.bundle = Some(spec),
+            Hook::Html => hooks.html = Some(spec),
         }
     }
     Ok(Plugin {
@@ -993,6 +1184,95 @@ mod tests {
                 Value::Object(hooks.into_iter().map(|(k, v)| (k.to_string(), v)).collect()),
             ),
         ])
+    }
+
+    fn object(fields: Vec<(&str, Value)>) -> Value {
+        Value::Object(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
+    }
+
+    /// An `html` answer: a document, tags, or both. A tag's attributes are
+    /// escaped and a void element gets no end tag.
+    #[test]
+    fn an_html_answer_is_a_document_and_tags() {
+        let answer = html_result(&object(vec![
+            ("html", Value::String("<p>".to_string())),
+            (
+                "tags",
+                Value::Array(vec![
+                    object(vec![
+                        ("tag", Value::String("link".to_string())),
+                        (
+                            "attrs",
+                            object(vec![
+                                ("rel", Value::String("modulepreload".to_string())),
+                                ("href", Value::String("/a\"b.js".to_string())),
+                                ("crossorigin", Value::Bool(true)),
+                                ("hidden", Value::Bool(false)),
+                            ]),
+                        ),
+                    ]),
+                    object(vec![
+                        ("tag", Value::String("script".to_string())),
+                        ("children", Value::String("boot()".to_string())),
+                        ("injectTo", Value::String("body".to_string())),
+                    ]),
+                ]),
+            ),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(answer.html.as_deref(), Some("<p>"));
+        assert_eq!(
+            answer.tags[0].render(),
+            r#"<link rel="modulepreload" href="/a&quot;b.js" crossorigin>"#
+        );
+        assert_eq!(answer.tags[0].inject_to, InjectTo::Head);
+        assert_eq!(answer.tags[1].render(), "<script>boot()</script>");
+        assert_eq!(answer.tags[1].inject_to, InjectTo::Body);
+        assert!(html_result(&Value::Null).unwrap().is_none());
+    }
+
+    /// One form of answer: a bare string or list is refused, as is a tag with
+    /// nowhere to go or a name that is not one.
+    #[test]
+    fn an_html_answer_that_is_not_the_object_is_refused() {
+        let string = html_result(&Value::String("<p>".to_string())).unwrap_err();
+        assert!(string.contains("{ html?, tags? }"), "{string}");
+        let tags = |tag: Value| html_result(&object(vec![("tags", Value::Array(vec![tag]))]));
+        let place = tags(object(vec![
+            ("tag", Value::String("meta".to_string())),
+            ("injectTo", Value::String("footer".to_string())),
+        ]))
+        .unwrap_err();
+        assert!(place.contains("head-prepend"), "{place}");
+        let name = tags(object(vec![("tag", Value::String("a b".to_string()))])).unwrap_err();
+        assert!(name.contains("tag` name"), "{name}");
+    }
+
+    /// `html` is a hook a plugin declares like the others, with an `id`
+    /// filter and an order.
+    #[test]
+    fn html_is_a_hook() {
+        let declared = plugin(&declare(
+            "framework",
+            vec![(
+                "html",
+                object(vec![
+                    ("order", Value::String("pre".to_string())),
+                    ("filter", object(vec![("id", re("index\\.html$"))])),
+                ]),
+            )],
+        ))
+        .expect("declared");
+        let spec = declared.hooks.get(Hook::Html).expect("the hook");
+        assert_eq!(spec.order, Order::Pre);
+        assert!(spec.filter.admits("/p/index.html", None));
+        assert!(!spec.filter.admits("/p/about.html", None));
     }
 
     /// The filter is the whole reason this layer exists: a `transform` that
