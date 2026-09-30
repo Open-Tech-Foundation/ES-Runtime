@@ -20,7 +20,6 @@
 //! capability, an id that is not this agent's.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
@@ -28,15 +27,11 @@ use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{Entropy, NetProvider};
 
 use crate::Result;
+use crate::db_conns::Registry;
 use crate::handles::Handles;
 use crate::postgres::{
     Aside, Batch, CancelTarget, Connection, Event, Failure, Options, SslMode, Started,
 };
-
-/// Connections by id. A slot is empty while an op has the connection out: a
-/// connection is one conversation, and the driver never runs two at once on
-/// it, so finding one checked out is a bug worth naming rather than a queue.
-type Slots = Arc<Mutex<HashMap<u64, Option<Box<Connection>>>>>;
 
 /// What stays reachable about a connection while an op has it checked out: a
 /// cancel is sent *during* the query it cancels, a `LISTEN` is written *under*
@@ -53,9 +48,6 @@ struct Side {
 
 type Sides = Arc<Mutex<HashMap<u64, Side>>>;
 
-/// Connects in flight: ticket → the socket opened so far, if any.
-type Connecting = Arc<Mutex<HashMap<u64, Arc<Mutex<Option<u64>>>>>>;
-
 pub(crate) fn install(
     engine: &mut dyn Engine,
     net: Option<Arc<dyn NetProvider>>,
@@ -63,12 +55,7 @@ pub(crate) fn install(
     inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     let owned = inventory.track(Handles::new("PostgreSQL connection"));
-    let slots: Slots = Arc::new(Mutex::new(HashMap::new()));
-    let next_id = Arc::new(AtomicU64::new(1));
-    // Connects in flight, by the ticket the driver chose, each with the socket
-    // it has opened so far. Per agent, like everything here: one agent cannot
-    // abort another's connect by guessing its ticket.
-    let connecting: Connecting = Arc::new(Mutex::new(HashMap::new()));
+    let slots: Registry<Connection> = Registry::new();
     let sides: Sides = Arc::new(Mutex::new(HashMap::new()));
 
     // Args: [host, port, sslmode, ca (bytes, empty for none), params (flat
@@ -78,15 +65,12 @@ pub(crate) fn install(
         let net = net.clone();
         let owned = owned.clone();
         let slots = slots.clone();
-        let connecting = connecting.clone();
         let sides = sides.clone();
         engine.register_op(
             OpDecl::r#async("pg_connect", move |args| {
                 let net = net.clone();
                 let owned = owned.clone();
                 let slots = slots.clone();
-                let next_id = next_id.clone();
-                let connecting = connecting.clone();
                 let sides = sides.clone();
                 let ticket = arg_u64(&args, 8);
                 let mut nonce = [0u8; 18];
@@ -121,28 +105,26 @@ pub(crate) fn install(
                         process_id: 0,
                         secret_key: 0,
                     };
-                    let opened = Arc::new(Mutex::new(None));
-                    connecting.lock().unwrap().insert(ticket, opened.clone());
+                    let opened = slots.connecting(ticket);
                     let result = Connection::open(net, options, &opened).await;
-                    connecting.lock().unwrap().remove(&ticket);
+                    slots.connected(ticket);
                     match result {
-                        Ok(connection) => {
-                            let id = next_id.fetch_add(1, Ordering::Relaxed);
+                        Ok(mut connection) => {
                             let status = connection.status;
                             let process = connection.process_id;
                             cancel.process_id = connection.process_id;
                             cancel.secret_key = connection.secret_key;
+                            let socket = connection.socket();
+                            let aside = connection.take_aside();
+                            let id = slots.insert(connection);
                             sides.lock().unwrap().insert(
                                 id,
                                 Side {
-                                    socket: connection.socket(),
+                                    socket,
                                     cancel,
                                     subscribed: false,
                                 },
                             );
-                            let mut connection = Box::new(connection);
-                            let aside = connection.take_aside();
-                            slots.lock().unwrap().insert(id, Some(connection));
                             let mut out = vec![
                                 ("id".to_string(), Value::Number(owned.own(id) as f64)),
                                 ("processId".to_string(), Value::Number(process as f64)),
@@ -164,15 +146,11 @@ pub(crate) fn install(
     // hold the handshake — and the event loop — open for good.
     {
         let net = net.clone();
-        let connecting = connecting.clone();
+        let slots = slots.clone();
         engine.register_op(OpDecl::r#async("pg_abort_connect", move |args| {
             let net = net.clone();
             let ticket = arg_u64(&args, 0);
-            let socket = connecting
-                .lock()
-                .unwrap()
-                .get(&ticket)
-                .and_then(|opened| *opened.lock().unwrap());
+            let socket = slots.connecting_socket(ticket);
             Box::pin(async move {
                 if let (Some(socket), Some(net)) = (socket, net) {
                     let _ = net.close(socket).await;
@@ -202,11 +180,11 @@ pub(crate) fn install(
             let discard = matches!(args.get(4), Some(Value::Bool(true)));
             Box::pin(async move {
                 let id = owned.check(id)?;
-                let mut connection = checkout(&slots, id)?;
+                let mut connection = slots.checkout(id)?;
                 let result = connection.query(&sql, &params, max_bytes, discard).await;
                 let status = connection.status;
                 let aside = connection.take_aside();
-                checkin(&slots, id, connection);
+                slots.checkin(id, connection);
                 Ok(match result {
                     Ok(started) => started_value(started, status, aside),
                     Err(failure) => failure_value(failure, aside),
@@ -226,11 +204,11 @@ pub(crate) fn install(
             let max_bytes = arg_u64(&args, 1) as usize;
             Box::pin(async move {
                 let id = owned.check(id)?;
-                let mut connection = checkout(&slots, id)?;
+                let mut connection = slots.checkout(id)?;
                 let result = connection.fetch(max_bytes).await;
                 let status = connection.status;
                 let aside = connection.take_aside();
-                checkin(&slots, id, connection);
+                slots.checkin(id, connection);
                 Ok(match result {
                     Ok(batch) => {
                         let mut out = batch_fields(batch);
@@ -255,11 +233,11 @@ pub(crate) fn install(
             let id = arg_u64(&args, 0);
             Box::pin(async move {
                 let id = owned.check(id)?;
-                let mut connection = checkout(&slots, id)?;
+                let mut connection = slots.checkout(id)?;
                 let result = connection.finish().await;
                 let status = connection.status;
                 let aside = connection.take_aside();
-                checkin(&slots, id, connection);
+                slots.checkin(id, connection);
                 Ok(match result {
                     Ok(()) => {
                         let mut out = vec![("status".to_string(), status_value(status))];
@@ -284,11 +262,11 @@ pub(crate) fn install(
             let sql = arg_str(&args, 1);
             Box::pin(async move {
                 let id = owned.check(id)?;
-                let mut connection = checkout(&slots, id)?;
+                let mut connection = slots.checkout(id)?;
                 let result = connection.script(&sql).await;
                 let status = connection.status;
                 let aside = connection.take_aside();
-                checkin(&slots, id, connection);
+                slots.checkin(id, connection);
                 Ok(match result {
                     Ok((tags, _evicted)) => {
                         let mut out = vec![
@@ -358,11 +336,11 @@ pub(crate) fn install(
             }
             Box::pin(async move {
                 let id = owned.check(id)?;
-                let mut connection = checkout(&slots, id)?;
+                let mut connection = slots.checkout(id)?;
                 let result = connection.listen_next().await;
                 let status = connection.status;
                 let aside = connection.take_aside();
-                checkin(&slots, id, connection);
+                slots.checkin(id, connection);
                 Ok(match result {
                     Ok(events) => {
                         let mut out = vec![
@@ -433,7 +411,7 @@ pub(crate) fn install(
             Box::pin(async move {
                 let id = owned.check_and_release(id)?;
                 let side = sides.lock().unwrap().remove(&id);
-                let slot = slots.lock().unwrap().remove(&id);
+                let slot = slots.remove(id);
                 match slot {
                     Some(Some(mut connection)) => connection.close().await,
                     // Checked out: a read loop is blocked on the socket. Closing
@@ -452,29 +430,6 @@ pub(crate) fn install(
     }
 
     Ok(())
-}
-
-fn checkout(slots: &Slots, id: u64) -> std::result::Result<Box<Connection>, OpError> {
-    let mut slots = slots.lock().unwrap();
-    match slots.get_mut(&id) {
-        Some(slot) => slot.take().ok_or_else(|| {
-            OpError::new(
-                ExceptionClass::Error,
-                "this PostgreSQL connection is already running an operation",
-            )
-            .with_code(ErrorCode::Io)
-        }),
-        None => Err(
-            OpError::new(ExceptionClass::Error, "the connection is closed")
-                .with_code(ErrorCode::Io),
-        ),
-    }
-}
-
-fn checkin(slots: &Slots, id: u64, connection: Box<Connection>) {
-    if let Some(slot) = slots.lock().unwrap().get_mut(&id) {
-        *slot = Some(connection);
-    }
 }
 
 fn started_value(started: Started, status: u8, aside: Aside) -> Value {
