@@ -12635,6 +12635,55 @@ fn a_plugin_compiled_stylesheet_is_bundled_scoped_and_linked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An edit to a plugin — here a module the plugin imports — reloads the
+/// plugins before the rebuild. The host is kept across ordinary saves for the
+/// state it holds, and so used to go on applying the transform that had just
+/// been replaced.
+#[test]
+fn the_dev_loop_reloads_an_edited_plugin() {
+    let dir = watch_dir("s_plugin_edit");
+    let port = test_port("s_plugin_edit");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "mark.mjs", "export const mark = 'FIRST-MARK';\n");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"import { mark } from "./mark.mjs";
+export default {
+  name: "mark",
+  transform: {
+    filter: { id: /main\.js$/ },
+    handler: (code) => ({ code: code.replace("__MARK__", mark) }),
+  },
+};
+"#,
+    );
+    write_in(&dir, "src/main.js", "console.log('__MARK__');\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{"plugins": ["./plugin.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outdir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+        ),
+    );
+    let _supervisor = start_in(&dir);
+    let first = wait_for_http(port, "/assets/main.js", |body| body.contains("FIRST-MARK"));
+    assert!(first.contains("FIRST-MARK"), "{first}");
+    write_in(&dir, "mark.mjs", "export const mark = 'SECOND-MARK';\n");
+    let second = wait_for_http(port, "/assets/main.js", |body| body.contains("SECOND-MARK"));
+    assert!(
+        second.contains("SECOND-MARK"),
+        "the rebuild used the plugin as it was loaded: {second}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The dev loop rebuilds for a file a build read, whatever its extension: a
 /// `.scss` a plugin compiles is an input, as a `.ts` is, and a change to one
 /// is a stylesheet swap rather than a reload.

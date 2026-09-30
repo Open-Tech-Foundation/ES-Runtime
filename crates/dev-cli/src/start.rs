@@ -458,7 +458,15 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // hard refresh and every page opened after this one will load, and a
         // patch updates neither.
         let cycle = std::time::Instant::now();
-        let hot = if config.hot && !changed.is_empty() {
+        // An edited plugin is loaded again, and the bundler holding the old
+        // one is let go with it. No patch: every module the plugin compiled
+        // may be different now, and the graph that would say which is the
+        // one being thrown away.
+        let plugins_changed = crate::plugins::invalidate_if_changed(&changed);
+        if plugins_changed {
+            crate::build::forget_warm().await;
+        }
+        let hot = if config.hot && !changed.is_empty() && !plugins_changed {
             crate::build::hot_update(&changed).await
         } else {
             None

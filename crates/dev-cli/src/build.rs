@@ -1400,6 +1400,14 @@ pub fn is_stylesheet_input(path: &Path) -> bool {
     stylesheets().read().is_ok_and(|held| held.contains(path))
 }
 
+/// Lets go of the held browser bundler, so the next build makes a new one.
+///
+/// For when what it was made with is gone: its plugins were loaded from files
+/// that have since been edited ([`crate::plugins::invalidate_if_changed`]).
+pub async fn forget_warm() {
+    *warm().lock().await = None;
+}
+
 /// The browser bundler, held across the rebuilds of one `esdev start`.
 ///
 /// # Why it is held at all

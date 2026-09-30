@@ -57,6 +57,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **Editing a plugin applies on the next rebuild.** `esdev start` keeps the
+  loaded plugins across saves for the state they hold, and so kept applying
+  the old transform after the plugin itself — or a module it imports — was
+  edited. A change to any file the plugins were loaded from now loads them
+  again, with a fresh bundler.
 - **The dev loop rebuilds for any file a build read.** `esdev start` decided
   by a fixed list of extensions, so editing a `.scss` (or `.vue`, `.svelte`,
   `.mdx`) that a plugin compiles changed nothing until some other file was

@@ -66,6 +66,10 @@ pub struct PluginHost {
     /// resolves, its program finishes, and the thread ends.
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Every file the plugin isolate loaded: the plugin modules and whatever
+    /// they import. An edit to one means the plugins in memory are not the
+    /// ones on disk any more ([`invalidate_if_changed`]).
+    files: Arc<Mutex<std::collections::HashSet<std::path::PathBuf>>>,
 }
 
 impl PluginHost {
@@ -144,6 +148,39 @@ impl Drop for PluginHost {
 /// The one host a run has, started on the first build that needs it.
 static HOST: OnceLock<Mutex<Option<Arc<PluginHost>>>> = OnceLock::new();
 
+/// Drops the loaded plugins when one of `changed` is a file they were loaded
+/// from, so the next build loads them again; reports whether it did.
+///
+/// Kept across ordinary saves on purpose: a plugin's state (an incremental
+/// compiler, a cache) is why the host outlives a build. An edit to the plugin
+/// itself is the one change that state cannot survive — the old code would go
+/// on answering hooks, and the rebuild would apply the transform that was
+/// just replaced.
+pub fn invalidate_if_changed(changed: &[std::path::PathBuf]) -> bool {
+    let Some(cell) = HOST.get() else {
+        return false;
+    };
+    let mut held = cell.lock().expect("plugin host");
+    let Some(host) = held.as_ref() else {
+        return false;
+    };
+    let edited = host.files.lock().is_ok_and(|files| {
+        changed.iter().any(|path| {
+            files.contains(path)
+                || dunce::canonicalize(path).is_ok_and(|canonical| files.contains(&canonical))
+        })
+    });
+    if !edited {
+        return false;
+    }
+    // Stopped off this thread: stopping joins the isolate's thread, and the
+    // dev loop that asked has a page waiting on it.
+    if let Some(host) = held.take() {
+        std::thread::spawn(move || drop(host));
+    }
+    true
+}
+
 /// The plugins for this project, starting the host if this is the first build.
 ///
 /// `Ok(None)` is a project with no plugins, which is most of them: nothing is
@@ -220,6 +257,8 @@ pub(crate) async fn launch(
     // races the process exiting, so it is handed over instead.
     let failure: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
     let reported = Arc::clone(&failure);
+    let files = Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let recorded = Arc::clone(&files);
 
     let hosted = crate::guest::build::Hosted {
         bridge: bridge.clone(),
@@ -252,7 +291,10 @@ pub(crate) async fn launch(
                 // Granted everything above, so every socket path too (D140).
                 permissive: true,
                 options: es_runtime_cli_common::args::RunOptions::default(),
-                transform: Some(Arc::new(crate::transform::TypeStripper::new())),
+                transform: Some(Arc::new(Recording {
+                    inner: crate::transform::TypeStripper::new(),
+                    files: Arc::clone(&recorded),
+                })),
                 // A plugin is source somebody is editing, like everything else
                 // this binary runs.
                 bundler_style_resolution: true,
@@ -293,7 +335,36 @@ pub(crate) async fn launch(
         plugins,
         shutdown: Some(shutdown),
         thread: Some(thread),
+        files,
     })
+}
+
+/// The plugin isolate's compiler, noting each file it compiles: what the
+/// plugins were loaded from.
+struct Recording {
+    inner: crate::transform::TypeStripper,
+    files: Arc<Mutex<std::collections::HashSet<std::path::PathBuf>>>,
+}
+
+impl es_runtime_cli_common::run::SourceTransform for Recording {
+    fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
+        if let Some(path) = url::Url::parse(specifier)
+            .ok()
+            .filter(|url| url.scheme() == "file")
+            .and_then(|mut url| {
+                url.set_query(None);
+                url.to_file_path().ok()
+            })
+            && let Ok(mut files) = self.files.lock()
+        {
+            files.insert(path);
+        }
+        self.inner.transform(specifier, source)
+    }
+
+    fn reserved_query(&self) -> Option<&'static str> {
+        self.inner.reserved_query()
+    }
 }
 
 /// The program the plugin isolate runs.
