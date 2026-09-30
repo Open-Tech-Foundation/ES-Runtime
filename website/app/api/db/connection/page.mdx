@@ -8,23 +8,24 @@ import { Callout } from "@opentf/web-docs";
 # Connections and pooling
 
 ```js
-import { connect, sqlite, sql } from "runtime:db";
+import { connect, postgres, sqlite, sql } from "runtime:db";
 ```
 
 ## `connect(url, options)`
 
-Opens a connection with the **driver** you pass. `sqlite` is built in; every
-other driver is a package export.
+Opens a connection with the **driver** you pass. `sqlite` and `postgres` are
+built in; every other driver is a package export.
 
 ```js
 const db  = await connect("sqlite:./app.db", { driver: sqlite });
 const mem = await connect("sqlite::memory:", { driver: sqlite });
 const enc = await connect("sqlite:./secret.db", { driver: sqlite, key });
 
+const pg = await connect("postgres://user@host/app", { driver: postgres });
+
 // Every driver package exports its driver as `driver`, and nothing as a
 // default. Two of them in one module are told apart with `as`.
-import { driver as postgres } from "@opentf/esrun-postgres";
-const pg = await connect("postgres://user@host/app", { driver: postgres });
+import { driver as redis } from "@opentf/esrun-redis";
 ```
 
 | Option | Type | Meaning |
@@ -40,6 +41,24 @@ and `readOnly` for `sqlite`, a host and TLS settings for a networked one.
 | `key` | `string \| Uint8Array` | Encryption key, hex or bytes. |
 | `cipher` | `string` | Cipher name; defaults to the backend's. |
 | `readOnly` | `boolean` | Open without the ability to write. |
+
+`postgres` takes `postgres:` and `postgresql:` URLs. Options win over the URL,
+and the URL over the `PG*` environment variables, which are read only with the
+`env` permission. Connecting needs `net` for the server's host and port.
+
+| `postgres` option | Type | Meaning |
+| --- | --- | --- |
+| `host`, `port`, `user`, `password`, `database` | `string`, `number` | What the URL carries. Default `localhost:5432`, user `postgres`. |
+| `sslmode` | `"prefer" \| "require" \| "disable"` | Ask for TLS (default), insist on it, or never ask. |
+| `sslRootCert` | `string \| Uint8Array` | A PEM certificate authority to trust besides the public roots. |
+| `connectTimeout` | `number` | Milliseconds for the connection and its handshake. Default `10000`; `0` waits forever. The URL's `connect_timeout` is in seconds. |
+| `statementTimeout` | `number` | Milliseconds, enforced by the server on every statement. |
+| `preparedStatementCacheSize` | `number` | Prepared statements kept per connection. Default `100`; `0` prepares every query. |
+| `temporal` | `boolean` | Decode dates and times to Temporal values (default) or to `Date` and strings. |
+| `applicationName` | `string` | Reported to the server as `application_name`. |
+
+The built-in `postgres` driver does not yet run scripts (`executeScript`),
+cancel a running statement, or `LISTEN`. `@opentf/esrun-postgres` still does.
 
 What comes back is **that driver's** connection, so a driver's own surface is on
 the object `connect` returned and needs no second entry point: Redis's commands,

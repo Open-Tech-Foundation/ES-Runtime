@@ -82,6 +82,14 @@ pub(crate) fn install(
         handle_refs.clone(),
         &inventory,
     )?;
+    // The built-in PostgreSQL driver (D147): its protocol in Rust, reaching the
+    // server through the same NetProvider `runtime:net` uses, gated on Net.
+    crate::pg_ops::install(
+        engine,
+        providers.net_provider(),
+        providers.entropy(),
+        &inventory,
+    )?;
     // The in-flight requests this agent has been handed (D50). Built here
     // rather than inside `http_ops` because `ws_ops` needs the same registry:
     // upgrading a request to a WebSocket is a use of that request, so it is

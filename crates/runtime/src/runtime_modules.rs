@@ -38,7 +38,12 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:process" => Some(include_str!("runtime_modules/process.js")),
         "runtime:path" => Some(include_str!("runtime_modules/path.js")),
         "runtime:fs" => Some(include_str!("runtime_modules/fs.js")),
-        "runtime:db" => Some(include_str!("runtime_modules/db.js")),
+        // The built-in PostgreSQL driver (D147) lives in a file of its own and
+        // shares the module's scope.
+        "runtime:db" => Some(concat!(
+            include_str!("runtime_modules/db.js"),
+            include_str!("runtime_modules/db_postgres.js")
+        )),
         "runtime:net" => Some(include_str!("runtime_modules/net.js")),
         "runtime:http" => Some(include_str!("runtime_modules/http.js")),
         "runtime:websocket" => Some(include_str!("runtime_modules/websocket.js")),

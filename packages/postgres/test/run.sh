@@ -32,7 +32,7 @@ export PGDATABASE="${pg_dbpart%%\?*}"
 export PGSSLMODE=disable
 
 status=0
-for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool environment cancel listen binary; do
+for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool environment cancel listen binary native; do
   printf '\n== %s ==\n' "$test"
   # esrun grants nothing by default (DECISIONS D65). These tests load the
   # built package (imports), open a connection to the server (net) and read
@@ -46,7 +46,7 @@ for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays
   # business listening still cannot. (`listen` is LISTEN/NOTIFY, which is the
   # server's own pub/sub and needs nothing extra.)
   case "$test" in
-    timeouts | lost) grants+=(--allow-listen) ;;
+    timeouts | lost | native) grants+=(--allow-listen) ;;
   esac
   "$esrun" "${grants[@]}" "$here/$test.mjs" || status=1
 done

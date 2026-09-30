@@ -13,6 +13,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- A built-in PostgreSQL driver: `import { postgres } from "runtime:db"`, then
+  `connect("postgres://…", { driver: postgres })`. Its wire protocol runs in
+  Rust (D147) — the handshake, TLS, SCRAM-SHA-256, the statement cache and the
+  extended query protocol — through the same network permission and host
+  allowlist `runtime:net` uses. On the Postgres QPS benchmark it answers 22%
+  more queries than `@opentf/esrun-postgres` with less memory. Scripts,
+  cancellation and `LISTEN` are not in it yet.
+
+### Added
+
 - A `runtime:fs` file is a Fetch body: `new Response(file(path))`,
   `new Request(url, { body: file(path) })` and `fetch(url, { body: file(path) })`.
   `serve()` sends a file body host-side, so its bytes never become a JavaScript
