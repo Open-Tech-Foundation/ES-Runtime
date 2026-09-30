@@ -1,32 +1,4 @@
 declare module "runtime:build" {
-  /** A hook's `this`: the bundler's own context, for as long as the hook runs. */
-  export interface PluginContext {
-    /**
-     * Asks the **bundler's own resolver** where a specifier points, in the
-     * middle of a hook. `null` if nothing resolves.
-     */
-    resolve(
-      source: string,
-      importer?: string,
-      options?: { skipSelf?: boolean },
-    ): Promise<{ id: string; external: boolean } | null>;
-    /**
-     * Declares a file the module being processed depends on but never imports
-     * — frontmatter, a `_meta.js` a virtual module was generated from. This is
-     * what puts it in `watchFiles`, and therefore what makes invalidation
-     * correct for generated modules.
-     */
-    addWatchFile(file: string): void;
-    /** Adds a chunk or an asset to a build that is already running. */
-    emitFile(file: EmittedFile): string;
-    /** A diagnostic, surfaced in the build's `warnings`. */
-    warn(log: string | { message: string }): void;
-    info(log: string | { message: string }): void;
-    debug(log: string | { message: string }): void;
-    /** Fails the build with this message. Throws — it does not return. */
-    error(log: string | Error | { message: string }): never;
-  }
-
   export type EmittedFile =
     | { type: "asset"; name?: string; fileName?: string; source: string | Uint8Array }
     | { type: "chunk"; id: string; name?: string; fileName?: string };
@@ -96,15 +68,30 @@ declare module "runtime:build" {
      */
     readonly type?: string;
     /**
-     * The hot-reload scheme this target named (`esdev.json`'s `refresh`), and
-     * only while the dev loop is running it hot. `undefined` in a release
-     * build, in a server target, and where no scheme was named.
+     * Where this hook is running: `"build"`, `"start"`, `"test"` or `"run"`.
+     * Absent from a `build()` a program starts, which describes its own build.
      *
-     * What a plugin implementing a scheme has to know before it does anything:
-     * the per-module wrapper that makes a component replaceable makes every
-     * module a hot boundary, which is exactly wrong in what you ship.
+     * Facts, not modes: esdev does not know what a framework's SPA, SSG or SSR
+     * mean. A plugin combines its own options with these to decide what to
+     * emit.
      */
-    readonly refresh?: string;
+    readonly command?: "build" | "start" | "test" | "run";
+    /**
+     * What the compiled code runs against. `"browser"` for a browser target
+     * and for `esdev test --dom` / `--browser`; `"server"` for this runtime
+     * (`platform: "neutral"` in `build()`); `"node"` when `build()` asked for
+     * it. Absent for a library build.
+     */
+    readonly platform?: "browser" | "server" | "node";
+    /** The `esdev.json` target being built, by name. Absent outside one. */
+    readonly target?: string;
+    /**
+     * `true` only for a browser build in `esdev start`'s hot loop, where
+     * modules are replaced in place. A refresh scheme installs its per-module
+     * wrapper when this is set and nowhere else: the wrapper makes every module
+     * a hot boundary, which is exactly wrong in what you ship.
+     */
+    readonly hot: boolean;
   }
 
   /** One pattern: a string is an **exact** match, a RegExp is tested. */
@@ -179,9 +166,8 @@ declare module "runtime:build" {
      * Finding them needs the syntax tree the compiler already has; the
      * per-module half you write yourself, in a `transform`.
      *
-     * Honoured **only in a hot dev build of a target that named a `refresh`
-     * scheme**, because the calls it inserts reach globals that only a hot loop
-     * installs.
+     * Honoured **only in a hot dev build** (`ctx.hot`), because the calls it
+     * inserts reach globals that only a hot loop installs.
      */
     refresh?: boolean;
   }
@@ -361,9 +347,9 @@ declare module "runtime:build" {
   export interface BuildResult {
     output: (OutputChunk | OutputAsset)[];
     /**
-     * Every file the build read, plus every file a plugin declared with
-     * `this.addWatchFile()`. Pair it with `runtime:watch` to drop exactly the
-     * cached chunks a change invalidates.
+     * Every file the build read, plus every file a plugin's hook returned in
+     * `dependsOn`. Pair it with `runtime:watch` to drop exactly the cached
+     * chunks a change invalidates.
      */
     watchFiles: string[];
     warnings: string[];

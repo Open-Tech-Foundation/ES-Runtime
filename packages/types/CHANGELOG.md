@@ -13,6 +13,15 @@ itself.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: `runtime:build`'s `PluginContext` matches what esdev hands a
+  hook.** `refresh` is gone; `command`, `platform`, `target` and `hot` are
+  added (esdev D148). The obsolete `addWatchFile()` and `emitFile()`, left
+  over from a second declaration of the interface that TypeScript merged into
+  the first, are removed: a dependency is returned in `dependsOn`, and a file
+  is emitted with `emit()`.
+
 ### Added
 
 - `runtime:db`'s built-in `postgres` driver, with `PgConnection`, `PgOptions`,

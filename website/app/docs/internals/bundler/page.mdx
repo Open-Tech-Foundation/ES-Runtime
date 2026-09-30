@@ -220,8 +220,8 @@ never exit.
 A build returns `{ output, watchFiles, warnings }`. The chunks carry their code
 as strings; nothing is written unless you call `write()`.
 
-`watchFiles` is every file the build read **plus** every file a plugin declared
-with `this.addWatchFile()`. It is the half of the API that makes a lazy cache
+`watchFiles` is every file the build read **plus** every file a plugin's hook
+returned in `dependsOn`. It is the half of the API that makes a lazy cache
 possible:
 
 ```js
@@ -234,7 +234,7 @@ for await (const { path } of changes) {
 
 Without it, a consumer can only clear everything on every save — which is the
 same as having no cache, and is exactly the regression this API exists to avoid.
-`this.addWatchFile()` is what extends it to modules the graph could not have
+`dependsOn` is what extends it to modules the graph could not have
 discovered: a page compiled from frontmatter depends on files it never imports,
 and only the plugin knows.
 

@@ -3700,8 +3700,8 @@ module behind a dynamic import — and `null` for a shared chunk. It is how you
 find one entry's chunk: `output.find((c) => c.isEntry)` asks a different
 question, since an emitted worker chunk is an entry as well.
 
-`watchFiles` is every file the build read **plus** every file a plugin declared
-with `this.addWatchFile()`. Paired with [`runtime:watch`](#runtimewatch), it is
+`watchFiles` is every file the build read **plus** every file a plugin's hook
+returned in `dependsOn`. Paired with [`runtime:watch`](#runtimewatch), it is
 what lets a dev server drop the chunks a change invalidates and keep the rest.
 
 ### When a build fails
