@@ -94,7 +94,7 @@ run = "pnpm install --frozen-lockfile"
 # script, so the alternative is a no-op script that exists to be skipped, which
 # is a worse thing to leave in a published manifest.
 [tasks.build]
-run = "pnpm --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --filter esrun-serialization --filter esdev-dom-color --parallel run build"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --filter esrun-serialization --filter esdev-dom-color --parallel run build"
 
 # Not "*": `crates/runtime/js` has 25 standing type errors and has never been
 # typechecked standalone (its tsconfig sets `types: []` and drives the editor).
@@ -114,7 +114,7 @@ run = "pnpm --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @
 # uses. `esdev` is already on PATH wherever this runs: the JS packages build
 # with it, and CI installs it before this task.
 [tasks.typecheck]
-run = "pnpm --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --filter @opentf/esrun-types --parallel exec esdev typecheck"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-smtp --filter @opentf/esrun-types --parallel exec esdev typecheck"
 
 [tasks.lint]
 run = "biome check"
