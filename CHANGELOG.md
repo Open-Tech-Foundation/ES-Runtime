@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-01
+
 ### Added
 
 - A built-in PostgreSQL driver: `import { postgres } from "runtime:db"`, then

@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-01
+
 ### Changed
 
 - **Breaking: `runtime:build`'s `PluginContext` matches what esdev hands a

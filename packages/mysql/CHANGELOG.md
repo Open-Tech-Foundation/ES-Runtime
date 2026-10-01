@@ -11,6 +11,8 @@ pace of the MySQL protocol rather than the runtime's. See the root
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-01
+
 ### Changed
 
 - **The package re-exports the driver built into `runtime:db`** (esrun 0.35 and
