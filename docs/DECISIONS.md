@@ -3141,3 +3141,15 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Running it for `esdev test --browser`'s page.** That page is esdev's harness, not a document the project wrote.
 
 **Consequences:** a framework's bootstrapping, head management and preload links live in its plugin and are the same in development and in the build.
+
+### D152 — The dev loop leaves out `"then": "run"` steps · *Accepted (2026-10-01)*
+
+**Context:** a static site is a browser target plus a prerender target with `"then": "run"`. `esdev start` built every target when `dev.watch.targets` was absent, so it bundled and launched the prerender on startup and every save. The prerender's output is the release site, which the dev loop does not serve, so the step had to detect the dev loop and exit. That added startup work and log lines with no effect.
+
+**Decision:** without `dev.watch.targets`, `esdev start` builds every target except `"then": "run"` steps. The `dev.run` target is always built, because the loop runs its output. Naming a step in `dev.watch.targets` runs it on every save, as before. When no target has a step, the default is still "all targets", so a target added later is built without anyone listing it.
+
+**Rejected:**
+- **Steps that detect the dev loop and exit.** Each framework would repeat that check, and the bundle and launch would still happen.
+- **A per-target `"dev": false` key.** It adds a key for what `then: "run"` already says: the target's job is to produce release output.
+
+**Consequences:** a site's `esdev start` builds only what it serves. Projects that relied on a step running in development list it in `dev.watch.targets`.

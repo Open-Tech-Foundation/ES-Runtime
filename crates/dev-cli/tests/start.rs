@@ -264,3 +264,37 @@ fn the_loop_narrates_startup_and_every_save() {
     assert_eq!(restarts, 1, "no cycle line for the save");
     assert!(get(port).contains("ok"), "the restarted server answers");
 }
+
+/// A `"then": "run"` step is a release step: the loop builds and runs the
+/// server, and neither bundles nor runs the step beside it.
+#[test]
+fn the_loop_skips_run_after_build_steps() {
+    static PORT: AtomicU16 = AtomicU16::new(20_500);
+    let listen = PORT.fetch_add(1, Ordering::Relaxed);
+    let dir = project(
+        "skips-steps",
+        &format!(
+            r#"{{ "build": {{ "targets": {{
+                    "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }},
+                    "prerender": {{ "entry": "src/prerender.ts", "out": "gen/prerender.js", "then": "run" }} }} }},
+                  "dev": {{ "run": "server", "app": {{ "port": {listen} }} }} }}"#
+        ),
+    );
+    std::fs::write(
+        dir.join("src/prerender.ts"),
+        "console.log(\"prerendered\");\n",
+    )
+    .expect("write the step");
+    let mut dev = Loop::start(dir.clone());
+    let port = dev.wait_for_app();
+
+    assert!(get(port).contains("ok"), "the dev server answers");
+    assert!(
+        dir.join(".dev/dist/server.js").is_file(),
+        "the server was built"
+    );
+    assert!(
+        !dir.join(".dev/gen/prerender.js").exists(),
+        "the release step was bundled by the dev loop"
+    );
+}

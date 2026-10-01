@@ -260,7 +260,8 @@ run.
 
 `then: "run"` is how a static site is generated without `esdev` knowing what
 one is: the bundle runs, and what it writes is the output. It runs in a child
-process, after every target is built.
+process, after every target is built. `esdev start` skips these steps unless
+`dev.watch.targets` names them; see [esdev start](/esdev/start).
 
 ## Safe output replacement
 

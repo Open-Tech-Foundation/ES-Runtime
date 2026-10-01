@@ -345,7 +345,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     }
 
     let run = project.start.run.clone();
-    let watched = project.start.watch.clone();
+    let watched = dev_targets(&project);
     let output = match &run {
         Some(name) => Some(running_output(&project, name)?),
         None => None,
@@ -583,6 +583,30 @@ impl From<Option<Vec<PathBuf>>> for Woken {
             None => Self::Interrupted,
         }
     }
+}
+
+/// The targets the dev loop builds: `dev.watch.targets` when it names any,
+/// otherwise every target but the `"then": "run"` steps.
+///
+/// A step that runs once built is a release step — a prerender writes the
+/// deliverable, and the dev loop serves a development build instead. Running
+/// it on every save is startup work whose output nothing reads. Naming one in
+/// `dev.watch.targets` opts it back in; the `dev.run` target is always built,
+/// since the loop runs its output.
+fn dev_targets(project: &Settings) -> Vec<String> {
+    if !project.start.watch.is_empty() {
+        return project.start.watch.clone();
+    }
+    if !project.targets.iter().any(|target| target.run_after_build) {
+        return Vec::new();
+    }
+    let run = project.start.run.as_deref();
+    project
+        .targets
+        .iter()
+        .filter(|target| !target.run_after_build || run == Some(target.name.as_str()))
+        .map(|target| target.name.clone())
+        .collect()
 }
 
 /// Builds the project in dev mode, reporting the failure.
@@ -1279,6 +1303,56 @@ mod tests {
             serve_dir(&frontend).expect("served"),
             Some(PathBuf::from("/p/.dev/dist"))
         );
+    }
+
+    fn settings(json: &str) -> crate::settings::Settings {
+        crate::settings::Settings::from_project(
+            crate::config::parse(json, PathBuf::from("/p"), "esdev.json")
+                .expect("parsed")
+                .expect("a config"),
+        )
+    }
+
+    /// A prerender step is a release step: the loop builds the site it
+    /// serves and leaves the step that writes the deliverable alone.
+    #[test]
+    fn the_loop_leaves_out_run_after_build_steps() {
+        let site = settings(
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}, "ssg": {"entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run"}}}}"#,
+        );
+        assert_eq!(dev_targets(&site), vec!["web".to_string()]);
+    }
+
+    /// Without a step to leave out, the list stays empty — "all of them" —
+    /// so a target added later is built without anyone listing it.
+    #[test]
+    fn without_a_step_the_loop_builds_every_target() {
+        let app = settings(
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outdir": "dist/public"}}}, "dev": {"run": "server"}}"#,
+        );
+        assert!(dev_targets(&app).is_empty());
+    }
+
+    /// An explicit list is the developer's word, including a step it names.
+    #[test]
+    fn watch_targets_can_opt_a_step_back_in() {
+        let site = settings(
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}, "ssg": {"entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run"}}}, "dev": {"watch": {"targets": ["web", "ssg"]}}}"#,
+        );
+        assert_eq!(
+            dev_targets(&site),
+            vec!["web".to_string(), "ssg".to_string()]
+        );
+    }
+
+    /// The target the loop runs is built even when it is also a step,
+    /// because its output is what the loop starts.
+    #[test]
+    fn the_run_target_is_always_built() {
+        let app = settings(
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js", "then": "run"}, "gen": {"entry": "gen.ts", "out": "dist/gen.js", "then": "run"}}}, "dev": {"run": "server"}}"#,
+        );
+        assert_eq!(dev_targets(&app), vec!["server".to_string()]);
     }
 
     #[test]

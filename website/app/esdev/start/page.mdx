@@ -129,8 +129,9 @@ pin the endpoint.
 
 These `dev` settings control what the loop rebuilds and serves:
 
-- `watch.targets` selects targets to rebuild. If omitted, esdev rebuilds all
-  targets.
+- `watch.targets` selects targets to rebuild. If omitted, esdev rebuilds every
+  target except `"then": "run"` steps, which run only in `esdev build`. The
+  `run` target is always built. List a step here to run it on every save.
 - `watch.paths` adds watched paths, resolved relative to `esdev.json`.
 - `serve` selects the directory to serve when no `run` target is configured.
 - `app.port` sets the app server's fallback port. `server.port` pins esdev's

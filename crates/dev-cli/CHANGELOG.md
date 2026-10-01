@@ -26,6 +26,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- `esdev start` no longer bundles or runs `"then": "run"` targets, such as a
+  static-site prerender, unless `dev.watch.targets` names them. These steps
+  write the release output, which the dev loop does not serve; the `dev.run`
+  target is always built.
 - Regenerate the site version metadata so development pages display the
   current `esdev` release.
 - Browser protocol commands fail after 30 seconds without a reply, naming the
