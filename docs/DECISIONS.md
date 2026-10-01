@@ -3153,3 +3153,24 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **A per-target `"dev": false` key.** It adds a key for what `then: "run"` already says: the target's job is to produce release output.
 
 **Consequences:** a site's `esdev start` builds only what it serves. Projects that relied on a step running in development list it in `dev.watch.targets`.
+
+### D153 — A plugin can finish a release build · *Proposed (2026-10-01)* · *extends D148, D151*
+
+**Context:** some output can be produced only once the whole build exists: prerendered pages need the browser bundle and the written document, a sitemap needs the pages, and a preload manifest needs the chunk graph. A plugin had no hook for this. `bundle` runs once per target, receives the file list without code, and cannot see the other targets. The only way was a `"then": "run"` target, a script run as a child process that has to work out from its own path what esdev already knows. Web-App-Framework's `website/ssg.js` shows the cost: it searches upward for `.esdev-build-*` to find the staged output and to tell a dev build from a release build, guesses the project layout from `/website/.ssg/` in its own path, and passes no chunk manifest because it cannot see the chunks.
+
+**Decision (maintainer, 2026-10-01):**
+
+- **One hook, `finish(targets, ctx)`**, called once per `esdev build` after every selected target is built (its `html` hooks included) and every `"then": "run"` step has run, before staging moves anything into place.
+- **`targets` is keyed by target name.** Each entry has `platform`, `outDir` (the absolute staged directory the target writes into; for an `out` file, its directory) and `files` (what the build produced there, in the `bundle` hook's shape, `fileName` relative to `outDir`). An HTML target's `files` include its document. These are facts; esdev still does not know what a prerender is (D85).
+- **A plugin writes into an `outDir` directly.** Plugins already run under esdev's grant, and staging commits everything written under it, so no write API is needed. A `finish` that throws fails the build and nothing is deployed, the same guarantee as a failed target.
+- **Release builds only.** `esdev start` never calls it, for the reason D152 leaves out `"then": "run"` steps: its output is the deployment, which the dev loop does not serve. `ctx.command` is `"build"`; `ctx.platform` and `ctx.target` are absent, because the hook is about the whole build.
+- **`esdev build --target X`** calls it with the selected targets only. A plugin that needs a target that was not built says so.
+- **No filter**, as for `start`, `end` and `bundle`. Ordered `pre`, unordered, `post`, in that order; each sees what the ones before it wrote.
+
+**Rejected:**
+- **Rollup's `writeBundle`/`closeBundle` per target.** They run once per bundle, and the work that needs this hook spans targets.
+- **A write API on `ctx`.** It would duplicate the file system the plugin already has, and staging already makes the writes atomic.
+- **Running it in `esdev start`, with `ctx.command` for the plugin to check.** Every plugin would carry the same check, and forgetting it writes release output on every save.
+- **`renderChunk` (rewriting chunk code).** Nothing needs it yet; it stays out until something does.
+
+**Consequences:** a framework's prerender, sitemap, search index and feeds become part of its plugin, run in the build that has the facts they need. Web-App-Framework can drop its `site-ssg` target and the path guessing in `ssg.js`, and build its route preload manifest from `files`. `"then": "run"` remains for scripts that are not plugins.

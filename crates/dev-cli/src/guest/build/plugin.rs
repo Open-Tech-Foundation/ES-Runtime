@@ -372,6 +372,45 @@ impl contract::Pass for GuestPass {
         })
     }
 
+    fn finish<'a>(
+        &'a self,
+        targets: &'a [contract::Finished],
+        ctx: &'a Arc<dyn contract::Context>,
+    ) -> contract::Answer<'a, ()> {
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            // Keyed by name, as `esdev.json` names them: a plugin reaches for
+            // `targets.web.outDir`, not for an index it would have to search.
+            let targets = Value::Object(
+                targets
+                    .iter()
+                    .map(|target| {
+                        (
+                            target.name.clone(),
+                            Value::Object(vec![
+                                (
+                                    "platform".to_string(),
+                                    Value::String(target.platform.to_string()),
+                                ),
+                                (
+                                    "outDir".to_string(),
+                                    Value::String(target.out_dir.to_string_lossy().into_owned()),
+                                ),
+                                (
+                                    "files".to_string(),
+                                    Value::Array(target.files.iter().map(output_value).collect()),
+                                ),
+                            ]),
+                        )
+                    })
+                    .collect(),
+            );
+            self.call(Hook::Finish, vec![targets], Vec::new(), ctx)
+                .await?;
+            Ok(())
+        })
+    }
+
     fn html<'a>(
         &'a self,
         html: &'a str,

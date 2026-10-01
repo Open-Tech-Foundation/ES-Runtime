@@ -1,6 +1,6 @@
 ---
 title: Plugin lifecycle and hooks
-description: Define an esdev plugin object, filter work, and use its seven hooks.
+description: Define an esdev plugin object, filter work, and use its eight hooks.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -55,7 +55,7 @@ side as a string literal instead of an `export`. Set it whenever the code you
 return is a different language from the file it came from: `"js"`, `"jsx"`,
 `"ts"`, `"css"`.
 
-## The seven hooks
+## The eight hooks
 
 | Hook | Handler | Returns |
 | --- | --- | --- |
@@ -66,8 +66,9 @@ return is a different language from the file it came from: `"js"`, `"jsx"`,
 | `end` | `(error, ctx)` | nothing |
 | `bundle` | `(output, ctx)` | nothing |
 | `html` | `(html, id, ctx)` | `{ html?, tags? }`, or `null` — esdev's HTML targets only |
+| `finish` | `(targets, ctx)` | nothing — `esdev build` only |
 
-Seven, against rollup's twenty-odd. Each is a promise whatever bundler sits
+Eight, against rollup's twenty-odd. Each is a promise whatever bundler sits
 behind this has to keep, so the list is short on purpose. Data comes first and
 the context comes last, with nothing positional in between: anything one
 particular hook needs to say — `isEntry`, on a resolve — rides on the context
@@ -113,6 +114,45 @@ html: {
 
 It runs in `esdev build` and `esdev start` alike; the dev loop's update client
 is added after every plugin. The rest of the document is left byte for byte.
+
+## finish: after the whole build
+
+`finish` runs once per `esdev build`, after every target is built and every
+`"then": "run"` step has run, and before anything moves into place. It is where
+output that needs the whole build goes: prerendered pages, a sitemap, a search
+index.
+
+```js
+import { write } from "runtime:fs";
+
+finish: {
+  async handler(targets, ctx) {
+    const { outDir, files } = targets.web;
+    // Which file each entry and lazy module became, for a prerenderer's preloads.
+    const entries = files.filter((file) => file.isEntry || file.isDynamicEntry);
+    const manifest = Object.fromEntries(entries.map((file) => [file.facadeModuleId, file.fileName]));
+    await write(`${outDir}/manifest.json`, JSON.stringify(manifest));
+  },
+}
+```
+
+`targets` is keyed by target name:
+
+| Field | |
+| --- | --- |
+| `platform` | `"browser"` or `"server"` |
+| `outDir` | The absolute directory the target was written to, inside the build's staging directory. For an `out` file, its directory. |
+| `files` | The chunks and assets the bundler wrote there, in the [`bundle`](/api/build#bundle-what-the-build-produced) shape, plus an HTML target's document. `fileName` is relative to `outDir`. Stylesheets and imported or copied assets are not listed; read `outDir` for them. |
+
+Write files into an `outDir` with `runtime:fs`; they are deployed with the rest
+of the build. If the hook throws, the build fails and nothing is deployed.
+`ctx.emit()` is refused, because every bundle is already written.
+
+It does not run in `esdev start`, whose output is not a deployment. With
+`esdev build --target`, `targets` holds only the targets that were built.
+`ctx.command` is `"build"`; `ctx.platform` and `ctx.target` are absent. Plugins
+run in `pre`, unordered, `post` order, and each sees what the ones before it
+wrote.
 
 ## jsx: what only the compiler can do
 

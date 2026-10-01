@@ -340,6 +340,18 @@ fn ordered(passes: &[Arc<dyn contract::Pass>], hook: Hook) -> Vec<&Arc<dyn contr
 pub fn run_context(root: &Path) -> Arc<dyn contract::Context> {
     Arc::new(RunContext {
         dir: root.to_path_buf(),
+        emit_refused: "ctx.emit() adds to a build's output, and a run unbundled writes none — \
+             this hook cannot emit under esdev test or esdev <file>",
+    })
+}
+
+/// A `finish` hook's context (D153): the bundles are written, so there is no
+/// build left to emit into. The hook writes into a target's `outDir` instead.
+pub fn finish_context(root: &Path) -> Arc<dyn contract::Context> {
+    Arc::new(RunContext {
+        dir: root.to_path_buf(),
+        emit_refused: "ctx.emit() adds to a build in flight, and every bundle is written \
+             by the time `finish` runs — write the file into a target's outDir instead",
     })
 }
 
@@ -443,6 +455,8 @@ fn module_type(id: &str) -> String {
 /// entry to and no output to put an asset beside.
 struct RunContext {
     dir: PathBuf,
+    /// Why `ctx.emit()` cannot work here.
+    emit_refused: &'static str,
 }
 
 impl contract::Context for RunContext {
@@ -456,11 +470,7 @@ impl contract::Context for RunContext {
     }
 
     fn emit(&self, _emit: contract::Emit) -> Result<String, String> {
-        Err(
-            "ctx.emit() adds to a build's output, and a run unbundled writes none — \
-             this hook cannot emit under esdev test or esdev <file>"
-                .to_string(),
-        )
+        Err(self.emit_refused.to_string())
     }
 
     fn log(&self, level: &str, message: String) {

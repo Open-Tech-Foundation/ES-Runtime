@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `Plugin.finish` and `FinishedTarget`: the hook a release `esdev build` calls
+  once every target is staged (esdev D153).
+
 ## [0.12.0] - 2026-10-01
 
 ### Changed

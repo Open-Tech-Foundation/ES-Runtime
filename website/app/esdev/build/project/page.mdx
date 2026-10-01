@@ -227,7 +227,8 @@ hook contract.
 
 | Command | Which hooks |
 | --- | --- |
-| `esdev build`, `esdev start`, `esdev build <entry>` | All seven (`html` for an HTML target) |
+| `esdev build` | All eight (`html` for an HTML target) |
+| `esdev start`, `esdev build <entry>` | All but `finish` (`html` for an HTML target) |
 | `esdev test --browser` | All but `html`: the test is bundled into esdev's own page |
 | `esdev test`, `esdev test --dom`, `esdev <file>` | `resolve`, `load`, `transform` |
 
@@ -235,7 +236,7 @@ A module run unbundled goes through the same `resolve`, `load` and `transform`
 hooks a build calls, in the same order, and esdev's own passes run with them: a
 test importing a CSS Module gets its scoped names, and an image gets its URL. A
 virtual module a plugin serves is loaded under the `esdev-virtual:` scheme.
-There is no bundle, so `start`, `end` and `bundle` do not run and `ctx.emit()`
+There is no bundle, so `start`, `end`, `bundle` and `finish` do not run and `ctx.emit()`
 fails. `ctx.resolve()` finds a relative or absolute path, with the extensions
 and `index` files a bundler tries, and answers `null` for a package.
 
@@ -258,8 +259,10 @@ run.
 | Frontend (SSG/SPA) | A browser `outdir`, plus a prerender target with `then: "run"` |
 | Fullstack | Both |
 
-`then: "run"` is how a static site is generated without `esdev` knowing what
-one is: the bundle runs, and what it writes is the output. It runs in a child
+A plugin's [`finish`](/esdev/plugins/lifecycle#finish-after-the-whole-build)
+hook does the same work from inside the build, with each target's output
+directory and files in hand. `then: "run"` is how a static site is generated
+without a plugin: the bundle runs, and what it writes is the output. It runs in a child
 process, after every target is built. `esdev start` skips these steps unless
 `dev.watch.targets` names them; see [esdev start](/esdev/start).
 

@@ -24,6 +24,15 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- Plugin `finish(targets, ctx)` hook. It runs once per `esdev build`, after
+  every target and `"then": "run"` step and before the output is deployed.
+  `targets` gives each target's staged `outDir`, `platform` and `files`, so a
+  plugin can prerender pages or write a sitemap from inside the build. Files it
+  writes there are deployed; a throw fails the build. `esdev start` does not
+  call it.
+
 ### Fixed
 
 - `esdev start` no longer bundles or runs `"then": "run"` targets, such as a

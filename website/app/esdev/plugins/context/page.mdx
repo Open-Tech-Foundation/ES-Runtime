@@ -12,7 +12,7 @@ The last argument of every handler, never `this`.
 | Member | Description |
 | --- | --- |
 | `ctx.resolve(source, importer?, options?)` | Asks the build's own resolver, mid-hook. `null` when nothing resolves. |
-| `ctx.emit({ type, … })` | Adds a chunk or an asset to a build already running; returns a reference id. |
+| `ctx.emit({ type, … })` | Adds a chunk or an asset to a build already running; returns a reference id. Refused in `finish`, where every bundle is already written. |
 | `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
 | `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
 | `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |

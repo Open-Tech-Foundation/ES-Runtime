@@ -298,3 +298,33 @@ fn the_loop_skips_run_after_build_steps() {
         "the release step was bundled by the dev loop"
     );
 }
+
+/// `finish` belongs to a release build (D153): the dev loop builds and runs
+/// the project without calling it.
+#[test]
+fn the_loop_never_calls_finish() {
+    static PORT: AtomicU16 = AtomicU16::new(20_600);
+    let listen = PORT.fetch_add(1, Ordering::Relaxed);
+    let dir = project(
+        "never-finishes",
+        &format!(
+            r#"{{ "plugins": ["./finish.mjs"],
+                  "build": {{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }} }},
+                  "dev": {{ "run": "server", "app": {{ "port": {listen} }} }} }}"#
+        ),
+    );
+    std::fs::write(
+        dir.join("finish.mjs"),
+        "import { write } from \"runtime:fs\";\n\
+         export default { name: \"finish\", finish: { handler: () => write(\"finished.txt\", \"yes\") } };\n",
+    )
+    .expect("write the plugin");
+    let mut dev = Loop::start(dir.clone());
+    let port = dev.wait_for_app();
+
+    assert!(get(port).contains("ok"), "the dev server answers");
+    assert!(
+        !dir.join("finished.txt").exists(),
+        "the dev loop called finish"
+    );
+}

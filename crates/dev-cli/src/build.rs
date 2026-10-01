@@ -473,7 +473,8 @@ fn copy_library_styles(root: &Path, dir: &Path, out: &Path) -> Result<usize, Str
 /// A stylesheet named directly on the command line is an entry in its own
 /// right, not an empty JavaScript module.  Its imports are bundled just as they
 /// are for an HTML target.
-fn build_stylesheet_entry(config: &BuildConfig, cwd: &Path) -> Result<String, String> {
+/// Returns the report and the written file's name.
+fn build_stylesheet_entry(config: &BuildConfig, cwd: &Path) -> Result<(String, String), String> {
     let source = cwd.join(&config.source);
     let out = config
         .out
@@ -509,7 +510,14 @@ fn build_stylesheet_entry(config: &BuildConfig, cwd: &Path) -> Result<String, St
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
     std::fs::write(&out, code).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
-    Ok(out.strip_prefix(cwd).unwrap_or(&out).display().to_string())
+    let file_name = out
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok((
+        out.strip_prefix(cwd).unwrap_or(&out).display().to_string(),
+        file_name,
+    ))
 }
 
 /// Whether a specifier names a file in the project rather than a package.
@@ -658,8 +666,17 @@ fn owned_dirs(
     Ok(owned)
 }
 
+/// What [`build`] wrote.
+pub struct Built {
+    /// The line the build prints for it.
+    pub report: String,
+    /// Every chunk and asset the bundler wrote, `file_name` relative to the
+    /// output directory: what a `finish` hook is shown (D153).
+    pub produced: Vec<crate::contract::Output>,
+}
+
 /// Bundles `config` and reports what was written.
-pub async fn build(config: BuildConfig) -> Result<String, String> {
+pub async fn build(config: BuildConfig) -> Result<Built, String> {
     let cwd = match &config.root {
         Some(root) => root.clone(),
         None => {
@@ -674,7 +691,10 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             .extension()
             .is_some_and(|extension| extension == CSS_EXTENSION)
     {
-        return build_stylesheet_entry(&config, &cwd);
+        return build_stylesheet_entry(&config, &cwd).map(|(report, file_name)| Built {
+            report,
+            produced: vec![crate::contract::Output::Asset { file_name }],
+        });
     }
 
     // An application build names one file; a library build names a source
@@ -847,6 +867,7 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         lib && !is_local(specifier)
     });
 
+    let mut produced = Vec::new();
     for format in &formats {
         // A library's output tree is named after its module system: `[name].js`
         // for the ES modules and `[name].cjs` for the CommonJS ones, so both can
@@ -989,7 +1010,10 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                     format.name()
                 )
             })
-            .map(|output| crate::print_warnings!(output))?;
+            .map(|output| {
+                crate::print_warnings!(output);
+                produced.extend(crate::adapter::produced(&output.assets));
+            })?;
     }
 
     // Beside the bundle that imports them, under `assets/`, which is where the
@@ -1025,11 +1049,14 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             .map(|m| m.len())
             .unwrap_or(0);
         let copied = copy_assets(&config.assets, &cwd, &cwd.join(&out_dir))?;
-        return Ok(format!(
-            "{} ({:.1} KB{copied})",
-            written.display(),
-            size as f64 / 1024.0
-        ));
+        return Ok(Built {
+            report: format!(
+                "{} ({:.1} KB{copied})",
+                written.display(),
+                size as f64 / 1024.0
+            ),
+            produced,
+        });
     }
 
     let root = preserve_root.unwrap_or_else(|| PathBuf::from("."));
@@ -1086,7 +1113,10 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         ));
     }
     warn_about_runtime_imports(&formats, &runtime_imports);
-    Ok(format!("{}/ ({counted})", out_dir.display()))
+    Ok(Built {
+        report: format!("{}/ ({counted})", out_dir.display()),
+        produced,
+    })
 }
 
 /// Says so when a CommonJS build carries an import only `esrun` can serve.
@@ -1991,6 +2021,8 @@ async fn build_targets(
         None => path.to_path_buf(),
     };
 
+    // What each target produced, for the plugins' `finish` (D153).
+    let mut finished = Vec::with_capacity(selected.len());
     for target in selected {
         // Where this build is, for the plugins to read (D148). Hot only for a
         // browser build in a hot loop: that is the one a page is running and
@@ -2031,7 +2063,7 @@ async fn build_targets(
                 ));
             };
             let out_dir = staging.path(place(Path::new(dir)));
-            let written = crate::html::build(
+            let (written, files) = crate::html::build(
                 target,
                 &settings.source.root,
                 &out_dir,
@@ -2050,6 +2082,12 @@ async fn build_targets(
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
             copy_assets(&target.assets, &settings.source.root, &out_dir)
                 .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+            finished.push(crate::contract::Finished {
+                name: target.name.clone(),
+                platform: platform.name(),
+                out_dir,
+                files,
+            });
             let dev_loop = project.dev.is_some();
             let paint = if dev_loop {
                 crate::style::Palette::stderr()
@@ -2066,17 +2104,20 @@ async fn build_targets(
             continue;
         }
 
-        let (out, out_dir) = match &target.output {
+        // The directory the bundler writes into, which is what the listing's
+        // names are relative to: an `out` file's own directory, or `outdir`.
+        let (out, out_dir, written_into) = match &target.output {
             crate::config::Output::File(out) => {
                 let out = staging.path(place(Path::new(out)));
-                (Some(out.to_string_lossy().into_owned()), None)
+                let dir = out.parent().map(Path::to_path_buf).unwrap_or_default();
+                (Some(out.to_string_lossy().into_owned()), None, dir)
             }
             crate::config::Output::Dir(dir) => {
                 let dir = staging.path(place(Path::new(dir)));
-                (None, Some(dir.to_string_lossy().into_owned()))
+                (None, Some(dir.to_string_lossy().into_owned()), dir)
             }
         };
-        let written = build(BuildConfig {
+        let built = build(BuildConfig {
             jsx: settings.source.jsx.clone(),
             tsconfig: settings.source.tsconfig.clone(),
             source: target.entry.clone(),
@@ -2116,6 +2157,13 @@ async fn build_targets(
         })
         .await
         .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
+        finished.push(crate::contract::Finished {
+            name: target.name.clone(),
+            platform: platform.name(),
+            out_dir: written_into,
+            files: built.produced,
+        });
+        let written = built.report;
         let dev_loop = project.dev.is_some();
         let paint = if dev_loop {
             crate::style::Palette::stderr()
@@ -2157,6 +2205,46 @@ async fn build_targets(
             paint.dim("→"),
             paint.cyan(staging.reveal(&output.to_string_lossy()))
         );
+    }
+
+    // Last, with everything in staging and nothing yet in place (D153). A
+    // release build only: the dev loop's output is not the deployment.
+    if project.dev.is_none()
+        && let Some(host) = &host
+    {
+        let site = crate::contract::Site {
+            command: Some("build"),
+            ..crate::contract::Site::default()
+        };
+        finish(&host.passes(&site), &finished, &settings.source.root)
+            .await
+            .map_err(|e| staging.reveal(&e))?;
+    }
+    Ok(())
+}
+
+/// Calls every plugin's `finish`: `pre`, then unordered, then `post`, each
+/// after the one before it has written what it writes.
+async fn finish(
+    passes: &[std::sync::Arc<dyn crate::contract::Pass>],
+    targets: &[crate::contract::Finished],
+    root: &Path,
+) -> Result<(), String> {
+    use crate::contract::{Hook, Order};
+    let mut declared: Vec<_> = passes
+        .iter()
+        .filter_map(|pass| Some((pass, pass.hooks().get(Hook::Finish)?.order)))
+        .collect();
+    declared.sort_by_key(|(_, order)| match order {
+        Order::Pre => 0,
+        Order::Normal => 1,
+        Order::Post => 2,
+    });
+    let ctx = crate::unbundled::finish_context(root);
+    for (pass, _) in declared {
+        pass.finish(targets, &ctx)
+            .await
+            .map_err(|e| format!("[plugin {}] finish\n{e}", pass.name()))?;
     }
     Ok(())
 }
@@ -2226,7 +2314,7 @@ async fn build_single(mut config: BuildConfig) -> Result<String, String> {
     let written = build(config)
         .await
         .map_err(|e| staging.reveal(&e))
-        .map(|report| staging.reveal(&report))?;
+        .map(|built| staging.reveal(&built.report))?;
     staging.commit()?;
     Ok(written)
 }

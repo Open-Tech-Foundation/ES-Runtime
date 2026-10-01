@@ -64,7 +64,7 @@ use es_runtime_cli_common::{OpError, Value};
 
 /// Which hook of a plugin a call is for.
 ///
-/// Seven, deliberately, against rollup's twenty-odd: every hook carried here is
+/// Eight, deliberately, against rollup's twenty-odd: every hook carried here is
 /// a promise some future backend has to keep, so the list is short on purpose
 /// and grows only when something cannot be written without it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -84,6 +84,8 @@ pub enum Hook {
     /// An HTML target's document, before its references are read (`pre`) or
     /// once they point at the output (D151).
     Html,
+    /// A release build is complete, every target written to staging (D153).
+    Finish,
 }
 
 impl Hook {
@@ -97,6 +99,7 @@ impl Hook {
             Hook::End => "end",
             Hook::Bundle => "bundle",
             Hook::Html => "html",
+            Hook::Finish => "finish",
         }
     }
 }
@@ -192,6 +195,7 @@ pub struct Hooks {
     pub end: Option<HookSpec>,
     pub bundle: Option<HookSpec>,
     pub html: Option<HookSpec>,
+    pub finish: Option<HookSpec>,
 }
 
 impl Hooks {
@@ -204,6 +208,7 @@ impl Hooks {
             Hook::End => self.end.as_ref(),
             Hook::Bundle => self.bundle.as_ref(),
             Hook::Html => self.html.as_ref(),
+            Hook::Finish => self.finish.as_ref(),
         }
     }
 }
@@ -443,6 +448,32 @@ pub trait Pass: Send + Sync + std::fmt::Debug {
     ) -> Answer<'a, Option<HtmlResult>> {
         Box::pin(async { Ok(None) })
     }
+
+    /// A release build is complete (D153): every selected target is in
+    /// staging and every `"then": "run"` step has run, and nothing has moved
+    /// into place yet. What a pass writes under a target's `out_dir` is
+    /// committed with the rest; an error fails the build.
+    fn finish<'a>(
+        &'a self,
+        _targets: &'a [Finished],
+        _ctx: &'a Arc<dyn Context>,
+    ) -> Answer<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// One target of a finished build, as a `finish` hook is shown it.
+#[derive(Clone, Debug)]
+pub struct Finished {
+    /// The target's name in `esdev.json`.
+    pub name: String,
+    /// `"browser"` or `"server"`.
+    pub platform: &'static str,
+    /// The staged directory the target wrote into: its `outdir`, or the
+    /// directory of its `out` file.
+    pub out_dir: std::path::PathBuf,
+    /// What the build produced there, `file_name` relative to `out_dir`.
+    pub files: Vec<Output>,
 }
 
 /// What an `html` hook answered: a replacement document, tags to insert, or
@@ -824,7 +855,7 @@ fn kind(value: &Value) -> &'static str {
 // --- reading the guest's declaration ----------------------------------------
 
 /// Every hook name, for the "did you mean" in a rejection.
-const HOOK_NAMES: [&str; 7] = [
+const HOOK_NAMES: [&str; 8] = [
     "start",
     "resolve",
     "load",
@@ -832,6 +863,7 @@ const HOOK_NAMES: [&str; 7] = [
     "end",
     "bundle",
     "html",
+    "finish",
 ];
 
 /// Reads one plugin's declaration.
@@ -876,6 +908,7 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             "end" => Hook::End,
             "bundle" => Hook::Bundle,
             "html" => Hook::Html,
+            "finish" => Hook::Finish,
             other => return Err(unknown_hook(&name, other)),
         };
         let spec = hook_spec(&name, hook, spec)?;
@@ -887,6 +920,7 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             Hook::End => hooks.end = Some(spec),
             Hook::Bundle => hooks.bundle = Some(spec),
             Hook::Html => hooks.html = Some(spec),
+            Hook::Finish => hooks.finish = Some(spec),
         }
     }
     Ok(Plugin {
@@ -913,7 +947,7 @@ fn hook_spec(plugin: &str, hook: Hook, value: &Value) -> Result<HookSpec, OpErro
     // `start` and `end` are called once, with no module in hand — a filter on
     // them cannot mean anything, and one that was quietly ignored would be a
     // plugin whose author believes it is scoped when it is not.
-    if !filter.is_empty() && matches!(hook, Hook::Start | Hook::End | Hook::Bundle) {
+    if !filter.is_empty() && matches!(hook, Hook::Start | Hook::End | Hook::Bundle | Hook::Finish) {
         return Err(OpError::type_error(format!(
             "{plugin}.{}: this hook runs once, for the whole build, so it cannot be filtered",
             hook.name()
@@ -1404,6 +1438,43 @@ mod tests {
         );
         let err = plugin(&spec).expect_err("a filtered start must be refused");
         assert!(err.to_string().contains("cannot be filtered"), "{err}");
+    }
+
+    /// `finish` is a declared hook (D153), ordered like the others and, being
+    /// about the whole build, never filtered.
+    #[test]
+    fn finish_is_declared_ordered_and_never_filtered() {
+        let ordered = declare(
+            "x",
+            vec![(
+                "finish",
+                Value::Object(vec![(
+                    "order".to_string(),
+                    Value::String("post".to_string()),
+                )]),
+            )],
+        );
+        let declared = plugin(&ordered).expect("declaration");
+        assert_eq!(
+            declared.hooks.get(Hook::Finish).map(|spec| spec.order),
+            Some(Order::Post)
+        );
+
+        let filtered = declare(
+            "x",
+            vec![(
+                "finish",
+                Value::Object(vec![(
+                    "filter".to_string(),
+                    Value::Object(vec![("id".to_string(), re(r"\.html$"))]),
+                )]),
+            )],
+        );
+        let err = plugin(&filtered).expect_err("a filtered finish must be refused");
+        assert!(
+            err.to_string().contains("x.finish: this hook runs once"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -201,7 +201,7 @@ const mdx = {
 };
 ```
 
-### The seven hooks
+### The hooks
 
 | Hook | Handler | Returns |
 | --- | --- | --- |
@@ -212,6 +212,10 @@ const mdx = {
 | `end` | `(error, ctx)` | nothing |
 | `bundle` | `(output, ctx)` | nothing |
 | `html` | `(html, id, ctx)` | `{ html?, tags? }`, or `null` — esdev's HTML targets only |
+| `finish` | `(targets, ctx)` | nothing — `esdev build` only |
+
+`build()` never calls `finish`: it belongs to a project's
+[`esdev build`](/esdev/plugins/lifecycle#finish-after-the-whole-build).
 
 `null` or nothing means *not mine*, and the next plugin gets a turn. Anything
 else must be the object — a bare string of code is refused by name. Data comes

@@ -650,7 +650,7 @@ pub async fn build(
     jsx: crate::contract::Jsx,
     jsx_settings: crate::transform::JsxSettings,
     tsconfig: Option<std::path::PathBuf>,
-) -> Result<String, String> {
+) -> Result<(String, Vec<crate::contract::Output>), String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
     let html = std::fs::read_to_string(&entry)
@@ -949,7 +949,7 @@ pub async fn build(
     // target's `assets` list, the files a stylesheet referenced, and the files
     // a *module* imported.
     let copied = copied + pulled_in + imported;
-    Ok(format!(
+    let report = format!(
         "{} ({scripts} script{}, {styled} stylesheet{}, {copied} asset{})",
         written
             .strip_prefix(root)
@@ -958,7 +958,13 @@ pub async fn build(
         if scripts == 1 { "" } else { "s" },
         if styled == 1 { "" } else { "s" },
         if copied == 1 { "" } else { "s" }
-    ))
+    );
+    // What a `finish` hook is shown (D153): the bundle, and the document.
+    let mut files = listing;
+    files.push(crate::contract::Output::Asset {
+        file_name: name.to_string_lossy().into_owned(),
+    });
+    Ok((report, files))
 }
 
 /// The transport half of the client's hot-update runtime, compiled into the

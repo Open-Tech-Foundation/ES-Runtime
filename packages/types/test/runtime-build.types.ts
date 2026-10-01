@@ -67,3 +67,25 @@ export const refused: Plugin = {
     handler: (html) => html,
   },
 };
+
+// `finish` sees every target of a release build, keyed by name (D153).
+export const sitemap: Plugin = {
+  name: "sitemap",
+  finish: {
+    order: "post",
+    async handler(targets, ctx) {
+      const web = targets.web;
+      const entries = web.files.filter((file) => file.type === "chunk" && file.isEntry);
+      void ctx.command;
+      void `${web.outDir}/${entries.length}`;
+    },
+  },
+};
+
+export const filteredFinish: Plugin = {
+  finish: {
+    // @ts-expect-error — `finish` runs once for the whole build: no filter.
+    filter: { id: /x/ },
+    handler: () => {},
+  },
+};

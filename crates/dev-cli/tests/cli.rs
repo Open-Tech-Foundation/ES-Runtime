@@ -19127,3 +19127,169 @@ test("reads anything", async () => {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The project the `finish` tests share: an HTML target and a server target,
+/// and a plugin whose `finish` reports what it was shown into the web output.
+fn finish_project(name: &str, plugin: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.js", "console.log('MAIN');\n");
+    write_in(&dir, "src/server.js", "console.log('SERVER');\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head><script type=\"module\" src=\"./src/main.js\"></script>\
+         </head><body></body></html>\n",
+    );
+    write_in(&dir, "finish.mjs", plugin);
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./finish.mjs"], "build": {"targets": {
+            "web": {"entry": "index.html", "outdir": "dist"},
+            "server": {"entry": "src/server.js", "out": "server/server.js"}}}}"#,
+    );
+    dir
+}
+
+/// A plugin finishes a release build (D153): once, after every target, with
+/// each target's staged directory and files, in `pre`/unordered/`post` order,
+/// and what it writes there is deployed with the rest.
+#[test]
+fn a_plugin_finishes_a_release_build() {
+    let dir = finish_project(
+        "p_plugins_finish",
+        r#"
+import { file, write } from "runtime:fs";
+
+export default {
+  name: "report",
+  finish: {
+    async handler(targets, ctx) {
+      const pre = await file(`${targets.web.outDir}/pre.txt`).text();
+      const shown = Object.fromEntries(
+        Object.entries(targets).map(([name, t]) => [
+          name,
+          {
+            platform: t.platform,
+            staged: t.outDir.includes(".esdev-build-"),
+            files: t.files.map((f) => `${f.type}:${f.fileName}`),
+          },
+        ]),
+      );
+      await write(
+        `${targets.web.outDir}/report.json`,
+        JSON.stringify({ pre, command: ctx.command, platform: ctx.platform ?? null, shown }),
+      );
+    },
+  },
+};
+"#,
+    );
+    // A second plugin ordered `pre`, which the one above reads after.
+    write_in(
+        &dir,
+        "pre.mjs",
+        r#"
+import { write } from "runtime:fs";
+export default {
+  name: "pre",
+  finish: { order: "pre", handler: (targets) => write(`${targets.web.outDir}/pre.txt`, "first") },
+};
+"#,
+    );
+    let config = std::fs::read_to_string(dir.join("esdev.json")).expect("config");
+    write_in(
+        &dir,
+        "esdev.json",
+        &config.replace(r#"["./finish.mjs"]"#, r#"["./finish.mjs", "./pre.mjs"]"#),
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let report = std::fs::read_to_string(dir.join("dist/report.json")).expect("deployed");
+    assert!(report.contains(r#""pre":"first""#), "{report}");
+    assert!(report.contains(r#""command":"build""#), "{report}");
+    assert!(report.contains(r#""platform":null"#), "{report}");
+    assert!(
+        report.contains(r#""web":{"platform":"browser","staged":true"#),
+        "{report}"
+    );
+    assert!(
+        report
+            .contains(r#""server":{"platform":"server","staged":true,"files":["chunk:server.js"]"#),
+        "{report}"
+    );
+    assert!(report.contains(r#""asset:index.html""#), "{report}");
+    assert!(report.contains(r#""chunk:assets/main-"#), "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `finish` that throws fails the build, and what was deployed before is
+/// what is still deployed.
+#[test]
+fn a_failing_finish_deploys_nothing() {
+    let dir = finish_project(
+        "p_plugins_finish_fails",
+        r#"
+import { write } from "runtime:fs";
+export default {
+  name: "prerender",
+  finish: {
+    async handler(targets) {
+      await write(`${targets.web.outDir}/half.html`, "half");
+      throw new Error("route /about failed to render");
+    },
+  },
+};
+"#,
+    );
+    std::fs::create_dir_all(dir.join("dist")).expect("dist");
+    write_in(&dir, "dist/index.html", "LAST GOOD");
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let printed = stderr(&out);
+    assert!(printed.contains("[plugin prerender] finish"), "{printed}");
+    assert!(
+        printed.contains("route /about failed to render"),
+        "{printed}"
+    );
+    assert!(!printed.contains(".esdev-build-"), "{printed}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/index.html")).expect("kept"),
+        "LAST GOOD"
+    );
+    assert!(!dir.join("dist/half.html").exists());
+    assert!(!dir.join("server/server.js").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--target` builds part of the project, and `finish` is shown that part.
+#[test]
+fn finish_is_shown_only_the_selected_targets() {
+    let dir = finish_project(
+        "p_plugins_finish_selected",
+        r#"
+import { write } from "runtime:fs";
+export default {
+  name: "names",
+  finish: {
+    handler: (targets) =>
+      write(`${Object.values(targets)[0].outDir}/names.txt`, Object.keys(targets).join(",")),
+  },
+};
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["build", "--target=server"])
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("server/names.txt")).expect("written"),
+        "server"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

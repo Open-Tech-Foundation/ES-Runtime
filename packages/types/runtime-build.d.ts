@@ -223,6 +223,30 @@ declare module "runtime:build" {
     html?: Hook<
       (html: string, id: string, ctx: PluginContext) => HtmlResult | Promise<HtmlResult>
     >;
+    /**
+     * A release `esdev build` is complete: every target is written to staging
+     * and nothing is deployed yet. Write files into a target's `outDir` and
+     * they are deployed with the rest; throw and nothing is. esdev only, and
+     * never in `esdev start`: a `build()` a program starts does not call it.
+     */
+    finish?: WholeBuildHook<
+      (targets: Record<string, FinishedTarget>, ctx: PluginContext) => void | Promise<void>
+    >;
+  }
+
+  /** One target of a finished `esdev build`, as `finish` is shown it. */
+  export interface FinishedTarget {
+    readonly platform: "browser" | "server";
+    /**
+     * The absolute staged directory the target was written to: its `outdir`,
+     * or the directory of its `out` file.
+     */
+    readonly outDir: string;
+    /**
+     * The chunks and assets the bundler wrote there, plus an HTML target's
+     * document. `fileName` is relative to `outDir`.
+     */
+    readonly files: BundledFile[];
   }
 
   /**
