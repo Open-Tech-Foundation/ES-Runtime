@@ -10,17 +10,21 @@
 import { Hono } from "hono";
 
 const app = new Hono();
-app.get("/", (c) => c.text("Hello, World!"));
+const responseMode = (await benchEnv("BENCH_RESPONSE_MODE")) || "json";
+const respond = responseMode === "text"
+  ? (c) => c.text("Hello, World!")
+  : (c) => c.json({ message: "Hello, World!" });
+app.get("/", respond);
 
 // Port from BENCH_PORT (rps.sh picks a free one per run); see helloserver.js.
-async function benchPort() {
-  if (typeof Deno !== "undefined") return Deno.env.get("BENCH_PORT");
-  if (typeof process !== "undefined" && process.env) return process.env.BENCH_PORT;
+async function benchEnv(name) {
+  if (typeof Deno !== "undefined") return Deno.env.get(name);
+  if (typeof process !== "undefined" && process.env) return process.env[name];
   const { env } = await import("runtime:process");
-  return env.BENCH_PORT;
+  return env[name];
 }
 
-const PORT = Number(await benchPort()) || 3000;
+const PORT = Number(await benchEnv("BENCH_PORT")) || 3000;
 
 if (typeof Deno !== "undefined") {
   Deno.serve({ hostname: "127.0.0.1", port: PORT, onListen() {} }, app.fetch);

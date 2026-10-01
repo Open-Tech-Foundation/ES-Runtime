@@ -10,8 +10,8 @@ LLRT has no general HTTP server, no `WebAssembly`, and only partial `fs`/streams
 and built for cold-start and low memory — a deliberate foil for esrun's startup
 and footprint numbers, and a different engine (QuickJS, vs V8 for
 esrun/Node/Deno and JavaScriptCore for Bun). It runs the engine + Web-API
-workloads it supports; `http`/`streams`/`fs`/`glob`/`fetch_upload` and the
-`wasm_*`/`wasi_*` rows fall through to n/a.
+workloads it supports; `http`, `glob`, and the `wasm_*`/`wasi_*` rows
+fall through to n/a. Streams and filesystem support vary by operation.
 
 ## The database benchmark
 
@@ -398,107 +398,105 @@ same run that feeds the site. One machine; re-run locally for your own numbers.
 ```
 workload      |     node |      bun |     deno |     llrt |    esrun
 --------------+----------+----------+----------+----------+----------
-startup       |     22.5 |      4.3 |     13.5 |      3.8 |      8.8
-bigscript     |     35.8 |     15.6 |     22.0 |     11.9 |      3.1
-modules       |     84.7 |     12.6 |     31.5 |     14.6 |      3.1
-compute       |    194.7 |    111.8 |    235.9 |   1725.8 |    196.1
-json          |    269.3 |    148.2 |    196.5 |    652.1 |    189.5
-jsonbig       |    681.1 |    428.6 |    522.4 |   1620.7 |    475.7
-regex         |     68.2 |     17.4 |     64.1 |    948.1 |     61.5
-strings       |     61.8 |     60.1 |     61.3 |    163.1 |     58.0
-structured    |    214.5 |    238.0 |    267.2 |    401.6 |    279.4
-errors        |   1561.0 |    313.3 |   4326.8 |    369.7 |    378.1
-async         |     61.3 |     42.2 |     33.5 |    605.7 |     35.6
-timers        |     50.0 |     30.9 |    253.6 |     37.9 |    109.6
-url           |     36.9 |     32.5 |    107.9 |    130.7 |     94.7
-url_setter    |    148.1 |     89.7 |    204.0 |    125.6 |    190.9
-urlpattern    |    438.6 |    491.4 |   5734.9 |      n/a |    938.9
-encoding      |     79.1 |     17.8 |     82.5 |     79.8 |     75.0
-encoding_large|    347.8 |     79.8 |    167.1 |    273.9 |    103.0
-base64        |      7.5 |     12.6 |      7.6 |     37.4 |     25.0
-buffers       |     14.3 |     17.5 |     15.2 |     77.6 |     13.6
-headers       |    481.7 |    243.6 |   1691.3 |      n/a |    467.4
-formdata      |    277.6 |     20.2 |    400.9 |   4318.4 |     95.9
-date_intl     |    122.4 |     76.1 |    137.5 |      n/a |    135.8
-streams       |     12.3 |      5.9 |     11.4 |     93.7 |     11.9
-compression   |    306.9 |     28.3 |     81.0 |      n/a |     71.1
-sha256        |    541.0 |    450.2 |    439.6 |    339.6 |    342.4
-crypto        |    183.2 |     86.5 |    101.4 |     35.1 |     35.6
-crypto_asym   |    353.4 |    209.6 |   2286.7 |   1039.3 |   1136.0
-crypto_kdf    |     71.2 |     65.5 |     71.5 |     97.6 |     99.9
-hash_hex      |    166.2 |    179.6 |    184.1 |    319.6 |    317.7
-hash_chunks   |   1506.4 |   1707.8 |   1676.9 |   3149.5 |   3120.6
-hash_fast     |      n/a |     48.2 |      n/a |      n/a |     68.1
-fetch         |    100.5 |     19.1 |     38.9 |     20.5 |     44.8
-fetch_upload  |    109.4 |     40.9 |     43.2 |   8715.9 |     47.6
-http          |    401.2 |     50.5 |    116.5 |      n/a |    126.8
-websocket     |    677.1 |    452.3 |    600.0 |      n/a |    879.9
-udp_echo      |    303.8 |    201.5 |    478.6 |    421.8 |    364.3
-udp_send      |    247.0 |    186.1 |    260.7 |    796.5 |    218.2
-fsread_small  |    127.2 |     42.0 |     44.3 |     31.6 |     48.5
-fsread_large  |     68.9 |     19.2 |     74.3 |      7.5 |     48.4
-fswrite_small |    180.0 |     12.5 |     91.9 |    101.5 |     85.8
-fswrite_large |     62.6 |     23.5 |     46.5 |     53.8 |     40.9
-fsappend_small|    101.2 |     34.0 |     43.8 |      n/a |     36.0
-fsappend_large|     23.4 |      7.9 |     16.4 |      n/a |      8.9
-fsstat_small  |     71.8 |     52.5 |     96.9 |     43.6 |     56.6
-fsstat_many   |    293.9 |    208.9 |    383.2 |    182.8 |    240.5
-fsexists_small|     62.7 |      7.6 |     98.7 |     51.1 |     40.5
-fsexists_many |    265.9 |     34.1 |    416.2 |    240.0 |    191.1
-glob          |    207.0 |     26.5 |      n/a |      n/a |     49.7
-spawn         |    229.3 |    100.6 |    122.8 |     99.7 |     90.8
-jsonl_stream  |    650.7 |    901.8 |    708.0 |      n/a |    612.8
-xml_small     |    500.7 |    534.4 |    458.6 |     59.8 |    165.3
-xml_large     |   1037.1 |    964.6 |    936.9 |    123.2 |    340.5
-yaml_small    |    206.2 |     97.5 |    189.0 |   4344.1 |    239.3
-yaml_large    |    395.5 |    189.0 |    381.3 |   8522.7 |    456.2
-toml_small    |    205.8 |     53.3 |    231.9 |   3909.2 |    168.9
-toml_large    |    404.2 |    107.3 |    487.9 |   7963.7 |    339.9
-msgpack_small |     41.7 |     52.4 |     38.6 |    843.1 |     50.9
-msgpack_large |     44.5 |     53.5 |     41.1 |    855.2 |     56.7
-protobuf_small|     61.3 |     80.5 |     75.2 |   1079.0 |     80.7
-protobuf_large|    335.0 |    360.6 |    428.0 |   5134.6 |    398.1
-wasm_compile  |     43.8 |     66.8 |     36.7 |      n/a |     39.1
-wasm_call     |    101.9 |    148.0 |     80.2 |      n/a |     80.3
-wasm_mem      |    207.6 |    371.5 |    245.5 |      n/a |    253.4
-wasi_start    |    281.6 |    536.6 |     47.2 |      n/a |     47.0
-wasi_syscall  |     44.4 |     14.2 |     18.3 |      n/a |     58.8
-rss           |     43.0 |     12.0 |     29.0 |     11.0 |     24.0
-rss_loaded    |    136.0 |    144.0 |    124.0 |    161.0 |    107.0
+startup       |     21.6 |      4.3 |     12.8 |      3.5 |      8.6
+bigscript     |     33.0 |     15.1 |     21.3 |     11.3 |     19.9
+modules       |     95.7 |     12.3 |     31.6 |     15.1 |     33.0
+compute       |    191.5 |    108.5 |    233.4 |   1700.0 |    190.1
+json          |    255.9 |    150.4 |    193.2 |    618.0 |    185.7
+jsonbig       |    667.2 |    425.3 |    499.1 |   1576.5 |    468.5
+regex         |     64.9 |     16.5 |     62.1 |    935.4 |     58.1
+strings       |     59.8 |     59.5 |     58.1 |    159.0 |     56.4
+structured    |    210.9 |    233.0 |    259.3 |    390.9 |    271.8
+errors        |   1422.7 |    314.5 |   4248.9 |    369.8 |    392.4
+async         |     54.9 |     37.9 |     30.1 |    544.2 |     30.3
+timers        |     50.4 |     29.0 |    236.4 |     45.3 |    113.2
+url           |     34.9 |     30.3 |     98.3 |    118.4 |     84.5
+url_setter    |    136.5 |     84.1 |    187.2 |    110.8 |    172.4
+urlpattern    |    394.7 |    465.4 |   5036.7 |      n/a |    819.9
+encoding      |     67.4 |     16.4 |     65.7 |     67.5 |     64.5
+encoding_large|    308.3 |     72.3 |    143.7 |    242.3 |     99.5
+base64        |      7.0 |     10.9 |      7.2 |     33.4 |     22.3
+buffers       |     16.2 |     16.2 |     14.9 |     70.8 |     13.3
+headers       |    419.4 |    222.7 |   1519.5 |      n/a |    414.1
+formdata      |    271.0 |     19.4 |    375.7 |   4325.1 |     88.5
+date_intl     |    122.4 |     76.6 |    137.5 |      n/a |    131.1
+streams       |     10.8 |      5.7 |     10.6 |     91.3 |     10.2
+compression   |    291.5 |     27.4 |     78.0 |      n/a |     68.4
+sha256        |    512.9 |    433.0 |    415.8 |    327.1 |    334.8
+crypto        |    187.3 |     84.9 |     97.8 |     35.2 |     34.1
+crypto_asym   |    378.2 |    199.0 |   2234.2 |   1015.5 |   1112.4
+crypto_kdf    |     70.7 |     64.1 |     71.7 |     96.7 |     98.7
+hash_hex      |    161.9 |    175.0 |    181.1 |    322.6 |    313.3
+hash_chunks   |   1469.3 |   1653.6 |   1661.0 |   3082.5 |   3058.0
+hash_fast     |      n/a |     46.6 |      n/a |      n/a |     66.2
+fetch         |     94.9 |     17.4 |     35.4 |     18.3 |     40.8
+fetch_upload  |    107.8 |     38.9 |     35.9 |   8804.0 |     38.3
+http          |    368.6 |     49.2 |    106.8 |      n/a |    114.0
+websocket     |    594.2 |    420.6 |    561.4 |      n/a |    791.4
+udp_echo      |    282.2 |    184.4 |    417.8 |    388.7 |    325.1
+udp_send      |    229.5 |    179.0 |    248.9 |    736.8 |    207.1
+fsread_small  |    113.5 |     38.0 |     40.3 |     26.8 |     41.7
+fsread_large  |     60.1 |     16.4 |     64.6 |      6.8 |     26.2
+fswrite_small |    164.9 |     12.4 |     85.3 |     92.2 |     81.0
+fswrite_large |     58.9 |     20.1 |     42.4 |     49.5 |     35.6
+fsappend_small|     96.1 |     32.3 |     42.0 |      n/a |     35.9
+fsappend_large|     23.6 |      7.0 |     15.5 |      n/a |      8.9
+fsstat_small  |     75.5 |     47.7 |     90.8 |     41.2 |     55.6
+fsstat_many   |    279.4 |    193.4 |    358.1 |    165.5 |    238.6
+fsexists_small|     60.8 |      7.5 |     90.0 |     48.2 |     40.1
+fsexists_many |    245.1 |     31.3 |    362.0 |    195.3 |    180.5
+glob          |    187.8 |     28.5 |      n/a |      n/a |     48.2
+spawn         |    239.6 |    131.4 |    142.6 |    121.2 |     87.7
+jsonl_stream  |    611.7 |    845.8 |    674.0 |      n/a |    573.1
+xml_small     |    474.1 |    505.9 |    427.3 |     57.4 |    155.3
+xml_large     |    973.0 |    909.0 |    885.1 |    115.2 |    307.3
+yaml_small    |    189.6 |     95.2 |    182.9 |   4251.2 |    227.6
+yaml_large    |    393.3 |    190.1 |    370.1 |   8371.2 |    453.8
+toml_small    |    203.1 |     52.6 |    226.7 |   3764.5 |    165.0
+toml_large    |    389.3 |    104.4 |    471.3 |   7516.1 |    329.4
+msgpack_small |     40.6 |     48.3 |     37.9 |    800.7 |     49.6
+msgpack_large |     41.6 |     50.4 |     39.9 |    795.4 |     54.1
+protobuf_small|     57.7 |     71.0 |     70.7 |    975.7 |     73.3
+protobuf_large|    326.1 |    342.6 |    402.2 |   5016.6 |    383.2
+wasm_compile  |     45.9 |     60.7 |     35.1 |      n/a |     37.7
+wasm_call     |    101.1 |    146.9 |     78.9 |      n/a |     79.2
+wasm_mem      |    202.4 |    365.2 |    239.3 |      n/a |    249.9
+wasi_start    |    274.1 |    505.9 |     46.9 |      n/a |     43.8
+wasi_syscall  |     44.2 |     13.8 |     17.6 |      n/a |     55.8
+rss           |     45.0 |     12.0 |     28.0 |     11.0 |     24.0
+rss_loaded    |    135.0 |    145.0 |    125.0 |    161.0 |    108.0
 ```
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.21.0, bun 1.4.2, deno 2.9.7, llrt v0.9.0-beta, esrun 0.32.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.21.0, bun 1.4.2, deno 2.9.7, llrt v0.9.0-beta, esrun 0.34.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 
 ## Interpretation
 
 **Reading the LLRT column.** LLRT is the cold-start/footprint specialist —
-QuickJS, no JIT, trimmed surface — so it leads `startup` and `rss` and stays in
+QuickJS, no JIT, trimmed surface — so it boots quickly, uses little memory, and stays in
 the pack on the synchronous-crypto workloads, but its lack of a JIT shows starkly
-on `compute`/`json`/`jsonbig`/`async` (often 5–30×), and it has no streams, HTTP
-server, or `fs` here. It's the honest yardstick for esrun's startup/memory
+on `compute`/`json`/`jsonbig`/`async`. It has no general HTTP server, and some
+Web and filesystem APIs are missing. It's a yardstick for esrun's startup/memory
 claims: esrun's pitch is **near-LLRT boot with a full JIT engine and the complete
 WinterTC surface**, not "fastest at everything."
 
-**Where esrun wins or ties:**
+**Selected workload results:**
 
-- **startup (6.7 ms) — fastest of the JIT runtimes** (~3.6× under Node/Deno),
-  beaten only by LLRT's no-JIT QuickJS (3.4 ms). Two things pay for esrun's:
-  the **V8 startup snapshot baked into the binary** at build time (`build.rs`;
-  the whole prelude pre-executed, restored instead of recompiled) and **lazy
-  HTTP-client build-out** (the reqwest client/TLS/root store is built on first
-  `fetch`, not at boot — isolated, the eager client cost ~5.5 ms of startup).
-- **bigscript (20 ms) — fastest of the JIT runtimes** (LLRT parses faster, having
-  no JIT to feed). Real parse work on ~100 KB; the fast process floor carries it.
-- **async, timers, streams — fastest.** The driven loop's microtask-checkpoint
-  integration (esrun's distinctive risk), its timer queue, and the pure-JS
-  streams prelude all hold up; LLRT's QuickJS microtask path is ~20× slower on
-  `async`, and it has no streams.
+- **startup (8.6 ms)** — below Node (21.6 ms) and Deno (12.8 ms),
+  above Bun (4.3 ms) and LLRT (3.5 ms). esrun restores its prelude from the
+  V8 startup snapshot and builds the HTTP client lazily on first `fetch`.
+- **bigscript (19.9 ms)** — below Node (33.0 ms) and Deno (21.3 ms),
+  above Bun (15.1 ms) and LLRT (11.3 ms). This row adds parsing a generated
+  ~100 KB file to the process launch cost.
+- **async, timers, streams have different rankings.** esrun is close to Deno
+  on `async`, behind Bun and Node on `timers`, and close to Node and Deno but
+  behind Bun on `streams`. These rows exercise separate parts of the event loop
+  and prelude; one ranking does not describe all three.
 - **crypto, sha256 — fastest among the JIT runtimes, by a wide margin on crypto**
-  (34 ms vs Bun's 77). `crypto.subtle.*` is a synchronous RustCrypto op wrapped
+  (34 ms vs Bun's 85 in `crypto`). `crypto.subtle.*` is a synchronous RustCrypto op wrapped
   in an already-resolved promise, so the `await`s drain in microtask checkpoints
   with little scheduling cost; Node/Deno/Bun run genuinely-async WebCrypto that
   pays per-call scheduling. LLRT (also a native synchronous crypto path) lands
@@ -509,33 +507,24 @@ WinterTC surface**, not "fastest at everything."
   the **HTTP requests/sec** section below for the server-throughput story
   (per-request CPU cost) — the in-process `http` micro-workload here just exercises
   the warm request/response path.
-- **rss (19 MB) — lowest among the JIT runtimes**, under LLRT's 11 MB QuickJS.
-- **wasi_start — fastest, tied with Deno** (48 ms vs Node's 283 and Bun's 641 for
+- **rss — between Bun and Node/Deno.** Use `rss_loaded` to compare the larger
+  live working set too; idle footprint describes only the near-empty process.
+- **wasi_start — fastest, close to Deno** (44 ms vs Node's 274 and Bun's 506 for
   2 000 program runs). `runtime:wasi` is pure JS in the prelude, so constructing a
   WASI and building its import object is object allocation inside the isolate —
   no host crossing, no native binding to set up per instance.
-- **wasm_call — fastest** (80 ms), marginally ahead of Deno and Node; the JS↔wasm
+- **wasm_call — close to Deno, ahead of Node and Bun** (79 ms); the JS↔wasm
   boundary is V8's own and esrun adds nothing to it.
 - **json, jsonbig — mid-pack and competitive**; pure-engine baselines confirming
   the engine itself isn't a bottleneck (and where LLRT's missing JIT bites hardest).
 
 **Where esrun trails, and why:**
 
-- **compute (~15% behind Node, same engine) is entirely `Math.log`.** Splitting
-  the row's loop into its parts settles it: `Math.sqrt` costs 27.3 ms on esrun
-  against Node's 27.0 and Deno's 27.6, integer work 11.2 against 11.3 and 11.0,
-  float multiply 40.8 against 41.0 and 40.7 — identical, to the tenth of a
-  millisecond. `Math.log` alone is 221.9 against 167.8 and 176.0, and it is 94%
-  of the row.
-
-  So this is one transcendental function in the V8 build we consume, not
-  anything about how esrun runs JS. Flag experiments (`--maglev`, `--max-opt`, …)
-  moved nothing, which fits — there is no codegen difference to find. The three
-  runtimes are on three V8 versions (Node 13.6, Deno 14.9, ours 15.0) and the
-  cost tracks the version. Not addressable from this repo, and worth knowing
-  before anyone reads `compute` as a general engine verdict: at this workload's
-  mix it is a `Math.log` microbenchmark.
-- **wasm_compile — was 144 ms against Deno's 36; now 40.** This was previously
+- **compute — close to Node, behind Bun in the current sample.** The loop
+  combines integer arithmetic, floating-point work, `Math.sqrt` and `Math.log`.
+  Its ranking describes that mix; attributing the difference to one operation
+  requires a separate measurement.
+- **wasm_compile — was 144 ms against Deno's 36; now 38.** This was previously
   recorded here as wasm codegen rather than the async pipeline, on the evidence
   that the *synchronous* `new WebAssembly.Module` was also several times slower.
   That inference was wrong: sync compilation forgoes V8's background threads, so
@@ -546,10 +535,10 @@ WinterTC surface**, not "fastest at everything."
 - **wasi_syscall (56 ms vs Deno's 17).** Each preview-1 call is a JS function
   reached from wasm that writes its result into linear memory through a
   `DataView`; Node and Deno drop into native implementations. It is the price of
-  D34's pure-JS, no-new-attack-surface `runtime:wasi`, and it still beats Bun's
-  `node:wasi` by ~86×. The syscalls a real guest makes in bulk are the file ones,
+  D34's pure-JS, no-new-attack-surface `runtime:wasi`. Bun is also faster in
+  this sample. The syscalls a real guest makes in bulk are the file ones,
   which go through host ops, not this path.
-- **wasm_mem — mid-pack** (244 ms, level with Deno, ahead of Bun). The work is
+- **wasm_mem — mid-pack** (250 ms, close to Deno, ahead of Bun). The work is
   V8's; nothing here is ours to win.
 - **hash_hex, hash_chunks — ~2× behind Node/Bun/Deno, level with LLRT.** This is
   the caveat on the `sha256` bullet above, measured — and the two rows together
@@ -559,10 +548,10 @@ WinterTC surface**, not "fastest at everything."
 
   | | `sha256` (async) | `hash_hex` (sync) | ratio |
   | --- | --- | --- | --- |
-  | esrun | 327.2 | 308.2 | 1.06× |
-  | Node | 503.5 | 158.2 | 3.18× |
+  | esrun | 334.8 | 313.3 | 1.07× |
+  | Node | 512.9 | 161.9 | 3.17× |
 
-  esrun's two numbers are 6% apart because `crypto.subtle` here *is* the
+  esrun's two numbers are 7% apart because `crypto.subtle` here *is* the
   synchronous op with a resolved promise around it — there is no second
   implementation and almost no scheduling. Node's are 3.2× apart, which is what
   genuinely-async WebCrypto costs per call. So esrun wins the async row and loses
@@ -570,7 +559,7 @@ WinterTC surface**, not "fastest at everything."
 
   What *is* about the hash function is the remaining ~2×: RustCrypto's portable
   Rust against the hand-written AVX2/BMI2 assembly in OpenSSL and BoringSSL —
-  277 MB/s to Node's 580, measured on `hash_chunks`, which pushes 839 MB through
+  274 MB/s to Node's 571, measured on `hash_chunks`, which pushes 839 MB through
   12 800 `update` calls so the crossing is amortized to nothing.
 
   **The reference machine has no SHA-NI** (i7-8700K, Coffee Lake), so both sides
@@ -580,27 +569,16 @@ WinterTC surface**, not "fastest at everything."
   we can take on this box. Read it as "esrun's software SHA-256 is half of
   OpenSSL's", which is true, rather than as a figure for your server.
 
-  `hash_fast` is the row that says what the module is actually for: 63.7 ms where
-  `hash_hex` takes 308, on sixteen times the data — a checksum-grade hash for the
+  `hash_fast` is the row that says what the module is actually for: 66.2 ms where
+  `hash_hex` takes 313.3 ms, on sixteen times the data — a checksum-grade hash for the
   cache keys and ETags that do not need a cryptographic one, which Node, Deno and
   LLRT have no standard-library answer for at all.
-- **fswrite_large, fsappend_large — 2.8× and 3.1× slower than the numbers
-  published for 0.17.0, and the old ones were wrong.** `write()` above 64 KiB
-  takes an async path where `tokio::fs::File` dispatches to the blocking pool;
-  `write_all` returned before those writes landed and the file was dropped
-  without a flush, so the call resolved over a file that had not been written
-  (fixed in `9c629ba`, which is a correctness fix — a read straight after a
-  260 KB write saw a prefix, or nothing, in 18 of 25 attempts). The old 20.8 ms
-  was therefore timing a write that had not finished. 57.8 ms is the first
-  honest measurement of one that has, and it puts esrun level with Node rather
-  than ahead of it.
-
-  Two things corroborate the reading rather than leaving it as a story: every
-  other runtime's fs cells are stable to within ~2% across the two runs, so the
-  machine is not the variable; and the **small** write/append rows did not move
-  at all (+6%, 0%), which is exactly what the fix predicts — the sub-64 KiB
-  branch is a synchronous `std::fs` write and was never affected.
-- **url, encoding — competitive but behind the native parsers.** This surface
+- **fswrite_large, fsappend_large — completed writes.** An older async
+  write path returned before the blocking-pool writes landed, so it measured
+  unfinished work (fixed in `9c629ba`). In the current sample esrun is ahead
+  of Node and Deno on both rows, and behind Bun. Compare the current table;
+  the pre-fix timings were not valid baselines.
+- **url trails Node and Bun; encoding is close to Node and Deno, behind Bun.** This surface
   crosses the JS↔Rust op boundary per call. It got here through three rounds:
   (1) op *dispatch* is cheap (~49 ns/call) — the cost was always per-call *work*;
   (2) structured marshaling (building a JS object property-by-property) was tried
@@ -617,7 +595,7 @@ WinterTC surface**, not "fastest at everything."
   change — 0.44µs of parse against 0.56µs of doing the work. The host now keeps a
   bounded cache of parsed URLs keyed by their own serialization, and a setter puts
   its result back, so the next setter on the same object finds it already parsed.
-  `url_setter` 263 → 183 ms, past Deno and Bun. `href -> Url` is a pure function,
+  `url_setter` is 172.4 ms in this sample, ahead of Deno but behind Bun. `href -> Url` is a pure function,
   which is what makes this safe: a hit cannot give a different answer from a miss.
   Handles were considered and rejected — they buy the same speed while making
   every `new URL()` allocate host state reclaimed only when a
@@ -633,7 +611,7 @@ WinterTC surface**, not "fastest at everything."
   results into a V8-allocated `ArrayBuffer` instead of donating the `Vec`, and
   returning `atob`/`btoa` output as Latin-1 bytes — `rusty_v8`'s `String::new`
   already detects ASCII and builds a one-byte string directly.
-- **structured (slowest, 343 ms).** `structuredClone` is a pure-JS recursive
+- **structured (272 ms, behind the other JIT runtimes).** `structuredClone` is a pure-JS recursive
   walk in the prelude. Making it a host op would need **structured marshaling of
   arbitrary JS objects across the boundary** — exactly the deferred D3a work; the
   same reason a faster `base64`/`url`/`encoding` eventually wants a zero-copy
@@ -681,20 +659,22 @@ already listening there (a dev server, a stray run) would be load-tested *in pla
 of* every runtime — which shows up as all runtimes scoring identically. `rps.sh`
 refuses to start in that case and names the process holding the port.
 
-Indicative numbers on one Linux x86-64 box (12 cores):
+Indicative numbers on one Linux x86-64 box (12 cores). The bare-server column
+is an earlier sample; the Hono column is the refreshed sample recorded by the
+site benchmark data on 2026-10-01:
 
 ```
 # bare server (runtime:http)            # through Hono (framework)
 runtime |      req/sec                  runtime |      req/sec
 --------+------------                   --------+------------
-deno    |      85,070                   deno    |      71,531
-bun     |      82,615                   bun     |      62,894
-esrun   |      49,537                   esrun   |      47,722
-node    |      29,558                   node    |      28,217
+deno    |      85,070                   deno    |      69,741
+bun     |      82,615                   bun     |      73,951
+esrun   |      49,537                   esrun   |      50,601
+node    |      29,558                   node    |      30,872
 ```
 
-esrun beats Node comfortably and reaches roughly two-thirds of Bun/Deno on the
-bare server. **All three (esrun, Bun, Deno) saturate ~one core** under this load,
+In the earlier bare-server sample, esrun is above Node and below Bun/Deno.
+**All three (esrun, Bun, Deno) saturate ~one core** under this load,
 so this is not a core-count gap but a per-request one.
 
 Wall-clock req/s is noisy on a shared box, though (a busy machine throttles the
@@ -726,8 +706,9 @@ not a multi-core web server).
 
 ### Through a framework (Hono)
 
-The right-hand column above is the same shape served through [Hono] — a real,
-third-party web framework — instead of each runtime's bare server. It shows esrun
+The right-hand column above serves JSON through [Hono], a real third-party
+web framework. The earlier bare-server sample returns plain text, so the two
+columns measure different responses as well as different server paths. It shows esrun
 runs **unmodified npm ESM packages** off `node_modules`, not just its own server.
 Hono is Web-standard (`app.fetch(request) -> Response`), so it plugs straight into
 `runtime:http`, `Bun.serve`, and `Deno.serve`; Node uses Hono's `@hono/node-server`
@@ -738,16 +719,20 @@ cd bench && pnpm install              # hono + @hono/node-server
 SERVER=scripts/hono.js bench/rps.sh
 ```
 
-The framework narrows the gap (esrun is within ~25% of Bun here), because
-`runtime:http` is already esrun's native path while Bun/Deno pay Hono's adapter
-cost on top of their fast servers. Express, by contrast, cannot run on esrun at
-all (it is CommonJS and needs `node:http`'s `(req, res)` API; esrun is ESM-only
-and rejects `node:` builtins).
+The route returns the JSON object `{"message":"Hello, World!"}`. On the
+2026-10-01 refresh, esrun serves 50,601 req/s and Bun 73,951 req/s, a 32%
+throughput gap. Set `BENCH_RESPONSE_MODE=text` when running the script to compare
+the same Hono route returning plain text. The published chart defaults to JSON.
+This result does not identify which part of the runtime or server path causes
+the difference. Express, by contrast, cannot run on esrun at all (it is
+CommonJS and needs `node:http`'s `(req, res)` API; esrun is ESM-only and rejects
+`node:` builtins).
 
 ### Through a second framework (Elysia)
 
-The same hello-world shape through [Elysia] (`scripts/elysia.js`), published as
-the `elysia` key next to `hono` and charted beside it on the home page. Elysia
+The same JSON hello-world response through [Elysia] (`scripts/elysia.js`),
+published as the `elysia` key next to `hono` and charted beside it on the home
+page. Elysia
 is WinterTC-compliant, so Bun and Deno serve its `app.fetch` natively — but one
 transitive dependency is CommonJS, which esrun rejects. So this section measures
 the **esdev bundle**: `gen-bench-data.sh` builds `dist/elysia.bundle.js` first,
@@ -756,6 +741,8 @@ Node both frameworks share `@hono/node-server` as the HTTP glue, for the same
 reason: Elysia's official Node adapter is srvx-based CJS and does not survive
 the bundle (its server resolves to srvx's generic build, which the adapter
 cannot start). The delta on Node is therefore route handling, not glue.
+Both framework fixtures also accept `BENCH_RESPONSE_MODE=text` for a paired
+plain-text comparison; their default, and the published numbers, use JSON.
 
 ```sh
 cd bench && pnpm install              # elysia (+ hono for the shared Node glue)
@@ -884,8 +871,9 @@ key; the query reads the first hundred.
 
 ### HTTP/1.1 vs HTTP/2
 
-`bench/http2.sh` measures the same hello-world server over HTTP/1.1 and over
-cleartext HTTP/2 (h2c by prior knowledge). It runs two client shapes, because an
+`bench/http2.sh` measures each runtime's hello-world server over HTTP/1.1 and
+cleartext HTTP/2 (h2c by prior knowledge). Node and Bun use separate server APIs
+for h2; see the caveat below. It runs two client shapes, because an
 HTTP/2 number in isolation says nothing — it is dominated by how many connections
 the client opened and how many streams it put on each.
 
@@ -914,17 +902,17 @@ Same box as above (Linux x86-64, 12 cores), `-n 100000`, best of 3:
         | wide: 50 conns × 1 stream  | narrow: 1 conn × 50 streams
 runtime |  HTTP/1.1    HTTP/2   gain |  HTTP/1.1    HTTP/2   gain
 --------+----------------------------+----------------------------
-node    |     36,597    18,413 0.50x†|    23,221    39,700 1.71x†
-bun     |    119,785    43,086 0.36x†|    31,109    49,142 1.58x†
-deno    |    115,141    27,409  0.24x|    32,303    39,209  1.21x
-esrun   |     66,939    53,080  0.79x|    20,157    73,541  3.65x
+node    |     34,578    16,326 0.47x†|    23,986    42,961 1.79x†
+bun     |     93,250    37,427 0.40x†|    31,052    49,960 1.61x†
+deno    |     92,300    23,264 0.25x |    32,962    42,805 1.30x
+esrun   |     49,738    39,901 0.80x |    18,699    70,886 3.79x
 ```
 
 #### What this table does and does not license you to compare
 
 - **Down a column: fair.** One client shape, one load generator, each runtime on
-  its best available server. On the narrow shape esrun serves **73,541 req/s over
-  HTTP/2 — the fastest of the four outright**, 1.50× the next best (Bun, 49,142),
+  its best available server. On the narrow shape esrun serves **70,886 req/s over
+  HTTP/2 — the fastest of the four outright**, 1.42× the next best (Bun, 49,960),
   and it does that while being *slowest* of the four on the same shape over
   HTTP/1.1. That is the claim worth making, and it does not depend on any ratio.
 - **The gain column, unmarked rows (esrun, Deno): fair.** Both numbers come from
@@ -933,17 +921,17 @@ esrun   |     66,939    53,080  0.79x|    20,157    73,541  3.65x
   both, cleartext h2 lives behind `node:http2` while their default server
   (`node:http`, `Bun.serve`) is HTTP/1.1-only — checked directly with
   `curl --http2-prior-knowledge`. So their ratio carries the gap between two
-  *implementations* on top of the protocol change. Bun's 0.36× in particular is
+  *implementations* on top of the protocol change. Bun's wide-shape ratio is
   mostly `node:http2` against a very fast native `Bun.serve`, not a statement
   about HTTP/2.
-- **Ratios across runtimes: don't.** esrun's 3.65× is the largest partly because
-  its single-connection HTTP/1.1 baseline is the *weakest* of the four (20,157),
+- **Ratios across runtimes: don't.** esrun's 3.79× is the largest partly because
+  its single-connection HTTP/1.1 baseline is the *weakest* of the four (18,699),
   and a small denominator inflates a multiple. The absolute number above is the
   honest version of the same result.
 
 Both halves of the table are expected, and they say opposite things:
 
-- **Wide is HTTP/2's worst case and every runtime loses there** (0.24–0.79×).
+- **Wide is HTTP/2's worst case and every runtime loses there** (0.25–0.80×).
   With 50 sockets already open there is nothing to multiplex, so h2 is pure
   overhead: framing, HPACK state, flow-control accounting.
 - **Narrow is what HTTP/2 is for.** One connection, 50 requests in flight:
@@ -1040,15 +1028,17 @@ Underneath, `bench/gen-bench-data.sh` runs the scripts in machine mode, merges
 their JSON and writes the module; `publish.sh` passes its arguments and
 environment straight through.
 
-The module is fed by five independent scripts and re-running all of them takes
+The module is fed by independent scripts and re-running all of them takes
 most of an hour, so `SECTIONS` picks which actually run: `workloads` (run.sh,
 which owns every charted row), `rps` (Hono req/s), `rps_sustained` (the same
 server held under load for a window), `rps_static` (64 KiB static file req/s),
 `rps_elysia` (Elysia req/s, via the esdev bundle), `websocket` (the chat fan-out
 sweep), `http2`, and `memory_safety`.
 A section left out keeps the values already in the module. `workloads` is the
-one exception to merging — it owns the row matrices outright and replaces them,
-so a row deleted from the suite does not live on in the data forever.
+one exception when run in full — it owns the row matrices outright and replaces
+them, so a row deleted from the suite does not live on in the data forever. A
+row-scoped workload refresh merges its measured rows and keeps the others,
+including when it reuses a cached full run.
 
 The point of a generated module is that no number on the site is ever typed by
 hand — which only holds if a run that went wrong is **rejected** rather than
@@ -1091,6 +1081,18 @@ They must not carry inline fallback numbers: the homepage req/s chart used to
 have a `||` fallback that had gone stale by ~43% for esrun, and it would have
 appeared the moment a run failed to produce the key — silently replacing a
 measurement with a flattering guess.
+
+### Tooling checks
+
+With the dependencies in `bench/` installed, run:
+
+```sh
+node --test bench/tooling.test.mjs
+```
+
+These checks exercise result merging, JSON publication, load-generator
+environments, fixture generation, and the Hono/Elysia response modes. They do
+not measure performance.
 
 ## Caveats
 

@@ -39,6 +39,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- Refresh the published workload, HTTP, development, production-build,
+  PostgreSQL QPS, and MySQL QPS measurements, and align benchmark notes with
+  the measured rankings.
 - V8's young generation is capped at 48 MB. It had been sized from system
   memory, up to 96 MB, and a program making garbage quickly grew it that far
   and kept it: peak memory drops by 25–60 MB on the allocation-heavy benchmarks
@@ -52,6 +55,18 @@ namespace) is unstable and may change between minor releases until the API freez
 - File `arrayBuffer()` results reuse the fresh file-read backing store, and
   streamed fetch uploads and HTTP responses move marshalled byte buffers into
   their channels instead of cloning them.
+- Hono and Elysia HTTP benchmark endpoints now return the same JSON response;
+  `BENCH_RESPONSE_MODE=text` remains available for paired comparisons.
+- Scoped benchmark row refreshes now merge into the existing results without
+  deleting chart rows that were not remeasured.
+- Published Hono and Elysia benchmarks explicitly select JSON responses,
+  including when the caller requests text for standalone comparisons.
+- Benchmark tooling regression checks cover scoped merges, output replacement,
+  load-generator environments, and the current dev-server fixture config.
+- Refreshed benchmark method metadata replaces obsolete fields from earlier
+  measurement shapes, including the former timed-window PostgreSQL QPS run.
+- Generated launch-benchmark fixtures stay inside esrun's sandbox, and failed
+  launches are rejected rather than published as fast startup measurements.
 - `new Response(file(path))` sent the text `[object Object]` instead of the file.
 - `ByteWriter.endLength()` no longer allocates an options object on every call
   that passes none.

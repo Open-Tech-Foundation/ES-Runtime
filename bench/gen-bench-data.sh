@@ -37,7 +37,7 @@ trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TM
 
 # Scoped or full, one code path.
 #
-# The data module is fed by five independent scripts, and re-running all of
+# The data module is fed by independent scripts, and re-running all of
 # them to change one is most of an hour. SECTIONS picks which actually run;
 # every section left out keeps the values already in the module, so a targeted
 # regeneration is a normal thing to do rather than an all-or-nothing event.
@@ -160,7 +160,7 @@ run_workloads() {
   if [ -n "$ROW_SCOPE" ]; then WORKLOADS="$ROW_SCOPE" BENCH_JSON=1 bash run.sh
   else BENCH_JSON=1 bash run.sh; fi
 }
-run_rps_hono() { SERVER=scripts/hono.js BENCH_JSON=1 bash rps.sh; }
+run_rps_hono() { SERVER=scripts/hono.js BENCH_RESPONSE_MODE=json BENCH_JSON=1 bash rps.sh; }
 # The same hello-world shape through Elysia instead of Hono — the framework
 # comparison the home page charts. Elysia cannot run on esrun from source (a
 # transitive dependency is CommonJS and esrun is ESM-only), so the section
@@ -173,7 +173,7 @@ run_rps_elysia() {
     exit 1
   fi
   "$ESDEV" build scripts/elysia.js --out=dist/elysia.bundle.js >&2
-  SERVER=dist/elysia.bundle.js SERVER_KEY=elysia BENCH_JSON=1 bash rps.sh
+  SERVER=dist/elysia.bundle.js SERVER_KEY=elysia BENCH_RESPONSE_MODE=json BENCH_JSON=1 bash rps.sh
 }
 # The same Hono server held under load for a fixed window instead of a fixed
 # burst. The burst above answers "how fast when fresh"; this answers whether it
@@ -181,7 +181,7 @@ run_rps_elysia() {
 # for a while — the question a long-lived server actually poses. Published under
 # its own key so the site can put the two side by side.
 run_rps_sustained() {
-  SERVER=scripts/hono.js SERVER_KEY=hono_sustained \
+  SERVER=scripts/hono.js SERVER_KEY=hono_sustained BENCH_RESPONSE_MODE=json \
     DURATION="${SUSTAIN_DURATION:-60s}" REPS="${SUSTAIN_REPS:-2}" \
     BENCH_JSON=1 bash rps.sh
 }
@@ -215,12 +215,10 @@ run_memory_safety() { BENCH_JSON=1 bash memory-safety.sh; }
 # the named rows are measured again and merged over it, and the result can be
 # published even though no single run produced every row cleanly. This is what
 # a noisy row the validator refused costs — its own rows, not the whole suite.
-PATCHED_FULL=""
 if selected workloads && [ -n "$ROW_SCOPE" ] && [ "${RESUME:-1}" != 0 ] && [ -s "$CACHE/workloads.json" ]; then
   echo "  section: workloads (kept full run; re-measuring $ROW_SCOPE)" >&2
   cp "$CACHE/workloads.json" "$TMP1"
   FRAGMENTS+=("$TMP1")
-  PATCHED_FULL="$TMP1"
   started=$SECONDS
   WORKLOADS="$ROW_SCOPE" BENCH_JSON=1 bash run.sh > "$TMP13"
   bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP13"
@@ -252,7 +250,7 @@ run_section memory_safety "$TMP6" run_memory_safety
 # key, which swept up `results_http2` — owned by http2.sh, not run.sh — and a
 # `SECTIONS=workloads` run therefore destroyed a section it had never measured.
 # The validator caught it and refused to publish, which is what it is for.
-OWNER_FRAGMENT="$PATCHED_FULL"
+OWNER_FRAGMENT=""
 if [ -z "$ROW_SCOPE" ]; then
   case " $SECTIONS " in *" workloads "*) OWNER_FRAGMENT="$TMP1" ;; esac
 fi
@@ -281,7 +279,9 @@ bun -e '
       if (REPLACE.has(k)) base[k] = v;
       else if (isPlain(v) && isPlain(base[k])) {
         for (const [k2, v2] of Object.entries(v)) {
-          if (isPlain(v2) && isPlain(base[k][k2])) Object.assign(base[k][k2], v2);
+          // A measured section emits its complete method for each row.
+          // Replacing it drops fields from older measurement shapes.
+          if (!k.endsWith("_method") && isPlain(v2) && isPlain(base[k][k2])) Object.assign(base[k][k2], v2);
           else base[k][k2] = v2;
         }
       } else base[k] = v;

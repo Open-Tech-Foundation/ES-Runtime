@@ -117,8 +117,8 @@ fs.writeFileSync(
   path.join(dir, "esdev.json"),
   JSON.stringify(
     {
-      targets: { web: { entry: "index.html", outdir: "dist" } },
-      start: { watch: ["web"] },
+      build: { targets: { web: { entry: "index.html", outdir: "dist" } } },
+      dev: { watch: { targets: ["web"] } },
     },
     null,
     2

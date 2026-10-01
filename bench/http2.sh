@@ -123,7 +123,7 @@ load() {
   local version="$1" conns="$2" streams="$3"
   local args=(-n "$REQUESTS" -c "$conns" --no-tui --output-format json -H "$HDR")
   [ "$version" = "h2" ] && args+=(--http2 -p "$streams")
-  $LOAD_PIN "$OHA" "${args[@]}" "$URL" >"$OUT" 2>/dev/null
+  env -u NO_COLOR $LOAD_PIN "$OHA" "${args[@]}" "$URL" >"$OUT" 2>/dev/null
   python3 -c "
 import json, sys
 d = json.load(open('$OUT'))

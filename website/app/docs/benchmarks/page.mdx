@@ -76,12 +76,12 @@ answer in Node, Deno or LLRT, which is why they are n/a.
 <Callout type="note" title="Where this leaves esrun, and why">
   `hash_hex` and `sha256` are the **same work** — 20 000 × SHA-256 of the same
   4 KiB buffer — one through async `crypto.subtle`, one through a synchronous
-  call. esrun's two numbers are 6% apart (327 / 308), Node's are 3.2× apart
-  (504 / 158): `crypto.subtle` here *is* the sync op with a resolved promise
+  call. esrun's two numbers are 7% apart (335 / 313), Node's are 3.2× apart
+  (513 / 162): `crypto.subtle` here *is* the sync op with a resolved promise
   around it, so esrun wins the async row and loses the sync one, and neither is
   about the hash function. What is about the hash function is the remaining ~2×
   — RustCrypto's portable Rust against OpenSSL's hand-written AVX2 assembly,
-  277 MB/s to 580. The reference machine has no SHA-NI, so both sides run
+  274 MB/s to 571. The reference machine has no SHA-NI, so both sides run
   software SHA-256; `sha2` selects an SHA-NI backend at runtime on hardware that
   has the instructions, which this box does not. `hash_fast` is what the module
   is actually for: 16× the data in a fifth of the time.
@@ -98,8 +98,12 @@ external load generator on separate cores.
 
 ### Hello world, measured externally
 
-A framework hello-world (Hono) per runtime, driven by an external load generator
-on separate cores. LLRT has no general HTTP server, so it is not in this set.
+A JSON hello-world response through Hono per runtime, driven by an external
+load generator on separate cores. LLRT has no general HTTP server, so it is not
+in this set.
+The memory column is peak RSS for the whole server process during the run, not
+JavaScript heap alone; it includes the runtime, framework, and server path. This
+measurement shows the footprint but does not attribute it to a specific layer.
 
 <RpsChart />
 
@@ -185,8 +189,8 @@ The three measure different things. **Compile** is validation plus baseline
 codegen on a ~250 KB module, with a different salt each iteration so nothing is
 served from a code cache. The **call boundary** (20M calls into a trivial
 exported `add`) and **linear memory** (JS fills a 64 KiB window, wasm sums it
-back) are where real interop spends its time. esrun is level with Deno and ahead
-of Node and Bun on all three.
+back) are where real interop spends its time. These workloads exercise different
+parts of V8; compare each row separately, since their rankings differ.
 
 <span id="wasi"></span>
 
@@ -203,9 +207,8 @@ makes them, so it measures the host-side preview-1 implementation.
 
 esrun's bootstrap is the fastest measured, a little ahead of Deno and several
 times quicker than Node or Bun. Its syscall path is not: Deno's is around 3x
-faster, because esrun implements preview-1 in JS rather than natively. Bun's
-number on that row is an outlier large enough to be worth checking against your
-own workload before trusting it either way.
+faster, because esrun implements preview-1 in JS rather than natively. Bun is
+also faster on that workload in the current sample.
 
 <span id="websocket"></span>
 
@@ -239,9 +242,11 @@ See the [WebSocket guide](/docs/guides/websocket).
 
 ## HTTP/1.1 vs HTTP/2
 
-The same hello-world server driven twice — once over HTTP/1.1, once over
-cleartext HTTP/2 (h2c) — so the only variable is the protocol version. Cells are
-**req/sec**, best of 3 interleaved repetitions. Higher is better.
+Each runtime's hello-world server is measured over HTTP/1.1 and cleartext HTTP/2
+(h2c), where supported. Node and Bun use separate server APIs for h2 because
+their default servers do not support it; their ratios therefore include an
+implementation change as well as the protocol change. Cells are **req/sec**,
+best of 3 interleaved repetitions. Higher is better.
 
 Unlike the charts above, this table is driven by an **external** load generator
 against each runtime's own server, and it is regenerated on its own
@@ -323,8 +328,8 @@ scan is mid-pack — it is specifically the **map** path.
 <Callout type="note" title="What the map gap is, and what it is not">
   Not UTF-8 decoding: reading the same 50 000-element reply with
   `{ binary: true }`, which skips every `TextDecoder` call, was **2% faster**.
-  Not startup either — esrun launches an empty script in 8 ms against Node's 20
-  and Deno's 24.
+  Not startup either — esrun launches an empty script in about 9 ms against Node's 22
+  and Deno's 13.
 
   What is left is how a RESP3 map is represented on the way to the object a
   caller asked for: a pair array of wrapper objects, each holding a copied

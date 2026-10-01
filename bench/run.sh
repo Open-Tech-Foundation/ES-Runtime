@@ -352,7 +352,10 @@ if [ -x "$ESRUN" ]; then add esrun "$ESRUN --allow-all" "$ESRUN --version"; ORDE
 fi
 
 # Scratch dir (generated bigscript, RSS samples), cleaned on exit.
-SCRATCH="$(mktemp -d)"
+# Generated entries must stay inside esrun's working-directory sandbox. A
+# system-temp entry would measure its refusal rather than parsing the fixture.
+mkdir -p .cache
+SCRATCH="$(mktemp -d "$PWD/.cache/run.XXXXXX")"
 SERVER_PID=""
 WS_SERVER_PID=""
 cleanup() {
@@ -555,7 +558,8 @@ fi
 sample_once() {  # kind cmd script
   local kind="$1" cmd="$2" script="$3" s e out rc
   if [ "$kind" = startup ]; then
-    s=$(now); $WRAP $cmd "$script" >/dev/null 2>&1; e=$(now)
+    s=$(now); $WRAP $cmd "$script" >/dev/null 2>&1; rc=$?; e=$(now)
+    [ "$rc" -ne 0 ] && { echo ERR; return; }
     to_ms "$(awk "BEGIN{print $e-$s}")"
   else
     $TIMEOUT_BIN $WRAP $cmd "$script" >"$SCRATCH/sample.out" 2>/dev/null; rc=$?

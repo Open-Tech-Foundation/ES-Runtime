@@ -152,9 +152,9 @@ fi
 load() {
   if [ "$TOOL" = "oha" ]; then
     if [ -n "${DURATION:-}" ]; then
-      $LOAD_PIN "$OHA" -z "$DURATION" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+      env -u NO_COLOR $LOAD_PIN "$OHA" -z "$DURATION" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
     else
-      $LOAD_PIN "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+      env -u NO_COLOR $LOAD_PIN "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
     fi
     python3 -c "
 import json
