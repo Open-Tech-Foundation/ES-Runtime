@@ -13,6 +13,10 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-10-01
+
+_Dependency updates._
+
 ## [0.1.10] - 2026-09-29
 
 _Dependency updates._

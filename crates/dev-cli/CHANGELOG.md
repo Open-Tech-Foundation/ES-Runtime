@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-01
+
 ### Changed
 
 - **Breaking: plugins are declared once, in the top-level `plugins`, and

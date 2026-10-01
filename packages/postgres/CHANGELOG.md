@@ -13,6 +13,8 @@ the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Changed
 
 - **The package re-exports the driver built into `runtime:db`** (esrun 0.35 and
