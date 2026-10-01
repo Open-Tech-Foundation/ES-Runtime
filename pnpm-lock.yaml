@@ -239,6 +239,12 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/esdev-plugin-react:
+    dependencies:
+      react-refresh:
+        specifier: ^0.19.0
+        version: 0.19.0
+
   packages/mysql:
     devDependencies:
       '@opentf/esrun-types':
@@ -1658,6 +1664,10 @@ packages:
     resolution: {integrity: sha512-Ujym7JbxoAqanaxGcHgmTomfhC01HfDCSuGZ8Hs9boHrDjzbNVMnFRJo2KtbDT9LCRgeJoFnkn9JQZ41eEUrLw==}
     engines: {node: '>=22.12.0'}
 
+  react-refresh@0.19.0:
+    resolution: {integrity: sha512-5HdstYgoJBbBofjapO5qCPcovECJCBfvjLb+iTcsmqDFVMRdqy0qs7iiInBJTUXmIFc2bjoc5b2HVLp2zRtYhQ==}
+    engines: {node: '>=0.10.0'}
+
   readable-stream@3.6.2:
     resolution: {integrity: sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==}
     engines: {node: '>= 6'}
@@ -2844,6 +2854,8 @@ snapshots:
       - proxy-agent
       - utf-8-validate
       - yauzl
+
+  react-refresh@0.19.0: {}
 
   readable-stream@3.6.2:
     dependencies:
