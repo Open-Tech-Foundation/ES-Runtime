@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-01
+
 ### Fixed
 
 - Include the package and its React Refresh peer in the workspace lockfile, so

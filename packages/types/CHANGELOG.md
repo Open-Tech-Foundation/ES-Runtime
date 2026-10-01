@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-01
+
 ### Added
 
 - `Plugin.finish` and `FinishedTarget`: the hook a release `esdev build` calls

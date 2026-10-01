@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-01
+
 ### Added
 
 - Plugin `finish(targets, ctx)` hook. It runs once per `esdev build`, after
