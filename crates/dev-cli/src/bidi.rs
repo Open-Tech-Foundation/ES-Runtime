@@ -42,6 +42,11 @@ use crate::browser::{Browser, Launch};
 /// longer only delays saying so.
 const STARTUP: Duration = Duration::from_secs(30);
 
+// Control commands must finish even when a driver keeps the socket open but
+// stops answering. The test-file timeout only bounds the page's event loop;
+// setup, navigation and context cleanup also send commands outside that loop.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A message the browser sent that was not an answer to a command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
@@ -135,6 +140,16 @@ impl Client {
     /// Sends a command and waits for its answer. A BiDi error comes back as
     /// its `error` code and `message`, prefixed with the command that failed.
     pub async fn command(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.command_with_timeout(method, params, COMMAND_TIMEOUT)
+            .await
+    }
+
+    async fn command_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (answer, answered) = oneshot::channel();
         self.pending.lock().await.insert(id, answer);
@@ -150,10 +165,17 @@ impl Client {
             self.pending.lock().await.remove(&id);
             return Err(format!("{method}: the browser closed the connection"));
         }
-        match answered.await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(err)) => Err(format!("{method}: {err}")),
-            Err(_) => Err(format!("{method}: the browser closed the connection")),
+        match tokio::time::timeout(timeout, answered).await {
+            Ok(Ok(Ok(result))) => Ok(result),
+            Ok(Ok(Err(err))) => Err(format!("{method}: {err}")),
+            Ok(Err(_)) => Err(format!("{method}: the browser closed the connection")),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                Err(format!(
+                    "{method}: the browser did not answer within {}ms",
+                    timeout.as_millis()
+                ))
+            }
         }
     }
 
@@ -687,6 +709,50 @@ mod tests {
             err,
             "browsingContext.navigate: no such frame: Browsing context with id 42 not found"
         );
+    }
+
+    #[tokio::test]
+    async fn an_open_connection_that_does_not_answer_times_out() {
+        let url = mock(|_| vec![]).await;
+        let client = Client::connect(&url).await.expect("connect");
+        let err = client
+            .command_with_timeout(
+                "browsingContext.navigate",
+                json!({}),
+                Duration::from_millis(20),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "browsingContext.navigate: the browser did not answer within 20ms"
+        );
+        assert!(client.pending.lock().await.is_empty());
+        assert!(!client.closed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_late_answer_after_timeout_does_not_answer_another_command() {
+        let url = mock(|command| {
+            if command["method"] == "test.silent" {
+                return vec![];
+            }
+            vec![
+                json!({ "type": "success", "id": 1, "result": "late" }),
+                json!({ "type": "success", "id": command["id"], "result": "fresh" }),
+            ]
+        })
+        .await;
+        let client = Client::connect(&url).await.expect("connect");
+        assert!(
+            client
+                .command_with_timeout("test.silent", json!({}), Duration::from_millis(20))
+                .await
+                .is_err()
+        );
+        let result = client.command("test.echo", json!({})).await.unwrap();
+        assert_eq!(result, json!("fresh"));
+        assert!(client.pending.lock().await.is_empty());
     }
 
     #[tokio::test]

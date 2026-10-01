@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- Browser protocol commands fail after 30 seconds without a reply, naming the
+  command that stalled. Setup, navigation and context cleanup can no longer
+  wait indefinitely outside the test-file timeout. Late replies are discarded
+  without affecting later commands.
+
 ## [0.14.0] - 2026-10-01
 
 ### Changed

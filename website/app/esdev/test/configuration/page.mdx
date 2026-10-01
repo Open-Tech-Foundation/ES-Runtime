@@ -52,10 +52,16 @@ A setup module is imported **before** the file under test, so a global it stubs
 is in place before anything reads it — and it costs no line numbers: a failing
 assertion still names the line you wrote.
 
-`--timeout` is enforced by the parent, which **ends** the process. The case it
-exists for is a file that wedges, and a budget the file kept for itself is one
-it never gets round to noticing. There is no default: a suite is not a place to
+For process-isolated runs, `--timeout` is enforced by the parent, which
+**ends** the process. The case it exists for is a file that wedges, and a
+budget the file kept for itself is one it never gets round to noticing. There is no default: a suite is not a place to
 guess how long a machine takes.
+
+In a browser run, `--timeout` bounds the wait for the page to finish its tests.
+Browser control commands have a separate, fixed 30-second reply deadline,
+including setup, navigation and context cleanup. A browser that keeps its
+connection open but stops replying fails with the command name and
+`the browser did not answer within 30000ms`.
 
 <Callout type="note" title="Not yet">
   An `include` pattern for discovery: test files are found by their `*.test.*`
