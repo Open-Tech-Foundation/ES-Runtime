@@ -11,6 +11,10 @@ pace of the MySQL protocol rather than the runtime's. See the root
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-01
+
+_Dependency updates._
+
 ## [0.2.0] - 2026-10-01
 
 ### Changed
