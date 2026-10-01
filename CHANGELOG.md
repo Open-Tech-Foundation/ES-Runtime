@@ -11,6 +11,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- Regenerate the site version metadata so the navigation badge matches the
+  current `esrun` release.
+
 ## [0.35.0] - 2026-10-01
 
 ### Added

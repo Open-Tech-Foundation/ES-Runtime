@@ -26,6 +26,8 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- Regenerate the site version metadata so development pages display the
+  current `esdev` release.
 - Browser protocol commands fail after 30 seconds without a reply, naming the
   command that stalled. Setup, navigation and context cleanup can no longer
   wait indefinitely outside the test-file timeout. Late replies are discarded
