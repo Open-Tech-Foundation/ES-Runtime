@@ -24,6 +24,12 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- The esdev guide promotes plugins and the development loop in the sidebar:
+  Plugins is a top-level section with a Rollup / Vite 8 comparison on its
+  overview page, and the development loop sorts before the build reference.
+
 ## [0.15.0] - 2026-10-01
 
 ### Added

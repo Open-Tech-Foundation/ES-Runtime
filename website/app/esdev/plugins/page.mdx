@@ -14,20 +14,40 @@ runs alike ([where plugins run](/esdev/build/project#where-plugins-run));
 programmatic builds pass them to [`build()`](/api/build).
 
 <Callout type="info" title="Read only the part you need">
-  Plugins run in the build process and are esdev-only. The detailed guide is
-  split by the decisions you make while writing one.
+  Plugins run in the build process and are esdev-only. The sidebar lists the
+  guide pages by the decisions you make while writing one.
 </Callout>
 
-## Plugin guide
+## How this compares
 
-- [Lifecycle and hooks](/esdev/plugins/lifecycle) — define a plugin object,
-  filter work, and use the eight hooks.
-- [Dependencies and module context](/esdev/plugins/dependencies) — return
-  `dependsOn` files and understand virtual modules.
-- [Context and ordering](/esdev/plugins/context) — use hook context, ordering,
-  and build results.
-- [Runtime and troubleshooting](/esdev/plugins/runtime) — understand where
-  plugins run and diagnose mistakes.
+Eight hooks against rollup's twenty-odd — each one is a promise whatever
+bundler sits behind the contract has to keep, so the list is short on purpose.
+The table below is the delta against the systems plugin authors arrive from;
+the linked pages are the full description.
 
-See also the [`runtime:build` API](/api/build) and the
-[hot-reload plugin guide](/esdev/start/hmr#component-refresh-is-a-plugin).
+Vite 8 and esdev share the same foundation — Rolldown for bundling, Oxc for
+transforms — so none of the difference below is the engine. It is the contract
+on top: Rolldown kept Rollup's plugin API as its own, while esdev defines a
+smaller one against it.
+
+| | esdev | Rollup | Vite 8 |
+| --- | --- | --- | --- |
+| Hooks | `start, resolve, load, transform, end, bundle, html, finish` ([lifecycle](/esdev/plugins/lifecycle)) | 20+: `options, buildStart, resolveId, load, transform, moduleParsed, buildEnd, generateBundle, writeBundle, closeBundle, watchChange…` | Rolldown's hooks plus Vite's own: `config, configResolved, configureServer, transformIndexHtml, handleHotUpdate…`, per environment |
+| `html` hook | Built in, with `pre`/`post` ordering | None | `transformIndexHtml` — built in and powerful, Vite-only |
+| `finish` hook | Runs after every target is staged, before anything moves into place — for sitemaps, manifests, prerendered pages; an error fails the build with nothing deployed | No equivalent (`writeBundle` runs per bundle, after files are written) | Same as Rollup |
+| `bundle` hook | Read-only: the chunk graph without the bytes, so one plugin cannot invalidate another's maps | `generateBundle` hands over mutable chunks | Same as Rollup |
+| Virtual modules | `{ id, virtual: true }` — explicit, no convention | A NUL byte glued to the id | Same NUL convention, encoded as `/@id/__x00__…` in dev URLs |
+| Filter | `{ id, code }`, matched host-side before the hook crosses into the isolate ([ordering](/esdev/plugins/context)) | `{ filter: { id, code }, handler }` since 4.38 | Same object-hook filters since 6.3 |
+| Filter semantics | A string is an **exact** match; an empty or uncompilable filter is **refused at declaration** | A string is a picomatch glob; nothing is refused | Same as Rollup, plus `moduleType` and composable `and/or/not` via pluginutils |
+| Context | A `ctx` argument — arrow-safe | `this` (lost by an arrow function) | Same `this` |
+| Dependencies | Returned as `dependsOn` — it cannot be forgotten ([dependencies](/esdev/plugins/dependencies)) | `this.addWatchFile()`, a call you can forget | Same as Rollup |
+| Sandbox | Guest code under the capability model: a plugin that reads a file needs `FileRead` ([runtime](/esdev/plugins/runtime)) | Full Node access | Full Node access |
+| Config | Data: `esdev.json` names the module and its JSON options | Executable config, arbitrary code pre-build | Executable config |
+| Mistakes | Refused at declaration with a fix: unknown hooks get a did-you-mean, bare-function hooks and string returns are named, uncompilable filters say how to rewrite ([troubleshooting](/esdev/plugins/runtime)) | Unknown hooks and bad returns are silently ignored | Same as Rollup |
+
+Two honest gaps. The filter is compiled by Rust's `regex`, so lookbehind and
+backreferences are refused rather than run — and unlike Rolldown there are no
+`include/exclude` or composable filters, only flat id/code lists. Porting a
+rollup plugin still means rewriting its filters alongside its NUL-prefixed
+ids. And there is no plugin registry yet; `esdev.json` can name a bare
+package, but discovery is word of mouth.

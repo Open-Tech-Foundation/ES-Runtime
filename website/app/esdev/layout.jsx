@@ -15,6 +15,15 @@ const NAV = [
     ],
   },
   {
+    title: "Development loop",
+    items: [
+      { title: "The dev loop", path: "/esdev/start" },
+      { title: "Hot module replacement", path: "/esdev/start/hmr" },
+      { title: "Watch mode", path: "/esdev/watch" },
+      { title: "Previewing a release", path: "/esdev/start/preview" },
+    ],
+  },
+  {
     title: "Build",
     items: [
       { title: "Bundling", path: "/esdev/build" },
@@ -22,25 +31,16 @@ const NAV = [
       { title: "Browser builds", path: "/esdev/build/browser" },
       { title: "Tailwind CSS", path: "/esdev/build/tailwind" },
       { title: "Libraries", path: "/esdev/build/library" },
-      {
-        title: "Writing plugins",
-        items: [
-          { title: "Overview", path: "/esdev/plugins" },
-          { title: "Lifecycle & hooks", path: "/esdev/plugins/lifecycle" },
-          { title: "Dependencies & modules", path: "/esdev/plugins/dependencies" },
-          { title: "Context & ordering", path: "/esdev/plugins/context" },
-          { title: "Runtime & troubleshooting", path: "/esdev/plugins/runtime" },
-        ],
-      },
     ],
   },
   {
-    title: "Development loop",
+    title: "Plugins",
     items: [
-      { title: "The dev loop", path: "/esdev/start" },
-      { title: "Hot module replacement", path: "/esdev/start/hmr" },
-      { title: "Watch mode", path: "/esdev/watch" },
-      { title: "Previewing a release", path: "/esdev/start/preview" },
+      { title: "Overview", path: "/esdev/plugins" },
+      { title: "Lifecycle & hooks", path: "/esdev/plugins/lifecycle" },
+      { title: "Dependencies & modules", path: "/esdev/plugins/dependencies" },
+      { title: "Context & ordering", path: "/esdev/plugins/context" },
+      { title: "Runtime & troubleshooting", path: "/esdev/plugins/runtime" },
     ],
   },
   {
