@@ -11,6 +11,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- Migrate `examples/shop/esdev.json` to the current project config format
+  (`build.targets`, `dev`), so the shop builds, tests, and serves again.
+
 ## [0.36.0] - 2026-10-01
 
 ### Fixed
