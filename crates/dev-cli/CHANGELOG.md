@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-03
+
 ### Changed
 
 - The esdev guide promotes plugins and the development loop in the sidebar:

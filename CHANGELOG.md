@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-03
+
 ### Fixed
 
 - Migrate `examples/shop/esdev.json` to the current project config format
