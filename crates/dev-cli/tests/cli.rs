@@ -12020,7 +12020,7 @@ fn otf_templates_scaffold_from_flags() {
         "no compiler beside the config: {manifest}"
     );
     assert!(
-        manifest.contains(r#""preview": "esdev preview --dir=dist""#),
+        manifest.contains(r#""preview": "esdev preview""#),
         "no preview of what it builds: {manifest}"
     );
 
@@ -12077,8 +12077,11 @@ fn otf_templates_scaffold_from_flags() {
     let document = std::fs::read_to_string(dir.join("index.html")).expect("read");
     assert!(document.contains("<title>journal</title>"), "{document}");
 
-    // The library ships an `esdev test` suite, not a Bun one — and it passes
-    // with no dependencies installed.
+    // The library ships an `esdev test` suite that renders its component.
+    // Running it needs installed dependencies (network), which the scaffold
+    // harness does not have — so this asserts the wiring the run needs: the
+    // CSR compiler plugin with routes off, the DOM cleanup setup, and the
+    // `--dom` script that selects it.
     let lib = esdev_in(&parent)
         .args(["create", "widgets", "--template=library", "--language=ts"])
         .stdin(std::process::Stdio::null())
@@ -12094,15 +12097,14 @@ fn otf_templates_scaffold_from_flags() {
         "a library has nothing to run dev: {}",
         stdout(&lib)
     );
-    let tested = esdev_in(&dir)
-        .arg("test")
-        .output()
-        .expect("spawn esdev test");
+    let config = std::fs::read_to_string(dir.join("esdev.json")).expect("read");
+    assert!(config.contains(r#""target": "csr""#), "{config}");
+    assert!(config.contains(r#""routes": false"#), "{config}");
+    assert!(config.contains("@opentf/web-test/setup"), "{config}");
+    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
     assert!(
-        tested.status.success(),
-        "the library template's own tests failed:\n{}{}",
-        stdout(&tested),
-        stderr(&tested)
+        manifest.contains(r#""test": "esdev test --dom""#),
+        "{manifest}"
     );
 
     let _ = std::fs::remove_dir_all(&parent);

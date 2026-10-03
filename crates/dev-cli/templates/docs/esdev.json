@@ -1,0 +1,53 @@
+{
+  "plugins": [
+    {
+      "module": "@opentf/esdev-plugin-web",
+      "options": {
+        "mode": "ssg",
+        "appDir": "app"
+      }
+    },
+    {
+      "module": "@opentf/web-docs/build",
+      "export": "docsNavPlugin",
+      "options": {
+        "appDir": "app"
+      }
+    },
+    {
+      "module": "@opentf/web-docs/build",
+      "export": "blogPostsPlugin",
+      "options": {
+        "appDir": "app",
+        "contentDir": "blog"
+      }
+    },
+    {
+      "module": "@opentf/web-cli/ssg",
+      "export": "siteOutputPlugin",
+      "options": {
+        "root": ".",
+        "target": "web",
+        "prerenderTarget": "site-ssg"
+      }
+    }
+  ],
+  "build": {
+    "targets": {
+      "web": {
+        "entry": "index.html",
+        "outdir": "dist"
+      },
+      "site-ssg": {
+        "entry": "ssg.js",
+        "out": ".ssg/ssg.js",
+        "then": "run"
+      }
+    }
+  },
+  "dev": {
+    "server": {
+      "port": 3005
+    }
+  }
+}

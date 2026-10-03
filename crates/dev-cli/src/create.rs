@@ -1196,6 +1196,13 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     bytes = otf_patch_source(template, "README.md", text).into_bytes();
                 }
+            } else if new_path.starts_with("tests/") && new_path.ends_with(".js") {
+                // Test files are not renamed, but their imports follow the
+                // renames: a test importing `../app/page.jsx` breaks in
+                // TypeScript mode unless it names `page.tsx`.
+                if let Ok(text) = std::str::from_utf8(&bytes) {
+                    bytes = otf_patch_source(template, "test.js", text).into_bytes();
+                }
             }
         }
         if otf.styling.as_deref() == Some("tailwind")
@@ -1214,6 +1221,15 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
             {
                 bytes = otf_patch_blog_page(text).into_bytes();
             }
+        }
+        // Without the demo blog there is nothing to index: the docs build
+        // drops the blog posts plugin alongside `app/blog/`.
+        if template == "docs"
+            && otf.blog == Some(false)
+            && new_path == "esdev.json"
+            && let Ok(text) = std::str::from_utf8(&bytes)
+        {
+            bytes = otf_patch_docs_esdev(text).into_bytes();
         }
         if template == "library"
             && ts
@@ -1296,6 +1312,7 @@ fn otf_patch_source(template: &str, basename: &str, content: &str) -> String {
     }
     next = otf_patch_layout_types(&next, basename);
     next = otf_patch_component_types(&next, basename);
+    next = otf_patch_middleware_types(&next, basename);
     next
 }
 
@@ -1333,6 +1350,27 @@ fn otf_patch_component_types(content: &str, basename: &str) -> String {
     content.replace(
         "export default function Counter({ initial = 0 })",
         "export default function Counter({ initial = 0 }: { initial?: number })",
+    )
+}
+
+/// Middleware handlers take the pipeline's request, context and next; the
+/// untyped parameters are implicit `any` under `strict`. The types are
+/// type-only — erased before the build — from the server entry the file
+/// already runs under.
+fn otf_patch_middleware_types(content: &str, basename: &str) -> String {
+    if basename != "_middleware.ts" {
+        return content.to_string();
+    }
+    const PARAMS: &str = "export default async function middleware(request, context, next) {";
+    if !content.contains(PARAMS) {
+        return content.to_string();
+    }
+    format!(
+        "import type {{ MiddlewareContext, NextFn }} from \"@opentf/web/server\";\n\n{}",
+        content.replace(
+            PARAMS,
+            "export default async function middleware(\n  request: Request,\n  context: MiddlewareContext,\n  next: NextFn,\n) {"
+        )
     )
 }
 
@@ -1407,6 +1445,10 @@ fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
         "strict": true,
         "skipLibCheck": true,
         "noEmit": true,
+        // Libraries publish their sources, and entries import them by
+        // extension (`./src/Counter.tsx`) — which TS5097 refuses without
+        // this. Spas need it too, to consume those libraries.
+        "allowImportingTsExtensions": true,
         "isolatedModules": true,
         "moduleDetection": "force",
     });
@@ -1454,6 +1496,16 @@ fn otf_patch_blog_page(content: &str) -> String {
         "\n## Edit Content\n",
         &format!("{OTF_BLOG_DEMO_SECTION}\n## Edit Content\n"),
     )
+}
+
+/// The blog posts plugin entry the embedded docs `esdev.json` carries, with
+/// the trailing comma that joins it to the entry after it. Withholding the
+/// blog is withholding the files plus this entry — a plugin indexing posts
+/// that do not exist would fail the release build instead.
+const OTF_BLOG_PLUGIN_ENTRY: &str = "    {\n      \"module\": \"@opentf/web-docs/build\",\n      \"export\": \"blogPostsPlugin\",\n      \"options\": {\n        \"appDir\": \"app\",\n        \"contentDir\": \"blog\"\n      }\n    },\n";
+
+fn otf_patch_docs_esdev(content: &str) -> String {
+    content.replace(OTF_BLOG_PLUGIN_ENTRY, "")
 }
 
 /// How a menu value reads. Flags stay lowercase — what is chosen must match
@@ -2298,6 +2350,7 @@ mod tests {
         assert_eq!(
             registry_packages(&docs).expect("valid placeholders"),
             BTreeSet::from([
+                "@opentf/esdev-plugin-web".to_string(),
                 "@opentf/esrun-types".to_string(),
                 "@opentf/web".to_string(),
                 "@opentf/web-cli".to_string(),
@@ -3000,6 +3053,264 @@ mod tests {
         assert!(!test.contains("bun:test"));
     }
 
+    /// The four OTF starters are native esdev projects: a project-local
+    /// esdev.json naming the framework plugin in its rendering mode, scripts
+    /// on esdev commands, and no retired `otfw` executable anywhere.
+    #[test]
+    fn otf_templates_are_native_esdev_projects() {
+        for (template, mode, styling, blog) in [
+            ("spa", "spa", Some("css"), None),
+            ("fullstack", "ssr", Some("css"), None),
+            ("docs", "ssg", None, Some(true)),
+        ] {
+            let files = otf_written(template, "js", styling, blog);
+            let config: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+            let plugins = config["plugins"].as_array().expect("a plugins array");
+            assert!(
+                plugins.iter().any(|plugin| {
+                    plugin.get("module").and_then(|m| m.as_str())
+                        == Some("@opentf/esdev-plugin-web")
+                        && plugin
+                            .get("options")
+                            .and_then(|o| o.get("mode"))
+                            .and_then(|m| m.as_str())
+                            == Some(mode)
+                }),
+                "{template}: the framework plugin with mode {mode}"
+            );
+            let manifest: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "package.json"))
+                    .expect("valid package.json");
+            for (script, command) in manifest["scripts"].as_object().expect("scripts") {
+                let command = command.as_str().unwrap_or_default();
+                assert!(
+                    !command.starts_with("otfw "),
+                    "{template}: {script} still calls the retired CLI: {command}"
+                );
+            }
+            assert!(
+                manifest["devDependencies"]
+                    .get("@opentf/esdev-plugin-web")
+                    .is_some(),
+                "{template}: the plugin is installed"
+            );
+            // The client entry mounts the generated route map, with the
+            // generated loader patterns beside it.
+            let entry = otf_text(&files, "entry.js");
+            assert!(
+                entry.contains("loaderRoutes") && entry.contains("mountApp"),
+                "{template}: the entry mounts generated routes: {entry}"
+            );
+        }
+        // The library compiles without route discovery and tests in the DOM.
+        let files = otf_written("library", "js", None, None);
+        let config: serde_json::Value =
+            serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+        let options = &config["plugins"][0]["options"];
+        assert_eq!(options["target"], serde_json::json!("csr"));
+        assert_eq!(options["routes"], serde_json::json!(false));
+        assert_eq!(
+            config["test"]["setup"],
+            serde_json::json!(["@opentf/web-test/setup"])
+        );
+    }
+
+    /// The fullstack server is explicit file-convention wiring: server.js
+    /// registers routes, API, loaders and middleware against `/app`-rooted
+    /// map keys the framework derives URLs from — keys a bundler cannot
+    /// discover, so they are written, not found. Route registration comes
+    /// from `@opentf/web/server`, which loads no Custom Elements, so the
+    /// server entry needs no DOM bootstrap.
+    #[test]
+    fn fullstack_server_wiring_is_explicit() {
+        let files = otf_written("fullstack", "js", Some("css"), None);
+        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        assert!(
+            !paths.contains(&"bootstrap.js"),
+            "no DOM bootstrap beside the server"
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+        assert_eq!(
+            config["build"]["targets"]["server"]["entry"],
+            serde_json::json!("server.js")
+        );
+        let server = otf_text(&files, "server.js");
+        for expected in [
+            "registerRoutes(pages)",
+            "createApiHandler",
+            "createLoaderRegistry",
+            "createMiddleware",
+            "\"/app/api/hello/route.js\"",
+            "\"/app/loader.js\"",
+            "\"/app/_middleware.js\"",
+        ] {
+            assert!(server.contains(expected), "server.js wires {expected}");
+        }
+        assert!(
+            server.contains("from \"@opentf/web/server\""),
+            "registration is DOM-free: {server}"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_str(&otf_text(&files, "package.json")).expect("valid package.json");
+        let start = manifest["scripts"]["start"].as_str().unwrap_or_default();
+        assert!(
+            start.starts_with("esrun ") && start.contains("dist/server.js"),
+            "production serves the bundle: {start}"
+        );
+        assert!(
+            start.contains("--allow-imports"),
+            "the server lazy-loads its routes chunk: {start}"
+        );
+    }
+
+    /// Withholding the demo blog withholds its files plus the plugin entry
+    /// that would index posts that do not exist; keeping it keeps the entry.
+    #[test]
+    fn docs_blog_off_drops_the_posts_plugin() {
+        let without = otf_written("docs", "js", None, Some(false));
+        let paths: Vec<&str> = without.iter().map(|(path, _)| path.as_str()).collect();
+        assert!(
+            !paths.iter().any(|path| path.starts_with("app/blog/")),
+            "blog files withheld"
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&otf_text(&without, "esdev.json")).expect("valid esdev.json");
+        let plugins = config["plugins"].as_array().expect("a plugins array");
+        assert!(
+            !plugins
+                .iter()
+                .any(|plugin| plugin.get("export").and_then(|e| e.as_str())
+                    == Some("blogPostsPlugin")),
+            "no posts plugin without posts"
+        );
+        assert!(
+            plugins.iter().any(
+                |plugin| plugin.get("export").and_then(|e| e.as_str()) == Some("docsNavPlugin")
+            ),
+            "docs navigation stays"
+        );
+
+        let with = otf_written("docs", "js", None, Some(true));
+        let config: serde_json::Value =
+            serde_json::from_str(&otf_text(&with, "esdev.json")).expect("valid esdev.json");
+        assert!(
+            config["plugins"]
+                .as_array()
+                .expect("a plugins array")
+                .iter()
+                .any(|plugin| plugin.get("export").and_then(|e| e.as_str())
+                    == Some("blogPostsPlugin")),
+            "the demo blog is indexed"
+        );
+    }
+
+    /// Test files are not renamed, but their imports follow the renames.
+    #[test]
+    fn otf_test_imports_follow_ts_renames() {
+        let spa = otf_written("spa", "ts", Some("css"), None);
+        assert!(
+            otf_text(&spa, "tests/counter.test.js").contains("../app/page.tsx"),
+            "the SPA test imports what exists"
+        );
+        let fullstack = otf_written("fullstack", "ts", Some("css"), None);
+        let api = otf_text(&fullstack, "tests/api.test.js");
+        assert!(
+            api.contains("../app/api/hello/route.ts"),
+            "route import: {api}"
+        );
+        assert!(api.contains("../app/loader.ts"), "loader import: {api}");
+        let library = otf_written("library", "ts", None, None);
+        let test = otf_text(&library, "tests/counter.test.js");
+        // The entry is TypeScript; the test's bundler-style import still
+        // names `.js`, which the test runner resolves to `index.ts`.
+        assert!(
+            test.contains("\"../index.js\""),
+            "the library test imports the entry: {test}"
+        );
+        // Middleware runs the pipeline typed: the untyped parameters are
+        // implicit `any` under `strict` (TS7006).
+        let middleware = otf_text(&fullstack, "app/_middleware.ts");
+        assert!(
+            middleware
+                .contains("import type { MiddlewareContext, NextFn } from \"@opentf/web/server\""),
+            "the middleware names its types: {middleware}"
+        );
+        assert!(
+            middleware.contains("request: Request")
+                && middleware.contains("context: MiddlewareContext")
+                && middleware.contains("next: NextFn"),
+            "the middleware types its parameters: {middleware}"
+        );
+    }
+
+    /// Extension-full source imports (`./src/Counter.tsx`) are TS5097 without
+    /// `allowImportingTsExtensions` — which libraries need to publish sources,
+    /// and spas need to consume them.
+    #[test]
+    fn otf_tsconfigs_allow_importing_ts_extensions() {
+        for (template, styling, blog) in [
+            ("spa", Some("css"), None),
+            ("fullstack", Some("css"), None),
+            ("docs", None, Some(false)),
+            ("library", None, None),
+        ] {
+            let files = otf_written(template, "ts", styling, blog);
+            let tsconfig: serde_json::Value =
+                serde_json::from_str(&otf_text(&files, "tsconfig.json")).expect("valid JSON");
+            assert_eq!(
+                tsconfig["compilerOptions"]["allowImportingTsExtensions"],
+                serde_json::json!(true),
+                "{template}: extension imports refused"
+            );
+        }
+    }
+
+    /// The library test renders the component it publishes: props, clicks,
+    /// and cleanup — not the manifest that points at it.
+    #[test]
+    fn library_tests_render_the_component() {
+        let files = otf_written("library", "js", None, None);
+        let test = otf_text(&files, "tests/counter.test.js");
+        for expected in [
+            "import { Counter }",
+            "render(Counter",
+            ".click()",
+            "unmount()",
+            "isConnected",
+        ] {
+            assert!(test.contains(expected), "the test {expected}");
+        }
+    }
+
+    /// The docs release prerenders through its own target: ssg.js runs after
+    /// every target (`then: run`) and skips without a staging area, so the
+    /// dev loop never prerenders.
+    #[test]
+    fn docs_ssg_target_prerenders_on_release() {
+        let files = otf_written("docs", "js", None, Some(true));
+        let config: serde_json::Value =
+            serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+        assert_eq!(
+            config["build"]["targets"]["site-ssg"],
+            serde_json::json!({
+                "entry": "ssg.js",
+                "out": ".ssg/ssg.js",
+                "then": "run",
+            })
+        );
+        let ssg = otf_text(&files, "ssg.js");
+        assert!(
+            ssg.contains("no staging area") && ssg.contains("exit(0)"),
+            "development skips the prerender: {ssg}"
+        );
+        assert!(
+            ssg.contains("writePrerenderReport"),
+            "the finish plugin gets its handoff"
+        );
+    }
+
     /// A `tsconfig.json` nothing can act on is a broken promise: TypeScript
     /// mode gains the compiler dependency and the `typecheck` script the
     /// esdev-native templates ship, and JavaScript mode gains neither.
@@ -3155,7 +3466,7 @@ mod tests {
         ] {
             assert_eq!(
                 scripts(&otf_written(template, language, styling, blog))["preview"],
-                serde_json::json!("esdev preview --dir=dist"),
+                serde_json::json!("esdev preview"),
                 "{template} {language}: wrong preview script"
             );
         }

@@ -30,6 +30,23 @@ is the point, since none of the three has any business in a deployment.
   Plugins is a top-level section with a Rollup / Vite 8 comparison on its
   overview page, and the development loop sorts before the build reference.
 
+### Fixed
+
+- An HTML release build whose entry shares code with a route chunk no longer
+  points the chunk at a file that is not on disk. Entry filenames are hashed
+  by the bundler itself instead of renamed afterwards, so inter-chunk imports
+  name the files that were written. This un-breaks OTF Web route mounting in
+  `esdev preview`.
+- The embedded OTF Web starters (`spa`, `fullstack`, `docs`, `library`) are
+  native esdev projects: each emits a project-local `esdev.json` naming
+  `@opentf/esdev-plugin-web`, installs it, and runs on `esdev`/`esrun`
+  scripts instead of the retired `otfw` executable. The fullstack starter
+  gains an explicit `server.js` (API, loaders, middleware, SSR, assets,
+  hydration payloads) behind a DOM-shim bootstrap entry; the docs starter
+  gains a release prerender target (`ssg.js`, `"then": "run"`) with search
+  indexing; the library starter tests a rendered component under
+  `esdev test --dom`.
+
 ## [0.15.0] - 2026-10-01
 
 ### Added

@@ -6,12 +6,8 @@ dist/
 
 # toolchain working dirs (dev server + temp build dirs)
 .dev
-.otfw
-.otfw-ssg
-.otfw-api
-.otfw-api-build
-.otfw-loaders
-.otfw-loaders-build
+.esdev-build-*
+.ssg/
 
 # environment files
 .env

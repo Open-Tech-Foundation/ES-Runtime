@@ -4,15 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "otfw dev",
-    "build": "otfw build",
-    "serve": "otfw serve"
+    "dev": "esdev start",
+    "build": "esdev build",
+    "start": "esrun --allow-read --allow-net --allow-listen=3000 --allow-env=PORT --allow-imports dist/server.js",
+    "test": "esdev test"
   },
   "dependencies": {
     "@opentf/web": "{{registry:@opentf/web}}"
   },
   "devDependencies": {
-    "@opentf/web-cli": "{{registry:@opentf/web-cli}}",
+    "@opentf/esdev-plugin-web": "{{registry:@opentf/esdev-plugin-web}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   }
 }

@@ -1,0 +1,19 @@
+{
+  "plugins": [
+    {
+      "module": "@opentf/esdev-plugin-web",
+      "options": { "mode": "spa" }
+    }
+  ],
+  "build": {
+    "targets": {
+      "web": {
+        "entry": "index.html",
+        "outdir": "dist"
+      }
+    }
+  },
+  "test": {
+    "setup": ["@opentf/web-test/setup"]
+  }
+}

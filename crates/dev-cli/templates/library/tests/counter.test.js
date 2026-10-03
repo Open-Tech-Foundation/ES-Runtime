@@ -1,11 +1,26 @@
-import { assert, test } from "runtime:test";
-import { exists, file } from "runtime:fs";
+import { expect, test } from "runtime:test";
+import { render } from "@opentf/web-test";
+import { Counter } from "../index.js";
 
-// Paths are relative to this file. Rendering the component needs the OTF
-// compiler, so this checks what consumers import instead.
-test("the package entry exports Counter", async () => {
-  const manifest = JSON.parse(await file("../package.json").text());
-  const entry = manifest.exports["."].replace(/^\.\//, "../");
-  assert(await exists(entry), `${entry} exists`);
-  assert((await file(entry).text()).includes("./src/Counter."), "it re-exports src/Counter");
+test("renders the initial count", () => {
+  const { getByRole, unmount } = render(Counter, { initial: 3 });
+  expect(getByRole("button", { name: "Count 3" })).toBeTruthy();
+  unmount();
+});
+
+test("clicking increments the count", () => {
+  const { getByRole, unmount } = render(Counter);
+  const button = getByRole("button", { name: "Count 0" });
+  button.click();
+  button.click();
+  expect(button.textContent).toBe("Count 2");
+  unmount();
+});
+
+test("unmounting removes the component", () => {
+  const { container, getByRole, unmount } = render(Counter);
+  expect(getByRole("button")).toBeTruthy();
+  unmount();
+  expect(container.isConnected).toBe(false);
+  expect(document.querySelector("[data-testid='counter']")).toBe(null);
 });

@@ -9,5 +9,5 @@ import { Counter } from "{{name}}";
 
 ```sh
 {{pm}} install
-{{pm}} run test
+{{pm}} run test       # esdev test --dom — renders the components for real
 ```

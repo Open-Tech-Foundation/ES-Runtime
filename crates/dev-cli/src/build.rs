@@ -1239,12 +1239,19 @@ pub async fn bundle_browser_entries(
         jsx,
         output: crate::bundler::OutputOptions {
             dir: Some(out_dir.to_string_lossy().into_owned()),
-            // Written under the entry's own name and hashed *afterwards*,
-            // below. Nothing imports an entry — a chunk is imported by it,
-            // never the other way round — so renaming one once it is written
-            // breaks no reference, and it keeps this from having to read the
-            // bundler's own report of what it called things.
-            entry_filenames: Some("[name].js".to_string()),
+            // Hashed by the bundler itself in a release build, stable in the
+            // dev loop. Hashing here rather than renaming afterwards is what
+            // keeps inter-chunk imports correct: a shared chunk the bundler
+            // places behind an entry is imported *by name* from the chunks
+            // that share it, so renaming an entry file after the fact —
+            // without rewriting every chunk that names it — ships a reference
+            // to a file that is not on disk. The bundler rewrites those
+            // references as it hashes; a rename afterwards cannot.
+            entry_filenames: Some(if hash {
+                "[name]-[hash].js".to_string()
+            } else {
+                "[name].js".to_string()
+            }),
             // A chunk is always hashed: nothing names one, so there is no
             // filename to keep stable, and a shared chunk that changed without
             // its name changing is a browser running two halves of two builds.
@@ -1264,7 +1271,7 @@ pub async fn bundle_browser_entries(
     // it. Which is why the collector is the bundler's rather than the caller's:
     // a held plugin keeps the handle it was constructed with, so a caller that
     // made a fresh one each build would be reading an empty one.
-    let (styles, assets, mut produced) = if dev {
+    let (styles, assets, produced) = if dev {
         let held = warm().lock().await;
         build_warm(held, &key, root, out_dir, &options, minify, plugins).await?
     } else {
@@ -1300,26 +1307,27 @@ pub async fn bundle_browser_entries(
 
     let mut written = Vec::new();
     for name in names {
-        let path = out_dir.join(format!("{name}.js"));
-        let bytes =
-            std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         if !hash {
             written.push((name.clone(), format!("{name}.js")));
             continue;
         }
-        let filename = crate::html::hashed_name(&path, &bytes);
-        std::fs::rename(&path, out_dir.join(&filename))
-            .map_err(|e| format!("cannot name {filename}: {e}"))?;
-        // The listing names what is on disk, and an entry was renamed after
-        // the bundler wrote it.
-        let unhashed = format!("{name}.js");
-        for output in &mut produced {
-            if let crate::contract::Output::Chunk { file_name, .. } = output
-                && *file_name == unhashed
-            {
-                file_name.clone_from(&filename);
-            }
-        }
+        // The filename the bundler gave this entry, read from its own report
+        // rather than assumed: the HTML tag has to point at what is on disk,
+        // and every chunk-to-chunk import already names it.
+        let filename = produced
+            .iter()
+            .find_map(|output| match output {
+                crate::contract::Output::Chunk {
+                    file_name,
+                    name: chunk_name,
+                    is_entry: true,
+                    ..
+                } if chunk_name == &name => Some(file_name.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!("the bundler did not report an output file for the {name} entry")
+            })?;
         written.push((name, filename));
     }
     Ok(BrowserBundle {

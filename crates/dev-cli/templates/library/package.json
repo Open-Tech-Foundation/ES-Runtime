@@ -4,7 +4,7 @@
   "description": "An OTF Web component library",
   "type": "module",
   "scripts": {
-    "test": "esdev test"
+    "test": "esdev test --dom"
   },
   "exports": {
     ".": "./index.js"
@@ -18,6 +18,8 @@
   },
   "devDependencies": {
     "@opentf/web": "{{registry:@opentf/web}}",
+    "@opentf/esdev-plugin-web": "{{registry:@opentf/esdev-plugin-web}}",
+    "@opentf/web-test": "{{registry:@opentf/web-test}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   },
   "publishConfig": {

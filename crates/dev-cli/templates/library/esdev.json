@@ -1,0 +1,11 @@
+{
+  "plugins": [
+    {
+      "module": "@opentf/esdev-plugin-web",
+      "options": { "target": "csr", "routes": false }
+    }
+  ],
+  "test": {
+    "setup": ["@opentf/web-test/setup"]
+  }
+}

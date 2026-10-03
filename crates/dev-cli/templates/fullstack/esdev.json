@@ -1,0 +1,26 @@
+{
+  "plugins": [
+    {
+      "module": "@opentf/esdev-plugin-web",
+      "options": { "mode": "ssr" }
+    }
+  ],
+  "build": {
+    "targets": {
+      "web": {
+        "entry": "index.html",
+        "outdir": "dist"
+      },
+      "server": {
+        "entry": "server.js",
+        "out": "dist/server.js"
+      }
+    }
+  },
+  "dev": {
+    "run": "server",
+    "app": {
+      "port": 3000
+    }
+  }
+}

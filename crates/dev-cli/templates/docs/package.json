@@ -4,15 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "otfw dev",
-    "build": "otfw build --ssg",
-    "preview": "esdev preview --dir=dist"
+    "dev": "esdev start",
+    "build": "esdev build",
+    "preview": "esdev preview"
   },
   "dependencies": {
     "@opentf/web": "{{registry:@opentf/web}}",
     "@opentf/web-docs": "{{registry:@opentf/web-docs}}"
   },
   "devDependencies": {
+    "@opentf/esdev-plugin-web": "{{registry:@opentf/esdev-plugin-web}}",
     "@opentf/web-cli": "{{registry:@opentf/web-cli}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   }
