@@ -1196,10 +1196,9 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     bytes = otf_patch_source(template, "README.md", text).into_bytes();
                 }
-            } else if new_path.starts_with("tests/") && new_path.ends_with(".js") {
-                // Test files are not renamed, but their imports follow the
-                // renames: a test importing `../app/page.jsx` breaks in
-                // TypeScript mode unless it names `page.tsx`.
+            } else if new_path.starts_with("tests/") {
+                // A test helper the renames leave alone still imports
+                // sources that moved: its imports follow them too.
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     bytes = otf_patch_source(template, "test.js", text).into_bytes();
                 }
@@ -1278,11 +1277,18 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
     out
 }
 
-/// The TypeScript renames `create-web` applies: `.jsx` sources, and the
-/// server files the toolchain treats as code rather than components.
+/// The TypeScript renames `create-web` applies: `.jsx` sources, the test
+/// files that import them, and the server files the toolchain treats as
+/// code rather than components.
 fn otf_rename(path: &str) -> Option<String> {
     if let Some(stem) = path.strip_suffix(".jsx") {
         return Some(format!("{stem}.tsx"));
+    }
+    if path.starts_with("tests/") && path.ends_with(".test.js") {
+        return Some(format!(
+            "{}.test.ts",
+            &path[..path.len() - ".test.js".len()]
+        ));
     }
     let base = path.rsplit('/').next().unwrap_or(path);
     if (base == "route.js" && path.contains("/api/"))
@@ -1313,6 +1319,7 @@ fn otf_patch_source(template: &str, basename: &str, content: &str) -> String {
     next = otf_patch_layout_types(&next, basename);
     next = otf_patch_component_types(&next, basename);
     next = otf_patch_middleware_types(&next, basename);
+    next = otf_patch_handler_types(&next, basename);
     next
 }
 
@@ -1374,6 +1381,26 @@ fn otf_patch_middleware_types(content: &str, basename: &str) -> String {
     )
 }
 
+/// Route and loader handlers take the request pipeline's arguments; the
+/// untyped parameters are implicit `any` under `strict` (TS7006). The
+/// framework calls them with `(request, context)` and `(context)`, which is
+/// also how the template's own tests call them.
+fn otf_patch_handler_types(content: &str, basename: &str) -> String {
+    let mut next = content.to_string();
+    if basename == "route.ts" {
+        next = next.replace(
+            "export function GET(_request)",
+            "export function GET(_request: Request)",
+        );
+    } else if basename == "loader.ts" {
+        next = next.replace(
+            "export default function (_context)",
+            "export default function (_context: {\n  params: Record<string, string>;\n  query: Record<string, string>;\n})",
+        );
+    }
+    next
+}
+
 /// The library publishes its entry, and in TypeScript the entry is TypeScript.
 fn otf_patch_library_manifest(content: &str) -> String {
     content
@@ -1427,7 +1454,7 @@ declare function $effect(fn: () => void | (() => void)): void;
 /// The `tsconfig.json` beside it, with the same per-template includes.
 fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
     let (env_path, include, allow_js): (&str, Vec<&str>, bool) = match template {
-        "spa" | "fullstack" => ("app/otfw-env.d.ts", vec!["app"], false),
+        "spa" | "fullstack" => ("app/otfw-env.d.ts", vec!["app", "tests"], false),
         "library" => (
             "otfw-env.d.ts",
             vec!["src", "tests", "index.ts", "otfw-env.d.ts"],
@@ -1449,6 +1476,10 @@ fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
         // extension (`./src/Counter.tsx`) — which TS5097 refuses without
         // this. Spas need it too, to consume those libraries.
         "allowImportingTsExtensions": true,
+        // The `runtime:` modules (`runtime:test` in the template suites)
+        // resolve through the installed type package, as they do for the
+        // esdev-native templates.
+        "types": ["@opentf/esrun-types"],
         "isolatedModules": true,
         "moduleDetection": "force",
     });
@@ -2981,9 +3012,11 @@ mod tests {
         let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"app/page.tsx"));
         assert!(paths.contains(&"app/layout.tsx"));
+        assert!(paths.contains(&"tests/counter.test.ts"));
         assert!(paths.contains(&"tsconfig.json"));
         assert!(paths.contains(&"app/otfw-env.d.ts"));
         assert!(!paths.contains(&"app/page.jsx"));
+        assert!(!paths.contains(&"tests/counter.test.js"));
         assert!(!paths.contains(&"jsconfig.json"));
 
         let layout = otf_text(&files, "app/layout.tsx");
@@ -3011,8 +3044,8 @@ mod tests {
             serde_json::from_str(&otf_text(&files, "tsconfig.json")).expect("valid JSON");
         assert_eq!(
             tsconfig["include"],
-            serde_json::json!(["app"]),
-            "apps include their tree"
+            serde_json::json!(["app", "tests"]),
+            "apps include their tree and their tests"
         );
         assert!(
             tsconfig["compilerOptions"].get("allowJs").is_none(),
@@ -3048,7 +3081,7 @@ mod tests {
             "the counter types its prop: {counter}"
         );
         // The esdev test reads the manifest, so it needs no patch per mode.
-        let test = otf_text(&library, "tests/counter.test.js");
+        let test = otf_text(&library, "tests/counter.test.ts");
         assert!(test.contains("runtime:test"));
         assert!(!test.contains("bun:test"));
     }
@@ -3116,25 +3149,30 @@ mod tests {
         );
     }
 
-    /// The fullstack server is explicit file-convention wiring: server.js
+    /// The fullstack server is explicit file-convention wiring: a bootstrap
+    /// entry shims the DOM globals ahead of a dynamic import (static imports
+    /// evaluate first — the shared runtime defines Custom Elements at module
+    /// scope, which a bundler inlines into the server output), and server.js
     /// registers routes, API, loaders and middleware against `/app`-rooted
     /// map keys the framework derives URLs from — keys a bundler cannot
-    /// discover, so they are written, not found. Route registration comes
-    /// from `@opentf/web/server`, which loads no Custom Elements, so the
-    /// server entry needs no DOM bootstrap.
+    /// discover, so they are written, not found.
     #[test]
     fn fullstack_server_wiring_is_explicit() {
         let files = otf_written("fullstack", "js", Some("css"), None);
-        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+        let bootstrap = otf_text(&files, "bootstrap.js");
         assert!(
-            !paths.contains(&"bootstrap.js"),
-            "no DOM bootstrap beside the server"
+            bootstrap.contains("globalThis.HTMLElement ??="),
+            "the shim precedes every import: {bootstrap}"
+        );
+        assert!(
+            bootstrap.contains("await import("),
+            "static imports would evaluate first: {bootstrap}"
         );
         let config: serde_json::Value =
             serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
         assert_eq!(
             config["build"]["targets"]["server"]["entry"],
-            serde_json::json!("server.js")
+            serde_json::json!("bootstrap.js")
         );
         let server = otf_text(&files, "server.js");
         for expected in [
@@ -3150,7 +3188,7 @@ mod tests {
         }
         assert!(
             server.contains("from \"@opentf/web/server\""),
-            "registration is DOM-free: {server}"
+            "registration comes from the server entry: {server}"
         );
         let manifest: serde_json::Value =
             serde_json::from_str(&otf_text(&files, "package.json")).expect("valid package.json");
@@ -3211,18 +3249,18 @@ mod tests {
     fn otf_test_imports_follow_ts_renames() {
         let spa = otf_written("spa", "ts", Some("css"), None);
         assert!(
-            otf_text(&spa, "tests/counter.test.js").contains("../app/page.tsx"),
+            otf_text(&spa, "tests/counter.test.ts").contains("../app/page.tsx"),
             "the SPA test imports what exists"
         );
         let fullstack = otf_written("fullstack", "ts", Some("css"), None);
-        let api = otf_text(&fullstack, "tests/api.test.js");
+        let api = otf_text(&fullstack, "tests/api.test.ts");
         assert!(
             api.contains("../app/api/hello/route.ts"),
             "route import: {api}"
         );
         assert!(api.contains("../app/loader.ts"), "loader import: {api}");
         let library = otf_written("library", "ts", None, None);
-        let test = otf_text(&library, "tests/counter.test.js");
+        let test = otf_text(&library, "tests/counter.test.ts");
         // The entry is TypeScript; the test's bundler-style import still
         // names `.js`, which the test runner resolves to `index.ts`.
         assert!(
@@ -3242,6 +3280,18 @@ mod tests {
                 && middleware.contains("context: MiddlewareContext")
                 && middleware.contains("next: NextFn"),
             "the middleware types its parameters: {middleware}"
+        );
+        // Route and loader handlers are typed the way the framework and the
+        // template tests call them: request in, context in.
+        let route = otf_text(&fullstack, "app/api/hello/route.ts");
+        assert!(
+            route.contains("export function GET(_request: Request)"),
+            "the route types its request: {route}"
+        );
+        let loader = otf_text(&fullstack, "app/loader.ts");
+        assert!(
+            loader.contains("params: Record<string, string>"),
+            "the loader types its context: {loader}"
         );
     }
 
@@ -3263,6 +3313,11 @@ mod tests {
                 tsconfig["compilerOptions"]["allowImportingTsExtensions"],
                 serde_json::json!(true),
                 "{template}: extension imports refused"
+            );
+            assert_eq!(
+                tsconfig["compilerOptions"]["types"],
+                serde_json::json!(["@opentf/esrun-types"]),
+                "{template}: the runtime: modules resolve through the type package"
             );
         }
     }
