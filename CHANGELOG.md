@@ -11,6 +11,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- Update the website's Wrangler tooling to 4.147.0, which pulls in patched
+  Undici 7.29.1 through Miniflare and addresses the ten Undici advisories
+  reported by the dependency scan.
+
 ## [0.37.0] - 2026-10-03
 
 ### Fixed
