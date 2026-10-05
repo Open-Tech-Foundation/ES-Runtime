@@ -42,7 +42,7 @@ irm https://esrun.opentechf.org/install.ps1 | iex
 $env:ES_RUNTIME_ONLY = 'esrun'; irm https://esrun.opentechf.org/install.ps1 | iex
 ```
 
-Each binary is released under its own tag — `esrun@0.25.0`, `esdev@0.3.0` — and
+Each binary is released under its own tag — `esrun@…`, `esdev@…` — and
 pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. `esrun upgrade` and
 `esdev upgrade` each update their own binary in place.
 

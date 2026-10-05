@@ -26,7 +26,9 @@ throws a standard `DOMException` with the `NotAllowedError` name.
 | `Signals` | Watch OS signals through `runtime:process`. |
 | `Run` | Spawn a child process through `runtime:system`. |
 | `Worker` | Start a [`Worker`](/docs/internals/workers), whose own grant is narrower. |
-| `HrTime` | Access high-resolution timing. |
+| `FileSystem` | Load modules: static imports, package imports, dynamic `import()`. Flag name: `imports`. |
+| `DiagnosticsObserve` | Observe the runtime's own execution via `runtime:diagnostics` — span timings, kinds, counts, the handle inventory, loop metrics. `attributes` come back empty. Flag name: `diagnostics`. |
+| `DiagnosticsDetail` | The above **plus** span `attributes` (paths, URLs, SQL text). Implies `DiagnosticsObserve`. Flag name: `diagnostics-detail`. |
 
 Importing a `runtime:` module never needs a capability. The gate is the
 operation, so a built-in imports under any policy and only its operations throw.

@@ -118,7 +118,7 @@ that depends on one needs a different shape rather than a workaround.
 
 | What | Why, and what to do instead |
 | --- | --- |
-| `require()`, `module.exports` | No CommonJS at run time. [`esdev build`](/esdev/build) converts a CJS dependency at build time, and esrun receives ordinary ESM. |
+| `require()`, `module.exports` | No CommonJS at run time. esdev converts a CJS dependency — [`esdev build`](/esdev/build) at build time, or on import under `esdev` run/test — and esrun receives ordinary ESM. |
 | `import "https://…"` | Remote imports are rejected. Fetch data with `fetch` or `runtime:net`; code stays local and reviewable. |
 | Native addons (N-API), FFI | No addon ABI and no foreign-function interface. The host extends the runtime through providers, in Rust. |
 | `SharedWorker`, `data:`/`blob:` worker URLs | A worker's URL names a file. The dedicated [`Worker`](/docs/guides/workers) ships. |

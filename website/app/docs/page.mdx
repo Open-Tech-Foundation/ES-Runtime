@@ -56,17 +56,6 @@ on V8 in Rust. It runs standard ES Modules with a sandboxed module system.
   <a href="/esdev" className="grid h-10 shrink-0 place-items-center rounded-lg bg-brand-500 px-4 py-0 text-sm font-semibold leading-none !text-white shadow-sm transition hover:bg-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500">Open Development docs →</a>
 </div>
 
-## Principles
-
-- **ESM only.** There is no CommonJS interop at runtime; modules are real ES
-  Modules. A CommonJS dependency is converted at build time by
-  [`esdev build`](/esdev/build), so what runs in production is the text that
-  was reviewed.
-- **Capabilities are explicit.** Host powers — environment, filesystem, network
-  — are granted one at a time. Nothing is ambient.
-- **Standard surface.** Host functionality is exposed through `runtime:` module
-  imports rather than magic globals.
-
 ## Install
 
 Download a prebuilt, checksum-verified binary for your platform:

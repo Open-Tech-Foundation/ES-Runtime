@@ -35,8 +35,8 @@ const features = [
       <span>
         Static imports, dynamic import(), top-level await, import.meta, and JSON
         modules. One module system, no CommonJS interop rules to learn —{" "}
-        <code className={BIN_INLINE}>esdev</code>'s bundler converts a CJS
-        dependency at build time.
+        <code className={BIN_INLINE}>esdev</code> converts a CJS dependency
+        (at build time, or on import while developing).
       </span>
     ),
   },
@@ -81,21 +81,24 @@ const durablePoints = [
 // cannot", when the truth is "not in the binary you deploy".
 const devItems = [
   "TypeScript & JSX",
-  "CommonJS (converted at build)",
+  "CommonJS (converted by esdev)",
   "Bundler",
   "Test runner",
   "Watch mode",
   "Debugger",
+  "Permission discovery",
 ];
 
 // Non-goals for the whole project, not a division of labour between binaries.
 const scopeItems = [
   "Node.js compatibility",
+  "CommonJS at runtime",
   "Package installer",
   "Linter / formatter",
   "FFI",
   "Native addons",
   "Remote module imports",
+  "SharedWorker / data: worker URLs",
 ];
 
 export default function HomePage() {
@@ -270,11 +273,12 @@ export default function HomePage() {
             <SandboxDiagram />
           </div>
           <p className="mx-auto mt-6 max-w-5xl text-center text-sm text-zinc-500 dark:text-zinc-400">
-            Nine capabilities: <code className="font-mono">read</code>, <code className="font-mono">write</code>,{" "}
+            Eleven capabilities: <code className="font-mono">read</code>, <code className="font-mono">write</code>,{" "}
             <code className="font-mono">imports</code>, <code className="font-mono">net</code>,{" "}
             <code className="font-mono">listen</code>, <code className="font-mono">env</code>,{" "}
             <code className="font-mono">run</code>, <code className="font-mono">signals</code>,{" "}
-            <code className="font-mono">workers</code>. The gate is the op, not the import.
+            <code className="font-mono">workers</code>, <code className="font-mono">diagnostics</code>,{" "}
+            <code className="font-mono">diagnostics-detail</code>. The gate is the op, not the import.
           </p>
         </div>
       </section>

@@ -22,7 +22,7 @@ by default, and `esrun` grants none.
 esrun <file>                Run a JavaScript module file
 esrun -e=<code>             Run an inline module snippet
 esrun --allow-<name>        Grant one capability; repeatable
-esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the nine)
+esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the eleven)
 esrun --allow-all, -A       Grant everything (unsandboxed)
 esrun --deny-<name>         Take one back; requires --allow-all; repeatable
 esrun --deny-all            Grant nothing — the default, said outright
@@ -174,9 +174,10 @@ operation, not the import.
 
 ### Scoped grants
 
-**Seven of the nine** `--allow-<name>` flags take a comma-separated list that
-narrows the grant instead of handing over the whole capability. `imports` is the
-exception — what may be *loaded* has [its own mechanism](#import-policy).
+**Seven of the eleven** `--allow-<name>` flags take a comma-separated list that
+narrows the grant instead of handing over the whole capability. `imports`,
+`workers`, `diagnostics` and `diagnostics-detail` are all-or-nothing — what
+may be *loaded* has [its own mechanism](#import-policy).
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
@@ -311,7 +312,7 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 | `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |
 | `esrun app.js --allow-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
 | `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
-| `--allow-ffi` | Not one of the nine |
+| `--allow-ffi` | Not one of the eleven |
 | `--allow-workers=x` | `workers` is all-or-nothing; the scope is set at the spawn |
 | `--timeout 500` | Same rule 1 — this is the parser's grammar, not a permission rule |
 

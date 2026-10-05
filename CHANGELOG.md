@@ -21,6 +21,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Correct the website's capability count from nine to eleven: the `diagnostics`
+  and `diagnostics-detail` flags were missing from the landing page list and
+  from every "seven of the nine" statement, and the permissions page listed a
+  nonexistent `HrTime` capability instead of the `imports` and diagnostics
+  rows. All counts now match the eleven host-facing flags in
+  `crates/common/src/capability.rs`.
+- Fix the `runtime:env` reference in the esdev project-build docs — environment
+  is read through `runtime:process`; no such module was ever built — and state
+  both durable-alarm retry limits (five-minute backoff cap, `alarmRetries`
+  attempts) on the guide and internals pages instead of one each.
+- Reconcile the CommonJS wording: scope, migration and landing pages now say
+  esdev converts CJS at build time and on import under run/test, matching the
+  esdev docs.
+- Regenerate `website/src/versions.js` (0.37.0 / 0.16.0) and drop the stale
+  release tags from the README install section.
 - Update the website's Wrangler tooling to 4.147.0, which pulls in patched
   Undici 7.29.1 through Miniflare and addresses the ten Undici advisories
   reported by the dependency scan.

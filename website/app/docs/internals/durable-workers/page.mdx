@@ -281,7 +281,8 @@ handler has finished, though, so a process that dies mid-handler runs it again
 after a restart. That makes an alarm at-least-once, which is what a scheduler
 that never drops work has to be; a handler's effects should be idempotent. A failure puts one back — 1s, 2s, 4s, to
 a five-minute cap — with the attempt count stored beside the alarm, so a restart
-does not reset it, and the last failure is reported rather than dropped.
+does not reset it; after `alarmRetries` attempts (5 by default) the alarm is
+cleared, and the last failure is reported rather than dropped.
 
 The process stays alive while the scheduler runs, and this is the one place this
 module holds a timer at all. Which is why it is not started for you: eviction

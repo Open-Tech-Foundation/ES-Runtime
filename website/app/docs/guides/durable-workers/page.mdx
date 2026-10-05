@@ -202,9 +202,9 @@ startAlarms({
 });
 ```
 
-A handler that throws is retried with backoff (1s, 2s, 4s … up to
-`alarmRetries`, 5 by default); then `onError` hears about it with
-`gaveUp: true`. An alarm is **at least once**: if the process dies while its
+A handler that throws is retried with backoff (1s, 2s, 4s … capped at five
+minutes between attempts, up to `alarmRetries`, 5 by default); then `onError`
+hears about it with `gaveUp: true`. An alarm is **at least once**: if the process dies while its
 handler runs, it runs again after the restart, so keep its effects idempotent
 (send the webhook with an idempotency key, for example).
 
