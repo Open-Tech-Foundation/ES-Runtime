@@ -6,6 +6,7 @@
 // objects (a style string becomes Object.assign(..., str)).
 import bench from "../src/benchmarks.js";
 import { LABELS, ORDER } from "../src/runtimes.js";
+import RuntimeIcon from "./RuntimeIcon.jsx";
 
 const BRAND_COLORS = {
   esrun: {
@@ -211,8 +212,9 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
           return (
             <div className="grid grid-cols-12 items-center gap-2">
               {/* Runtime Name */}
-              <div className={"col-span-3 " + nameCls}>
-                {LABELS[rt]}
+              <div className={"col-span-3 flex items-center gap-1.5 " + nameCls}>
+                <RuntimeIcon name={rt} />
+                <span className="truncate">{LABELS[rt]}</span>
               </div>
 
               {/* Throughput Bar & Value */}

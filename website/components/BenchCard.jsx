@@ -7,6 +7,7 @@
 import bench from "../src/benchmarks.js";
 import { betterLabel, winnerOf } from "../src/metric-direction.js";
 import { LABELS, ORDER } from "../src/runtimes.js";
+import RuntimeIcon from "./RuntimeIcon.jsx";
 
 const BRAND_COLORS = {
   esrun: {
@@ -117,8 +118,9 @@ export default function BenchCard({ metric }) {
           return (
             <div className="grid grid-cols-12 items-center gap-2">
               {/* Runtime Label */}
-              <div className="col-span-3 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
-                {LABELS[rt]}
+              <div className="col-span-3 flex items-center gap-1.5 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+                <RuntimeIcon name={rt} />
+                <span className="truncate">{LABELS[rt]}</span>
               </div>
 
               {/* Performance Metric Bar & Value */}

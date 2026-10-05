@@ -8,6 +8,7 @@
 // NOTE: same compiler constraint as RpsChart — non-render computations use
 // plain loops, dynamic styles are objects.
 import bench from "../src/benchmarks.js";
+import RuntimeIcon from "./RuntimeIcon.jsx";
 
 const TOOL_META = {
   vite: {
@@ -160,8 +161,9 @@ export default function DevServerChart({ large = false, view = "startup" }) {
           };
           return (
             <div className="grid grid-cols-12 items-center gap-2">
-              <div className={nameSpan + " " + nameCls}>
-                {meta.label}
+              <div className={nameSpan + " flex items-center gap-1.5 " + nameCls}>
+                <RuntimeIcon name={tool} />
+                <span className="truncate">{meta.label}</span>
               </div>
               {columns.map((col) => {
                 const isWin = tool === getWinner(tools, col.key);

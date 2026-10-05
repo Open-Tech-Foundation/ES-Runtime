@@ -8,6 +8,7 @@
 // plain loops, dynamic styles are objects.
 import bench from "../src/benchmarks.js";
 import { LABELS, ORDER } from "../src/runtimes.js";
+import RuntimeIcon from "./RuntimeIcon.jsx";
 
 const BRAND = {
   bun: {
@@ -135,7 +136,10 @@ export default function DbQpsChart({ db = "pg", large = false }) {
           };
           return (
             <div className="grid grid-cols-12 items-center gap-2">
-              <div className={"col-span-3 " + nameCls}>{LABELS[rt] || rt}</div>
+              <div className={"col-span-3 flex items-center gap-1.5 " + nameCls}>
+                <RuntimeIcon name={rt} />
+                <span className="truncate">{LABELS[rt] || rt}</span>
+              </div>
               <div className="col-span-5 flex items-center gap-1.5 pr-1">
                 <div className={barCls}>
                   <div

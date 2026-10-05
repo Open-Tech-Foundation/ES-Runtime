@@ -11,6 +11,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- Each runtime and tool row on the landing page Benchmarks section now shows
+  its full-color brand icon beside the name — the OTF logo for esrun and
+  esdev, official artwork for Node.js, Bun, Deno, Vite, esbuild and AWS
+  (for LLRT), and a monochrome tile for oj — so rows can be told apart without
+  reading the label.
+
 ### Fixed
 
 - Update the website's Wrangler tooling to 4.147.0, which pulls in patched
