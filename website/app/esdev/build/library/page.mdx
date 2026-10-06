@@ -94,7 +94,32 @@ A `.module.css` that a module imports ships **scoped**: the class names in
 `dist/button.module.css` are the ones the published JavaScript hands out, such
 as `btn_c2e58308`. A module it `composes` from is imported at the top of the
 file, so importing one stylesheet brings every rule its class names use.
-`url()`s stay relative to the file. A plain `.css` stays a byte-for-byte copy.
+
+### Images and fonts a stylesheet uses
+
+A file a library stylesheet names with `url()` ships with it. By default it is
+copied into `dist/assets/` under a content-hashed name, and the `url()` points
+at the copy. To inline every such file into the stylesheet as a `data:` URL
+instead, set `css-urls`:
+
+```sh
+esdev build --lib src --css-urls=inline
+```
+
+```json
+{ "build": { "targets": { "kit": { "entry": "src", "lib": true, "outdir": "dist", "css-urls": "inline" } } } }
+```
+
+| `css-urls` | `url(./bg.png)` becomes | Ships |
+| --- | --- | --- |
+| `copy` (default) | `url("../assets/bg-1a2b3c4d.png")` | `dist/assets/bg-1a2b3c4d.png` |
+| `inline` | `url("data:image/png;base64,…")` | nothing extra |
+
+Inlining keeps a package to its stylesheets, at the cost of a larger CSS file:
+base64 is about a third bigger than the file, and an image used twice is
+embedded twice. Remote, rooted and `data:` URLs, `@import`s, and a path that
+names no file are left as written. Everything else in the stylesheet is
+unchanged.
 
 ## Declarations
 
@@ -169,6 +194,7 @@ constructs such as module augmentations stop the build and name themselves.
 | `--format=<list>` | `"format": ["esm", "cjs"]` | `esm` (default), `cjs`, or both |
 | `--no-types` | `"types": false` | Skip `.d.ts` files |
 | `--dts-bundle[=<entry>]` | `"dts-bundle": true` or an entry | One `.d.ts` instead of one per module |
+| `--css-urls=<copy\|inline>` | `"css-urls": "inline"` | What a stylesheet's `url()` files become; `copy` (default) |
 | `--out=<dir>` | `"outdir": "dist"` | Where to write it |
 
 ```json

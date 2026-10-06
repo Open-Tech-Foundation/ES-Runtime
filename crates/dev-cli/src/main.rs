@@ -526,6 +526,9 @@ OPTIONS:
     --no-types                  --lib only: skip the .d.ts files
     --dts-bundle[=<entry>]      --lib only: link every declaration into one
                                 .d.ts (default entry: <srcdir>/index.ts)
+    --css-urls=<copy|inline>    --lib only: the files a stylesheet's url()s
+                                name, copied hashed into assets/ (default) or
+                                inlined as data: URLs
     -h, --help                  Show this help
 
 A PROJECT (esdev.json)
@@ -880,6 +883,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     let mut formats: Vec<build::Format> = Vec::new();
     let mut no_types = false;
     let mut dts_bundle: Option<Option<String>> = None;
+    let mut css_urls: Option<crate::config::CssUrls> = None;
     let mut conditions = Vec::new();
     let mut defines = Vec::new();
     let mut alias: Vec<(String, String)> = Vec::new();
@@ -924,6 +928,13 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             // source directory, which is where a package's `.` export points
             // in almost every library that has one.
             "--dts-bundle" => dts_bundle = Some(value.map(str::to_string)),
+            "--css-urls" => {
+                let given = require_value(flag, value)?;
+                css_urls = Some(
+                    crate::config::CssUrls::parse(given)
+                        .ok_or_else(|| format!("{flag}={given}: say copy or inline."))?,
+                );
+            }
             "--minify" => {
                 reject_value(flag, value)?;
                 minify = true;
@@ -1048,6 +1059,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         (!formats.is_empty(), "--format"),
         (no_types, "--no-types"),
         (dts_bundle.is_some(), "--dts-bundle"),
+        (css_urls.is_some(), "--css-urls"),
     ]
     .into_iter()
     .find_map(|(given, flag)| given.then_some(flag));
@@ -1071,7 +1083,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                     "{flag} shapes a library build, and a project build's targets say \
                      whether they are libraries in {}.\n\n\
                      Put it on the target: \"lib\": true, \"format\": [\"esm\", \"cjs\"], \
-                     \"types\": false, \"dts-bundle\": \"src/index.ts\".",
+                     \"types\": false, \"dts-bundle\": \"src/index.ts\", \"css-urls\": \"inline\".",
                     config::FILE_NAME
                 ));
             }
@@ -1142,6 +1154,12 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
              entry happens to reach. Build the directory: \
              `esdev build --lib {root}`."
         ));
+    }
+    if css_urls.is_some() && !lib {
+        return Err("--css-urls only means something with --lib.\n\n\
+             An application build already hashes and links the files its \
+             stylesheets name."
+            .to_string());
     }
     if dts_bundle.is_some() && !lib {
         return Err("--dts-bundle only means something with --lib.\n\n\
@@ -1233,6 +1251,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             formats,
             types: !no_types,
             dts_bundle,
+            css_urls: css_urls.unwrap_or_default(),
             // Started with the build: see `build::run`.
             plugins: Vec::new(),
         },

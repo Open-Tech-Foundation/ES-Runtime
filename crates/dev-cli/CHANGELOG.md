@@ -37,6 +37,14 @@ is the point, since none of the three has any business in a deployment.
   framework imports in a server build to the DOM-free `@opentf/web/server`, so
   nothing needs `HTMLElement` before the server's modules evaluate.
 
+### Added
+
+- `--css-urls=<copy|inline>`, and `"css-urls"` on a library target: the files
+  a library stylesheet names with `url()` are copied into `dist/assets/` under
+  a content-hashed name (the default), or inlined as `data:` URLs. They used
+  to be left out of the package, so the published `url()` named a missing
+  file (D158).
+
 ### Fixed
 
 - `new URL("./icon.svg", import.meta.url)`, and any other literal relative

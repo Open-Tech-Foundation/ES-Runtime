@@ -75,6 +75,7 @@ esdev build src/app.ts           # one-off entry; project source settings still 
 | `format` | A library's module systems: `"esm"`, `"cjs"`, or both as a list |
 | `types` | `false` — skip declarations |
 | `dts-bundle` | `true`, or the entry to link from |
+| `css-urls` | A library stylesheet's `url()` files: `"copy"` (default) or `"inline"` |
 | `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
 
 `resolve.alias` is a project-level setting shared by targets and source
@@ -94,7 +95,7 @@ A flag applies to every target built, and beats the file:
 | `--define`, `--conditions` | Added after the target's own, so a `--define` wins a name both set |
 | `--alias` | Replaces the `alias` of the same name, or adds one |
 
-`--out`, `--lib`, `--format`, `--no-types` and `--dts-bundle` are refused: a
+`--out`, `--lib`, `--format`, `--no-types`, `--dts-bundle` and `--css-urls` are refused: a
 project build writes where each target says, and a target says whether it is a
 library in the file.
 

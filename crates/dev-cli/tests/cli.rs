@@ -2231,6 +2231,7 @@ fn every_build_flag_is_applied_or_refused_in_a_project_build() {
         ("--format", vec!["--format=cjs"], Expect::Refused),
         ("--no-types", vec!["--no-types"], Expect::Refused),
         ("--dts-bundle", vec!["--dts-bundle"], Expect::Refused),
+        ("--css-urls", vec!["--css-urls=inline"], Expect::Refused),
         ("--help", Vec::new(), Expect::NotAFlag),
         // Named in the help's deploy line, which is esrun's.
         ("--allow-imports", Vec::new(), Expect::NotAFlag),
@@ -10665,8 +10666,8 @@ fn a_library_drops_its_css_imports_and_warns_when_exports_miss_them() {
 
 /// A library's CSS Modules ship scoped (D157): the class names in the
 /// published stylesheet are the ones its JavaScript hands out, a composed
-/// module is `@import`ed so its rules come along, and a `url()` stays relative
-/// to the file. A plain stylesheet is still the passthrough copy.
+/// module is `@import`ed so its rules come along, and a `url()` names the
+/// copied file. A plain stylesheet is still the passthrough copy.
 #[test]
 fn a_library_ships_its_css_modules_scoped_as_its_javascript_names_them() {
     let dir = build_dir("lib_css_modules");
@@ -10706,12 +10707,79 @@ fn a_library_ships_its_css_modules_scoped_as_its_javascript_names_them() {
         button.starts_with("@import \"./base.module.css\";"),
         "{button}"
     );
-    assert!(button.contains("url(\"./icon.png\")"), "{button}");
+    // The image goes where the stylesheets' files go (D158): hashed, in assets/.
+    assert!(button.contains("url(\"../assets/icon-"), "{button}");
     assert!(!button.contains("composes"), "{button}");
     assert!(base_css.contains(&format!(".{base}")), "{base_css}");
     assert_eq!(
         std::fs::read_to_string(dir.join("dist/plain.css")).expect("plain"),
         ".plain { color: blue }\n"
+    );
+}
+
+/// A library stylesheet's `url()`s (D158): copied under a hashed name into
+/// `assets/` by default, inlined as `data:` URLs with `--css-urls=inline` or
+/// the target's `css-urls`. The rest of the stylesheet is as written.
+#[test]
+fn a_library_copies_or_inlines_what_its_stylesheets_url_names() {
+    let dir = build_dir("lib_css_urls");
+    std::fs::create_dir_all(dir.join("src/ui/img")).expect("create source");
+    write_in(&dir, "src/ui/img/bg.png", "png");
+    write_in(&dir, "src/index.js", "export const x = 1;\n");
+    write_in(
+        &dir,
+        "src/ui/s.css",
+        "@import url(\"../theme.css\");\n.a { background: url(./img/bg.png) }\n",
+    );
+    write_in(&dir, "src/theme.css", ":root{}\n");
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--no-types"])
+        .output()
+        .expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 file from stylesheets copied"), "{text}");
+    let copied: Vec<String> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("dist/assets")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .collect();
+    assert!(
+        copied.len() == 1 && copied[0].starts_with("bg-") && copied[0].ends_with(".png"),
+        "{copied:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/ui/s.css")).expect("css"),
+        format!(
+            "@import url(\"../theme.css\");\n.a {{ background: url(\"../assets/{}\") }}\n",
+            copied[0]
+        )
+    );
+
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist", "types": false, "css-urls": "inline"}}}}"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 file from stylesheets inlined"), "{text}");
+    assert!(!dir.join("dist/assets").exists(), "inlined, yet copied");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/ui/s.css")).expect("css"),
+        "@import url(\"../theme.css\");\n.a { background: url(\"data:image/png;base64,cG5n\") }\n"
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/index.js", "--css-urls=copy"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--css-urls only means something with --lib"),
+        "{}",
+        stderr(&out)
     );
 }
 

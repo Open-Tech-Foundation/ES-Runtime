@@ -272,6 +272,10 @@ pub struct Target {
     /// it is a config error naming what was looked for rather than a build that
     /// fails later.
     pub dts_bundle: Option<String>,
+    /// `"css-urls"` — what a library's stylesheets do with the files their
+    /// `url()`s name: `"copy"` (the default) or `"inline"` (D158). Refused
+    /// off a library, as `--css-urls` is.
+    pub css_urls: CssUrls,
     /// Compile-time replacements, as `--define` makes them.
     pub define: Vec<(String, String)>,
     /// Extra `exports` conditions, as `--conditions` adds them.
@@ -367,7 +371,33 @@ const TARGET_KEYS: &[&str] = &[
     "format",
     "types",
     "dts-bundle",
+    "css-urls",
 ];
+
+/// What a library's stylesheets do with the files their `url()`s name (D158).
+///
+/// A library's CSS is copied beside its modules, and a relative `url()` in it
+/// would name a file the package does not ship. Vite's library mode always
+/// inlines; esbuild asks for a loader per extension. Both are wanted, so the
+/// target says which.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CssUrls {
+    /// Into `assets/` under a content-hashed name, the `url()` pointing at it.
+    #[default]
+    Copy,
+    /// Into the stylesheet as a `data:` URL.
+    Inline,
+}
+
+impl CssUrls {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "copy" => Some(CssUrls::Copy),
+            "inline" => Some(CssUrls::Inline),
+            _ => None,
+        }
+    }
+}
 
 /// The keys the file may carry at the top level.
 const TOP_LEVEL_KEYS: &[&str] = &[
@@ -1203,8 +1233,22 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
                  An application build emits no declarations to link."
             ));
         }
+        if map.contains_key("css-urls") {
+            return Err(format!(
+                "{file}: {at} has `css-urls` without \"lib\": true.\n\n\
+                 An application build already hashes and links the files its \
+                 stylesheets name."
+            ));
+        }
     }
     let dts_bundle = dts_bundle(map.get("dts-bundle"), file, &at, dir, &entry)?;
+    let css_urls = match map.get("css-urls") {
+        None => CssUrls::default(),
+        Some(value) => value
+            .as_str()
+            .and_then(CssUrls::parse)
+            .ok_or_else(|| format!("{file}: {at}'s `css-urls` must be \"copy\" or \"inline\""))?,
+    };
     if lib {
         if !types && dts_bundle.is_some() {
             return Err(format!(
@@ -1254,6 +1298,7 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
         formats,
         types,
         dts_bundle,
+        css_urls,
     };
 
     // An HTML target's shape is decided by the document, so the keys that would
@@ -2147,6 +2192,36 @@ mod tests {
     /// `"dts-bundle": true` needs an index to bundle from, and says so while
     /// naming what it looked for — resolved when the file is read rather than
     /// from inside a build, which is where the flag resolves it too.
+    #[test]
+    fn css_urls_is_a_library_key_with_two_values() {
+        let parse = |text: &str| parse(text, PathBuf::from("/p"), "esdev.json");
+        let project = parse(
+            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist", "css-urls": "inline"}}}}"#,
+        )
+        .expect("parse")
+        .expect("a project");
+        assert_eq!(project.targets[0].css_urls, CssUrls::Inline);
+        let project = parse(
+            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist"}}}}"#,
+        )
+        .expect("parse")
+        .expect("a project");
+        assert_eq!(project.targets[0].css_urls, CssUrls::Copy);
+        let err = parse(
+            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist", "css-urls": "both"}}}}"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains(r#"must be "copy" or "inline""#), "{err}");
+        let err = parse(
+            r#"{"build": {"targets": {"app": {"entry": "src/a.js", "out": "dist/a.js", "css-urls": "copy"}}}}"#,
+        )
+        .expect_err("refused");
+        assert!(
+            err.contains(r#"has `css-urls` without "lib": true"#),
+            "{err}"
+        );
+    }
+
     #[test]
     fn dts_bundle_true_with_no_index_says_where_to_look() {
         let err = read(

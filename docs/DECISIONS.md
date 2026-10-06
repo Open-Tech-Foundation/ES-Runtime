@@ -3246,3 +3246,19 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Shipping unscoped CSS and unscoped names.** It would make a library's classes global in its consumer's page, which is what CSS Modules exist to prevent.
 
 **Consequences:** a component library built with CSS Modules works when its consumer imports the component and its stylesheet. A file a `url()` names is still not copied by `--lib` (only `.css` is), which predates this and is not changed here.
+
+### D158 — A library's stylesheets carry the files their `url()`s name · *Accepted (2026-10-07)* · *amends D156, D157*
+
+**Context:** `--lib` copied a library's `.css` as written but not the files its `url()`s name, so `url(./bg.png)` shipped pointing at a file the package did not contain. Vite's library mode always inlines such files as base64 (`build.assetsInlineLimit` is ignored under `build.lib`); esbuild has no default and asks for a loader per extension (`file` copies under a hashed name, `dataurl` inlines).
+
+**Decision (maintainer, 2026-10-07):**
+
+- **A setting with two values**, `"css-urls"` on a library target and `--css-urls` on the command line, refused off a library: `copy` (the default) writes each file once into the output's `assets/` under a content-hashed name and points the `url()` at it, relative to the stylesheet; `inline` replaces the `url()` with a `data:` URL.
+- **Copy is the default** because it keeps a stylesheet small and an image cacheable on its own, and it is where `--lib` already puts the files a module names with `new URL()` (D155).
+- **Only the `url()`s change.** A plain stylesheet is otherwise as written (D156); `@import`s, remote, rooted and `data:` URLs, fragment-only URLs, and a path that names no file are left alone. A copied URL keeps its `?query#fragment` (`font.woff2?#iefix`); an inlined one drops it. CSS Modules (D157) follow the same setting.
+
+**Rejected:**
+- **Leaving the URL relative and copying the file unhashed beside the stylesheet.** It was the first proposal; the maintainer chose the two modes the mainstream tools offer.
+- **Copying every non-code file under the source directory** (mkdist). It ships whatever else lives in `src/`.
+
+**Consequences:** a library's stylesheets work as published in either mode, and the build line says how many files they used and whether they were copied or inlined.

@@ -210,6 +210,9 @@ pub struct BuildConfig {
     /// The entry whose declarations are linked into one file, from
     /// `--dts-bundle[=<entry>]`. `None` leaves a `.d.ts` beside each module.
     pub dts_bundle: Option<String>,
+    /// What a `--lib` build's stylesheets do with the files their `url()`s
+    /// name, from `--css-urls` or the target's `css-urls` (D158).
+    pub css_urls: crate::config::CssUrls,
     /// The project's plugins that apply to this build ([`crate::plugins`]).
     ///
     /// Passes like any other, and installed in the same list as this
@@ -482,6 +485,7 @@ fn copy_library_styles(
     dir: &Path,
     out: &Path,
     copied: &mut Vec<String>,
+    urls: &mut LibraryUrls,
 ) -> Result<(), String> {
     let read = std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     for entry in read.flatten() {
@@ -491,7 +495,7 @@ fn copy_library_styles(
             continue;
         }
         if path.is_dir() {
-            copy_library_styles(root, &path, out, copied)?;
+            copy_library_styles(root, &path, out, copied, urls)?;
         } else if path
             .extension()
             .is_some_and(|extension| extension == CSS_EXTENSION)
@@ -502,12 +506,143 @@ fn copy_library_styles(
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
             }
-            std::fs::copy(&path, &target)
-                .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+            // As written, except for what a `url()` names (D158). A file that
+            // is not text is not CSS anyone can rewrite, and goes as it is.
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    let from = path.parent().unwrap_or(Path::new("."));
+                    let code = rewrite_urls(&text, from, |file| urls.url_for(file, &target))?;
+                    std::fs::write(&target, code)
+                        .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+                }
+                Err(_) => {
+                    std::fs::copy(&path, &target)
+                        .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+                }
+            }
             copied.push(relative.to_string_lossy().replace('\\', "/"));
         }
     }
     Ok(())
+}
+
+/// What a library's stylesheets turn their `url()`s into (D158): a hashed copy
+/// in the output's `assets/`, or a `data:` URL.
+struct LibraryUrls {
+    mode: crate::config::CssUrls,
+    assets: PathBuf,
+    /// Every file a stylesheet named, once each.
+    files: std::collections::BTreeSet<PathBuf>,
+}
+
+impl LibraryUrls {
+    fn new(mode: crate::config::CssUrls, out: &Path) -> Self {
+        LibraryUrls {
+            mode,
+            assets: out.join(crate::html::ASSET_DIR),
+            files: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// The URL `file` takes in the stylesheet written at `stylesheet`.
+    fn url_for(&mut self, file: &Path, stylesheet: &Path) -> Result<String, String> {
+        let bytes =
+            std::fs::read(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+        // One file however it was spelled: a relative `url()` in a copied
+        // sheet and the absolute path a CSS Module records are the same file.
+        self.files
+            .insert(file.canonicalize().unwrap_or_else(|_| file.to_path_buf()));
+        match self.mode {
+            crate::config::CssUrls::Inline => {
+                use base64::Engine as _;
+                // `text/plain; charset=utf-8` has a space a data: URL may not.
+                let mime = crate::devserver::content_type(file).replace("; ", ";");
+                Ok(format!(
+                    "data:{mime};base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&bytes)
+                ))
+            }
+            crate::config::CssUrls::Copy => {
+                let name = crate::html::hashed_name(file, &bytes);
+                let target = self.assets.join(&name);
+                if !target.is_file() {
+                    std::fs::create_dir_all(&self.assets)
+                        .map_err(|e| format!("cannot create {}: {e}", self.assets.display()))?;
+                    std::fs::write(&target, &bytes)
+                        .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+                }
+                let from = stylesheet.parent().unwrap_or(Path::new("."));
+                let url = crate::bundler::relative_to(from, &target)
+                    .map(|url| url.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|| target.to_string_lossy().into_owned());
+                Ok(if url.starts_with("../") {
+                    url
+                } else {
+                    format!("./{url}")
+                })
+            }
+        }
+    }
+}
+
+/// Every `url()` in `css` that names a local file, replaced by what `map`
+/// makes of that file; everything else exactly as written.
+///
+/// Left alone: `@import`s (a stylesheet is copied as a stylesheet), `data:`,
+/// remote and rooted URLs, a fragment-only `#id`, and a path that names no file
+/// — a consumer may provide it, and a build cannot tell. A `?query` or
+/// `#fragment` on a file (`font.woff2?#iefix`) stays on a copied URL and is
+/// dropped from an inlined one, which has no file to ask.
+fn rewrite_urls(
+    css: &str,
+    from: &Path,
+    mut map: impl FnMut(&Path) -> Result<String, String>,
+) -> Result<String, String> {
+    static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]*))\s*\)"#)
+            .expect("a literal pattern")
+    });
+    let mut out = String::with_capacity(css.len());
+    let mut last = 0;
+    for found in URL.captures_iter(css) {
+        let whole = found.get(0).expect("a match");
+        let value = (1..=3)
+            .find_map(|group| found.get(group))
+            .map_or("", |value| value.as_str());
+        // The statement this url() is in, back to the last `;`, `{` or `}`.
+        let statement = css[..whole.start()]
+            .rfind([';', '{', '}'])
+            .map_or(0, |at| at + 1);
+        let in_import = css[statement..whole.start()]
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("@import");
+        let remote = value.is_empty()
+            || value.starts_with('#')
+            || value.starts_with('/')
+            || value.starts_with("data:")
+            || value.contains("://");
+        if in_import || remote {
+            continue;
+        }
+        let cut = value.find(['?', '#']).unwrap_or(value.len());
+        let (path, suffix) = value.split_at(cut);
+        let file = from.join(path);
+        if !file.is_file() {
+            continue;
+        }
+        let mapped = map(&file)?;
+        let suffix = if mapped.starts_with("data:") {
+            ""
+        } else {
+            suffix
+        };
+        out.push_str(&css[last..whole.start()]);
+        out.push_str(&format!("url(\"{mapped}{suffix}\")"));
+        last = whole.end();
+    }
+    out.push_str(&css[last..]);
+    Ok(out)
 }
 
 /// Writes a library's CSS Modules as the scoped stylesheets its modules use.
@@ -521,8 +656,8 @@ fn copy_library_styles(
 ///
 /// A module a `composes … from` reached is written too. A stylesheet a plugin
 /// compiled (`button.module.scss`) is written as `.css`, which is what it now
-/// is. Its `@import`s are inlined, as scoping needs them; its `url()`s are
-/// written back as paths relative to the file, as they were in the source.
+/// is. Its `@import`s are inlined, as scoping needs them; its `url()`s become
+/// what the library's `css-urls` says (D158).
 /// Plain stylesheets keep their passthrough copy. A sheet from outside the
 /// source directory is not part of the package and is left alone.
 fn write_library_modules(
@@ -530,6 +665,7 @@ fn write_library_modules(
     out: &Path,
     sheets: Vec<crate::cssmodules::Sheet>,
     written: &mut Vec<String>,
+    urls: &mut LibraryUrls,
 ) -> Result<(), String> {
     for sheet in sheets {
         if !crate::cssmodules::is_css_module(&sheet.path.to_string_lossy()) {
@@ -563,10 +699,11 @@ fn write_library_modules(
             })
             .collect();
         code.push_str(&sheet.code);
-        for referenced in &sheet.referenced {
-            code = code.replace(&referenced.placeholder, &url_to(&referenced.path));
-        }
         let target = out.join(&relative);
+        for referenced in &sheet.referenced {
+            let url = urls.url_for(&referenced.path, &target)?;
+            code = code.replace(&referenced.placeholder, &url);
+        }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
@@ -1325,8 +1462,15 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
     // `esdev.json` could describe a library build, a `--lib` target had no way
     // to name them at all.
     let mut styles = Vec::new();
-    copy_library_styles(&root, &root, &out_dir, &mut styles)?;
-    write_library_modules(&cwd.join(&root), &out_dir, scoped.take(), &mut styles)?;
+    let mut urls = LibraryUrls::new(config.css_urls, &out_dir);
+    copy_library_styles(&root, &root, &out_dir, &mut styles, &mut urls)?;
+    write_library_modules(
+        &cwd.join(&root),
+        &out_dir,
+        scoped.take(),
+        &mut styles,
+        &mut urls,
+    )?;
     styles.sort();
     styles.dedup();
     let copied = copy_assets(&config.assets, &cwd, &out_dir)?;
@@ -1336,6 +1480,17 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
             ", {} stylesheet{}",
             styles.len(),
             if styles.len() == 1 { "" } else { "s" }
+        ));
+    }
+    let used = urls.files.len();
+    if used > 0 {
+        counted.push_str(&format!(
+            ", {used} file{} from stylesheets {}",
+            if used == 1 { "" } else { "s" },
+            match config.css_urls {
+                crate::config::CssUrls::Copy => "copied",
+                crate::config::CssUrls::Inline => "inlined",
+            }
         ));
     }
     warn_about_runtime_imports(&formats, &runtime_imports);
@@ -2408,6 +2563,7 @@ async fn build_targets(
                 .collect(),
             types: target.lib && target.types,
             dts_bundle: target.dts_bundle.clone(),
+            css_urls: target.css_urls,
             plugins,
         })
         .await
@@ -2663,6 +2819,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_stylesheet_url_naming_a_local_file_is_rewritten_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("esdev-css-urls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("img")).unwrap();
+        std::fs::write(dir.join("img/bg.png"), "png").unwrap();
+        std::fs::write(dir.join("font.woff2"), "woff").unwrap();
+        let css = "@import url(\"./theme.css\");\n\
+                   .a{background:url(./img/bg.png)}\n\
+                   .b{background:URL( 'img/bg.png' )}\n\
+                   .c{background:url(data:image/gif;base64,R0)}\n\
+                   .d{background:url(https://x.test/y.png) url(/r.png) url(#f) url(./none.png)}\n\
+                   @font-face{src:url(\"font.woff2?#iefix\")}\n";
+        let copied = rewrite_urls(css, &dir, |file| {
+            Ok(format!(
+                "NEW/{}",
+                file.file_name().unwrap().to_string_lossy()
+            ))
+        })
+        .unwrap();
+        assert_eq!(
+            copied,
+            "@import url(\"./theme.css\");\n\
+             .a{background:url(\"NEW/bg.png\")}\n\
+             .b{background:url(\"NEW/bg.png\")}\n\
+             .c{background:url(data:image/gif;base64,R0)}\n\
+             .d{background:url(https://x.test/y.png) url(/r.png) url(#f) url(./none.png)}\n\
+             @font-face{src:url(\"NEW/font.woff2?#iefix\")}\n"
+        );
+        // An inlined URL has no file to put a query to.
+        let inlined = rewrite_urls(".f{src:url(font.woff2?#iefix)}", &dir, |_| {
+            Ok("data:font/woff2;base64,AA".to_string())
+        })
+        .unwrap();
+        assert_eq!(inlined, ".f{src:url(\"data:font/woff2;base64,AA\")}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_exports_target_reaches_a_file_exactly_by_pattern_or_by_folder() {
         assert!(exported("./dist/button.css", "./dist/button.css"));
         assert!(!exported("./dist/index.js", "./dist/button.css"));
@@ -2795,6 +2989,7 @@ mod tests {
             formats: Vec::new(),
             types: true,
             dts_bundle: None,
+            css_urls: crate::config::CssUrls::default(),
             plugins: Vec::new(),
         };
         let err = build_single(config).await.expect_err("refused");
