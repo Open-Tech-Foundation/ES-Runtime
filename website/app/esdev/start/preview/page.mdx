@@ -17,8 +17,10 @@ esdev preview --dir=dist --port=5000
 esdev preview --config=deploy/esdev.json   # the site another project file describes
 ```
 
-Preview serves existing output; it does not build. Missing paths fall back to
-`index.html` for client-side routes. Responses support `ETag` and
+Preview serves existing output; it does not build. When the output has a
+`404.html` at its root, every missing path is answered with that page and a
+`404` status. Without one, missing paths that look like routes (no file
+extension) fall back to `index.html` for client-side routing. Responses support `ETag` and
 `Last-Modified` revalidation (`304`) and HTTP range requests (`206`, or `416`
 when a range cannot be satisfied).
 

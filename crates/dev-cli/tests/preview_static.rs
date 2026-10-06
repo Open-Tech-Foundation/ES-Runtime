@@ -659,6 +659,46 @@ fn routing_fallbacks_and_refusals_hold() {
 }
 
 #[test]
+fn a_site_404_page_answers_every_miss_with_404() {
+    const NAME: &str = "a_site_404_page_answers_every_miss_with_404";
+    let dir = fixture(NAME);
+    std::fs::write(dir.join("404.html"), "<h1>not here</h1>").expect("404 page");
+    let (preview, port) = start(&dir);
+    let _preview = preview;
+    // A route-like miss gets the site's page, not the index, and says 404.
+    let route = get(port, &req("GET", "/missing/page", &[]));
+    assert_eq!(status(&route), "404");
+    assert_eq!(route.body, b"<h1>not here</h1>");
+    assert_eq!(
+        route.headers.get("content-type").map(String::as_str),
+        Some("text/html; charset=utf-8")
+    );
+    assert_eq!(
+        route.headers.get("cache-control").map(String::as_str),
+        Some("no-store")
+    );
+    // So does a missing asset.
+    let asset = get(port, &req("GET", "/missing.js", &[]));
+    assert_eq!(status(&asset), "404");
+    assert_eq!(asset.body, b"<h1>not here</h1>");
+    // HEAD: the length a GET would send, no body.
+    let head = get(port, &req("HEAD", "/missing/page", &[]));
+    assert_eq!(status(&head), "404");
+    assert!(head.body.is_empty());
+    assert_eq!(
+        head.headers.get("content-length").map(String::as_str),
+        Some("17")
+    );
+    // What exists is still served, and the page itself answers 200.
+    assert_eq!(status(&get(port, &req("GET", "/", &[]))), "200");
+    assert_eq!(status(&get(port, &req("GET", "/sub/", &[]))), "200");
+    assert_eq!(status(&get(port, &req("GET", "/404.html", &[]))), "200");
+    // Refusals keep their own status.
+    let up = get(port, &req("GET", "/../../etc/hostname", &[]));
+    assert_eq!(status(&up), "400");
+}
+
+#[test]
 #[cfg(unix)]
 fn symlinks_cannot_leave_the_root() {
     const NAME: &str = "symlinks_cannot_leave_the_root";

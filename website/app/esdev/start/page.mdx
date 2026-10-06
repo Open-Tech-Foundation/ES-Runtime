@@ -77,8 +77,10 @@ project and clear of every target's `out` and `outdir`; anything overlapping
 is refused when the file is read.
 
 A project with no server of its own — a static site or single-page app — has
-nothing to run, so esdev serves the output directory itself: files, an
-`index.html` fallback for client-side routes, and nothing else.
+nothing to run, so esdev serves the output directory itself: files, the
+output's `404.html` (status `404`) for a missing path when it has one, an
+`index.html` fallback for client-side routes when it does not, and nothing
+else.
 
 ## Build failures
 

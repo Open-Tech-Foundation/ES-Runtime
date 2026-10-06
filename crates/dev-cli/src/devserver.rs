@@ -487,15 +487,26 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
         }
     }
     let mut resolved = resolve(canonical_root.as_deref(), file);
+    let missing = !matches!(&resolved, Resolved::File { meta, .. } if meta.is_file())
+        && !matches!(resolved, Resolved::Outside);
+    // **A top-level 404.html is the site's answer to a miss** (D154), with a
+    // 404 status, for every missing path. A site that ships one is a set of
+    // pages, not an app shell, and the hosts it deploys to read the file the
+    // same way — so the index fallback below would show its home page at a
+    // URL that does not exist.
+    if missing
+        && let Resolved::File { file, meta, .. } =
+            resolve(canonical_root.as_deref(), root.join("404.html"))
+    {
+        respond_not_found_page(stream, head_only, file, &meta).await;
+        return;
+    }
     // **The fallback is what makes client-side routing work.** A reload on
     // /about asks for a file nobody wrote; the app's router is in the bundle
     // index.html loads. It applies only to paths that look like routes — a
     // missing .js answered with HTML is a syntax error three steps from its
     // cause, and a missing image should be a missing image.
-    if !matches!(&resolved, Resolved::File { meta, .. } if meta.is_file())
-        && !matches!(resolved, Resolved::Outside)
-        && Path::new(path).extension().is_none()
-    {
+    if missing && Path::new(path).extension().is_none() {
         resolved = resolve(canonical_root.as_deref(), root.join("index.html"));
     }
     match resolved {
@@ -537,6 +548,50 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
             serve_resolved(stream, head, head_only, file, &meta, &logical).await;
         }
     }
+}
+
+/// The site's own `404.html`, with the status it is named for.
+///
+/// No validators and no ranges: they describe a resource, and a miss is not
+/// one. `no-store` for the reason [`respond_error`] gives — the page that
+/// is missing now may be the next build's.
+async fn respond_not_found_page(
+    stream: &mut TcpStream,
+    head_only: bool,
+    mut file: std::fs::File,
+    meta: &std::fs::Metadata,
+) {
+    let len = meta.len();
+    let headers = vec![
+        (
+            "Content-Type".to_string(),
+            "text/html; charset=utf-8".to_string(),
+        ),
+        ("Content-Length".to_string(), len.to_string()),
+        ("Cache-Control".to_string(), "no-store".to_string()),
+    ];
+    if head_only {
+        let _ = respond_static(stream, "404 Not Found", &headers, None).await;
+        return;
+    }
+    if write_head(stream, "404 Not Found", &headers).await.is_err() {
+        return;
+    }
+    if len > 0
+        && copy_span(
+            &mut file,
+            crate::static_serve::Span {
+                start: 0,
+                end: len - 1,
+            },
+            stream,
+        )
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let _ = stream.flush().await;
 }
 
 /// Serves a resolved file: validators, conditionals and ranges around the

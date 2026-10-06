@@ -3174,3 +3174,16 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **`renderChunk` (rewriting chunk code).** Nothing needs it yet; it stays out until something does.
 
 **Consequences:** a framework's prerender, sitemap, search index and feeds become part of its plugin, run in the build that has the facts they need. Web-App-Framework can drop its `site-ssg` target and the path guessing in `ssg.js`, and build its route preload manifest from `files`. `"then": "run"` remains for scripts that are not plugins.
+
+### D154 — A site's `404.html` answers a miss · *Accepted (2026-10-06)* · *amends D61's preview fallback*
+
+**Context:** `esdev preview` and `esdev start` (when they serve files) answered every extensionless miss with `index.html` and `200`. That is right for a single-page app and wrong for a site of prerendered pages: a docs site showed its home page at a URL that does not exist, with a status that tells crawlers and link checkers the page is there. Such a site already says what a miss should look like — it ships a `404.html`, which is what static hosts serve.
+
+**Decision:** a regular file named `404.html` at the root of the served directory answers **every** missing path, route-like or not, with status `404`, `text/html`, `no-store`, no validators and no ranges. Without one, the index fallback is unchanged. Nothing about the project is consulted: the file's presence is the whole signal, so the rule is the same for every framework and for a folder served with `--dir`.
+
+**Rejected:**
+- **A flag or `esdev.json` key choosing SPA or MPA.** The output already says which it is; a key would be a second place to say it that can disagree with the first.
+- **Serving `404.html` only for route-like paths.** Hosts serve it for any miss, and a preview exists to show what the host will. The `404` status keeps a missing script from executing as HTML.
+- **Nested `404.html` files per directory.** Not every host honours them, and nothing has asked.
+
+**Consequences:** a prerendered site previews its real 404 page; an SPA that ships no `404.html` is unaffected. An SPA that ships one for its own reasons loses the index fallback, which is also what Cloudflare Pages does with it.

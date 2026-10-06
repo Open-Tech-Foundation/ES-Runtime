@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev preview`, and `esdev start` when it serves files, answer a missing
+  path with the output's top-level `404.html` and a `404` status when there is
+  one, instead of the home page with `200`. Without a `404.html`, the
+  `index.html` fallback for client-side routes is unchanged (D154).
+
 ## [0.16.0] - 2026-10-03
 
 ### Changed
