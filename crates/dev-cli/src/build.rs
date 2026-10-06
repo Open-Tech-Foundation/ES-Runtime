@@ -1536,6 +1536,15 @@ struct Warm {
     /// `load` hook, so a collector emptied each time would forget a file that
     /// is still imported and stop writing it.
     assets: crate::assets::Emitted,
+    /// Whether the last build on `bundler` succeeded, and so whether it holds
+    /// a module graph a hot update can be computed against.
+    ///
+    /// **Not optional to check.** A failed build leaves rolldown with no scan
+    /// snapshot, and its hot-update entry point unwraps that snapshot rather
+    /// than reporting its absence — so the save that *fixes* a syntax error
+    /// panicked the dev loop. rolldown's API has no way to ask, so the answer
+    /// is kept here, beside the bundler it describes.
+    graph: bool,
 }
 
 /// How many patch files stay on disk.
@@ -1602,8 +1611,10 @@ pub async fn forget_shipped() {
 ///
 /// `Ok(None)` means there is nothing to hot-apply and the caller should fall
 /// back to a reload — either rolldown said so (a change no patch can represent,
-/// like a tsconfig that re-transforms every module) or there is no held bundler
-/// to compute against, which is the first build.
+/// like a tsconfig that re-transforms every module), or there is no held bundler
+/// to compute against, which is the first build, or the last build failed and
+/// left it no graph ([`Warm::graph`]). The page is showing the error overlay in
+/// that last case, so the reload the full build answers with is what it needs.
 ///
 /// The patch is *written*, not returned: rolldown hands back the code and the
 /// name it should have, and leaves the writing to whoever is serving it — which
@@ -1611,6 +1622,9 @@ pub async fn forget_shipped() {
 pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
     let mut held = warm().lock().await;
     let warm = held.as_mut()?;
+    if !warm.graph {
+        return None;
+    }
     let out_dir = warm.out_dir.clone();
     let session = warm.hmr.get_or_insert_with(|| HmrSession {
         shipped: rustc_hash::FxHashMap::default(),
@@ -1738,6 +1752,7 @@ async fn build_warm(
             // a patch being computed against a ship map for a build that no
             // longer exists.
             hmr: None,
+            graph: false,
         });
     }
 
@@ -1746,6 +1761,7 @@ async fn build_warm(
     // rolldown keeps its own cache coherent across a failure — so the handle
     // stays held either way and the error is simply reported.
     let written = warm.bundler.write().await;
+    warm.graph = written.is_ok();
     record_inputs(&warm.bundler);
     let output = written.map_err(reported!())?;
     let produced = crate::adapter::produced(&output.assets);

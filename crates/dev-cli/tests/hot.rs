@@ -117,6 +117,11 @@ fn port_for(name: &str) -> u16 {
 impl Fixture {
     /// Writes a two-module project whose entry is `main`, and starts everything.
     fn start(name: &str, main: &str) -> Option<Fixture> {
+        Fixture::start_with(name, main, None)
+    }
+
+    /// [`Fixture::start`], with a project plugin module listed in `esdev.json`.
+    fn start_with(name: &str, main: &str, plugin: Option<&str>) -> Option<Fixture> {
         let browser = chromium()?;
         let dir = std::env::temp_dir().join(format!("esdev-hot-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -133,11 +138,18 @@ impl Fixture {
              <body><div id=out>pending</div></body></html>\n",
         );
         let port = port_for(name);
+        let plugins = match plugin {
+            Some(source) => {
+                write(&dir, "plugin.mjs", source);
+                r#""plugins": ["./plugin.mjs"],"#
+            }
+            None => "",
+        };
         write(
             &dir,
             "esdev.json",
             &format!(
-                r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                r#"{{ {plugins} "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
                      "dev": {{ "server": {{ "port": {port} }} }} }}"#
             ),
         );
@@ -502,7 +514,14 @@ async fn a_replaced_module_s_listeners_are_aborted() {
 fn every_fixture_gets_a_port_of_its_own() {
     // Every name passed to `Fixture::start` in this file.
     const FIXTURES: &[&str] = &[
-        "accept", "reload", "css", "dep", "signal", "keep", "overlay",
+        "accept",
+        "reload",
+        "css",
+        "dep",
+        "signal",
+        "keep",
+        "overlay",
+        "plugin-error",
     ];
 
     let mut taken: Vec<(u16, &str)> = Vec::new();
@@ -606,5 +625,90 @@ async fn a_failed_build_shows_in_the_page_until_it_is_fixed() {
         page.until("document.getElementById('out').textContent === 'TWO'")
             .await,
         "the fix never reached the page"
+    );
+}
+
+/// **A plugin's error, fixed, does not take the dev loop down.** A transform
+/// that throws fails the full build, which leaves the bundler with no module
+/// graph. The save that fixes it then asked for a hot update against that
+/// missing graph, and the bundler panicked — when the changed file was one a
+/// module had named in `dependsOn`, as a route table names its pages, since
+/// that is the path that still finds a module to update. The fix has to reach
+/// the page, and the edit after it has to hot-swap again: the graph is back.
+#[tokio::test]
+async fn a_plugin_error_fixed_does_not_stop_the_dev_loop() {
+    let Some(fixture) = Fixture::start_with(
+        "plugin-error",
+        "import { label } from \"virtual:label\";\n\
+         document.getElementById(\"out\").textContent = label;\n\
+         import.meta.hot.accept();\n",
+        Some(
+            r#"const counter = new URL("./src/counter.mjs", import.meta.url).pathname;
+export default {
+  name: "strict",
+  resolve: {
+    filter: { id: "virtual:label" },
+    handler: () => ({ id: "virtual:label", virtual: true }),
+  },
+  load: {
+    filter: { id: "virtual:label" },
+    handler: () => ({
+      code: `export { label } from ${JSON.stringify(counter)};`,
+      dependsOn: [counter],
+    }),
+  },
+  transform: {
+    filter: { id: /counter\.mjs$/ },
+    handler(code) {
+      if (code.includes("BROKEN")) throw new Error("strict: BROKEN is not allowed");
+      return null;
+    },
+  },
+};
+"#,
+        ),
+    ) else {
+        eprintln!("skipped: no chromium on this machine");
+        return;
+    };
+
+    let mut page = Page::open(&fixture).await;
+    assert_eq!(
+        page.eval("document.getElementById('out').textContent")
+            .await,
+        "ONE"
+    );
+
+    fixture.edit("src/counter.mjs", "export const label = \"BROKEN\";\n");
+    assert!(
+        page.until("document.getElementById('__esdev_err') !== null")
+            .await,
+        "no overlay for the plugin's error"
+    );
+
+    fixture.edit("src/counter.mjs", "export const label = \"TWO\";\n");
+    assert!(
+        page.until("document.getElementById('out').textContent === 'TWO'")
+            .await,
+        "the fix never reached the page: the dev loop stopped"
+    );
+    assert!(
+        page.until("document.getElementById('__esdev_err') === null")
+            .await,
+        "the fix did not clear the overlay"
+    );
+
+    // The graph is whole again: the next edit is a patch, not a reload.
+    page.eval(MARK).await;
+    fixture.edit("src/counter.mjs", "export const label = \"THREE\";\n");
+    assert!(
+        page.until("document.getElementById('out').textContent === 'THREE'")
+            .await,
+        "the edit after the fix never arrived"
+    );
+    assert_eq!(
+        page.eval("window.__esdev_test_marker").await,
+        "here",
+        "the edit after the fix reloaded the page instead of patching it"
     );
 }

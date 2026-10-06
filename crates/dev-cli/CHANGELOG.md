@@ -45,6 +45,12 @@ is the point, since none of the three has any business in a deployment.
   paths were handled, so the file was missing from `dist/` and 404'd. It works
   in builds, the dev loop, `esdev preview`, `esdev test --browser` and `--lib`
   builds (D155).
+- `esdev start` no longer panics in the bundler on the save that fixes a
+  build error. A failed build leaves the bundler with no module graph, and
+  the next hot update was computed against it anyway; it crashed whenever the
+  changed file was one a plugin had named in `dependsOn` (an OTF Web page, for
+  example). The first build after a failure now reloads the page, and hot
+  updates resume from the edit after it.
 
 ## [0.16.0] - 2026-10-03
 
