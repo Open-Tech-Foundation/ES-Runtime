@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build",
-    "preview": "esdev preview",
+    "preview": "esdev preview --spa",
     "test": "esdev test --dom"
   },
   "dependencies": {

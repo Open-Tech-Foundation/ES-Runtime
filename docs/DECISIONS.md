@@ -3175,15 +3175,21 @@ The day before, the same reasoning had been taken one step further and an out-of
 
 **Consequences:** a framework's prerender, sitemap, search index and feeds become part of its plugin, run in the build that has the facts they need. Web-App-Framework can drop its `site-ssg` target and the path guessing in `ssg.js`, and build its route preload manifest from `files`. `"then": "run"` remains for scripts that are not plugins.
 
-### D154 — A site's `404.html` answers a miss · *Accepted (2026-10-06)* · *amends D61's preview fallback*
+### D154 — `esdev preview` serves a static site; `--spa` asks for the index fallback · *Accepted (2026-10-06)* · *amends the preview decision's index fallback*
 
-**Context:** `esdev preview` and `esdev start` (when they serve files) answered every extensionless miss with `index.html` and `200`. That is right for a single-page app and wrong for a site of prerendered pages: a docs site showed its home page at a URL that does not exist, with a status that tells crawlers and link checkers the page is there. Such a site already says what a miss should look like — it ships a `404.html`, which is what static hosts serve.
+**Context:** `esdev preview` answered every extensionless miss with `index.html` and `200`. That is right for a single-page app and wrong for a site of pages: a docs site showed its home page at a URL that does not exist, with a status that tells crawlers and link checkers the page is there, and its own `404.html` was never served. Static servers and hosts mostly start from the other end. `serve` and `sirv-cli` 404 by default and take `--single` for the fallback; `serve`, `http-server` and GitHub Pages serve a root `404.html` on a miss; Deno's `file_server` and Bun's `{ dir }` routes have no fallback at all. Vite's preview falls back by default, from `appType` in its config.
 
-**Decision:** a regular file named `404.html` at the root of the served directory answers **every** missing path, route-like or not, with status `404`, `text/html`, `no-store`, no validators and no ranges. Without one, the index fallback is unchanged. Nothing about the project is consulted: the file's presence is the whole signal, so the rule is the same for every framework and for a folder served with `--dir`.
+**Decision:**
+
+- **`esdev preview` is a static server by default.** A miss is a `404`, with the served directory's top-level `404.html` as the body when it has one (`text/html`, `no-store`, no validators or ranges), for any path, route-like or not.
+- **`--spa` turns on the index fallback**: an extensionless miss gets `index.html` with `200`, and other misses a plain `404`. `404.html` is not consulted, because the router in the bundle owns every route.
+- **The dev loop keeps the index fallback.** `esdev start` serving a frontend is unchanged; it is the inner loop, not the deployment, and the preview is where the deployment is checked. The shared file server takes the choice as a setting (`devserver::Miss`), so neither command's answer leaks into the other's.
 
 **Rejected:**
-- **A flag or `esdev.json` key choosing SPA or MPA.** The output already says which it is; a key would be a second place to say it that can disagree with the first.
-- **Serving `404.html` only for route-like paths.** Hosts serve it for any miss, and a preview exists to show what the host will. The `404` status keeps a missing script from executing as HTML.
+- **Guessing from the output** (Cloudflare Pages: SPA unless a `404.html` exists). An SPA may ship a `404.html` and a site may not, and a preview that guessed would be showing a decision it made rather than the one the host will make.
+- **SPA by default with an opt-out** (Vite). The miss a docs site gets wrong is silent; the one an SPA gets wrong is a visible 404 on reload, which names its fix in `--help`.
+- **An `esdev.json` key.** A flag is enough for a command run by hand or from one `package.json` script, and adding a key is a second place to say it.
+- **A fallback file name (`--spa=shell.html`, as `sirv-cli` takes).** Nothing has asked for it.
 - **Nested `404.html` files per directory.** Not every host honours them, and nothing has asked.
 
-**Consequences:** a prerendered site previews its real 404 page; an SPA that ships no `404.html` is unaffected. An SPA that ships one for its own reasons loses the index fallback, which is also what Cloudflare Pages does with it.
+**Consequences:** a site previews its real 404 page and status. An SPA's preview needs `--spa`; its `package.json` script says so once. This is a breaking change to `esdev preview`'s default and the changelog says so.

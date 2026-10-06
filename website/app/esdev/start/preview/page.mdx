@@ -17,12 +17,24 @@ esdev preview --dir=dist --port=5000
 esdev preview --config=deploy/esdev.json   # the site another project file describes
 ```
 
-Preview serves existing output; it does not build. When the output has a
-`404.html` at its root, every missing path is answered with that page and a
-`404` status. Without one, missing paths that look like routes (no file
-extension) fall back to `index.html` for client-side routing. Responses support `ETag` and
+Preview serves existing output; it does not build. It serves the output the
+way a static host does: a missing path gets a `404` status, with the output's
+top-level `404.html` as the page when it has one. Responses support `ETag` and
 `Last-Modified` revalidation (`304`) and HTTP range requests (`206`, or `416`
 when a range cannot be satisfied).
+
+## Single-page apps
+
+A client-side router needs every route to load `index.html`. Pass `--spa` so
+that a missing path with no file extension gets `index.html` with a `200`:
+
+```sh
+esdev preview --spa
+```
+
+Missing files with an extension, such as `/app.js`, still get a `404`.
+
+## Server bundles
 
 A server bundle has no static output to preview. Run it under `esrun`, as it
 will run in production.
@@ -35,8 +47,8 @@ the dev loop.
 
 `--dir` serves whatever folder you point it at — no project, no `esdev.json`,
 no `npx serve` or `python3 -m http.server`. The folder needs an `index.html`
-at its root; everything else is served as-is, with the same fallback,
-validators, and ranges as above.
+at its root; everything else is served as-is, with the same `404` handling,
+`--spa`, validators, and ranges as above.
 
 ```sh
 esdev preview --dir=./public        # → http://127.0.0.1:4173

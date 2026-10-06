@@ -2,7 +2,7 @@
 //!
 //! Drives the real binary the way a developer would — `esdev preview
 //! --dir=<fixture>` — and asserts the wire: validators and `304`s, single
-//! and multiple ranges, `416`s, `HEAD`, the SPA fallback, and the traversal
+//! and multiple ranges, `416`s, `HEAD`, misses with and without `--spa`, and the traversal
 //! and symlink refusals. Unit coverage of the parsing and decisions lives
 //! beside the code (`static_serve.rs`); what is asserted here is that the
 //! server built on it answers correctly end to end.
@@ -537,9 +537,9 @@ fn unsatisfiable_ranges_and_conditional_ranges() {
 fn routing_fallbacks_and_refusals_hold() {
     const NAME: &str = "routing_fallbacks_and_refusals_hold";
     let dir = fixture(NAME);
-    let (preview, port) = start(&dir);
+    let (preview, port) = start_with(&dir, &["--spa".to_string()]);
     let _preview = preview;
-    // Extensionless misses fall back to the app shell; real files 404 —
+    // With --spa, extensionless misses fall back to the app shell; real files 404 —
     // while a directory serves its own index rather than falling back.
     let a = get(port, &req("GET", "/about", &[]));
     assert_eq!(status(&a), "200");
@@ -659,6 +659,22 @@ fn routing_fallbacks_and_refusals_hold() {
 }
 
 #[test]
+fn a_miss_is_a_404_by_default() {
+    const NAME: &str = "a_miss_is_a_404_by_default";
+    let dir = fixture(NAME);
+    let (preview, port) = start(&dir);
+    let _preview = preview;
+    // No fallback without --spa: a route-like miss is a miss.
+    let route = get(port, &req("GET", "/about", &[]));
+    assert_eq!(status(&route), "404");
+    assert_ne!(route.body, b"<h1>site</h1>");
+    assert_eq!(status(&get(port, &req("GET", "/missing.js", &[]))), "404");
+    // What exists is still served, directories by their index.
+    assert_eq!(get(port, &req("GET", "/", &[])).body, b"<h1>site</h1>");
+    assert_eq!(get(port, &req("GET", "/sub/", &[])).body, b"<h1>sub</h1>");
+}
+
+#[test]
 fn a_site_404_page_answers_every_miss_with_404() {
     const NAME: &str = "a_site_404_page_answers_every_miss_with_404";
     let dir = fixture(NAME);
@@ -696,6 +712,20 @@ fn a_site_404_page_answers_every_miss_with_404() {
     // Refusals keep their own status.
     let up = get(port, &req("GET", "/../../etc/hostname", &[]));
     assert_eq!(status(&up), "400");
+}
+
+#[test]
+fn spa_routes_reach_the_index_even_beside_a_404_page() {
+    const NAME: &str = "spa_routes_reach_the_index_even_beside_a_404_page";
+    let dir = fixture(NAME);
+    std::fs::write(dir.join("404.html"), "<h1>not here</h1>").expect("404 page");
+    let (preview, port) = start_with(&dir, &["--spa".to_string()]);
+    let _preview = preview;
+    // The flag says the output is an app: its router owns every route.
+    let route = get(port, &req("GET", "/missing/page", &[]));
+    assert_eq!(status(&route), "200");
+    assert_eq!(route.body, b"<h1>site</h1>");
+    assert_eq!(status(&get(port, &req("GET", "/missing.js", &[]))), "404");
 }
 
 #[test]

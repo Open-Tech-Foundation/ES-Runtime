@@ -15,10 +15,15 @@
 //! What this does is deliberately small: it serves a directory. It does not
 //! build (that is `esdev build`, and running it for you would make "preview the
 //! thing I am about to ship" mean "ship something I have not seen"), it patches
-//! nothing, and it holds no watcher. The one piece of behaviour it keeps from
-//! the dev server is the **index fallback** — a reload on `/about` has to reach
-//! the router in the bundle, and a preview that 404s there would be answering a
-//! question about itself rather than about the build.
+//! nothing, and it holds no watcher.
+//!
+//! A miss is a **404**, with the site's own `404.html` when it ships one: that
+//! is what a static host does, so it is what a preview shows. The dev loop's
+//! **index fallback** — a reload on `/about` reaching the router in the
+//! bundle — is `--spa`, said by whoever knows the output is an app (D154).
+//! Not guessed from the files: an SPA may ship a `404.html` and a site may
+//! not, and a preview that guessed would be answering a question about itself
+//! rather than about the deployment.
 //!
 //! # It is not a production server
 //!
@@ -39,6 +44,8 @@ pub struct PreviewConfig {
     pub port: Option<u16>,
     /// `--config`, for a project whose file is not `./esdev.json`.
     pub config: Option<String>,
+    /// `--spa`: answer a route-like miss with `index.html`.
+    pub spa: bool,
 }
 
 /// The port a preview opens when none was named.
@@ -102,6 +109,11 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
         reload,
         error,
         proxy: crate::proxy::Rule::from_config(&project.start.proxy),
+        miss: if config.spa {
+            crate::devserver::Miss::Spa
+        } else {
+            crate::devserver::Miss::Static
+        },
     });
 
     let paint = crate::style::Palette::stderr();

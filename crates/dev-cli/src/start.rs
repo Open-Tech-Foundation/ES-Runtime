@@ -292,6 +292,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             reload: reload.clone(),
             error: error.clone(),
             proxy: crate::proxy::Rule::from_config(&project.start.proxy),
+            miss: crate::devserver::Miss::Spa,
         }),
     ));
 

@@ -24,12 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- `esdev preview`, and `esdev start` when it serves files, answer a missing
-  path with the output's top-level `404.html` and a `404` status when there is
-  one, instead of the home page with `200`. Without a `404.html`, the
-  `index.html` fallback for client-side routes is unchanged (D154).
+- **Breaking:** `esdev preview` serves a static site by default. A missing path
+  is a `404`, with the output's top-level `404.html` as the page when it has
+  one, instead of the home page with `200`. Pass `--spa` for the `index.html`
+  fallback a client-side router needs. `esdev start` keeps the fallback (D154).
+  The `spa` template's `preview` script passes `--spa`.
 
 ## [0.16.0] - 2026-10-03
 

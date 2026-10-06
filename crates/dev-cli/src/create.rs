@@ -3513,15 +3513,17 @@ mod tests {
                 "{template} {mode:?}: wrong preview script"
             );
         }
-        for (template, language, styling, blog) in [
-            ("spa", "js", Some("css"), None),
-            ("spa", "ts", Some("css"), None),
-            ("docs", "js", None, Some(true)),
-            ("docs", "ts", None, Some(false)),
+        // A client-side router owns every route, so its preview asks for the
+        // index fallback; a site of pages is served as it is.
+        for (template, language, styling, blog, script) in [
+            ("spa", "js", Some("css"), None, "esdev preview --spa"),
+            ("spa", "ts", Some("css"), None, "esdev preview --spa"),
+            ("docs", "js", None, Some(true), "esdev preview"),
+            ("docs", "ts", None, Some(false), "esdev preview"),
         ] {
             assert_eq!(
                 scripts(&otf_written(template, language, styling, blog))["preview"],
-                serde_json::json!("esdev preview"),
+                serde_json::json!(script),
                 "{template} {language}: wrong preview script"
             );
         }

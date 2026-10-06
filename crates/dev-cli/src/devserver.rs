@@ -153,6 +153,21 @@ pub struct DevServer {
     /// Path prefixes forwarded to another server (`dev.server.proxy`, D150),
     /// longest first. Asked after esdev's own paths and before the files.
     pub proxy: Vec<crate::proxy::Rule>,
+    /// What a request for a file that is not there gets.
+    pub miss: Miss,
+}
+
+/// What a request for a missing file is answered with (D154).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Miss {
+    /// A single-page app: a path that looks like a route (no extension) gets
+    /// `index.html`, so a reload reaches the router in the bundle. Anything
+    /// else is a plain 404. The dev loop's answer, and `esdev preview --spa`'s.
+    Spa,
+    /// A static site: every miss is a 404, with the site's own top-level
+    /// `404.html` as the body when it ships one. `esdev preview`'s default,
+    /// because it is what a static host does.
+    Static,
 }
 
 /// Accepts connections until the process ends.
@@ -249,7 +264,7 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
         .await;
         return;
     };
-    serve_file(&mut stream, root, &path, &head).await;
+    serve_file(&mut stream, root, &path, &head, server.miss).await;
 }
 
 /// An error answer: `text/plain` with the length a GET would carry, and no
@@ -382,7 +397,7 @@ async fn updates(
 /// chunks: full, single-range and multi-range alike, so no request ever
 /// holds a file (or a span of one) in memory whole. The conditionals and
 /// ranges parse the head already in memory.
-async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str) {
+async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str, miss: Miss) {
     let head_only = match crate::inspect::request_method(head) {
         Some("GET") => false,
         Some("HEAD") => true,
@@ -489,25 +504,29 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str)
     let mut resolved = resolve(canonical_root.as_deref(), file);
     let missing = !matches!(&resolved, Resolved::File { meta, .. } if meta.is_file())
         && !matches!(resolved, Resolved::Outside);
-    // **A top-level 404.html is the site's answer to a miss** (D154), with a
-    // 404 status, for every missing path. A site that ships one is a set of
-    // pages, not an app shell, and the hosts it deploys to read the file the
-    // same way — so the index fallback below would show its home page at a
-    // URL that does not exist.
-    if missing
-        && let Resolved::File { file, meta, .. } =
-            resolve(canonical_root.as_deref(), root.join("404.html"))
-    {
-        respond_not_found_page(stream, head_only, file, &meta).await;
-        return;
-    }
-    // **The fallback is what makes client-side routing work.** A reload on
-    // /about asks for a file nobody wrote; the app's router is in the bundle
-    // index.html loads. It applies only to paths that look like routes — a
-    // missing .js answered with HTML is a syntax error three steps from its
-    // cause, and a missing image should be a missing image.
-    if missing && Path::new(path).extension().is_none() {
-        resolved = resolve(canonical_root.as_deref(), root.join("index.html"));
+    match miss {
+        // **A static site's own 404.html is its answer to a miss**, with the
+        // status it is named for — what GitHub Pages, Cloudflare Pages and
+        // `serve` all do with the file.
+        Miss::Static => {
+            if missing
+                && let Resolved::File { file, meta, .. } =
+                    resolve(canonical_root.as_deref(), root.join("404.html"))
+            {
+                respond_not_found_page(stream, head_only, file, &meta).await;
+                return;
+            }
+        }
+        // **The fallback is what makes client-side routing work.** A reload on
+        // /about asks for a file nobody wrote; the app's router is in the bundle
+        // index.html loads. It applies only to paths that look like routes — a
+        // missing .js answered with HTML is a syntax error three steps from its
+        // cause, and a missing image should be a missing image.
+        Miss::Spa => {
+            if missing && Path::new(path).extension().is_none() {
+                resolved = resolve(canonical_root.as_deref(), root.join("index.html"));
+            }
+        }
     }
     match resolved {
         Resolved::Outside => {

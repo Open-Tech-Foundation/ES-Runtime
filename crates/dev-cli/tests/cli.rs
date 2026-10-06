@@ -10568,7 +10568,7 @@ fn preview_serves_the_build_with_a_route_fallback() {
     let port = test_port("preview");
     let mut command = esdev_in(&dir);
     command
-        .args(["preview", &format!("--port={port}")])
+        .args(["preview", "--spa", &format!("--port={port}")])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     #[cfg(unix)]
@@ -10584,7 +10584,7 @@ fn preview_serves_the_build_with_a_route_fallback() {
     // the half `esdev start` cannot show.
     assert!(index.contains("/assets/main-"), "{index}");
 
-    // A reload on a route the router owns has to reach the router.
+    // With --spa, a reload on a route the router owns has to reach the router.
     let route = http_get(port, "/about").expect("a response");
     assert!(route.contains("200 OK"), "{route}");
     assert!(route.contains("<script"), "{route}");
@@ -10592,6 +10592,17 @@ fn preview_serves_the_build_with_a_route_fallback() {
     // …and a missing file that is not a route is still missing.
     let missing = http_get(port, "/nope.js").expect("a response");
     assert!(missing.contains("404"), "{missing}");
+}
+
+/// `--spa` is a switch: a value would read as a fallback file it does not take.
+#[test]
+fn preview_spa_takes_no_value() {
+    let out = esdev()
+        .args(["preview", "--spa=shell.html", "--dir=."])
+        .output()
+        .expect("spawn esdev preview");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(stderr(&out).contains("--spa"), "{}", stderr(&out));
 }
 
 /// A server bundle is run, not served — and by the binary that will run it in
@@ -12020,8 +12031,8 @@ fn otf_templates_scaffold_from_flags() {
         "no compiler beside the config: {manifest}"
     );
     assert!(
-        manifest.contains(r#""preview": "esdev preview""#),
-        "no preview of what it builds: {manifest}"
+        manifest.contains(r#""preview": "esdev preview --spa""#),
+        "no preview of what it builds, with its router's fallback: {manifest}"
     );
 
     // Unattended, the language takes its default and styling adds nothing:

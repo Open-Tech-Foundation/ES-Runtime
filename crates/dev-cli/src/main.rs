@@ -335,12 +335,15 @@ OPTIONS:
     --port=<n>                  The port to open (default 4173, or any free one
                                 if that is taken)
     --config=<path>             Read this instead of ./esdev.json
+    --spa                       Answer a missing path that looks like a route
+                                with index.html, for a client-side router
     -h, --help                  Show this help
 
 It serves; it does not build. The dev loop's build is not the one that ships —
 NODE_ENV is \"development\" there and nothing is content-hashed — so this is where
-a release build gets looked at before it is deployed. Missing paths that look
-like routes fall back to index.html, as they must for a client-side router.
+a release build gets looked at before it is deployed. A missing path is a 404,
+with the output's 404.html when it has one; --spa sends route-like paths to
+index.html instead.
 
 Loopback only, like every endpoint esdev opens. A project whose output is a
 server bundle has nothing to serve: run it under esrun, which is what will run
@@ -1242,6 +1245,7 @@ fn parse_preview(args: impl Iterator<Item = String>) -> Result<PreviewConfig, St
     let mut dir = None;
     let mut port = None;
     let mut config = None;
+    let mut spa = false;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1252,6 +1256,10 @@ fn parse_preview(args: impl Iterator<Item = String>) -> Result<PreviewConfig, St
             }
             "--dir" => dir = Some(require_value(flag, value)?.to_string()),
             "--config" => config = Some(require_value(flag, value)?.to_string()),
+            "--spa" => {
+                reject_value(flag, value)?;
+                spa = true;
+            }
             "--port" => {
                 let text = require_value(flag, value)?;
                 port = Some(text.parse::<u16>().map_err(|_| {
@@ -1263,7 +1271,12 @@ fn parse_preview(args: impl Iterator<Item = String>) -> Result<PreviewConfig, St
             }
         }
     }
-    Ok(PreviewConfig { dir, port, config })
+    Ok(PreviewConfig {
+        dir,
+        port,
+        config,
+        spa,
+    })
 }
 
 /// Parses `esdev create <dir> [options]`.
