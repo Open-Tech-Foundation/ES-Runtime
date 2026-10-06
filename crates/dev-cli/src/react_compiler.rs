@@ -72,7 +72,7 @@ impl Pass for ReactCompiler {
             }
             let (result, diagnostics) = transform_module(code, id, module_type, self.ssr)?;
             for diagnostic in diagnostics {
-                ctx.log("warn", format!("{id}: {}", diagnostic.message));
+                ctx.log("warn", self.name(), format!("{id}: {}", diagnostic.message));
             }
             Ok(result)
         })

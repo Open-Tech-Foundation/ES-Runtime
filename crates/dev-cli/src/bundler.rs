@@ -82,6 +82,30 @@ pub fn warn(message: String) {
     }
 }
 
+/// What a plugin says through `ctx.warn()`, `ctx.info()` and `ctx.debug()`,
+/// printed the same way whichever command ran it.
+///
+/// **Warn and info are shown; debug is not** — rollup's default level. A
+/// warning is a warning, deduplicated like the bundler's own. An info line is
+/// something the plugin chose to say, and dropping it in one command while
+/// printing it in another made the same plugin look different under
+/// `esdev build` and `esdev test`.
+pub fn plugin_log(level: &str, plugin: Option<&str>, message: &str) {
+    let line = match plugin {
+        Some(plugin) if !plugin.is_empty() => format!("{plugin}: {message}"),
+        _ => message.to_string(),
+    };
+    match level {
+        "debug" => {}
+        "info" => eprintln!(
+            "{} {}",
+            crate::style::Palette::stderr().bold("info:"),
+            line.trim_end()
+        ),
+        _ => warn(line),
+    }
+}
+
 /// Prints the warnings a finished build carries — the bundler's own, which it
 /// hands back with the output rather than through its log. A macro for the
 /// reason [`failures!`] is one: the diagnostic type is rolldown's.
@@ -605,16 +629,21 @@ pub fn translate(
             }
         }),
         resolve: Some(resolve),
-        // Where `this.warn()` ends up. Info and debug are dropped: a build that
-        // reported every `this.debug()` as a warning would train whoever reads
-        // the list to stop reading it.
+        // Where `ctx.warn()` ends up: the sink, which prints or collects.
+        // `ctx.info()` is printed wherever the build runs, as
+        // [`plugin_log`] prints it for every other context; `ctx.debug()` is
+        // not shown, so a plugin can leave it in.
         on_log: on_log.map(|sink| {
             rolldown_common::OnLog::new(Arc::new(move |level, log: rolldown_common::Log| {
-                if matches!(level, rolldown_common::LogLevel::Warn) {
-                    sink(match &log.plugin {
+                match level {
+                    rolldown_common::LogLevel::Warn => sink(match &log.plugin {
                         Some(plugin) => format!("{plugin}: {}", log.message),
                         None => log.message.clone(),
-                    });
+                    }),
+                    rolldown_common::LogLevel::Info => {
+                        plugin_log("info", log.plugin.as_deref(), &log.message);
+                    }
+                    _ => {}
                 }
                 Box::pin(async { Ok(()) })
             }))

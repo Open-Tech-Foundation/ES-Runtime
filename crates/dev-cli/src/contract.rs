@@ -320,8 +320,11 @@ pub trait Context: Send + Sync {
     /// reference the emitter can ask for the final file name by.
     fn emit(&self, emit: Emit) -> Result<String, String>;
 
-    /// A diagnostic. `"warn"`, `"info"` or `"debug"`.
-    fn log(&self, level: &str, message: String);
+    /// A diagnostic from the plugin named `plugin`: `"warn"`, `"info"` or
+    /// `"debug"`. Every context reports them the same way
+    /// ([`crate::bundler::plugin_log`]), so a plugin says the same thing under
+    /// `esdev build` as under `esdev test`.
+    fn log(&self, level: &str, plugin: &str, message: String);
 
     /// A file the module being processed depends on. Prefer returning
     /// [`ModuleResult::depends_on`]; this exists for the whole-build hooks,

@@ -136,6 +136,9 @@ function failure(err) {
 // so that it does not show up in whatever the plugin logs.
 const REPORTED = Symbol("reported");
 
+// A plugin's name, kept beside its handlers so a diagnostic can say whose it is.
+const PLUGIN_NAME = Symbol("plugin name");
+
 function invoke(call) {
   const target = registry.get(call.plugin);
   if (target === undefined) return null;
@@ -151,13 +154,13 @@ function invoke(call) {
   // Every hook is *data first, context last*, with nothing positional in
   // between — anything a particular hook needs to say (`isEntry`, on a
   // resolve) rides on the context instead of shifting the signature.
-  return handler(...call.args, context(call.id, call.meta));
+  return handler(...call.args, context(call.id, call.meta, target[PLUGIN_NAME] ?? ""));
 }
 
 // A hook's context: the bundler's own, for exactly as long as that hook runs.
 // Reaching into it afterwards throws, because by then it may name a build that
 // no longer exists.
-function context(id, meta) {
+function context(id, meta, plugin) {
   return {
     ...meta,
     // The bundler's own resolver, mid-hook. `null` when nothing resolves.
@@ -169,16 +172,21 @@ function context(id, meta) {
       return ops.build_emit(id, file);
     },
     warn(log) {
-      ops.build_log(id, "warn", message(log));
+      ops.build_log(id, "warn", message(log), plugin);
       return undefined;
     },
     info(log) {
-      ops.build_log(id, "info", message(log));
+      ops.build_log(id, "info", message(log), plugin);
       return undefined;
     },
     debug(log) {
-      ops.build_log(id, "debug", message(log));
+      ops.build_log(id, "debug", message(log), plugin);
       return undefined;
+    },
+    // Not a member: the levels are methods of their own. Here so the slip
+    // names them, rather than reading as `ctx.log is not a function`.
+    log() {
+      throw new TypeError("ctx has no log() — call ctx.warn(), ctx.info() or ctx.debug()");
     },
     // Fails the build. Throws — it does not return, because the plugin is
     // saying the build cannot continue and returning would pretend otherwise.
@@ -347,6 +355,24 @@ function filterOf(name, hook, filter) {
 // optionally a filter and an order. A bare function is rollup's shorthand and
 // is refused — accepting it would make the filter, the order and the context
 // argument optional extras on somebody else's design.
+// What each hook's handler is called with, the context always last. A
+// handler that declares more parameters than its hook passes has the wrong
+// hook's signature — `load(code, id, ctx)` written from `transform`'s — and
+// the slip otherwise surfaces as `ctx` being undefined somewhere inside it.
+// `handler.length` is known when the plugin is declared, so it is refused
+// there, naming the signature. Fewer parameters are fine: a handler may ignore
+// what it does not need.
+const PARAMETERS = {
+  start: ["ctx"],
+  resolve: ["source", "importer", "ctx"],
+  load: ["id", "ctx"],
+  transform: ["code", "id", "ctx"],
+  end: ["error", "ctx"],
+  bundle: ["output", "ctx"],
+  html: ["html", "id", "ctx"],
+  finish: ["targets", "ctx"],
+};
+
 function hookOf(name, hook, declared) {
   if (typeof declared === "function") {
     throw new TypeError(
@@ -359,6 +385,13 @@ function hookOf(name, hook, declared) {
   }
   if (typeof declared.handler !== "function") {
     throw new TypeError(`${name}.${hook}: handler must be a function`);
+  }
+  const parameters = PARAMETERS[hook];
+  if (parameters && declared.handler.length > parameters.length) {
+    throw new TypeError(
+      `${name}.${hook}: ${hook} takes (${parameters.join(", ")}), ` +
+        `but the handler declares ${declared.handler.length} parameters`,
+    );
   }
   const spec = {};
   const filter = filterOf(name, hook, declared.filter);
@@ -395,6 +428,7 @@ function describe(plugin, index) {
   // honoured only in a hot dev build of a target that named a `refresh` scheme,
   // because the registrations call globals only a hot loop installs.
   const jsx = plugin.jsx == null ? undefined : { refresh: plugin.jsx.refresh === true };
+  Object.defineProperty(handlers, PLUGIN_NAME, { value: name });
   return { id: register(handlers), name, hooks, ...(jsx ? { jsx } : {}) };
 }
 

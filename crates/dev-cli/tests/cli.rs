@@ -13320,6 +13320,106 @@ fn regex_like_find(text: &str, start: &str, end: &str) -> Option<String> {
 /// turns any other error from a `load` into "Could not load x — plugin `p`
 /// threw an error" and drops the cause, which is the only part that says what
 /// went wrong.
+/// A handler with more parameters than its hook passes has another hook's
+/// signature — `load(code, id, ctx)` copied from `transform` — and is refused
+/// when the plugin is declared, naming the signature, rather than failing later
+/// as `ctx` being undefined. `ctx.log()` names the methods that exist.
+#[test]
+fn a_plugin_with_the_wrong_signature_or_ctx_log_is_told_which() {
+    let dir = build_dir("p_plugins_signature");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.mjs", "console.log(1);\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./plugin.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
+    );
+
+    write_in(
+        &dir,
+        "plugin.mjs",
+        "export default { name: \"slip\", load: { handler(code, id, ctx) { return null; } } };\n",
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains("slip.load: load takes (id, ctx), but the handler declares 3 parameters"),
+        "{text}"
+    );
+
+    // Fewer parameters than the hook passes are fine.
+    write_in(
+        &dir,
+        "plugin.mjs",
+        "export default { name: \"ok\", transform: { handler(code) { return null; } } };\n",
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    write_in(
+        &dir,
+        "plugin.mjs",
+        "export default { name: \"logger\", transform: { handler(code, id, ctx) { ctx.log(\"hi\"); return null; } } };\n",
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains("ctx has no log() — call ctx.warn(), ctx.info() or ctx.debug()"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A plugin's `ctx.warn()` and `ctx.info()` read the same under `esdev build`
+/// and `esdev test`, and `ctx.debug()` is shown by neither.
+#[test]
+fn a_plugin_says_the_same_thing_under_build_and_test() {
+    let dir = build_dir("p_plugins_logs");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"export default {
+  name: "talk",
+  transform: {
+    filter: { id: /src\/x\.js$/ },
+    handler(code, id, ctx) {
+      ctx.warn("careful here");
+      ctx.info("compiled x");
+      ctx.debug("internal detail");
+      return null;
+    },
+  },
+};
+"#,
+    );
+    write_in(&dir, "src/x.js", "export const x = 1;\n");
+    write_in(
+        &dir,
+        "src/x.test.js",
+        "import { test, expect } from \"runtime:test\";\nimport { x } from \"./x.js\";\ntest(\"x\", () => expect(x).toBe(1));\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./plugin.mjs"], "build": {"targets": {"app": {"entry": "src/x.js", "out": "dist/x.js"}}}}"#,
+    );
+    for command in ["build", "test"] {
+        let out = esdev_in(&dir).arg(command).output().expect("spawn esdev");
+        let text = format!("{}{}", stdout(&out), stderr(&out));
+        assert!(out.status.success(), "{command}: {text}");
+        assert!(
+            text.contains("warning: talk: careful here"),
+            "{command}: {text}"
+        );
+        assert!(text.contains("info: talk: compiled x"), "{command}: {text}");
+        assert!(!text.contains("internal detail"), "{command}: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_failing_load_reports_the_plugins_own_message() {
     let dir = build_dir("p_plugins_load_fails");

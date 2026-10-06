@@ -473,8 +473,8 @@ impl contract::Context for RunContext {
         Err(self.emit_refused.to_string())
     }
 
-    fn log(&self, level: &str, message: String) {
-        eprintln!("esdev: plugin {level}: {message}");
+    fn log(&self, level: &str, plugin: &str, message: String) {
+        crate::bundler::plugin_log(level, Some(plugin), &message);
     }
 
     fn depends_on(&self, _file: &str) {}

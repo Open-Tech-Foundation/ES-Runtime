@@ -415,10 +415,11 @@ impl HostExtension for BuildExtension {
             let call = arg_id(&args, 0);
             let level = arg_str(&args, 1);
             let message = arg_str(&args, 2);
+            let plugin = arg_str(&args, 3);
             let Some(ctx) = this.bridge.context(call) else {
                 return Err(context_expired());
             };
-            ctx.log(&level, message);
+            ctx.log(&level, &plugin, message);
             Ok(Value::Undefined)
         }));
 

@@ -145,7 +145,7 @@ impl contract::Context for HookCtx {
         }
     }
 
-    fn log(&self, level: &str, message: String) {
+    fn log(&self, level: &str, _plugin: &str, message: String) {
         let log = rolldown::plugin::LogWithoutPlugin {
             message,
             ..Default::default()

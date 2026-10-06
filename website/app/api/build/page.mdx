@@ -302,7 +302,7 @@ declaration order. Anything else is refused.
 | --- | --- |
 | `ctx.resolve(source, importer?, options?)` | Asks the build's resolver, mid-hook. `null` if nothing resolves. Pass `{ skipSelf: true }` from inside a `resolve` hook, or it re-enters your own. |
 | `ctx.emit({ type, … })` | Adds a chunk (`{ type: "chunk", id }`) or an asset (`{ type: "asset", source, fileName? }`) to a running build; returns a reference id. |
-| `ctx.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`, prefixed with the plugin's name. |
+| `ctx.warn(msg)` / `info` / `debug` | Diagnostics, prefixed with the plugin's name. Warnings come back in `warnings` (and are printed by `esdev build`, `start` and `test`); `info` is printed to stderr; `debug` is not shown. There is no `ctx.log()`. |
 | `ctx.error(msg)` | Fails the build. Throws — it does not return. |
 | `ctx.isEntry` | On `resolve`: whether the specifier is an entry. |
 | `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
@@ -322,6 +322,7 @@ rather than at `generate()`.
 | --- | --- |
 | a bare function as a hook | `a hook is an object, not a function — write { handler(...) {} }, optionally with filter and order` |
 | an unknown hook name | `unknown hook "transfrom". Did you mean "transform"?` |
+| a handler with more parameters than its hook passes | `slip.load: load takes (id, ctx), but the handler declares 3 parameters` |
 | `filter` on `start`/`end` | `this hook runs once, for the whole build, so it cannot be filtered` |
 | `filter.code` off `transform` | `only transform can filter on code — it is the only hook given any` |
 | a bare pattern as the filter | `filter must be an object — write { id: /\.mdx$/ }` |

@@ -45,6 +45,14 @@ is the point, since none of the three has any business in a deployment.
   paths were handled, so the file was missing from `dist/` and 404'd. It works
   in builds, the dev loop, `esdev preview`, `esdev test --browser` and `--lib`
   builds (D155).
+- A plugin's `ctx.info()` is printed by `esdev build` and `esdev start` as it
+  already was by `esdev test`, and every command prints a plugin's `warn` and
+  `info` the same way (`warning: <plugin>: …`, `info: <plugin>: …`).
+  `ctx.debug()` is shown by none of them.
+- A hook handler that declares more parameters than its hook passes is refused
+  when the plugin is declared, naming the signature (`load takes (id, ctx)`),
+  instead of failing later with `ctx` undefined. Calling `ctx.log()` names the
+  methods that exist.
 - The `--dom` test realm runs Testing Library's `userEvent`: `setup()`,
   typing into inputs and textareas, selection, `clear()`, copy and paste.
   `navigator` is an extensible `Navigator` (it was frozen, so the clipboard
