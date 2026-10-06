@@ -88,6 +88,14 @@ esdev does not edit `package.json`. When `exports` cannot reach a copied
 stylesheet, the build warns and names the line to add. A package with no
 `exports` field gets no warning, because every file in it is importable.
 
+### CSS Modules
+
+A `.module.css` that a module imports ships **scoped**: the class names in
+`dist/button.module.css` are the ones the published JavaScript hands out, such
+as `btn_c2e58308`. A module it `composes` from is imported at the top of the
+file, so importing one stylesheet brings every rule its class names use.
+`url()`s stay relative to the file. A plain `.css` stays a byte-for-byte copy.
+
 ## Declarations
 
 Declarations are derived from what the source **says**, never from what a

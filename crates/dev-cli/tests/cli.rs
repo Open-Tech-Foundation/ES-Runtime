@@ -10663,6 +10663,58 @@ fn a_library_drops_its_css_imports_and_warns_when_exports_miss_them() {
     assert!(!text.contains("warning:"), "{text}");
 }
 
+/// A library's CSS Modules ship scoped (D157): the class names in the
+/// published stylesheet are the ones its JavaScript hands out, a composed
+/// module is `@import`ed so its rules come along, and a `url()` stays relative
+/// to the file. A plain stylesheet is still the passthrough copy.
+#[test]
+fn a_library_ships_its_css_modules_scoped_as_its_javascript_names_them() {
+    let dir = build_dir("lib_css_modules");
+    std::fs::create_dir_all(dir.join("src/ui")).expect("create source");
+    write_in(&dir, "src/ui/base.module.css", ".base { padding: 1px }\n");
+    write_in(
+        &dir,
+        "src/ui/button.module.css",
+        ".btn { composes: base from './base.module.css'; color: red; background: url(./icon.png) }\n",
+    );
+    write_in(&dir, "src/ui/icon.png", "png");
+    write_in(&dir, "src/plain.css", ".plain { color: blue }\n");
+    write_in(
+        &dir,
+        "src/ui/button.js",
+        "import styles from './button.module.css';\nexport const className = styles.btn;\n",
+    );
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--format=esm,cjs", "--no-types"])
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let js = std::fs::read_to_string(dir.join("dist/ui/button.module.js")).expect("names module");
+    let names = js
+        .split("\"btn\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no btn mapping in:\n{js}"));
+    let (btn, base) = names.split_once(' ').expect("btn composes base");
+    let button =
+        std::fs::read_to_string(dir.join("dist/ui/button.module.css")).expect("button css");
+    let base_css = std::fs::read_to_string(dir.join("dist/ui/base.module.css")).expect("base css");
+    assert!(button.contains(&format!(".{btn}")), "{button}");
+    assert!(!button.contains(".btn "), "unscoped name left:\n{button}");
+    assert!(
+        button.starts_with("@import \"./base.module.css\";"),
+        "{button}"
+    );
+    assert!(button.contains("url(\"./icon.png\")"), "{button}");
+    assert!(!button.contains("composes"), "{button}");
+    assert!(base_css.contains(&format!(".{base}")), "{base_css}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/plain.css")).expect("plain"),
+        ".plain { color: blue }\n"
+    );
+}
+
 /// CSS Modules: a stylesheet the *JavaScript* imports, rather than one the
 /// document links.
 ///

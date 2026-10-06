@@ -51,6 +51,10 @@ is the point, since none of the three has any business in a deployment.
   as before. When the package's `exports` cannot reach a copied stylesheet,
   the build warns and names the line to add (`"./*.css": "./dist/*.css"`).
   esdev never edits `package.json` (D156).
+- A `--lib` build ships its CSS Modules scoped. `dist/button.module.css`
+  declared `.btn` while the published JavaScript used `btn_c2e58308`, so its
+  rules matched nothing. The scoped sheet is now written, a composed module is
+  `@import`ed from it, and `url()`s stay relative (D157).
 - A plugin's `ctx.info()` is printed by `esdev build` and `esdev start` as it
   already was by `esdev test`, and every command prints a plugin's `warn` and
   `info` the same way (`warning: <plugin>: …`, `info: <plugin>: …`).

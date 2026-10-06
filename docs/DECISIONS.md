@@ -3229,3 +3229,20 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Writing `exports` for the author.** `exports` is the package's public surface; a build tool that edits a committed manifest decides the API for its author.
 
 **Consequences:** a component library publishes modules that load anywhere, and stylesheets a consumer imports by subpath. Server and browser application targets are unchanged: an application bundle inlines the stub, and an HTML target links the hashed stylesheet.
+
+### D157 — A library ships its CSS Modules scoped · *Accepted (2026-10-07)* · *extends D156*
+
+**Context:** `--lib` copied every `.css` byte for byte, `.module.css` included. The JavaScript a CSS Module import became maps `btn` to the scoped `btn_c2e58308`, so the published stylesheet said `.btn` while the component rendered `class="btn_c2e58308"`: a consumer who imported both got rules that matched nothing.
+
+**Decision:**
+
+- **A library writes each CSS Module the CSS pass scoped, over its passthrough copy.** One pass produced both the names in the JavaScript and the scoped sheet, hashed against the same root, so they agree by construction rather than by a second computation. A plugin-compiled module (`button.module.scss`) is written as `.css`.
+- **A module that `composes … from` another `@import`s it**, by a path relative to the file. An application's stylesheet holds every module at once; a library ships one file per module, so the dependency `composes` creates has to be stated in CSS for a consumer importing one file to get the rules its class names reach.
+- **`url()`s are written relative to the file**, as in the source; `@import`s are inlined, which scoping requires.
+- **Plain stylesheets are unchanged** (D156), and a `.module.css` no module imports keeps its copy, since no JavaScript hands out names for it.
+
+**Rejected:**
+- **Inlining composed rules into each module.** Two modules composing one base would each carry its rules, and a consumer importing both would apply them twice.
+- **Shipping unscoped CSS and unscoped names.** It would make a library's classes global in its consumer's page, which is what CSS Modules exist to prevent.
+
+**Consequences:** a component library built with CSS Modules works when its consumer imports the component and its stylesheet. A file a `url()` names is still not copied by `--lib` (only `.css` is), which predates this and is not changed here.

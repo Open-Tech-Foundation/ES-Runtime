@@ -69,6 +69,10 @@ pub struct Sheet {
     /// has, because the problem is the same: the CSS moves to `assets/` and a
     /// relative `url()` moves with it.
     pub referenced: Vec<crate::css::Referenced>,
+    /// The modules a `composes … from` in this one names. An application's
+    /// stylesheet holds them all; a library ships one file per module, and
+    /// imports these from it so its classes arrive with their rules.
+    pub composes: Vec<PathBuf>,
 }
 
 impl Collected {
@@ -330,6 +334,7 @@ impl CssModules {
         );
         read.extend(bundled.read_files);
 
+        let mut composes = Vec::new();
         let (sheet, names) = if is_css_module(&path.to_string_lossy()) {
             let mut imports = Imports {
                 from: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
@@ -338,9 +343,11 @@ impl CssModules {
                 minify: self.minify,
                 seen: vec![path.to_path_buf()],
                 read: read.clone(),
+                composes: Vec::new(),
             };
             let scoped =
                 crate::css::modules::scope_with(bundled.sheet, &self.ident(path), &mut imports)?;
+            composes = imports.composes;
             (scoped.sheet, Some(scoped.names))
         } else {
             (bundled.sheet, None)
@@ -355,6 +362,7 @@ impl CssModules {
             path: path.to_path_buf(),
             code,
             referenced: bundled.referenced,
+            composes,
         });
         Ok(names)
     }
@@ -376,6 +384,8 @@ struct Imports {
     /// it depends on. A composed module is reachable from **no import**, so
     /// nothing else in the build has heard of it.
     read: Files,
+    /// The modules this one composes from, directly.
+    composes: Vec<PathBuf>,
 }
 
 impl crate::css::modules::Resolve for Imports {
@@ -416,6 +426,7 @@ impl crate::css::modules::Resolve for Imports {
                 seen
             },
             read: self.read.clone(),
+            composes: Vec::new(),
         };
         let scoped = crate::css::modules::scope_with(bundled.sheet, &ident, &mut deeper)?;
         self.collected.push(Sheet {
@@ -426,7 +437,11 @@ impl crate::css::modules::Resolve for Imports {
                 crate::css::print::print(&scoped.sheet)
             },
             referenced: bundled.referenced,
+            composes: deeper.composes,
         });
+        if !self.composes.contains(&path) {
+            self.composes.push(path);
+        }
         Ok(scoped.names)
     }
 }
@@ -518,6 +533,7 @@ mod tests {
                 path: PathBuf::from(format!("/p/{name}.module.css")),
                 code: format!(".{name}{{}}"),
                 referenced: Vec::new(),
+                composes: Vec::new(),
             });
         }
         let codes: Vec<String> = collected.take().into_iter().map(|s| s.code).collect();

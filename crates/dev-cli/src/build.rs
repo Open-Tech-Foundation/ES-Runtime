@@ -510,6 +510,74 @@ fn copy_library_styles(
     Ok(())
 }
 
+/// Writes a library's CSS Modules as the scoped stylesheets its modules use.
+///
+/// The JavaScript a `.module.css` import becomes maps `btn` to `btn_c2e58308`;
+/// the copy [`copy_library_styles`] made still says `.btn`, so a consumer
+/// importing it got rules that matched nothing. The CSS pass already produced
+/// the scoped sheet, under the same root the names were hashed against, so it
+/// is written over the copy: the names agree because one pass made both
+/// (D157).
+///
+/// A module a `composes … from` reached is written too. A stylesheet a plugin
+/// compiled (`button.module.scss`) is written as `.css`, which is what it now
+/// is. Its `@import`s are inlined, as scoping needs them; its `url()`s are
+/// written back as paths relative to the file, as they were in the source.
+/// Plain stylesheets keep their passthrough copy. A sheet from outside the
+/// source directory is not part of the package and is left alone.
+fn write_library_modules(
+    root: &Path,
+    out: &Path,
+    sheets: Vec<crate::cssmodules::Sheet>,
+    written: &mut Vec<String>,
+) -> Result<(), String> {
+    for sheet in sheets {
+        if !crate::cssmodules::is_css_module(&sheet.path.to_string_lossy()) {
+            continue;
+        }
+        let Ok(relative) = sheet.path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.with_extension(CSS_EXTENSION);
+        let from = sheet.path.parent().unwrap_or(Path::new("."));
+        let url_to = |path: &Path| {
+            let url = crate::bundler::relative_to(from, path)
+                .map(|url| url.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            if url.starts_with("../") {
+                url
+            } else {
+                format!("./{url}")
+            }
+        };
+        // What it composes from, imported, so a consumer that imports this one
+        // file gets every rule its class names reach.
+        let mut code: String = sheet
+            .composes
+            .iter()
+            .map(|composed| {
+                format!(
+                    "@import \"{}\";\n",
+                    url_to(&composed.with_extension(CSS_EXTENSION))
+                )
+            })
+            .collect();
+        code.push_str(&sheet.code);
+        for referenced in &sheet.referenced {
+            code = code.replace(&referenced.placeholder, &url_to(&referenced.path));
+        }
+        let target = out.join(&relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&target, code)
+            .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+        written.push(relative.to_string_lossy().replace('\\', "/"));
+    }
+    Ok(())
+}
+
 /// Warns when a library ships stylesheets its `package.json` does not export.
 ///
 /// A library's JavaScript no longer imports its CSS (D156), so a consumer
@@ -1013,6 +1081,9 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
 
     let mut produced = Vec::new();
     let stubs = crate::cssmodules::Stubs::default();
+    // What the CSS pass made of each stylesheet. An application's HTML target
+    // links these; a library writes its CSS Modules from them (D157).
+    let scoped = crate::cssmodules::Collected::new();
     for format in &formats {
         // A library's output tree is named after its module system: `[name].js`
         // for the ES modules and `[name].cjs` for the CommonJS ones, so both can
@@ -1106,11 +1177,7 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
                 ),
             ));
         }
-        let styles = crate::cssmodules::CssModules::new(
-            &cwd,
-            crate::cssmodules::Collected::new(),
-            config.minify,
-        );
+        let styles = crate::cssmodules::CssModules::new(&cwd, scoped.clone(), config.minify);
         let styles = if config.lib {
             styles.for_library(stubs.clone())
         } else {
@@ -1259,7 +1326,9 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
     // to name them at all.
     let mut styles = Vec::new();
     copy_library_styles(&root, &root, &out_dir, &mut styles)?;
+    write_library_modules(&cwd.join(&root), &out_dir, scoped.take(), &mut styles)?;
     styles.sort();
+    styles.dedup();
     let copied = copy_assets(&config.assets, &cwd, &out_dir)?;
     counted.push_str(&copied);
     if !styles.is_empty() {

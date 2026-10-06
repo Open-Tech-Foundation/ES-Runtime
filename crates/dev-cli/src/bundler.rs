@@ -478,7 +478,7 @@ fn published_source(source: &str, map: &str) -> String {
 
 /// `to` as a path from the directory `from`, or `None` when the two share no
 /// root to climb to.
-fn relative_to(from: &Path, to: &Path) -> Option<PathBuf> {
+pub(crate) fn relative_to(from: &Path, to: &Path) -> Option<PathBuf> {
     let from: Vec<_> = from.components().collect();
     let to: Vec<_> = to.components().collect();
     let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
