@@ -31,6 +31,10 @@ is the point, since none of the three has any business in a deployment.
   one, instead of the home page with `200`. Pass `--spa` for the `index.html`
   fallback a client-side router needs. `esdev start` keeps the fallback (D154).
   The `spa` template's `preview` script passes `--spa`.
+- The `fullstack` template's server target enters through `server.js`; the
+  `bootstrap.js` DOM shim is gone. `@opentf/esdev-plugin-web` 0.4.0 resolves
+  framework imports in a server build to the DOM-free `@opentf/web/server`, so
+  nothing needs `HTMLElement` before the server's modules evaluate.
 
 ## [0.16.0] - 2026-10-03
 

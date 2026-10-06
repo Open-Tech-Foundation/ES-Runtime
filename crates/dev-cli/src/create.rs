@@ -3149,30 +3149,24 @@ mod tests {
         );
     }
 
-    /// The fullstack server is explicit file-convention wiring: a bootstrap
-    /// entry shims the DOM globals ahead of a dynamic import (static imports
-    /// evaluate first — the shared runtime defines Custom Elements at module
-    /// scope, which a bundler inlines into the server output), and server.js
-    /// registers routes, API, loaders and middleware against `/app`-rooted
-    /// map keys the framework derives URLs from — keys a bundler cannot
-    /// discover, so they are written, not found.
+    /// The fullstack server is explicit file-convention wiring: server.js is
+    /// the server target's entry — the plugin resolves framework imports in a
+    /// server build to the DOM-free `@opentf/web/server`, so nothing needs a
+    /// DOM shim ahead of it — and it registers routes, API, loaders and
+    /// middleware against `/app`-rooted map keys the framework derives URLs
+    /// from — keys a bundler cannot discover, so they are written, not found.
     #[test]
     fn fullstack_server_wiring_is_explicit() {
         let files = otf_written("fullstack", "js", Some("css"), None);
-        let bootstrap = otf_text(&files, "bootstrap.js");
         assert!(
-            bootstrap.contains("globalThis.HTMLElement ??="),
-            "the shim precedes every import: {bootstrap}"
-        );
-        assert!(
-            bootstrap.contains("await import("),
-            "static imports would evaluate first: {bootstrap}"
+            !files.iter().any(|(name, _)| name.ends_with("bootstrap.js")),
+            "no DOM shim entry ships"
         );
         let config: serde_json::Value =
             serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
         assert_eq!(
             config["build"]["targets"]["server"]["entry"],
-            serde_json::json!("bootstrap.js")
+            serde_json::json!("server.js")
         );
         let server = otf_text(&files, "server.js");
         for expected in [

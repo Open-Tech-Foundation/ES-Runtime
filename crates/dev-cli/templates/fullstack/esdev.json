@@ -12,7 +12,7 @@
         "outdir": "dist"
       },
       "server": {
-        "entry": "bootstrap.js",
+        "entry": "server.js",
         "out": "dist/server.js"
       }
     }
