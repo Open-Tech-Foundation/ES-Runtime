@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-06
+
 ### Changed
 
 - **Breaking:** `esdev preview` serves a static site by default. A missing path
