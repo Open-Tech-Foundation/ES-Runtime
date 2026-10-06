@@ -37,6 +37,15 @@ is the point, since none of the three has any business in a deployment.
   framework imports in a server build to the DOM-free `@opentf/web/server`, so
   nothing needs `HTMLElement` before the server's modules evaluate.
 
+### Fixed
+
+- `new URL("./icon.svg", import.meta.url)`, and any other literal relative
+  path to a file that is not a module, copies the file into the output under a
+  content-hashed name and points the URL at the copy. Previously only module
+  paths were handled, so the file was missing from `dist/` and 404'd. It works
+  in builds, the dev loop, `esdev preview`, `esdev test --browser` and `--lib`
+  builds (D155).
+
 ## [0.16.0] - 2026-10-03
 
 ### Changed

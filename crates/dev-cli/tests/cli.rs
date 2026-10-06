@@ -1043,6 +1043,122 @@ fn build_emits_the_modules_a_new_url_names() {
     assert_eq!(stdout(&run).trim(), "echo! hi");
 }
 
+/// `new URL("./x.json", import.meta.url)` naming a file that is not a module
+/// copies it into the output (D155): hashed, beside the bundle, the URL
+/// rewritten to it — so a server reads its data file from `dist/`. A path that
+/// names nothing on disk, and one with a query, are left as written.
+#[test]
+fn build_copies_the_files_a_new_url_names() {
+    let dir = build_dir("b_asset_url");
+    std::fs::create_dir_all(dir.join("src/data")).expect("create src");
+    write_in(&dir, "src/data/greeting.json", "{\"greeting\":\"hi\"}\n");
+    write_in(
+        &dir,
+        "src/server.js",
+        "import { file } from \"runtime:fs\";\n\
+         const url = new URL(\"./data/greeting.json\", import.meta.url);\n\
+         const later = new URL(\"./made-at-run-time.txt\", import.meta.url);\n\
+         const query = new URL(\"./data/greeting.json?v=1\", import.meta.url);\n\
+         console.log(JSON.parse(await file(url).text()).greeting, later.pathname.endsWith(\"/made-at-run-time.txt\"), query.search);\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/server.js", "--out=dist/server.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/server.js")).expect("read bundle");
+    assert!(
+        !bundle.contains("\"./data/greeting.json\""),
+        "the source path survived:\n{bundle}"
+    );
+    assert!(
+        bundle.contains("./made-at-run-time.txt"),
+        "a path to nothing on disk is left as written:\n{bundle}"
+    );
+    assert!(
+        bundle.contains("./data/greeting.json?v=1"),
+        "a path with a query is left as written:\n{bundle}"
+    );
+    let copied: Vec<String> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("an assets directory beside the bundle")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .collect();
+    assert!(
+        copied.len() == 1 && copied[0].starts_with("greeting-") && copied[0].ends_with(".json"),
+        "one hashed copy: {copied:?}"
+    );
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        eprintln!("skipping: esrun is not built beside esdev");
+        return;
+    };
+    let run = Command::new(esrun)
+        .current_dir(&dir)
+        .args(["--allow-read", "dist/server.js"])
+        .output()
+        .expect("spawn esrun");
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run).trim(), "hi true ?v=1");
+}
+
+/// The same in a page: the file lands beside the chunk that names it, in the
+/// document's assets directory rather than a nested one, and the chunk's URL
+/// is relative to itself.
+#[test]
+fn build_copies_a_new_url_file_beside_a_page_chunk() {
+    let dir = build_dir("b_asset_url_page");
+    std::fs::create_dir_all(dir.join("src/img")).expect("create src");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body><script type=\"module\" src=\"./src/main.js\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "src/img/icon.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
+    );
+    write_in(
+        &dir,
+        "src/main.js",
+        "const icon = new URL(\"./img/icon.svg\", import.meta.url);\n\
+         document.body.append(Object.assign(document.createElement(\"img\"), { src: icon.href }));\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let names: Vec<String> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("dist/assets")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .collect();
+    let icon = names
+        .iter()
+        .find(|n| n.starts_with("icon-") && n.ends_with(".svg"))
+        .unwrap_or_else(|| panic!("no hashed icon beside the chunk: {names:?}"));
+    assert!(
+        !dir.join("dist/assets/assets").exists(),
+        "a nested assets directory"
+    );
+    let chunk = names
+        .iter()
+        .find(|n| n.starts_with("main-") && n.ends_with(".js"))
+        .expect("the page chunk");
+    let code = std::fs::read_to_string(dir.join("dist/assets").join(chunk)).expect("chunk");
+    assert!(
+        code.contains(&format!("new URL(\"{icon}\", import.meta.url)")),
+        "the chunk names the copy relative to itself:\n{code}"
+    );
+}
+
 #[test]
 fn build_bundles_a_graph_into_one_file() {
     let dir = build_dir("b_graph");
@@ -18809,8 +18925,9 @@ test("compare", async ({ bench }) => {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// In a page, a stylesheet's `url()` loads the file it names, and the
-/// project's `public/` is served at the root, as a build places both.
+/// In a page, a stylesheet's `url()` and a module's `new URL()` load the files
+/// they name (D155), and the project's `public/` is served at the root, as a
+/// build places them.
 #[test]
 fn test_browser_serves_stylesheet_assets_and_public() {
     let browser = browser_flag();
@@ -18831,6 +18948,7 @@ fn test_browser_serves_stylesheet_assets_and_public() {
         "src/box.css",
         ".box { background-image: url(\"./img/dot.png\"); }\n",
     );
+    write_in(&dir, "src/img/note.txt", "hello from a module URL\n");
     write_in(
         &dir,
         "src/assets.test.ts",
@@ -18853,6 +18971,11 @@ test("public/ is at the root", async () => {
   expect((await fetch("/icons/missing.svg")).status).toBe(404);
   expect((await fetch("/../Cargo.toml")).status).toBe(404);
 });
+test("a module's new URL() file is served", async () => {
+  const res = await fetch(new URL("./img/note.txt", import.meta.url));
+  expect(res.status).toBe(200);
+  expect(await res.text()).toBe("hello from a module URL\n");
+});
 "#,
     );
     let out = esdev_in(&dir)
@@ -18865,7 +18988,7 @@ test("public/ is at the root", async () => {
         return;
     }
     assert!(out.status.success(), "{text}{err}");
-    assert!(text.contains("2 passed, 0 failed"), "{text}");
+    assert!(text.contains("3 passed, 0 failed"), "{text}");
 }
 
 /// Several browsers, each named: one that cannot be driven fails the run and

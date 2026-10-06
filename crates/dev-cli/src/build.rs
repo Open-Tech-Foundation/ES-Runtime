@@ -1256,6 +1256,10 @@ pub async fn bundle_browser_entries(
             // filename to keep stable, and a shared chunk that changed without
             // its name changing is a browser running two halves of two builds.
             chunk_filenames: Some("[name]-[hash].js".to_string()),
+            // A file a module names by `new URL()` (D155), beside the chunks
+            // rather than in an `assets/` of their own: this directory already
+            // is the document's assets directory.
+            asset_filenames: Some("[name]-[hash][extname]".to_string()),
             sourcemap,
             ..crate::bundler::OutputOptions::default()
         },

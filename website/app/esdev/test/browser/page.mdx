@@ -95,9 +95,9 @@ build copies them.
 
 The project's `public/` directory is served at the root, as a build puts it:
 `fetch("/data/users.json")` in a test reads `public/data/users.json`. Refer to
-these files by that rooted path. A path relative to a module, such as
-`new URL("./logo.png", import.meta.url)`, is not rewritten when the file is
-bundled.
+these files by that rooted path. A file a module names relative to itself, such
+as `new URL("./logo.png", import.meta.url)`, is served beside the bundled test,
+as a build copies it.
 
 ## How a run works
 

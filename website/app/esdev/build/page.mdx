@@ -90,8 +90,9 @@ configure({ shards: "auto", module: new URL("./workers.js", import.meta.url) });
 ```
 
 Only a literal path to a JavaScript or TypeScript module, with
-`import.meta.url` as the base, is built this way. Other files are left to the
-asset handling, and a computed path is left as written.
+`import.meta.url` as the base, is built this way. A literal path to any other
+file is [copied into the output](/esdev/build/browser#files-named-by-url), and
+a computed path is left as written.
 
 The bundler's warnings are printed as the build runs. The one to act on is an
 import it could not resolve: the bundle keeps it as an import and the build

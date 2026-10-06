@@ -3193,3 +3193,22 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Nested `404.html` files per directory.** Not every host honours them, and nothing has asked.
 
 **Consequences:** a site previews its real 404 page and status. An SPA's preview needs `--spa`; its `package.json` script says so once. This is a breaking change to `esdev preview`'s default and the changelog says so.
+
+### D155 — A file a `new URL()` names is copied into the output · *Accepted (2026-10-06)* · *extends D134*
+
+**Context:** D134 built a module named by `new URL("./x.js", import.meta.url)` as a chunk and left every other path "to the asset pass". The asset pass handles `import logo from "./logo.png"` only, so `new URL("./icon.svg", import.meta.url)` stayed verbatim in the bundle, nothing copied the file, and it 404'd once deployed. The same happened in `esdev test --browser`, whose docs said so. The only workaround was `public/` and a rooted path, which gives up hashing and module-relative naming.
+
+**Decision:**
+
+- **The `esdev:module-url` pass copies every non-module file a literal `new URL("./…" | "../…", import.meta.url)` names.** Module extensions (`js`, `mjs`, `cjs`, `ts`, `mts`, `cts`, `jsx`, `tsx`) are still built as chunks; anything else is emitted through the bundler as an asset under a content-hashed name, and the expression is rewritten with `import.meta.ROLLUP_FILE_URL_<ref>` to the copy, relative to the chunk that contains it.
+- **The path is read as a URL is:** literally, against the importing file's directory. No extension is guessed, no alias or plugin resolution applies, and only a regular file qualifies. A path that names nothing, one with a `?query` or `#fragment`, and a computed path are left as written, as D134 leaves them.
+- **The URL stays module-relative.** Unlike an imported asset's rooted `/assets/…` URL, it resolves against wherever the chunk lands, which is what the author wrote. So it works on a server (a file beside `dist/server.js`), in a page, and in a `--lib` build, where the file ships inside the package.
+- **An HTML target writes these files beside its chunks** (`[name]-[hash][extname]` in the document's `assets/`), not in a nested `assets/assets/`. Other targets keep the bundler's default `assets/[name]-[hash][extname]` under their output directory.
+- **The file is a dependency of its importer**, so the dev loop rebuilds when it changes.
+
+**Rejected:**
+- **rolldown's `resolveNewUrlToAsset`.** It treats modules as assets too, which D134 rejected it for.
+- **Rooted URLs, as `import x from "./x.png"` produces.** A rooted URL is right for markup shared between a server render and the browser; `new URL(…, import.meta.url)` is explicitly module-relative, and rewriting it to a root would break it on a server and in a library.
+- **Resolving the path as an import** (extensions, aliases, `exports`). `new URL("./data", …)` names a file called `data`; guessing `data.js` would change what the program asks for.
+
+**Consequences:** `new URL()` assets work in builds, the dev loop, preview and browser tests with no `public/` workaround, for every framework, since the pass runs in every build. A literal that names a non-module file now changes the output; a project that relied on it staying verbatim (with the file placed beside the bundle by hand) gets a hashed copy instead.

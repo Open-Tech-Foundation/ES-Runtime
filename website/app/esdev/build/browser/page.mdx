@@ -55,6 +55,23 @@ a `.json` import stays a module.
 | **Counted by the build** | The file is in the output because a module imported it — nothing to remember in `esdev.json` |
 | **Not in `--lib`** | A library cannot know where the consuming build serves a file from, so it refuses |
 
+## Files named by URL
+
+```js
+const icon = new URL("./icon.svg", import.meta.url);
+```
+
+A file named this way is copied into the output with a content hash, beside
+the chunk that names it, and the URL is rewritten to point at the copy. The URL
+stays relative to the module, so it works wherever the output is served from,
+and in a `--lib` build the file ships inside the package. Any file that is not
+a JavaScript or TypeScript module is copied this way; a module is
+[built as a chunk](/esdev/build#what-the-application-build-guarantees) instead.
+
+The path must be a literal starting with `./` or `../`, read exactly as written
+against the module's directory. A path to a file that does not exist, a path
+with a `?query` or `#fragment`, and a computed path are left as written.
+
 Use `assets` for a file nothing imports — a `favicon.ico` or `robots.txt` —
 where the name must not change. A relative asset path in a target resolves
 against the entry module's directory and is copied into the deployment.
