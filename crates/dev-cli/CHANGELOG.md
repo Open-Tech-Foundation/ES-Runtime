@@ -45,6 +45,14 @@ is the point, since none of the three has any business in a deployment.
   paths were handled, so the file was missing from `dist/` and 404'd. It works
   in builds, the dev loop, `esdev preview`, `esdev test --browser` and `--lib`
   builds (D155).
+- The `--dom` test realm runs Testing Library's `userEvent`: `setup()`,
+  typing into inputs and textareas, selection, `clear()`, copy and paste.
+  `navigator` is an extensible `Navigator` (it was frozen, so the clipboard
+  stub could not be installed); `<input>` gains `select()` and
+  `setRangeText()`; `<textarea>` gains the whole selection API and
+  `textLength`; `Selection` gains `setBaseAndExtent()`, `extend()`, a
+  direction and `toString()`; and `FileReader` and a realm `ProgressEvent`
+  are added. Each was checked against Chrome in the DOM parity probe.
 - `esdev start` no longer panics in the bundler on the save that fixes a
   build error. A failed build leaves the bundler with no module graph, and
   the next hot update was computed against it anyway; it crashed whenever the

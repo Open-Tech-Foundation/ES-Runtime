@@ -343,11 +343,13 @@ anything looks.
 
 **Implemented for real**
 
-- `document`, `navigator` (`userAgent` identifying esdev, `language`, `languages`), `location` as a parsed URL that can be read and assigned, with assignment recording the target rather than navigating
+- `document`, `navigator` (a `Navigator` with `userAgent` identifying esdev, `language`, `languages`; extensible, as a browser's is, so a library can install `navigator.clipboard`), `location` as a parsed URL that can be read and assigned, with assignment recording the target rather than navigating
 - `history` with `pushState`, `replaceState`, `back`, `forward`, an in-memory entry list and `popstate` events — routers need this and it costs little
 - `localStorage` and `sessionStorage` as real `Storage` objects, cleared between test files
 - `requestAnimationFrame` and `cancelAnimationFrame` on a fake clock the test runner can advance
 - `getComputedStyle`, `queueMicrotask`, `structuredClone`, `atob`, `btoa`, timers — the last several come from the runtime and are simply exposed
+- The text control selection APIs on `<input>` and `<textarea>`: `select()`, `setSelectionRange()`, `setRangeText()`, `selectionStart`/`selectionEnd`/`selectionDirection`, with the `select` event; and `getSelection()` with `setBaseAndExtent()`, `extend()` and anchor/focus direction
+- `FileReader`, reading a `Blob` as text, an `ArrayBuffer`, a binary string or a `data:` URL through its progress events
 - `document.activeElement`, `focus()`, `blur()`, and the `focus`/`blur`/`focusin`/`focusout` events, with focusability decided by tag and `tabindex` rather than by visibility
 
 **Constructible, never firing**

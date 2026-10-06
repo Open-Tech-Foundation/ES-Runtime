@@ -1,10 +1,10 @@
 {
   "summary": {
-    "features": 228,
+    "features": 234,
     "agreesWithChrome": {
-      "esdev": 209,
-      "jsdom": 178,
-      "happy-dom": 179
+      "esdev": 217,
+      "jsdom": 184,
+      "happy-dom": 185
     },
     "drift": 0
   },
@@ -39,10 +39,10 @@
     },
     {
       "group": "window",
-      "features": 34,
-      "esdev": 25,
-      "jsdom": 22,
-      "happy-dom": 24
+      "features": 36,
+      "esdev": 29,
+      "jsdom": 24,
+      "happy-dom": 26
     },
     {
       "group": "events",
@@ -67,10 +67,10 @@
     },
     {
       "group": "forms",
-      "features": 14,
-      "esdev": 14,
-      "jsdom": 14,
-      "happy-dom": 14
+      "features": 18,
+      "esdev": 18,
+      "jsdom": 18,
+      "happy-dom": 18
     }
   ],
   "features": [
@@ -1579,6 +1579,42 @@
     },
     {
       "group": "forms",
+      "name": "input.select",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "input.setRangeText",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "textarea.setSelectionRange",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "forms",
+      "name": "select() selects the value",
+      "chrome": "0-5",
+      "esdev": "0-5",
+      "jsdom": "0-5",
+      "happy-dom": "0-5",
+      "drift": false
+    },
+    {
+      "group": "forms",
       "name": "labels collection",
       "chrome": true,
       "esdev": true,
@@ -1968,7 +2004,25 @@
       "group": "window",
       "name": "File / FileReader",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "navigator takes properties",
+      "chrome": true,
+      "esdev": true,
+      "jsdom": true,
+      "happy-dom": true,
+      "drift": false
+    },
+    {
+      "group": "window",
+      "name": "Selection.setBaseAndExtent",
+      "chrome": true,
+      "esdev": true,
       "jsdom": true,
       "happy-dom": true,
       "drift": false
@@ -2004,7 +2058,7 @@
       "group": "window",
       "name": "alert",
       "chrome": true,
-      "esdev": false,
+      "esdev": true,
       "jsdom": true,
       "happy-dom": false,
       "drift": false

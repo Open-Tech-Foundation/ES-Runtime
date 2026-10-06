@@ -254,6 +254,16 @@ export function createEvents() {
   class PromiseRejectionEvent extends Event {
     constructor(type, options = {}) { super(type, options); this.promise = options.promise; this.reason = options.reason; }
   }
+  // What a `FileReader` fires. The runtime has one too, but its `Event` is not
+  // this realm's, and a DOM target refuses an event from outside the realm.
+  class ProgressEvent extends Event {
+    constructor(type, options = {}) {
+      super(type, options);
+      this.lengthComputable = Boolean(options.lengthComputable);
+      this.loaded = Number(options.loaded ?? 0);
+      this.total = Number(options.total ?? 0);
+    }
+  }
 
   class EventTarget {
     constructor() { Object.defineProperty(this, LISTENERS, { value: new Map() }); }
@@ -441,5 +451,5 @@ export function createEvents() {
   defineConstants(KeyboardEvent, ["DOM_KEY_LOCATION_STANDARD", "DOM_KEY_LOCATION_LEFT", "DOM_KEY_LOCATION_RIGHT", "DOM_KEY_LOCATION_NUMPAD"]);
   defineConstants(WheelEvent, ["DOM_DELTA_PIXEL", "DOM_DELTA_LINE", "DOM_DELTA_PAGE"]);
 
-  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, ToggleEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, asEventTarget, createLegacy };
+  return { EventTarget, Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, PointerEvent, WheelEvent, DragEvent, ClipboardEvent, CommandEvent, ToggleEvent, SubmitEvent, ErrorEvent, PromiseRejectionEvent, ProgressEvent, asEventTarget, createLegacy };
 }

@@ -334,21 +334,31 @@ class History {
 
 class Selection {
   #ranges = [];
+  // Which end of the range is the focus: "backward" puts the anchor at its
+  // end, as a selection dragged right to left does.
+  #direction = "none";
   get rangeCount() { return this.#ranges.length; }
-  get anchorNode() { return this.#ranges[0]?.startContainer ?? null; }
-  get anchorOffset() { return this.#ranges[0]?.startOffset ?? 0; }
-  get focusNode() { return this.#ranges[0]?.endContainer ?? null; }
-  get focusOffset() { return this.#ranges[0]?.endOffset ?? 0; }
+  get #backward() { return this.#direction === "backward"; }
+  get anchorNode() { const range = this.#ranges[0]; return (this.#backward ? range?.endContainer : range?.startContainer) ?? null; }
+  get anchorOffset() { const range = this.#ranges[0]; return (this.#backward ? range?.endOffset : range?.startOffset) ?? 0; }
+  get focusNode() { const range = this.#ranges[0]; return (this.#backward ? range?.startContainer : range?.endContainer) ?? null; }
+  get focusOffset() { const range = this.#ranges[0]; return (this.#backward ? range?.startOffset : range?.endOffset) ?? 0; }
   get isCollapsed() { return this.#ranges.length === 0 || this.#ranges.every((range) => range.collapsed); }
+  // The stringifier: the selected text.
+  toString() { return this.#ranges[0]?.toString() ?? ""; }
   // A range outside this document, or a second range, is ignored rather than
   // refused: a selection holds at most one range, as in Chrome.
   addRange(range) {
     if (!(range instanceof ranges.Range)) throw new TypeError("Selection.addRange expects a Range");
     if (range.startContainer.getRootNode() !== document || this.#ranges.length > 0) return;
     this.#ranges = [range];
+    this.#direction = "forward";
   }
-  removeAllRanges() { this.#ranges = []; }
-  removeRange(range) { this.#ranges = this.#ranges.filter((candidate) => candidate !== range); }
+  removeAllRanges() { this.#ranges = []; this.#direction = "none"; }
+  removeRange(range) {
+    this.#ranges = this.#ranges.filter((candidate) => candidate !== range);
+    if (this.#ranges.length === 0) this.#direction = "none";
+  }
   getRangeAt(index) {
     const range = this.#ranges[Number(index)];
     if (!range) throw new DOMException("The range index is out of bounds.", "IndexSizeError");
@@ -359,7 +369,121 @@ class Selection {
     const range = new ranges.Range(document);
     range.setStart(node, offset); range.collapse(true);
     this.#ranges = [range];
+    this.#direction = "forward";
   }
+  // The range between two points, in whichever order they fall, remembering
+  // which one is the focus (Selection API §setBaseAndExtent). A bad offset
+  // throws IndexSizeError from `setStart`; a point outside this document
+  // leaves the selection as it was.
+  setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset) {
+    const anchor = new ranges.Range(document);
+    anchor.setStart(anchorNode, anchorOffset);
+    const focus = new ranges.Range(document);
+    focus.setStart(focusNode, focusOffset);
+    if (anchorNode.getRootNode() !== document || focusNode.getRootNode() !== document) return;
+    this.#select(anchorNode, Number(anchorOffset), focusNode, Number(focusOffset));
+  }
+  // Moves the focus and keeps the anchor (Selection API §extend).
+  extend(node, offset = 0) {
+    if (this.#ranges.length === 0) throw new DOMException("There is no selection to extend.", "InvalidStateError");
+    if (node.getRootNode() !== document) return;
+    new ranges.Range(document).setStart(node, offset);
+    this.#select(this.anchorNode, this.anchorOffset, node, Number(offset));
+  }
+  #select(anchorNode, anchorOffset, focusNode, focusOffset) {
+    const anchor = new ranges.Range(document);
+    anchor.setStart(anchorNode, anchorOffset);
+    const backward = anchor.comparePoint(focusNode, focusOffset) < 0;
+    const range = new ranges.Range(document);
+    if (backward) { range.setStart(focusNode, focusOffset); range.setEnd(anchorNode, anchorOffset); }
+    else { range.setStart(anchorNode, anchorOffset); range.setEnd(focusNode, focusOffset); }
+    this.#ranges = [range];
+    this.#direction = backward ? "backward" : "forward";
+  }
+}
+
+// `FileReader` (File API §6): a Blob's bytes as an ArrayBuffer, text, a
+// binary string or a `data:` URL, delivered through events. Testing Library's
+// clipboard reads what was copied this way, so `user.copy()` and
+// `user.paste()` need it. The read itself is the Blob's own; what this adds is
+// the state machine and the events around it.
+class FileReader extends events.EventTarget {
+  static EMPTY = 0;
+  static LOADING = 1;
+  static DONE = 2;
+  #state = 0;
+  #result = null;
+  #error = null;
+  #read = 0;
+  constructor() {
+    super();
+    for (const type of ["loadstart", "progress", "load", "abort", "error", "loadend"]) this[`on${type}`] = null;
+  }
+  get readyState() { return this.#state; }
+  get result() { return this.#result; }
+  get error() { return this.#error; }
+  readAsArrayBuffer(blob) { this.#start(blob, (bytes) => bytes.buffer); }
+  readAsBinaryString(blob) { this.#start(blob, (bytes) => Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")); }
+  readAsText(blob, encoding = "utf-8") {
+    this.#start(blob, (bytes) => {
+      let label = String(encoding);
+      try { new TextDecoder(label); } catch { label = "utf-8"; }
+      return new TextDecoder(label).decode(bytes);
+    });
+  }
+  readAsDataURL(blob) {
+    this.#start(blob, (bytes) => {
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return `data:${blob.type || "application/octet-stream"};base64,${btoa(binary)}`;
+    });
+  }
+  abort() {
+    if (this.#state === FileReader.EMPTY || this.#state === FileReader.DONE) { this.#result = null; return; }
+    this.#read += 1;
+    this.#state = FileReader.DONE;
+    this.#result = null;
+    this.#fire("abort");
+    this.#fire("loadend");
+  }
+  #start(blob, convert) {
+    if (!(blob instanceof Blob)) throw new TypeError("FileReader reads a Blob");
+    if (this.#state === FileReader.LOADING) throw new DOMException("The reader is already reading.", "InvalidStateError");
+    this.#state = FileReader.LOADING;
+    this.#result = null;
+    this.#error = null;
+    const read = ++this.#read;
+    const total = blob.size;
+    // Every event is a task after the call returns, as in a browser: a
+    // handler assigned on the next line still hears `loadstart`.
+    setTimeout(() => {
+      if (read !== this.#read) return;
+      this.#fire("loadstart", 0, total);
+      blob.arrayBuffer().then(
+        (buffer) => {
+          if (read !== this.#read) return;
+          this.#result = convert(new Uint8Array(buffer));
+          this.#state = FileReader.DONE;
+          this.#fire("progress", total, total);
+          this.#fire("load", total, total);
+          if (this.#state === FileReader.DONE) this.#fire("loadend", total, total);
+        },
+        (error) => {
+          if (read !== this.#read) return;
+          this.#state = FileReader.DONE;
+          this.#error = error instanceof DOMException ? error : new DOMException(String(error?.message ?? error), "NotReadableError");
+          this.#fire("error");
+          this.#fire("loadend");
+        },
+      );
+    }, 0);
+  }
+  #fire(type, loaded = 0, total = 0) {
+    this.dispatchEvent(new events.ProgressEvent(type, { lengthComputable: total > 0, loaded, total }));
+  }
+}
+for (const [name, value] of [["EMPTY", 0], ["LOADING", 1], ["DONE", 2]]) {
+  Object.defineProperty(FileReader.prototype, name, { value, enumerable: true });
 }
 
 // A test DOM has no window to measure, so it declares one. The defaults are
@@ -629,11 +753,18 @@ function cancelAnimationFrame(id) {
   animationFrames.delete(Number(id));
 }
 
-const navigator = Object.freeze({
-  userAgent: "esdev DOM",
-  language: "en-US",
-  languages: Object.freeze(["en-US"]),
-});
+// An ordinary object, as a browser's is: its members are getters on
+// `Navigator.prototype`, and the instance takes properties of its own. Testing
+// Library's `userEvent.setup()` installs its clipboard stub with
+// `Object.defineProperty(navigator, "clipboard", …)`, which a frozen object
+// refuses — and so did every test that used it.
+const LANGUAGES = Object.freeze(["en-US"]);
+class Navigator {
+  get userAgent() { return "esdev DOM"; }
+  get language() { return "en-US"; }
+  get languages() { return LANGUAGES; }
+}
+const navigator = new Navigator();
 const history = new History();
 const localStorage = new Storage();
 const sessionStorage = new Storage();
@@ -687,6 +818,7 @@ Object.assign(globalThis, { document, customElements });
 globalThis.window = globalThis;
 const globals = {
   DOMParser: parse.DOMParser,
+  FileReader,
   HashChangeEvent,
   PopStateEvent,
   History,
@@ -717,6 +849,7 @@ const globals = {
   CSSContainerRule: sheets.CSSContainerRule,
   CSSLayerBlockRule: sheets.CSSLayerBlockRule,
   MediaList: sheets.MediaList,
+  Navigator,
   Range: ranges.Range,
   StaticRange: ranges.StaticRange,
   Selection,

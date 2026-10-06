@@ -7,14 +7,14 @@ description: What esdev's test DOM answers, next to Chrome, jsdom and happy-dom.
 
 # DOM parity
 
-Chrome is the oracle. 228 features — interfaces, members and behaviours — are
+Chrome is the oracle. 234 features — interfaces, members and behaviours — are
 put to all four runtimes, and 121 behaviour cases run the same code in each.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 209 / 228 | 92% |
-| jsdom | 178 / 228 | 78% |
-| happy-dom | 179 / 228 | 79% |
+| esdev | 217 / 234 | 93% |
+| jsdom | 184 / 234 | 79% |
+| happy-dom | 185 / 234 | 79% |
 
 ## By area
 
@@ -24,11 +24,11 @@ put to all four runtimes, and 121 behaviour cases run the same code in each.
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 23 | 12 | 17 |
-| window | 34 | 25 | 22 | 24 |
+| window | 36 | 29 | 24 | 26 |
 | events | 26 | 24 | 22 | 25 |
 | components | 32 | 32 | 20 | 20 |
 | parsing | 13 | 9 | 12 | 11 |
-| forms | 14 | 14 | 14 | 14 |
+| forms | 18 | 18 | 18 | 18 |
 
 ## Behaviour cases
 
@@ -160,7 +160,7 @@ put to all four runtimes, and 121 behaviour cases run the same code in each.
 
 ## Closer to Chrome than an emulator
 
-63 features where esdev matches Chrome and jsdom or happy-dom does not.
+64 features where esdev matches Chrome and jsdom or happy-dom does not.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -223,6 +223,7 @@ put to all four runtimes, and 121 behaviour cases run the same code in each.
 | WebSocket | yes | yes | no |
 | Worker | yes | no | no |
 | URL.createObjectURL | yes | no | yes |
+| alert | yes | yes | no |
 | MathMLElement | yes | no | no |
 | SVGGeometryElement | yes | no | yes |
 | showPopover | yes | no | no |
@@ -230,7 +231,7 @@ put to all four runtimes, and 121 behaviour cases run the same code in each.
 
 ## Differences from Chrome
 
-19 features, each with its reason. There are no others.
+17 features, each with its reason. There are no others.
 
 **Legacy or superseded by a modern API that is implemented.**
 
@@ -280,8 +281,6 @@ put to all four runtimes, and 121 behaviour cases run the same code in each.
 | Feature | Chrome | esdev |
 | --- | --- | --- |
 | XMLHttpRequest | yes | no |
-| File / FileReader | yes | no |
-| alert | yes | no |
 | Image | yes | no |
 | canvas.getContext | `context` | `missing` |
 | iframe.contentWindow | `window` | `null` |

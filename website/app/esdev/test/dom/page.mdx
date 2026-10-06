@@ -41,6 +41,11 @@ test("updates a control", () => {
 Use the built-in [`runtime:test`](/api/test) assertions and runner. `--dom`
 does not add compatibility layers for other test frameworks.
 
+Libraries that drive the DOM through standard APIs run as they do in a
+browser. Testing Library's `userEvent` types, selects, tabs, copies and pastes:
+the realm has the text selection APIs, `Selection`, `FileReader` and an
+extensible `navigator` it relies on.
+
 ## Strict modern HTML
 
 `innerHTML` and fragment parsing accept conforming modern HTML, including the

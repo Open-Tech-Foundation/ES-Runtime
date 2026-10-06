@@ -25,6 +25,7 @@ const sample = {
   HTMLFormElement: (w) => make(w, "form"),
   HTMLInputElement: (w) => make(w, "input"),
   HTMLSelectElement: (w) => make(w, "select"),
+  HTMLTextAreaElement: (w) => make(w, "textarea"),
   HTMLFieldSetElement: (w) => make(w, "fieldset"),
   HTMLTemplateElement: (w) => make(w, "template"),
   HTMLSlotElement: (w) => make(w, "slot"),
@@ -33,6 +34,7 @@ const sample = {
   HTMLTableRowElement: (w) => make(w, "tr"),
   HTMLStyleElement: (w) => make(w, "style"),
   Range: (w) => w.document.createRange(),
+  Selection: (w) => w.document.getSelection(),
 };
 
 const method = (window, ctor, name) => {
@@ -621,6 +623,15 @@ export const features = [
   ["forms", "input.valueAsNumber", (w) => accessor(w, "HTMLInputElement", "valueAsNumber")],
   ["forms", "input.valueAsDate", (w) => accessor(w, "HTMLInputElement", "valueAsDate")],
   ["forms", "setSelectionRange", (w) => method(w, "HTMLInputElement", "setSelectionRange")],
+  ["forms", "input.select", (w) => method(w, "HTMLInputElement", "select")],
+  ["forms", "input.setRangeText", (w) => method(w, "HTMLInputElement", "setRangeText")],
+  ["forms", "textarea.setSelectionRange", (w) => method(w, "HTMLTextAreaElement", "setSelectionRange")],
+  ["forms", "select() selects the value", (w) => value(() => {
+    const area = make(w, "textarea");
+    area.value = "hello";
+    area.select();
+    return `${area.selectionStart}-${area.selectionEnd}`;
+  })],
   ["forms", "labels collection", (w) => accessor(w, "HTMLInputElement", "labels")],
   ["forms", "input.indeterminate", (w) => accessor(w, "HTMLInputElement", "indeterminate")],
   ["forms", "select.selectedOptions", (w) => accessor(w, "HTMLSelectElement", "selectedOptions")],
@@ -804,6 +815,8 @@ export const features = [
   ["window", "Worker", (w) => global(w, "Worker")],
   ["window", "Blob", (w) => global(w, "Blob")],
   ["window", "File / FileReader", (w) => global(w, "File") && global(w, "FileReader")],
+  ["window", "navigator takes properties", (w) => value(() => Object.isExtensible(w.navigator))],
+  ["window", "Selection.setBaseAndExtent", (w) => method(w, "Selection", "setBaseAndExtent")],
   ["window", "URL.createObjectURL", (w) => typeof w.URL?.createObjectURL === "function"],
   ["window", "crypto.randomUUID", (w) => typeof w.crypto?.randomUUID === "function"],
   ["window", "performance.now", (w) => typeof w.performance?.now === "function"],

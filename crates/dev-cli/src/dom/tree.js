@@ -2061,11 +2061,21 @@ export function createTree(events = {}) {
   }
 
   class HTMLTextAreaElement extends HTMLElement {
-    constructor(name, ownerDocument) { super(name, ownerDocument); this[TEXTAREA_VALUE] = null; }
+    constructor(name, ownerDocument) {
+      super(name, ownerDocument);
+      this[TEXTAREA_VALUE] = null;
+      this[INPUT_SELECTION_START] = null; this[INPUT_SELECTION_END] = null; this[INPUT_SELECTION_DIRECTION] = "none";
+    }
     get defaultValue() { return this.textContent; }
     set defaultValue(value) { this.textContent = String(value); if (this[TEXTAREA_VALUE] === null) this[TEXTAREA_VALUE] = null; }
     get value() { return this[TEXTAREA_VALUE] ?? this.defaultValue; }
-    set value(value) { this[TEXTAREA_VALUE] = String(value); }
+    set value(value) {
+      this[TEXTAREA_VALUE] = String(value);
+      // Setting the value moves the cursor to the end, as it does for <input>.
+      const end = this[TEXTAREA_VALUE].length;
+      this[INPUT_SELECTION_START] = end; this[INPUT_SELECTION_END] = end; this[INPUT_SELECTION_DIRECTION] = "none";
+    }
+    get textLength() { return this.value.length; }
   }
 
   class HTMLFieldSetElement extends HTMLElement {
@@ -2581,18 +2591,6 @@ export function createTree(events = {}) {
     max: { get() { return this.getAttribute("max") ?? ""; }, set(value) { this.setAttribute("max", String(value)); } },
     pattern: { get() { return this.getAttribute("pattern") ?? ""; }, set(value) { this.setAttribute("pattern", String(value)); } },
     step: { get() { return this.getAttribute("step") ?? ""; }, set(value) { this.setAttribute("step", String(value)); } },
-    selectionStart: {
-      get() { return selectionCapable(this) ? selectionRange(this)[0] : null; },
-      set(value) { this.setSelectionRange(value, this.selectionEnd ?? value, this.selectionDirection); },
-    },
-    selectionEnd: {
-      get() { return selectionCapable(this) ? selectionRange(this)[1] : null; },
-      set(value) { this.setSelectionRange(this.selectionStart ?? value, value, this.selectionDirection); },
-    },
-    selectionDirection: {
-      get() { return selectionCapable(this) ? this[INPUT_SELECTION_DIRECTION] : null; },
-      set(value) { this.setSelectionRange(this.selectionStart ?? 0, this.selectionEnd ?? 0, value); },
-    },
     valueAsNumber: {
       get() {
         if (this.type === "number") return this.value === "" ? NaN : Number(this.value);
@@ -2617,21 +2615,115 @@ export function createTree(events = {}) {
     },
   });
 
-  function selectionCapable(input) { return ["text", "search", "tel", "url", "password"].includes(input.type); }
-  function selectionRange(input) {
-    const end = input.value.length;
-    const start = input[INPUT_SELECTION_START] ?? end;
-    return [Math.min(start, end), Math.min(input[INPUT_SELECTION_END] ?? end, end)];
+  // The text control selection APIs (HTML §4.10.20), for <input> and
+  // <textarea> alike. Each member is the element's own prototype's, as a
+  // browser's is: Testing Library's user-event wraps `select`,
+  // `setSelectionRange`, `selectionStart`, `selectionEnd` and `setRangeText`
+  // by reading them off `element.constructor.prototype`, and refuses an
+  // element whose interface does not carry them.
+  //
+  // `selectionStart` and its kin, `setSelectionRange` and `setRangeText` apply
+  // to a textarea and to the input types with a plain text value; `select()`
+  // applies to more of them, and is a no-op on the ones with no text selection
+  // to show (email, number, the dates).
+  const SELECT_APPLIES = new Set(["text", "search", "tel", "url", "email", "password", "date", "month", "week", "time", "datetime-local", "number", "file"]);
+  function selectionCapable(control) {
+    return control instanceof HTMLTextAreaElement || ["text", "search", "tel", "url", "password"].includes(control.type);
   }
-  HTMLInputElement.prototype.setSelectionRange = function(start, end, direction = "none") {
-    if (!selectionCapable(this)) throw domError("InvalidStateError", "This input type does not support selection.");
-    if (!["forward", "backward", "none"].includes(direction)) throw new TypeError("selection direction must be forward, backward, or none.");
-    const length = this.value.length;
-    start = Math.max(0, Math.min(length, Number(start)));
-    end = Math.max(0, Math.min(length, Number(end)));
+  function selectionRange(control) {
+    const end = control.value.length;
+    const start = control[INPUT_SELECTION_START] ?? end;
+    return [Math.min(start, end), Math.min(control[INPUT_SELECTION_END] ?? end, end)];
+  }
+  function refuseSelection(control) {
+    if (!selectionCapable(control)) throw domError("InvalidStateError", "This input type does not support selection.");
+  }
+  // "Set the selection range": clamped to the value, an end before the start
+  // collapses onto the end, and a change fires `select` as a task.
+  function setSelection(control, start, end, direction) {
+    const length = control.value.length;
+    start = Math.max(0, Math.min(length, Number(start) || 0));
+    end = Math.max(0, Math.min(length, Number(end) || 0));
     if (end < start) start = end;
-    this[INPUT_SELECTION_START] = start; this[INPUT_SELECTION_END] = end; this[INPUT_SELECTION_DIRECTION] = direction;
+    direction = direction === "forward" || direction === "backward" ? direction : "none";
+    const [oldStart, oldEnd] = selectionRange(control);
+    const oldDirection = control[INPUT_SELECTION_DIRECTION];
+    control[INPUT_SELECTION_START] = start; control[INPUT_SELECTION_END] = end; control[INPUT_SELECTION_DIRECTION] = direction;
+    if (start !== oldStart || end !== oldEnd || direction !== oldDirection) {
+      queueElementTask(() => control.dispatchEvent(new Event("select", { bubbles: true })));
+    }
+  }
+  const textControlSelection = {
+    selectionStart: {
+      get() { return selectionCapable(this) ? selectionRange(this)[0] : null; },
+      set(value) {
+        refuseSelection(this);
+        const end = selectionRange(this)[1];
+        setSelection(this, value, Math.max(end, Number(value) || 0), this[INPUT_SELECTION_DIRECTION]);
+      },
+    },
+    selectionEnd: {
+      get() { return selectionCapable(this) ? selectionRange(this)[1] : null; },
+      set(value) { refuseSelection(this); setSelection(this, selectionRange(this)[0], value, this[INPUT_SELECTION_DIRECTION]); },
+    },
+    selectionDirection: {
+      get() { return selectionCapable(this) ? this[INPUT_SELECTION_DIRECTION] : null; },
+      set(value) { refuseSelection(this); const [start, end] = selectionRange(this); setSelection(this, start, end, String(value)); },
+    },
   };
+  const textControlMethods = {
+    select() {
+      if (this instanceof HTMLInputElement && !SELECT_APPLIES.has(this.type)) return;
+      if (!selectionCapable(this)) return;
+      setSelection(this, 0, this.value.length, "none");
+    },
+    setSelectionRange(start, end, direction) {
+      refuseSelection(this);
+      setSelection(this, start, end, direction);
+    },
+    setRangeText(replacement, ...range) {
+      refuseSelection(this);
+      replacement = String(replacement);
+      let [start, end] = selectionRange(this);
+      let mode = "preserve";
+      if (range.length > 0) {
+        start = Number(range[0]) || 0;
+        end = Number(range[1]) || 0;
+        if (start > end) throw domError("IndexSizeError", "The start of the range is after its end.");
+        if (range[2] !== undefined) mode = String(range[2]);
+        if (!["select", "start", "end", "preserve"].includes(mode)) {
+          throw new TypeError(`'${mode}' is not a valid SelectionMode.`);
+        }
+      }
+      const value = this.value;
+      start = Math.min(Math.max(0, start), value.length);
+      end = Math.min(Math.max(0, end), value.length);
+      let [selectionStart, selectionEnd] = selectionRange(this);
+      const direction = this[INPUT_SELECTION_DIRECTION];
+      const newEnd = start + replacement.length;
+      const delta = replacement.length - (end - start);
+      // Through the slot, not the `value` setter: that would move the
+      // cursor to the end, and the selection mode is what decides it here.
+      if (this instanceof HTMLTextAreaElement) this[TEXTAREA_VALUE] = value.slice(0, start) + replacement + value.slice(end);
+      else this[INPUT_VALUE] = value.slice(0, start) + replacement + value.slice(end);
+      if (mode === "select") { selectionStart = start; selectionEnd = newEnd; }
+      else if (mode === "start") { selectionStart = start; selectionEnd = start; }
+      else if (mode === "end") { selectionStart = newEnd; selectionEnd = newEnd; }
+      else {
+        if (selectionStart > end) selectionStart += delta;
+        else if (selectionStart > start) selectionStart = start;
+        if (selectionEnd > end) selectionEnd += delta;
+        else if (selectionEnd > start) selectionEnd = newEnd;
+      }
+      setSelection(this, selectionStart, selectionEnd, direction);
+    },
+  };
+  for (const Class of [HTMLInputElement, HTMLTextAreaElement]) {
+    defineIdl(Class.prototype, textControlSelection);
+    for (const [name, method] of Object.entries(textControlMethods)) {
+      Object.defineProperty(Class.prototype, name, { value: method, writable: true, configurable: true, enumerable: true });
+    }
+  }
   defineIdl(HTMLButtonElement.prototype, {
     type: { get() { return this.getAttribute("type") ?? "submit"; }, set(value) { this.setAttribute("type", String(value)); } },
   });

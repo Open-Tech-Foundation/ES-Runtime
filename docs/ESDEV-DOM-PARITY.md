@@ -9,13 +9,13 @@ keep current.
 
 ## Surface
 
-228 features — interfaces, members and behaviours — put to all four runtimes.
+234 features — interfaces, members and behaviours — put to all four runtimes.
 
 | Runtime | Agrees with Chrome | |
 | --- | --: | --: |
-| esdev | 209 / 228 | 92% |
-| jsdom | 178 / 228 | 78% |
-| happy-dom | 179 / 228 | 79% |
+| esdev | 217 / 234 | 93% |
+| jsdom | 184 / 234 | 79% |
+| happy-dom | 185 / 234 | 79% |
 
 | Area | Features | esdev | jsdom | happy-dom |
 | --- | --: | --: | --: | --: |
@@ -23,11 +23,11 @@ keep current.
 | traversal | 14 | 13 | 13 | 11 |
 | selectors | 14 | 14 | 14 | 13 |
 | cascade | 26 | 23 | 12 | 17 |
-| window | 34 | 25 | 22 | 24 |
+| window | 36 | 29 | 24 | 26 |
 | events | 26 | 24 | 22 | 25 |
 | components | 32 | 32 | 20 | 20 |
 | parsing | 13 | 9 | 12 | 11 |
-| forms | 14 | 14 | 14 | 14 |
+| forms | 18 | 18 | 18 | 18 |
 
 ## Behaviour
 
@@ -160,7 +160,7 @@ compares the result.
 
 ## Where esdev is closer to Chrome than an emulator
 
-63 of the 228 features.
+64 of the 234 features.
 
 | Feature | Chrome & esdev | jsdom | happy-dom |
 | --- | --- | --- | --- |
@@ -223,6 +223,7 @@ compares the result.
 | WebSocket | yes | yes | no |
 | Worker | yes | no | no |
 | URL.createObjectURL | yes | no | yes |
+| alert | yes | yes | no |
 | MathMLElement | yes | no | no |
 | SVGGeometryElement | yes | no | yes |
 | showPopover | yes | no | no |
@@ -230,7 +231,7 @@ compares the result.
 
 ## Where esdev differs from Chrome, and why
 
-19 of 228. Every one of them is here:
+17 of 234. Every one of them is here:
 a difference with no entry fails `tsr docs:parity`.
 
 **Legacy or superseded by a modern API that is implemented.**
@@ -281,8 +282,6 @@ a difference with no entry fails `tsr docs:parity`.
 | Feature | Chrome | esdev |
 | --- | --- | --- |
 | XMLHttpRequest | yes | no |
-| File / FileReader | yes | no |
-| alert | yes | no |
 | Image | yes | no |
 | canvas.getContext | `context` | `missing` |
 | iframe.contentWindow | `window` | `null` |
@@ -458,6 +457,10 @@ a difference with no entry fails `tsr docs:parity`.
 | forms | input.valueAsNumber | yes | yes | yes | yes |
 | forms | input.valueAsDate | yes | yes | yes | yes |
 | forms | setSelectionRange | yes | yes | yes | yes |
+| forms | input.select | yes | yes | yes | yes |
+| forms | input.setRangeText | yes | yes | yes | yes |
+| forms | textarea.setSelectionRange | yes | yes | yes | yes |
+| forms | select() selects the value | `0-5` | `0-5` | `0-5` | `0-5` |
 | forms | labels collection | yes | yes | yes | yes |
 | forms | input.indeterminate | yes | yes | yes | yes |
 | forms | select.selectedOptions | yes | yes | yes | yes |
@@ -501,11 +504,13 @@ a difference with no entry fails `tsr docs:parity`.
 | window | WebSocket | yes | yes | yes | no |
 | window | Worker | yes | yes | no | no |
 | window | Blob | yes | yes | yes | yes |
-| window | File / FileReader | yes | no | yes | yes |
+| window | File / FileReader | yes | yes | yes | yes |
+| window | navigator takes properties | yes | yes | yes | yes |
+| window | Selection.setBaseAndExtent | yes | yes | yes | yes |
 | window | URL.createObjectURL | yes | yes | no | yes |
 | window | crypto.randomUUID | no | yes | yes | yes |
 | window | performance.now | yes | yes | yes | yes |
-| window | alert | yes | no | yes | no |
+| window | alert | yes | yes | yes | no |
 | window | scrollTo | yes | yes | yes | yes |
 | window | Image | yes | no | yes | yes |
 | window | canvas.getContext | `context` | `missing` | `null` | `null` |

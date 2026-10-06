@@ -5398,6 +5398,190 @@ fn test_dom_text_inputs_keep_and_clamp_selection_ranges() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Runs one `--dom` test file and asserts it passed, naming what it covers.
+fn run_dom_test(name: &str, file: &str, source: &str, what: &str) {
+    let dir = build_dir(name);
+    write_in(&dir, file, source);
+    let ran = esdev_in(&dir)
+        .args(["test", "--dom"])
+        .output()
+        .expect("spawn esdev test --dom");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        ran.status.success(),
+        "{what}:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+}
+
+/// `select()`, `setRangeText()` and the selection members on `<input>` and
+/// `<textarea>` alike, each the interface's own prototype member — which is
+/// where Testing Library's user-event looks for them.
+#[test]
+fn test_dom_text_controls_select_and_replace_ranges() {
+    run_dom_test(
+        "t_test_dom_text_controls",
+        "controls.test.mjs",
+        r#"import { test, assertEquals, assertThrows } from 'runtime:test';
+test('each member is the interface prototype own', () => {
+  for (const Class of [HTMLInputElement, HTMLTextAreaElement]) {
+    for (const name of ['select', 'setSelectionRange', 'setRangeText']) {
+      assertEquals(typeof Object.getOwnPropertyDescriptor(Class.prototype, name)?.value, 'function', `${Class.name}.${name}`);
+    }
+    for (const name of ['value', 'selectionStart', 'selectionEnd', 'selectionDirection']) {
+      assertEquals(typeof Object.getOwnPropertyDescriptor(Class.prototype, name)?.set, 'function', `${Class.name}.${name}`);
+    }
+  }
+});
+test('select() selects everything, and fires select as a task', async () => {
+  for (const tag of ['input', 'textarea']) {
+    const control = document.createElement(tag); control.value = 'hello';
+    document.body.append(control);
+    let fired = 0;
+    control.addEventListener('select', (event) => { fired++; assertEquals(event.bubbles, true); });
+    control.select();
+    assertEquals([control.selectionStart, control.selectionEnd, control.selectionDirection], [0, 5, 'none'], tag);
+    assertEquals(fired, 0, 'not synchronously');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(fired, 1, tag);
+    control.remove();
+  }
+});
+test('select() is a no-op where it has nothing to select', () => {
+  for (const type of ['number', 'email', 'checkbox', 'hidden']) {
+    const input = document.createElement('input'); input.type = type;
+    input.select();
+    assertEquals(input.selectionStart, null, type);
+  }
+});
+test('a textarea keeps a selection, and its value moves the cursor', () => {
+  const area = document.createElement('textarea'); area.value = 'one\ntwo';
+  assertEquals([area.selectionStart, area.selectionEnd, area.textLength], [7, 7, 7]);
+  area.setSelectionRange(2, 5, 'backward');
+  assertEquals([area.selectionStart, area.selectionEnd, area.selectionDirection], [2, 5, 'backward']);
+  area.selectionStart = 6;
+  assertEquals([area.selectionStart, area.selectionEnd], [6, 6]);
+  area.value = 'x';
+  assertEquals([area.selectionStart, area.selectionEnd, area.selectionDirection], [1, 1, 'none']);
+});
+test('setRangeText() replaces and places the selection by mode', () => {
+  const input = document.createElement('input'); input.value = 'abcdef';
+  input.setSelectionRange(2, 4);
+  input.setRangeText('XY');
+  assertEquals([input.value, input.selectionStart, input.selectionEnd], ['abXYef', 2, 4]);
+  input.setRangeText('123', 0, 2, 'select');
+  assertEquals([input.value, input.selectionStart, input.selectionEnd], ['123XYef', 0, 3]);
+  input.setRangeText('', 0, 3, 'start');
+  assertEquals([input.value, input.selectionStart, input.selectionEnd], ['XYef', 0, 0]);
+  input.setRangeText('!', 4, 4, 'end');
+  assertEquals([input.value, input.selectionStart, input.selectionEnd], ['XYef!', 5, 5]);
+  input.setSelectionRange(3, 5);
+  input.setRangeText('--', 0, 1, 'preserve');
+  assertEquals([input.value, input.selectionStart, input.selectionEnd], ['--Yef!', 4, 6]);
+  assertThrows(() => input.setRangeText('z', 3, 1), DOMException);
+  input.type = 'email';
+  assertThrows(() => input.setRangeText('z'), DOMException);
+});
+"#,
+        "DOM text-control selection test did not run",
+    );
+}
+
+/// `navigator` is an ordinary object, as a browser's is: a library can add to
+/// it, and user-event's `setup()` installs its clipboard stub that way.
+#[test]
+fn test_dom_navigator_takes_properties_of_its_own() {
+    run_dom_test(
+        "t_test_dom_navigator",
+        "navigator.test.mjs",
+        r#"import { test, assertEquals } from 'runtime:test';
+test('navigator is a Navigator that takes properties', () => {
+  assertEquals(navigator instanceof Navigator, true);
+  assertEquals(Object.prototype.toString.call(navigator), '[object Navigator]');
+  assertEquals([navigator.userAgent, navigator.language, navigator.languages[0]], ['esdev DOM', 'en-US', 'en-US']);
+  const clipboard = {};
+  Object.defineProperty(navigator, 'clipboard', { get: () => clipboard, configurable: true });
+  assertEquals(navigator.clipboard, clipboard);
+  delete navigator.clipboard;
+  assertEquals(navigator.clipboard, undefined);
+});
+"#,
+        "DOM navigator test did not run",
+    );
+}
+
+/// `setBaseAndExtent()` and `extend()` keep the anchor where it was put, so a
+/// selection made right to left reports its anchor at the range's end.
+#[test]
+fn test_dom_selection_keeps_its_anchor_and_focus() {
+    run_dom_test(
+        "t_test_dom_selection_extent",
+        "extent.test.mjs",
+        r#"import { test, assertEquals, assertThrows } from 'runtime:test';
+test('setBaseAndExtent and extend', () => {
+  document.body.innerHTML = '<p>hello world</p>';
+  const text = document.querySelector('p').firstChild;
+  const selection = document.getSelection();
+  selection.setBaseAndExtent(text, 1, text, 4);
+  assertEquals([selection.anchorOffset, selection.focusOffset, String(selection)], [1, 4, 'ell']);
+  assertEquals([selection.getRangeAt(0).startOffset, selection.getRangeAt(0).endOffset], [1, 4]);
+  selection.setBaseAndExtent(text, 5, text, 2);
+  assertEquals([selection.anchorOffset, selection.focusOffset, String(selection)], [5, 2, 'llo']);
+  assertEquals([selection.getRangeAt(0).startOffset, selection.getRangeAt(0).endOffset], [2, 5]);
+  selection.extend(text, 8);
+  assertEquals([selection.anchorOffset, selection.focusOffset, selection.isCollapsed], [5, 8, false]);
+  assertThrows(() => selection.setBaseAndExtent(text, 99, text, 0), DOMException);
+  selection.removeAllRanges();
+  assertThrows(() => selection.extend(text, 1), DOMException);
+});
+"#,
+        "DOM selection extent test did not run",
+    );
+}
+
+/// `FileReader` reads a Blob through events, as user-event's clipboard does.
+#[test]
+fn test_dom_file_reader_reads_blobs_through_events() {
+    run_dom_test(
+        "t_test_dom_file_reader",
+        "reader.test.mjs",
+        r#"import { test, assertEquals, assertThrows } from 'runtime:test';
+const read = (method, blob, ...args) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  const seen = [];
+  for (const type of ['loadstart', 'progress', 'load', 'loadend']) reader.addEventListener(type, () => seen.push(type));
+  reader.onerror = reject;
+  reader.onloadend = () => resolve({ result: reader.result, seen, state: reader.readyState });
+  reader[method](blob, ...args);
+  assertEquals(reader.readyState, FileReader.LOADING);
+});
+test('every read shape', async () => {
+  const blob = new Blob(['héllo'], { type: 'text/plain' });
+  const text = await read('readAsText', blob);
+  assertEquals([text.result, text.state], ['héllo', FileReader.DONE]);
+  assertEquals(text.seen, ['loadstart', 'progress', 'load', 'loadend']);
+  assertEquals(new Uint8Array((await read('readAsArrayBuffer', blob)).result).length, 6);
+  assertEquals((await read('readAsDataURL', new Blob(['hi'], { type: 'text/plain' }))).result, 'data:text/plain;base64,aGk=');
+  assertEquals((await read('readAsBinaryString', new Blob([new Uint8Array([104, 255])]))).result, 'hÿ');
+});
+test('abort and refusals', async () => {
+  const reader = new FileReader();
+  const seen = [];
+  reader.onabort = () => seen.push('abort');
+  reader.onload = () => seen.push('load');
+  reader.readAsText(new Blob(['x']));
+  assertThrows(() => reader.readAsText(new Blob(['y'])), DOMException);
+  reader.abort();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assertEquals([seen, reader.result, reader.readyState], [['abort'], null, FileReader.DONE]);
+  assertThrows(() => new FileReader().readAsText('not a blob'), TypeError);
+});
+"#,
+        "DOM FileReader test did not run",
+    );
+}
+
 #[test]
 fn test_dom_selector_pseudo_classes_reject_malformed_and_unsupported_syntax() {
     let dir = build_dir("t_test_dom_selector_pseudo_errors");
