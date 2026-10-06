@@ -252,6 +252,20 @@ fn req(method: &str, path: &str, extra: &[&str]) -> String {
     r
 }
 
+/// Waits for the preview's stderr log (after its URL line) to mention `text`.
+fn logged(dir: &Path, text: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if std::fs::read_to_string(dir.join("server-stderr.log"))
+            .is_ok_and(|log| log.contains(text))
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 fn status(a: &Answer) -> &str {
     a.status.split_whitespace().nth(1).unwrap_or("")
 }
@@ -664,6 +678,11 @@ fn a_miss_is_a_404_by_default() {
     let dir = fixture(NAME);
     let (preview, port) = start(&dir);
     let _preview = preview;
+    // The default is said at startup, with the flag that changes it.
+    assert!(
+        logged(&dir, "static: a missing path is a 404 (--spa"),
+        "no startup line naming the miss behaviour"
+    );
     // No fallback without --spa: a route-like miss is a miss.
     let route = get(port, &req("GET", "/about", &[]));
     assert_eq!(status(&route), "404");
@@ -681,6 +700,10 @@ fn a_site_404_page_answers_every_miss_with_404() {
     std::fs::write(dir.join("404.html"), "<h1>not here</h1>").expect("404 page");
     let (preview, port) = start(&dir);
     let _preview = preview;
+    assert!(
+        logged(&dir, "static: a missing path gets 404.html with status 404"),
+        "no startup line naming the site's 404 page"
+    );
     // A route-like miss gets the site's page, not the index, and says 404.
     let route = get(port, &req("GET", "/missing/page", &[]));
     assert_eq!(status(&route), "404");
@@ -721,6 +744,13 @@ fn spa_routes_reach_the_index_even_beside_a_404_page() {
     std::fs::write(dir.join("404.html"), "<h1>not here</h1>").expect("404 page");
     let (preview, port) = start_with(&dir, &["--spa".to_string()]);
     let _preview = preview;
+    assert!(
+        logged(
+            &dir,
+            "--spa: a missing path without an extension gets index.html"
+        ),
+        "no startup line for --spa"
+    );
     // The flag says the output is an app: its router owns every route.
     let route = get(port, &req("GET", "/missing/page", &[]));
     assert_eq!(status(&route), "200");

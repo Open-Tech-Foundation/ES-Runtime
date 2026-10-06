@@ -132,10 +132,27 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
             dir.strip_prefix(&root).unwrap_or(&dir).display()
         ))
     );
+    eprintln!(
+        "{}",
+        paint.dim(miss_line(config.spa, dir.join("404.html").is_file()))
+    );
 
     tokio::select! {
         () = crate::devserver::serve(listener, server) => Ok(()),
         _ = tokio::signal::ctrl_c() => Ok(()),
+    }
+}
+
+/// The startup line that says how a miss is answered, and which flag changes
+/// it — a static default that 404s a router's routes is otherwise found by a
+/// reload, not by reading.
+fn miss_line(spa: bool, has_404_page: bool) -> &'static str {
+    match (spa, has_404_page) {
+        (true, _) => "  --spa: a missing path without an extension gets index.html",
+        (false, true) => {
+            "  static: a missing path gets 404.html with status 404 (--spa for a client-side router)"
+        }
+        (false, false) => "  static: a missing path is a 404 (--spa for a client-side router)",
     }
 }
 
@@ -263,5 +280,15 @@ mod tests {
         ))
         .expect_err("refused");
         assert!(err.contains("--dir"), "{err}");
+    }
+
+    #[test]
+    fn the_startup_line_names_the_miss_behaviour_and_the_flag() {
+        assert!(miss_line(false, false).contains("is a 404"));
+        assert!(miss_line(false, false).contains("--spa"));
+        assert!(miss_line(false, true).contains("404.html with status 404"));
+        assert!(miss_line(false, true).contains("--spa"));
+        assert!(miss_line(true, true).contains("index.html"));
+        assert_eq!(miss_line(true, false), miss_line(true, true));
     }
 }
