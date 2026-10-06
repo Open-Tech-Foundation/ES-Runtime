@@ -87,6 +87,7 @@ impl Pass for JsxPass {
                 map,
                 module_type: Some("js".to_string()),
                 depends_on: Vec::new(),
+                side_effects: None,
             }))
         })
     }

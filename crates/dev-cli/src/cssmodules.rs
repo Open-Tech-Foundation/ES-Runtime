@@ -132,6 +132,23 @@ impl Files {
     }
 }
 
+/// The ids of the plain stylesheets a `--lib` build reduced to empty modules.
+#[derive(Debug, Default, Clone)]
+pub struct Stubs(Arc<std::sync::Mutex<std::collections::HashSet<String>>>);
+
+impl Stubs {
+    fn record(&self, id: &str) {
+        if let Ok(mut ids) = self.0.lock() {
+            ids.insert(crate::adapter::guest_id(id).to_string());
+        }
+    }
+
+    /// Whether `id` is one of them.
+    pub fn contains(&self, id: &str) -> bool {
+        self.0.lock().is_ok_and(|ids| ids.contains(id))
+    }
+}
+
 /// Whether a module id names a CSS Modules stylesheet.
 ///
 /// The `.module.css` convention rather than a config key: it is what every
@@ -164,6 +181,9 @@ pub struct CssModules {
     root: PathBuf,
     collected: Collected,
     minify: bool,
+    /// A `--lib` build, and where it records the stylesheets it stubbed: see
+    /// [`CssModules::for_library`].
+    library: Option<Stubs>,
     hooks: Hooks,
 }
 
@@ -173,6 +193,7 @@ impl CssModules {
             root: root.to_path_buf(),
             collected,
             minify,
+            library: None,
             // No filter on the id: a module is a stylesheet because its type
             // is `css`, which is what a plugin compiling `.scss` says it made
             // (D149), and the type is only known when the hook is called. The
@@ -190,6 +211,23 @@ impl CssModules {
                 ..Hooks::default()
             },
         }
+    }
+
+    /// The pass a `--lib` build installs. A plain stylesheet's import is
+    /// dropped from the output: the build copies every `.css` beside the
+    /// modules, and a published module importing `./button.css` would fail
+    /// anywhere that is not a CSS-aware bundler — Node, a server render,
+    /// esrun. What would be left in its place is an empty module of its own,
+    /// so the stub is marked side-effect free and the bundler removes it with
+    /// the import. A consumer imports the copied stylesheet through the
+    /// package's `exports`.
+    ///
+    /// Tree-shaking is off in a library build, so the bundler still writes the
+    /// stub as a file of its own; its id goes into `stubs` for the build to
+    /// remove that file once it is written.
+    pub fn for_library(mut self, stubs: Stubs) -> Self {
+        self.library = Some(stubs);
+        self
     }
 }
 
@@ -226,6 +264,7 @@ impl contract::Pass for CssModules {
             let names = self
                 .stylesheet(path, code, &read)
                 .map_err(|e| format!("{}: {e}", self.ident(path)))?;
+            let plain = names.is_none();
 
             Ok(Some(ModuleResult {
                 code: match names {
@@ -249,6 +288,13 @@ impl contract::Pass for CssModules {
                 // this a save to one of them rebuilds nothing and the page
                 // keeps the rules it had.
                 depends_on: read.take(),
+                side_effects: match &self.library {
+                    Some(stubs) if plain => {
+                        stubs.record(id);
+                        Some(false)
+                    }
+                    _ => None,
+                },
             }))
         })
     }

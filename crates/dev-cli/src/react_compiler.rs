@@ -164,6 +164,7 @@ fn transform_module(
             // normal type erasure, JSX lowering, and Fast Refresh pass.
             module_type: None,
             depends_on: Vec::new(),
+            side_effects: None,
         }),
         diagnostics.into_iter().collect(),
     ))

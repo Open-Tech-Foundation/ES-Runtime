@@ -290,6 +290,7 @@ impl contract::Pass for Assets {
                 module_type: Some("js".to_string()),
                 map: None,
                 depends_on: Vec::new(),
+                side_effects: None,
             }))
         })
     }

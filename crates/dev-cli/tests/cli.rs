@@ -10559,6 +10559,110 @@ fn a_library_keeps_css_at_its_exports_map_path() {
     );
 }
 
+/// Every file under `dir`, recursively.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// A component that imports its stylesheet (D156): the library ships the
+/// `.css` beside the modules and drops the import from its JavaScript — which
+/// would fail anywhere but a CSS-aware bundler — without leaving the empty
+/// module the stylesheet became. A `package.json` whose `exports` cannot reach
+/// the stylesheets is warned about, naming the line to add.
+#[test]
+fn a_library_drops_its_css_imports_and_warns_when_exports_miss_them() {
+    let dir = build_dir("lib_css_imports");
+    std::fs::create_dir_all(dir.join("src/parts")).expect("create source");
+    write_in(
+        &dir,
+        "src/button.js",
+        "import './button.css';\nexport const Button = () => 'b';\n",
+    );
+    write_in(&dir, "src/button.css", ".btn { color: red }\n");
+    write_in(
+        &dir,
+        "src/parts/card.js",
+        "import './card.css';\nexport const Card = () => 'c';\n",
+    );
+    write_in(&dir, "src/parts/card.css", ".card { color: blue }\n");
+    write_in(
+        &dir,
+        "src/index.js",
+        "export * from './button.js';\nexport * from './parts/card.js';\n",
+    );
+    let build = |manifest: &str| {
+        write_in(&dir, "package.json", manifest);
+        let _ = std::fs::remove_dir_all(dir.join("dist"));
+        let out = esdev_in(&dir)
+            .args(["build", "--lib", "src", "--format=esm,cjs", "--no-types"])
+            .output()
+            .expect("spawn esdev");
+        assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+        format!("{}{}", stdout(&out), stderr(&out))
+    };
+
+    let text =
+        build(r#"{ "name": "kit", "type": "module", "exports": { ".": "./dist/index.js" } }"#);
+    for module in ["button.js", "button.cjs", "parts/card.js", "parts/card.cjs"] {
+        let code = std::fs::read_to_string(dir.join("dist").join(module)).expect("module");
+        assert!(
+            !code.contains(".css"),
+            "{module} still imports its stylesheet:\n{code}"
+        );
+    }
+    let mut files: Vec<String> = Vec::new();
+    for entry in walk(&dir.join("dist")) {
+        files.push(
+            entry
+                .strip_prefix(dir.join("dist"))
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/"),
+        );
+    }
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "button.cjs",
+            "button.css",
+            "button.js",
+            "index.cjs",
+            "index.js",
+            "parts/card.cjs",
+            "parts/card.css",
+            "parts/card.js",
+        ],
+        "no stub module for a stylesheet"
+    );
+    assert!(text.contains("3 modules"), "{text}");
+    assert!(
+        text.contains(r#"warning: these stylesheets are not in package.json "exports", so a consumer cannot import them: dist/button.css, dist/parts/card.css"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"Add to "exports": "./*.css": "./dist/*.css""#),
+        "{text}"
+    );
+
+    // Exported: quiet. No `exports` at all: everything is importable, quiet.
+    let text = build(
+        r#"{ "name": "kit", "exports": { ".": "./dist/index.js", "./*.css": "./dist/*.css" } }"#,
+    );
+    assert!(!text.contains("warning:"), "{text}");
+    let text = build(r#"{ "name": "kit" }"#);
+    assert!(!text.contains("warning:"), "{text}");
+}
+
 /// CSS Modules: a stylesheet the *JavaScript* imports, rather than one the
 /// document links.
 ///

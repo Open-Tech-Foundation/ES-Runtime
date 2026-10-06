@@ -220,6 +220,7 @@ impl contract::Pass for ModuleUrl {
                 module_type: None,
                 map: Some(map.to_json_string()),
                 depends_on,
+                side_effects: None,
             }))
         })
     }

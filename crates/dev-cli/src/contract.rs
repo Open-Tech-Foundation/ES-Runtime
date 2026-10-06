@@ -705,6 +705,11 @@ pub struct ModuleResult {
     /// a build that serves stale output, which is the failure that is hardest
     /// to notice and worst to debug.
     pub depends_on: Vec<String>,
+    /// `Some(false)` when nothing is lost by dropping the module if nothing
+    /// uses its exports: the bundler then removes it and the import naming it.
+    /// `None` leaves the bundler's own analysis. Not part of the guest
+    /// contract; esdev's own passes set it.
+    pub side_effects: Option<bool>,
 }
 
 /// Reads a `resolve` answer.
@@ -748,6 +753,7 @@ pub fn module_result(value: &Value, hook: Hook) -> Result<Option<ModuleResult>, 
                     .filter(|json| !json.is_empty())
                     .map(str::to_string),
                 depends_on: depends_on(value),
+                side_effects: None,
             }))
         }
         other => Err(format!(

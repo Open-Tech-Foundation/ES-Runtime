@@ -374,7 +374,7 @@ impl Plugin for Adapter {
             code: result.code.into(),
             map: result.map,
             module_type: result.module_type,
-            ..HookLoadOutput::default()
+            side_effects: side_effects(result.side_effects),
         }))
     }
 
@@ -413,8 +413,8 @@ impl Plugin for Adapter {
                 // which leaves the chain alone. `Null` would *break* it.
                 None => HookTransformOutputMap::Omitted,
             },
+            side_effects: side_effects(result.side_effects),
             module_type: result.module_type,
-            ..HookTransformOutput::default()
         }))
     }
 
@@ -507,6 +507,17 @@ pub(crate) fn produced(bundle: &[rolldown_common::Output]) -> Vec<contract::Outp
 /// entry lands verbatim, and the same file appears in `watchFiles` twice —
 /// once as the graph found it and once as the plugin spelled it — so a
 /// consumer matching a change against its dependency set misses half the time.
+/// The contract's `side_effects` in the backend's terms.
+fn side_effects(value: Option<bool>) -> Option<rolldown_common::side_effects::HookSideEffects> {
+    value.map(|value| {
+        if value {
+            rolldown_common::side_effects::HookSideEffects::True
+        } else {
+            rolldown_common::side_effects::HookSideEffects::False
+        }
+    })
+}
+
 fn declare(ctx: &Arc<dyn contract::Context>, files: &[String]) {
     if files.is_empty() {
         return;
@@ -644,6 +655,7 @@ struct Module {
     map: Option<rolldown_sourcemap::SourceMap>,
     module_type: Option<ModuleType>,
     depends_on: Vec<String>,
+    side_effects: Option<bool>,
 }
 
 fn convert(result: contract::ModuleResult, hook: Hook) -> anyhow::Result<Module> {
@@ -669,6 +681,7 @@ fn convert(result: contract::ModuleResult, hook: Hook) -> anyhow::Result<Module>
         map,
         module_type,
         depends_on: result.depends_on,
+        side_effects: result.side_effects,
     })
 }
 

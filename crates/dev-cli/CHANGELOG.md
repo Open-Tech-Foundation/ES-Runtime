@@ -45,6 +45,12 @@ is the point, since none of the three has any business in a deployment.
   paths were handled, so the file was missing from `dist/` and 404'd. It works
   in builds, the dev loop, `esdev preview`, `esdev test --browser` and `--lib`
   builds (D155).
+- A `--lib` module that imports its own stylesheet (`import "./button.css"`)
+  no longer comes out importing an empty `button2.js` stub: the import is
+  removed and no stub is written, and the stylesheet ships beside the module
+  as before. When the package's `exports` cannot reach a copied stylesheet,
+  the build warns and names the line to add (`"./*.css": "./dist/*.css"`).
+  esdev never edits `package.json` (D156).
 - A plugin's `ctx.info()` is printed by `esdev build` and `esdev start` as it
   already was by `esdev test`, and every command prints a plugin's `warn` and
   `info` the same way (`warning: <plugin>: …`, `info: <plugin>: …`).

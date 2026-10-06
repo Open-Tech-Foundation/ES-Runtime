@@ -437,12 +437,52 @@ fn collect_sources(root: &Path, dir: &Path, entries: &mut Vec<(String, String)>)
     }
 }
 
+/// Deletes the files a `--lib` build wrote for its stylesheet stubs, and drops
+/// them from what the build reports.
+///
+/// The import of a plain stylesheet is already gone from every module (see
+/// [`crate::cssmodules::CssModules::for_library`]); what is left is the empty
+/// module the stylesheet became, written as `button2.js` beside the real
+/// `button.js` because tree-shaking is off in a library. Nothing imports it, it
+/// has no content, and shipping it would put a file in the package that only
+/// exists because of how the build works.
+fn remove_stylesheet_stubs(
+    files: Vec<crate::contract::Output>,
+    stubs: &crate::cssmodules::Stubs,
+    dir: &Path,
+) -> Vec<crate::contract::Output> {
+    files
+        .into_iter()
+        .filter(|file| {
+            let crate::contract::Output::Chunk {
+                file_name,
+                module_ids,
+                ..
+            } = file
+            else {
+                return true;
+            };
+            if module_ids.is_empty() || !module_ids.iter().all(|id| stubs.contains(id)) {
+                return true;
+            }
+            let path = dir.join(file_name);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_file_name(format!("{file_name}.map")));
+            false
+        })
+        .collect()
+}
+
 /// CSS is a published library surface too: packages commonly export
 /// `./styles.css`, and an exports map cannot name a content-hashed file.  Keep
 /// each stylesheet at its source-relative name, so its own relative @imports
 /// continue to work without inventing a URL policy for the consumer.
-fn copy_library_styles(root: &Path, dir: &Path, out: &Path) -> Result<usize, String> {
-    let mut copied = 0;
+fn copy_library_styles(
+    root: &Path,
+    dir: &Path,
+    out: &Path,
+    copied: &mut Vec<String>,
+) -> Result<(), String> {
     let read = std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     for entry in read.flatten() {
         let path = entry.path();
@@ -451,7 +491,7 @@ fn copy_library_styles(root: &Path, dir: &Path, out: &Path) -> Result<usize, Str
             continue;
         }
         if path.is_dir() {
-            copied += copy_library_styles(root, &path, out)?;
+            copy_library_styles(root, &path, out, copied)?;
         } else if path
             .extension()
             .is_some_and(|extension| extension == CSS_EXTENSION)
@@ -464,10 +504,110 @@ fn copy_library_styles(root: &Path, dir: &Path, out: &Path) -> Result<usize, Str
             }
             std::fs::copy(&path, &target)
                 .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
-            copied += 1;
+            copied.push(relative.to_string_lossy().replace('\\', "/"));
         }
     }
-    Ok(copied)
+    Ok(())
+}
+
+/// Warns when a library ships stylesheets its `package.json` does not export.
+///
+/// A library's JavaScript no longer imports its CSS (D156), so a consumer
+/// imports `my-lib/button.css` — and Node, and every bundler that follows
+/// `exports`, refuses a subpath the map does not list. esdev does not edit
+/// `package.json`: `exports` is the package's public surface and its author's
+/// to write. It reads it, and names the line that is missing.
+///
+/// Quiet when there is no `package.json` above the output, or it has no
+/// `exports` — without one, every file in the package is importable.
+fn warn_unexported_styles(root: &Path, out: &Path, styles: &[String]) {
+    if styles.is_empty() {
+        return;
+    }
+    let out = root.join(out);
+    let Some(package) = out
+        .ancestors()
+        .find(|dir| dir.join("package.json").is_file())
+    else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(package.join("package.json")) else {
+        return;
+    };
+    let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(exports) = manifest.get("exports") else {
+        return;
+    };
+    let mut targets = Vec::new();
+    export_targets(exports, &mut targets);
+    let dir = out
+        .strip_prefix(package)
+        .unwrap_or(&out)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let prefix = if dir.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{dir}")
+    };
+    let missing: Vec<String> = styles
+        .iter()
+        .map(|style| format!("{prefix}/{style}"))
+        .filter(|file| !targets.iter().any(|target| exported(target, file)))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let shown: Vec<&str> = missing
+        .iter()
+        .map(|file| file.trim_start_matches("./"))
+        .collect();
+    crate::bundler::warn(format!(
+        "{} not in package.json \"exports\", so a consumer cannot import {}: {}\n\
+         Add to \"exports\": \"./*.css\": \"{prefix}/*.css\"",
+        if missing.len() == 1 {
+            "this stylesheet is"
+        } else {
+            "these stylesheets are"
+        },
+        if missing.len() == 1 { "it" } else { "them" },
+        shown.join(", "),
+    ));
+}
+
+/// Every file target an `exports` value names: a string, an array of
+/// fallbacks, a conditions object, or a subpath map of any of those.
+fn export_targets(value: &serde_json::Value, targets: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(target) => targets.push(target.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                export_targets(item, targets);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                export_targets(item, targets);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether one `exports` target reaches `file` (`./dist/button.css`): the file
+/// itself, a `*` pattern around it, or a folder mapping ending in `/`.
+fn exported(target: &str, file: &str) -> bool {
+    if let Some((before, after)) = target.split_once('*') {
+        return file.len() >= before.len() + after.len()
+            && file.starts_with(before)
+            && file.ends_with(after);
+    }
+    if target.ends_with('/') {
+        return file.starts_with(target);
+    }
+    target == file
 }
 
 /// A stylesheet named directly on the command line is an entry in its own
@@ -673,6 +813,9 @@ pub struct Built {
     /// Every chunk and asset the bundler wrote, `file_name` relative to the
     /// output directory: what a `finish` hook is shown (D153).
     pub produced: Vec<crate::contract::Output>,
+    /// A library's copied stylesheets, relative to its output directory —
+    /// what [`warn_unexported_styles`] checks against `exports`.
+    pub styles: Vec<String>,
 }
 
 /// Bundles `config` and reports what was written.
@@ -694,6 +837,7 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
         return build_stylesheet_entry(&config, &cwd).map(|(report, file_name)| Built {
             report,
             produced: vec![crate::contract::Output::Asset { file_name }],
+            styles: Vec::new(),
         });
     }
 
@@ -868,6 +1012,7 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
     });
 
     let mut produced = Vec::new();
+    let stubs = crate::cssmodules::Stubs::default();
     for format in &formats {
         // A library's output tree is named after its module system: `[name].js`
         // for the ES modules and `[name].cjs` for the CommonJS ones, so both can
@@ -961,12 +1106,18 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
                 ),
             ));
         }
+        let styles = crate::cssmodules::CssModules::new(
+            &cwd,
+            crate::cssmodules::Collected::new(),
+            config.minify,
+        );
+        let styles = if config.lib {
+            styles.for_library(stubs.clone())
+        } else {
+            styles
+        };
         own_plugins.extend([
-            std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                &cwd,
-                crate::cssmodules::Collected::new(),
-                config.minify,
-            )) as std::sync::Arc<dyn crate::contract::Pass>,
+            std::sync::Arc::new(styles) as std::sync::Arc<dyn crate::contract::Pass>,
             std::sync::Arc::new(crate::jsx::JsxPass::new(config.jsx.clone())),
             std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
             if config.lib {
@@ -1012,7 +1163,9 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
             })
             .map(|output| {
                 crate::print_warnings!(output);
-                produced.extend(crate::adapter::produced(&output.assets));
+                let files = crate::adapter::produced(&output.assets);
+                let files = remove_stylesheet_stubs(files, &stubs, &cwd.join(&out_dir));
+                produced.extend(files);
             })?;
     }
 
@@ -1056,6 +1209,7 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
                 size as f64 / 1024.0
             ),
             produced,
+            styles: Vec::new(),
         });
     }
 
@@ -1103,19 +1257,23 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
     // most needs them — npm shows the README on the package page — and until
     // `esdev.json` could describe a library build, a `--lib` target had no way
     // to name them at all.
-    let styles = copy_library_styles(&root, &root, &out_dir)?;
+    let mut styles = Vec::new();
+    copy_library_styles(&root, &root, &out_dir, &mut styles)?;
+    styles.sort();
     let copied = copy_assets(&config.assets, &cwd, &out_dir)?;
     counted.push_str(&copied);
-    if styles > 0 {
+    if !styles.is_empty() {
         counted.push_str(&format!(
-            ", {styles} stylesheet{}",
-            if styles == 1 { "" } else { "s" }
+            ", {} stylesheet{}",
+            styles.len(),
+            if styles.len() == 1 { "" } else { "s" }
         ));
     }
     warn_about_runtime_imports(&formats, &runtime_imports);
     Ok(Built {
         report: format!("{}/ ({counted})", out_dir.display()),
         produced,
+        styles,
     })
 }
 
@@ -2209,6 +2367,14 @@ async fn build_targets(
             paint.dim("→"),
             staging.reveal(&written)
         );
+        // The release build, where the package is: a dev loop's output is
+        // mirrored elsewhere and published by nobody.
+        if target.lib
+            && !dev_loop
+            && let crate::config::Output::Dir(dir) = &target.output
+        {
+            warn_unexported_styles(&settings.source.root, Path::new(dir), &built.styles);
+        }
     }
 
     // Every bundle exists before any of them runs. A prerender step renders the
@@ -2312,9 +2478,12 @@ async fn build_single(mut config: BuildConfig) -> Result<String, String> {
         ));
     }
     let mut staging = crate::staging::Staging::new(&root, true)?;
+    // Where a library lands once staging commits, for the `exports` check.
+    let mut library = None;
 
     if config.lib {
         let out = PathBuf::from(config.out.clone().unwrap_or_else(|| "dist".to_string()));
+        library = Some(out.clone());
         // Against the real directory: what the refusals are about is the
         // directory that is going to be replaced, not the one being written now.
         guard_replacement(&root.join(&out), &root.join(&config.source))?;
@@ -2339,11 +2508,12 @@ async fn build_single(mut config: BuildConfig) -> Result<String, String> {
         config.out = Some(staging.path(out).to_string_lossy().into_owned());
     }
 
-    let written = build(config)
-        .await
-        .map_err(|e| staging.reveal(&e))
-        .map(|built| staging.reveal(&built.report))?;
+    let built = build(config).await.map_err(|e| staging.reveal(&e))?;
+    let written = staging.reveal(&built.report);
     staging.commit()?;
+    if let Some(out) = library {
+        warn_unexported_styles(&root, &out, &built.styles);
+    }
     Ok(written)
 }
 
@@ -2422,6 +2592,43 @@ fn bundle_declarations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_exports_target_reaches_a_file_exactly_by_pattern_or_by_folder() {
+        assert!(exported("./dist/button.css", "./dist/button.css"));
+        assert!(!exported("./dist/index.js", "./dist/button.css"));
+        assert!(exported("./dist/*.css", "./dist/parts/card.css"));
+        assert!(exported("./dist/*", "./dist/button.css"));
+        assert!(!exported("./dist/*.js", "./dist/button.css"));
+        assert!(exported("./dist/", "./dist/button.css"));
+        assert!(!exported("./lib/", "./dist/button.css"));
+    }
+
+    #[test]
+    fn every_shape_of_exports_yields_its_targets() {
+        let exports = serde_json::json!({
+            ".": { "import": "./dist/index.js", "require": "./dist/index.cjs" },
+            "./styles": ["./dist/styles.css", "./fallback.css"],
+            "./*.css": "./dist/*.css",
+            "./private": null,
+        });
+        let mut targets = Vec::new();
+        export_targets(&exports, &mut targets);
+        targets.sort();
+        assert_eq!(
+            targets,
+            [
+                "./dist/*.css",
+                "./dist/index.cjs",
+                "./dist/index.js",
+                "./dist/styles.css",
+                "./fallback.css"
+            ]
+        );
+        let mut sugar = Vec::new();
+        export_targets(&serde_json::json!("./dist/index.js"), &mut sugar);
+        assert_eq!(sugar, ["./dist/index.js"]);
+    }
 
     #[test]
     fn the_output_defaults_to_dist_beside_the_entry_name() {

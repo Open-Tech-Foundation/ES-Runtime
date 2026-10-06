@@ -52,6 +52,42 @@ esdev build --lib src
 This is deliberately passthrough rather than a hashed deploy asset: a library's
 consumer controls caching and where its CSS is served.
 
+### A component that imports its stylesheet
+
+A module may import its own stylesheet, so the two stay together while you
+work on them:
+
+```js
+// src/button.js
+import "./button.css";
+export function Button() { /* … */ }
+```
+
+The stylesheet is copied like any other, and the import is **removed** from the
+published module. A `.css` import works only in a bundler that understands it;
+in Node, in a server render or under `esrun` it fails. The consumer imports the
+stylesheet instead, through your `exports`:
+
+```js
+import { Button } from "my-lib";
+import "my-lib/button.css";
+```
+
+That subpath has to be in `exports`. One line covers every stylesheet:
+
+```json
+{
+  "exports": {
+    ".": "./dist/index.js",
+    "./*.css": "./dist/*.css"
+  }
+}
+```
+
+esdev does not edit `package.json`. When `exports` cannot reach a copied
+stylesheet, the build warns and names the line to add. A package with no
+`exports` field gets no warning, because every file in it is importable.
+
 ## Declarations
 
 Declarations are derived from what the source **says**, never from what a

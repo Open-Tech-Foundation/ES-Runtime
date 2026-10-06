@@ -3212,3 +3212,20 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Resolving the path as an import** (extensions, aliases, `exports`). `new URL("./data", …)` names a file called `data`; guessing `data.js` would change what the program asks for.
 
 **Consequences:** `new URL()` assets work in builds, the dev loop, preview and browser tests with no `public/` workaround, for every framework, since the pass runs in every build. A literal that names a non-module file now changes the output; a project that relied on it staying verbatim (with the file placed beside the bundle by hand) gets a hashed copy instead.
+
+### D156 — A library drops its CSS imports and ships the stylesheets · *Accepted (2026-10-07)* · *amends the library build's stylesheet passthrough*
+
+**Context:** `--lib` already copied every `.css` under the source directory to its source-relative path, so an `exports` map can name it. But a module that imported its own stylesheet (`import "./button.css"`) came out importing `./button2.js`: the CSS pass had turned the stylesheet into an empty module, and with modules preserved and tree-shaking off, that module was written as a file of its own. The published package carried empty stubs, and the module no longer named its stylesheet in any form a consumer could use. Leaving `import "./button.css"` in the output instead would work only in a CSS-aware bundler; Node, server rendering and `esrun` refuse it.
+
+**Decision:**
+
+- **In `--lib`, a plain stylesheet's import is removed from the module**, and the empty module it became is not written. The CSS pass marks the stub side-effect free (the bundler drops the import) and records its id; the build deletes the file the bundler still wrote for it. CSS Modules (`.module.css`) are unchanged: their import carries the class names.
+- **The stylesheet ships as before**, at its source-relative path, unhashed. One file per stylesheet, not one bundle: `--lib` has no single entry to name a bundle after (every module is an entry), and a library that wants one sheet keeps a `styles.css` that `@import`s the rest.
+- **esdev reads `package.json`, never writes it.** After a `--lib` build, if the nearest `package.json` above the output has `exports` and no target in it reaches a copied stylesheet (exactly, by a `*` pattern, or by a folder mapping), one warning names the stylesheets and the line to add: `"./*.css": "./dist/*.css"`. No `exports`, no warning: every file is importable then. Not in the dev loop, whose output nobody publishes.
+
+**Rejected:**
+- **Keeping the import** ("just copy"). It ties every consumer to a CSS-aware bundler, including this runtime's own server builds.
+- **One bundled `<name>.css`** (Vite's library mode). There is no entry to name it after, and it would drop the per-component files the passthrough already ships.
+- **Writing `exports` for the author.** `exports` is the package's public surface; a build tool that edits a committed manifest decides the API for its author.
+
+**Consequences:** a component library publishes modules that load anywhere, and stylesheets a consumer imports by subpath. Server and browser application targets are unchanged: an application bundle inlines the stub, and an HTML target links the hashed stylesheet.
