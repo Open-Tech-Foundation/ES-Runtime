@@ -3033,7 +3033,7 @@ sent to several sizes.
 
 | Method | Description |
 | --- | --- |
-| `resize(width, height?, options?)` | Omit either side (or pass `null`) to keep the aspect ratio. `fit`: `"fill"` (default, stretch), `"inside"`, `"outside"`, `"cover"` (fill the box, crop centred), `"contain"` (fit the box, pad centred with `background`). `filter`: `"lanczos3"` (default), `"lanczos2"`, `"mitchell"`, `"catmull-rom"` (`"cubic"`), `"bilinear"` (`"linear"`), `"box"`, `"nearest"`. `background`: a colour, default transparent. `withoutEnlargement`: never upscale. A JPEG resized to half its size or less is decoded at a reduced scale. |
+| `resize(width, height?, options?)` | Scale to a size. See [Resize options](#resize-options). |
 | `crop({ left, top, width, height })` | Keep that region. `left` and `top` default to `0`. A region outside the image is a `RangeError` from the terminal. |
 | `rotate(degrees)` | Clockwise, by a multiple of 90. Other angles are a `RangeError`. |
 | `flip()` / `flop()` | Mirror top to bottom / left to right. |
@@ -3046,6 +3046,44 @@ sent to several sizes.
 
 A colour is `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or
 `{ r, g, b, alpha }` with `alpha` from 0 to 1.
+
+### Resize options
+
+`resize(width, height?, options?)` scales to `width` × `height`. Omit either
+side, or pass `null`, to keep the aspect ratio: `resize(400)` is 400 pixels
+wide at the image's own proportions.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `fit` | `"fill"` | How the image meets the box. See below. |
+| `filter` | `"lanczos3"` | The resampling kernel. See below. |
+| `background` | transparent | The padding colour when `fit` is `"contain"`. |
+| `withoutEnlargement` | `false` | Never make the image larger than it is. |
+
+`fit`:
+
+| Value | Result |
+| --- | --- |
+| `"fill"` | Exactly `width` × `height`; the aspect ratio is not kept. |
+| `"inside"` | As large as fits inside the box, aspect ratio kept. |
+| `"outside"` | As small as covers the box, aspect ratio kept. |
+| `"cover"` | Fills the box, aspect ratio kept; the overflow is cropped from the centre. |
+| `"contain"` | Fits inside the box, aspect ratio kept; the rest is padded with `background`, centred. |
+
+`filter`:
+
+| Value | Use |
+| --- | --- |
+| `"lanczos3"` | Photographs. The sharpest. |
+| `"lanczos2"` | A little softer than `"lanczos3"`, with less ringing. |
+| `"mitchell"` | Balanced sharpness and smoothness. |
+| `"catmull-rom"` | Bicubic. `"cubic"` is the same filter. |
+| `"bilinear"` | Fast, soft. `"linear"` is the same filter. |
+| `"box"` | Averages; fast downscaling. |
+| `"nearest"` | Keeps exact pixel values: pixel art, masks. |
+
+A JPEG resized to half its size or less is decoded at a reduced scale, so a
+thumbnail of a large photo never holds the full-size image.
 
 ### Output formats
 
