@@ -27,6 +27,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:websocket`](#runtimewebsocket)
 - [`runtime:serialization`](#runtimeserialization)
 - [`runtime:hashing`](#runtimehashing)
+- [`runtime:images`](#runtimeimages)
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
 - [`runtime:workers`](#runtimeworkers)
@@ -889,6 +890,7 @@ the required capability has been granted.
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 | `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
+| `runtime:images`  | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimeimages) |
 | `runtime:workers` | Available   | `FileRead` / `FileWrite` — the same grants its state files need | [↓](#runtimeworkers) |
 | `runtime:build`   | Available — **`esdev` only** | `FileRead` (+ `FileWrite` to `write()`) | [↓](#runtimebuild) |
 | `runtime:test`    | Available — **`esdev` only** | none | [↓](#runtimetest) |
@@ -2986,6 +2988,115 @@ it, not a hundred concurrent calls. And **bcrypt refuses a password longer than
 different passwords the same password; verification still truncates, since a
 stored hash may have been written by an implementation that did.
 
+## `runtime:images`
+
+Decode, transform and encode images (DECISIONS D159), on
+[otf-pixels](https://crates.io/crates/otf-pixels). The chain is `Bun.Image`'s:
+`new Image(input)`, transforms that each return a new image, one output
+format, and an awaited terminal. Nothing is decoded until a terminal or
+`metadata()` is awaited, and the work runs off the event loop.
+
+- **Capability:** None for bytes in and bytes out. A `runtime:fs` `file()`
+  source needs `FileRead` and a `file()` destination `FileWrite`, checked and
+  jailed exactly as reading or writing that file would be.
+- **Status:** Available
+
+```js
+import { Image } from "runtime:images";
+import { file } from "runtime:fs";
+
+const image = new Image(await request.bytes(), { maxPixels: 40_000_000 });
+await image.metadata();                    // { width, height, format, pixelFormat, hasAlpha, animation }
+const thumb = await image.resize(400, 400, { fit: "cover" }).webp({ quality: 80 }).bytes();
+await image.resize(1600).avif().write(file("public/large.avif"));
+```
+
+### `new Image(input, options?)`
+
+`input` is a `Uint8Array`, an `ArrayBuffer`, any view, a `Blob`, or a
+`runtime:fs` `file()`. A path string is a `TypeError`: pass `file(path)`. A
+`SharedArrayBuffer` or a resizable buffer is a `TypeError`. The bytes are
+copied when a terminal is called, so changing the buffer afterwards does not
+change the result. The format is read from the bytes, never from a name.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `maxPixels` | `268402689` | An image over this many pixels fails at its header with `ERR_IMAGE_TOO_LARGE`, before anything is allocated. Set it per request for untrusted uploads. |
+| `autoOrient` | `true` | The orientation the file declares (EXIF, AVIF `irot`/`imir`) is applied, so `metadata()` reports the upright size. |
+| `toSrgb` | `true` | An embedded matrix/TRC ICC profile is converted to sRGB and dropped. Off, the pixels are kept as stored and the profile is written to outputs that can hold one. |
+| `animated` | `false` | Ask for every frame. Not yet supported: an animated input with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
+
+### Transforms
+
+Each returns a new `Image`; the original is unchanged, so one source can be
+sent to several sizes.
+
+| Method | Description |
+| --- | --- |
+| `resize(width, height?, options?)` | Omit either side (or pass `null`) to keep the aspect ratio. `fit`: `"fill"` (default, stretch), `"inside"`, `"outside"`, `"cover"` (fill the box, crop centred), `"contain"` (fit the box, pad centred with `background`). `filter`: `"lanczos3"` (default), `"lanczos2"`, `"mitchell"`, `"catmull-rom"` (`"cubic"`), `"bilinear"` (`"linear"`), `"box"`, `"nearest"`. `background`: a colour, default transparent. `withoutEnlargement`: never upscale. A JPEG resized to half its size or less is decoded at a reduced scale. |
+| `crop({ left, top, width, height })` | Keep that region. `left` and `top` default to `0`. A region outside the image is a `RangeError` from the terminal. |
+| `rotate(degrees)` | Clockwise, by a multiple of 90. Other angles are a `RangeError`. |
+| `flip()` / `flop()` | Mirror top to bottom / left to right. |
+| `modulate({ brightness?, saturation?, hue? })` | Multipliers for brightness and saturation (`1` unchanged, saturation `0` is grey); `hue` rotates by degrees. |
+| `blur(sigma)` | Gaussian blur, `sigma` in pixels. |
+| `sharpen(amount = 1)` | A 3×3 sharpen scaled by `amount`. |
+| `flatten({ background? })` | Draw over `background` (default black) and drop alpha. |
+| `grayscale()` | Convert to grey, keeping any alpha. |
+| `extractChannel(channel)` | One channel as a grey image: `0`–`3` or `"red"`, `"green"`, `"blue"`, `"alpha"`. |
+
+A colour is `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or
+`{ r, g, b, alpha }` with `alpha` from 0 to 1.
+
+### Output formats
+
+One format method per chain; the last one wins. Without one, the output is in
+the source's format. The format never comes from a destination's extension.
+
+| Method | Options | Notes |
+| --- | --- | --- |
+| `jpeg(options?)` | `quality` 1–100, default 80 | Baseline. `progressive` is a `TypeError`. Transparency is composited over black. |
+| `png(options?)` | — | 8- or 16-bit, as the pixels are. `compressionLevel`, `palette`, `colors` and `dither` are a `TypeError`. |
+| `webp(options?)` | `quality` 1–100, default 80; `lossless` | Lossy by default. Alpha is always lossless. |
+| `avif(options?)` | `quality` 1–100, default 80 | 8-bit 4:2:0. `lossless` is a `TypeError`. |
+| `gif()` | — | One frame, palette-quantized. |
+| `tiff()` | — | |
+
+Every format decodes and encodes on every platform. JPEG input may be
+progressive; output is baseline.
+
+### Terminals and `metadata()`
+
+| Method | Resolves to |
+| --- | --- |
+| `metadata()` | `{ width, height, format, pixelFormat, hasAlpha, animation }` at this point in the chain, read from the header without decoding pixels: `new Image(x).resize(400).metadata()` reports the resized size. `format` is the source's. `pixelFormat` is `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. `animation` is `{ frames, loop, durations }` (milliseconds per frame) or `null`. |
+| `bytes()` | The encoded image, a `Uint8Array`. |
+| `blob()` | A `Blob` whose `type` is the format's media type (`image/webp`, …). |
+| `write(destination)` | Encodes into `destination`, a `runtime:fs` `file()`, and resolves to the number of bytes written. A path string is a `TypeError`. |
+
+EXIF and XMP are never written to an output, which also strips location data
+from uploads.
+
+### Errors
+
+| Failure | Thrown |
+| --- | --- |
+| The bytes are not a valid image of their format | `Error` with `code` `ERR_IMAGE_DECODE_FAILED` |
+| An unknown format, or a valid file using something not implemented (an AVIF sequence, `animated: true` on an animation) | `Error` with `code` `ERR_IMAGE_FORMAT_UNSUPPORTED` |
+| Over `maxPixels` | `Error` with `code` `ERR_IMAGE_TOO_LARGE` |
+| A bad argument seen at the call | `TypeError` or `RangeError` from the method |
+| A bad argument seen only when the image is read (a crop outside it) | `RangeError` from the terminal |
+| Reading or writing a `file()` | The `runtime:fs` error (`NotAllowedError`, `ERR_NOT_FOUND`, …) |
+
+### Coming from Bun
+
+`new Image(...)` in place of `new Bun.Image(...)`. A path string becomes
+`file(path)`. `write()` takes a `file()` and uses the chained format, not the
+extension. Not here: `heic()`, `placeholder()`, `buffer()`, `toBase64()`
+(`(await img.bytes()).toBase64()`), `dataurl()`, the clipboard, `Image.backend`,
+and the `mks2013`/`mks2021` filters. Added: the `outside`, `cover` and
+`contain` fits, `crop`, `blur`, `sharpen`, `flatten`, `grayscale`,
+`extractChannel`, `modulate({ hue })`, and `gif()`, `tiff()` and AVIF on Linux.
+
 ## `runtime:wasi`
 
 WASI preview 1 (`wasi_snapshot_preview1`) — enough of the ABI to run what the
@@ -4742,6 +4853,9 @@ try {
 | `ERR_TLS` | TLS handshake or certificate verification failed. |
 | `ERR_TOO_MANY_REDIRECTS` | A redirect chain exceeded the Fetch specification's cap of 20. |
 | `ERR_CANCELLED` | The operation was cancelled. |
+| `ERR_IMAGE_DECODE_FAILED` | `runtime:images`: the bytes are not a valid image of their format. |
+| `ERR_IMAGE_FORMAT_UNSUPPORTED` | `runtime:images`: an unknown format, or a valid file using something not implemented. |
+| `ERR_IMAGE_TOO_LARGE` | `runtime:images`: the image is over `maxPixels`. |
 
 `runtime:db` adds a portable classification on top, so an application can branch
 on what a database did without knowing which one said so. These sit on the same

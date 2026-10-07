@@ -17,7 +17,7 @@ use es_runtime_default_providers::{
     ImportPolicy, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub,
     ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
     SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, ThreadWorkerHost, TokioTimers, WorkerProcess, path,
+    SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, WorkerProcess, path,
 };
 use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
 use url::Url;
@@ -918,7 +918,10 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // starts shares the hub, so a channel opened in one reaches the rest.
     .with_broadcast(Arc::new(ProcessBroadcastHub::new()))
     // MessagePort queues, so a port transferred into a worker keeps working.
-    .with_ports(Arc::new(ProcessPortHub::new()));
+    .with_ports(Arc::new(ProcessPortHub::new()))
+    // CPU-bound work off the event loop — `runtime:images` pipelines (D159) —
+    // on tokio's blocking pool, which every worker shares.
+    .with_task_spawner(Arc::new(TokioTaskSpawner));
     // OpenTelemetry export, when the command line asked for it. Installed as a
     // *provider*, so the spans leave the process without the program holding
     // `net` to reach the collector or `diagnostics` to read its own traces

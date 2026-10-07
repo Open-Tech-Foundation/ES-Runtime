@@ -3262,3 +3262,28 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Copying every non-code file under the source directory** (mkdist). It ships whatever else lives in `src/`.
 
 **Consequences:** a library's stylesheets work as published in either mode, and the build line says how many files they used and whether they were copied or inlined.
+
+### D159 — `runtime:images`: Bun's `Image` pipeline on otf-pixels, with no path strings · *Accepted (2026-10-07)*
+
+**Context:** a server resizes uploads, makes thumbnails and converts to WebP or AVIF. In Node that is sharp, a native addon over libvips, which this runtime cannot load (no FFI). Bun 1.3.14 ships `Bun.Image`, a sharp-shaped chain (`resize`, `rotate`, `flip`, `flop`, `modulate`, then `jpeg`/`png`/`webp`/`avif`/`heic`, then an awaited `bytes`/`blob`/`write`) over libjpeg-turbo, spng and libwebp. On Linux it has no AVIF, HEIC or TIFF, and its `resize` fits only `fill` and `inside`. Deno has nothing built in. otf-pixels, published by this project on 2026-10-07, is a pure-Rust, streaming, demand-driven engine with its own codecs. Its embedding guide (`docs/EMBEDDING.md`) says how a runtime should put it behind an API: run it off the event loop, share one scheduler, limit pixels per request, expose an `animated` option from the start, and map its stable error codes.
+
+**Decision (maintainer, 2026-10-07):**
+
+- **One module, `runtime:images`, exporting `Image`, with Bun's chain.** `new Image(input, options)`, transforms that return a new `Image`, one output-format method, and an awaited terminal. Each method returns a new image rather than changing this one, so a single source can be sent to several sizes. Pixels clones share graph nodes, and nothing runs until a terminal.
+- **No path strings.** The input is bytes (`Uint8Array`, `ArrayBuffer`, any view), a `Blob`, or a `runtime:fs` `file()`. A string is a `TypeError` that names `file()`. Bun's own docs call a path argument "an arbitrary-file-read primitive". Here a `file()` is read through the `FileSystem` provider, so `FileRead`, `--allow-read=<paths>` and the root jail apply as they do to `file().bytes()`. `write(file(path))` is `FileWrite`, the same way. Bytes in and bytes out need no capability, as in `runtime:hashing`: the work reads and reaches nothing.
+- **The output format is the one chained, or else the source's.** It is never inferred from a destination's extension, which is a MIME table D145 declined to own. Bun infers it from the extension; sharp, like this, keeps the input's format.
+- **The same formats on every platform:** decode and encode JPEG, PNG, WebP, AVIF, GIF and TIFF, because every codec is Pixels' own. HEIC is not offered; Pixels has no codec for it.
+- **What Pixels does beyond Bun is exposed:** `resize` fits `fill | inside | outside | cover | contain` with a `background`; `crop`, `blur`, `sharpen`, `flatten`, `grayscale`, `extractChannel`; `modulate` takes `hue`. `metadata()` works on any image in a chain and reports its size at that point (an image already resized reports the resized size) without decoding pixels. It also reports `pixelFormat`, `hasAlpha` and `animation`.
+- **Open options follow Pixels' defaults:** `maxPixels` (268 MP), `autoOrient` (on), `toSrgb` (on), `animated` (off). `animated: true` is refused on animated input with `ERR_IMAGE_FORMAT_UNSUPPORTED` until Pixels has multi-frame pipelines, so code written against it keeps its meaning.
+- **Errors carry Bun's codes where Bun has one:** malformed bytes are `ERR_IMAGE_DECODE_FAILED`, an unknown or unimplemented format is `ERR_IMAGE_FORMAT_UNSUPPORTED`, and over `maxPixels` is `ERR_IMAGE_TOO_LARGE`. A bad argument found while chaining is a `TypeError` or `RangeError` at the call; one Pixels finds later, such as a crop outside the image, is a `RangeError` from the terminal. Reading or writing a `file()` fails with the `runtime:fs` codes.
+- **Off the event loop, on one scheduler.** The pipeline travels to the host as a list of steps and runs on the embedder's `TaskSpawner`, which `HostProviders` now carries. Its tiles run on one process-wide Pixels `Scheduler` that every agent and worker shares. A runtime built without a spawner runs the work inline, so an embedder gets a correct result before it gets a fast one.
+- **Bytes are copied when the terminal is called**, as every op argument is, so changing the buffer afterwards cannot change the output. Bun asks callers not to change it.
+
+**Rejected:**
+- **Path strings, for parity with Bun.** It would be the only API in the runtime that reads a file without passing the `FileSystem` provider.
+- **A native handle per `Image`.** It would need a registry and a `FinalizationRegistry` to free it. A list of steps costs nothing until a terminal and crosses into a worker as plain data.
+- **sharp's API.** It is wider than Pixels, and Bun's chain is the one a runtime has already shipped. Where sharp names an operation Bun lacks, sharp's name is used (`flatten`, `extractChannel`, `grayscale`); `crop` takes sharp's `extract` region.
+
+**Consequences:** `HostProviders` carries a `TaskSpawner` (`with_task_spawner`), and `esrun` and `esdev` install tokio's blocking pool there. The release `esrun` grew by 1.7 MiB (79.5 MB to 81.3 MB, Linux x86-64, 2026-10-07), so the module is not behind a cargo feature.
+
+**Not here:** an `Image` as a `Response` body encoded host-side (the D145 path); `composite`; reading a `file()` as a stream, so that a large file is processed in constant memory; Bun's `placeholder()`, clipboard and `backend`; PNG palette output, PNG compression level and progressive JPEG output, which Pixels does not have.

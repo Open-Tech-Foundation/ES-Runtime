@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:images`: `Image`, its options, `ImageMetadata` and the
+  `ERR_IMAGE_*` codes (DECISIONS D159).
+
 ## [0.13.0] - 2026-10-01
 
 ### Added

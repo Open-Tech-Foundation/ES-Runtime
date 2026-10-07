@@ -75,6 +75,7 @@ const NAV = [
       { title: "URLPattern", path: "/docs/urlpattern" },
       { title: "WebAssembly & WASI", path: "/docs/wasm" },
       { title: "Hashing", path: "/docs/guides/hashing" },
+      { title: "Images", path: "/docs/guides/images" },
       { title: "Request context", path: "/docs/guides/context" },
       { title: "Observing the runtime", path: "/docs/guides/diagnostics" },
       {
@@ -144,6 +145,7 @@ const NAV = [
       { title: "Paths", path: "/docs/internals/path" },
       { title: "Serialization", path: "/docs/internals/serialization" },
       { title: "WebCrypto", path: "/docs/internals/crypto" },
+      { title: "Images", path: "/docs/internals/images" },
       { title: "WASI", path: "/docs/internals/wasi" },
       { title: "The bundler bridge", path: "/docs/internals/bundler" },
       { title: "Tailwind CSS", path: "/docs/internals/tailwind" },

@@ -1,0 +1,108 @@
+---
+title: runtime:images
+description: Decode, resize, transform and encode JPEG, PNG, WebP, AVIF, GIF and TIFF — Bun's Image chain, off the event loop.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:images
+
+Decode, transform and encode images. The chain is `Bun.Image`'s:
+`new Image(input)`, transforms that each return a new image, one output
+format, and an awaited terminal. Nothing is decoded until a terminal or
+`metadata()` is awaited, and the work runs off the event loop.
+
+<Callout type="info" title="Capability: none for bytes">
+  Bytes in and bytes out need nothing. A `runtime:fs` `file()` source needs
+  **FileRead** and a `file()` destination **FileWrite**, checked and jailed as
+  reading or writing that file would be. Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import { Image } from "runtime:images";
+
+// Or the default aggregate:
+import images from "runtime:images";
+```
+
+## `new Image(input, options?)`
+
+`input` is a `Uint8Array`, an `ArrayBuffer`, any view, a `Blob`, or a
+`runtime:fs` `file()`. A path string is a `TypeError`: pass `file(path)`. A
+`SharedArrayBuffer` or a resizable buffer is a `TypeError`. The bytes are
+copied when a terminal is called. The format is read from the bytes, never
+from a name.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `maxPixels` | `268402689` | Over this many pixels fails at the header with `ERR_IMAGE_TOO_LARGE`, before allocation. |
+| `autoOrient` | `true` | Apply the orientation the file declares; `metadata()` reports the upright size. |
+| `toSrgb` | `true` | Convert an embedded matrix/TRC ICC profile to sRGB. Off, keep the pixels and write the profile to outputs. |
+| `animated` | `false` | Every frame. Not yet supported: an animation with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
+
+## Transforms
+
+Each returns a new `Image` and leaves the original unchanged.
+
+| Method | Description |
+| --- | --- |
+| `resize(width, height?, options?)` | Omit either side (or pass `null`) to keep the aspect ratio. `fit`: `"fill"` (default), `"inside"`, `"outside"`, `"cover"`, `"contain"`. `filter`: `"lanczos3"` (default), `"lanczos2"`, `"mitchell"`, `"catmull-rom"` (`"cubic"`), `"bilinear"` (`"linear"`), `"box"`, `"nearest"`. `background` for `"contain"`, default transparent. `withoutEnlargement`. |
+| `crop({ left, top, width, height })` | Keep a region. Outside the image is a `RangeError` from the terminal. |
+| `rotate(degrees)` | Clockwise, a multiple of 90. |
+| `flip()` / `flop()` | Mirror top to bottom / left to right. |
+| `modulate({ brightness?, saturation?, hue? })` | Multipliers (`1` unchanged); `hue` in degrees. |
+| `blur(sigma)` | Gaussian, `sigma` in pixels. |
+| `sharpen(amount = 1)` | 3×3 sharpen. |
+| `flatten({ background? })` | Draw over `background` (default black), drop alpha. |
+| `grayscale()` | Grey, keeping alpha. |
+| `extractChannel(channel)` | `0`–`3` or `"red"`, `"green"`, `"blue"`, `"alpha"`. |
+
+A colour is `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or
+`{ r, g, b, alpha }` with `alpha` from 0 to 1.
+
+## Output formats
+
+The last format method wins. Without one, the source's format. Never the
+destination's extension.
+
+| Method | Options | Notes |
+| --- | --- | --- |
+| `jpeg()` | `quality` 1–100 (80) | Baseline. `progressive` is a `TypeError`. |
+| `png()` | — | `compressionLevel`, `palette`, `colors`, `dither` are a `TypeError`. |
+| `webp()` | `quality` 1–100 (80), `lossless` | Lossy by default. |
+| `avif()` | `quality` 1–100 (80) | 8-bit 4:2:0. `lossless` is a `TypeError`. |
+| `gif()` | — | One frame. |
+| `tiff()` | — | |
+
+## Terminals
+
+| Method | Resolves to |
+| --- | --- |
+| `metadata()` | `{ width, height, format, pixelFormat, hasAlpha, animation }` at this point in the chain, from the header. `animation` is `{ frames, loop, durations }` or `null`. |
+| `bytes()` | `Uint8Array`. |
+| `blob()` | `Blob` with the format's media type. |
+| `write(file)` | Bytes written to a `runtime:fs` `file()`. |
+
+EXIF and XMP are never written to an output.
+
+## Errors
+
+| Code / class | When |
+| --- | --- |
+| `ERR_IMAGE_DECODE_FAILED` | The bytes are not a valid image of their format. |
+| `ERR_IMAGE_FORMAT_UNSUPPORTED` | An unknown format, or a valid file using something not implemented. |
+| `ERR_IMAGE_TOO_LARGE` | Over `maxPixels`. |
+| `TypeError` / `RangeError` | A bad argument; from the method, or from the terminal when only the image shows it. |
+
+Reading or writing a `file()` fails with the [`runtime:fs`](/api/fs) errors.
+
+## Coming from Bun
+
+`new Image(...)` replaces `new Bun.Image(...)`; a path string becomes
+`file(path)`; `write()` takes a `file()` and keeps the chained format. Not
+here: `heic()`, `placeholder()`, `buffer()`, `toBase64()`, `dataurl()`, the
+clipboard, `Image.backend`, the `mks` filters. Added: the `outside`, `cover`
+and `contain` fits, `crop`, `blur`, `sharpen`, `flatten`, `grayscale`,
+`extractChannel`, `modulate({ hue })`, `gif()`, `tiff()`, and AVIF on Linux.

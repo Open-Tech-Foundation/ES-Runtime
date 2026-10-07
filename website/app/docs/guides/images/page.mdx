@@ -1,0 +1,87 @@
+---
+title: Images
+description: Thumbnail uploads, convert formats and save variants with runtime:images.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Images
+
+[`runtime:images`](/api/images) decodes, transforms and encodes JPEG, PNG,
+WebP, AVIF, GIF and TIFF. Work on bytes needs no capability.
+
+## A thumbnail
+
+```js
+import { Image } from "runtime:images";
+
+const thumb = await new Image(bytes)
+  .resize(400, 400, { fit: "cover" })
+  .webp({ quality: 80 })
+  .bytes();
+```
+
+`fit: "cover"` fills the box and crops the overflow from the centre;
+`"inside"` keeps the whole image within it. Give one side to keep the aspect
+ratio: `resize(400)`.
+
+## Untrusted uploads
+
+Set `maxPixels` for anything a client sends. A small file can declare an
+enormous image; the limit refuses it at the header, before any memory is
+allocated.
+
+```js
+import { serve } from "runtime:http";
+import { Image } from "runtime:images";
+
+serve({ port: 8080 }, async (request) => {
+  const image = new Image(await request.bytes(), { maxPixels: 40_000_000 });
+  try {
+    const body = await image.resize(800).webp().bytes();
+    return new Response(body, { headers: { "content-type": "image/webp" } });
+  } catch (error) {
+    if (error.code === "ERR_IMAGE_TOO_LARGE") return new Response(null, { status: 413 });
+    if (error.code === "ERR_IMAGE_DECODE_FAILED") return new Response(null, { status: 400 });
+    if (error.code === "ERR_IMAGE_FORMAT_UNSUPPORTED") return new Response(null, { status: 415 });
+    throw error;
+  }
+});
+```
+
+Location data goes with the rest of the EXIF: outputs never carry it.
+
+## Several sizes from one source
+
+Every method returns a new image, so one source fans out:
+
+```js
+import { Image } from "runtime:images";
+import { file } from "runtime:fs";
+
+const source = new Image(file("uploads/photo.jpg"));
+await Promise.all([
+  source.resize(320).webp().write(file("public/photo-320.webp")),
+  source.resize(1280).webp().write(file("public/photo-1280.webp")),
+  source.resize(1280).avif().write(file("public/photo-1280.avif")),
+]);
+```
+
+<Callout type="info">
+  Reading a `file()` needs `--allow-read` and writing one `--allow-write`, as
+  for any `runtime:fs` call. The output format is the method you chain, never
+  the file's extension.
+</Callout>
+
+## Size before work
+
+`metadata()` reads the header only, and reports the size at any point in a
+chain:
+
+```js
+const { width, height, format, animation } = await new Image(bytes).metadata();
+const { width: w } = await new Image(bytes).resize(400).metadata();   // 400
+```
+
+An animated GIF or WebP is processed as its first frame; `animation` says how
+many frames there were, so you can decide to keep the original instead.

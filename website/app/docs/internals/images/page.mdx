@@ -1,0 +1,57 @@
+---
+title: "Internals: images"
+description: Where runtime:images runs, what it holds in memory, and how it compares with Bun.Image.
+---
+
+# Internals: images
+
+What `runtime:images` does below the API: where the work runs, what bounds
+its memory, and what it costs against `Bun.Image`.
+
+## The engine
+
+The module is a thin layer over [otf-pixels](https://crates.io/crates/otf-pixels),
+a pure-Rust image engine with its own codecs. There is no C library and no
+platform backend, so every format decodes and encodes the same way on every
+operating system, and a given input and pipeline produce byte-identical output
+everywhere.
+
+## Where the work runs
+
+A chain is recorded in JavaScript as a list of steps; nothing crosses to the
+host until a terminal. The terminal sends the source, the steps and the output
+in one call, and the host runs the pipeline on the embedder's blocking pool
+(tokio's, in `esrun` and `esdev`). The event loop keeps running meanwhile.
+
+Inside a run, tiles are evaluated in parallel on one scheduler that the whole
+process shares, workers included. Concurrent pipelines share its threads
+rather than each starting a pool of their own.
+
+Nothing is held between calls: there is no image handle to free, and an image
+passed to a worker is plain data.
+
+## Memory
+
+Opening an image reads its header only. `maxPixels` is checked there, so an
+image that declares more pixels than allowed is refused before any pixel
+memory exists.
+
+Pixels are pulled through the pipeline in tiles, so a resize of a large
+baseline JPEG, TIFF or non-interlaced PNG holds a band of the image rather than
+all of it. WebP, AVIF, GIF, progressive JPEG and interlaced PNG have no
+streamable prefix and are buffered whole by their decoder. The encoded input
+is held in full: a `file()` is read into memory before it is decoded.
+
+## Compared with Bun
+
+`bench/images/run.sh` runs the same workloads against `Bun.Image`: 40
+pipelines at once from a 12-megapixel JPEG and from a 1280×800 PNG. The script
+checks that both runtimes produce images of the same size.
+
+Bun's codecs are libjpeg-turbo, spng and libwebp, which are hand-tuned C with
+SIMD. Pixels' are younger; its PNG decoder and its WebP encoder are the
+slowest stages, and most of the gap on the `png_jpeg` and `jpeg_webp`
+workloads comes from them.
+
+Peak memory on many concurrent PNG decodes is higher than Bun's, for the same
+reason: it is Pixels' decoder, not the runtime, that holds it.

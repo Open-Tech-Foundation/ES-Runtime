@@ -13,6 +13,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `runtime:images`: decode, resize, transform and encode JPEG, PNG, WebP,
+  AVIF, GIF and TIFF on every platform, with `Bun.Image`'s chain
+  (`new Image(input).resize(400).webp().bytes()`), off the event loop, on
+  otf-pixels (DECISIONS D159). Input is bytes, a `Blob` or a `runtime:fs`
+  `file()`, never a path string; bytes need no capability, a `file()` needs
+  FileRead or FileWrite. Failures carry `ERR_IMAGE_DECODE_FAILED`,
+  `ERR_IMAGE_FORMAT_UNSUPPORTED` and `ERR_IMAGE_TOO_LARGE`.
+- `HostProviders::with_task_spawner`: the blocking pool an embedder lends the
+  runtime for CPU-bound work. `esrun` and `esdev` install tokio's.
+- `bench/images/run.sh` compares `runtime:images` with `Bun.Image`.
+
 - Each runtime and tool row on the landing page Benchmarks section now shows
   its full-color brand icon beside the name — the OTF logo for esrun and
   esdev, official artwork for Node.js, Bun, Deno, Vite, esbuild and AWS

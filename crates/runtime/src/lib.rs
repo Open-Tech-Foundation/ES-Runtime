@@ -32,6 +32,7 @@ pub mod fuzz;
 mod handles;
 mod hashing_ops;
 mod http_ops;
+mod image_ops;
 mod module_ops;
 mod msgpack;
 mod my_ops;
@@ -72,8 +73,8 @@ pub use es_runtime_engine::{
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
     ConsoleLevel, EmbeddedDb, Entropy, FileSystem, HttpServerProvider, ModuleLoader, ModuleSource,
-    NetProvider, NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, TelemetrySink,
-    WebSocketProvider, WorkerHost, WorkerScope,
+    NetProvider, NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, TaskSpawner,
+    TelemetrySink, WebSocketProvider, WorkerHost, WorkerScope,
 };
 
 /// The exporter's live state: its subscription, the clock offset it converts
@@ -241,6 +242,7 @@ pub struct HostProviders {
     worker_scope: Option<Arc<dyn WorkerScope>>,
     broadcast: Option<Arc<dyn BroadcastHub>>,
     ports: Option<Arc<dyn PortHub>>,
+    task_spawner: Option<Arc<dyn TaskSpawner>>,
     telemetry: Option<TelemetryConfig>,
 }
 
@@ -273,6 +275,7 @@ impl HostProviders {
             worker_scope: None,
             broadcast: None,
             ports: None,
+            task_spawner: None,
             telemetry: None,
         }
     }
@@ -464,6 +467,20 @@ impl HostProviders {
 
     fn ports(&self) -> Option<Arc<dyn PortHub>> {
         self.ports.clone()
+    }
+
+    /// Adds the [`TaskSpawner`] that runs CPU-bound work off the thread driving
+    /// the runtime — today, `runtime:images` pipelines (DECISIONS.md D159).
+    /// Absent, that work runs inline: the answer is the same, but the event loop
+    /// waits for it.
+    #[must_use]
+    pub fn with_task_spawner(mut self, task_spawner: Arc<dyn TaskSpawner>) -> Self {
+        self.task_spawner = Some(task_spawner);
+        self
+    }
+
+    fn task_spawner(&self) -> Option<Arc<dyn TaskSpawner>> {
+        self.task_spawner.clone()
     }
 
     /// Exports spans to `sink` as OpenTelemetry, for every program this runtime
