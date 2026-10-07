@@ -28,22 +28,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
       - id: check
         run: |
-          echo "should_release=$(otf-release check --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-smtp --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
-          echo "release_opentf_esrun_mysql=$(otf-release check --package @opentf/esrun-mysql)" >> "$GITHUB_OUTPUT"
-          echo "release_opentf_esrun_postgres=$(otf-release check --package @opentf/esrun-postgres)" >> "$GITHUB_OUTPUT"
-          echo "release_opentf_esrun_redis=$(otf-release check --package @opentf/esrun-redis)" >> "$GITHUB_OUTPUT"
-          echo "release_opentf_esrun_smtp=$(otf-release check --package @opentf/esrun-smtp)" >> "$GITHUB_OUTPUT"
-          echo "release_es_runtime_cli=$(otf-release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
-          echo "release_es_runtime_dev_cli=$(otf-release check --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "should_release=$(release check --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-smtp --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_mysql=$(release check --package @opentf/esrun-mysql)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_postgres=$(release check --package @opentf/esrun-postgres)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_redis=$(release check --package @opentf/esrun-redis)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_smtp=$(release check --package @opentf/esrun-smtp)" >> "$GITHUB_OUTPUT"
+          echo "release_es_runtime_cli=$(release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
+          echo "release_es_runtime_dev_cli=$(release check --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
   matrix-es-runtime-cli:
     needs: [check-release]
@@ -53,13 +61,21 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - id: set
-        run: echo "matrix=$(otf-release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
+        run: echo "matrix=$(release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
 
   build-es-runtime-cli:
     needs: [check-release, matrix-es-runtime-cli]
@@ -78,35 +94,44 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Both CLIs are one cargo workspace and share all but a handful of
-          # dependencies, so the two jobs for a triple share one cache entry
-          # instead of storing the same half-gigabyte twice. Six entries rather
-          # than twelve, which is what keeps this inside the repository's 10 GB
-          # cache budget with ci.yml's entries alongside it.
-          shared-key: release-${{ matrix.triple }}
-          # `librusty_v8.a` is a 178 MB prebuilt that the `v8` build script
-          # fetches, and it lands in `gn_out` — beside the three directories
-          # rust-cache knows about, not inside them, so the default set misses
-          # it and every job re-downloads it. The script skips the download when
-          # the `.sum` file next to the archive still names the same URL, so
-          # restoring this directory is what makes that skip happen.
-          cache-directories: target/${{ matrix.triple }}/release/gn_out
-      - name: Install otf-release
+      - name: Install release
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
-      - name: Install otf-release
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
+      - name: Install release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.40.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.ps1 | iex
+      - name: Expose release command
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command release -ErrorAction SilentlyContinue)) {
+            $cliDir = Join-Path $env:RUNNER_TEMP 'release-cli'
+            New-Item -ItemType Directory -Force -Path $cliDir | Out-Null
+            Copy-Item (Get-Command otf-release).Source (Join-Path $cliDir 'release.exe')
+          $cliDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ contains(fromJSON('["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]'), matrix.triple) }}
+        with:
+          cache-directories: "target/${{ matrix.triple }}/release/gn_out"
+          shared-key: "release-${{ matrix.triple }}"
       - name: Build es-runtime-cli
-        run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
+        run: release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: es-runtime-cli-${{ matrix.name }}-${{ matrix.arch }}
@@ -120,13 +145,21 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - id: set
-        run: echo "matrix=$(otf-release matrix --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+        run: echo "matrix=$(release matrix --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
   build-es-runtime-dev-cli:
     needs: [check-release, matrix-es-runtime-dev-cli]
@@ -145,40 +178,49 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Both CLIs are one cargo workspace and share all but a handful of
-          # dependencies, so the two jobs for a triple share one cache entry
-          # instead of storing the same half-gigabyte twice. Six entries rather
-          # than twelve, which is what keeps this inside the repository's 10 GB
-          # cache budget with ci.yml's entries alongside it.
-          shared-key: release-${{ matrix.triple }}
-          # `librusty_v8.a` is a 178 MB prebuilt that the `v8` build script
-          # fetches, and it lands in `gn_out` — beside the three directories
-          # rust-cache knows about, not inside them, so the default set misses
-          # it and every job re-downloads it. The script skips the download when
-          # the `.sum` file next to the archive still names the same URL, so
-          # restoring this directory is what makes that skip happen.
-          cache-directories: target/${{ matrix.triple }}/release/gn_out
-      - name: Install otf-release
+      - name: Install release
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
-      - name: Install otf-release
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
+      - name: Install release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.40.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.ps1 | iex
+      - name: Expose release command
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command release -ErrorAction SilentlyContinue)) {
+            $cliDir = Join-Path $env:RUNNER_TEMP 'release-cli'
+            New-Item -ItemType Directory -Force -Path $cliDir | Out-Null
+            Copy-Item (Get-Command otf-release).Source (Join-Path $cliDir 'release.exe')
+          $cliDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ contains(fromJSON('["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]'), matrix.triple) }}
+        with:
+          cache-directories: "target/${{ matrix.triple }}/release/gn_out"
+          shared-key: "release-${{ matrix.triple }}"
+      - name: Setup
+        if: ${{ contains(fromJSON('["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]'), matrix.triple) }}
+        shell: bash
+        run: |
+          echo "ES_RUNTIME_INSPECTOR=1" >> "$GITHUB_ENV"
       - name: Build es-runtime-dev-cli
-        # With the V8 inspector, for `esdev --inspect` and `esdev test
-        # --coverage` (DECISIONS D59, D108). This job builds esdev alone;
-        # esrun's build script refuses the variable outright.
-        env:
-          ES_RUNTIME_INSPECTOR: "1"
-        run: otf-release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
+        run: release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: es-runtime-dev-cli-${{ matrix.name }}-${{ matrix.arch }}
@@ -193,8 +235,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.4.1
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -205,13 +245,21 @@ jobs:
       - name: Build @opentf/esrun-mysql
         run: npm run build
         working-directory: packages/mysql
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - name: Publish
-        run: otf-release publish --package @opentf/esrun-mysql
+        run: release publish --package @opentf/esrun-mysql
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -225,8 +273,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.4.1
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -237,13 +283,21 @@ jobs:
       - name: Build @opentf/esrun-postgres
         run: tsr build
         working-directory: packages/postgres
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - name: Publish
-        run: otf-release publish --package @opentf/esrun-postgres
+        run: release publish --package @opentf/esrun-postgres
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -257,8 +311,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.4.1
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -269,13 +321,21 @@ jobs:
       - name: Build @opentf/esrun-redis
         run: tsr build
         working-directory: packages/redis
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - name: Publish
-        run: otf-release publish --package @opentf/esrun-redis
+        run: release publish --package @opentf/esrun-redis
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -289,8 +349,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.4.1
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -301,13 +359,21 @@ jobs:
       - name: Build @opentf/esrun-smtp
         run: npm run build
         working-directory: packages/smtp
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - name: Publish
-        run: otf-release publish --package @opentf/esrun-smtp
+        run: release publish --package @opentf/esrun-smtp
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -331,22 +397,28 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.4.1
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
       - name: Publish
-        run: otf-release publish --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-smtp
+        run: release publish --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-smtp
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -362,15 +434,23 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: .artifacts
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: otf-release github-release --package es-runtime-cli --artifacts-dir .artifacts
+        run: release github-release --package es-runtime-cli --artifacts-dir .artifacts
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
@@ -387,16 +467,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: .artifacts
-      - name: Install otf-release
+      - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.38.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.40.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.40.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: otf-release github-release --package es-runtime-dev-cli --artifacts-dir .artifacts
+        run: release github-release --package es-runtime-dev-cli --artifacts-dir .artifacts
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: .artifacts/.flat-es-runtime-dev-cli/*
+

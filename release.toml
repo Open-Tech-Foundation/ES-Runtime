@@ -185,7 +185,25 @@ runner = "windows-latest"
 stage_as = "win32-arm64"
 ext = ".exe"
 
+# Both CLIs are one cargo workspace and share all but a handful of
+# dependencies, so the two jobs for a triple share one cache entry instead of
+# storing the same half-gigabyte twice: six entries rather than twelve, which
+# keeps this inside the repository's 10 GB cache budget beside ci.yml's.
+# `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches into
+# `gn_out`, beside the directories rust-cache knows about; restoring it is what
+# lets the script skip the download. `targets` names every triple so the step
+# is emitted only in the build jobs, where `matrix.triple` exists.
 [[package.setup]]
+uses = "Swatinem/rust-cache@v2"
+with = { shared-key = "release-${{ matrix.triple }}", cache-directories = "target/${{ matrix.triple }}/release/gn_out" }
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
 
 [[package]]
 name = "es-runtime-dev-cli"
@@ -247,4 +265,36 @@ runner = "windows-latest"
 stage_as = "win32-arm64"
 ext = ".exe"
 
+# Both CLIs are one cargo workspace and share all but a handful of
+# dependencies, so the two jobs for a triple share one cache entry instead of
+# storing the same half-gigabyte twice: six entries rather than twelve, which
+# keeps this inside the repository's 10 GB cache budget beside ci.yml's.
+# `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches into
+# `gn_out`, beside the directories rust-cache knows about; restoring it is what
+# lets the script skip the download. `targets` names every triple so the step
+# is emitted only in the build jobs, where `matrix.triple` exists.
 [[package.setup]]
+uses = "Swatinem/rust-cache@v2"
+with = { shared-key = "release-${{ matrix.triple }}", cache-directories = "target/${{ matrix.triple }}/release/gn_out" }
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+
+# With the V8 inspector, for `esdev --inspect` and `esdev test --coverage`
+# (DECISIONS D59, D108). Set for the build step through $GITHUB_ENV; esrun's
+# build script refuses the variable, which `-p es-runtime-dev-cli` keeps away.
+[[package.setup]]
+run = ['echo "ES_RUNTIME_INSPECTOR=1" >> "$GITHUB_ENV"']
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
