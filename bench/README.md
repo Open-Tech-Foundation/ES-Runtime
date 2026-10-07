@@ -13,6 +13,19 @@ esrun/Node/Deno and JavaScriptCore for Bun). It runs the engine + Web-API
 workloads it supports; `http`, `glob`, and the `wasm_*`/`wasi_*` rows
 fall through to n/a. Streams and filesystem support vary by operation.
 
+## The image benchmark
+
+`bench/images/run.sh` makes 40 thumbnails at once with each runtime's own image
+API: `runtime:images` (esrun), `Bun.Image` (Bun), `createImageBitmap` with an
+`OffscreenCanvas` (Deno) and, as Node has none, sharp. It records wall time,
+peak RSS and the size of one output, and refuses a run whose output dimensions
+disagree. The site's numbers come from it through
+`SECTIONS=images bench/gen-bench-data.sh`.
+
+`bench/images/features/features.py` runs each operation the comparison page
+lists on all four and judges the files they write with Pillow. Its output is
+the table on that page.
+
 ## The database benchmark
 
 `bench/db/run.sh` compares **SQLite** across esrun, Node.js, Bun and Deno.

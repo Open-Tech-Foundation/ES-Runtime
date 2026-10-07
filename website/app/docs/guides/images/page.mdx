@@ -27,26 +27,33 @@ ratio: `resize(400)`.
 
 ## Untrusted uploads
 
-Set `maxPixels` for anything a client sends. A small file can declare an
-enormous image; the limit refuses it at the header, before any memory is
-allocated.
+A small file can declare an enormous image. Every image is limited to
+268 megapixels by default, the same limit sharp and Bun use, and an image over
+it is refused at its header, before any memory is allocated. There is nothing
+to set; map the errors to responses:
 
 ```js
 import { serve } from "runtime:http";
 import { Image } from "runtime:images";
 
 serve({ port: 8080 }, async (request) => {
-  const image = new Image(await request.bytes(), { maxPixels: 40_000_000 });
+  const image = new Image(await request.bytes());
   try {
     const body = await image.resize(800).webp().bytes();
     return new Response(body, { headers: { "content-type": "image/webp" } });
   } catch (error) {
-    if (error.code === "ERR_IMAGE_TOO_LARGE") return new Response(null, { status: 413 });
+    if (error.code === "ERR_IMAGE_TOO_MANY_PIXELS") return new Response(null, { status: 413 });
     if (error.code === "ERR_IMAGE_DECODE_FAILED") return new Response(null, { status: 400 });
     if (error.code === "ERR_IMAGE_FORMAT_UNSUPPORTED") return new Response(null, { status: 415 });
     throw error;
   }
 });
+```
+
+To accept less, or more, pass `maxPixels`:
+
+```js
+new Image(bytes, { maxPixels: 40_000_000 });   // 40 MP, about a 7700×5200 photo
 ```
 
 Location data goes with the rest of the EXIF: outputs never carry it.

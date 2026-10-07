@@ -26,7 +26,7 @@ for the host you are leaving:
 - [Migrating from Node.js](/docs/migration/node) — globals, files, paths,
   subprocesses, buffers, and cryptography.
 - [Migrating from Bun](/docs/migration/bun) — the `Bun.*` namespace, processes,
-  and hashing.
+  hashing, and images.
 - [Migrating from Deno](/docs/migration/deno) — `Deno.*` APIs and permissions.
 
 ## Architectural and language differences
@@ -64,6 +64,7 @@ Three rules shape the port before any individual API does.
 | **Join paths** | `path.join(...)` | `path.join(...)` | `path.join(...)` | `import { join } from "runtime:path";`<br />`join(...)` |
 | **Subprocesses** | `child_process.spawn()` | `Bun.spawn()` | `new Deno.Command()` | `import { Command } from "runtime:system";`<br />`new Command(...)` |
 | **UDP datagrams** | `dgram.createSocket("udp4")` | `Bun.udpSocket()` | `Deno.listenDatagram()` | `import { bind } from "runtime:net";`<br />`bind({ port })` — [mapping](/docs/guides/udp#coming-from-node-deno-or-bun) |
+| **Images** | `sharp` (npm) | `new Bun.Image(bytes)` | `createImageBitmap(blob)` | `import { Image } from "runtime:images";`<br />`new Image(bytes)` |
 | **WASI guest** | `node:wasi` | `node:wasi` | `node:wasi` | `import { WASI } from "runtime:wasi"` |
 | **YAML and other formats** | `js-yaml` (npm) | `js-yaml` (npm) | `js-yaml` (npm) | `import { YAML } from "runtime:serialization"` |
 | **Async context** | `new AsyncLocalStorage()` | `new AsyncLocalStorage()` | `new AsyncLocalStorage()` | `import { createContext } from "runtime:context";`<br />`createContext({ name })` |

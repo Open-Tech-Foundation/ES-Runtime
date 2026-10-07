@@ -19,10 +19,14 @@ namespace) is unstable and may change between minor releases until the API freez
   otf-pixels (DECISIONS D159). Input is bytes, a `Blob` or a `runtime:fs`
   `file()`, never a path string; bytes need no capability, a `file()` needs
   FileRead or FileWrite. Failures carry `ERR_IMAGE_DECODE_FAILED`,
-  `ERR_IMAGE_FORMAT_UNSUPPORTED` and `ERR_IMAGE_TOO_LARGE`.
+  `ERR_IMAGE_FORMAT_UNSUPPORTED` and `ERR_IMAGE_TOO_MANY_PIXELS`.
 - `HostProviders::with_task_spawner`: the blocking pool an embedder lends the
   runtime for CPU-bound work. `esrun` and `esdev` install tokio's.
-- `bench/images/run.sh` compares `runtime:images` with `Bun.Image`.
+- `bench/images/run.sh` compares `runtime:images` with `Bun.Image`, Deno's
+  `createImageBitmap` and sharp on Node.js, by time, memory and output size,
+  and `bench/images/features/features.py` checks what each can do. The site
+  has an images section on the benchmarks and comparison pages, and the
+  `Bun.Image` migration guide.
 
 - Each runtime and tool row on the landing page Benchmarks section now shows
   its full-color brand icon beside the name — the OTF logo for esrun and

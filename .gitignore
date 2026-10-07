@@ -37,6 +37,8 @@ wpt/upstream
 #.idea/
 bench/db/.scratch/
 bench/images/.data/
+bench/images/features/.samples/
+bench/images/features/.out/
 
 # Built npm packages — produced by `pnpm run build`, published from CI.
 packages/*/dist/

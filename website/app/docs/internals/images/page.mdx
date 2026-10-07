@@ -42,16 +42,13 @@ all of it. WebP, AVIF, GIF, progressive JPEG and interlaced PNG have no
 streamable prefix and are buffered whole by their decoder. The encoded input
 is held in full: a `file()` is read into memory before it is decoded.
 
-## Compared with Bun
+## Speed
 
-`bench/images/run.sh` runs the same workloads against `Bun.Image`: 40
-pipelines at once from a 12-megapixel JPEG and from a 1280×800 PNG. The script
-checks that both runtimes produce images of the same size.
+The [benchmarks](/docs/benchmarks#images) measure `runtime:images` against
+Bun, Deno and sharp. Bun's codecs are libjpeg-turbo, spng and libwebp, and
+sharp's come with libvips: hand-tuned C with SIMD. Pixels' are younger. Its PNG
+decoder and its WebP encoder are the slowest stages, and most of the gap on
+the PNG and WebP workloads comes from them.
 
-Bun's codecs are libjpeg-turbo, spng and libwebp, which are hand-tuned C with
-SIMD. Pixels' are younger; its PNG decoder and its WebP encoder are the
-slowest stages, and most of the gap on the `png_jpeg` and `jpeg_webp`
-workloads comes from them.
-
-Peak memory on many concurrent PNG decodes is higher than Bun's, for the same
-reason: it is Pixels' decoder, not the runtime, that holds it.
+Peak memory on many concurrent PNG decodes is higher than Bun's for the same
+reason: Pixels' decoder holds it, not the runtime.

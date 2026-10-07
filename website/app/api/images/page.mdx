@@ -37,7 +37,7 @@ from a name.
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `maxPixels` | `268402689` | Over this many pixels fails at the header with `ERR_IMAGE_TOO_LARGE`, before allocation. |
+| `maxPixels` | `268402689` | Over this many pixels fails at the header with `ERR_IMAGE_TOO_MANY_PIXELS`, before allocation. Applies with nothing set; pass a number to lower or raise it. |
 | `autoOrient` | `true` | Apply the orientation the file declares; `metadata()` reports the upright size. |
 | `toSrgb` | `true` | Convert an embedded matrix/TRC ICC profile to sRGB. Off, keep the pixels and write the profile to outputs. |
 | `animated` | `false` | Every frame. Not yet supported: an animation with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
@@ -93,16 +93,9 @@ EXIF and XMP are never written to an output.
 | --- | --- |
 | `ERR_IMAGE_DECODE_FAILED` | The bytes are not a valid image of their format. |
 | `ERR_IMAGE_FORMAT_UNSUPPORTED` | An unknown format, or a valid file using something not implemented. |
-| `ERR_IMAGE_TOO_LARGE` | Over `maxPixels`. |
+| `ERR_IMAGE_TOO_MANY_PIXELS` | Over `maxPixels`. |
 | `TypeError` / `RangeError` | A bad argument; from the method, or from the terminal when only the image shows it. |
 
 Reading or writing a `file()` fails with the [`runtime:fs`](/api/fs) errors.
 
-## Coming from Bun
-
-`new Image(...)` replaces `new Bun.Image(...)`; a path string becomes
-`file(path)`; `write()` takes a `file()` and keeps the chained format. Not
-here: `heic()`, `placeholder()`, `buffer()`, `toBase64()`, `dataurl()`, the
-clipboard, `Image.backend`, the `mks` filters. Added: the `outside`, `cover`
-and `contain` fits, `crop`, `blur`, `sharpen`, `flatten`, `grayscale`,
-`extractChannel`, `modulate({ hue })`, `gif()`, `tiff()`, and AVIF on Linux.
+Moving from `Bun.Image`: see [Migrating from Bun](/docs/migration/bun).

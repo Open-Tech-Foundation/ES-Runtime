@@ -35,13 +35,13 @@ const CHANNELS = { red: 0, green: 1, blue: 2, alpha: 3 };
 // parts of another. Module-private, so guest code cannot reach that path.
 const DERIVE = Symbol("derive");
 
-// Pixels' stable error codes, as this module names them. Bun's names where Bun
-// has one; a bad argument Pixels finds late (a crop outside the image) is the
+// Pixels' stable error codes, under the names Bun gives them, so code that
+// branches on them moves unchanged; a bad argument Pixels finds late (a crop outside the image) is the
 // RangeError it would have been had it been found at the call.
 const ERROR_CODES = {
   malformed: "ERR_IMAGE_DECODE_FAILED",
   unsupported: "ERR_IMAGE_FORMAT_UNSUPPORTED",
-  limit_exceeded: "ERR_IMAGE_TOO_LARGE",
+  limit_exceeded: "ERR_IMAGE_TOO_MANY_PIXELS",
 };
 
 // Bun options Pixels has no encoder support for. Refused by name rather than

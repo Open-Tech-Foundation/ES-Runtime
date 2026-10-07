@@ -1,6 +1,6 @@
 ---
 title: Migrating from Bun
-description: Move a Bun application to esrun: files, subprocesses, hashing, and passwords.
+description: Move a Bun application to esrun: files, subprocesses, hashing, passwords, and images.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -149,3 +149,73 @@ is what makes them answerable inside a worker. The process-wide ones are in
 
 See the [Request context](/docs/guides/context) and
 [Observing the runtime](/docs/guides/diagnostics) guides.
+
+### 7. Images (`Bun.Image`)
+
+[`runtime:images`](/api/images) has `Bun.Image`'s chain: the same transform
+names, the same format methods and the same terminals, so most pipelines move
+with an import and a rename.
+
+```js
+// ❌ Bun
+const thumb = await Bun.file("photo.jpg").image()
+  .resize(400, 400, { fit: "inside" })
+  .webp({ quality: 80 })
+  .bytes();
+await new Bun.Image(upload).resize(1600).write("public/large.avif");
+
+// ✅ esrun
+import { Image } from "runtime:images";
+import { file } from "runtime:fs";
+
+const thumb = await new Image(file("photo.jpg"))
+  .resize(400, 400, { fit: "inside" })
+  .webp({ quality: 80 })
+  .bytes();
+await new Image(upload).resize(1600).avif().write(file("public/large.avif"));
+```
+
+#### What carries over unchanged
+
+`resize(width, height?, { fit, filter, withoutEnlargement })` with `"fill"`
+and `"inside"`; `rotate`, `flip`, `flop`; `modulate({ brightness, saturation })`;
+`jpeg`, `png`, `webp` and `avif` with `quality`, and `webp({ lossless })`;
+`bytes()` and `blob()`; the `maxPixels` and `autoOrient` options with the same
+defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
+`ERR_IMAGE_FORMAT_UNSUPPORTED` and `ERR_IMAGE_TOO_MANY_PIXELS`.
+
+#### What changes
+
+| Bun | esrun | Why |
+| --- | --- | --- |
+| `new Bun.Image("photo.jpg")` | `new Image(file("photo.jpg"))` | A path string is a `TypeError`. A `file()` is read through `runtime:fs`, so `--allow-read` and the project jail apply. Bun's docs warn that a path argument is an arbitrary-file-read primitive. |
+| `Bun.file(p).image()` | `new Image(file(p))` | |
+| `img.write("out.webp")` | `img.webp().write(file("out.webp"))` | The format is the one chained, or else the source's. The extension is never read, so `write(file("out.webp"))` with no format method writes the source's format. Writing needs `--allow-write`. |
+| `img.buffer()` | `img.bytes()` | There is no `Buffer`. |
+| `img.toBase64()` | `(await img.bytes()).toBase64()` | |
+| `img.dataurl()` | `` `data:image/webp;base64,${(await img.webp().bytes()).toBase64()}` `` | |
+| `new Response(img)` | `new Response(await img.bytes(), { headers: { "content-type": "image/webp" } })` | An `Image` is not a body yet. |
+| `img.width`, `img.height` after a terminal | `(await img.metadata()).width` | `metadata()` works at any point in a chain, before anything is encoded. |
+| `metadata()` → `{ width, height, format }` | `{ width, height, format, pixelFormat, hasAlpha, animation }` | A superset. |
+
+#### Not available
+
+| Bun | Instead |
+| --- | --- |
+| `heic()`, HEIC input | No HEIC codec. Convert to AVIF or JPEG before upload. |
+| `placeholder()` | No ThumbHash yet. A tiny `resize(16).webp()` inlined as a data URL is the nearest. |
+| `jpeg({ progressive })` | Baseline JPEG only. The option is a `TypeError`. |
+| `png({ compressionLevel, palette, colors, dither })` | A `TypeError`. `gif()` writes a palette image. |
+| `mks2013`, `mks2021` filters | `"lanczos3"` (the default) or `"mitchell"`. |
+| `Bun.Image.fromClipboard()` and the clipboard helpers | None. A server has no clipboard. |
+| `Bun.Image.backend` | None. There is one backend. |
+
+#### Added
+
+- The `"outside"`, `"cover"` and `"contain"` fits, and `background` for
+  `"contain"`.
+- `crop`, `blur`, `sharpen`, `flatten`, `grayscale`, `extractChannel` and
+  `modulate({ hue })`.
+- `gif()` and `tiff()` output.
+- AVIF and TIFF on Linux, where Bun has neither.
+- The `toSrgb` and `animated` options.

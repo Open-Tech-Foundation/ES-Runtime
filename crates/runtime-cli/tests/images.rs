@@ -271,8 +271,7 @@ console.log("ok");
     );
 }
 
-/// Each failure has its class and code: Bun's two codes, ours for the pixel
-/// limit, a RangeError for a crop Pixels finds outside the image, and a
+/// Each failure has its class and code: Bun's three codes, a RangeError for a crop Pixels finds outside the image, and a
 /// TypeError at the call for what the chain can see is wrong.
 #[test]
 fn failures_have_stable_codes() {
@@ -283,7 +282,7 @@ import {{ Image }} from "runtime:images";
 const png = {png};
 await rejects(new Image(new Uint8Array(16)).bytes(), (e) => eq(e.code, "ERR_IMAGE_FORMAT_UNSUPPORTED", "unknown"), "unknown");
 await rejects(new Image(png.subarray(0, 60)).bytes(), (e) => eq(e.code, "ERR_IMAGE_DECODE_FAILED", "truncated"), "truncated");
-await rejects(new Image(png, {{ maxPixels: 100 }}).metadata(), (e) => eq(e.code, "ERR_IMAGE_TOO_LARGE", "limit"), "limit");
+await rejects(new Image(png, {{ maxPixels: 100 }}).metadata(), (e) => eq(e.code, "ERR_IMAGE_TOO_MANY_PIXELS", "limit"), "limit");
 await rejects(new Image(png).crop({{ left: 30, top: 0, width: 10, height: 10 }}).bytes(), (e) => eq(e.name, "RangeError", "crop"), "crop");
 throws(() => new Image("photo.jpg"), (e) => eq(e.name, "TypeError", "path string"), "path string");
 throws(() => new Image(new SharedArrayBuffer(8)), (e) => eq(e.name, "TypeError", "shared"), "shared");

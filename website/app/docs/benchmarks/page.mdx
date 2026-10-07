@@ -12,6 +12,7 @@ import Http2Table from "../../../components/Http2Table.jsx";
 import RpsChart from "../../../components/RpsChart.jsx";
 import MemorySafetyTable from "../../../components/MemorySafetyTable.jsx";
 import SustainedRpsTable from "../../../components/SustainedRpsTable.jsx";
+import ImagesTable from "../../../components/ImagesTable.jsx";
 import bench from "../../../src/benchmarks.js";
 
 # Benchmarks
@@ -342,6 +343,36 @@ scan is mid-pack — it is specifically the **map** path.
 Unlike the rest of this page, these runs are **not interleaved** — each column
 is measured in turn — so treat small differences as noise and the order of
 magnitude as the finding. Reproduce with `bench/db/redis/run.sh`.
+
+## Images
+
+Each runtime's own way of making a thumbnail: [`runtime:images`](/api/images)
+for esrun, `Bun.Image` for Bun, `createImageBitmap` with an `OffscreenCanvas`
+for Deno, and, since Node.js has no image API, [sharp](https://sharp.pixelplumbing.com)
+(libvips), which Node applications use. Every workload starts 40 pipelines at
+once, which is how a server meets uploads. Each runtime uses its defaults,
+including its thread pool. Wall ms, **min of 5**, lower is better; n/a where a
+runtime cannot write the format. Every workload prints a checksum of the
+output dimensions, and the runner refuses a run in which they disagree.
+
+<ImagesTable data={bench.results_images} metric="ms" />
+
+Size of one output. Encoders trade speed against size, so a time is only
+comparable between outputs of similar size. Every runtime is asked for quality
+80.
+
+<ImagesTable data={bench.results_images} metric="bytes" />
+
+Peak resident memory of the whole process, lower is better:
+
+<ImagesTable data={bench.results_images} metric="rss_mb" />
+
+esrun's codecs are [otf-pixels](https://crates.io/crates/otf-pixels)' own,
+written in Rust; Bun and sharp use C libraries (libjpeg-turbo, spng, libwebp;
+libvips with mozjpeg, libpng, libwebp, and libheif with libaom). Deno's encoder writes PNG
+and JPEG only. Where esrun is slower, the time is in Pixels' codecs; see
+[Internals: images](/docs/internals/images). Reproduce with
+`bench/images/run.sh`.
 
 ## Reproduce
 

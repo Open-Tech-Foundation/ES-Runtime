@@ -44,6 +44,7 @@ experimental or flag-gated one is <Partial />.
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | Built-in SQLite | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Built-in image processing | <Yes /> | <No /> | <Yes /> | <Partial /> |
 | Built-in Postgres / MySQL client | <Yes /> | <No /> | <Yes /> | <No /> |
 | Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
@@ -141,6 +142,70 @@ development binary, not the runtime. Bun's bundler needs the
 `bun-plugin-tailwind` package and a `bunfig.toml` entry. Node has no bundler,
 and Deno's leaves CSS frameworks to other tools. See
 [Tailwind CSS](/esdev/build/tailwind).
+
+## Images, feature by feature
+
+Each runtime's own image API: [`runtime:images`](/api/images) for esrun,
+`Bun.Image` for Bun, and `createImageBitmap` with an `OffscreenCanvas` for
+Deno. Node.js has none, so its column is [sharp](https://sharp.pixelplumbing.com),
+the libvips binding Node applications use. Every cell was produced by
+**running** the operation and checking the file it wrote (its size, its pixels,
+its format), not by reading documentation.
+
+Produced by `bench/images/features/features.py` on Linux x86-64 with esrun
+0.37.0, sharp 0.35.5 on Node.js 24.21.0, Bun 1.4.2 and Deno 2.9.7
+(2026-10-07). Bun's AVIF and TIFF support depends on the operating system's
+codecs, so on macOS and Windows its column differs.
+
+| | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
+| --- | :---: | :---: | :---: | :---: |
+| Decode JPEG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Decode PNG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Decode WebP | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Decode AVIF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Decode GIF | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Decode TIFF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Encode JPEG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Encode PNG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Encode WebP | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Encode AVIF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Encode GIF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Encode TIFF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Resize: `cover` | <Yes /> | <Yes /> | <No /> | <No /> |
+| Resize: `contain` | <Yes /> | <Yes /> | <No /> | <No /> |
+| Resize: `outside` | <Yes /> | <Yes /> | <No /> | <No /> |
+| Crop | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Rotate 90° | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Blur | <Yes /> | <Yes /> | <No /> | <No /> |
+| Composite | <No /> | <Yes /> | <No /> | <No /> |
+| EXIF orientation applied by default | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| Refuses a decompression bomb | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Error code on malformed input | <Yes /> | <No /> | <Yes /> | <No /> |
+| Reports animation frames | <Yes /> | <Yes /> | <No /> | <No /> |
+| Event loop runs while decoding | <Yes /> | <Yes /> | <Yes /> | <No /> |
+
+**Formats.** esrun and sharp read and write all six on every platform; esrun's
+codecs are its own, in Rust, and sharp's come with libvips. Bun uses the
+operating system's codecs for AVIF and TIFF, which Linux does not have. Deno's
+`convertToBlob` writes PNG and JPEG; asked for WebP or AVIF it returns a PNG,
+as the HTML specification allows, which is why those rows are <No /> although
+the call succeeds.
+
+**Operations.** Bun's `resize` takes `fill` and `inside` only; Deno's
+`createImageBitmap` can resize and crop, and nothing else. `composite` is not
+in `runtime:images` yet.
+
+**Safety.** A 400-megapixel PNG of about one megabyte is refused at its
+header by esrun, sharp and Bun, whose limits default to 268 megapixels. Deno
+decoded it. sharp leaves EXIF orientation off unless asked
+(`autoOrient: true` or `.rotate()`), and its errors carry a message but no
+code to branch on. While Deno's `createImageBitmap` decoded, no timer ran; in
+the other three, timers kept firing.
+
+**Speed.** Full numbers, including output sizes, in
+[Benchmarks](/docs/benchmarks#images). Bun is the fastest on JPEG and PNG and
+sharp next. esrun is slower on PNG input and WebP output, where Pixels' codecs
+are the cost, and the fastest at AVIF.
 
 ## Redis clients, feature by feature
 

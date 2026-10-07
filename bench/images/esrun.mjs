@@ -11,4 +11,6 @@ const outputs = await Promise.all(
   Array.from({ length: JOBS }, () => new Image(bytes).resize(w.width)[w.format]({ quality: 80 }).bytes()),
 );
 const m = await new Image(outputs[0]).metadata();
-console.log(outputs.length * m.width * m.height);
+// The checksum, then the first output's size: encoders are only comparable
+// at similar sizes, so the size is published beside the time.
+console.log(`${outputs.length * m.width * m.height} ${outputs[0].length}`);

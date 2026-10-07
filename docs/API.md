@@ -3005,7 +3005,7 @@ format, and an awaited terminal. Nothing is decoded until a terminal or
 import { Image } from "runtime:images";
 import { file } from "runtime:fs";
 
-const image = new Image(await request.bytes(), { maxPixels: 40_000_000 });
+const image = new Image(await request.bytes());  // at most 268 MP unless maxPixels says otherwise
 await image.metadata();                    // { width, height, format, pixelFormat, hasAlpha, animation }
 const thumb = await image.resize(400, 400, { fit: "cover" }).webp({ quality: 80 }).bytes();
 await image.resize(1600).avif().write(file("public/large.avif"));
@@ -3021,7 +3021,7 @@ change the result. The format is read from the bytes, never from a name.
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `maxPixels` | `268402689` | An image over this many pixels fails at its header with `ERR_IMAGE_TOO_LARGE`, before anything is allocated. Set it per request for untrusted uploads. |
+| `maxPixels` | `268402689` | An image over this many pixels fails at its header with `ERR_IMAGE_TOO_MANY_PIXELS`, before anything is allocated. The default applies with nothing set; pass a number to lower or raise it. |
 | `autoOrient` | `true` | The orientation the file declares (EXIF, AVIF `irot`/`imir`) is applied, so `metadata()` reports the upright size. |
 | `toSrgb` | `true` | An embedded matrix/TRC ICC profile is converted to sRGB and dropped. Off, the pixels are kept as stored and the profile is written to outputs that can hold one. |
 | `animated` | `false` | Ask for every frame. Not yet supported: an animated input with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
@@ -3082,20 +3082,12 @@ from uploads.
 | --- | --- |
 | The bytes are not a valid image of their format | `Error` with `code` `ERR_IMAGE_DECODE_FAILED` |
 | An unknown format, or a valid file using something not implemented (an AVIF sequence, `animated: true` on an animation) | `Error` with `code` `ERR_IMAGE_FORMAT_UNSUPPORTED` |
-| Over `maxPixels` | `Error` with `code` `ERR_IMAGE_TOO_LARGE` |
+| Over `maxPixels` | `Error` with `code` `ERR_IMAGE_TOO_MANY_PIXELS` |
 | A bad argument seen at the call | `TypeError` or `RangeError` from the method |
 | A bad argument seen only when the image is read (a crop outside it) | `RangeError` from the terminal |
 | Reading or writing a `file()` | The `runtime:fs` error (`NotAllowedError`, `ERR_NOT_FOUND`, …) |
 
-### Coming from Bun
-
-`new Image(...)` in place of `new Bun.Image(...)`. A path string becomes
-`file(path)`. `write()` takes a `file()` and uses the chained format, not the
-extension. Not here: `heic()`, `placeholder()`, `buffer()`, `toBase64()`
-(`(await img.bytes()).toBase64()`), `dataurl()`, the clipboard, `Image.backend`,
-and the `mks2013`/`mks2021` filters. Added: the `outside`, `cover` and
-`contain` fits, `crop`, `blur`, `sharpen`, `flatten`, `grayscale`,
-`extractChannel`, `modulate({ hue })`, and `gif()`, `tiff()` and AVIF on Linux.
+Moving from `Bun.Image`: see the site's *Migrating from Bun* page.
 
 ## `runtime:wasi`
 
@@ -4855,7 +4847,7 @@ try {
 | `ERR_CANCELLED` | The operation was cancelled. |
 | `ERR_IMAGE_DECODE_FAILED` | `runtime:images`: the bytes are not a valid image of their format. |
 | `ERR_IMAGE_FORMAT_UNSUPPORTED` | `runtime:images`: an unknown format, or a valid file using something not implemented. |
-| `ERR_IMAGE_TOO_LARGE` | `runtime:images`: the image is over `maxPixels`. |
+| `ERR_IMAGE_TOO_MANY_PIXELS` | `runtime:images`: the image is over `maxPixels`. |
 
 `runtime:db` adds a portable classification on top, so an application can branch
 on what a database did without knowing which one said so. These sit on the same

@@ -71,7 +71,7 @@ declare module "runtime:images" {
   }
 
   /** The codes `runtime:images` rejects with. */
-  export type ImageErrorCode = "ERR_IMAGE_DECODE_FAILED" | "ERR_IMAGE_FORMAT_UNSUPPORTED" | "ERR_IMAGE_TOO_LARGE";
+  export type ImageErrorCode = "ERR_IMAGE_DECODE_FAILED" | "ERR_IMAGE_FORMAT_UNSUPPORTED" | "ERR_IMAGE_TOO_MANY_PIXELS";
 
   /**
    * A lazy image pipeline. Every transform and format method returns a new
