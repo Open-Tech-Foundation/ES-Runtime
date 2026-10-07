@@ -6,9 +6,9 @@
 //! free and nothing an agent could name that another agent made.
 //!
 //! The work runs on the embedder's [`TaskSpawner`] — Pixels is synchronous by
-//! design — and its tiles on one process-wide Pixels [`Scheduler`], which every
-//! agent and worker shares, as the Pixels embedding guide asks. Without a
-//! spawner the work runs inline.
+//! design — and its tiles on Pixels' process-wide scheduler, which every agent
+//! and worker shares because no output here asks for a pool of its own. Without
+//! a spawner the work runs inline.
 //!
 //! The capability split is by op name rather than by argument, because an op
 //! declares what it requires before it runs: bytes in and out need nothing, a
@@ -20,14 +20,14 @@
 //! Filesystem failures reject as `runtime:fs` ones do.
 
 use std::io::Cursor;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{FileSystem, ProviderError, TaskSpawner};
 use otf_pixels::{
     EncodeOptions, Filter, Fit, Format, Image, Limits, Modulate, OpenOptions, PixelFormat,
-    PixelsError, ResizeOptions, Scheduler, SchedulerOptions,
+    PixelsError, ResizeOptions,
 };
 
 use crate::Result;
@@ -74,19 +74,6 @@ struct Output {
     format: Option<Format>,
     quality: Option<u8>,
     lossless: bool,
-}
-
-/// The process-wide scheduler. `None` if it could not be built, in which case
-/// each run brings its own threads, which is slower but still correct.
-fn scheduler() -> Option<Arc<Scheduler>> {
-    static SCHEDULER: OnceLock<Option<Arc<Scheduler>>> = OnceLock::new();
-    SCHEDULER
-        .get_or_init(|| {
-            Scheduler::new(SchedulerOptions::default())
-                .ok()
-                .map(Arc::new)
-        })
-        .clone()
 }
 
 /// Registers the `runtime:images` ops.
@@ -297,11 +284,7 @@ fn encode(
         None => EncodeOptions::default(),
     }
     .with_lossless(output.lossless);
-    let mut run = image.output(format, options);
-    if let Some(scheduler) = scheduler() {
-        run = run.with_scheduler(scheduler);
-    }
-    Ok((run.bytes()?, format))
+    Ok((image.output(format, options).bytes()?, format))
 }
 
 fn metadata(image: &Image) -> std::result::Result<Value, PixelsError> {

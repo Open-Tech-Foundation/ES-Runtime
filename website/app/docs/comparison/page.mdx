@@ -203,9 +203,9 @@ code to branch on. While Deno's `createImageBitmap` decoded, no timer ran; in
 the other three, timers kept firing.
 
 **Speed.** Full numbers, including output sizes, in
-[Benchmarks](/docs/benchmarks#images). Bun is the fastest on JPEG and PNG and
-sharp next. esrun is slower on PNG input and WebP output, where Pixels' codecs
-are the cost, and the fastest at AVIF.
+[Benchmarks](/docs/benchmarks#images). Bun is the fastest on JPEG and PNG.
+esrun is close to sharp there, slower on WebP output, where Pixels' encoder is
+the cost, and the fastest at AVIF.
 
 ## Redis clients, feature by feature
 

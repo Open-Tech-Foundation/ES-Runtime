@@ -46,9 +46,9 @@ is held in full: a `file()` is read into memory before it is decoded.
 
 The [benchmarks](/docs/benchmarks#images) measure `runtime:images` against
 Bun, Deno and sharp. Bun's codecs are libjpeg-turbo, spng and libwebp, and
-sharp's come with libvips: hand-tuned C with SIMD. Pixels' are younger. Its PNG
-decoder and its WebP encoder are the slowest stages, and most of the gap on
-the PNG and WebP workloads comes from them.
+sharp's come with libvips: hand-tuned C with SIMD. Pixels' are younger. Its
+WebP encoder is the slowest stage, and most of the gap on the WebP workload
+comes from it.
 
-Peak memory on many concurrent PNG decodes is higher than Bun's for the same
-reason: Pixels' decoder holds it, not the runtime.
+Peak memory on many concurrent PNG decodes is higher than the others': Pixels'
+decoder holds it, not the runtime.

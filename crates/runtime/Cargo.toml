@@ -62,7 +62,7 @@ serde-transcode = "1.1.1"
 brotli = "8"
 # runtime:images (DECISIONS.md D159). The 0.x minor is pinned, as its
 # embedding guide asks: a 0.x minor may change the API.
-otf-pixels = "0.1.0"
+otf-pixels = "0.2.0"
 
 [features]
 # Exposes `crate::fuzz` for the targets under `fuzz/` (SPEC §5). Not public API
