@@ -653,7 +653,7 @@ fn parse_args() -> Result<Command, String> {
             }
             // The same machinery `esrun upgrade` runs, on a thread of its own —
             // self_update drives a blocking HTTP runtime, and dropping that from
-            // inside this `#[tokio::main]` context panics.
+            // inside this async runtime panics.
             es_runtime_cli_common::upgrade::run_and_exit("esdev", env!("CARGO_PKG_VERSION"));
         }
     }
@@ -3114,8 +3114,28 @@ fn attach_debugger(config: &mut Config, inspect: Option<&InspectConfig>) -> Resu
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("error: cannot start the async runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let code = runtime.block_on(run());
+    // Dropping a runtime waits, without limit, for its blocking work. On
+    // Windows a child's pipe is read on the blocking pool, and a browser that
+    // outlives its session holds the pipe open, so that read never returns:
+    // esdev finished its tests and then never exited. Work that ends does so
+    // well within the bound; work that cannot is left to the process exit.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    code
+}
+
+async fn run() -> ExitCode {
     // Before anything that could log. Installing a subscriber is a
     // process-global act, so a library crate must not do it. Quiet by default
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.

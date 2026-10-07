@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev test --browser` could finish its tests and never exit on Windows.
+  A browser that outlived its session held a pipe esdev was still reading,
+  and on Windows that read runs on the blocking pool, which esdev waited on
+  without limit at exit. It now waits at most two seconds.
+
 ## [0.17.0] - 2026-10-06
 
 ### Changed
