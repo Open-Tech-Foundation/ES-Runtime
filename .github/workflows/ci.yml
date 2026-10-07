@@ -21,7 +21,11 @@ concurrency:
 
 # Every job has a time limit. Without one a hung test holds a runner for
 # GitHub's six hours and the run reports nothing until then; the Windows test
-# and browser jobs did exactly that while esdev waited on a browser's pipe.
+# job did exactly that while esdev waited on a browser's pipe.
+#
+# Real-browser tests are not run here. They need a browser and driver pair the
+# runner images change under us, and they cost more than they catch; run them
+# locally with `ESDEV_TEST_BROWSER=chrome tsr test:browser`.
 
 env:
   CARGO_TERM_COLOR: always
@@ -106,50 +110,6 @@ jobs:
             target/debug/gn_out
       - uses: ./.github/actions/setup-tsr
       - run: tsr test:inspector
-
-  # `esdev test --browser` in real browsers: Chrome and Firefox on each tier-1
-  # platform, and Edge on Windows, as the runner images install them. The images keep the
-  # drivers in directories of their own, named by CHROMEWEBDRIVER and
-  # EDGEWEBDRIVER, and esdev looks for a driver on PATH, so those go on it.
-  # Each step names its browser, so one that cannot be driven fails the job
-  # instead of passing as a skip, and runs whether or not the one before it
-  # passed. Safari is left out until it serves WebDriver BiDi.
-  browser:
-    name: browser tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-directories: |
-            target/debug/gn_out
-      - uses: ./.github/actions/setup-tsr
-      - name: Put the browser drivers on PATH
-        shell: bash
-        run: |
-          echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
-          echo "$EDGEWEBDRIVER" >> "$GITHUB_PATH"
-      - name: Chrome
-        run: tsr test:browser
-        env:
-          ESDEV_TEST_BROWSER: chrome
-      - name: Firefox
-        if: success() || failure()
-        run: tsr test:browser
-        env:
-          ESDEV_TEST_BROWSER: firefox
-      # Edge is Chromium, so a second Chromium run adds little but its driver
-      # and install paths; it is run where it is the machine's own browser.
-      - name: Edge
-        if: matrix.os == 'windows-latest' && (success() || failure())
-        run: tsr test:browser
-        env:
-          ESDEV_TEST_BROWSER: edge
 
   miri:
     name: miri

@@ -930,7 +930,7 @@ mod tests {
     }
 
     /// The real thing, against the browsers `ESDEV_TEST_BROWSER` names — as
-    /// CI's browser job and `tsr test:browser` do. Unnamed, it checks nothing
+    /// `tsr test:browser` does when given one. Unnamed, it checks nothing
     /// and says so: which browsers a machine carries is not this crate's to
     /// decide, and an image whose Chromium cannot start its sandbox would
     /// otherwise fail every test job. The stubbed tests above always run.

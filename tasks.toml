@@ -43,7 +43,7 @@ env = { ES_RUNTIME_INSPECTOR = "1" }
 # name says browser, the stub-machine ones included, and the BiDi session check.
 # `ESDEV_TEST_BROWSER` names the browser, and a real browser is driven only when
 # it is set; a named browser that cannot be driven fails the run instead of
-# passing as a skip, which is how CI's browser job runs it once per browser.
+# passing as a skip. Not run in CI; run it locally before touching browser code.
 #   ESDEV_TEST_BROWSER=chrome tsr test:browser
 [tasks."test:browser"]
 run = "cargo test -p es-runtime-dev-cli --test cli browser --no-fail-fast && cargo test -p es-runtime-dev-cli --bin esdev bidi::tests::drives_the_named_real_browsers"

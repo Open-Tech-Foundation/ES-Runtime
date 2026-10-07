@@ -17356,7 +17356,7 @@ fn test_mock_module_says_what_is_wrong_with_a_call() {
 /// The flag a real-browser test runs with, or `None` when no browser is named.
 ///
 /// A real browser is driven only when `ESDEV_TEST_BROWSER` names one, as each
-/// step of CI's browser job and `tsr test:browser` do. Unnamed, the test says
+/// `tsr test:browser` does when given one. Unnamed, the test says
 /// it did not run: which browsers a machine happens to carry is not something
 /// the general suite can depend on. A runner image that began shipping a
 /// Chromium whose sandbox cannot start failed every test job that way.
