@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-07
+
 ### Added
 
 - `runtime:images`: `Image`, its options, `ImageMetadata` and the

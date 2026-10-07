@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-07
+
 ### Added
 
 - `runtime:images`: decode, resize, transform and encode JPEG, PNG, WebP,
