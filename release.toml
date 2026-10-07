@@ -191,19 +191,12 @@ ext = ".exe"
 # keeps this inside the repository's 10 GB cache budget beside ci.yml's.
 # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches into
 # `gn_out`, beside the directories rust-cache knows about; restoring it is what
-# lets the script skip the download. `targets` names every triple so the step
-# is emitted only in the build jobs, where `matrix.triple` exists.
+# lets the script skip the download. Build jobs only: the others have no
+# `matrix.triple` to key on.
 [[package.setup]]
 uses = "Swatinem/rust-cache@v2"
 with = { shared-key = "release-${{ matrix.triple }}", cache-directories = "target/${{ matrix.triple }}/release/gn_out" }
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "aarch64-pc-windows-msvc",
-]
+jobs = ["build"]
 
 [[package]]
 name = "es-runtime-dev-cli"
@@ -219,6 +212,10 @@ manifest = "crates/dev-cli/Cargo.toml"
 attest = true
 checksums = true
 tag_format = "esdev@{version}"
+# With the V8 inspector, for `esdev --inspect` and `esdev test --coverage`
+# (DECISIONS D59, D108), in CI and in a local `release build` alike. esrun's
+# build script refuses the variable, which `-p es-runtime-dev-cli` keeps away.
+env = { ES_RUNTIME_INSPECTOR = "1" }
 
 [[package.targets]]
 name = "linux"
@@ -271,30 +268,9 @@ ext = ".exe"
 # keeps this inside the repository's 10 GB cache budget beside ci.yml's.
 # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches into
 # `gn_out`, beside the directories rust-cache knows about; restoring it is what
-# lets the script skip the download. `targets` names every triple so the step
-# is emitted only in the build jobs, where `matrix.triple` exists.
+# lets the script skip the download. Build jobs only: the others have no
+# `matrix.triple` to key on.
 [[package.setup]]
 uses = "Swatinem/rust-cache@v2"
 with = { shared-key = "release-${{ matrix.triple }}", cache-directories = "target/${{ matrix.triple }}/release/gn_out" }
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "aarch64-pc-windows-msvc",
-]
-
-# With the V8 inspector, for `esdev --inspect` and `esdev test --coverage`
-# (DECISIONS D59, D108). Set for the build step through $GITHUB_ENV; esrun's
-# build script refuses the variable, which `-p es-runtime-dev-cli` keeps away.
-[[package.setup]]
-run = ['echo "ES_RUNTIME_INSPECTOR=1" >> "$GITHUB_ENV"']
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "aarch64-pc-windows-msvc",
-]
+jobs = ["build"]
