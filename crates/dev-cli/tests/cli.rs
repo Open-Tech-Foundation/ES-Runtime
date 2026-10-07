@@ -17353,13 +17353,20 @@ fn test_mock_module_says_what_is_wrong_with_a_call() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The flag a real-browser test runs with. `ESDEV_TEST_BROWSER` names the
-/// browser, as each step of CI's browser job does; otherwise `--browser` takes
-/// the first this machine can drive.
-fn browser_flag() -> String {
+/// The flag a real-browser test runs with, or `None` when no browser is named.
+///
+/// A real browser is driven only when `ESDEV_TEST_BROWSER` names one, as each
+/// step of CI's browser job and `tsr test:browser` do. Unnamed, the test says
+/// it did not run: which browsers a machine happens to carry is not something
+/// the general suite can depend on. A runner image that began shipping a
+/// Chromium whose sandbox cannot start failed every test job that way.
+fn browser_flag() -> Option<String> {
     match std::env::var("ESDEV_TEST_BROWSER") {
-        Ok(name) if !name.is_empty() => format!("--browser={name}"),
-        _ => "--browser".to_string(),
+        Ok(name) if !name.is_empty() => Some(format!("--browser={name}")),
+        _ => {
+            eprintln!("ESDEV_TEST_BROWSER is not set; the real-browser run did not happen");
+            None
+        }
     }
 }
 
@@ -17383,7 +17390,9 @@ fn no_browser(err: &str) -> bool {
 /// build would be.
 #[test]
 fn test_compiles_through_the_plugins_in_a_browser_run() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = framework_project("p_plugins_test_browser");
     let out = esdev_in(&dir)
         .args(["test", &browser])
@@ -17403,7 +17412,9 @@ fn test_compiles_through_the_plugins_in_a_browser_run() {
 /// setup runs beside the browser.
 #[test]
 fn test_mocks_and_the_clock_in_a_browser_run() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = module_mock_project("t_mock_module_browser");
     write_in(
         &dir,
@@ -17689,7 +17700,9 @@ fn test_browser_refuses_what_has_no_meaning_in_a_page() {
 /// and the stubbed tests above cover the choosing everywhere.
 #[test]
 fn test_browser_runs_the_files_in_a_real_page() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = build_dir("t_browser_real");
     write_in(
         &dir,
@@ -18130,7 +18143,9 @@ test("dup", () => { expect("first").toMatchSnapshot(); });
 /// that can be driven; on a machine without one it checks nothing.
 #[test]
 fn test_browser_snapshots_are_the_process_runs_snapshots() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = build_dir("t_browser_snapshots");
     let file = |user: &str| {
         write_in(
@@ -18348,7 +18363,9 @@ test("written by another runner", () => {
 #[cfg(unix)]
 #[test]
 fn test_browser_watch_runs_again_when_a_file_changes() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = build_dir("t_browser_watch");
     let test = dir.join("w.test.js");
     let body = |want: u32| {
@@ -19355,7 +19372,9 @@ fn test_watch_keys_cancel_a_run_and_update_snapshots() {
 /// fixtures, tags, concurrent tests (one at a time there) and benchmarks.
 #[test]
 fn test_browser_runs_fixtures_tags_concurrency_and_benchmarks() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = build_dir("t_browser_phase4");
     write_in(
         &dir,
@@ -19438,7 +19457,9 @@ test("compare", async ({ bench }) => {
 /// build places them.
 #[test]
 fn test_browser_serves_stylesheet_assets_and_public() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = build_dir("t_browser_assets");
     std::fs::create_dir_all(dir.join("src/img")).unwrap();
     std::fs::create_dir_all(dir.join("public/icons")).unwrap();
@@ -19603,7 +19624,9 @@ fn test_browser_runs_every_file_in_each_of_several() {
 /// nothing. Outside a browser run it says it needs one.
 #[test]
 fn test_browser_screenshots_are_compared_with_a_reference() {
-    let browser = browser_flag();
+    let Some(browser) = browser_flag() else {
+        return;
+    };
     let dir = build_dir("t_browser_screenshots");
     let test = |colour: &str| {
         format!(

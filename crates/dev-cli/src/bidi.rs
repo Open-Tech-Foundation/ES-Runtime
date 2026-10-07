@@ -929,16 +929,35 @@ mod tests {
         assert!(!complete(b"HTTP/1.0 200 OK\r\n\r\n{}"));
     }
 
-    /// The real thing, against every browser this machine can drive — both
-    /// ways in, when it has a Firefox and a driven one. On a machine with none
-    /// it checks nothing and says so, since which browsers a CI runner carries
-    /// is not this crate's to decide; the stubbed tests above always run.
+    /// The real thing, against the browsers `ESDEV_TEST_BROWSER` names — as
+    /// CI's browser job and `tsr test:browser` do. Unnamed, it checks nothing
+    /// and says so: which browsers a machine carries is not this crate's to
+    /// decide, and an image whose Chromium cannot start its sandbox would
+    /// otherwise fail every test job. The stubbed tests above always run.
     #[tokio::test]
-    async fn drives_every_real_browser_that_is_installed() {
+    async fn drives_the_named_real_browsers() {
+        use crate::browser::Choice;
+        let named = match std::env::var("ESDEV_TEST_BROWSER") {
+            Ok(text) if !text.is_empty() => text,
+            _ => {
+                eprintln!("ESDEV_TEST_BROWSER is not set; the real-browser check did not run");
+                return;
+            }
+        };
+        let browsers = match Choice::parse(&named) {
+            Ok(Choice::Named(browser)) => vec![browser],
+            Ok(Choice::Several(browsers)) => browsers,
+            Ok(Choice::Auto) => crate::browser::ORDER.to_vec(),
+            Err(err) => panic!("ESDEV_TEST_BROWSER={named}: {err}"),
+        };
         let mut driven = 0;
-        for browser in crate::browser::ORDER {
-            let Ok(launch) = crate::browser::find(browser, &crate::browser::System) else {
-                continue;
+        for browser in browsers {
+            let launch = match crate::browser::find(browser, &crate::browser::System) {
+                Ok(launch) => launch,
+                Err(_) if named == "auto" => continue,
+                Err(err) => {
+                    panic!("ESDEV_TEST_BROWSER names {browser}, which cannot be driven: {err}")
+                }
             };
             let session = Session::start(&launch, true)
                 .await
@@ -957,8 +976,9 @@ mod tests {
             session.end().await;
             driven += 1;
         }
-        if driven == 0 {
-            eprintln!("no browser can be driven here; the real-browser check did not run");
-        }
+        assert!(
+            driven > 0,
+            "ESDEV_TEST_BROWSER={named}, and no browser could be driven"
+        );
     }
 }
