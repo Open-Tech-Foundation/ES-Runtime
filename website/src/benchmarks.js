@@ -3886,74 +3886,74 @@ export default {
   "results_images": {
     "jpeg_webp": {
       "esrun": {
-        "ms": 526.3,
-        "rss_mb": 149.7,
+        "ms": 530.1,
+        "rss_mb": 142.6,
         "bytes": 16888
       },
       "node": {
-        "ms": 351.6,
-        "rss_mb": 101,
+        "ms": 346.5,
+        "rss_mb": 99,
         "bytes": 16512
       },
       "bun": {
-        "ms": 167.3,
-        "rss_mb": 126.3,
+        "ms": 166.8,
+        "rss_mb": 123.1,
         "bytes": 16634
       }
     },
     "jpeg_jpeg": {
       "esrun": {
-        "ms": 265.3,
-        "rss_mb": 106.8,
+        "ms": 250,
+        "rss_mb": 116.3,
         "bytes": 23856
       },
       "node": {
-        "ms": 233.8,
-        "rss_mb": 99.7,
+        "ms": 242.2,
+        "rss_mb": 99.6,
         "bytes": 23637
       },
       "bun": {
-        "ms": 113.6,
-        "rss_mb": 115.1,
+        "ms": 113.8,
+        "rss_mb": 109.5,
         "bytes": 25011
       },
       "deno": {
-        "ms": 49011.4,
-        "rss_mb": 199.4,
+        "ms": 49026.9,
+        "rss_mb": 198.7,
         "bytes": 36797
       }
     },
     "png_jpeg": {
       "esrun": {
-        "ms": 561.4,
-        "rss_mb": 338.1,
+        "ms": 226.2,
+        "rss_mb": 343.1,
         "bytes": 16799
       },
       "node": {
-        "ms": 205.1,
-        "rss_mb": 145.1,
+        "ms": 210.2,
+        "rss_mb": 143.9,
         "bytes": 15766
       },
       "bun": {
-        "ms": 61.6,
-        "rss_mb": 126.8,
+        "ms": 61.2,
+        "rss_mb": 133.7,
         "bytes": 16792
       },
       "deno": {
-        "ms": 4344.1,
+        "ms": 4337.7,
         "rss_mb": 63.6,
         "bytes": 20353
       }
     },
     "jpeg_avif": {
       "esrun": {
-        "ms": 683.7,
-        "rss_mb": 219.9,
+        "ms": 675,
+        "rss_mb": 219.8,
         "bytes": 24843
       },
       "node": {
-        "ms": 6421.4,
-        "rss_mb": 206.3,
+        "ms": 6466.4,
+        "rss_mb": 203.3,
         "bytes": 24007
       }
     }
