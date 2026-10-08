@@ -190,24 +190,24 @@ codecs, so on macOS and Windows its column differs.
 
 **Formats.** esrun and sharp read and write JPEG, PNG, WebP, AVIF, GIF and
 TIFF on every platform; esrun's codecs are its own, in Rust, and sharp's come
-with libvips. HEIC is outside the table: `runtime:images` has no HEIC codec —
+with libvips. HEIC is outside the table: `runtime:images` has no HEIC codec yet —
 an HEIC upload is rejected with `ERR_IMAGE_FORMAT_UNSUPPORTED`, so convert to
 AVIF or JPEG before upload — while sharp decodes it through libheif. Bun uses
 the operating system's codecs for AVIF and TIFF, which Linux does not have.
 Deno's `convertToBlob` writes PNG and JPEG; asked for WebP or AVIF it returns
 a PNG, as the HTML specification allows, which is why those rows are <No />
 although the call succeeds.
-
 **Operations.** Bun's `resize` takes `fill` and `inside` only; Deno's
 `createImageBitmap` can resize and crop, and nothing else. `runtime:images`
 covers the thumbnail pipeline — decode, resize, crop, 90° rotation, blur,
-single-format encode — but it is not sharp parity: rotation is multiples of
-90° only, there is no compositing or text rendering, an animation is processed
-as its first frame (`gif()` writes one frame), and JPEG output is baseline
-only. sharp does all four; Bun matches it only on progressive JPEG. The
-encoder tuning knobs are absent too — PNG palette and compression, AVIF
-lossless and TIFF options are a `TypeError`, as the [API reference](/api/images)
-lists — so anything beyond thumbnails and format conversion still belongs on sharp.
+single-format encode — but it is not at sharp parity yet: rotation is multiples
+of 90° only, there is no compositing or text rendering yet, an animation is
+processed as its first frame (`gif()` writes one frame), and JPEG output is
+baseline only. sharp does all four; Bun matches it only on progressive JPEG.
+The encoder tuning knobs are not there yet either — PNG palette and
+compression, AVIF lossless and TIFF options are a `TypeError`, as the [API
+reference](/api/images) lists — so for now, anything beyond thumbnails and
+format conversion still belongs on sharp.
 
 **Safety.** A 400-megapixel PNG of about one megabyte is refused at its
 header by esrun, sharp and Bun, whose limits default to 268 megapixels. Deno

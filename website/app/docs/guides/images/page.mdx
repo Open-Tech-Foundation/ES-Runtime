@@ -110,10 +110,11 @@ const avatar = await new Image(bytes)
 
 The full method list is in the [API reference](/api/images).
 
-## Limits
+## Current limitations
 
-The module covers thumbnails and format conversion: no compositing or text
-rendering, no rotation between the right angles, single-frame output, baseline
-JPEG, and no HEIC codec. What that means next to sharp, `Bun.Image` and Deno's
+For now the module covers thumbnails and format conversion: compositing and
+text rendering, rotation between the right angles, multi-frame output,
+progressive JPEG, the encoder tuning knobs and a HEIC codec are not there
+yet. What that means next to sharp, `Bun.Image` and Deno's
 `createImageBitmap` is measured row by row on the
 [comparison page](/docs/comparison).

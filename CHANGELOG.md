@@ -14,7 +14,8 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Added
 
 - The images guide names the non-resize transforms and the `blob()` terminal,
-  with a chained avatar example.
+  with a chained avatar example. Its gaps and the comparison notes are framed
+  as current limitations, not permanent ones.
 
 ### Fixed
 
