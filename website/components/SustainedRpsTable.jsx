@@ -9,10 +9,17 @@
 // Fed by bench/rps.sh via `SECTIONS=rps_sustained bench/gen-bench-data.sh`,
 // published under `results_rps.hono_sustained`.
 //
-// NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
+// The fastest burst and sustained cells are marked like ImagesTable's winners
+// (higher req/s is better); the change column keeps its own directional
+// colouring, since the direction is the point there, not the ranking.
+//
+ // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops.
 import bench from "../src/benchmarks.js";
 import { LABELS, ORDER } from "../src/runtimes.js";
+
+// Same winner tone as ImagesTable.
+const WIN = "font-semibold text-emerald-600 dark:text-emerald-400";
 
 
 function fmt(v) {
@@ -36,6 +43,14 @@ export default function SustainedRpsTable() {
   const runtimes = [];
   for (const rt of ORDER) if (burst[rt] != null || held[rt] != null) runtimes.push(rt);
 
+  // Fastest burst and sustained values; a missing cell never wins.
+  let topBurst = -Infinity;
+  let topHeld = -Infinity;
+  for (const rt of runtimes) {
+    if (typeof burst[rt] === "number" && burst[rt] > topBurst) topBurst = burst[rt];
+    if (typeof held[rt] === "number" && held[rt] > topHeld) topHeld = held[rt];
+  }
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
@@ -50,13 +65,19 @@ export default function SustainedRpsTable() {
         <tbody>
           {runtimes.map((rt) => {
             const pct = change(burst[rt], held[rt]);
+            const burstTone =
+              typeof burst[rt] === "number" && burst[rt] === topBurst
+                ? WIN
+                : "text-zinc-500";
+            const heldTone =
+              typeof held[rt] === "number" && held[rt] === topHeld ? WIN : "text-zinc-500";
             return (
               <tr className="border-b border-zinc-100 dark:border-zinc-800">
                 <td className="px-3 py-2">{LABELS[rt]}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-zinc-500">
+                <td className={"px-3 py-2 text-right tabular-nums " + burstTone}>
                   {fmt(burst[rt])}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-zinc-500">
+                <td className={"px-3 py-2 text-right tabular-nums " + heldTone}>
                   {fmt(held[rt])}
                 </td>
                 <td

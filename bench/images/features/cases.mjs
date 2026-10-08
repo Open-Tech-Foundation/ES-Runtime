@@ -32,10 +32,18 @@ async function run(name, arg, data, out, api) {
       return write(await api.crop(await api.read(`${data}/sample.png`)));
     case "rotate":
       return write(await api.rotate(await api.read(`${data}/sample.png`)));
+    case "rotate-free":
+      return write(await api.rotateFree(await api.read(`${data}/sample.png`)));
     case "blur":
       return write(await api.blur(await api.read(`${data}/sample.png`)));
     case "composite":
       return write(await api.composite(await api.read(`${data}/sample.png`)));
+    case "text":
+      return write(await api.text(await api.read(`${data}/sample.png`)));
+    case "animated-out":
+      return write(await api.animatedGif(await api.read(`${data}/animated.gif`)), "gif");
+    case "progressive-jpg":
+      return write(await api.progressiveJpeg(await api.read(`${data}/sample.png`)), "jpg");
     case "orient":
       return write(await api.reencode(await api.read(`${data}/oriented.jpg`)));
     case "bomb":

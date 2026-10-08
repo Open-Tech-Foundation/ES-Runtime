@@ -1,7 +1,10 @@
 // HTTP/1.1 vs HTTP/2 table for the Benchmarks page — req/sec (higher is better).
 // Two client shapes per runtime, because an HTTP/2 number in isolation says
 // nothing: it is dominated by how many connections the client opened and how
-// many streams it put on each. Used by app/docs/benchmarks/page.mdx.
+// many streams it put on each. The fastest cell in each throughput column is
+// marked like ImagesTable's winners; the gain columns stay neutral, since a
+// gain ratio carries the two-implementation gap the caption warns about.
+// Used by app/docs/benchmarks/page.mdx.
 //
 import { LABELS, ORDER } from "../src/runtimes.js";
 
@@ -12,10 +15,26 @@ import { LABELS, ORDER } from "../src/runtimes.js";
 // caption says what the mark means. Comparing down a column is always fair.
 const fmt = (n) => (n == null ? "n/a" : n.toLocaleString("en-US"));
 const gain = (lo, hi) => (lo == null || hi == null ? "n/a" : `${(hi / lo).toFixed(2)}×`);
+// Same winner tone as ImagesTable.
+const WIN = "font-semibold text-emerald-600 dark:text-emerald-400";
+const PLAIN = "text-zinc-600 dark:text-zinc-400";
+const KEYS = ["wide_h1", "wide_h2", "narrow_h1", "narrow_h2"];
 
 export default function Http2Table({ data }) {
   if (!data) return null;
   const rows = ORDER.filter((rt) => data[rt]);
+  // Fastest value per throughput column; a missing cell never wins.
+  const best = {};
+  for (const k of KEYS) {
+    let top = -Infinity;
+    for (const rt of rows) {
+      const v = data[rt][k];
+      if (typeof v === "number" && v > top) top = v;
+    }
+    best[k] = top;
+  }
+  // Winner check per cell, inline so the compiler still sees plain <td>s.
+  const won = (rt, k) => typeof data[rt][k] === "number" && data[rt][k] === best[k];
   return (
     <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <table className="w-full text-left text-sm">
@@ -47,20 +66,20 @@ export default function Http2Table({ data }) {
             return (
               <tr>
                 <td className="px-4 py-3 font-mono text-zinc-900 dark:text-zinc-100">{LABELS[rt] || rt}</td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
+                <td className={"px-4 py-3 text-right font-mono tabular-nums " + (won(rt, "wide_h1") ? WIN : PLAIN)}>
                   {fmt(d.wide_h1)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
+                <td className={"px-4 py-3 text-right font-mono tabular-nums " + (won(rt, "wide_h2") ? WIN : PLAIN)}>
                   {fmt(d.wide_h2)}
                 </td>
                 <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
                   {gain(d.wide_h1, d.wide_h2)}
                   {mark}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
+                <td className={"px-4 py-3 text-right font-mono tabular-nums " + (won(rt, "narrow_h1") ? WIN : PLAIN)}>
                   {fmt(d.narrow_h1)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
+                <td className={"px-4 py-3 text-right font-mono tabular-nums " + (won(rt, "narrow_h2") ? WIN : PLAIN)}>
                   {fmt(d.narrow_h2)}
                 </td>
                 <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-500 dark:text-zinc-400">

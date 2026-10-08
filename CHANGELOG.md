@@ -11,6 +11,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- The images section of the comparison page no longer reads as sharp parity:
+  four measured rows now list what `runtime:images` cannot do yet — rotation
+  between the right angles, text overlay, multi-frame output and progressive
+  JPEG — with HEIC, compositing and the absent encoder knobs stated in the
+  notes. The new `rotate-free`, `text`, `animated-out` and `progressive-jpg`
+  cases in `bench/images/features` reproduce every cell by running it.
+
+### Changed
+
+- Every table on the benchmarks page now marks its winning cells in semibold
+  green, the way the images tables already did: fastest per column in the
+  WebSocket sweep and HTTP/2 tables, fastest burst and sustained throughput,
+  the graceful outcome in the memory-safety table, and the hand-marked minima
+  in the Redis tables (via a shared `Win` component). Gain ratios and the
+  sustained-change column keep their existing colouring.
+
 ## [0.38.0] - 2026-10-07
 
 ### Added

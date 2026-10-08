@@ -35,7 +35,8 @@ function verdict(raw) {
 }
 
 const TONE = {
-  ok: "text-emerald-700 dark:text-emerald-400",
+  // The good outcome reads as the winner, like ImagesTable's best cells.
+  ok: "font-semibold text-emerald-700 dark:text-emerald-400",
   warn: "text-amber-600 dark:text-amber-400",
   bad: "font-semibold text-red-600 dark:text-red-400",
   none: "text-zinc-400",

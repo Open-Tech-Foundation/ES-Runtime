@@ -16,8 +16,12 @@ await probe(Deno.args[0], Deno.args[1], Deno.args[2], {
   fit: () => unsupported(),
   crop: async (b) => encode(await bitmap(b, 10, 10, 20, 20)),
   rotate: () => unsupported(),
+  rotateFree: () => unsupported(),
   blur: () => unsupported(),
   composite: () => unsupported(),
+  text: () => unsupported(),
+  animatedGif: () => unsupported(),
+  progressiveJpeg: () => unsupported(),
   reencode: async (b) => encode(await bitmap(b)),
   frames: () => null,
 });

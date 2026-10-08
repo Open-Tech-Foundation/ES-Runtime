@@ -92,3 +92,11 @@ const { width: w } = await new Image(bytes).resize(400).metadata();   // 400
 
 An animated GIF or WebP is processed as its first frame; `animation` says how
 many frames there were, so you can decide to keep the original instead.
+
+## Limits
+
+The module covers thumbnails and format conversion: no compositing or text
+rendering, no rotation between the right angles, single-frame output, baseline
+JPEG, and no HEIC codec. What that means next to sharp, `Bun.Image` and Deno's
+`createImageBitmap` is measured row by row on the
+[comparison page](/docs/comparison).

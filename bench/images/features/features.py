@@ -82,7 +82,8 @@ def samples():
 CASES = (
     [f"decode:{f}" for f in FORMATS]
     + [f"encode:{f}" for f in FORMATS]
-    + ["fit:cover", "fit:contain", "fit:outside", "crop", "rotate", "blur", "composite",
+    + ["fit:cover", "fit:contain", "fit:outside", "crop", "rotate", "rotate-free",
+       "blur", "composite", "text", "animated-out", "progressive-jpg",
        "orient", "bomb", "malformed", "animation", "offthread"]
 )
 
@@ -140,6 +141,22 @@ def judge(case, result):
         return size(result) == (20, 20)
     if name == "rotate":
         return size(result) == (48, 64)
+    if name == "rotate-free":
+        # sample.png is 64x48: a 45-degree turn makes a larger square canvas.
+        w, h = size(result)
+        return w == h and (w, h) != (64, 48)
+    if name == "text":
+        # The overlay is black text on white. Every source pixel has blue 128,
+        # so no source pixel has all three channels under 64.
+        with Image.open(result["out"]) as im:
+            return any(r < 64 and g < 64 and b < 64 for r, g, b in im.convert("RGB").getdata())
+    if name == "animated-out":
+        with Image.open(result["out"]) as im:
+            return getattr(im, "n_frames", 1) == 2
+    if name == "progressive-jpg":
+        # A progressive JPEG carries a Start Of Frame marker for each scan
+        # (SOF2, 0xFFC2); a baseline one carries none.
+        return b"\xff\xc2" in open(result["out"], "rb").read()
     if name in ("blur", "composite"):
         return size(result) == (64, 48)
     if name == "orient":
@@ -166,7 +183,9 @@ ROWS = [
     ("Encode JPEG", ["encode:jpeg"]), ("Encode PNG", ["encode:png"]), ("Encode WebP", ["encode:webp"]),
     ("Encode AVIF", ["encode:avif"]), ("Encode GIF", ["encode:gif"]), ("Encode TIFF", ["encode:tiff"]),
     ("Resize: `cover`", ["fit:cover"]), ("Resize: `contain`", ["fit:contain"]), ("Resize: `outside`", ["fit:outside"]),
-    ("Crop", ["crop"]), ("Rotate 90°", ["rotate"]), ("Blur", ["blur"]), ("Composite", ["composite"]),
+    ("Crop", ["crop"]), ("Rotate 90°", ["rotate"]), ("Rotate 45° (any angle)", ["rotate-free"]),
+    ("Blur", ["blur"]), ("Composite", ["composite"]), ("Text overlay", ["text"]),
+    ("Animated output keeps frames", ["animated-out"]), ("Progressive JPEG", ["progressive-jpg"]),
     ("EXIF orientation applied by default", ["orient"]),
     ("Refuses a decompression bomb", ["bomb"]),
     ("Error code on malformed input", ["malformed"]),

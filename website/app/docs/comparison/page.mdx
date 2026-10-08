@@ -153,8 +153,8 @@ the libvips binding Node applications use. Every cell was produced by
 its format), not by reading documentation.
 
 Produced by `bench/images/features/features.py` on Linux x86-64 with esrun
-0.37.0, sharp 0.35.5 on Node.js 24.21.0, Bun 1.4.2 and Deno 2.9.7
-(2026-10-07). Bun's AVIF and TIFF support depends on the operating system's
+0.38.0, sharp 0.35.5 on Node.js 24.21.0, Bun 1.4.2 and Deno 2.9.7
+(2026-10-08). Bun's AVIF and TIFF support depends on the operating system's
 codecs, so on macOS and Windows its column differs.
 
 | | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
@@ -176,24 +176,38 @@ codecs, so on macOS and Windows its column differs.
 | Resize: `outside` | <Yes /> | <Yes /> | <No /> | <No /> |
 | Crop | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Rotate 90° | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Rotate 45° (any angle) | <No /> | <Yes /> | <No /> | <No /> |
 | Blur | <Yes /> | <Yes /> | <No /> | <No /> |
 | Composite | <No /> | <Yes /> | <No /> | <No /> |
+| Text overlay | <No /> | <Yes /> | <No /> | <No /> |
+| Animated output keeps frames | <No /> | <Yes /> | <No /> | <No /> |
+| Progressive JPEG | <No /> | <Yes /> | <Yes /> | <No /> |
 | EXIF orientation applied by default | <Yes /> | <No /> | <Yes /> | <Yes /> |
 | Refuses a decompression bomb | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Error code on malformed input | <Yes /> | <No /> | <Yes /> | <No /> |
 | Reports animation frames | <Yes /> | <Yes /> | <No /> | <No /> |
 | Event loop runs while decoding | <Yes /> | <Yes /> | <Yes /> | <No /> |
 
-**Formats.** esrun and sharp read and write all six on every platform; esrun's
-codecs are its own, in Rust, and sharp's come with libvips. Bun uses the
-operating system's codecs for AVIF and TIFF, which Linux does not have. Deno's
-`convertToBlob` writes PNG and JPEG; asked for WebP or AVIF it returns a PNG,
-as the HTML specification allows, which is why those rows are <No /> although
-the call succeeds.
+**Formats.** esrun and sharp read and write JPEG, PNG, WebP, AVIF, GIF and
+TIFF on every platform; esrun's codecs are its own, in Rust, and sharp's come
+with libvips. HEIC is outside the table: `runtime:images` has no HEIC codec —
+an HEIC upload is rejected with `ERR_IMAGE_FORMAT_UNSUPPORTED`, so convert to
+AVIF or JPEG before upload — while sharp decodes it through libheif. Bun uses
+the operating system's codecs for AVIF and TIFF, which Linux does not have.
+Deno's `convertToBlob` writes PNG and JPEG; asked for WebP or AVIF it returns
+a PNG, as the HTML specification allows, which is why those rows are <No />
+although the call succeeds.
 
 **Operations.** Bun's `resize` takes `fill` and `inside` only; Deno's
-`createImageBitmap` can resize and crop, and nothing else. `composite` is not
-in `runtime:images` yet.
+`createImageBitmap` can resize and crop, and nothing else. `runtime:images`
+covers the thumbnail pipeline — decode, resize, crop, 90° rotation, blur,
+single-format encode — but it is not sharp parity: rotation is multiples of
+90° only, there is no compositing or text rendering, an animation is processed
+as its first frame (`gif()` writes one frame), and JPEG output is baseline
+only. sharp does all four; Bun matches it only on progressive JPEG. The
+encoder tuning knobs are absent too — PNG palette and compression, AVIF
+lossless and TIFF options are a `TypeError`, as the [API reference](/api/images)
+lists — so anything beyond thumbnails and format conversion still belongs on sharp.
 
 **Safety.** A 400-megapixel PNG of about one megabyte is refused at its
 header by esrun, sharp and Bun, whose limits default to 268 megapixels. Deno
