@@ -11,6 +11,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- The images guide names the non-resize transforms and the `blob()` terminal,
+  with a chained avatar example.
+
 ### Fixed
 
 - The images section of the comparison page no longer reads as sharp parity:

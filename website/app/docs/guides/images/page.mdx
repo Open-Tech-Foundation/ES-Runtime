@@ -93,6 +93,23 @@ const { width: w } = await new Image(bytes).resize(400).metadata();   // 400
 An animated GIF or WebP is processed as its first frame; `animation` says how
 many frames there were, so you can decide to keep the original instead.
 
+## Beyond thumbnails
+
+`resize` is one step among several — `crop`, `rotate` (multiples of 90°),
+`flip`/`flop`, `modulate`, `blur`, `sharpen`, `flatten`, `grayscale` and
+`extractChannel` all chain the same way — and `blob()` returns the result as
+a `Blob` typed with the format's media type:
+
+```js
+const avatar = await new Image(bytes)
+  .resize(512, 512, { fit: "cover" })
+  .modulate({ saturation: 0.5 })
+  .jpeg({ quality: 85 })
+  .blob();   // Blob of type "image/jpeg"
+```
+
+The full method list is in the [API reference](/api/images).
+
 ## Limits
 
 The module covers thumbnails and format conversion: no compositing or text
