@@ -9,7 +9,12 @@ await probe(process.argv[2], process.argv[3], process.argv[4], {
   read: (path) => readFile(path),
   save: (path, bytes) => writeFile(path, bytes),
   decodeResize: (b, w) => png(sharp(b).resize(w)),
-  encode: (b, format) => sharp(b)[format]().toBuffer(),
+  // sharp names the codec `heif`, not `heic` — and 0.35+ needs an explicit
+  // compression: HEVC keeps the `heic` brand (AV1 would write AVIF).
+  encode: (b, format) => (format === "heic"
+    ? sharp(b).heif({ compression: "hevc" })
+    : sharp(b)[format]()
+  ).toBuffer(),
   fit: (b, fit) => png(sharp(b).resize(100, 100, { fit, background: { r: 0, g: 0, b: 0, alpha: 0 } })),
   crop: (b) => png(sharp(b).extract({ left: 10, top: 10, width: 20, height: 20 })),
   rotate: (b) => png(sharp(b).rotate(90)),

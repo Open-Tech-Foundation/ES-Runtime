@@ -23,8 +23,8 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 SAMPLES = os.path.join(HERE, ".samples")
 OUT = os.path.join(HERE, ".out")
 ESRUN = os.environ.get("ESRUN", os.path.join(ROOT, "target", "release", "esrun"))
-FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff"]
-EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif", "gif": "gif", "tiff": "tiff"}
+FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff", "heic"]
+EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif", "gif": "gif", "tiff": "tiff", "heic": "heic"}
 
 RUNTIMES = {
     "esrun": [ESRUN, "--allow-read", "--allow-write", "--allow-imports", "esrun.mjs"],
@@ -62,6 +62,9 @@ def samples():
     fixtures = os.path.join(ROOT, "crates", "runtime-cli", "tests", "fixtures", "images")
     shutil.copy(os.path.join(fixtures, "oriented.jpg"), s(SAMPLES, "oriented.jpg"))
     shutil.copy(os.path.join(fixtures, "animated.gif"), s(SAMPLES, "animated.gif"))
+    # A grayscale 128x128 HEIC still, `heic` brand: no encoder is needed anywhere
+    # because the file is committed. Sourced from pillow_heif's test images (MIT).
+    shutil.copy(os.path.join(fixtures, "sample.heic"), s(SAMPLES, "sample.heic"))
     # A valid 20000x20000 PNG of black pixels: 400 MP, over every runtime's
     # 268 MP default, about a megabyte on disk and 1.2 GB once decoded. Valid,
     # so a runtime with no limit decodes it rather than failing on bad data.
@@ -94,6 +97,8 @@ MAGIC = {
     "avif": lambda b: b[4:8] == b"ftyp" and b[8:12] in (b"avif", b"avis"),
     "gif": lambda b: b[:4] == b"GIF8",
     "tiff": lambda b: b[:4] in (b"II*\0", b"MM\0*"),
+    "heic": lambda b: b[4:8] == b"ftyp" and b[8:12] in (
+        b"heic", b"heix", b"hevc", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"),
 }
 
 
@@ -123,7 +128,8 @@ def judge(case, result):
     if "out" not in result:
         return False
     if name == "decode":
-        return size(result) == (32, 24)
+        # sample.heic is square (128x128), the rest are 4:3 (64x48).
+        return size(result) == ((32, 32) if arg == "heic" else (32, 24))
     if name == "encode":
         return MAGIC[arg](open(result["out"], "rb").read(16))
     if name == "fit":
@@ -177,20 +183,33 @@ def run(rt, case):
     return json.loads(lines[-1])
 
 
-ROWS = [
-    ("Decode JPEG", ["decode:jpeg"]), ("Decode PNG", ["decode:png"]), ("Decode WebP", ["decode:webp"]),
-    ("Decode AVIF", ["decode:avif"]), ("Decode GIF", ["decode:gif"]), ("Decode TIFF", ["decode:tiff"]),
-    ("Encode JPEG", ["encode:jpeg"]), ("Encode PNG", ["encode:png"]), ("Encode WebP", ["encode:webp"]),
-    ("Encode AVIF", ["encode:avif"]), ("Encode GIF", ["encode:gif"]), ("Encode TIFF", ["encode:tiff"]),
-    ("Resize: `cover`", ["fit:cover"]), ("Resize: `contain`", ["fit:contain"]), ("Resize: `outside`", ["fit:outside"]),
-    ("Crop", ["crop"]), ("Rotate 90°", ["rotate"]), ("Rotate 45° (any angle)", ["rotate-free"]),
-    ("Blur", ["blur"]), ("Composite", ["composite"]), ("Text overlay", ["text"]),
-    ("Animated output keeps frames", ["animated-out"]), ("Progressive JPEG", ["progressive-jpg"]),
-    ("EXIF orientation applied by default", ["orient"]),
-    ("Refuses a decompression bomb", ["bomb"]),
-    ("Error code on malformed input", ["malformed"]),
-    ("Reports animation frames", ["animation"]),
-    ("Event loop runs while decoding", ["offthread"]),
+GROUPS = [
+    # NOTE: Bun decodes/encodes HEIC where the OS provides the codec, so the
+    # page shows <Partial /> for these two rows while a Linux run prints No.
+    ("Decoding", [
+        ("Decode JPEG", ["decode:jpeg"]), ("Decode PNG", ["decode:png"]), ("Decode WebP", ["decode:webp"]),
+        ("Decode AVIF", ["decode:avif"]), ("Decode GIF", ["decode:gif"]), ("Decode TIFF", ["decode:tiff"]),
+        ("Decode HEIC", ["decode:heic"]),
+    ]),
+    ("Encoding", [
+        ("Encode JPEG", ["encode:jpeg"]), ("Encode PNG", ["encode:png"]), ("Encode WebP", ["encode:webp"]),
+        ("Encode AVIF", ["encode:avif"]), ("Encode GIF", ["encode:gif"]), ("Encode TIFF", ["encode:tiff"]),
+        ("Encode HEIC", ["encode:heic"]),
+    ]),
+    ("Transforms", [
+        ("Resize: `cover`", ["fit:cover"]), ("Resize: `contain`", ["fit:contain"]),
+        ("Resize: `outside`", ["fit:outside"]),
+        ("Crop", ["crop"]), ("Rotate 90°", ["rotate"]), ("Rotate 45° (any angle)", ["rotate-free"]),
+        ("Blur", ["blur"]), ("Composite", ["composite"]), ("Text overlay", ["text"]),
+        ("Animated output keeps frames", ["animated-out"]), ("Progressive JPEG", ["progressive-jpg"]),
+    ]),
+    ("Behaviour & safety", [
+        ("EXIF orientation applied by default", ["orient"]),
+        ("Refuses a decompression bomb", ["bomb"]),
+        ("Error code on malformed input", ["malformed"]),
+        ("Reports animation frames", ["animation"]),
+        ("Event loop runs while decoding", ["offthread"]),
+    ]),
 ]
 
 
@@ -208,11 +227,16 @@ def main():
     cols = [rt for rt in ["esrun", "node", "bun", "deno"] if rt in present]
     heads = {"esrun": "esrun<br/>`runtime:images`", "node": "Node.js<br/>sharp", "bun": "Bun<br/>`Bun.Image`",
              "deno": "Deno<br/>`createImageBitmap`"}
-    print("| | " + " | ".join(heads[rt] for rt in cols) + " |")
-    print("| --- |" + " :---: |" * len(cols))
-    for label, cases in ROWS:
-        cells = ["<Yes />" if all(verdicts[(rt, c)] for c in cases) else "<No />" for rt in cols]
-        print(f"| {label} | " + " | ".join(cells) + " |")
+    print()
+    for title, rows in GROUPS:
+        print(f"### {title}")
+        print()
+        print("| | " + " | ".join(heads[rt] for rt in cols) + " |")
+        print("| --- |" + " :---: |" * len(cols))
+        for label, cases in rows:
+            cells = ["<Yes />" if all(verdicts[(rt, c)] for c in cases) else "<No />" for rt in cols]
+            print(f"| {label} | " + " | ".join(cells) + " |")
+        print()
 
 
 main()

@@ -2,8 +2,8 @@
 // prints one JSON line: `{ "out": file }` for an image it wrote, `{ "value": x }`
 // for a number it measured, or `{ "error": message, "code": code }`. features.py
 // judges the answer, so no probe decides whether it passed.
-export const FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff"];
-export const EXT = { jpeg: "jpg", png: "png", webp: "webp", avif: "avif", gif: "gif", tiff: "tiff" };
+export const FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff", "heic"];
+export const EXT = { jpeg: "jpg", png: "png", webp: "webp", avif: "avif", gif: "gif", tiff: "tiff", heic: "heic" };
 
 export async function probe(kase, data, out, api) {
   try {

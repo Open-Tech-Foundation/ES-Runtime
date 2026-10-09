@@ -11,26 +11,72 @@ export const Partial = () => <StatusIcon status="partial" className="size-4 shri
 
 # esrun vs Node.js · Bun · Deno
 
-Node.js, Bun, and Deno are general-purpose runtimes with broad toolchains and
-(varying degrees of) Node.js compatibility. esrun is intentionally narrower: a
-secure server runtime with a standards-first API, deny-by-default permissions,
-and a separate development binary, [`esdev`](/esdev), for everything that does
-not belong in production. The table makes the trade-offs explicit.
+Node.js, Bun, and Deno are general-purpose runtimes. esrun is narrower: a
+secure, standards-first server runtime with deny-by-default permissions.
+Dev tooling lives in [`esdev`](/esdev), never in production.
 
-Compared against **esrun 0.32.0, Node.js 26.10.0 (Current), Bun 1.4.2 and
-Deno 2.9.7**, checked on 2026-09-26 by running each runtime rather than by
-reading its documentation. A feature counts when the runtime ships it in a
-stable, official API — its own or its `node:` compatibility layer; an
-experimental or flag-gated one is <Partial />.
+**Runtimes measured**
+
+- esrun 0.32.0
+- Node.js 26.10.0 (Current)
+- Bun 1.4.2
+- Deno 2.9.7
+
+**Legend**
+
+- <Yes /> Supported
+- <Partial /> Partial / flagged / experimental
+- <No /> Not supported
+
+## Language, modules and Web standards
+
+What the production binary loads and runs. Transforms live in
+[`esdev`](/esdev) — see [Development binary](#development-binary-esdev).
 
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
 | ES Modules | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| CommonJS (require) | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
-| TypeScript (built-in) | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
-| JSX (built-in) | <Partial /> | <No /> | <Yes /> | <Yes /> |
 | JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Temporal API | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
+
+**On the Temporal row.** Node has it from 26; Node 24 LTS does not.
+
+## Development binary (`esdev`)
+
+TypeScript, JSX, CommonJS, bundling, tests and Tailwind live here — the
+local-only binary. `esrun` runs the bundle; nothing below ships to production.
+
+| Capability | esdev | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
+| TypeScript | <Yes /> | <Partial /> | <Yes /> | <Yes /> |
+| JSX | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| CommonJS (require) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Bundler | <Yes /> | <No /> | <Yes /> | <No /> |
+| Test runner | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Tailwind CSS | <Yes /> | <No /> | <Partial /> | <No /> |
+| Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
+
+**CommonJS** works because `esdev` converts packages to ES modules on first
+import; `esrun` runs the bundle where that is already settled.
+
+**TypeScript on Node** strips erasable syntax only — `enum` and `namespace`
+need `--experimental-transform-types`.
+
+**Tailwind:** `esdev` compiles v4 with zero config ([docs](/esdev/build/tailwind));
+Bun needs `bun-plugin-tailwind`; Node and Deno leave CSS to other tools.
+
+**Package installer:** `esdev` has none by design — use your package manager.
+
+## HTTP and networking
+
+The server, the protocols it speaks, and the socket surface around it.
+
+| Capability | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
 | Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | HTTP/3 server (QUIC) | <No /> | <No /> | <Partial /> | <No /> |
@@ -39,19 +85,61 @@ experimental or flag-gated one is <Partial />.
 | UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Connected UDP sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Temporal API | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
-| WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
+
+**On the HTTP/2 row.** esrun and Deno serve both versions from one `serve()`;
+Node needs a separate `node:http2` server, and Bun only via `node:http2` —
+its own `Bun.serve` is HTTP/1.1-only. Throughput: [Benchmarks](/docs/benchmarks#http2).
+
+**On the stalled-connection row.** Measured: esrun, Bun and Node close a
+connection that sends nothing; Deno holds it open. Node is <Partial /> — its
+60s `headersTimeout` on a 30s check lets one linger ~90s. Per-runtime times:
+[HTTP server comparison](/docs/internals/http/comparison).
+
+**On the HTTP/3 row.** Only Bun serves it (experimental, hence <Partial />);
+Node has no QUIC, Deno only transport primitives. QUIC is a new UDP transport
+with its own TLS stack — a new listener, not a flag — so esrun has none yet.
+
+**On the cookie row.** esrun and Bun ship `Cookie`/`CookieMap`; Deno's is a
+stdlib package, Node has none. Unlike Bun's, esrun's **throws** on cookies a
+browser would drop (`SameSite=None` without `Secure`, `__Host-` with `Domain`).
+See [Cookies](/docs/http/basics#cookies).
+
+**On the UDP rows.** All four have it. Deno's stable path is `node:dgram`;
+Bun's surface is widest (`sendMany`, source-specific membership); esrun's is
+the only one where binding and sending are **separate grants**. Call-by-call
+mapping: [UDP guide](/docs/guides/udp#coming-from-node-deno-or-bun).
+
+## Data and built-in backends
+
+Databases, images and mail: in the runtime, in a first-party package, or npm.
+
+| Capability | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
 | Built-in SQLite | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Built-in image processing | <Yes /> | <No /> | <Yes /> | <Partial /> |
 | Built-in Postgres / MySQL client | <Yes /> | <No /> | <Yes /> | <No /> |
-| Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
+| Built-in Redis client | <Yes /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
-| First-party SMTP client | <Partial /> | <No /> | <No /> | <No /> |
-| Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Partial /> | <Partial /> |
-| Capability sandbox (deny by default) | <Yes /> | <Partial /> | <No /> | <Yes /> |
-| Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| First-party SMTP client | <Yes /> | <No /> | <No /> | <No /> |
+| Built-in image processing | <Yes /> | <No /> | <Yes /> | <Partial /> |
+
+**On the database rows.** `postgres` and `mysql` live in `runtime:db`; Redis
+(`@opentf/esrun-redis`) is a first-party *package*. All sit
+on the public driver tier below; Bun exports no such tier, Node and Deno leave
+drivers to npm.
+
+**On the SMTP row.** First-party package [`@opentf/esrun-smtp`](/docs/guides/email)
+over `runtime:net`. Elsewhere mail is npm,
+where `nodemailer` needs `node:net`, which esrun lacks.
+
+**On the image-processing row.** Node has no image API; Deno encodes PNG/JPEG
+only. Per-operation breakdown: [Images, feature by feature](#images-feature-by-feature).
+
+## Workers, state and observability
+
+Concurrency, isolation between workers, durable state, and self-exports.
+
+| Capability | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
 | Workers / multi-thread | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Per-worker memory limit | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Per-worker capabilities | <Yes /> | <No /> | <No /> | <Partial /> |
@@ -59,103 +147,84 @@ experimental or flag-gated one is <Partial />.
 | Worker queue depth (backpressure signal) | <Yes /> | <No /> | <No /> | <No /> |
 | Durable workers (addressable state, alarms) | <Yes /> | <No /> | <No /> | <No /> |
 | Built-in OpenTelemetry export | <Yes /> | <No /> | <No /> | <Yes /> |
+
+**On the worker rows.** Deno's web `Worker` has no `unref()` or memory limit
+(`node:worker_threads` has both); Bun accepts `resourceLimits` but never
+enforces it, per its own compatibility table.
+
+**On the durable workers row.** Addressable instances with storage, alarms and
+hibernating WebSockets — the Durable Objects model, self-hosted. The other
+three leave state and scheduling to a database and job queue. See
+[Durable workers](/docs/guides/durable-workers).
+
+**On the OpenTelemetry row.** `esrun --otel` exports OTLP/HTTP spans with no
+SDK; Deno (`OTEL_DENO=1`) also covers logs and metrics. Node and Bun need the
+npm SDK; Bun's native tracing is unreleased.
+
+## Security
+
+The sandbox default and the flags that shape it. Full breakdown below in
+[Permission models](#permission-models).
+
+| Capability | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
+| Capability sandbox (deny by default) | <Yes /> | <Partial /> | <No /> | <Yes /> |
+| Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
+
+**On the permission row.** This is the *CLI*; the sandbox row above is the
+**default**. Both esrun and Deno deny by default — the table below shows how
+differently they grant, scope and query.
+
+> **esrun sandbox in one line:** `esrun app.js` holds nothing — `--allow-*`
+> names what a run may reach. `esdev` grants everything, so no flags indoors.
+
+## Node.js compatibility
+
+esrun runs standards-only code — no `node:` builtins, FFI, or native addons.
+Porting means leaving those behind: [From Node.js](/docs/migration/node).
+
+| Capability | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
+| Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Partial /> | <Partial /> |
 | FFI (dlopen) | <No /> | <Partial /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
-| Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
-| Bundler / test runner | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
-| Tailwind CSS in the toolchain | <Partial /> | <No /> | <Partial /> | <No /> |
 
-**Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental / dev-binary only · <No /> Not supported
+**On these rows.** Node's `node:ffi` is experimental; Bun and Deno both report
+incomplete `node:` coverage (Bun lists partial modules, Deno passes 75%+ of
+Node's suite).
 
-**On the TypeScript, JSX, CommonJS and toolchain rows.** esrun does none of them,
-deliberately: it is the binary that runs in production, and a transform, a
-watcher or a test discoverer in there is surface that cannot pay for itself.
-[`esdev`](/esdev) — a second binary, for your machine only — runs `.ts` and
-`.tsx` directly, bundles (which is how a CommonJS dependency becomes runnable),
-runs tests, watches, and debugs over the Chrome DevTools Protocol. It shares
-every line that decides how a run behaves, so a program cannot behave one way
-there and another in production. Marked <Partial /> rather than <Yes /> because
-the answer is "in the toolchain, not in the runtime", which is a real difference
-from the other three.
+## Permission models
 
-**On the cookie row.** esrun and Bun ship `Cookie` and `CookieMap`, and Deno's
-is a standard-library package (`@std/http/cookie`) rather than runtime API.
-Node.js has none. esrun's follows Bun's API, with one difference: a cookie a
-browser would silently drop, such as `SameSite=None` without `Secure` or a
-`__Host-` cookie with a `Domain`, throws when it is set rather than being sent.
-See [Cookies](/docs/http/basics#cookies).
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Restricted by default | <Yes /> | <No /> | <No /> | <Yes /> |
+| Turned on by | always on (`-A` off) | `--permission` | — | always on (`-A` off) |
+| Direction | allow-list, or `--allow-all` + `--deny-*` | allow-list | — | allow-list + `--deny-*` |
+| Scoped to paths / hosts | <Yes /> | <Yes /> | — | <Yes /> |
+| Interactive prompt | <No /> | <No /> | — | <Yes /> |
+| Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
+| Local imports readable | `--allow-imports` | <No /> | — | <Yes /> |
+| Allow/deny which modules load | `--import-policy` file | <No /> | — | <No /> |
+| Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
+| Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
+| Filesystem root jail | always on | <No /> | <No /> | <No /> |
+| Status | alpha | stable (v22.13+) | [requested](https://github.com/oven-sh/bun/issues/6617) | stable |
 
-**On the UDP rows.** All four have it. In Deno the stable path is `node:dgram`,
-which binds, joins multicast groups and connects; Deno's own
-`Deno.listenDatagram` is still behind `--unstable-net` and has no
-connected-socket mode. Bun's surface is the widest of the four
-(source-specific membership, batch `sendMany`); ours is the only one where
-binding and sending are **separate grants**, which is what makes a receive-only
-service expressible. See the [UDP guide](/docs/guides/udp#coming-from-node-deno-or-bun)
-for the call-by-call mapping, and [the benchmarks](/docs/benchmarks) for the two
-UDP rows.
-
-**On the database client rows.** PostgreSQL and MySQL (with MariaDB) are built
-in: `postgres` and `mysql` from `runtime:db`, with their protocols in the
-runtime. Redis is a first-party *package*, `@opentf/esrun-redis`, which is why
-its row is <Partial />. All of them are
-built on the public driver tier in the row below, which Bun's are not: its
-drivers' internals are not exported, so a third party's backend starts from
-nothing. Node and Deno leave both to npm.
-
-**On the TypeScript row for Node.** Node runs `.ts` files by stripping types:
-erasable syntax works, while an `enum` or a `namespace` fails without
-`--experimental-transform-types`.
-
-**On the Temporal row.** Node has it from 26; Node 24 LTS does not.
-
-**On the worker rows for Deno.** Its web `Worker` has no `unref()` or memory
-limit; `node:worker_threads` has both, and enforces `resourceLimits`. Bun
-accepts `resourceLimits` but does not enforce it — a worker allocating past the
-limit keeps running, and Bun's own compatibility table lists it as missing.
-
-**On the FFI and Node compatibility rows.** Node 26's `node:ffi` is experimental.
-Bun and Deno both describe their `node:` coverage as incomplete: Bun lists
-modules it implements partially, and Deno reports passing over 75% of Node's own
-test suite.
-
-**On the SMTP row.** esrun's is a first-party package,
-[`@opentf/esrun-smtp`](/docs/guides/email), JavaScript over `runtime:net` —
-<Partial /> for the same reason as the database clients. The other three leave
-mail to npm, where `nodemailer` needs `node:net`, which esrun does not provide.
-
-**On the durable workers row.** `runtime:workers` gives a class addressable
-instances with their own storage, alarms, and WebSockets that hibernate with the
-instance — the Cloudflare Durable Objects model, in a process you run. The other
-three have no equivalent in the runtime: state and scheduling are left to a
-database and a job queue. See [Durable workers](/docs/guides/durable-workers).
-
-**On the OpenTelemetry row.** `esrun --otel` exports spans over OTLP/HTTP from
-the runtime itself; the program needs no SDK and no `net` grant to reach the
-collector. Deno's built-in export (`OTEL_DENO=1`, stable since 2.4) also covers
-logs and metrics. Node and Bun need the OpenTelemetry SDK from npm; Bun's native
-tracing is in review and not yet released.
-
-**On the Tailwind CSS row.** `esdev` compiles Tailwind v4 with the project's own
-`tailwindcss` and nothing to configure — <Partial /> because it is the
-development binary, not the runtime. Bun's bundler needs the
-`bun-plugin-tailwind` package and a `bunfig.toml` entry. Node has no bundler,
-and Deno's leaves CSS frameworks to other tools. See
-[Tailwind CSS](/esdev/build/tailwind).
+- **Rows 6–8:** entry file runs, second file needs a grant (Deno exempts analysable imports). What the loader may *resolve* is separate: esrun's `--import-policy` (packages/paths) vs Deno's `--allow-import` (remote hosts); Node removed theirs.
+- **Names:** `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail` — flags, `permissions.has()`, Worker options. See [Security model](/docs/security/permissions#granting-capabilities-in-esrun).
 
 ## Images, feature by feature
 
-Each runtime's own image API: [`runtime:images`](/api/images) for esrun,
-`Bun.Image` for Bun, and `createImageBitmap` with an `OffscreenCanvas` for
-Deno. Node.js has none, so its column is [sharp](https://sharp.pixelplumbing.com),
-the libvips binding Node applications use. Every cell was produced by
-**running** the operation and checking the file it wrote (its size, its pixels,
-its format), not by reading documentation.
+Each runtime's own image API — [`runtime:images`](/api/images), `Bun.Image`,
+Deno's `createImageBitmap`, and [sharp](https://sharp.pixelplumbing.com) for
+Node, which has none. Every cell was produced by **running** the operation,
+not by reading docs.
 
-Produced by `bench/images/features/features.py` on Linux x86-64 with esrun
-0.38.0, sharp 0.35.5 on Node.js 24.21.0, Bun 1.4.2 and Deno 2.9.7
-(2026-10-08). Bun's AVIF and TIFF support depends on the operating system's
-codecs, so on macOS and Windows its column differs.
+`bench/images/features/features.py`, Linux x86-64: esrun 0.38.0, sharp 0.35.5
+on Node 24.21.0, Bun 1.4.2, Deno 2.9.7 (2026-10-08). Bun's AVIF/TIFF follow
+the OS codecs, so macOS/Windows differ.
+
+### Decoding
 
 | | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
 | --- | :---: | :---: | :---: | :---: |
@@ -165,12 +234,24 @@ codecs, so on macOS and Windows its column differs.
 | Decode AVIF | <Yes /> | <Yes /> | <No /> | <No /> |
 | Decode GIF | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Decode TIFF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Decode HEIC | <No /> | <No /> | <Partial /> | <No /> |
+
+### Encoding
+
+| | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
+| --- | :---: | :---: | :---: | :---: |
 | Encode JPEG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Encode PNG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Encode WebP | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Encode AVIF | <Yes /> | <Yes /> | <No /> | <No /> |
 | Encode GIF | <Yes /> | <Yes /> | <No /> | <No /> |
 | Encode TIFF | <Yes /> | <Yes /> | <No /> | <No /> |
+| Encode HEIC | <No /> | <No /> | <Partial /> | <No /> |
+
+### Transforms
+
+| | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
+| --- | :---: | :---: | :---: | :---: |
 | Resize: `cover` | <Yes /> | <Yes /> | <No /> | <No /> |
 | Resize: `contain` | <Yes /> | <Yes /> | <No /> | <No /> |
 | Resize: `outside` | <Yes /> | <Yes /> | <No /> | <No /> |
@@ -182,59 +263,33 @@ codecs, so on macOS and Windows its column differs.
 | Text overlay | <No /> | <Yes /> | <No /> | <No /> |
 | Animated output keeps frames | <No /> | <Yes /> | <No /> | <No /> |
 | Progressive JPEG | <No /> | <Yes /> | <Yes /> | <No /> |
+
+### Behaviour & safety
+
+| | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
+| --- | :---: | :---: | :---: | :---: |
 | EXIF orientation applied by default | <Yes /> | <No /> | <Yes /> | <Yes /> |
 | Refuses a decompression bomb | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Error code on malformed input | <Yes /> | <No /> | <Yes /> | <No /> |
 | Reports animation frames | <Yes /> | <Yes /> | <No /> | <No /> |
 | Event loop runs while decoding | <Yes /> | <Yes /> | <Yes /> | <No /> |
 
-**Formats.** esrun and sharp read and write JPEG, PNG, WebP, AVIF, GIF and
-TIFF on every platform; esrun's codecs are its own, in Rust, and sharp's come
-with libvips. HEIC is outside the table: `runtime:images` has no HEIC codec yet —
-an HEIC upload is rejected with `ERR_IMAGE_FORMAT_UNSUPPORTED`, so convert to
-AVIF or JPEG before upload — while sharp decodes it through libheif. Bun uses
-the operating system's codecs for AVIF and TIFF, which Linux does not have.
-Deno's `convertToBlob` writes PNG and JPEG; asked for WebP or AVIF it returns
-a PNG, as the HTML specification allows, which is why those rows are <No />
-although the call succeeds.
-**Operations.** Bun's `resize` takes `fill` and `inside` only; Deno's
-`createImageBitmap` can resize and crop, and nothing else. `runtime:images`
-covers the thumbnail pipeline — decode, resize, crop, 90° rotation, blur,
-single-format encode — but it is not at sharp parity yet: rotation is multiples
-of 90° only, there is no compositing or text rendering yet, an animation is
-processed as its first frame (`gif()` writes one frame), and JPEG output is
-baseline only. sharp does all four; Bun matches it only on progressive JPEG.
-The encoder tuning knobs are not there yet either — PNG palette and
-compression, AVIF lossless and TIFF options are a `TypeError`, as the [API
-reference](/api/images) lists — so for now, anything beyond thumbnails and
-format conversion still belongs on sharp.
-
-**Safety.** A 400-megapixel PNG of about one megabyte is refused at its
-header by esrun, sharp and Bun, whose limits default to 268 megapixels. Deno
-decoded it. sharp leaves EXIF orientation off unless asked
-(`autoOrient: true` or `.rotate()`), and its errors carry a message but no
-code to branch on. While Deno's `createImageBitmap` decoded, no timer ran; in
-the other three, timers kept firing.
-
-**Speed.** Full numbers, including output sizes, in
-[Benchmarks](/docs/benchmarks#images). Bun is the fastest on JPEG and PNG.
-esrun is close to sharp there, slower on WebP output, where Pixels' encoder is
-the cost, and the fastest at AVIF.
+- **Formats:** the six everywhere on esrun/sharp; Bun follows the OS; Deno writes PNG/JPEG only (WebP/AVIF requests return PNG per spec).
+- **HEIC:** esrun `ERR_IMAGE_FORMAT_UNSUPPORTED` — convert to AVIF/JPEG; Bun <Partial />, `img.heic({ quality: 80 })` on macOS/Windows; sharp here lacks the HEVC plugin; Deno none.
+- **Operations:** thumbnails only — no free rotation, compositing, text, multi-frame output, progressive JPEG, or encoder knobs. Beyond that, use sharp.
+- **Safety:** 400 MP bomb refused at header by all but Deno; sharp skips EXIF unless asked and its errors carry no code; Deno decode blocks the loop.
+- **Speed:** [Benchmarks](/docs/benchmarks#images).
 
 ## Redis clients, feature by feature
 
-The [Redis guide](/docs/db/redis) has the same table alongside the usage it
-describes. Every cell was produced by **running** the client, not by reading its
-documentation. Node and Deno have no built-in Redis, so they are shown on both
-npm clients: `redis` (node-redis, the official one, maintained in
-`redis/node-redis`) and `ioredis` (about twice the weekly downloads, and now
-under the same organisation). They differ enough that showing only one would
-misreport Node.
+Same table as the [Redis guide](/docs/db/redis), where usage lives. Every cell
+was produced by **running** the client. Node/Deno show both npm clients —
+`redis` (official) and `ioredis` (~2× downloads) — because they differ enough
+to misreport Node alone.
 
-Produced by `bench/db/redis/features.mjs` against Redis 8.10.2 with node-redis
-6.2.1, ioredis 6.0.0, Bun 1.4.2 and esrun 0.32.0 (2026-09-26); the cluster,
-Sentinel and private-CA rows are checked as available APIs, since one server
-cannot exercise them.
+`bench/db/redis/features.mjs` vs Redis 8.10.2: node-redis 6.2.1, ioredis 6.0.0,
+Bun 1.4.2, esrun 0.32.0 (2026-09-26). Cluster/Sentinel/private-CA rows check
+API presence — one server cannot exercise them.
 
 | | esrun<br/>`esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
 | --- | :---: | :---: | :---: | :---: |
@@ -255,152 +310,29 @@ cannot exercise them.
 | Portable error codes | <Yes /> | <No /> | <No /> | <No /> |
 | Scoped by a capability flag | <Yes /> | Deno only | Deno only | <No /> |
 
-**Exact 64-bit integers** is the one difference that changes an answer rather
-than an ergonomic. `INCRBY k 9007199254740993` returns `9007199254740993n` here
-and `9007199254740992` — a `number`, off by one — on all three others. Redis
-integers are signed 64-bit, so a counter past 2⁵³ is not exotic. `EXISTS` is a
-smaller case of the same thing: Redis returns a *count*, which is what
-`exists("a", "b")` answers here, where Bun's returns a boolean that cannot
-express the multi-key form.
-
-**RESP3 is now universal**, which was not true a version ago — ioredis 5
-negotiated RESP2 even when asked for 3, and ioredis 6 negotiates 3 by default.
-Worth stating because it is the row most likely to be out of date in anything
-written earlier, including an earlier draft of this page.
-
-**The <Partial /> cells.** node-redis and Bun have no pipeline builder; both
-pipeline commands issued together, so `Promise.all` is the idiom rather than a
-missing feature. Bun's client has no `multi`, `watch`, cluster or Sentinel at
-all.
-
-**Auto-reconnect** is <Partial /> for esrun because it is **off by default** —
-a deliberate disagreement rather than a gap: turning it on changes what a thrown
-error means, and a pool already replaces dead connections. The other three
-reconnect out of the box, verified by killing connections server-side.
-
-The last three rows are esrun's own: a blocking command with no timeout is
-refused before it can hold a connection for the life of the process; failures
-carry `runtime:db`'s portable codes, so an application can branch on what
-happened without knowing which database said it; and the connection is scoped by
-`--allow-net` like every other socket. Deno can scope the socket too, but
-neither npm client has a portable error vocabulary to map onto.
+- **Exact 64-bit integers** is the only row that changes an *answer*: `…993n` here, `…992` (off by one) elsewhere — Redis integers are 64-bit.
+- **The <Partial /> cells:** no pipeline builder on node-redis/Bun (`Promise.all` is the idiom); Bun has no `multi`/`watch`/cluster/Sentinel; esrun auto-reconnect is off by default (a pool replaces dead connections).
+- **Last three rows** are esrun-only: no-timeout blocks refused, portable error codes, `--allow-net` scoping.
 
 ### Speed
 
-Full numbers in [Benchmarks](/docs/benchmarks#redis-clients). The short version:
-Bun's native client leads everything by 1.3× on round trips and 3–5× on
-decoding. Among the **JavaScript** clients esrun is the fastest where the round
-trip dominates, in a third of the memory, and ahead of the official node-redis
-on batches and list scans — but **twice as slow on repeated `HGETALL`**, which
-is a map-decoding cost specific to this driver and fixable.
-
-**On the HTTP/2 row.** esrun and Deno detect the version per connection on the
-server they already have, so one `serve()` answers both. Node's h2c is a separate
-API (`node:http2`); `node:http`'s server is HTTP/1.1-only. Bun is <Partial />
-because it implements `node:http2` — which does serve h2c — while its own
-`Bun.serve` is HTTP/1.1-only, so the flagship API and the HTTP/2 one are not the
-same server. Measured throughput for all four:
-[Benchmarks](/docs/benchmarks#http2).
-
-**On the stalled-connection row.** Measured, not read from docs: a connection
-that sends nothing is closed by esrun, Bun and Node, and held open by Deno for as
-long as the probe waits. Node is <Partial /> because its bound is a 60s
-`headersTimeout` checked on a 30s interval, so a stalled connection lives for
-most of a minute and a half. The per-runtime times, for silent and for idle
-keep-alive connections, are in the
-[HTTP server comparison](/docs/internals/http/comparison), generated by
-`bench/probe-runtimes.sh`.
-
-**On the HTTP/3 row.** Bun leads here and esrun does not have it.
-`Bun.serve({ http3: true })` serves HTTP/3 over TLS on an embedded lsquic stack;
-Bun 1.4 marks it experimental, hence <Partial />. Node 26 has no `node:quic`.
-Deno ships QUIC *primitives* (`Deno.QuicEndpoint`, `Deno.connectQuic`) behind
-`--unstable-net`, and `Deno.serve` speaks HTTP/1.1 and HTTP/2 only — a transport
-with nothing speaking HTTP above it.
-
-HTTP/3 is not the cheap follow-on that HTTP/2 was, which is why the two rows
-differ: HTTP/2 was another version negotiated on a connection `serve()` already
-accepts, whereas QUIC is a UDP transport with its own TLS integration and
-congestion control — a new listener and a new dependency, not a flag on the
-existing one. Bun's answer to that was to embed a C QUIC library; that is a real
-option and the row is here to say so plainly rather than to imply the field has
-no answer.
-
-**On the permission row.** It is about the *CLI*, and is a different question
-from the sandbox row above it, which is about the **default**: esrun and Deno
-both deny by default and grant on request. Both have flags that allow or deny a
-capability, scopes that narrow one to particular paths or hosts, and a way to ask
-from JS — the
-[Permission models](#permission-models) table below breaks down how differently
-they get there, and where esrun goes further (an always-on filesystem jail, and
-a policy for what the module loader may resolve).
-
-<br />
-
-> **Note on the esrun sandbox column.** `esrun app.js` holds nothing;
-> `--allow-<name>` names what a run may reach, so a deployment cannot forget to
-> sandbox — there is nothing to forget. `esdev`, the development binary, is the
-> one that grants everything, so an inner loop needs no flags. See
-> [Permission models](#permission-models).
-
-## Permission models
-
-| | esrun | Node.js | Bun | Deno |
-| --- | --- | --- | --- | --- |
-| Restricted by default | <Yes /> | <No /> | <No /> | <Yes /> |
-| Turned on by | always on (`-A` off) | `--permission` | — | always on (`-A` off) |
-| Direction | allow-list, or `--allow-all` + `--deny-*` | allow-list | — | allow-list + `--deny-*` |
-| Scoped to paths / hosts | <Yes /> | <Yes /> | — | <Yes /> |
-| Interactive prompt | <No /> | <No /> | — | <Yes /> |
-| Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
-| Local imports readable | `--allow-imports` | <No /> | — | <Yes /> |
-| Allow/deny which modules load | `--import-policy` file | <No /> | — | <No /> |
-| Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
-| Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
-| Filesystem root jail | always on | <No /> | <No /> | <No /> |
-| Status | alpha | stable (v22.13+) | [requested](https://github.com/oven-sh/bun/issues/6617) | stable |
-
-Rows 6–7 are about the module graph: under esrun's default and Node's
-`--permission`, the entry file still runs but a second file needs a grant. Deno
-reads statically analysable imports without one.
-
-Row 8 is a different question again — not *may the loader run* but *what may it
-resolve*. esrun answers it outside the permission model, with a JSON
-`--import-policy` file of allow/deny package names and paths. Deno's
-similarly-named `--allow-import` is not this: it names which **remote hosts**
-code may be fetched from, which esrun has no equivalent of because it refuses
-remote modules outright. Node's module policy mechanism was deprecated and
-removed.
-
-esrun's eleven permission names — `read`, `write`, `imports`, `net`, `listen`,
-`env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail` — are
-the `--allow-`/`--deny-` flag names, what `permissions.has()` takes, and what
-`new Worker(url, { permissions })` takes. See
-[Security model](/docs/security/permissions#granting-capabilities-in-esrun).
+Full numbers: [Benchmarks](/docs/benchmarks#redis-clients). Bun's native client
+leads (1.3× round trips, 3–5× decoding). Among JS clients esrun is fastest
+where the round trip dominates at a third of the memory — but **2× slower on
+repeated `HGETALL`**, a fixable map-decoding cost in this driver.
 
 ## Where the API surface differs
 
-- **No Node.js API.** Where Node.js, Bun, and Deno all expose `node:fs`,
-  `Buffer`, and a global `process`, esrun exposes host functionality only through
-  capability-gated `runtime:` modules.
-- **Globals are not host APIs.** Like Deno, esrun keeps the global scope close to
-  the Web platform — but it does not put filesystem or process access on a global
-  either.
-- **Always-on filesystem jail.** File access — including module resolution — is
-  confined to a project root that can't be escaped, even via symlink, in both the
-  library and the CLI, with no flag to turn it off. No other runtime here has an
-  equivalent; their permission flags are the only confinement. It is also the one
-  place esrun's `node_modules` walk differs from theirs: Node, Deno and Bun walk
-  up to the filesystem root, esrun stops at the directory you run in — and there
-  is no flag to move it, because a boundary an argument can widen is not one.
-- **Two binaries.** `esrun` runs the service and has no development surface;
-  `esdev` bundles, tests, watches and debugs on your machine. Both share every
-  line that decides how a run behaves.
-
-- **WASI is enforced, not advisory.** Node's own docs say its `node:wasi` threat
-  model "does not provide secure sandboxing". Here a guest's file access passes
-  three independent checks — preopen, capability, root jail. See
-  [WebAssembly & WASI](/docs/wasm).
+- **No Node.js API.** Only capability-gated `runtime:` modules — no `node:fs`,
+  `Buffer`, or global `process`.
+- **Globals are not host APIs.** Global scope stays Web-platform; no fs/process
+  on globals either (like Deno, stricter).
+- **Always-on filesystem jail.** Project-root confinement, symlink-proof, no
+  off flag. `node_modules` walk stops at the run directory, not the fs root.
+- **Two binaries.** `esrun` serves; `esdev` bundles, tests, watches, debugs.
+  Same behavior core.
+- **WASI is enforced, not advisory.** Preopen + capability + jail — Node's own
+  docs call `node:wasi` not a secure sandbox. See [WebAssembly & WASI](/docs/wasm).
 
 Status reflects general availability at the time of writing and is a summary, not
 an exhaustive audit. See [Benchmarks](/docs/benchmarks) for measured performance.

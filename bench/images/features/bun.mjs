@@ -7,7 +7,12 @@ await probe(process.argv[2], process.argv[3], process.argv[4], {
   read: (path) => Bun.file(path).bytes(),
   save: (path, bytes) => Bun.write(path, bytes),
   decodeResize: (b, w) => png(new Bun.Image(b).resize(w)),
-  encode: (b, format) => (has(format) ? new Bun.Image(b)[format]().bytes() : unsupported()),
+  // HEIC takes an options object: img.heic({ quality: 80 }) — macOS/Windows only.
+  encode: (b, format) => {
+    if (!has(format)) return unsupported();
+    const image = new Bun.Image(b);
+    return format === "heic" ? image.heic({ quality: 80 }).bytes() : image[format]().bytes();
+  },
   fit: (b, fit) => png(new Bun.Image(b).resize(100, 100, { fit })),
   crop: (b) => (has("crop") ? png(new Bun.Image(b).crop({ left: 10, top: 10, width: 20, height: 20 })) : unsupported()),
   rotate: (b) => png(new Bun.Image(b).rotate(90)),

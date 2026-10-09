@@ -34,6 +34,22 @@ namespace) is unstable and may change between minor releases until the API freez
   the graceful outcome in the memory-safety table, and the hand-marked minima
   in the Redis tables (via a shared `Win` component). Gain ratios and the
   sustained-change column keep their existing colouring.
+- The comparison page groups its capability tables by area — language, a new
+  `esdev` development-binary table (TypeScript, JSX, CommonJS, bundler/tests,
+  Tailwind, installer) instead of `<Partial />` marks on the runtime,
+  HTTP and networking, data backends, workers and observability, security
+  and compatibility — with versions and legend as lists, each note next to
+  the section it explains, and prose trimmed to two lines. The images table
+  splits into Decoding / Encoding / Transforms / Behaviour & safety, matched
+  by `bench/images/features/features.py`, which now prints the same groups.
+  The `esdev` table splits Bundler / test runner into two rows (bundler:
+  esdev and Bun only; test runner: all four). Redis and SMTP show <Yes />:
+  first-party packages are supported features, not partial ones. Security
+  and Node.js compatibility are two sections, not one. The images tables gain
+  Decode HEIC / Encode HEIC rows — Bun <Partial /> (Yes on macOS/Windows,
+  No on Linux), No elsewhere on Linux, each verified by running it (`sample.heic` fixture, `heif({ compression: "hevc" })` for
+  sharp) — with the macOS-only Bun cell and the HEVC-plugin caveat in the
+  notes instead of a footnote.
 
 ## [0.38.0] - 2026-10-07
 
