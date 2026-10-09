@@ -17,10 +17,11 @@ Dev tooling lives in [`esdev`](/esdev), never in production.
 
 **Runtimes measured**
 
-- esrun 0.32.0
-- Node.js 26.10.0 (Current)
+- esrun 0.38.0
+- Node.js 24.21.0 (LTS)
 - Bun 1.4.2
 - Deno 2.9.7
+- esdev 0.17.0 (development binary)
 
 **Legend**
 
@@ -38,12 +39,12 @@ What the production binary loads and runs. Transforms live in
 | ES Modules | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Temporal API | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Temporal API | <Yes /> | <No /> | <Yes /> | <Yes /> |
 | WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 
-**On the Temporal row.** Node has it from 26; Node 24 LTS does not.
+**On the Temporal row.** Node 26+ only — the LTS (24) measured here has none.
 
 ## Development binary (`esdev`)
 
@@ -55,7 +56,7 @@ local-only binary. `esrun` runs the bundle; nothing below ships to production.
 | TypeScript | <Yes /> | <Partial /> | <Yes /> | <Yes /> |
 | JSX | <Yes /> | <No /> | <Yes /> | <Yes /> |
 | CommonJS (require) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Bundler | <Yes /> | <No /> | <Yes /> | <No /> |
+| Bundler | <Yes /> | <No /> | <Yes /> | <Partial /> |
 | Test runner | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Tailwind CSS | <Yes /> | <No /> | <Partial /> | <No /> |
 | Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
@@ -65,6 +66,8 @@ import; `esrun` runs the bundle where that is already settled.
 
 **TypeScript on Node** strips erasable syntax only — `enum` and `namespace`
 need `--experimental-transform-types`.
+
+**Bundler:** `deno bundle` works but warns it is experimental — hence <Partial />.
 
 **Tailwind:** `esdev` compiles v4 with zero config ([docs](/esdev/build/tailwind));
 Bun needs `bun-plugin-tailwind`; Node and Deno leave CSS to other tools.
@@ -95,9 +98,10 @@ connection that sends nothing; Deno holds it open. Node is <Partial /> — its
 60s `headersTimeout` on a 30s check lets one linger ~90s. Per-runtime times:
 [HTTP server comparison](/docs/internals/http/comparison).
 
-**On the HTTP/3 row.** Only Bun serves it (experimental, hence <Partial />);
-Node has no QUIC, Deno only transport primitives. QUIC is a new UDP transport
-with its own TLS stack — a new listener, not a flag — so esrun has none yet.
+**On the HTTP/3 row.** Only Bun serves it (experimental, hence <Partial />).
+No `node:quic` on Node LTS; Deno 2.9 exposes no QUIC API at all. QUIC is a
+new UDP transport with its own TLS stack — a new listener, not a flag — so
+esrun has none yet.
 
 **On the cookie row.** esrun and Bun ship `Cookie`/`CookieMap`; Deno's is a
 stdlib package, Node has none. Unlike Bun's, esrun's **throws** on cookies a
@@ -158,7 +162,7 @@ three leave state and scheduling to a database and job queue. See
 [Durable workers](/docs/guides/durable-workers).
 
 **On the OpenTelemetry row.** `esrun --otel` exports OTLP/HTTP spans with no
-SDK; Deno (`OTEL_DENO=1`) also covers logs and metrics. Node and Bun need the
+SDK; Deno (`OTEL_DENO=true`) also covers logs and metrics. Node and Bun need the
 npm SDK; Bun's native tracing is unreleased.
 
 ## Security
@@ -186,11 +190,11 @@ Porting means leaving those behind: [From Node.js](/docs/migration/node).
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Partial /> | <Partial /> |
-| FFI (dlopen) | <No /> | <Partial /> | <Yes /> | <Yes /> |
+| FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 
-**On these rows.** Node's `node:ffi` is experimental; Bun and Deno both report
-incomplete `node:` coverage (Bun lists partial modules, Deno passes 75%+ of
+**On these rows.** Node LTS has no `node:ffi` at all; Bun (`bun:ffi`) and
+Deno (`Deno.dlopen`) do. Both report incomplete `node:` coverage (Bun lists partial modules, Deno passes 75%+ of
 Node's suite).
 
 ## Permission models

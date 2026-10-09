@@ -50,6 +50,12 @@ namespace) is unstable and may change between minor releases until the API freez
   No on Linux), No elsewhere on Linux, each verified by running it (`sample.heic` fixture, `heif({ compression: "hevc" })` for
   sharp) — with the macOS-only Bun cell and the HEVC-plugin caveat in the
   notes instead of a footnote.
+- The comparison page is re-measured against esrun 0.38.0, Node.js 24.21.0
+  (LTS), Bun 1.4.2, Deno 2.9.7 and esdev 0.17.0, every cell by running it:
+  Temporal and FFI flip to No on Node LTS (neither exists in 24), Bundler
+  flips to Partial on Deno (`deno bundle` works but warns experimental),
+  Deno 2.9 exposes no QUIC API at all, and `OTEL_DENO` takes `true`, not
+  `1`. The Redis section is unchanged — no server was available to re-run it.
 
 ## [0.38.0] - 2026-10-07
 
