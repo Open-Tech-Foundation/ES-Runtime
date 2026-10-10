@@ -26,6 +26,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- A `lit` template: Lit web components on the DOM — shadow DOM,
+  client-rendered from `src/hello-world.ts`, with a DOM test beside the
+  unit test. Takes `--styling` like the other page templates. Lit's
+  decorator syntax is not compiled by esdev, so the element uses `static
+  properties` and `customElements.define` instead.
 - A `preact` template: Preact on the DOM — React's API in three kilobytes,
   client-rendered from `src/App.tsx`, with a DOM test beside the unit test.
   Takes `--styling` like the other page templates.

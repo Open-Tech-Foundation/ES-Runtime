@@ -1,0 +1,17 @@
+/* Starter styles — linked from index.html and bundled by esdev. */
+body {
+  font-family: system-ui, sans-serif;
+  margin: 2rem;
+  background: #fafafa;
+  color: #222;
+}
+
+#app,
+#root {
+  max-width: 42rem;
+  margin-inline: auto;
+}
+
+h1 {
+  font-size: 2rem;
+}
