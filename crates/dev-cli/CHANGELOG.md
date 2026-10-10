@@ -26,6 +26,9 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- A `preact` template: Preact on the DOM — React's API in three kilobytes,
+  client-rendered from `src/App.tsx`, with a DOM test beside the unit test.
+  Takes `--styling` like the other page templates.
 - A `hono` template: an HTTP app on Hono — routes, query validation and a
   server-rendered page behind one server, under the same narrow grant as the
   `api` template. Routes are tested through `app.request()`, so no server

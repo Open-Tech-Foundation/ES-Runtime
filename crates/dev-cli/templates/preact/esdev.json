@@ -1,0 +1,13 @@
+{
+  "jsx": {
+    "importSource": "preact"
+  },
+  "build": {
+    "targets": {
+      "web": {
+        "entry": "index.html",
+        "outdir": "dist"
+      }
+    }
+  }
+}

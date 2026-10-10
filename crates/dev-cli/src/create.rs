@@ -103,6 +103,10 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "Micro apps with Micro-UI — framework-free UI with a tiny reactive core",
     ),
     (
+        "preact",
+        "Preact on the DOM — React's API in three kilobytes. One dep",
+    ),
+    (
         "spa",
         "An OTF Web single-page app — browser-only UI, static deploy, no server",
     ),
@@ -215,7 +219,7 @@ pub struct CreateConfig {
     pub language: Option<String>,
     /// Plain CSS or Tailwind, or `None` to ask (or take the default). Taken
     /// by the templates with a page to style — `react`, `vanilla`, `micro-ui`,
-    /// `spa` and `fullstack` ([`stylings`]); refused everywhere else.
+    /// `preact`, `spa` and `fullstack` ([`stylings`]); refused everywhere else.
     pub styling: Option<String>,
     /// Whether the `docs` template keeps its demo blog, or `None` to ask
     /// (or take the default). Refused for every other template.
@@ -815,7 +819,7 @@ const UNSTYLED: &str = "css";
 /// CSS pipeline — bundled by esdev, swapped without reload in the dev loop —
 /// with nothing to install. Tailwind replaces that stylesheet's contents with
 /// its import and adds the dependency that provides it.
-const ESDEV_STYLED: &[&str] = &["react", "vanilla", "micro-ui"];
+const ESDEV_STYLED: &[&str] = &["react", "vanilla", "micro-ui", "preact"];
 
 const ESDEV_STYLINGS: &[(&str, &str)] = &[
     ("css", "Plain CSS — no framework, nothing to install"),
@@ -1557,6 +1561,7 @@ fn display_name(name: &'static str) -> &'static str {
         // reads "Library", so this needs its own (see OTF_GROUP below).
         "library" => "Component Library",
         "micro-ui" => "Micro-UI",
+        "preact" => "Preact",
         "react" => "ReactJS",
         "spa" => "SPA",
         "vanilla" => "Vanilla",

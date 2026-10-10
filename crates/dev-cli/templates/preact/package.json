@@ -1,0 +1,20 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esdev start",
+    "build": "esdev build --minify",
+    "preview": "esdev preview",
+    "test": "esdev test",
+    "test:dom": "esdev test --dom",
+    "typecheck": "esdev typecheck"
+  },
+  "dependencies": {
+    "preact": "{{registry:preact}}"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}",
+    "typescript": "{{registry:typescript}}"
+  }
+}
