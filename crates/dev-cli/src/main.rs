@@ -426,8 +426,8 @@ USAGE:
     esdev create -h, --help     Show this help
 
 OPTIONS:
-    --template=<name>           react (default), api, vanilla, micro-ui, lib,
-                                spa, fullstack, docs or library
+    --template=<name>           react (default), api, hono, vanilla, micro-ui,
+                                lib, spa, fullstack, docs or library
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
     --language=<name>           OTF templates only: js (default) or ts

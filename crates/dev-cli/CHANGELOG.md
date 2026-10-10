@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- A `hono` template: an HTTP app on Hono — routes, query validation and a
+  server-rendered page behind one server, under the same narrow grant as the
+  `api` template. Routes are tested through `app.request()`, so no server
+  is needed to test them.
+
 ### Fixed
 
 - `esdev test --browser` could finish its tests and never exit on Windows.

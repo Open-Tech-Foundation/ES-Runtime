@@ -83,6 +83,10 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "A JSON API — a hello-world server under a narrow grant. No deps",
     ),
     (
+        "hono",
+        "A Hono app — routes, validation and pages behind one server. One dep",
+    ),
+    (
         "react",
         "React — a static site, or an app with a server of its own",
     ),
@@ -1547,6 +1551,7 @@ fn display_name(name: &'static str) -> &'static str {
         "api" => "API",
         "docs" => "Docs",
         "fullstack" => "FullStack",
+        "hono" => "Hono",
         "lib" => "Library",
         // The OTF starter's display is provisional: `lib` above already
         // reads "Library", so this needs its own (see OTF_GROUP below).
