@@ -11999,7 +11999,7 @@ fn create_writes_a_project_that_builds_and_runs() {
     let dir = parent.join("weather-app");
 
     let out = esdev_in(&parent)
-        .args(["create", "weather-app"])
+        .args(["create", "weather-app", "--template=react"])
         .output()
         .expect("spawn esdev create");
     assert!(out.status.success(), "{}", stderr(&out));
@@ -12147,7 +12147,7 @@ fn create_refuses_a_directory_that_holds_something() {
     write_in(&dir, "package.json", "{ \"name\": \"mine\" }\n");
 
     let refused = esdev_in(&parent)
-        .args(["create", "taken"])
+        .args(["create", "taken", "--template=react"])
         .output()
         .expect("spawn esdev create");
     assert!(!refused.status.success());
@@ -12158,7 +12158,7 @@ fn create_refuses_a_directory_that_holds_something() {
     );
 
     let forced = esdev_in(&parent)
-        .args(["create", "taken", "--force"])
+        .args(["create", "taken", "--template=react", "--force"])
         .output()
         .expect("spawn esdev create");
     assert!(forced.status.success(), "{}", stderr(&forced));
@@ -12405,25 +12405,22 @@ fn a_mode_that_does_not_exist_is_refused() {
 fn create_never_asks_when_nobody_is_there() {
     let parent = watch_dir("c_quiet");
 
-    // No flags at all: the default template, and nothing installed.
+    // No flags at all: there is no default template, so this stops rather
+    // than guessing — without asking, and without writing anything.
     let out = esdev_in(&parent)
         .args(["create", "quiet"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
-    assert!(out.status.success(), "{}", stderr(&out));
-    // The default mode, named — "the react template" is two projects, and a
-    // report that does not say which one cannot be checked.
+    assert!(!out.status.success());
     assert!(
-        stdout(&out).contains("react (static) template"),
+        stderr(&out).contains("no template chosen"),
         "{}",
-        stdout(&out)
+        stderr(&out)
     );
-    // The next steps tell them to install, because this run did not.
-    assert!(stdout(&out).contains("npm install"), "{}", stdout(&out));
     assert!(
-        !parent.join("quiet/node_modules").exists(),
-        "an unattended run installed something"
+        !parent.join("quiet").exists(),
+        "an undecided run wrote a project"
     );
 
     // …and nothing was written to the question stream.
@@ -12458,9 +12455,10 @@ fn every_question_has_a_flag() {
     assert!(stdout(&out).contains("run test"), "{}", stdout(&out));
 
     // `--yes` is the conventional "take every default", and must not ask
-    // either — even where a terminal would have been available.
+    // either — even where a terminal would have been available. The template
+    // has no default, so it still has to be named.
     let yes = esdev_in(&parent)
-        .args(["create", "defaulted", "--yes"])
+        .args(["create", "defaulted", "--yes", "--template=react"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12469,6 +12467,30 @@ fn every_question_has_a_flag() {
         stdout(&yes).contains("react (static) template"),
         "{}",
         stdout(&yes)
+    );
+
+    // Without it, `--yes` stops before writing anything rather than
+    // guessing a project nobody chose.
+    let none = esdev_in(&parent)
+        .args(["create", "undecided", "--yes"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(!none.status.success());
+    assert!(
+        stderr(&none).contains("no template chosen"),
+        "{}",
+        stderr(&none)
+    );
+    assert!(
+        stderr(&none).contains("--template"),
+        "{}",
+        stderr(&none)
+    );
+    assert!(
+        !parent.join("undecided").exists(),
+        "nothing was written: {}",
+        stderr(&none)
     );
 
     // A package manager that is not one is named as such, before anything runs.

@@ -92,7 +92,7 @@ mod watch;
 mod watch_keys;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
 use config::TestIsolation;
-use create::{CreateConfig, DEFAULT_TEMPLATE};
+use create::CreateConfig;
 use init::InitConfig;
 use inspect::InspectConfig;
 use preview::PreviewConfig;
@@ -426,8 +426,9 @@ USAGE:
     esdev create -h, --help     Show this help
 
 OPTIONS:
-    --template=<name>           react (default), api, hono, vanilla, micro-ui,
-                                preact, lit, lib, spa, fullstack, docs or library
+    --template=<name>           Which template, no default: react, api, hono,
+                                vanilla, micro-ui, preact, lit, lib, spa,
+                                fullstack, docs or library
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
     --language=<name>           OTF templates only: js (default) or ts
@@ -453,12 +454,13 @@ access even with --no-install.
 
 On a terminal it asks which template, mode and supported options to use, which
 package manager the project uses, and whether to install. In a pipe or CI job it
-uses defaults without prompting. It still reports resolved package versions
+uses defaults without prompting — except the template, which has no default
+and must be named with --template. It still reports resolved package versions
 and whether scaffolding succeeded. Every question has a flag:
 
     esdev create my-app --template=api --install=bun
     esdev create my-app --template=spa --package-manager=pnpm --no-install
-    esdev create my-app --yes
+    esdev create my-app --template=api --yes
 
     The templates:  https://esrun.opentechf.org/esdev/create
 ";
@@ -1349,11 +1351,12 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 install = Some(None);
             }
             // The conventional spelling of "do not ask me anything": take every
-            // default rather than prompting, even on a terminal.
+            // default rather than prompting, even on a terminal. The template
+            // is the exception — it has no default, so `-y` without
+            // `--template` stops with where the names are listed.
             "-y" | "--yes" => {
                 reject_value(flag, value)?;
                 yes = true;
-                template.get_or_insert_with(|| DEFAULT_TEMPLATE.to_string());
                 // Left as `None` on purpose: the default *mode* depends on
                 // which template this turned out to be, and only `create` knows
                 // that. What `--yes` promises is that nothing is asked, and an

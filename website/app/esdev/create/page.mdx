@@ -174,7 +174,8 @@ the previous question — the second OTF menu returns to the first — and `Esc`
 at the first question cancels: nothing is written, and the exit status is
 zero.
 
-In a pipe or CI job, esdev uses the defaults without prompting. It still
+In a pipe or CI job, esdev uses the defaults without prompting — except the
+template, which has no default and must be named with `--template`. It still
 reports resolved package versions and whether scaffolding succeeded.
 
 **Every question has a flag**, so nothing is only reachable by answering one:
@@ -183,7 +184,7 @@ reports resolved package versions and whether scaffolding succeeded.
 esdev create my-app --template=react --mode=fullstack
 esdev create my-app --template=api --install=bun
 esdev create my-app --template=spa --package-manager=pnpm --no-install
-esdev create my-app --yes            # defaults, no questions
+esdev create my-app --template=api --yes   # defaults, no questions
 esdev create my-app --no-install
 ```
 
@@ -237,7 +238,7 @@ other's flags by name. Nothing is ever overwritten.
 
 | | |
 | --- | --- |
-| `--template=<name>` | Which template (default `react`) |
+| `--template=<name>` | Which template, no default |
 | `--mode=<name>` | Which shape of it, where it has more than one: `static` or `fullstack` |
 | `--language=<name>` | OTF templates: `js` (default) or `ts` |
 | `--styling=<name>` | `css` or `tailwind`, for `react`, `vanilla`, `micro-ui`, `preact`, `lit`, `spa` and `fullstack` |

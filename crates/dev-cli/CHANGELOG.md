@@ -24,6 +24,12 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `esdev create` has no default template. An unattended run
+  without `--template` stops with where the names are listed instead of
+  scaffolding `react`; on a terminal the question is asked as before.
+
 ### Added
 
 - A `lit` template: Lit web components on the DOM — shadow DOM,

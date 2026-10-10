@@ -213,7 +213,8 @@ pub(crate) const RENAMED: &[(&str, &str)] = &[("_gitignore", ".gitignore")];
 pub struct CreateConfig {
     /// The directory to write into.
     pub dir: String,
-    /// Which template, or `None` to ask (or take the default).
+    /// Which template, or `None` to ask. There is no default: an unattended
+    /// run without `--template` is refused rather than guessed.
     pub template: Option<String>,
     /// Which mode of that template, or `None` to ask (or take the default).
     /// Meaningless — and refused — for a template that has only one shape.
@@ -240,9 +241,6 @@ pub struct CreateConfig {
     /// `-y`: take every default and never ask, even on a terminal.
     pub yes: bool,
 }
-
-/// The default template, when `--template` did not say and nobody was asked.
-pub const DEFAULT_TEMPLATE: &str = "react";
 
 /// What a bare `--install` means.
 ///
@@ -273,7 +271,13 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
             Step::Template => {
                 if answers.template.is_none() {
                     if scripted {
-                        answers.template = Some(DEFAULT_TEMPLATE.to_string());
+                        // No default template: guessing one writes a project
+                        // nobody chose, so an unattended run without
+                        // `--template` stops before writing anything.
+                        return Err(format!(
+                            "no template chosen.\n\nThere is no default template: pass --template=<name>, or choose on a terminal.\n\n{}",
+                            list().trim_end()
+                        ));
                     } else {
                         match ask_template() {
                             Some(template) => {
@@ -1567,7 +1571,7 @@ fn display_name(name: &'static str) -> &'static str {
         "lit" => "Lit",
         "micro-ui" => "Micro-UI",
         "preact" => "Preact",
-        "react" => "ReactJS",
+        "react" => "React",
         "spa" => "SPA",
         "vanilla" => "Vanilla",
         "static" => "Static",
@@ -2098,8 +2102,7 @@ mod tests {
     /// a `create` that cannot work, and nothing else would notice.
     #[test]
     fn the_templates_are_in_the_binary() {
-        assert_eq!(DEFAULT_TEMPLATE, "react");
-        let paths = resolved(DEFAULT_TEMPLATE, default_mode(DEFAULT_TEMPLATE));
+        let paths = resolved("react", default_mode("react"));
 
         for expected in [
             "package.json",
@@ -2771,7 +2774,7 @@ mod tests {
             ("fullstack", "FullStack"),
             ("lib", "Library"),
             ("micro-ui", "Micro-UI"),
-            ("react", "ReactJS"),
+            ("react", "React"),
             ("spa", "SPA"),
             ("vanilla", "Vanilla"),
             ("static", "Static"),
