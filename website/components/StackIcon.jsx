@@ -20,7 +20,7 @@
 const CHIP =
   "stack-icon size-14 shrink-0 rounded-2xl bg-white object-contain p-2 ring-1 ring-zinc-900/10 dark:ring-white/25";
 const TILE =
-  "stack-icon flex size-14 shrink-0 items-center justify-center rounded-2xl bg-white text-zinc-700 ring-1 ring-zinc-900/10 dark:text-zinc-300 dark:ring-white/25";
+  "stack-icon flex size-14 shrink-0 items-center justify-center rounded-2xl bg-white text-zinc-700 ring-1 ring-zinc-900/10 dark:bg-zinc-900 dark:text-zinc-100 dark:ring-white/25";
 
 export default function StackIcon({ name }) {
   return (
