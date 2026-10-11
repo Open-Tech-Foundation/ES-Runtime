@@ -87,6 +87,10 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "A Hono app — routes, validation and pages behind one server. One dep",
     ),
     (
+        "elysia",
+        "An Elysia app — typed routes and validation behind one server. One dep",
+    ),
+    (
         "react",
         "React — a static site, or an app with a server of its own",
     ),
@@ -1562,6 +1566,7 @@ fn display_name(name: &'static str) -> &'static str {
     match name {
         "api" => "API",
         "docs" => "Docs",
+        "elysia" => "Elysia",
         "fullstack" => "FullStack",
         "hono" => "Hono",
         "lib" => "Library",

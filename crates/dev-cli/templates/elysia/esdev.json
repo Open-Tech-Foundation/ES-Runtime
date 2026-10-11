@@ -1,0 +1,21 @@
+{
+  "build": {
+    "targets": {
+      "server": {
+        "entry": "src/server.ts",
+        "out": "dist/server.js"
+      }
+    }
+  },
+  "dev": {
+    "run": "server",
+    "watch": {
+      "targets": [
+        "server"
+      ]
+    },
+    "app": {
+      "port": 8080
+    }
+  }
+}

@@ -427,8 +427,8 @@ USAGE:
 
 OPTIONS:
     --template=<name>           Which template, no default: react, api, hono,
-                                vanilla, micro-ui, preact, lit, lib, spa,
-                                fullstack, docs or library
+                                elysia, vanilla, micro-ui, preact, lit, lib,
+                                spa, fullstack, docs or library
     --mode=<name>               Which shape of it, where it has more than one:
                                 react is static (default) or fullstack
     --language=<name>           OTF templates only: js (default) or ts

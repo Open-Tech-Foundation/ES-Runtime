@@ -32,6 +32,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- An `elysia` template: an HTTP app on Elysia — typed routes and schema
+  validation behind one server. Routes are tested through `app.handle`,
+  so no server is needed to test them. The app never calls Elysia's
+  `listen()`, which serves through Bun; it exposes a fetch handler and
+  `runtime:http` owns the socket. Its build splits chunks, so the `start`
+  script grants `--allow-imports`.
 - A `lit` template: Lit web components on the DOM — shadow DOM,
   client-rendered from `src/hello-world.ts`, with a DOM test beside the
   unit test. Takes `--styling` like the other page templates. Lit's
