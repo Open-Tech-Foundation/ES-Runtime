@@ -149,6 +149,42 @@ button:not(:disabled),
   }
 }
 
+/* Why-cards (home page): a staggered rise on load, since the page is fully
+   static and there is no scroll observer to trigger on. No fill mode: before
+   its delay a card shows its natural state, so nothing can be stranded
+   invisible if the animation never runs (background tab, old engine). Short
+   delays only — a below-fold card finishes before it is seen, which reads as
+   already there rather than as motion missed. */
+@keyframes why-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.why-card {
+  animation: why-rise 0.55s ease;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .why-card {
+    animation: none;
+  }
+}
+
+/* A tile's icon gains an orange ring on hover, over whatever ground it has.
+ * Plain CSS rather than group-hover utilities: the icon roots live in
+ * StackIcon.jsx while the hovered anchor lives in page.jsx, and a shared
+ * `stack-icon` class is the seam between them. */
+.tile-link:hover .stack-icon {
+  box-shadow:
+    0 0 0 2px rgb(249 115 22 / 0.6),
+    0 10px 22px -10px rgb(249 115 22 / 0.5);
+}
+
 /* The Rust mark in the sandbox diagram, in Rust's own colour rather than the
  * site's — the point of the mark is that this half of the boundary is somebody
  * else's technology. One value, not two: the panel is dark in both site themes,

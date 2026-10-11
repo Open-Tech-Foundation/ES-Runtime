@@ -4,55 +4,106 @@ import DurableDiagram from "../components/DurableDiagram.jsx";
 import FrameworkTabs from "../components/FrameworkTabs.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import SandboxDiagram from "../components/SandboxDiagram.jsx";
+import StackIcon from "../components/StackIcon.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
-import bench from "../src/benchmarks.js";
-
-// Read from the generated data rather than restating it. This line said "about
-// 7 ms" while the suite measured 7.9, which is how every hand-typed number on a
-// site starts: correct once.
-const startupMs = bench.results_ms?.startup?.esrun;
-const startupPhrase = typeof startupMs === "number" ? `about ${Math.round(startupMs)} ms` : "milliseconds";
 
 // The two binaries are names, not prose. A tinted chip keeps them readable as
 // identifiers without shouting — the site's <code> rule only sets a font, which
 // left them looking like ordinary words in a sentence.
 const BIN = "rounded-md bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[0.9em] font-semibold text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100";
-// Incidental mentions inside running text: the monospace alone is enough.
-const BIN_INLINE = "font-mono font-semibold text-zinc-900 dark:text-zinc-100";
 
-const features = [
+// The stack, as icon tiles: official artwork where a brand exists, an
+// original monochrome glyph where none does (same deal as RuntimeIcon's
+// `oj` tile). Groups carry the meaning; labels name the tile. No
+// paragraphs — the docs behind each tile already say it once.
+const groups = [
   {
-    title: "Standard web APIs",
-    body: "fetch, URL, URLPattern, streams, WebCrypto, encoding, timers, and events — the WinterTC Minimum Common Web Platform API. What you learn here is what runs in the browser.",
+    name: "Connect",
+    desc: "HTTP and WebSocket servers in the binary.",
+    tiles: [
+      { icon: "http", label: "HTTP", to: "/docs/internals/http" },
+      { icon: "websocket", label: "WebSocket", to: "/docs/guides/websocket" },
+    ],
   },
   {
-    title: "Batteries in the binary",
-    body: "HTTP and WebSocket servers, filesystem, sockets, subprocesses, WASM/WASI, and XML, YAML, TOML, JSONL, MessagePack, and Protobuf parsers — all behind runtime: imports, nothing to install.",
+    name: "Store",
+    desc: "Embedded SQLite plus first-party Postgres, MySQL, and Redis.",
+    tiles: [
+      { icon: "sqlite", label: "SQLite", to: "/docs/internals/database" },
+      { icon: "postgres", label: "PostgreSQL", to: "/docs/internals/database" },
+      { icon: "mysql", label: "MySQL", to: "/docs/internals/database" },
+      { icon: "redis", label: "Redis", to: "/docs/internals/database" },
+    ],
   },
   {
-    title: "ESM everywhere",
-    body: (
-      <span>
-        Static imports, dynamic import(), top-level await, import.meta, and JSON
-        modules. One module system, no CommonJS interop rules to learn —{" "}
-        <code className={BIN_INLINE}>esdev</code> converts a CJS dependency
-        (at build time, or on import while developing).
-      </span>
-    ),
+    name: "Speak",
+    desc: "Parsers for every format your API touches.",
+    tiles: [
+      { icon: "xml", label: "XML", to: "/docs/serialization/xml" },
+      { icon: "yaml", label: "YAML", to: "/docs/serialization/yaml" },
+      { icon: "json", label: "JSON", to: "/docs/serialization/jsonl" },
+      { icon: "toml", label: "TOML", to: "/docs/serialization/toml" },
+      { icon: "messagepack", label: "MessagePack", to: "/docs/serialization/msgpack" },
+      { icon: "protobuf", label: "Protobuf", to: "/docs/serialization/protobuf" },
+    ],
   },
   {
-    title: "Written in Rust",
-    body: "The runtime around the engine is safe Rust: no data races, no use-after-free, no buffer overruns to reach for under hostile input.",
+    name: "Develop",
+    desc: "Tests with DOM parity, real-browser runs, watch, HMR, plugins.",
+    tiles: [
+      { icon: "test", label: "Test runner", to: "/esdev/test" },
+      { icon: "watch", label: "Watcher", to: "/esdev/watch" },
+      { icon: "browsers", label: "Browsers", to: "/esdev/test" },
+      { icon: "plugins", label: "Plugins", to: "/esdev/plugins" },
+      { icon: "hmr", label: "HMR", to: "/esdev/start" },
+      { icon: "tailwind", label: "Tailwind", to: "/esdev/build/tailwind" },
+      { icon: "oxc", label: "Bundler", to: "/esdev/build" },
+      { icon: "css", label: "CSS", to: "/esdev/build" },
+    ],
   },
   {
-    title: "Powered by V8",
-    body: `The engine behind Chrome and Node.js, embedded from Rust. A baked startup snapshot opens a full realm in ${startupPhrase}.`,
+    name: "Run on",
+    desc: "A Rust core around V8, scripted in JavaScript and TypeScript.",
+    tiles: [
+      { icon: "wasm", label: "WebAssembly", to: "/docs/wasm" },
+      { icon: "v8", label: "V8", to: "/docs/comparison" },
+      { icon: "rust", label: "Rust", to: "/docs/comparison" },
+      { icon: "javascript", label: "JavaScript", to: "/docs" },
+      { icon: "typescript", label: "TypeScript", to: "/esdev/typescript" },
+    ],
   },
   {
-    title: "Capability-gated",
-    body: "Deny-by-default: a run reaches what the command line that started it named, and nothing else. Every host operation is gated on an explicit capability, checked in Rust rather than in JavaScript.",
+    name: "Built-in Utils",
+    desc: "SMTP mail, password-grade hashing, and cookies.",
+    tiles: [
+      { icon: "email", label: "Email", to: "/docs/guides/email" },
+      { icon: "hashing", label: "Hashing", to: "/docs/guides/hashing" },
+      { icon: "cookies", label: "Cookies", to: "/docs/http/basics#cookies" },
+    ],
+  },
+  {
+    name: "Ships with",
+    desc: "Native image processing and durable state.",
+    tiles: [
+      { icon: "images", label: "Images", to: "/docs/guides/images" },
+      { icon: "durable", label: "Durable workers", to: "/docs/guides/durable-workers" },
+    ],
+  },
+  {
+    name: "Secure",
+    desc: "Deny by default on a capability-based runtime.",
+    tiles: [
+      { icon: "sandbox", label: "Deny by default", to: "/docs/guides/securing-runtime" },
+      { icon: "capabilities", label: "Capabilities", to: "/docs/guides/securing-runtime/capabilities" },
+    ],
+  },
+  {
+    name: "Observe",
+    desc: "OTLP spans to any collector, no SDK.",
+    tiles: [{ icon: "otel", label: "OTel export", to: "/docs/guides/diagnostics" }],
   },
 ];
+
 
 // Durable workers: each point is a property the test suite or the shop
 // benchmark proves, not a number — the measurements live on the internals page,
@@ -164,18 +215,46 @@ export default function HomePage() {
             </h2>
           </div>
 
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {features.map((f) => (
-              <div className="group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-brand-900">
-                {/* Faint brand wash, only on hover. */}
-                <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-brand-500/0 blur-2xl transition-colors duration-300 group-hover:bg-brand-500/15" />
-                <h3 className="relative text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                  {f.title}
-                </h3>
-                <span className="mt-3 block h-[3px] w-8 rounded-full bg-brand-500/70 transition-all duration-200 group-hover:w-12 group-hover:bg-brand-500" />
-                <p className="relative mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  {f.body}
+          {/* Two explicit columns, not CSS masonry: only placement puts
+              Develop top-right on purpose. Cards keep their own heights. */}
+          <div className="mx-auto grid max-w-5xl gap-6 sm:grid-cols-2">
+            {[
+              ["Connect", "Store", "Speak", "Ships with", "Secure"],
+              ["Develop", "Run on", "Built-in Utils", "Observe"],
+            ].map((column, ci) => (
+              <div className="space-y-6">
+                {column.map((name) => {
+                  const gi = groups.findIndex((g) => g.name === name);
+                  const g = groups[gi];
+                  return (
+                    <div
+                      className="why-card group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-brand-900"
+                      style={{ animationDelay: `${gi * 70}ms` }}
+                    >
+                      {/* Faint brand wash, only on hover. */}
+                      <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-brand-500/0 blur-2xl transition-colors duration-300 group-hover:bg-brand-500/15" />
+                      <h3 className="relative text-xs font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400">
+                        {g.name}
+                      </h3>
+                <p className="relative mt-1.5 border-l-2 border-brand-500 pl-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  {g.desc}
                 </p>
+                      <div className="relative mt-4 flex flex-wrap gap-x-6 gap-y-5">
+                        {g.tiles.map((t) => (
+                          <a
+                            href={t.to}
+                            className="tile-link flex w-20 flex-col items-center gap-2 rounded-lg text-center transition duration-200 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-brand-500"
+                          >
+                            <StackIcon name={t.icon} />
+                            <span className="text-[13px] font-medium leading-tight text-zinc-700 dark:text-zinc-300">
+                              {t.label}
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -196,7 +275,7 @@ export default function HomePage() {
           box, shown as the story the shop example tells rather than as code.
           Properties, not numbers — the numbers are on the internals page,
           where the scripts that produce them are named. */}
-      <section className="border-b border-zinc-200 dark:border-zinc-800">
+      <section id="durable-workers" className="border-b border-zinc-200 dark:border-zinc-800">
         <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
           <div className="mb-12 text-center">
             <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
