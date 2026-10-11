@@ -1,0 +1,95 @@
+---
+title: CSS
+description: Stylesheets in esdev — bundled from your HTML, scoped as modules, minified for release, with Tailwind v4 built in.
+---
+
+# CSS
+
+A stylesheet linked from `index.html` is built, not copied: `@import`s are
+inlined, `url()`s are rewritten to files in the output, and release builds
+minify. There is nothing to configure and no PostCSS pipeline to maintain.
+
+```html
+<link rel="stylesheet" href="./src/styles.css" />
+```
+
+The same pipeline applies however a stylesheet reaches the build — linked
+from a document, imported from a module (`import "./button.css"`), a
+[CSS Module](#css-modules), or named as an entry — and to what a test
+imports under `esdev test`.
+
+## Bundling
+
+`@import` inlines the named stylesheet, resolved the way the build resolves
+everything else. A `url()` naming a local file copies it into
+`dist/assets/` under a content-hashed name and points the URL at the copy:
+
+```css
+.icon {
+  background: url("./icon.svg"); /* dist/assets/icon-a1b2c3.svg */
+}
+```
+
+Pass `--css-urls=inline` to inline those files as `data:` URLs instead. A
+library target takes the same choice as a `"css-urls"` option.
+
+## CSS Modules
+
+A `.module.css` file is scoped: each class becomes a name only that
+stylesheet uses, and the JavaScript import receives the map.
+
+```css
+/* button.module.css */
+.btn {
+  padding: 0.5rem 1rem;
+}
+```
+
+```js
+import styles from "./button.module.css";
+
+button.className = styles.btn; // "btn_c2e58308"
+```
+
+A composed module is `@import`ed from the scoped sheet it builds on, and
+`url()`s inside a module stay relative to it.
+
+## Minification
+
+`esdev build --minify` minifies stylesheets alongside everything else. The
+pass is deliberately value-level — six-digit colours, zero dimensions
+outside math, repeated shorthand sides, overridden adjacent declarations —
+spellings that are safe without knowing every property's grammar. What the
+parser does not understand it leaves byte-identical: `print(parse(x))`
+round-trips any input, valid or not.
+
+No syntax lowering and no vendor prefixing: nesting, `color-mix()` and
+logical properties ship to browsers that support them, so lowering today
+would only enlarge the file.
+
+## Tailwind CSS
+
+A stylesheet that imports `tailwindcss` or uses its directives is compiled
+by the project's own `tailwindcss`, with nothing to configure:
+
+```css
+@import "tailwindcss";
+```
+
+See [Tailwind CSS](/esdev/build/tailwind) for directives, `@plugin` (CommonJS
+ones included), and why v3 is refused.
+
+## Stylesheets from a plugin
+
+A plugin hands esdev CSS by returning `{ code, type: "css" }` for any
+extension — a Sass plugin compiling `Card.module.scss`, for example. The
+result is bundled, scoped and linked like a stylesheet that was written by
+hand. See [Plugins](/esdev/plugins).
+
+## Libraries ship their stylesheets
+
+A `--lib` build keeps an imported stylesheet beside the module that imports
+it (`import "./button.css"` emits no stub and ships the sheet), and a
+`.module.css` ships scoped. When the package's `exports` cannot reach a
+copied stylesheet, the build warns and names the line to add — esdev never
+edits `package.json` itself.

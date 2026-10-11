@@ -61,9 +61,11 @@ export default function StackIcon({ name }) {
       {name === "protobuf" && (
         <span className={TILE}>
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
-            <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
-            <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+            <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+            <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+            <path d="M10 9H8" />
+            <path d="M16 13H8" />
+            <path d="M16 17H8" />
           </svg>
         </span>
       )}
@@ -203,8 +205,9 @@ export default function StackIcon({ name }) {
       {name === "oxc" && (
         <span className={TILE}>
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m12 14 4-4" />
-            <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+            <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+            <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+            <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
           </svg>
         </span>
       )}

@@ -21,7 +21,7 @@ const groups = [
     name: "Connect",
     desc: "HTTP and WebSocket servers in the binary.",
     tiles: [
-      { icon: "http", label: "HTTP", to: "/docs/internals/http" },
+      { icon: "http", label: "HTTP", to: "/docs/http/basics" },
       { icon: "websocket", label: "WebSocket", to: "/docs/guides/websocket" },
     ],
   },
@@ -29,10 +29,10 @@ const groups = [
     name: "Store",
     desc: "Embedded SQLite plus first-party Postgres, MySQL, and Redis.",
     tiles: [
-      { icon: "sqlite", label: "SQLite", to: "/docs/internals/database" },
-      { icon: "postgres", label: "PostgreSQL", to: "/docs/internals/database" },
-      { icon: "mysql", label: "MySQL", to: "/docs/internals/database" },
-      { icon: "redis", label: "Redis", to: "/docs/internals/database" },
+      { icon: "sqlite", label: "SQLite", to: "/docs/db" },
+      { icon: "postgres", label: "PostgreSQL", to: "/docs/db" },
+      { icon: "mysql", label: "MySQL", to: "/docs/db" },
+      { icon: "redis", label: "Redis", to: "/docs/db/redis" },
     ],
   },
   {
@@ -58,7 +58,7 @@ const groups = [
       { icon: "hmr", label: "HMR", to: "/esdev/start" },
       { icon: "tailwind", label: "Tailwind", to: "/esdev/build/tailwind" },
       { icon: "oxc", label: "Bundler", to: "/esdev/build" },
-      { icon: "css", label: "CSS", to: "/esdev/build" },
+      { icon: "css", label: "CSS", to: "/esdev/build/css" },
     ],
   },
   {
