@@ -52,6 +52,7 @@ const groups = [
     desc: "Tests with DOM parity, real-browser runs, watch, HMR, plugins.",
     tiles: [
       { icon: "test", label: "Test runner", to: "/esdev/test" },
+      { icon: "dom", label: "DOM", to: "/esdev/test/dom" },
       { icon: "watch", label: "Watcher", to: "/esdev/watch" },
       { icon: "browsers", label: "Browsers", to: "/esdev/test" },
       { icon: "plugins", label: "Plugins", to: "/esdev/plugins" },
