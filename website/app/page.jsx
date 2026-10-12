@@ -57,9 +57,9 @@ const groups = [
       { icon: "browsers", label: "WebDriver BiDi", to: "/esdev/test/browser" },
       { icon: "plugins", label: "Plugins", to: "/esdev/plugins" },
       { icon: "hmr", label: "HMR", to: "/esdev/start" },
-      { icon: "tailwind", label: "Tailwind", to: "/esdev/build/tailwind" },
       { icon: "oxc", label: "Bundler", to: "/esdev/build" },
       { icon: "css", label: "CSS", to: "/esdev/build/css" },
+      { icon: "tailwind", label: "Tailwind", to: "/esdev/build/tailwind" },
     ],
   },
   {
