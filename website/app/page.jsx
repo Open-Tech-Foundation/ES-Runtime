@@ -54,7 +54,7 @@ const groups = [
       { icon: "test", label: "Test runner", to: "/esdev/test" },
       { icon: "dom", label: "DOM", to: "/esdev/test/dom" },
       { icon: "watch", label: "Watcher", to: "/esdev/watch" },
-      { icon: "browsers", label: "Browsers", to: "/esdev/test" },
+      { icon: "browsers", label: "WebDriver BiDi", to: "/esdev/test/browser" },
       { icon: "plugins", label: "Plugins", to: "/esdev/plugins" },
       { icon: "hmr", label: "HMR", to: "/esdev/start" },
       { icon: "tailwind", label: "Tailwind", to: "/esdev/build/tailwind" },
