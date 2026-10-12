@@ -56,6 +56,10 @@ namespace) is unstable and may change between minor releases until the API freez
   flips to Partial on Deno (`deno bundle` works but warns experimental),
   Deno 2.9 exposes no QUIC API at all, and `OTEL_DENO` takes `true`, not
   `1`. The Redis section is unchanged — no server was available to re-run it.
+- The site benchmark numbers are re-measured against Bun 1.4.3 (was 1.4.2)
+  on esrun 0.38.0, Node.js 24.21.0, Deno 2.9.7 and LLRT 0.9.0-beta, every
+  cell by running it. Bun 1.4.3 is ~23% faster on the regex row and ~22% on
+  wasi_start; everything else is within noise.
 
 ## [0.38.0] - 2026-10-07
 
