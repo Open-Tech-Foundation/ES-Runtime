@@ -3,11 +3,11 @@
 //
 // Sources, all vendored under public/img/brands/ so the site makes no
 // external requests: SQLite, PostgreSQL, MySQL, Redis, Rust, TypeScript,
-// YAML, JSON, V8 and XML from devicons/devicon (MIT); TOML, WebAssembly and
+// YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML, WebAssembly and
 // JavaScript from Simple Icons (CC0). MessagePack, Protobuf, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
 // hashing, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
-// CSS minifying and capabilities have no official artwork, so they keep
+// minifying and capabilities have no official artwork, so they keep
 // original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile.
 //
 // Compiler quirks to respect (see components/StatusIcon.jsx): branch on
@@ -223,15 +223,7 @@ export default function StackIcon({ name }) {
         </span>
       )}
       {name === "css" && (
-        <span className={TILE}>
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="6" cy="6" r="3" />
-            <path d="M8.12 8.12 12 12" />
-            <path d="M20 4 8.12 15.88" />
-            <circle cx="6" cy="18" r="3" />
-            <path d="M14.8 14.8 20 20" />
-          </svg>
-        </span>
+        <img src="/img/brands/css.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
       )}
       {name === "tailwind" && (
         <img src="/img/brands/tailwind.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
