@@ -234,8 +234,14 @@ pub(crate) fn set_raw(raw: bool) -> Result<(), String> {
 
 #[cfg(not(unix))]
 pub(crate) fn set_raw(raw: bool) -> Result<(), String> {
+    use std::io::IsTerminal;
     if !raw {
         return Ok(());
+    }
+    // The terminal is checked first, as on Unix: piped input is refused for
+    // the reason that holds everywhere, not for the one that only holds here.
+    if !std::io::stdin().is_terminal() {
+        return Err("setRawMode needs a terminal, and standard input is not one".to_string());
     }
     Err("setRawMode is not supported on this platform yet".to_string())
 }

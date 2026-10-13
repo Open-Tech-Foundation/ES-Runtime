@@ -388,11 +388,19 @@ fn base64_digit(c: char) -> Option<u8> {
 mod tests {
     use super::*;
 
+    /// An absolute source path on this platform: a Unix path has no drive, so
+    /// on Windows it would be relative and joined onto the map's directory.
+    const SOURCE: &str = if cfg!(windows) {
+        "C:/p/src/a.ts"
+    } else {
+        "/p/src/a.ts"
+    };
+
     /// The map for `const x = 1;` on the second generated line coming from the
     /// fifth line of `src/a.ts`, hand-encoded.
     fn map() -> SourceMap {
         SourceMap::parse(
-            r#"{"version":3,"sources":["/p/src/a.ts"],"mappings":";AAIA,CAAC"}"#,
+            &format!(r#"{{"version":3,"sources":["{SOURCE}"],"mappings":";AAIA,CAAC"}}"#),
             Path::new("/elsewhere"),
         )
         .expect("a map")
@@ -402,13 +410,13 @@ mod tests {
     fn a_position_is_the_segment_at_or_before_it() {
         let map = map();
         // Generated line 2, column 1 → the first segment: source line 5.
-        assert_eq!(map.lookup(2, 1), Some(("/p/src/a.ts", 5, 1)));
+        assert_eq!(map.lookup(2, 1), Some((SOURCE, 5, 1)));
         // Column 2 is the second segment: one column along in the source, on
         // the same line — the deltas carry, and only the generated column
         // restarts per line.
-        assert_eq!(map.lookup(2, 2), Some(("/p/src/a.ts", 5, 2)));
+        assert_eq!(map.lookup(2, 2), Some((SOURCE, 5, 2)));
         // Past the last segment, the last segment still owns the position.
-        assert_eq!(map.lookup(2, 9), Some(("/p/src/a.ts", 5, 2)));
+        assert_eq!(map.lookup(2, 9), Some((SOURCE, 5, 2)));
         // A line with no segments at all.
         assert_eq!(map.lookup(1, 1), None);
         // Past the end of the map.
@@ -471,6 +479,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A Unix file URL; `a_windows_drive_url_stays_on_its_drive` is the same
+    /// on Windows, where a URL without a drive names no file.
+    #[cfg(unix)]
     #[test]
     fn a_url_splits_into_a_path_and_a_position() {
         assert_eq!(

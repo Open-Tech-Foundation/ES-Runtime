@@ -19,6 +19,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- On Windows, `stdin.setRawMode(true)` with piped input now says raw mode
+  needs a terminal, as on Unix, rather than that the platform does not
+  support it.
+
 - The images section of the comparison page no longer reads as sharp parity:
   four measured rows now list what `runtime:images` cannot do yet — rotation
   between the right angles, text overlay, multi-frame output and progressive
