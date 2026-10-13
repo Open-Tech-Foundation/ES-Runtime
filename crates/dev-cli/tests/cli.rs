@@ -12482,11 +12482,7 @@ fn every_question_has_a_flag() {
         "{}",
         stderr(&none)
     );
-    assert!(
-        stderr(&none).contains("--template"),
-        "{}",
-        stderr(&none)
-    );
+    assert!(stderr(&none).contains("--template"), "{}", stderr(&none));
     assert!(
         !parent.join("undecided").exists(),
         "nothing was written: {}",
