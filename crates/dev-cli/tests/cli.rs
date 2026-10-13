@@ -19013,14 +19013,16 @@ test("stored", async ({ bench }) => {
 test("a section", async ({ bench }) => {
   let setUp = 0;
   const result = await bench("sort", (b) => {
-    const data = Array.from({ length: 3000 }, (_, i) => 3000 - i);
+    const data = Array.from({ length: 30000 }, (_, i) => 30000 - i);
     setUp++;
     b.start();
     data.sort((x, y) => x - y);
     b.end();
   }).run({ time: 50 });
   expect(setUp).toBeGreaterThan(0);
-  // Long enough for the clock; whether it is noisy depends on the machine's load.
+  // Long enough for the clock with room to spare: on a loaded machine the
+  // measured clock step grows, and 3 000 elements once fell just under the
+  // threshold. Whether it is noisy depends on the machine's load.
   expect(result.warnings.join()).not.toContain("too short");
 });
 test("warnings", async ({ bench }) => {
