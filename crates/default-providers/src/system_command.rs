@@ -836,12 +836,21 @@ mod tests {
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let commands = SystemCommands::new().with_allowlist([tool.to_str().unwrap()]);
-        assert!(
-            commands
-                .spawn(spec(tool.to_str().unwrap(), &[]))
-                .await
-                .is_ok()
-        );
+        // Another test forking while `fs::write` still held the file open leaves
+        // a child with a write descriptor on it until that child execs, and an
+        // exec of a file open for writing fails with ETXTBSY. Nothing here can
+        // close the child's copy, so wait out the window.
+        let mut spawned = commands.spawn(spec(tool.to_str().unwrap(), &[])).await;
+        for _ in 0..100 {
+            match &spawned {
+                Err(e) if e.to_string().contains("Text file busy") => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    spawned = commands.spawn(spec(tool.to_str().unwrap(), &[])).await;
+                }
+                _ => break,
+            }
+        }
+        assert!(spawned.is_ok(), "{:?}", spawned.err());
         // A bare `tool` on the host PATH — if there were one — is not this file.
         let err = commands.spawn(spec("echo", &[])).await.unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
