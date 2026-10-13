@@ -3009,7 +3009,8 @@ The day before, the same reasoning had been taken one step further and an out-of
   - a `domain` or `path` containing `;` or a control character;
   - `SameSite=None` or `Partitioned` without `Secure`;
   - a `__Secure-` cookie without `Secure`;
-  - a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`.
+  - a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`;
+  - *(added 2026-10-13)* a name and value over 4096 octets together, measured after percent-encoding, or a `Domain` or `Path` over 1024 octets. RFC 6265bis §5.6 drops the first and ignores the second, which sets the cookie under a different scope, so a later delete misses it. **Rejected: splitting a large value across several cookies,** which no mainstream library does by default and which leaves stale pieces behind when the value shrinks.
 
   **This is the difference from Bun,** which emits them. A cookie that looks set while the browser has thrown it away is a login that fails with nothing in any log. **Rejected: Deno's rewriting of a `__Host-` cookie into a valid one**, which sets a cookie different from the one the code asked for.
 

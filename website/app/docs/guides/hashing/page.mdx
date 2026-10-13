@@ -159,6 +159,42 @@ await password.hash(input, { algorithm: "bcrypt", cost: 12 });
   a stored hash may have been written by one that did.
 </Callout>
 
+## Deriving a key
+
+A password hash is for checking a password, not for encrypting with. To turn a
+secret into an encryption key, use the key derivation functions in
+`crypto.subtle`: HKDF and PBKDF2.
+
+From a high-entropy secret, such as a random master key in an environment
+variable, use HKDF. A different `info` string gives an independent key for each
+purpose:
+
+```js
+const master = await crypto.subtle.importKey("raw", masterBytes, "HKDF", false, ["deriveKey"]);
+const key = await crypto.subtle.deriveKey(
+  { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: new TextEncoder().encode("exports v1") },
+  master,
+  { name: "AES-GCM", length: 256 },
+  false,
+  ["encrypt", "decrypt"],
+);
+```
+
+From a password, use PBKDF2 with a random salt stored beside the ciphertext, and
+the iteration count OWASP recommends for SHA-256:
+
+```js
+const salt = crypto.getRandomValues(new Uint8Array(16));
+const pw = await crypto.subtle.importKey("raw", new TextEncoder().encode(input), "PBKDF2", false, ["deriveKey"]);
+const key = await crypto.subtle.deriveKey(
+  { name: "PBKDF2", hash: "SHA-256", salt, iterations: 600_000 },
+  pw,
+  { name: "AES-GCM", length: 256 },
+  false,
+  ["encrypt", "decrypt"],
+);
+```
+
 ## Capability
 
 <Callout type="tip" title="Hashing needs nothing">

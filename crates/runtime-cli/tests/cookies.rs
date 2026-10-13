@@ -137,3 +137,33 @@ fn a_cookie_a_browser_would_discard_throws() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// RFC 6265bis §5.6: a browser drops a cookie whose name and value pass 4096
+/// octets, and ignores a Domain or Path past 1024. Measured as sent, so a value
+/// that percent-encoding triples is counted tripled.
+#[test]
+fn a_cookie_over_the_browser_size_limit_throws() {
+    let code = "import { Cookie } from 'runtime:http'; \
+        const tryIt = (name, value, options = {}) => { \
+          try { new Cookie(name, value, options).serialize(); console.log('OK', name.length + value.length); } \
+          catch (e) { console.log(e.name, e.message); } \
+        }; \
+        tryIt('sid', 'a'.repeat(4093)); \
+        tryIt('sid', 'a'.repeat(4094)); \
+        tryIt('sid', 'é'.repeat(700)); \
+        tryIt('sid', 'v', { path: '/' + 'p'.repeat(1023) }); \
+        tryIt('sid', 'v', { path: '/' + 'p'.repeat(1024) }); \
+        tryIt('sid', 'v', { domain: 'é'.repeat(513) });";
+    let out = esrun(&[&format!("-e={code}")]);
+    assert_eq!(
+        stdout(&out),
+        "OK 4096\n\
+         TypeError Cookie \"sid\" would be rejected by browsers: name and value are 4097 bytes once encoded; the limit is 4096\n\
+         TypeError Cookie \"sid\" would be rejected by browsers: name and value are 4203 bytes once encoded; the limit is 4096\n\
+         OK 4\n\
+         TypeError Cookie \"sid\" would be rejected by browsers: its Path is 1025 bytes; the limit is 1024\n\
+         TypeError Cookie \"sid\" would be rejected by browsers: its Domain is 1026 bytes; the limit is 1024\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

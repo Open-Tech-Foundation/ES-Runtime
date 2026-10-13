@@ -742,6 +742,10 @@ const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 // or corrupt the header.
 const ATTRIBUTE_BREAK = /[;\x00-\x1f\x7f]/;
 const SAME_SITE = new Set(["strict", "lax", "none"]);
+// RFC 6265bis §5.6, in octets.
+const MAX_COOKIE_OCTETS = 4096;
+const MAX_ATTRIBUTE_OCTETS = 1024;
+const utf8 = new TextEncoder();
 const EPOCH = new Date(0);
 
 // A cookie value as a program wrote it, decoded: `%XX` sequences become the
@@ -901,7 +905,22 @@ class Cookie {
       if (this.domain !== null) refuse("a __Host- cookie must not have a Domain");
       if (this.path !== "/") refuse('a __Host- cookie must have Path=/');
     }
-    let out = `${this.name}=${encodeURIComponent(this.value)}`;
+    // RFC 6265bis §5.6: a browser drops a cookie whose name and value exceed
+    // 4096 octets together, and ignores a Domain or Path over 1024 — which
+    // sets the cookie somewhere else, so a later delete misses it. The value
+    // is measured as sent, after percent-encoding (which leaves it ASCII).
+    const value = encodeURIComponent(this.value);
+    const size = this.name.length + value.length;
+    if (size > MAX_COOKIE_OCTETS) {
+      refuse(`name and value are ${size} bytes once encoded; the limit is ${MAX_COOKIE_OCTETS}`);
+    }
+    for (const [kind, text] of [["Domain", this.domain], ["Path", this.path]]) {
+      const octets = text === null ? 0 : utf8.encode(text).length;
+      if (octets > MAX_ATTRIBUTE_OCTETS) {
+        refuse(`its ${kind} is ${octets} bytes; the limit is ${MAX_ATTRIBUTE_OCTETS}`);
+      }
+    }
+    let out = `${this.name}=${value}`;
     if (this.domain !== null) out += `; Domain=${this.domain}`;
     out += `; Path=${this.path}`;
     if (expires !== null) out += `; Expires=${expires.toUTCString()}`;

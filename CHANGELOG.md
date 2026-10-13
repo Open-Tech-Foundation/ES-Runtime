@@ -13,11 +13,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- The hashing guide's new "Deriving a key" section shows how to derive an
+  encryption key with `crypto.subtle`: HKDF from a secret, PBKDF2 from a password.
+
 - The images guide names the non-resize transforms and the `blob()` terminal,
   with a chained avatar example. Its gaps and the comparison notes are framed
   as current limitations, not permanent ones.
 
 ### Fixed
+
+- A cookie a browser would drop for its size is now a `TypeError` when it is
+  serialized, like the other cookies D144 refuses: a name and value over 4096
+  bytes together (measured after percent-encoding), or a `Domain` or `Path` over
+  1024 bytes (RFC 6265bis §5.6). Such a cookie used to be sent, so a login
+  looked successful while the browser discarded the session.
 
 - `new Command(program, [args])` (the shape of Node's `spawn`) is now a
   `TypeError` that names `{ args: [...] }`. The array used to be read as an

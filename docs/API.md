@@ -2330,7 +2330,8 @@ happens when it is serialized or recorded with `set`/`delete`, and covers:
 - `;` or a control character in `domain` or `path`;
 - `SameSite=None` or `Partitioned` without `Secure`;
 - a `__Secure-` cookie without `Secure`;
-- a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`.
+- a `__Host-` cookie without `Secure`, with a `Domain`, or with a `Path` other than `/`;
+- a name and value over 4096 bytes together, measured after percent-encoding, or a `Domain` or `Path` over 1024 bytes (RFC 6265bis §5.6).
 
 Bun emits these cookies anyway, and the browser drops them without an error.
 
