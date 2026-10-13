@@ -117,7 +117,8 @@ fn as_integer(n: f64) -> Option<i64> {
     (n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64).then_some(n as i64)
 }
 
-/// Converts an engine `Value` into a `serde_yaml::Value`.
+/// Converts an engine `Value` into a `toml::Value`, or reports what TOML cannot
+/// represent.
 ///
 /// Built directly rather than transcoded through `serde_json::Value`, for the
 /// same reason [`toml_to_value`] is: a foreign `Value` type is free to use
@@ -125,40 +126,7 @@ fn as_integer(n: f64) -> Option<i64> {
 /// user's document. `serde_json` does exactly that under its
 /// `arbitrary_precision` feature — every number becomes a one-key map named
 /// `$serde_json::private::Number` — and a feature is not ours to control,
-/// because Cargo unifies it across everything in the build. Nothing in this
-/// crate asks for it; another crate in the same workspace enabling it silently
-/// changed what `YAML.build` produced. Going straight to the target type means
-/// there is no third format's private representation to leak.
-///
-/// Non-finite numbers become null, which is what the JSON path did.
-fn value_to_yaml(v: Value) -> serde_yaml::Value {
-    match v {
-        Value::Null => serde_yaml::Value::Null,
-        Value::Bool(b) => serde_yaml::Value::Bool(b),
-        Value::Number(n) => match as_integer(n) {
-            Some(i) => serde_yaml::Value::Number(i.into()),
-            None if n.is_finite() => serde_yaml::Value::Number(n.into()),
-            None => serde_yaml::Value::Null,
-        },
-        Value::String(s) => serde_yaml::Value::String(s),
-        Value::Array(arr) => {
-            serde_yaml::Value::Sequence(arr.into_iter().map(value_to_yaml).collect())
-        }
-        Value::Object(map) => {
-            let mut out = serde_yaml::Mapping::with_capacity(map.len());
-            for (k, v) in map {
-                out.insert(serde_yaml::Value::String(k), value_to_yaml(v));
-            }
-            serde_yaml::Value::Mapping(out)
-        }
-        _ => serde_yaml::Value::Null,
-    }
-}
-
-/// Converts an engine `Value` into a `toml::Value`, or reports what TOML cannot
-/// represent.
-///
-/// Same reasoning as [`value_to_yaml`] for going direct. The fallible signature
+/// because Cargo unifies it across everything in the build. The fallible signature
 /// is TOML's own: **there is no null**, so a null has to be refused rather than
 /// written as something else. Routing through `serde_json::Value` used to get
 /// that right by accident — the serializer rejected `Value::Null` — and this
@@ -577,18 +545,15 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             Some(s) => s,
             None => return Err(OpError::type_error("yaml_parse expects a string")),
         };
-
-        // Build engine Values directly rather than transcoding to a JSON string:
-        // JSON can't represent `.inf`/`.nan`, so the transcode path would silently
-        // turn non-finite floats into null. ValueSeed keeps them as JS Infinity/NaN.
-        let deserializer = serde_yaml::Deserializer::from_str(yaml);
-        match ValueSeed.deserialize(deserializer) {
-            Ok(val) => Ok(val),
-            Err(e) => Err(OpError::new(
-                ExceptionClass::SyntaxError,
-                format!("Parse failed: {e}"),
-            )),
-        }
+        // Values are built directly rather than through a JSON string: JSON
+        // cannot carry `.inf`/`.nan`, which would arrive as null.
+        crate::yaml::parse(yaml).map_err(|e| {
+            let class = match e.kind {
+                crate::yaml::ErrorKind::Syntax => ExceptionClass::SyntaxError,
+                crate::yaml::ErrorKind::Limit => ExceptionClass::RangeError,
+            };
+            OpError::new(class, format!("Parse failed: {e}"))
+        })
     }))?;
 
     engine.register_op(OpDecl::sync("yaml_validate", |args| {
@@ -596,21 +561,15 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             Some(s) => s,
             None => return Ok(Value::String("Expected a string".into())),
         };
-
-        match serde_yaml::from_str::<serde_yaml::Value>(yaml) {
-            Ok(_) => Ok(Value::Bool(true)),
-            Err(e) => Ok(Value::String(format!("Validation failed: {}", e))),
+        match crate::yaml::validate(yaml) {
+            Ok(()) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {e}"))),
         }
     }))?;
 
     engine.register_op(OpDecl::sync("yaml_build", |mut args| {
         let val = args.drain(..).next().unwrap_or(Value::Null);
-        let yaml_val = value_to_yaml(val);
-
-        match serde_yaml::to_string(&yaml_val) {
-            Ok(yaml_str) => Ok(Value::String(yaml_str)),
-            Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
-        }
+        Ok(Value::String(crate::yaml::emit(&val)))
     }))?;
 
     engine.register_op(OpDecl::sync("toml_parse", |args| {
@@ -801,25 +760,6 @@ mod tests {
             .and_then(|_| xml_stream_step(&mut state, "padding-text-that-never-closes", 8))
             .expect_err("unterminated element past the cap must error");
         assert!(err.contains("exceeds"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn yaml_parses() {
-        let yaml = "a: hi\nb: 42\n";
-        // Since we test ops we typically test the function logic, but we can't easily call the op closure here directly in a unit test without an engine instance with the op registered.
-        // Instead, let's just test ValueSeed.
-        let deserializer = serde_yaml::Deserializer::from_str(yaml);
-        let val = ValueSeed.deserialize(deserializer).unwrap();
-        assert!(matches!(val, Value::Object(_)));
-        if let Value::Object(map) = val {
-            assert_eq!(map.len(), 2);
-            assert_eq!(map[0].0, "a");
-            assert!(matches!(map[0].1, Value::String(ref s) if s == "hi"));
-            assert_eq!(map[1].0, "b");
-            assert!(matches!(map[1].1, Value::Number(n) if n == 42.0));
-        } else {
-            panic!("Expected object");
-        }
     }
 
     #[test]

@@ -1,0 +1,16 @@
+%YAML 1.2
+---
+base: &base {name: "x\ty", tags: [a, 'b c']}
+service:
+  <<: *base
+  ports:
+  - 80
+  - 0x1bb
+  script: |
+    echo hi
+  note: >-
+    folded
+    text
+  ? explicit key
+  : !!str 12
+...

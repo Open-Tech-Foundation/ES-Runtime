@@ -49,6 +49,14 @@ pub fn parse_xml(input: &str) {
     crate::serialization_ops::fuzz_parse_xml(input);
 }
 
+/// Parses YAML with the runtime's own reader and, when that succeeds, writes
+/// the value back out and reads it again. The reader is hand-written over an
+/// indentation-sensitive grammar, and the writer must never produce text the
+/// reader rejects.
+pub fn parse_yaml(input: &str) {
+    crate::yaml::fuzz_round_trip(input);
+}
+
 /// Decodes base64 the way `atob` does, including its stricter-than-usual
 /// whitespace and padding rules.
 pub fn atob(input: &str) {

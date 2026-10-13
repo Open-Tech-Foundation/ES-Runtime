@@ -32,6 +32,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `runtime:serialization`'s `YAML` now uses the runtime's own YAML 1.2 reader
+  and writer, in safe Rust, instead of `serde_yaml`. That removes
+  `unsafe-libyaml` (RUSTSEC-2024-0449: unmaintained, with no safe upgrade). The
+  reader passes all 402 cases of the yaml-test-suite (D160). Behaviour that
+  changes:
+  - A duplicate mapping key is a `SyntaxError`. It used to keep the last value.
+  - Merge keys (`<<: *base`) are applied. They used to come back as a literal
+    `"<<"` key.
+  - `017` parses as `17`, as the core schema says. It used to be the string
+    `"017"`.
+  - Aliases that expand to more than 1,000,000 nodes are a `RangeError`.
+  - `YAML.build` writes `NaN` and `±Infinity` as `.nan` and `±.inf` (they used
+    to become `null`), and quotes `yes`, `no`, `on`, `off`, `y` and `n`, which
+    YAML 1.1 readers take as booleans.
+  - Error messages are new, and every one ends with its line and column.
 - Every table on the benchmarks page now marks its winning cells in semibold
   green, the way the images tables already did: fastest per column in the
   WebSocket sweep and HTTP/2 tables, fastest burst and sustained throughput,

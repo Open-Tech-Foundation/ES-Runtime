@@ -404,6 +404,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
+
+[[package]]
 name = "crypto-bigint"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -657,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime"
-version = "0.28.0"
+version = "0.38.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -682,6 +707,7 @@ dependencies = [
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "md-5",
+ "otf-pixels",
  "p256",
  "p384",
  "p521",
@@ -695,7 +721,6 @@ dependencies = [
  "serde",
  "serde-transcode",
  "serde_json",
- "serde_yaml",
  "sha1 0.10.7",
  "sha1 0.11.0",
  "sha2 0.11.0",
@@ -712,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-common"
-version = "0.28.0"
+version = "0.38.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -721,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-engine"
-version = "0.28.0"
+version = "0.38.0"
 dependencies = [
  "es-runtime-common",
  "thiserror",
@@ -740,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-providers"
-version = "0.28.0"
+version = "0.38.0"
 dependencies = [
  "es-runtime-common",
  "futures-core",
@@ -1185,6 +1210,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+
+[[package]]
 name = "keccak"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1369,6 +1400,114 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "otf-pixels"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bc536b481658076edac78d3de8046cf9bb7372c718a47f97246401bb019e4a5"
+dependencies = [
+ "otf-pixels-codec-avif",
+ "otf-pixels-codec-gif",
+ "otf-pixels-codec-jpeg",
+ "otf-pixels-codec-png",
+ "otf-pixels-codec-raw",
+ "otf-pixels-codec-tiff",
+ "otf-pixels-codec-webp",
+ "otf-pixels-core",
+ "otf-pixels-ops",
+]
+
+[[package]]
+name = "otf-pixels-codec-avif"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bdf9773a940478f983b5979a79997154cbba1036f8495666ce019402562a2c7"
+dependencies = [
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-gif"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0dbed12727d85b7d794320ad015a55c5b2fe9129851cecee2fc5b87ac60bfc8"
+dependencies = [
+ "otf-pixels-compress",
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-jpeg"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9be07b2917d058a15e2eeff4c412c0ded87ebc4c3cb4c74a52427cf2a147064a"
+dependencies = [
+ "jpeg-decoder",
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-png"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccb593b691d0755fe6288ed62edbe192f7b10c5b581ca3fb722796f81e6ae772"
+dependencies = [
+ "otf-pixels-compress",
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-raw"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32515ecfb376dd14c3ae2f55a6f65fd59c98dd8d7151941988f1b23b6d569c71"
+dependencies = [
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-tiff"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25bd7cc44fdd99aef89e7f6f9f8de4799c262d3854c1eedef144fedb356521c4"
+dependencies = [
+ "otf-pixels-compress",
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-webp"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cd07fce7e23e5c437589132480d35c43ef1a80622a91d7c5d84d990d6532487"
+dependencies = [
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-compress"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe1adc488846f66c6e1d193f0966f64da841d9d17b1d45329885c8b97f427200"
+
+[[package]]
+name = "otf-pixels-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75ec379a36e81150981ef20477130b5c26e8d471d89de28ea56492a332ee73da"
+dependencies = [
+ "crossbeam-deque",
+]
+
+[[package]]
+name = "otf-pixels-ops"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c85f2e434570c86fddb3a90ed79693190cb1235971931de85bb2821d03556464"
+dependencies = [
+ "otf-pixels-core",
+]
 
 [[package]]
 name = "p256"
@@ -1724,12 +1863,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ryu"
-version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
 name = "salsa20"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1829,19 +1962,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
 ]
 
 [[package]]
@@ -2240,12 +2360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2277,9 +2391,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "v8"
-version = "150.4.0"
+version = "152.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42a978ff11f15b24e5c05a7123cf2b68f41e763546699781a924ef4e2cf43a49"
+checksum = "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888"
 dependencies = [
  "bindgen",
  "bitflags",

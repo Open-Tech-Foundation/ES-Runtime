@@ -21,6 +21,7 @@ committed seed crashes. A real campaign belongs on dedicated infrastructure.
 | `urlpattern` | URLPattern constructor strings — the path-to-regexp lexer and the component split |
 | `compression` | Decompression of arbitrary bytes, chunked as a `DecompressionStream` feeds it |
 | `serialization` | XML parsed into the runtime's value tree (recursive descent) |
+| `yaml` | The YAML reader, and a write-and-reread of whatever it accepts |
 | `keys` | The hand-written RFC 8410 key DER parsers, and `atob` |
 
 The JS↔Rust marshaler and the streams are deliberately absent: they need a live

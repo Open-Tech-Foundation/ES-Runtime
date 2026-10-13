@@ -2824,6 +2824,29 @@ For each string format (XML, YAML, TOML), the module provides a namespace with t
 left over inside an open one. A truncated document (`"<r>"`, `"<r><a>1"`) is a
 `SyntaxError` from `parse` and `false` from `validate` — the two always agree.
 
+`YAML` reads **YAML 1.2** and passes the full yaml-test-suite. `parse` reads
+exactly one document: a stream of several is a `SyntaxError`, and an empty
+stream is `null`. Plain scalars resolve by the 1.2 core schema, so `017` is
+`17`, `yes` is the string `"yes"`, and `.inf`/`.nan` are `Infinity`/`NaN`.
+Mapping keys keep their source text (`1: a` gives the key `"1"`). These are a
+`SyntaxError`:
+
+- a duplicate key in one mapping;
+- a sequence or mapping used as a key;
+- a tag other than the core ones (`!!str`, `!!int`, `!!float`, `!!bool`,
+  `!!null`, `!!seq`, `!!map`) and `!!binary`, `!!timestamp`, `!!set`, `!!omap`,
+  `!!pairs`, which are kept as written.
+
+Merge keys (`<<: *defaults`, or `<<: [*a, *b]`) are applied. A key written in
+the mapping wins over a merged one, and an earlier merge source wins over a
+later one. A quoted `"<<"` is an ordinary key. Nesting deeper than 256 levels,
+or aliases that expand to more than 1,000,000 nodes, is a `RangeError`.
+
+`YAML.build` writes block style with two-space indentation. A string is quoted
+when, written plain, it would read back as something else, including the YAML
+1.1 booleans `yes`, `no`, `on`, `off`, `y`, `n`. `NaN` and `±Infinity` are
+written `.nan` and `±.inf`.
+
 For binary formats like MessagePack, the namespace is slightly different:
 
 | Export | Description |

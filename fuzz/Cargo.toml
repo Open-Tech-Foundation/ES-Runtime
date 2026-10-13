@@ -67,6 +67,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "yaml"
+path = "fuzz_targets/yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "keys"
 path = "fuzz_targets/keys.rs"
 test = false

@@ -43,6 +43,42 @@ test("yaml edge cases", async () => {
   assertThrows(() => YAML.parse("---\na: 1\n---\nb: 2"));
 });
 
+test("yaml mapping keys: merges apply, duplicates throw", async () => {
+  const { YAML } = await import("runtime:serialization");
+  // `<<` merges the aliased mapping; a key written in place wins.
+  peq(
+    YAML.parse("base: &b {x: 1, y: 2}\nd:\n  <<: *b\n  y: 3"),
+    { base: { x: 1, y: 2 }, d: { x: 1, y: 3 } },
+    "yaml merge key",
+  );
+  peq(YAML.parse("'<<': 1"), { "<<": 1 }, "a quoted << is an ordinary key");
+  assertThrows(() => YAML.parse("a: 1\na: 2"), "SyntaxError");
+  assertThrows(() => YAML.parse("a: !custom x"), "SyntaxError");
+});
+
+test("yaml follows the 1.2 core schema", async () => {
+  const { YAML } = await import("runtime:serialization");
+  peq(
+    YAML.parse("a: 017\nb: 0o17\nc: yes\nd: 1_000\ne: !!str 1"),
+    { a: 17, b: 15, c: "yes", d: "1_000", e: "1" },
+    "core schema scalars",
+  );
+  // Non-finite numbers round-trip instead of becoming null.
+  const back = YAML.parse(YAML.build({ p: Infinity, n: -Infinity, x: NaN }));
+  if (back.p !== Infinity || back.n !== -Infinity || !Number.isNaN(back.x)) {
+    throw new Error("yaml build lost a non-finite number");
+  }
+  // Strings a YAML 1.1 reader would take as booleans are quoted on the way out.
+  if (YAML.build({ a: "yes" }) !== "a: 'yes'\n") throw new Error("yes must be quoted");
+});
+
+test("yaml alias expansion is bounded", async () => {
+  const { YAML } = await import("runtime:serialization");
+  let doc = "a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n";
+  for (let i = 1; i < 9; i++) doc += `a${i}: &a${i} [${Array(10).fill(`*a${i - 1}`).join(", ")}]\n`;
+  assertThrows(() => YAML.parse(doc), "RangeError");
+});
+
 test("toml edge cases", async () => {
   const { TOML } = await import("runtime:serialization");
 

@@ -51,13 +51,31 @@ support for massive documents.
 
 ## YAML
 
-Synchronous parsing, building, and validation of YAML data.
+Synchronous parsing, building, and validation of YAML 1.2.
 
 | Export | Type | Description | Example |
 | --- | --- | --- | --- |
 | `YAML.parse(yaml)` | `(string) => object` | Parses a YAML string into a JavaScript object. | `YAML.parse("key: value")` |
 | `YAML.build(obj)` | `(object) => string` | Serializes a JavaScript object into a YAML string. | `YAML.build({ key: "value" })` |
 | `YAML.validate(yaml, options?)` | `(string, object) => boolean \| object` | Validates a YAML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `YAML.validate("key: value", { detailed: true })` |
+
+`parse` reads one document; an empty stream is `null`. Plain scalars resolve by
+the YAML 1.2 core schema: `017` is `17`, `yes` is `"yes"`, `.inf` and `.nan` are
+`Infinity` and `NaN`. Keys keep their source text (`1: a` gives the key `"1"`).
+Merge keys (`<<`) are applied, and a key written in the mapping wins over a merged one.
+
+| Input | Result |
+| --- | --- |
+| More than one document | `SyntaxError` |
+| A duplicate key in one mapping | `SyntaxError` |
+| A sequence or mapping as a key | `SyntaxError` |
+| A tag other than `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq`, `!!map`, `!!binary`, `!!timestamp`, `!!set`, `!!omap`, `!!pairs` | `SyntaxError` |
+| Nesting deeper than 256 levels | `RangeError` |
+| Aliases expanding to more than 1,000,000 nodes | `RangeError` |
+
+`build` writes block style with two-space indentation. A string is quoted when
+it would read back as something else, including YAML 1.1's `yes`/`no`/`on`/`off`/`y`/`n`.
+`NaN` and `±Infinity` become `.nan` and `±.inf`.
 
 ## TOML
 
@@ -115,4 +133,4 @@ value-names, and `Uint8Array` for bytes.
 | --- | --- |
 | `SyntaxError` | Parsing fails due to malformed XML, YAML, or TOML input. |
 | `TypeError` | Building fails because the provided JavaScript object cannot be serialized into the target format (e.g., circular references, invalid keys). |
-| `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap). |
+| `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap, YAML alias expansion). |

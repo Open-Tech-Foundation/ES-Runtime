@@ -3287,3 +3287,23 @@ The day before, the same reasoning had been taken one step further and an out-of
 **Consequences:** `HostProviders` carries a `TaskSpawner` (`with_task_spawner`), and `esrun` and `esdev` install tokio's blocking pool there. The release `esrun` grew by 1.7 MiB (79.5 MB to 81.3 MB, Linux x86-64, 2026-10-07), so the module is not behind a cargo feature.
 
 **Not here:** an `Image` as a `Response` body encoded host-side (the D145 path); `composite`; reading a `file()` as a stream, so that a large file is processed in constant memory; Bun's `placeholder()`, clipboard and `backend`; PNG palette output, PNG compression level and progressive JPEG output, which Pixels does not have.
+
+### D160 — `runtime:serialization` reads and writes YAML with its own parser · *Accepted (2026-10-13)*
+
+**Context:** `YAML` was backed by `serde_yaml` 0.9, which is deprecated and depends on `unsafe-libyaml`, a c2rust translation of libyaml into unsafe Rust. Its repository was archived on 2024-03-25, and RUSTSEC-2024-0449 now fails `cargo deny` with no safe upgrade. The suggested replacements are other crates (saphyr, noyalib). Bun ships its own YAML 1.2 parser and says it passes the official yaml-test-suite.
+
+**Decision (maintainer, 2026-10-13):**
+
+- **Our own YAML 1.2 reader and writer, in safe Rust,** at `crates/runtime/src/yaml`: scanner, event parser, composer and emitter. The event layer matches the yaml-test-suite's notation, so `cargo test` runs all 402 cases of the pinned `data-2022-01-17` release (vendored as `crates/runtime/yaml-test-suite/cases.json`). All 402 pass.
+- **Duplicate keys are a `SyntaxError`**, as the specification requires and js-yaml does. serde_yaml let the last one win.
+- **Merge keys (`<<`) are applied**, as js-yaml does, although YAML 1.2 removed them. A key written in the mapping wins over a merged one, and an earlier merge source wins over a later one. serde_yaml returned `<<` as a literal key.
+- **The core schema is followed exactly.** `017` is `17`, where serde_yaml returned the string `"017"`. `YAML.build` writes `NaN` and `±Infinity` as `.nan` and `±.inf`, where serde_yaml wrote `null`.
+- **Unknown tags stay a `SyntaxError`**, and collection keys too, as before.
+- **Limits:** 256 levels of nesting and 1,000,000 nodes of alias expansion. Over either is a `RangeError`.
+
+**Rejected:**
+- **saphyr / serde-saphyr.** It is safe Rust, but we would still need our own composer for the policy above (duplicate keys, merges, key text, limits), and its schema and error positions would be its own. With the event layer written and checked against the suite, the rest is small.
+- **Keeping serde_yaml with an advisory ignore.** No upstream fix will come, and the parser reads untrusted input.
+- **Ignoring unknown tags.** `!Ref Foo` would come back as `"Foo"`, and the reference would be silently lost.
+
+**Consequences:** the `unsafe-libyaml` advisory leaves the dependency tree. Error messages are new, and their positions come from our own scanner. Strings that YAML 1.1 reads as booleans are now quoted on output (`'yes'`, `'y'`). The `yaml` fuzz target parses, writes and reparses every input it accepts.

@@ -102,6 +102,43 @@ reason MessagePack's is.
 
 ### YAML
 
+**The reader and writer are the runtime's own**, in safe Rust
+(`crates/runtime/src/yaml`). The usual crate, `serde_yaml`, is deprecated and
+is built on `unsafe-libyaml`, a machine translation of libyaml's C into unsafe
+Rust. Its repository is archived, so bugs found in it will not be fixed
+(RUSTSEC-2024-0449). The structure follows the specification: characters become
+tokens, tokens become the event stream that the
+[yaml-test-suite](https://github.com/yaml/yaml-test-suite) specifies, and events
+become values. Because the event layer exists, every one of the suite's 402
+cases is checked in `cargo test`. A valid case must reproduce the suite's events
+exactly and an invalid one must be rejected. All 402 pass.
+
+**Where YAML leaves a choice to the application, the reader takes the one that
+cannot lose data silently:**
+
+- A duplicate key is an error. The specification requires unique keys; taking
+  the last value hides typos in configuration.
+- An unknown tag (`!Ref`, `!custom`) is an error. Ignoring it would return a
+  value whose meaning was dropped.
+- A sequence or mapping used as a key is an error, because a JavaScript object
+  cannot have one as a key.
+
+**Merge keys are applied**, although YAML 1.2 removed them from the type
+repository, because CI and compose files depend on them. A key written in the
+mapping beats a merged one wherever the `<<` appears, which is what readers of
+those files expect.
+
+**Both resources an untrusted document can grow are bounded.** Nesting stops at
+256 levels, as in XML and MessagePack. Alias expansion stops at 1,000,000
+nodes: each alias is a copy, so nine levels of ten aliases each (a few hundred
+bytes) would otherwise expand to a billion. The tokenizer and the event parser
+keep their state on the heap, so deep input cannot overflow the stack before it
+reaches the depth check.
+
+**The writer quotes for YAML 1.1 readers too.** `yes`, `no`, `on`, `off`, `y`
+and `n` are plain strings in 1.2, but many readers still take them as booleans,
+so `build` quotes them, as js-yaml does by default.
+
 **Block-scalar chomping is the specification's, in all three modes** — this is
 worth stating plainly because it reads like a bug when tested carelessly:
 
