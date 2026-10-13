@@ -257,6 +257,18 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
     // Everything below resolves before anything is written, so a person who
     // changes their mind at a prompt leaves no directory behind.
     let scripted = config.yes || !crate::prompt::interactive();
+    // A flag's value is checked before any question: a package manager that is
+    // not one is the caller's mistake whatever else is missing, and asking for
+    // a template first would hide it behind a question it does not depend on.
+    let named_managers = [
+        config.manager.as_deref(),
+        config.install.as_ref().and_then(|named| named.as_deref()),
+    ];
+    for named in named_managers.into_iter().flatten() {
+        if crate::install::by_name(named).is_none() {
+            return Err(unknown_manager(named));
+        }
+    }
     let mut answers = Answers::default();
     if let Some(named) = &config.template {
         answers.template = Some(named.clone());

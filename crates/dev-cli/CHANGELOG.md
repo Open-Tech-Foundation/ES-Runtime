@@ -29,6 +29,8 @@ is the point, since none of the three has any business in a deployment.
 - **Breaking:** `esdev create` has no default template. An unattended run
   without `--template` stops with where the names are listed instead of
   scaffolding `react`; on a terminal the question is asked as before.
+  A package manager that is not one (`--install=cargo`) is still reported
+  first, before the missing template.
 
 ### Added
 
