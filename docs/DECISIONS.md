@@ -3308,3 +3308,24 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Ignoring unknown tags.** `!Ref Foo` would come back as `"Foo"`, and the reference would be silently lost.
 
 **Consequences:** the `unsafe-libyaml` advisory leaves the dependency tree. Error messages are new, and their positions come from our own scanner. Strings that YAML 1.1 reads as booleans are now quoted on output (`'yes'`, `'y'`). The `yaml` fuzz target parses, writes and reparses every input it accepts.
+
+### D161 — Signed and sealed cookies on `CookieMap` · *Accepted (2026-10-13)* · *extends D144*
+
+**Context:** D144 left signed and encrypted cookies out. Every session app then writes its own HMAC and base64 around a cookie value, and that is where the mistakes are: a `===` comparison that leaks timing, a value that can be copied from one cookie to another, an expiry the server never checks, no way to rotate a key. Node and Bun have nothing. Deno has `signCookie`/`verifySignedCookie` in `@std/http/unstable-signed-cookie` (async, one `CryptoKey`, marked unstable). Express's `cookie-parser`, Hono and React Router sign; Express and React Router take a list of secrets, of which the first signs and all verify. None of them encrypts; apps add iron-session for that.
+
+**Decision (maintainer, 2026-10-13):**
+
+- **`CookieMap` gains `setSigned`/`getSigned` and `setSealed`/`getSealed`.** The `set*` methods take the cookie options plus `secrets`; the `get*` methods take `{ secrets }`. Synchronous, like the rest of `CookieMap`.
+- **Signed** is HMAC-SHA256: the value stays readable, and any change is detected. Written `<value>.<expiry>.<tag>`. **Sealed** is AES-256-GCM: the value is hidden too. Written as base64url of nonce, ciphertext and tag.
+- **`secrets` is a non-empty array of strings, bytes or `runtime:process` `Secret`s, each at least 32 bytes.** The first signs or seals; every one is tried when reading, so a key is rotated by putting the new one first. Each secret is stretched with HKDF-SHA256 into separate signing and sealing keys, so one secret can serve both.
+- **The cookie name and an expiry are inside the protected data.** A value cannot be moved to a cookie of another name, and the expiry from `maxAge` or `expires` is enforced on read even if the browser keeps the cookie longer. A cookie with neither has no server-side expiry.
+- **A missing, malformed, tampered, wrong-key or expired cookie reads as `null`.** It is the same answer as no cookie, so a handler has one branch. The tag comparison is constant-time.
+- **`setSealed` needs Entropy** for its random nonce, drawn through `crypto.getRandomValues` as `password.hash` draws its salt (D57). Signing, verifying and opening need nothing.
+
+**Rejected:**
+- **Async methods over `crypto.subtle`** (Deno, Hono). Nothing here waits on I/O, and an async `get` would make every handler that reads a session async for no reason.
+- **A separate keyring object.** It would be one more type to learn; a `secrets` array is what Express and React Router users already write.
+- **Throwing on a bad signature.** A forged cookie is an attacker's input, not a programming error, and a throw turns it into a 500.
+- **Keeping the value readable in a sealed cookie, or encrypting a signed one.** Two clear choices are easier to use correctly than one cookie with modes.
+
+**Consequences:** the oversized-cookie check (D144) applies after signing or sealing, so a sealed value has about 3 KB of room. A key shorter than 32 bytes is a `TypeError` at the call.

@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Signed and sealed cookies in `runtime:http` (D161). `CookieMap.setSigned` and
+  `getSigned` protect a readable value with HMAC-SHA256; `setSealed` and
+  `getSealed` encrypt it with AES-256-GCM. Both take `secrets`, newest first,
+  each at least 32 bytes, so keys can be rotated. The cookie name and the expiry
+  from `maxAge`/`expires` are protected with the value and checked on read. A
+  missing, changed, wrong-key or expired cookie reads as `null`. The HTTP guide
+  shows sessions kept in a sealed cookie, a new internals page explains the
+  format, and the comparison page gains a row for them.
+
 - The hashing guide's new "Deriving a key" section shows how to derive an
   encryption key with `crypto.subtle`: HKDF from a secret, PBKDF2 from a password.
 

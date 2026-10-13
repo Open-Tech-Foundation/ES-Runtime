@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:http`: `CookieMap.setSigned`/`getSigned`, `setSealed`/`getSealed`
+  and the `CookieSecrets` type (DECISIONS D161).
+
 ## [0.14.0] - 2026-10-07
 
 ### Added

@@ -17,6 +17,7 @@
 mod base64_ops;
 mod builtins;
 mod compression_ops;
+mod cookie_ops;
 mod crypto_ops;
 mod curve25519_ops;
 mod db_conns;

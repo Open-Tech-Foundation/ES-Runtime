@@ -167,3 +167,129 @@ fn a_cookie_over_the_browser_size_limit_throws() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The browser's half of a round trip: the `name=value` part of each
+/// `Set-Cookie` header, as the next request's `Cookie` header (D161).
+const ROUND_TRIP: &str = "import { CookieMap } from 'runtime:http'; \
+    import { Secret } from 'runtime:process'; \
+    const back = (m) => new CookieMap(m.toSetCookieHeaders().map((h) => h.split(';')[0]).join('; ')); \
+    const K1 = 'k'.repeat(32), K2 = 'q'.repeat(32);";
+
+/// Signed: readable, unforgeable, bound to its name and expiry, and rotatable.
+#[test]
+fn a_signed_cookie_reads_back_only_as_it_was_written() {
+    let code = format!(
+        "{ROUND_TRIP} \
+        const m = new CookieMap(); \
+        m.setSigned('uid', 'user.42', {{ secrets: [K1], httpOnly: true }}); \
+        const header = m.toSetCookieHeaders()[0]; \
+        console.log(header.startsWith('uid=user.42.0.'), header.includes('HttpOnly')); \
+        const req = back(m); \
+        console.log(req.getSigned('uid', {{ secrets: [K1] }})); \
+        console.log(req.getSigned('uid', {{ secrets: [K2, K1] }})); \
+        console.log(req.getSigned('uid', {{ secrets: [K2] }})); \
+        const raw = req.get('uid'); \
+        console.log(new CookieMap({{ uid: raw.replace('user.42', 'user.43') }}).getSigned('uid', {{ secrets: [K1] }})); \
+        console.log(new CookieMap({{ admin: raw }}).getSigned('admin', {{ secrets: [K1] }})); \
+        console.log(new CookieMap({{ uid: 'no-tag' }}).getSigned('uid', {{ secrets: [K1] }})); \
+        console.log(new CookieMap().getSigned('uid', {{ secrets: [K1] }})); \
+        const old = new CookieMap(); old.setSigned('uid', 'u', {{ secrets: [K1], maxAge: -1 }}); \
+        console.log(back(old).getSigned('uid', {{ secrets: [K1] }})); \
+        const live = new CookieMap(); live.setSigned('uid', 'u', {{ secrets: [new Secret(K1)], maxAge: 60 }}); \
+        console.log(back(live).getSigned('uid', {{ secrets: [K1] }}));"
+    );
+    let out = esrun(&[&format!("-e={code}")]);
+    assert_eq!(
+        stdout(&out),
+        "true true\nuser.42\nuser.42\nnull\nnull\nnull\nnull\nnull\nnull\nu\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Sealed: the same guarantees, and the value is not in the header at all.
+#[test]
+fn a_sealed_cookie_hides_its_value_and_reads_back_only_as_written() {
+    let code = format!(
+        "{ROUND_TRIP} \
+        const m = new CookieMap(); \
+        m.setSealed('session', '{{\"user\":42}}', {{ secrets: [K1], maxAge: 3600 }}); \
+        const header = m.toSetCookieHeaders()[0]; \
+        console.log(header.includes('user'), header.includes('Max-Age=3600')); \
+        const req = back(m); \
+        console.log(req.getSealed('session', {{ secrets: [K1] }})); \
+        console.log(req.getSealed('session', {{ secrets: [K2, K1] }})); \
+        console.log(req.getSealed('session', {{ secrets: [K2] }})); \
+        const raw = req.get('session'); \
+        const flipped = raw.slice(0, -2) + (raw.at(-2) === 'A' ? 'B' : 'A') + raw.at(-1); \
+        console.log(new CookieMap({{ session: flipped }}).getSealed('session', {{ secrets: [K1] }})); \
+        console.log(new CookieMap({{ other: raw }}).getSealed('other', {{ secrets: [K1] }})); \
+        const old = new CookieMap(); old.setSealed('s', 'v', {{ secrets: [K1], expires: new Date(Date.now() - 1000) }}); \
+        console.log(back(old).getSealed('s', {{ secrets: [K1] }})); \
+        const a = new CookieMap(); a.setSealed('s', 'v', {{ secrets: [K1] }}); \
+        const b = new CookieMap(); b.setSealed('s', 'v', {{ secrets: [K1] }}); \
+        console.log(a.get('s') !== b.get('s'));"
+    );
+    let out = esrun(&[&format!("-e={code}")]);
+    assert_eq!(
+        stdout(&out),
+        "false true\n{\"user\":42}\n{\"user\":42}\nnull\nnull\nnull\nnull\ntrue\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A weak or missing key is a programming error, so it throws at the call.
+#[test]
+fn cookie_secrets_must_be_present_and_long_enough() {
+    let code = "import { CookieMap } from 'runtime:http'; \
+        const m = new CookieMap(); \
+        for (const call of [ \
+          () => m.setSigned('a', 'v', {}), \
+          () => m.setSealed('a', 'v', { secrets: [] }), \
+          () => m.getSigned('a', { secrets: ['short'] }), \
+          () => m.getSealed('a', { secrets: [42] }), \
+          () => m.setSigned('a', 42, { secrets: ['k'.repeat(32)] }), \
+          () => m.setSealed('bad name', 'v', { secrets: ['k'.repeat(32)] }), \
+        ]) { try { call(); console.log('NO THROW'); } catch (e) { console.log(e.name, e.message); } }";
+    let out = esrun(&[&format!("-e={code}")]);
+    assert_eq!(
+        stdout(&out),
+        "TypeError secrets must be a non-empty array, newest first\n\
+         TypeError secrets must be a non-empty array, newest first\n\
+         TypeError secrets[0] is 5 bytes; a cookie secret needs at least 32\n\
+         TypeError secrets[0] must be a string, bytes, or a Secret\n\
+         TypeError a signed or sealed cookie value must be a string\n\
+         TypeError Invalid cookie name: contains invalid characters\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `request.cookies` in `serve()`: a sealed session set by one request is
+/// read by the next, through real headers.
+#[test]
+fn a_sealed_session_survives_a_real_request_round_trip() {
+    let code = "import { serve } from 'runtime:http'; \
+        const secrets = ['k'.repeat(32)]; \
+        const server = serve({ hostname: '127.0.0.1', port: 0 }, (req) => { \
+          const seen = req.cookies.getSealed('session', { secrets }); \
+          if (seen === null) req.cookies.setSealed('session', 'hello', { secrets, httpOnly: true }); \
+          return new Response(String(seen)); \
+        }); \
+        const { port } = await server.addr; \
+        const url = `http://127.0.0.1:${port}/`; \
+        const first = await fetch(url); \
+        const cookie = first.headers.getSetCookie()[0].split(';')[0]; \
+        console.log(await first.text(), cookie.includes('hello')); \
+        const second = await fetch(url, { headers: { cookie } }); \
+        console.log(await second.text(), second.headers.getSetCookie().length); \
+        await server.stop();";
+    let out = esrun(&["--allow-listen", "--allow-net", &format!("-e={code}")]);
+    assert_eq!(
+        stdout(&out),
+        "null false\nhello 0\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

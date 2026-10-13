@@ -124,9 +124,55 @@ cookie without reporting anything, which makes a login fail with no clue why:
 - `SameSite=None` or `Partitioned` without `secure`;
 - a `__Host-` cookie with a `domain` or a path other than `/`;
 - a `__Secure-` or `__Host-` cookie without `secure`, which includes deleting one.
+- a cookie over the browser's size limit: 4096 bytes for the name and value.
 
 A plain-HTTP development server cannot set `secure` cookies that a browser will
 keep. Use a name without the prefix locally, or serve HTTPS.
+
+### Sessions without a database
+
+A user can read and edit every cookie. To keep session data in the cookie
+itself, seal it: `setSealed` encrypts the value, and `getSealed` returns it only
+if nobody changed it, it was sealed with one of your keys, and it has not
+expired.
+
+```js
+import { serve } from "runtime:http";
+import { env } from "runtime:process";
+
+const secrets = [env.SESSION_KEY]; // at least 32 bytes
+
+serve(async (request) => {
+  const raw = request.cookies.getSealed("__Host-session", { secrets });
+  const session = raw ? JSON.parse(raw) : { visits: 0 };
+  session.visits += 1;
+  request.cookies.setSealed("__Host-session", JSON.stringify(session), {
+    secrets,
+    secure: true,
+    httpOnly: true,
+    maxAge: 60 * 60 * 24,
+  });
+  return new Response(`visit ${session.visits}`);
+});
+```
+
+`getSealed` returns `null` for anything that is not a valid sealed cookie, so a
+forged or expired cookie is treated as no session. The `maxAge` is also checked
+on the server: a copied cookie stops working when it expires, even if the
+browser kept it.
+
+When the value may be visible but must not be changed, such as a user ID or a
+preference, use `setSigned` and `getSigned` instead. Same arguments; the value
+stays readable.
+
+To change keys, put the new one first and keep the old one until the cookies it
+sealed have expired:
+
+```js
+const secrets = [env.SESSION_KEY_2026, env.SESSION_KEY_2025];
+```
+
+New cookies use the first key; cookies sealed with either are read.
 
 To set cookies outside a handler, build them with `Cookie` or `CookieMap` and
 add `toSetCookieHeaders()` to the response yourself. See the

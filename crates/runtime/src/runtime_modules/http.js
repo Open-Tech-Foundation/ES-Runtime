@@ -963,6 +963,58 @@ function parseCookieHeader(header, into) {
   }
 }
 
+// The `secrets` of a signed or sealed cookie (D161): a non-empty array of
+// strings, bytes or `Secret`s, each at least 32 bytes. The first signs or
+// seals; all are tried when reading, which is how a key is rotated.
+const SECRET_VALUE = Symbol.for("runtime.secret.value");
+const MIN_COOKIE_SECRET = 32;
+
+function cookieSecrets(secrets) {
+  if (!Array.isArray(secrets) || secrets.length === 0) {
+    throw new TypeError("secrets must be a non-empty array, newest first");
+  }
+  return secrets.map((secret, i) => {
+    let value = secret;
+    if (value !== null && typeof value === "object" && SECRET_VALUE in value) {
+      value = value[SECRET_VALUE];
+    }
+    let bytes;
+    if (typeof value === "string") bytes = utf8.encode(value);
+    else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+    else if (ArrayBuffer.isView(value)) {
+      bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    } else {
+      throw new TypeError(`secrets[${i}] must be a string, bytes, or a Secret`);
+    }
+    if (bytes.byteLength < MIN_COOKIE_SECRET) {
+      throw new TypeError(
+        `secrets[${i}] is ${bytes.byteLength} bytes; a cookie secret needs at least ${MIN_COOKIE_SECRET}`,
+      );
+    }
+    return bytes;
+  });
+}
+
+function checkCookieText(value) {
+  if (typeof value !== "string") throw new TypeError("a signed or sealed cookie value must be a string");
+  return value;
+}
+
+// The server-side expiry, in Unix seconds, from the cookie's own `maxAge` or
+// `expires`; 0 when it has neither. Never 0 when it has one, even if already
+// past, so "expired" cannot read as "no expiry".
+function cookieExpiry(options) {
+  let at = null;
+  if (options.maxAge != null) at = Date.now() + options.maxAge * 1000;
+  else if (options.expires != null) at = toExpires(options.expires).getTime();
+  if (at === null) return 0;
+  return Math.max(1, Math.floor(at / 1000));
+}
+
+function expired(expiry) {
+  return expiry !== 0 && expiry * 1000 <= Date.now();
+}
+
 class CookieMap {
   #values = new Map();
   // One `Set-Cookie` per name, the last change made to it.
@@ -1031,6 +1083,56 @@ class CookieMap {
     this.#values.delete(cookie.name);
     this.#changes.delete(cookie.name);
     this.#changes.set(cookie.name, header);
+  }
+
+  // Signed and sealed cookies (D161). The `set*` forms take the cookie options
+  // plus `secrets`; the `get*` forms take `{ secrets }` and answer null for a
+  // cookie that is missing, malformed, tampered, under another key, or past
+  // the expiry it was written with — one branch for every bad case.
+  setSigned(name, value, options = {}) {
+    checkCookieName(name);
+    const { secrets, ...cookieOptions } = options;
+    const keys = cookieSecrets(secrets);
+    const text = checkCookieText(value);
+    const expiry = cookieExpiry(cookieOptions);
+    const tag = ops.cookie_sign(keys, name, expiry, text);
+    this.set(name, `${text}.${expiry}.${tag}`, cookieOptions);
+  }
+
+  getSigned(name, options = {}) {
+    const keys = cookieSecrets(options.secrets);
+    const raw = this.#values.get(name);
+    if (raw === undefined) return null;
+    const tagAt = raw.lastIndexOf(".");
+    const expiryAt = raw.lastIndexOf(".", tagAt - 1);
+    if (tagAt === -1 || expiryAt === -1) return null;
+    const expiryText = raw.slice(expiryAt + 1, tagAt);
+    if (!/^\d{1,15}$/.test(expiryText)) return null;
+    const expiry = Number(expiryText);
+    const value = raw.slice(0, expiryAt);
+    if (!ops.cookie_verify(keys, name, expiry, value, raw.slice(tagAt + 1))) return null;
+    return expired(expiry) ? null : value;
+  }
+
+  setSealed(name, value, options = {}) {
+    checkCookieName(name);
+    const { secrets, ...cookieOptions } = options;
+    const keys = cookieSecrets(secrets);
+    const text = checkCookieText(value);
+    const expiry = cookieExpiry(cookieOptions);
+    // The nonce comes through the Entropy gate, as a password salt does.
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    this.set(name, ops.cookie_seal(keys, name, expiry, text, nonce), cookieOptions);
+  }
+
+  getSealed(name, options = {}) {
+    const keys = cookieSecrets(options.secrets);
+    const raw = this.#values.get(name);
+    if (raw === undefined) return null;
+    const opened = ops.cookie_open(keys, name, raw);
+    if (opened === null) return null;
+    const [expiry, value] = opened;
+    return expired(expiry) ? null : value;
   }
 
   // What changed, as `Set-Cookie` header values. `serve()` sends these itself

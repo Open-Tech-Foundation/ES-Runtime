@@ -1,0 +1,73 @@
+---
+title: Cookies
+description: Why ES-Runtime refuses cookies a browser would drop, and how signed and sealed cookies are built.
+---
+
+# Cookies
+
+## Strict on the way out
+
+A browser drops a cookie it cannot accept and reports nothing to the server.
+The server sees a successful response, and the login fails later with no error
+anywhere. So serializing a cookie throws a `TypeError` for every case a browser
+discards (D144). Size is one of them: under RFC 6265bis §5.6 a browser drops a
+cookie whose name and value exceed 4096 bytes, and ignores a `Domain` or `Path`
+over 1024 bytes. The value is measured after percent-encoding, because that is
+what the browser receives.
+
+Splitting a large value across several cookies was rejected. No mainstream
+library does it by default, and when the value shrinks the leftover pieces stay
+in the browser until something deletes them.
+
+## Signed and sealed
+
+Both protect a value the user holds. They differ in whether the user can read it.
+
+| | Signed | Sealed |
+| --- | --- | --- |
+| Algorithm | HMAC-SHA256 | AES-256-GCM |
+| User can read the value | Yes | No |
+| Text | `<value>.<expiry>.<tag>` | base64url of nonce, ciphertext and tag |
+| Needs randomness | No | A 12-byte nonce per seal |
+
+**One secret, two keys.** Each secret is stretched with HKDF-SHA256 into a
+signing key and a sealing key, using different `info` strings. Signing and
+sealing with the same secret never use the same key.
+
+**The name and the expiry are protected with the value.** The signed data
+includes the cookie name, so a valid value cannot be copied into a cookie of
+another name. It also includes an expiry taken from `maxAge` or `expires`, which
+is checked on every read. The browser's own expiry is only a request to the
+browser; a copied cookie would otherwise work forever.
+
+**Every failure reads as `null`.** A missing cookie, a malformed one, a changed
+byte, an unknown key and an expired value give the same answer. A handler needs
+one branch, and a forged cookie never becomes an exception, which would be a 500
+an attacker can trigger. The tag comparison is constant-time, and every secret
+is tried, so the time taken does not show which key matched.
+
+**Rotation is a list.** `secrets[0]` signs or seals; all are tried when reading.
+This is the model of Express's `cookie-parser` and React Router's
+`createCookie`. A key is retired once every cookie it signed has expired.
+
+**At least 32 bytes per secret.** That is the size of the key behind it. A short
+human-chosen secret is the usual weakness of signed cookies, so it is refused
+when the cookie is set or read, not discovered later.
+
+## What it costs
+
+A signed value grows by its expiry and a 43-character tag. A sealed value grows
+by 36 bytes (nonce, expiry and tag), and then by a third, because the result is
+base64url. With the 4096-byte limit, that leaves a sealed cookie about 3 KB for
+its value. Data larger than that belongs on the server, with only its ID in a
+signed cookie.
+
+Signing and sealing run in Rust, synchronously, like the rest of `CookieMap`.
+There is nothing to wait for, and an `await` on every session read would make
+every handler that reads one async.
+
+## See also
+
+- [Cookies](/docs/http/basics#cookies) — how to use them
+- [`runtime:http` reference](/api/http#cookies) — every method and option
+- `docs/DECISIONS.md` D144 and D161 — what was decided and rejected

@@ -2321,6 +2321,10 @@ They are pure JavaScript and need no capability.
 | `set(name, value, options?)`, `set(init)`, `set(cookie)` | Record a cookie to send. |
 | `delete(name, options?)`, `delete({ name, path?, domain?, secure?, partitioned? })` | Record an expired cookie with that `path` and `domain`. A `__Host-`/`__Secure-` cookie needs `secure: true`. |
 | `toSetCookieHeaders()` | What changed, as `Set-Cookie` values. |
+| `setSigned(name, value, { secrets, ...options })` | Record a cookie whose value stays readable but cannot be changed (HMAC-SHA256). |
+| `getSigned(name, { secrets })` | The signed value, or `null`. |
+| `setSealed(name, value, { secrets, ...options })` | Record a cookie whose value is encrypted and authenticated (AES-256-GCM). Needs Entropy for its nonce. |
+| `getSealed(name, { secrets })` | The sealed value, or `null`. |
 
 **A cookie a browser would discard throws a `TypeError` naming the rule.** This
 happens when it is serialized or recorded with `set`/`delete`, and covers:
@@ -2334,6 +2338,27 @@ happens when it is serialized or recorded with `set`/`delete`, and covers:
 - a name and value over 4096 bytes together, measured after percent-encoding, or a `Domain` or `Path` over 1024 bytes (RFC 6265bis §5.6).
 
 Bun emits these cookies anyway, and the browser drops them without an error.
+
+##### Signed and sealed cookies
+
+`secrets` is a non-empty array of strings, bytes or `Secret`s from
+`runtime:process`, each at least 32 bytes. The first signs or seals; every one
+is tried when reading, so a key is rotated by putting the new one first.
+
+The cookie name and an expiry are protected with the value. The expiry comes
+from `maxAge` or `expires` and is checked when reading, even if the browser kept
+the cookie longer; a cookie with neither has none. `getSigned` and `getSealed`
+return `null` when the cookie is missing, malformed, changed, under none of the
+secrets, moved from another name, or expired.
+
+| | Format | Overhead |
+| --- | --- | --- |
+| Signed | `<value>.<expiry>.<tag>`, the tag base64url | about 45 bytes |
+| Sealed | base64url of nonce, ciphertext and tag | 36 bytes, then a third for base64url |
+
+A short or missing secret, or a value that is not a string, is a `TypeError`.
+The size limit above applies to the signed or sealed text, so a sealed value
+has about 3 KB of room.
 
 In a handler, `request.cookies` is a `CookieMap` of the request's cookies, parsed
 on first read. Its `set` and `delete` calls are sent with the response as

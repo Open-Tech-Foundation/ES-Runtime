@@ -96,6 +96,13 @@ declare module "runtime:http" {
   }
 
   /**
+   * Keys for signed and sealed cookies, newest first: the first signs or seals,
+   * every one is tried when reading. Each must be at least 32 bytes; a
+   * `Secret` from `runtime:process` env is accepted as is.
+   */
+  type CookieSecrets = ReadonlyArray<string | BufferSource | import("runtime:process").Secret>;
+
+  /**
    * The cookies of a request, by name — Bun's `Bun.CookieMap` (D144). Parsing
    * is lenient: malformed pairs are skipped, the first of a duplicated name
    * wins, and values are percent-decoded. Every `set` and `delete` is recorded
@@ -112,6 +119,27 @@ declare module "runtime:http" {
     set(cookie: Cookie): void;
     delete(name: string, options?: Omit<CookieStoreDeleteOptions, "name">): void;
     delete(options: CookieStoreDeleteOptions): void;
+    /**
+     * Sets a cookie whose value stays readable but cannot be changed: an
+     * HMAC-SHA256 tag over the name, value and expiry (D161). `secrets[0]`
+     * signs. The expiry comes from `maxAge` or `expires`.
+     */
+    setSigned(name: string, value: string, options: CookieInit & { secrets: CookieSecrets }): void;
+    /**
+     * The value of a signed cookie, or `null` if it is missing, changed, signed
+     * by none of `secrets`, or past its expiry.
+     */
+    getSigned(name: string, options: { secrets: CookieSecrets }): string | null;
+    /**
+     * Sets a cookie whose value is encrypted and authenticated with AES-256-GCM
+     * (D161). `secrets[0]` seals. Draws a random nonce, so it needs Entropy.
+     */
+    setSealed(name: string, value: string, options: CookieInit & { secrets: CookieSecrets }): void;
+    /**
+     * The value of a sealed cookie, or `null` if it is missing, changed, sealed
+     * by none of `secrets`, or past its expiry.
+     */
+    getSealed(name: string, options: { secrets: CookieSecrets }): string | null;
     /** What changed, as `Set-Cookie` header values. */
     toSetCookieHeaders(): string[];
     toJSON(): Record<string, string>;

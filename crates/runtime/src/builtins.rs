@@ -125,6 +125,9 @@ pub(crate) fn install(
     // runtime:hashing ops: digests, incremental hashers, HMAC, password
     // hashing. Pure computation, so no capability and no provider (D57).
     crate::hashing_ops::install(engine)?;
+    // Signed and sealed cookies for runtime:http (D161). Pure computation; a
+    // seal's nonce is drawn in JS, through the Entropy gate.
+    crate::cookie_ops::install(engine)?;
     // runtime:images ops (D159): bytes in and out need nothing; a file() source
     // is FileRead and a file() destination FileWrite, through the provider. The
     // work runs on the TaskSpawner, inline without one.
