@@ -39,6 +39,10 @@ import system from "runtime:system";
 the **host** `PATH`. The `env` you pass describes the child's environment, never
 where the runtime looks for executables.
 
+`options` is an object with only the keys below. An array (Node's
+`spawn(cmd, args)` shape) or any other key is a `TypeError`, so a misplaced
+argument list is never silently dropped.
+
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `args` | `(string \| number \| boolean)[]` | `[]` | Passed verbatim — no quoting or escaping needed. |

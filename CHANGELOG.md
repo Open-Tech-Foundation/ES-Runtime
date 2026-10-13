@@ -19,6 +19,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `new Command(program, [args])` (the shape of Node's `spawn`) is now a
+  `TypeError` that names `{ args: [...] }`. The array used to be read as an
+  options object with no `args`, so the program ran with no arguments: `echo`
+  printed an empty line and `ls /missing` listed the current directory and
+  exited 0. An unknown option key such as `argv` is now a `TypeError` too.
+
 - On Windows, `stdin.setRawMode(true)` with piped input now says raw mode
   needs a terminal, as on Unix, rather than that the platform does not
   support it.

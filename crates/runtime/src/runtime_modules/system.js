@@ -358,6 +358,20 @@ if (typeof Symbol.asyncDispose === "symbol") {
 
 // ---- the command -----------------------------------------------------------
 
+const COMMAND_OPTIONS = new Set([
+  "args",
+  "cwd",
+  "env",
+  "inheritEnv",
+  "stdin",
+  "stdout",
+  "stderr",
+  "killSignal",
+  "maxBuffer",
+  "signal",
+  "timeout",
+]);
+
 class Command {
   #program;
   #args;
@@ -372,8 +386,22 @@ class Command {
   #signal;
 
   constructor(program, options = {}) {
+    // `new Command("ls", ["-l"])` is Node's `spawn(cmd, args)` shape. An array
+    // is an object, so it read as options with no `args`, and the child ran
+    // bare — wrong output and a lying exit code, with nothing said.
+    if (Array.isArray(options)) {
+      throw new TypeError(
+        'Command arguments go in the options object: new Command(program, { args: [...] })',
+      );
+    }
     if (options === null || typeof options !== "object") {
       throw new TypeError("command options must be an object");
+    }
+    // Any key not read here would be dropped the same way (`argv`, `arg`).
+    for (const key of Object.keys(options)) {
+      if (!COMMAND_OPTIONS.has(key)) {
+        throw new TypeError(`unknown command option "${key}"`);
+      }
     }
     this.#program = checkProgram(program);
     this.#args = checkArgs(options.args);

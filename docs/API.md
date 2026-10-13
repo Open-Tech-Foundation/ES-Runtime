@@ -3278,6 +3278,10 @@ executables. On Windows the `PATHEXT` spellings are tried too; `.bat`/`.cmd`
 files are refused, because running one requires handing the command interpreter
 a line to re-parse (CVE-2024-27980) and this runtime does not spawn a shell.
 
+`options` is an object with only the keys below. An array (Node's
+`spawn(cmd, args)` shape) or any other key is a `TypeError`, so a misplaced
+argument list is never silently dropped.
+
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `args` | `(string \| number \| boolean)[]` | `[]` | Passed verbatim — no quoting or escaping needed. |

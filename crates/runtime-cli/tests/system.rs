@@ -66,6 +66,55 @@ console.log(new TextDecoder().decode(out.stdout).trim());
 }
 
 #[test]
+fn every_argument_reaches_the_child_byte_for_byte() {
+    // Exact bytes, not a substring: a child that ran bare prints nothing (or a
+    // lone newline), and an argument that arrived split or quoted shows here.
+    let s = run(
+        "sys_argv.mjs",
+        r#"
+import { Command } from "runtime:system";
+const out = await new Command("printf", { args: ["%s|", "A", "B c", "", 7, true] }).output();
+console.log(JSON.stringify(new TextDecoder().decode(out.stdout)));
+const ls = await new Command("ls", { args: ["/nonexistent-esrun-xyz"] }).output();
+console.log(ls.success, ls.code !== 0, ls.stdout.length);
+"#,
+    );
+    assert_eq!(
+        s.lines().collect::<Vec<_>>(),
+        [r#""A|B c||7|true|""#, "false true 0"],
+        "{s}"
+    );
+}
+
+#[test]
+fn arguments_outside_the_options_object_are_refused_not_dropped() {
+    // `new Command(cmd, [args])` is Node's spawn shape. It used to read the
+    // array as an options object without `args` and run the program bare.
+    let s = run(
+        "sys_argv_shape.mjs",
+        r#"
+import { Command } from "runtime:system";
+for (const make of [
+  () => new Command("echo", ["hello", "world"]),
+  () => new Command("echo", { argv: ["hello"] }),
+]) {
+  try { make(); console.log("NO THROW"); }
+  catch (e) { console.log(e.name, e.message); }
+}
+"#,
+    );
+    let lines: Vec<_> = s.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError Command arguments go in the options object: new Command(program, { args: [...] })",
+            r#"TypeError unknown command option "argv""#,
+        ],
+        "{s}"
+    );
+}
+
+#[test]
 fn a_failing_program_reports_its_code_and_stderr() {
     let s = run(
         "sys_failure.mjs",
