@@ -11,6 +11,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- Security dependency bumps with no API change: `rustls` 0.23.45 → 0.23.46
+  (RUSTSEC-2026-0346 through RUSTSEC-2026-0349) and `quinn-proto` 0.11.16 →
+  0.11.19 (RUSTSEC-2026-0338 through RUSTSEC-2026-0342).
+
 ### Added
 
 - `runtime:images` exposes the `otf-pixels` 0.3.0 additions: resize
