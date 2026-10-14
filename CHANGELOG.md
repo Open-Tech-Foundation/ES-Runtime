@@ -11,6 +11,29 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:images` exposes the `otf-pixels` 0.3.0 additions: resize
+  `position` (nine gravities) and `withoutReduction`, `modulate`'s
+  `lightness`, the adjustments `negate`, `gamma`, `linear`, `threshold`,
+  `tint`, `greyscale`, `recomb`, `ensureAlpha` and `removeAlpha`, named
+  channels in `extractChannel` with layout-aware errors, and multi-page TIFF
+  pages (`new Image(input, { page })`, `metadata().pages`). Names and
+  defaults follow sharp where it has the operation; the documented
+  divergences are `gamma`'s single exponent (libvips' definition, not
+  sharp's pair), `threshold` keeping the channel count, and `greyscale`
+  keeping three channels where `grayscale()` makes one. The images guide
+  has an adjustments section.
+
+### Changed
+
+- `runtime:images` now runs on `otf-pixels` 0.3.0 instead of 0.2.0: JPEG
+  decoding is about twice as fast with identical output, progressive JPEG
+  is decoded in-house (opening one reads only its headers, and the
+  published crates have no dependencies outside the Pixels workspace), and
+  the tile worker pool no longer uses `crossbeam`. The image and workloads
+  benchmark rows were re-measured on this build through `bench/publish.sh`.
+
 ## [0.39.0] - 2026-10-14
 
 ### Added
@@ -83,16 +106,6 @@ namespace) is unstable and may change between minor releases until the API freez
   cases in `bench/images/features` reproduce every cell by running it.
 
 ### Changed
-
-- `runtime:images` now runs on `otf-pixels` 0.3.0 instead of 0.2.0, with no
-  API change: JPEG decoding is about twice as fast with identical output,
-  progressive JPEG is decoded in-house (opening one reads only its headers,
-  and the published crates have no dependencies outside the Pixels
-  workspace), and the tile worker pool no longer uses `crossbeam`. The new
-  0.3.0 APIs — resize `position`/`without_reduction`, sharp's per-pixel
-  adjustments and multi-page TIFF reading — are not exposed yet. The image
-  and workloads benchmark rows were re-measured on this build through
-  `bench/publish.sh`.
 
 - `runtime:serialization`'s `YAML` now uses the runtime's own YAML 1.2 reader
   and writer, in safe Rust, instead of `serde_yaml`. That removes

@@ -3289,6 +3289,8 @@ The day before, the same reasoning had been taken one step further and an out-of
 
 **Not here:** an `Image` as a `Response` body encoded host-side (the D145 path); `composite`; reading a `file()` as a stream, so that a large file is processed in constant memory; Bun's `placeholder()`, clipboard and `backend`; PNG palette output, PNG compression level and progressive JPEG output, which Pixels does not have.
 
+*(Update 2026-10-14: Pixels 0.3.0 added sharp's per-pixel adjustments, resize `position`/`without_reduction` and multi-page TIFF reading, and the module exposes them — `negate`, `gamma`, `linear`, `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha`, `removeAlpha`, named `extractChannel`, `modulate({ lightness })`, `page` and `metadata().pages`. `composite`, text overlay and animated output stay out as decided above.)*
+
 ### D160 — `runtime:serialization` reads and writes YAML with its own parser · *Accepted (2026-10-13)*
 
 **Context:** `YAML` was backed by `serde_yaml` 0.9, which is deprecated and depends on `unsafe-libyaml`, a c2rust translation of libyaml into unsafe Rust. Its repository was archived on 2024-03-25, and RUSTSEC-2024-0449 now fails `cargo deny` with no safe upgrade. The suggested replacements are other crates (saphyr, noyalib). Bun ships its own YAML 1.2 parser and says it passes the official yaml-test-suite.

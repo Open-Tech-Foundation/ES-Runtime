@@ -110,6 +110,27 @@ const avatar = await new Image(bytes)
 
 The full method list is in the [API reference](/api/images).
 
+## Adjustments
+
+Per-pixel adjustments chain like everything else — `negate`, `gamma`,
+`linear`, `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha` and
+`removeAlpha`, with sharp's names:
+
+```js
+const poster = await new Image(bytes)
+  .resize(800, 800, { fit: "cover", position: "north" })
+  .modulate({ lightness: 5 })
+  .tint("#224488")
+  .jpeg({ quality: 85 })
+  .bytes();
+```
+
+`position` picks which part a `"cover"` keeps (or where a `"contain"`
+places the image): `"center"` (default), the edges and the corners.
+`withoutReduction` is `withoutEnlargement`'s counterpart: never scale down.
+`metadata()` also reports `pages` — how many pages the source holds, for
+multi-page TIFF opened with `new Image(bytes, { page: n })`.
+
 ## Current limitations
 
 For now the module covers thumbnails and format conversion: compositing and

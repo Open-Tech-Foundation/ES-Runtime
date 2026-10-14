@@ -26,8 +26,8 @@ use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{FileSystem, ProviderError, TaskSpawner};
 use otf_pixels::{
-    EncodeOptions, Filter, Fit, Format, Image, Limits, Modulate, OpenOptions, PixelFormat,
-    PixelsError, ResizeOptions,
+    Channel, EncodeOptions, Filter, Fit, Format, Image, Limits, Modulate, OpenOptions, PixelFormat,
+    PixelsError, Position, ResizeOptions,
 };
 
 use crate::Result;
@@ -60,12 +60,32 @@ enum Step {
         brightness: f32,
         saturation: f32,
         hue: f32,
+        lightness: f32,
     },
     Blur(f32),
     Sharpen(f32),
     Flatten([u8; 3]),
     Grayscale,
     ExtractChannel(usize),
+    ExtractChannelNamed(Channel),
+    Negate {
+        alpha: bool,
+    },
+    Gamma(f32),
+    Linear {
+        a: [f32; 3],
+        b: [f32; 3],
+    },
+    Threshold {
+        level: u8,
+        greyscale: bool,
+    },
+    Tint([u8; 3]),
+    Greyscale,
+    Recomb3([[f32; 3]; 3]),
+    Recomb4([[f32; 4]; 4]),
+    EnsureAlpha(f32),
+    RemoveAlpha,
 }
 
 /// The encode target; `None` keeps the source's format.
@@ -233,11 +253,13 @@ fn apply(image: Image, step: &Step) -> std::result::Result<Image, PixelsError> {
             brightness,
             saturation,
             hue,
+            lightness,
         } => image.modulate(
             Modulate::identity()
                 .with_brightness(brightness)?
                 .with_saturation(saturation)?
-                .with_hue(hue)?,
+                .with_hue(hue)?
+                .with_lightness(lightness)?,
         ),
         Step::Blur(sigma) => image.blur(sigma),
         Step::Sharpen(amount) => image.sharpen(amount),
@@ -251,6 +273,17 @@ fn apply(image: Image, step: &Step) -> std::result::Result<Image, PixelsError> {
             })
         }
         Step::ExtractChannel(index) => image.extract_channel(index),
+        Step::ExtractChannelNamed(channel) => image.extract_channel_named(channel),
+        Step::Negate { alpha } => image.negate(alpha),
+        Step::Gamma(exponent) => image.gamma(exponent),
+        Step::Linear { a, b } => image.linear_per_channel(a, b),
+        Step::Threshold { level, greyscale } => image.threshold(level, greyscale),
+        Step::Tint([r, g, b]) => image.tint(r, g, b),
+        Step::Greyscale => image.greyscale(),
+        Step::Recomb3(matrix) => image.recomb(matrix),
+        Step::Recomb4(matrix) => image.recomb_rgba(matrix),
+        Step::EnsureAlpha(level) => image.ensure_alpha(level),
+        Step::RemoveAlpha => image.remove_alpha(),
     })
 }
 
@@ -327,6 +360,7 @@ fn metadata(image: &Image) -> std::result::Result<Value, PixelsError> {
             ),
             ("hasAlpha".to_string(), Value::Bool(meta.pixel.has_alpha())),
             ("animation".to_string(), animation),
+            ("pages".to_string(), Value::Number(f64::from(image.pages()))),
         ]),
     )]))
 }
@@ -386,6 +420,9 @@ fn parse_open(value: Option<&Value>) -> std::result::Result<OpenOptions, OpError
             ("autoOrient", Value::Bool(b)) => open = open.with_auto_orient(*b),
             ("toSrgb", Value::Bool(b)) => open = open.with_to_srgb(*b),
             ("animated", Value::Bool(b)) => open = open.with_animated(*b),
+            ("page", Value::Number(n)) => {
+                open = open.with_page(n.max(0.0).clamp(0.0, f64::from(u32::MAX)) as u32);
+            }
             _ => {}
         }
     }
@@ -418,6 +455,29 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
                 _ => [0, 0, 0, 0],
             };
             let without_enlargement = matches!(parts.get(6), Some(Value::Bool(true)));
+            let position = match parts.get(7).and_then(Value::as_str).unwrap_or("center") {
+                "center" | "centre" => Position::Centre,
+                "north" | "top" => Position::North,
+                "northeast" | "right top" => Position::NorthEast,
+                "east" | "right" => Position::East,
+                "southeast" | "right bottom" => Position::SouthEast,
+                "south" | "bottom" => Position::South,
+                "southwest" | "left bottom" => Position::SouthWest,
+                "west" | "left" => Position::West,
+                "northwest" | "left top" => Position::NorthWest,
+                "attention" | "entropy" => {
+                    return Err(OpError::type_error(
+                        "position \"attention\" and \"entropy\" need saliency, which is not supported",
+                    ));
+                }
+                other => {
+                    return Err(OpError::type_error(format!(
+                        "unknown position {other:?}: center, north, northeast, east, \
+                         southeast, south, southwest, west or northwest"
+                    )));
+                }
+            };
+            let without_reduction = matches!(parts.get(8), Some(Value::Bool(true)));
             Step::Resize {
                 width: int(1),
                 height: int(2),
@@ -425,7 +485,9 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
                     .with_fit(fit)
                     .with_filter(filter)
                     .with_background(background)
-                    .without_enlargement(without_enlargement),
+                    .without_enlargement(without_enlargement)
+                    .without_reduction(without_reduction)
+                    .with_position(position),
             }
         }
         "crop" => Step::Crop {
@@ -441,12 +503,99 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
             brightness: num(1) as f32,
             saturation: num(2) as f32,
             hue: num(3) as f32,
+            lightness: num(4) as f32,
         },
         "blur" => Step::Blur(num(1) as f32),
         "sharpen" => Step::Sharpen(num(1) as f32),
         "flatten" => Step::Flatten([num(1) as u8, num(2) as u8, num(3) as u8]),
         "grayscale" => Step::Grayscale,
         "extractChannel" => Step::ExtractChannel(int(1) as usize),
+        "extractChannelNamed" => {
+            Step::ExtractChannelNamed(match parts.get(1).and_then(Value::as_str).unwrap_or("") {
+                "red" => Channel::Red,
+                "green" => Channel::Green,
+                "blue" => Channel::Blue,
+                "alpha" => Channel::Alpha,
+                other => {
+                    return Err(OpError::type_error(format!(
+                        "unknown channel {other:?}: red, green, blue or alpha"
+                    )));
+                }
+            })
+        }
+        "negate" => Step::Negate {
+            alpha: !matches!(parts.get(1), Some(Value::Bool(false))),
+        },
+        "gamma" => Step::Gamma(num(1) as f32),
+        "linear" => {
+            let channel = |i: usize| -> [f32; 3] {
+                match parts.get(i) {
+                    Some(Value::Array(items)) => [
+                        items.first().and_then(Value::as_number).unwrap_or(0.0) as f32,
+                        items.get(1).and_then(Value::as_number).unwrap_or(0.0) as f32,
+                        items.get(2).and_then(Value::as_number).unwrap_or(0.0) as f32,
+                    ],
+                    _ => [num(i) as f32; 3],
+                }
+            };
+            Step::Linear {
+                a: channel(1),
+                b: channel(2),
+            }
+        }
+        "threshold" => {
+            let level = num(1);
+            if !(0.0..=255.0).contains(&level) || level.fract() != 0.0 {
+                return Err(OpError::type_error(
+                    "threshold level must be an integer from 0 to 255",
+                ));
+            }
+            Step::Threshold {
+                level: level as u8,
+                greyscale: !matches!(parts.get(2), Some(Value::Bool(false))),
+            }
+        }
+        "tint" => Step::Tint([num(1) as u8, num(2) as u8, num(3) as u8]),
+        "greyscale" => Step::Greyscale,
+        "recomb" => {
+            let size = int(1) as usize;
+            if size != 3 && size != 4 {
+                return Err(OpError::type_error("recomb takes a 3x3 or 4x4 matrix"));
+            }
+            let flat: Vec<f32> = parts
+                .get(2)
+                .and_then(|v| match v {
+                    Value::Array(items) => Some(items),
+                    _ => None,
+                })
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_number)
+                        .map(|n| n as f32)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if flat.len() != size * size {
+                return Err(OpError::type_error("recomb takes a 3x3 or 4x4 matrix"));
+            }
+            if size == 3 {
+                Step::Recomb3([
+                    [flat[0], flat[1], flat[2]],
+                    [flat[3], flat[4], flat[5]],
+                    [flat[6], flat[7], flat[8]],
+                ])
+            } else {
+                Step::Recomb4([
+                    [flat[0], flat[1], flat[2], flat[3]],
+                    [flat[4], flat[5], flat[6], flat[7]],
+                    [flat[8], flat[9], flat[10], flat[11]],
+                    [flat[12], flat[13], flat[14], flat[15]],
+                ])
+            }
+        }
+        "ensureAlpha" => Step::EnsureAlpha(num(1) as f32),
+        "removeAlpha" => Step::RemoveAlpha,
         other => return Err(OpError::type_error(format!("unknown image step {other:?}"))),
     })
 }
@@ -604,6 +753,155 @@ mod tests {
         assert!(parse_filter("mks2021").is_err());
         let output = Value::Object(vec![("format".to_string(), s("heic"))]);
         assert!(parse_output(Some(&output)).is_err());
+    }
+
+    #[test]
+    fn parses_resize_position_and_reduction() {
+        let options = |step: Step| match step {
+            Step::Resize { options, .. } => options,
+            _ => panic!(),
+        };
+        let resize = |position: &str, reduction: bool| {
+            let mut parts = vec![
+                s("resize"),
+                Value::Number(10.0),
+                Value::Number(10.0),
+                s("cover"),
+                s("lanczos3"),
+                Value::Array(vec![]),
+                Value::Bool(false),
+                s(position),
+            ];
+            if reduction {
+                parts.push(Value::Bool(true));
+            }
+            step(parts)
+        };
+        assert_eq!(
+            options(resize("northwest", false)).position,
+            Position::NorthWest
+        );
+        assert_eq!(
+            options(resize("left top", false)).position,
+            Position::NorthWest
+        );
+        assert!(!options(resize("center", false)).without_reduction);
+        assert!(options(resize("center", true)).without_reduction);
+        assert!(
+            parse_step(&Value::Array(vec![
+                s("resize"),
+                Value::Number(10.0),
+                Value::Number(10.0),
+                s("cover"),
+                s("lanczos3"),
+                Value::Array(vec![]),
+                Value::Bool(false),
+                s("attention"),
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_the_adjustment_steps() {
+        assert!(matches!(
+            step(vec![s("negate"), Value::Bool(false)]),
+            Step::Negate { alpha: false }
+        ));
+        assert!(matches!(
+            step(vec![s("gamma"), Value::Number(2.2)]),
+            Step::Gamma(_)
+        ));
+        assert!(matches!(
+            step(vec![
+                s("linear"),
+                Value::Array(vec![Value::Number(1.0); 3]),
+                Value::Array(vec![Value::Number(0.0); 3]),
+            ]),
+            Step::Linear { .. }
+        ));
+        assert!(matches!(
+            step(vec![
+                s("threshold"),
+                Value::Number(128.0),
+                Value::Bool(true)
+            ]),
+            Step::Threshold {
+                level: 128,
+                greyscale: true
+            }
+        ));
+        assert!(parse_step(&Value::Array(vec![s("threshold"), Value::Number(300.0)])).is_err());
+        assert!(matches!(
+            step(vec![
+                s("tint"),
+                Value::Number(1.0),
+                Value::Number(2.0),
+                Value::Number(3.0)
+            ]),
+            Step::Tint([1, 2, 3])
+        ));
+        assert_eq!(step(vec![s("greyscale")]), Step::Greyscale);
+        assert!(matches!(
+            step(vec![
+                s("recomb"),
+                Value::Number(3.0),
+                Value::Array(vec![Value::Number(1.0); 9]),
+            ]),
+            Step::Recomb3(_)
+        ));
+        assert!(parse_step(&Value::Array(vec![s("recomb"), Value::Number(3.0)])).is_err());
+        assert!(matches!(
+            step(vec![s("ensureAlpha"), Value::Number(0.5)]),
+            Step::EnsureAlpha(_)
+        ));
+        assert_eq!(step(vec![s("removeAlpha")]), Step::RemoveAlpha);
+        assert_eq!(
+            step(vec![s("extractChannelNamed"), s("green")]),
+            Step::ExtractChannelNamed(Channel::Green)
+        );
+    }
+
+    #[test]
+    fn adjustments_apply_without_error() {
+        let image = png(4, 4);
+        let steps = [
+            Step::Negate { alpha: true },
+            Step::Gamma(2.2),
+            Step::Linear {
+                a: [1.0; 3],
+                b: [0.0; 3],
+            },
+            Step::Threshold {
+                level: 128,
+                greyscale: true,
+            },
+            Step::Tint([255, 0, 0]),
+            Step::Greyscale,
+            Step::Recomb3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            Step::EnsureAlpha(1.0),
+            Step::RemoveAlpha,
+        ];
+        for step in steps {
+            let out = pipeline(
+                image.clone(),
+                OpenOptions::default(),
+                std::slice::from_ref(&step),
+            );
+            assert!(out.is_ok(), "{step:?}");
+        }
+    }
+
+    #[test]
+    fn pages_defaults_to_one() {
+        let image = pipeline(png(4, 4), OpenOptions::default(), &[]).unwrap();
+        assert_eq!(image.pages(), 1);
+        let open = parse_open(Some(&Value::Object(vec![(
+            "page".to_string(),
+            Value::Number(1.0),
+        )])))
+        .unwrap();
+        assert!(pipeline(png(4, 4), open, &[]).is_err());
     }
 
     #[test]

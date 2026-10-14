@@ -3151,7 +3151,7 @@ import { Image } from "runtime:images";
 import { file } from "runtime:fs";
 
 const image = new Image(await request.bytes());  // at most 268 MP unless maxPixels says otherwise
-await image.metadata();                    // { width, height, format, pixelFormat, hasAlpha, animation }
+await image.metadata();                    // { width, height, format, pixelFormat, hasAlpha, animation, pages }
 const thumb = await image.resize(400, 400, { fit: "cover" }).webp({ quality: 80 }).bytes();
 await image.resize(1600).avif().write(file("public/large.avif"));
 ```
@@ -3170,6 +3170,7 @@ change the result. The format is read from the bytes, never from a name.
 | `autoOrient` | `true` | The orientation the file declares (EXIF, AVIF `irot`/`imir`) is applied, so `metadata()` reports the upright size. |
 | `toSrgb` | `true` | An embedded matrix/TRC ICC profile is converted to sRGB and dropped. Off, the pixels are kept as stored and the profile is written to outputs that can hold one. |
 | `animated` | `false` | Ask for every frame. Not yet supported: an animated input with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
+| `page` | `0` | The page to open of a multi-page TIFF. Past the end, or past 0 for any other format, is a `RangeError` from the terminal. |
 
 ### Transforms
 
@@ -3182,12 +3183,21 @@ sent to several sizes.
 | `crop({ left, top, width, height })` | Keep that region. `left` and `top` default to `0`. A region outside the image is a `RangeError` from the terminal. |
 | `rotate(degrees)` | Clockwise, by a multiple of 90. Other angles are a `RangeError`. |
 | `flip()` / `flop()` | Mirror top to bottom / left to right. |
-| `modulate({ brightness?, saturation?, hue? })` | Multipliers for brightness and saturation (`1` unchanged, saturation `0` is grey); `hue` rotates by degrees. |
+| `modulate({ brightness?, saturation?, hue?, lightness? })` | Multipliers for brightness and saturation (`1` unchanged, saturation `0` is grey); `hue` rotates by degrees; `lightness` is added in sharp's units (`0` unchanged). |
 | `blur(sigma)` | Gaussian blur, `sigma` in pixels. |
 | `sharpen(amount = 1)` | A 3×3 sharpen scaled by `amount`. |
 | `flatten({ background? })` | Draw over `background` (default black) and drop alpha. |
-| `grayscale()` | Convert to grey, keeping any alpha. |
-| `extractChannel(channel)` | One channel as a grey image: `0`–`3` or `"red"`, `"green"`, `"blue"`, `"alpha"`. |
+| `grayscale()` | Convert to grey, keeping any alpha: a one-channel image. |
+| `greyscale()` | Greyscale by luma, keeping the channel count: RGB stays three equal channels. |
+| `extractChannel(channel)` | One channel as a grey image: `0`–`3` or `"red"`, `"green"`, `"blue"`, `"alpha"`. A name the image's layout lacks (green of a grey image) is a `RangeError` from the terminal. |
+| `negate({ alpha? })` | Invert every channel; `alpha` (default `true`) inverts alpha too. |
+| `gamma(exponent)` | Each channel becomes `value^(1 / exponent)`; above 1 brightens. This is libvips' definition, not sharp's two-argument `gamma(gamma, gammaOut)`. |
+| `linear(a, b?)` | `value * a + b` on every channel; each side is a number or three, one per channel. |
+| `threshold(level = 128, { greyscale? })` | At or above `level` becomes full, below becomes zero. `greyscale` (default `true`) thresholds luma into every channel; without it, each channel on its own. Unlike sharp's, the channel count is kept. |
+| `tint(color)` | Tint towards `color`, keeping each pixel's luma. |
+| `recomb(matrix)` | Mix channels through a 3×3 or 4×4 matrix of finite numbers. |
+| `ensureAlpha(alpha = 1)` | Add an alpha channel at `alpha` (0 to 1) if there is none. |
+| `removeAlpha()` | Drop the alpha channel without compositing. |
 
 A colour is `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or
 `{ r, g, b, alpha }` with `alpha` from 0 to 1.
@@ -3204,6 +3214,8 @@ wide at the image's own proportions.
 | `filter` | `"lanczos3"` | The resampling kernel. See below. |
 | `background` | transparent | The padding colour when `fit` is `"contain"`. |
 | `withoutEnlargement` | `false` | Never make the image larger than it is. |
+| `withoutReduction` | `false` | Never make the image smaller than it is. |
+| `position` | `"center"` | Which part `"cover"` keeps and where `"contain"` places the image: `"center"`, `"north"`, `"northeast"`, `"east"`, `"southeast"`, `"south"`, `"southwest"`, `"west"` or `"northwest"` (with sharp's aliases: `"top"`, `"right top"`, `"right"`, `"right bottom"`, `"bottom"`, `"left bottom"`, `"left"`, `"left top"`). `"attention"` and `"entropy"` are a `TypeError`: saliency is not supported. |
 
 `fit`:
 
@@ -3212,8 +3224,8 @@ wide at the image's own proportions.
 | `"fill"` | Exactly `width` × `height`; the aspect ratio is not kept. |
 | `"inside"` | As large as fits inside the box, aspect ratio kept. |
 | `"outside"` | As small as covers the box, aspect ratio kept. |
-| `"cover"` | Fills the box, aspect ratio kept; the overflow is cropped from the centre. |
-| `"contain"` | Fits inside the box, aspect ratio kept; the rest is padded with `background`, centred. |
+| `"cover"` | Fills the box, aspect ratio kept; the overflow is cropped, keeping the part `position` names (default the centre). |
+| `"contain"` | Fits inside the box, aspect ratio kept; the rest is padded with `background`, placed where `position` says (default the centre). |
 
 `filter`:
 
@@ -3251,7 +3263,7 @@ progressive; output is baseline.
 
 | Method | Resolves to |
 | --- | --- |
-| `metadata()` | `{ width, height, format, pixelFormat, hasAlpha, animation }` at this point in the chain, read from the header without decoding pixels: `new Image(x).resize(400).metadata()` reports the resized size. `format` is the source's. `pixelFormat` is `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. `animation` is `{ frames, loop, durations }` (milliseconds per frame) or `null`. |
+| `metadata()` | `{ width, height, format, pixelFormat, hasAlpha, animation, pages }` at this point in the chain, read from the header without decoding pixels: `new Image(x).resize(400).metadata()` reports the resized size. `format` is the source's. `pixelFormat` is `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. `animation` is `{ frames, loop, durations }` (milliseconds per frame) or `null`. `pages` is how many pages the source document holds — always 1 except for TIFF. |
 | `bytes()` | The encoded image, a `Uint8Array`. |
 | `blob()` | A `Blob` whose `type` is the format's media type (`image/webp`, …). |
 | `write(destination)` | Encodes into `destination`, a `runtime:fs` `file()`, and resolves to the number of bytes written. A path string is a `TypeError`. |

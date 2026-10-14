@@ -196,7 +196,7 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
 | `img.dataurl()` | `` `data:image/webp;base64,${(await img.webp().bytes()).toBase64()}` `` | |
 | `new Response(img)` | `new Response(await img.bytes(), { headers: { "content-type": "image/webp" } })` | An `Image` is not a body yet. |
 | `img.width`, `img.height` after a terminal | `(await img.metadata()).width` | `metadata()` works at any point in a chain, before anything is encoded. |
-| `metadata()` → `{ width, height, format }` | `{ width, height, format, pixelFormat, hasAlpha, animation }` | A superset. |
+| `metadata()` → `{ width, height, format }` | `{ width, height, format, pixelFormat, hasAlpha, animation, pages }` | A superset. |
 
 #### Not available
 
@@ -216,6 +216,10 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
   `"contain"`.
 - `crop`, `blur`, `sharpen`, `flatten`, `grayscale`, `extractChannel` and
   `modulate({ hue })`.
+- The `otf-pixels` 0.3.0 additions: resize `position` and `withoutReduction`,
+  `modulate({ lightness })`, the adjustments `negate`, `gamma`, `linear`,
+  `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha` and `removeAlpha`,
+  and multi-page TIFF (`page`, `metadata().pages`).
 - `gif()` and `tiff()` output.
 - AVIF and TIFF on Linux, where Bun has neither.
 - The `toSrgb` and `animated` options.

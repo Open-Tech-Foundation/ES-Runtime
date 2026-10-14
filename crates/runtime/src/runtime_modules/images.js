@@ -31,6 +31,30 @@ const FILTERS = new Set([
 ]);
 const CHANNELS = { red: 0, green: 1, blue: 2, alpha: 3 };
 
+// sharp's nine crop gravities and their aliases. Saliency strategies
+// ("attention", "entropy") are refused by name in resize: Pixels crops to a
+// gravity, it does not find a subject.
+const POSITIONS = new Set([
+  "center",
+  "centre",
+  "north",
+  "top",
+  "northeast",
+  "right top",
+  "east",
+  "right",
+  "southeast",
+  "right bottom",
+  "south",
+  "bottom",
+  "southwest",
+  "left bottom",
+  "west",
+  "left",
+  "northwest",
+  "left top",
+]);
+
 // Passed as the constructor's first argument to build a derived image from the
 // parts of another. Module-private, so guest code cannot reach that path.
 const DERIVE = Symbol("derive");
@@ -113,6 +137,12 @@ function openOptions(options) {
   for (const key of ["autoOrient", "toSrgb", "animated"]) {
     if (o[key] !== undefined) open[key] = Boolean(o[key]);
   }
+  if (o.page !== undefined) {
+    if (!Number.isInteger(o.page) || o.page < 0) {
+      throw new RangeError("page must be a non-negative integer");
+    }
+    open.page = o.page;
+  }
   return open;
 }
 
@@ -161,6 +191,18 @@ function quality(value) {
   return value;
 }
 
+// A `linear` side: one finite number, or one per channel.
+function linearSide(value, what) {
+  if (typeof value === "number") {
+    finite(value, what);
+    return [value, value, value];
+  }
+  if (Array.isArray(value) && value.length === 3) {
+    return value.map((v) => finite(v, what));
+  }
+  throw new TypeError(`${what} must be a number or three numbers`);
+}
+
 function refuseUnsupported(format, o) {
   for (const key of UNSUPPORTED_OPTIONS[format] ?? []) {
     if (o[key] !== undefined) throw new TypeError(`${format}({ ${key} }) is not supported`);
@@ -189,7 +231,8 @@ export class Image {
   /**
    * `input` is a Uint8Array, an ArrayBuffer, any view, a Blob, or a
    * runtime:fs `file()`. Options: `maxPixels` (268 MP), `autoOrient` (true),
-   * `toSrgb` (true), `animated` (false).
+   * `toSrgb` (true), `animated` (false), `page` (0: the first page of a
+   * multi-page TIFF).
    */
   constructor(input, options) {
     if (input === DERIVE) {
@@ -217,7 +260,10 @@ export class Image {
    * Resize to `width` × `height`. Omit either (or pass null) to keep the
    * aspect ratio. Options: `fit` ("fill" | "inside" | "outside" | "cover" |
    * "contain", default "fill"), `filter` (default "lanczos3"), `background`
-   * for "contain" (default transparent), `withoutEnlargement`.
+   * for "contain" (default transparent), `withoutEnlargement`,
+   * `withoutReduction`, and `position` for "cover" and "contain" (a gravity:
+   * "center" (default), "north", "northeast", "east", "southeast", "south",
+   * "southwest", "west" or "northwest").
    */
   resize(width, height, options) {
     const w = size(width, "width");
@@ -229,7 +275,26 @@ export class Image {
     const filter = o.filter ?? "lanczos3";
     if (!FILTERS.has(filter)) throw new TypeError(`filter must be one of ${[...FILTERS].join(", ")}`);
     const background = o.background === undefined ? [0, 0, 0, 0] : colour(o.background, "background");
-    return this.#with(["resize", w, h, fit, filter, background, Boolean(o.withoutEnlargement)]);
+    const position = o.position ?? "center";
+    if (!POSITIONS.has(position)) {
+      if (position === "attention" || position === "entropy") {
+        throw new TypeError('position "attention" and "entropy" need saliency, which is not supported');
+      }
+      throw new TypeError(
+        'position must be center, north, northeast, east, southeast, south, southwest, west or northwest',
+      );
+    }
+    return this.#with([
+      "resize",
+      w,
+      h,
+      fit,
+      filter,
+      background,
+      Boolean(o.withoutEnlargement),
+      position,
+      Boolean(o.withoutReduction),
+    ]);
   }
 
   /** Keep only the region `{ left, top, width, height }`. */
@@ -264,14 +329,21 @@ export class Image {
 
   /**
    * Adjust `brightness` and `saturation` (multipliers; 1 is unchanged, a
-   * saturation of 0 is greyscale) and rotate `hue` by degrees.
+   * saturation of 0 is greyscale), rotate `hue` by degrees, and shift
+   * `lightness` (added units, 0 is unchanged).
    */
   modulate(options) {
     const o = optionsObject(options, "modulate");
     const brightness = finite(o.brightness ?? 1, "brightness");
     const saturation = finite(o.saturation ?? 1, "saturation");
     if (brightness < 0 || saturation < 0) throw new RangeError("brightness and saturation must not be negative");
-    return this.#with(["modulate", brightness, saturation, finite(o.hue ?? 0, "hue")]);
+    return this.#with([
+      "modulate",
+      brightness,
+      saturation,
+      finite(o.hue ?? 0, "hue"),
+      finite(o.lightness ?? 0, "lightness"),
+    ]);
   }
 
   /** Gaussian blur of standard deviation `sigma` pixels. */
@@ -297,13 +369,95 @@ export class Image {
     return this.#with(["grayscale"]);
   }
 
+  /**
+   * Greyscale by luma, keeping the channel count: RGB becomes three equal
+   * channels. `grayscale()` instead makes a one-channel image.
+   */
+  greyscale() {
+    return this.#with(["greyscale"]);
+  }
+
   /** One channel as a greyscale image: 0–3, or "red" | "green" | "blue" | "alpha". */
   extractChannel(channel) {
-    const index = typeof channel === "string" ? CHANNELS[channel] : channel;
-    if (!Number.isInteger(index) || index < 0 || index > 3) {
+    if (typeof channel === "string") {
+      if (!(channel in CHANNELS)) {
+        throw new RangeError("channel must be 0–3 or red, green, blue or alpha");
+      }
+      return this.#with(["extractChannelNamed", channel]);
+    }
+    if (!Number.isInteger(channel) || channel < 0 || channel > 3) {
       throw new RangeError("channel must be 0–3 or red, green, blue or alpha");
     }
-    return this.#with(["extractChannel", index]);
+    return this.#with(["extractChannel", channel]);
+  }
+
+  /** Invert every channel. `alpha` (default true) inverts alpha too. */
+  negate(options) {
+    const o = optionsObject(options, "negate");
+    return this.#with(["negate", Boolean(o.alpha ?? true)]);
+  }
+
+  /**
+   * Gamma correction with `exponent`: each channel becomes
+   * `value^(1 / exponent)`, so above 1 brightens. This is libvips'
+   * definition, not sharp's two-argument `gamma(gamma, gammaOut)`.
+   */
+  gamma(exponent) {
+    if (finite(exponent, "exponent") <= 0) throw new RangeError("exponent must be positive");
+    return this.#with(["gamma", exponent]);
+  }
+
+  /** `value * a + b` on every channel. Each side is a number or three. */
+  linear(a, b = 0) {
+    return this.#with(["linear", linearSide(a, "a"), linearSide(b, "b")]);
+  }
+
+  /**
+   * Two levels: at or above `level` (default 128) becomes full, below
+   * becomes zero. `greyscale` (default true) thresholds luma into every
+   * channel; without it, each channel on its own. Unlike sharp's, the
+   * channel count is kept.
+   */
+  threshold(level = 128, options) {
+    if (!Number.isInteger(level) || level < 0 || level > 255) {
+      throw new RangeError("level must be an integer from 0 to 255");
+    }
+    const o = optionsObject(options, "threshold");
+    return this.#with(["threshold", level, o.greyscale ?? true]);
+  }
+
+  /** Tint towards a colour, keeping each pixel's luma. */
+  tint(color) {
+    const [r, g, b] = colour(color, "color");
+    return this.#with(["tint", r, g, b]);
+  }
+
+  /** Mix channels through a 3×3 or 4×4 matrix of finite numbers. */
+  recomb(matrix) {
+    if (!Array.isArray(matrix) || (matrix.length !== 3 && matrix.length !== 4)) {
+      throw new TypeError("recomb takes a 3x3 or 4x4 matrix");
+    }
+    const flat = [];
+    for (const row of matrix) {
+      if (!Array.isArray(row) || row.length !== matrix.length) {
+        throw new TypeError("recomb takes a 3x3 or 4x4 matrix");
+      }
+      for (const value of row) flat.push(finite(value, "matrix"));
+    }
+    return this.#with(["recomb", matrix.length, flat]);
+  }
+
+  /** Add an alpha channel at `alpha` (default opaque) if there is none. */
+  ensureAlpha(alpha = 1) {
+    if (typeof alpha !== "number" || !(alpha >= 0 && alpha <= 1)) {
+      throw new RangeError("alpha must be from 0 to 1");
+    }
+    return this.#with(["ensureAlpha", alpha]);
+  }
+
+  /** Drop the alpha channel without compositing. */
+  removeAlpha() {
+    return this.#with(["removeAlpha"]);
   }
 
   /** Encode as JPEG. `quality` 1–100, default 80. */
@@ -343,10 +497,10 @@ export class Image {
   }
 
   /**
-   * `{ width, height, format, pixelFormat, hasAlpha, animation }` at this
-   * point in the chain, read from the header without decoding pixels.
+   * `{ width, height, format, pixelFormat, hasAlpha, animation, pages }` at
+   * this point in the chain, read from the header without decoding pixels.
    * `format` is the source's; `animation` is `{ frames, loop, durations }`
-   * or null.
+   * or null; `pages` counts the source document's pages (1 except for TIFF).
    */
   async metadata() {
     return settle(await this.#call("metadata"));

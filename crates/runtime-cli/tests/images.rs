@@ -83,7 +83,7 @@ fn bytes_in_and_out_need_no_capability() {
         r#"
 import {{ Image }} from "runtime:images";
 const image = new Image({});
-eq(await image.metadata(), {{ width: 32, height: 32, format: "png", pixelFormat: "rgba8", hasAlpha: true, animation: null }}, "metadata");
+eq(await image.metadata(), {{ width: 32, height: 32, format: "png", pixelFormat: "rgba8", hasAlpha: true, animation: null, pages: 1 }}, "metadata");
 const webp = await image.resize(16).webp().bytes();
 eq((await new Image(webp).metadata()).width, 16, "resized");
 console.log("ok");
@@ -296,6 +296,87 @@ console.log("ok");
     );
     assert_eq!(
         run("images_errors.mjs", &source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// The 0.3.0 adjustments change pixels, the positions pick different
+/// crops, `withoutReduction` refuses to shrink, and TIFF pages open by
+/// number. Identity operations encode byte-identical output.
+#[test]
+fn adjustments_positions_and_pages() {
+    let png = bytes_literal("alpha.png");
+    let jpg = bytes_literal("oriented.jpg");
+    let tiff = bytes_literal("pages.tiff");
+    let source = format!(
+        r##"
+import {{ Image }} from "runtime:images";
+const png = {png}, jpg = {jpg}, tiff = {tiff};
+const bytes = (img) => img.png().bytes();
+const same = (a, b) => JSON.stringify([...a]) === JSON.stringify([...b]);
+const photo = new Image(jpg);
+
+// Positions pick different crops of an asymmetric photo.
+const nw = await photo.resize(10, 10, {{ fit: "cover", position: "northwest" }}).png().bytes();
+const se = await photo.resize(10, 10, {{ fit: "cover", position: "southeast" }}).png().bytes();
+eq(same(nw, se), false, "position picks the crop");
+eq((await photo.resize(40, 40, {{ withoutReduction: true }}).metadata()).width, 48, "withoutReduction");
+eq((await photo.resize(40, 40).metadata()).width, 40, "reduces without it");
+throws(() => photo.resize(10, 10, {{ position: "stretch" }}), (e) => eq(e.name, "TypeError", "position"), "position");
+throws(() => photo.resize(10, 10, {{ position: "attention" }}), (e) => eq(e.name, "TypeError", "attention"), "attention");
+
+// Identity operations are byte-identical; the rest change the bytes.
+const base = new Image(png);
+const id = await bytes(base);
+eq(same(await bytes(base.linear(1, 0)), id), true, "linear identity");
+eq(same(await bytes(base.recomb([[1, 0, 0], [0, 1, 0], [0, 0, 1]])), id), true, "recomb identity");
+eq(same(await bytes(base.recomb([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])), id), true, "recomb rgba identity");
+eq(same(await bytes(base.ensureAlpha()), id), true, "ensureAlpha on rgba");
+for (const changed of [
+  base.negate(), base.negate({{ alpha: false }}), base.linear(1.2, 10),
+  base.linear([1, 1, 1], [0, 10, 10]), base.threshold(), base.threshold(0, {{ greyscale: false }}),
+  base.tint("#00ff00"), base.tint({{ r: 0, g: 0, b: 255 }}), base.greyscale(),
+  base.recomb([[0, 1, 0], [0, 0, 1], [1, 0, 0]]),
+  base.modulate({{ lightness: 10 }}),
+]) {{
+  const out = await bytes(changed);
+  eq(same(out, id), false, "changed");
+  eq(out.length > 0, true, "encoded");
+}}
+// Gamma fixes 0 and 1, and this fixture holds nothing else: smoke only.
+eq((await base.gamma(2.2).metadata()).width, 32, "gamma runs");
+eq((await base.greyscale().metadata()).pixelFormat, "rgba8", "greyscale keeps channels");
+eq((await base.removeAlpha().metadata()).pixelFormat, "rgb8", "removeAlpha");
+eq((await new Image(jpg).ensureAlpha().metadata()).hasAlpha, true, "ensureAlpha adds it");
+eq((await new Image(jpg).removeAlpha().metadata()).pixelFormat, "rgb8", "removeAlpha keeps rgb");
+
+// Misuse throws at the call; a channel a grey image lacks fails at the terminal.
+throws(() => base.threshold(300), (e) => eq(e.name, "RangeError", "level"), "level");
+throws(() => base.threshold(1.5), (e) => eq(e.name, "RangeError", "level"), "level");
+throws(() => base.gamma(0), (e) => eq(e.name, "RangeError", "gamma"), "gamma");
+throws(() => base.gamma(-2), (e) => eq(e.name, "RangeError", "gamma"), "gamma");
+throws(() => base.linear("x"), (e) => eq(e.name, "TypeError", "linear"), "linear");
+throws(() => base.linear([1, 2]), (e) => eq(e.name, "TypeError", "linear"), "linear");
+throws(() => base.recomb([[1]]), (e) => eq(e.name, "TypeError", "recomb"), "recomb");
+throws(() => base.recomb([[1, 0, 0], [0, NaN, 0], [0, 0, 1]]), (e) => eq(e.name, "TypeError", "recomb"), "recomb");
+throws(() => base.ensureAlpha(2), (e) => eq(e.name, "RangeError", "ensureAlpha"), "ensureAlpha");
+throws(() => base.extractChannel("cyan"), (e) => eq(e.name, "RangeError", "channel"), "channel");
+throws(() => base.modulate({{ lightness: NaN }}), (e) => eq(e.name, "TypeError", "lightness"), "lightness");
+await rejects(base.grayscale().extractChannel("green").bytes(), (e) => eq(e.name, "RangeError", "green"), "green");
+
+// Pages: stills hold one; a TIFF opens by number, past the end fails.
+eq((await base.metadata()).pages, 1, "png has one page");
+eq((await new Image(png, {{ page: 0 }}).metadata()).width, 32, "page 0");
+await rejects(new Image(png, {{ page: 1 }}).bytes(), (e) => eq(e.name, "RangeError", "page"), "page");
+throws(() => new Image(png, {{ page: -1 }}), (e) => eq(e.name, "RangeError", "page"), "page");
+eq((await new Image(tiff).metadata()).pages, 2, "tiff pages");
+eq((await new Image(tiff, {{ page: 1 }}).metadata()).height, 6, "second page");
+await rejects(new Image(tiff, {{ page: 2 }}).bytes(), (e) => eq(e.name, "RangeError", "page"), "page");
+console.log("ok");
+"##
+    );
+    assert_eq!(
+        run("images_adjust.mjs", &source, &["--deny-all"]).trim(),
         "ok"
     );
 }

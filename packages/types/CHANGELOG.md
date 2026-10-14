@@ -13,6 +13,13 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:images`: `Position` and the `position`/`withoutReduction` resize
+  options, `modulate`'s `lightness`, the adjustments `negate`, `gamma`,
+  `linear`, `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha` and
+  `removeAlpha`, the `page` open option and `ImageMetadata.pages`.
+
 ## [0.15.0] - 2026-10-14
 
 ### Added

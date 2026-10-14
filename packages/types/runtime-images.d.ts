@@ -17,6 +17,8 @@ declare module "runtime:images" {
      * fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Default false.
      */
     animated?: boolean;
+    /** The page to open of a multi-page TIFF. Default 0. */
+    page?: number;
   }
 
   /** `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or channels with alpha from 0 to 1. */
@@ -35,6 +37,26 @@ declare module "runtime:images" {
     | "box"
     | "nearest";
 
+  export type Position =
+    | "center"
+    | "centre"
+    | "north"
+    | "top"
+    | "northeast"
+    | "right top"
+    | "east"
+    | "right"
+    | "southeast"
+    | "right bottom"
+    | "south"
+    | "bottom"
+    | "southwest"
+    | "left bottom"
+    | "west"
+    | "left"
+    | "northwest"
+    | "left top";
+
   export interface ResizeOptions {
     /** Default `"fill"`. */
     fit?: Fit;
@@ -44,6 +66,10 @@ declare module "runtime:images" {
     background?: Colour;
     /** Never upscale. */
     withoutEnlargement?: boolean;
+    /** Never downscale. */
+    withoutReduction?: boolean;
+    /** Which part `"cover"` keeps and where `"contain"` places the image. Default `"center"`. */
+    position?: Position;
   }
 
   export type ImageFormat = "jpeg" | "png" | "webp" | "avif" | "gif" | "tiff";
@@ -68,6 +94,8 @@ declare module "runtime:images" {
     hasAlpha: boolean;
     /** What an animated file holds, or null for a still. */
     animation: { frames: number; loop: number; durations: number[] } | null;
+    /** How many pages the source document holds. Always 1 except for TIFF. */
+    pages: number;
   }
 
   /** The codes `runtime:images` rejects with. */
@@ -90,8 +118,8 @@ declare module "runtime:images" {
     flip(): Image;
     /** Mirror left to right. */
     flop(): Image;
-    /** Brightness and saturation multipliers, and a hue rotation in degrees. */
-    modulate(options: { brightness?: number; saturation?: number; hue?: number }): Image;
+    /** Brightness and saturation multipliers, a hue rotation in degrees, and a lightness shift. */
+    modulate(options: { brightness?: number; saturation?: number; hue?: number; lightness?: number }): Image;
     /** Gaussian blur of `sigma` pixels. */
     blur(sigma: number): Image;
     /** A 3×3 sharpen scaled by `amount` (default 1). */
@@ -100,8 +128,26 @@ declare module "runtime:images" {
     flatten(options?: { background?: Colour }): Image;
     /** Grey, keeping alpha. */
     grayscale(): Image;
+    /** Greyscale by luma, keeping the channel count. Unlike `grayscale`, RGB stays RGB. */
+    greyscale(): Image;
     /** One channel as a grey image. */
     extractChannel(channel: 0 | 1 | 2 | 3 | "red" | "green" | "blue" | "alpha"): Image;
+    /** Invert every channel; `alpha` (default true) inverts alpha too. */
+    negate(options?: { alpha?: boolean }): Image;
+    /** Gamma correction: each channel becomes `value^(1 / exponent)`. */
+    gamma(exponent: number): Image;
+    /** `value * a + b` on every channel; each side a number or three. */
+    linear(a: number | [number, number, number], b?: number | [number, number, number]): Image;
+    /** Two levels at `level` (default 128); `greyscale` (default true) thresholds luma. */
+    threshold(level?: number, options?: { greyscale?: boolean }): Image;
+    /** Tint towards a colour, keeping each pixel's luma. */
+    tint(color: Colour): Image;
+    /** Mix channels through a 3×3 or 4×4 matrix. */
+    recomb(matrix: number[][]): Image;
+    /** Add an alpha channel at `alpha` (default opaque) if there is none. */
+    ensureAlpha(alpha?: number): Image;
+    /** Drop the alpha channel without compositing. */
+    removeAlpha(): Image;
 
     jpeg(options?: { quality?: number }): Image;
     png(): Image;
