@@ -67,6 +67,9 @@ fn chromium() -> Option<&'static str> {
 /// run then collides with. The same lesson `tests/cli.rs` learned.
 struct Fixture {
     dir: PathBuf,
+    /// esdev's output, kept outside the project so writing it does not count
+    /// as a change to the project being watched.
+    log: PathBuf,
     esdev: Option<Child>,
     browser: Option<Child>,
     port: u16,
@@ -81,7 +84,14 @@ impl Drop for Fixture {
             let _ = child.kill();
             let _ = child.wait();
         }
+        // A failed hot-reload assertion says what the page saw; esdev's own
+        // account of what it rebuilt and sent is the other half.
+        if std::thread::panicking() {
+            let log = std::fs::read_to_string(&self.log).unwrap_or_default();
+            eprintln!("--- esdev output ---\n{log}--- end ---");
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_file(&self.log);
     }
 }
 
@@ -154,11 +164,13 @@ impl Fixture {
             ),
         );
 
+        let log = std::env::temp_dir().join(format!("esdev-hot-{name}-{}.log", std::process::id()));
+        let output = std::fs::File::create(&log).expect("create the esdev log");
         let esdev = Command::new(env!("CARGO_BIN_EXE_esdev"))
             .arg("start")
             .current_dir(&dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(output.try_clone().expect("clone the log handle"))
+            .stderr(output)
             .spawn()
             .expect("spawn esdev start");
 
@@ -180,6 +192,7 @@ impl Fixture {
 
         Some(Fixture {
             dir,
+            log,
             esdev: Some(esdev),
             browser: Some(browser),
             port,
