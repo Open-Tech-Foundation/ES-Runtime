@@ -227,6 +227,11 @@ impl Page {
         let mut page = Page { socket, next_id: 0 };
         page.call("Page.enable", "{}").await;
         page.call("Runtime.enable", "{}").await;
+        // `Page.navigate` answers before the new document replaces the old
+        // one, so a check run straight after it can read the old document —
+        // which, when the browser already showed this page, says `ONE` and
+        // passes. Marking the old document tells the two apart.
+        page.eval("window.__esdev_previous_document = true").await;
         page.call(
             "Page.navigate",
             &format!(r#"{{"url":"http://127.0.0.1:{}/"}}"#, fixture.port),
@@ -235,8 +240,14 @@ impl Page {
         // The bundle is a deferred module, so the document being there is not
         // the bundle having run. Waited for by its effect rather than by a
         // duration, so a slow machine is slow rather than flaky.
-        page.until("document.getElementById('out').textContent !== 'pending'")
-            .await;
+        assert!(
+            page.until(
+                "window.__esdev_previous_document === undefined && \
+                 (document.getElementById('out')?.textContent ?? 'pending') !== 'pending'"
+            )
+            .await,
+            "the page never ran its bundle"
+        );
         page
     }
 
@@ -349,10 +360,12 @@ async fn an_accepting_module_is_replaced_without_reloading_the_page() {
     };
 
     let mut page = Page::open(&fixture).await;
-    assert_eq!(
-        page.eval("document.getElementById('out').textContent")
+    // Waited for, not read once: the page can still be settling (a late
+    // watcher event reloads it once) when `open` returns.
+    assert!(
+        page.until("document.getElementById('out').textContent === 'ONE'")
             .await,
-        "ONE"
+        "the page never showed ONE"
     );
     page.eval(MARK).await;
 
@@ -559,10 +572,12 @@ async fn keep_survives_every_replacement() {
     };
 
     let mut page = Page::open(&fixture).await;
-    assert_eq!(
-        page.eval("document.getElementById('out').textContent")
+    // Waited for, not read once: the page can still be settling (a late
+    // watcher event reloads it once) when `open` returns.
+    assert!(
+        page.until("document.getElementById('out').textContent === 'ONE1'")
             .await,
-        "ONE1"
+        "the page never showed ONE1"
     );
     page.eval(MARK).await;
 
@@ -673,10 +688,12 @@ export default {
     };
 
     let mut page = Page::open(&fixture).await;
-    assert_eq!(
-        page.eval("document.getElementById('out').textContent")
+    // Waited for, not read once: the page can still be settling (a late
+    // watcher event reloads it once) when `open` returns.
+    assert!(
+        page.until("document.getElementById('out').textContent === 'ONE'")
             .await,
-        "ONE"
+        "the page never showed ONE"
     );
 
     fixture.edit("src/counter.mjs", "export const label = \"BROKEN\";\n");
