@@ -2299,6 +2299,7 @@ await server.stop();
 | `Cookie`                          | `class`                                       | One cookie: attributes, `serialize()`, `Cookie.parse()`. See [Cookies](#cookies). |
 | `CookieMap`                       | `class`                                       | Cookies by name, from a `Cookie` header; records `Set-Cookie` changes. See [Cookies](#cookies). |
 | `CSRF`                            | `object`                                      | `generate`/`verify` CSRF tokens bound to a session. See [CSRF](#csrf). |
+| `Webhook`, `WebhookVerificationError` | `class`                                  | Sign and verify Standard Webhooks deliveries. See [Webhooks](#webhooks). |
 | `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
@@ -2393,6 +2394,45 @@ an `encoding` other than `"base64url"` or an `algorithm` other than `"sha256"`
 
 Different from Bun: the secret and `sessionId` are required, `verify` does not
 throw for a bad token, and `request` is checked.
+
+#### Webhooks
+
+`Webhook` (D163) signs and verifies webhooks by the
+[Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
+specification, with the API and error messages of its reference library,
+`standardwebhooks`.
+
+| Member | Description |
+| --- | --- |
+| `new Webhook(secret)`, `new Webhook([secret, …])` | One key, or several newest first for rotation. A key is a `whsec_` HMAC secret (base64, at least 24 bytes; the prefix is optional), a `whsk_` Ed25519 secret key (32-byte seed, or 64 bytes of seed then public key), a `whpk_` Ed25519 public key, or a `Secret` holding one. |
+| `new Webhook(bytes, { format: "raw" })` | An HMAC key given as its bytes (or a string's UTF-8), at least 24 bytes. |
+| `Webhook.generateSecret()` | A `whsec_` secret of 32 random bytes. Needs Entropy. |
+| `Webhook.generateKeyPair()` | `{ secretKey, publicKey }`: `whsk_` (64 bytes) and `whpk_`. Needs Entropy. |
+| `webhook.sign(msgId, timestamp, payload)` | The `webhook-signature` value: `v1,<base64>` for each HMAC key and `v1a,<base64>` for each Ed25519 secret key, space-separated. `timestamp` is a `Date`; `payload` a string or bytes. |
+| `webhook.verify(payload, headers, { jsonParse?, tolerance? })` | Checks `webhook-id`, `webhook-timestamp` and `webhook-signature` (from a `Headers` or an object) against the raw `payload`. Returns the parsed JSON, or `undefined` for an empty body or with `jsonParse: false`. `tolerance` is in seconds, default 300. |
+
+The signed content is `${msgId}.${timestamp}.${payload}`, with the timestamp in
+whole seconds. `verify` accepts the delivery if any `v1` signature matches an
+HMAC key or any `v1a` signature verifies with an Ed25519 key; signatures of
+other versions are ignored.
+
+`verify` throws `WebhookVerificationError` with one of these messages:
+
+| Message | When |
+| --- | --- |
+| `Missing required headers` | A `webhook-*` header is absent or empty. |
+| `Invalid Signature Headers` | `webhook-timestamp` is not a whole number. |
+| `Message timestamp too old` / `too new` | The timestamp is more than `tolerance` seconds from now. |
+| `No matching signature found` | No signature matches any key. |
+
+These are `TypeError`s: a secret under 24 bytes, invalid base64, a `whpk_` key
+that is not 32 bytes, a `whsk_` key whose two halves disagree, an unknown
+option, `sign` with only public keys, an empty `msgId`, a `timestamp` that is
+not a valid `Date`, and a negative `tolerance`.
+
+Beyond the reference library: `v1a` signatures, several keys, a `Headers` for
+`verify`, `tolerance`, key generation, and the specification's 24-byte minimum
+(the reference library refuses only an empty secret).
 
 #### The connection a request came from
 

@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `Webhook` and `WebhookVerificationError` in `runtime:http` (D163) sign and
+  verify webhooks by the Standard Webhooks specification, with the API and error
+  messages of its reference library (`new Webhook(secret)`, `sign`, `verify`);
+  signatures are byte-identical to `standardwebhooks` 1.1.1. Beyond it: Ed25519
+  (`v1a`) signatures, several secrets for rotation, a `Headers` for `verify`, a
+  `tolerance` option, `generateSecret()`/`generateKeyPair()`, and the spec's
+  24-byte minimum secret. A new guide covers receiving, sending, duplicates and
+  key changes; the homepage has a Webhooks tile and the comparison page a row.
+
 - `CSRF` in `runtime:http` (D162): `CSRF.generate(secret, { sessionId })` and
   `CSRF.verify(token, { secret, sessionId, request })`, with Bun's API. A token
   is an HMAC-SHA256 over the session ID, a nonce and its issue time, so nothing

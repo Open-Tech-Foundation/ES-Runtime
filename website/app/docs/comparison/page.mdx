@@ -86,6 +86,7 @@ The server, the protocols it speaks, and the socket surface around it.
 | Cookie parse / serialize API | <Yes /> | <No /> | <Yes /> | <Partial /> |
 | Signed / sealed cookies | <Yes /> | <No /> | <No /> | <Partial /> |
 | CSRF tokens | <Yes /> | <No /> | <Yes /> | <No /> |
+| Webhook signing (Standard Webhooks) | <Yes /> | <No /> | <No /> | <No /> |
 | Stalled-connection timeouts by default | <Yes /> | <Partial /> | <Yes /> | <No /> |
 | UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
@@ -118,6 +119,11 @@ unstable `@std/http/unstable-signed-cookie`; Bun 1.4.3 and Node 24 have neither.
 shape. esrun requires the secret and the session ID, and checks `Sec-Fetch-Site`
 and `Origin` when given the request; Bun makes both optional. Deno's `@std/http`
 1.1.4 and Node 24 have none. See [CSRF](/docs/http/basics#csrf).
+
+**On the webhook row.** esrun signs and verifies Standard Webhooks, HMAC (`v1`)
+and Ed25519 (`v1a`), byte-compatible with the spec's reference library. Bun
+1.4.3, Node 24 and Deno's `@std/http` and `@std/crypto` have no webhook API.
+See [Webhooks](/docs/guides/webhooks).
 
 **On the UDP rows.** All four have it. Deno's stable path is `node:dgram`;
 Bun's surface is widest (`sendMany`, source-specific membership); esrun's is

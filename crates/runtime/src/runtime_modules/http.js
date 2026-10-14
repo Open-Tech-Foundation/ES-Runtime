@@ -1306,5 +1306,219 @@ const CSRF = {
   },
 };
 
-export { serve, withTrailers, trailersOf, Cookie, CookieMap, CSRF };
-export default { serve, withTrailers, trailersOf, Cookie, CookieMap, CSRF };
+// ---- Webhooks (D163) -------------------------------------------------------
+//
+// The Standard Webhooks reference library's API and messages: `new Webhook`,
+// `sign`, `verify`, `WebhookVerificationError`. Beyond it: Ed25519 (`v1a`),
+// several secrets for rotation, a `Headers` for `verify`, a `tolerance`, the
+// spec's 24-byte minimum, and secret generation.
+
+const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
+const MIN_WEBHOOK_SECRET = 24;
+const utf8Decoder = new TextDecoder();
+
+class WebhookVerificationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "WebhookVerificationError";
+  }
+}
+
+function fromBase64(text, what) {
+  try {
+    return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  } catch {
+    throw new TypeError(`${what} is not valid base64`);
+  }
+}
+
+function toBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function asBytes(value, what) {
+  if (typeof value === "string") return utf8.encode(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  throw new TypeError(`${what} must be a string or bytes`);
+}
+
+function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// One key: an HMAC secret (`v1`), an Ed25519 secret key that signs and
+// verifies, or an Ed25519 public key that only verifies (`v1a`).
+function webhookKey(secret, raw) {
+  let value = secret;
+  if (value !== null && typeof value === "object" && SECRET_VALUE in value) {
+    value = value[SECRET_VALUE];
+  }
+  let hmac;
+  if (raw) {
+    hmac = asBytes(value, "a raw webhook secret");
+  } else if (typeof value !== "string") {
+    throw new TypeError(
+      'a webhook secret is a whsec_, whsk_ or whpk_ string, or bytes with { format: "raw" }',
+    );
+  } else if (value.startsWith("whsk_")) {
+    const bytes = fromBase64(value.slice(5), "the whsk_ key");
+    if (bytes.length !== 32 && bytes.length !== 64) {
+      throw new TypeError(`a whsk_ key is 32 or 64 bytes, not ${bytes.length}`);
+    }
+    const seed = bytes.slice(0, 32);
+    const publicKey = ops.okp_public("Ed25519", seed);
+    if (bytes.length === 64 && !sameBytes(bytes.slice(32), publicKey)) {
+      throw new TypeError("the whsk_ key's public half does not match its seed");
+    }
+    return { seed, publicKey };
+  } else if (value.startsWith("whpk_")) {
+    const publicKey = fromBase64(value.slice(5), "the whpk_ key");
+    if (publicKey.length !== 32) {
+      throw new TypeError(`a whpk_ key is 32 bytes, not ${publicKey.length}`);
+    }
+    return { publicKey };
+  } else {
+    hmac = fromBase64(value.startsWith("whsec_") ? value.slice(6) : value, "the webhook secret");
+  }
+  if (hmac.length < MIN_WEBHOOK_SECRET) {
+    throw new TypeError(
+      `a webhook secret must be at least ${MIN_WEBHOOK_SECRET} bytes; this one is ${hmac.length}`,
+    );
+  }
+  return { hmac };
+}
+
+// What is signed: `id.timestamp.payload`, with the payload's own bytes.
+function signedContent(msgId, seconds, payload) {
+  const head = utf8.encode(`${msgId}.${seconds}.`);
+  const body = asBytes(payload, "payload");
+  const out = new Uint8Array(head.length + body.length);
+  out.set(head);
+  out.set(body, head.length);
+  return out;
+}
+
+function headerOf(headers, name) {
+  if (headers instanceof Headers) return headers.get(name);
+  if (headers === null || typeof headers !== "object") {
+    throw new TypeError("headers must be a Headers or an object");
+  }
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === name) return headers[key];
+  }
+  return null;
+}
+
+class Webhook {
+  #keys;
+
+  constructor(secret, options = {}) {
+    if (options === null || typeof options !== "object") {
+      throw new TypeError("Webhook options must be an object");
+    }
+    for (const key of Object.keys(options)) {
+      if (key !== "format") throw new TypeError(`unknown Webhook option "${key}"`);
+    }
+    if (options.format !== undefined && options.format !== "raw") {
+      throw new TypeError('format must be "raw" when given');
+    }
+    const secrets = Array.isArray(secret) ? secret : [secret];
+    if (secrets.length === 0) throw new TypeError("Webhook needs at least one secret");
+    this.#keys = secrets.map((s) => webhookKey(s, options.format === "raw"));
+  }
+
+  // A `whsec_` secret of 32 random bytes.
+  static generateSecret() {
+    return `whsec_${toBase64(crypto.getRandomValues(new Uint8Array(32)))}`;
+  }
+
+  // An Ed25519 pair: `whsk_` (seed then public key, 64 bytes) and `whpk_`.
+  static generateKeyPair() {
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const publicKey = ops.okp_public("Ed25519", seed);
+    const both = new Uint8Array(64);
+    both.set(seed);
+    both.set(publicKey, 32);
+    return { secretKey: `whsk_${toBase64(both)}`, publicKey: `whpk_${toBase64(publicKey)}` };
+  }
+
+  // The `webhook-signature` value: one signature per key that can sign.
+  sign(msgId, timestamp, payload) {
+    if (typeof msgId !== "string" || msgId === "") throw new TypeError("msgId must be a non-empty string");
+    if (!(timestamp instanceof Date) || Number.isNaN(timestamp.getTime())) {
+      throw new TypeError("timestamp must be a valid Date");
+    }
+    const content = signedContent(msgId, Math.floor(timestamp.getTime() / 1000), payload);
+    const signatures = [];
+    for (const key of this.#keys) {
+      if (key.hmac) signatures.push(`v1,${ops.hash_hmac("sha256", key.hmac, content, "base64")}`);
+      else if (key.seed) signatures.push(`v1a,${toBase64(ops.ed25519_sign(key.seed, content))}`);
+    }
+    if (signatures.length === 0) throw new TypeError("a whpk_ public key can only verify");
+    return signatures.join(" ");
+  }
+
+  // The parsed JSON body (or undefined), or a WebhookVerificationError.
+  verify(payload, headers, options = {}) {
+    const { jsonParse = true, tolerance = WEBHOOK_TOLERANCE_SECONDS } = options;
+    if (typeof tolerance !== "number" || !(tolerance >= 0)) {
+      throw new TypeError("tolerance must be a non-negative number of seconds");
+    }
+    const msgId = headerOf(headers, "webhook-id");
+    const msgTimestamp = headerOf(headers, "webhook-timestamp");
+    const msgSignature = headerOf(headers, "webhook-signature");
+    if (!msgId || !msgTimestamp || !msgSignature) {
+      throw new WebhookVerificationError("Missing required headers");
+    }
+    if (!/^\d{1,15}$/.test(msgTimestamp)) {
+      throw new WebhookVerificationError("Invalid Signature Headers");
+    }
+    const seconds = Number(msgTimestamp);
+    const now = Math.floor(Date.now() / 1000);
+    if (now - seconds > tolerance) throw new WebhookVerificationError("Message timestamp too old");
+    if (seconds > now + tolerance) throw new WebhookVerificationError("Message timestamp too new");
+
+    const content = signedContent(msgId, seconds, payload);
+    let matched = false;
+    for (const entry of String(msgSignature).split(" ")) {
+      const comma = entry.indexOf(",");
+      if (comma === -1) continue;
+      const version = entry.slice(0, comma);
+      let given;
+      try {
+        given = Uint8Array.from(atob(entry.slice(comma + 1)), (c) => c.charCodeAt(0));
+      } catch {
+        continue;
+      }
+      for (const key of this.#keys) {
+        if (version === "v1" && key.hmac) {
+          matched ||= ops.hash_equal(ops.hash_hmac("sha256", key.hmac, content), given);
+        } else if (version === "v1a" && key.publicKey) {
+          matched ||= ops.ed25519_verify(key.publicKey, given, content);
+        }
+      }
+    }
+    if (!matched) throw new WebhookVerificationError("No matching signature found");
+
+    const text = typeof payload === "string" ? payload : utf8Decoder.decode(asBytes(payload, "payload"));
+    if (text === "" || !jsonParse) return undefined;
+    return JSON.parse(text);
+  }
+}
+
+export { serve, withTrailers, trailersOf, Cookie, CookieMap, CSRF, Webhook, WebhookVerificationError };
+export default {
+  serve,
+  withTrailers,
+  trailersOf,
+  Cookie,
+  CookieMap,
+  CSRF,
+  Webhook,
+  WebhookVerificationError,
+};

@@ -196,6 +196,50 @@ declare module "runtime:http" {
     verify(token: unknown, options: CSRFVerifyOptions): boolean;
   };
 
+  /**
+   * A Standard Webhooks key: a `whsec_` HMAC secret (at least 24 bytes), a
+   * `whsk_` Ed25519 secret key, a `whpk_` Ed25519 public key (verifies only),
+   * or a `Secret` from `runtime:process` env holding one of those.
+   */
+  type WebhookSecret = string | import("runtime:process").Secret;
+
+  /** Thrown by `Webhook.verify` with the reference library's messages (D163). */
+  export class WebhookVerificationError extends Error {
+    readonly name: "WebhookVerificationError";
+  }
+
+  /**
+   * Signs and verifies webhooks by the Standard Webhooks spec, with the API of
+   * its reference library `standardwebhooks` (D163). `v1` is HMAC-SHA256, `v1a`
+   * Ed25519. Several keys, newest first, rotate: `sign` writes one signature
+   * per key, `verify` accepts any.
+   */
+  export class Webhook {
+    constructor(secret: WebhookSecret | readonly WebhookSecret[]);
+    /** `format: "raw"`: the secret is the key bytes themselves, not base64. */
+    constructor(
+      secret: string | BufferSource | ReadonlyArray<string | BufferSource>,
+      options: { format: "raw" },
+    );
+    /** A new `whsec_` secret of 32 random bytes. Needs Entropy. */
+    static generateSecret(): string;
+    /** A new Ed25519 pair, `whsk_…` and `whpk_…`. Needs Entropy. */
+    static generateKeyPair(): { secretKey: string; publicKey: string };
+    /** The `webhook-signature` header value for this delivery. */
+    sign(msgId: string, timestamp: Date, payload: string | BufferSource): string;
+    /**
+     * Checks a delivery against the raw body and its `webhook-*` headers, and
+     * the timestamp against `tolerance` seconds (default 300). Returns the
+     * parsed JSON body (unless `jsonParse: false`), or `undefined` for an
+     * empty one; throws `WebhookVerificationError` otherwise.
+     */
+    verify(
+      payload: string | BufferSource,
+      headers: Headers | Record<string, string>,
+      options?: { jsonParse?: boolean; tolerance?: number },
+    ): unknown;
+  }
+
   /** What the handler is told about the connection a request arrived on. */
   export interface ConnectionInfo {
     /**

@@ -1,0 +1,60 @@
+---
+title: Webhooks
+description: Why runtime:http follows Standard Webhooks, what it adds to the reference library, and what it leaves to the application.
+---
+
+# Webhooks
+
+## One scheme, followed exactly
+
+Every webhook sender signs in its own format, so every receiver writes its own
+check, and that is where the mistakes are: a `===` on the signature, no
+timestamp check, or a signature computed over a re-serialized body.
+[Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
+defines one scheme. `Webhook` implements it with the API and error messages of
+the specification's reference library, so code and test vectors move between
+the two. Its signatures are byte-identical to `standardwebhooks` 1.1.1, and each
+verifies the other's.
+
+## What it adds
+
+**Ed25519 (`v1a`).** The specification recommends public-key signatures when
+the sender does not control the receiver's security: with an HMAC secret,
+whoever can verify can also forge. The reference library has only `v1`. The
+specification does not fix the byte layout of a `whsk_` secret key, so
+`Webhook` reads both a 32-byte seed and the 64-byte seed-then-public-key form
+of Go and libsodium, and writes the 64-byte form.
+
+**Several keys.** The specification rotates a secret by sending several
+signatures in one header. `sign` writes one per key and `verify` accepts any
+match, so neither side has to switch at the same moment as the other.
+
+**The 24-byte minimum.** The specification asks for HMAC secrets of 24 to 64
+bytes. The reference library refuses only an empty one, so a short secret works
+there and throws here.
+
+## Why `verify` throws
+
+`CSRF.verify` returns `false`, but `Webhook.verify` throws a
+`WebhookVerificationError`. The reference library throws, and handlers written
+for it catch that error; the same name with a different contract would let a
+forged delivery through without an error. The error is a class of its own, so a
+handler can answer it with a 400 and still let any other exception surface.
+
+## What it leaves to the application
+
+**Duplicates.** A sender retries until it succeeds, so one event can arrive
+twice; `webhook-id` identifies it across retries. Skipping a seen ID needs a
+store of IDs, which is the application's choice: memory, a database, or a
+durable worker when there is more than one process. The timestamp window bounds
+how long the IDs must be kept.
+
+**Other vendors' schemes.** Stripe, GitHub and others sign in their own
+formats. They need `hmac()` and `timingSafeEqual()` from `runtime:hashing`,
+which is a few lines each.
+
+## See also
+
+- [Webhooks](/docs/guides/webhooks) — how to receive and send them
+- [`runtime:http` reference](/api/http#webhooks) — every method and error
+- `docs/DECISIONS.md` D163 — what was decided and rejected

@@ -1,9 +1,9 @@
 // A type test for `runtime:http`'s cookies. Compiled by `tsc -p .`, never run.
 
-import { Cookie, CookieMap, CSRF, serve } from "runtime:http";
+import { Cookie, CookieMap, CSRF, serve, Webhook, WebhookVerificationError } from "runtime:http";
 import { env } from "runtime:process";
 
-serve((req) => {
+serve(async (req) => {
   const sid: string | null = req.cookies.get("sid");
   req.cookies.set("visited", "yes", { httpOnly: true, sameSite: "Strict" });
   req.cookies.delete("__Host-old", { secure: true });
@@ -26,6 +26,20 @@ serve((req) => {
   // @ts-expect-error — only base64url is produced.
   CSRF.generate("k".repeat(32), { sessionId: "s1", encoding: "hex" });
   void ok;
+  // Webhooks (D163): verify the raw body against the request's headers.
+  const hook = new Webhook([env.WEBHOOK_SECRET, "whsec_old"]);
+  try {
+    const event = hook.verify(await req.text(), req.headers, { tolerance: 60 });
+    void event;
+  } catch (e) {
+    if (e instanceof WebhookVerificationError) return new Response(e.message, { status: 400 });
+  }
+  const signature: string = hook.sign("msg_1", new Date(), new Uint8Array(2));
+  const { secretKey, publicKey } = Webhook.generateKeyPair();
+  new Webhook(new Uint8Array(32), { format: "raw" });
+  // @ts-expect-error — the timestamp is a Date, as in the reference library.
+  hook.sign("msg_1", 1614265330, "x");
+  void [signature, secretKey, publicKey, Webhook.generateSecret()];
   return new Response(sid);
 });
 

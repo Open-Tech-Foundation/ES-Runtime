@@ -15,6 +15,7 @@ itself.
 
 ### Added
 
+- `runtime:http`: `Webhook` and `WebhookVerificationError` (DECISIONS D163).
 - `runtime:http`: `CSRF` with `CSRFGenerateOptions` and `CSRFVerifyOptions`
   (DECISIONS D162).
 - `runtime:http`: `CookieMap.setSigned`/`getSigned`, `setSealed`/`getSealed`

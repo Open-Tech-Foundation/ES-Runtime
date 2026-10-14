@@ -1,0 +1,117 @@
+---
+title: Webhooks
+description: Sign and verify webhooks with Standard Webhooks in runtime:http — receiving, sending, key rotation and Ed25519.
+---
+
+# Webhooks
+
+`Webhook` from `runtime:http` signs and verifies webhooks as the
+[Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
+specification describes. Each delivery carries three headers: `webhook-id`,
+`webhook-timestamp` and `webhook-signature`. The API is that of the
+specification's reference library, `standardwebhooks`.
+
+## Receiving a webhook
+
+Verify the body exactly as it arrived, before parsing it:
+
+```js
+import { serve, Webhook, WebhookVerificationError } from "runtime:http";
+import { env } from "runtime:process";
+
+const webhook = new Webhook(env.WEBHOOK_SECRET); // "whsec_…"
+
+serve(async (request) => {
+  let event;
+  try {
+    event = webhook.verify(await request.text(), request.headers);
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) {
+      return new Response("Invalid webhook", { status: 400 });
+    }
+    throw error;
+  }
+  await handle(event); // the parsed JSON body
+  return new Response(null, { status: 204 });
+});
+```
+
+`verify` throws a `WebhookVerificationError` when a header is missing, the
+signature does not match, or the timestamp is more than 5 minutes from now. The
+timestamp check stops a captured delivery from being replayed later. To change
+the window, pass `{ tolerance: seconds }`.
+
+## Handling a delivery twice
+
+A sender retries until it gets a success, so the same event can arrive more
+than once. `webhook-id` stays the same across retries. Record the IDs you have
+processed and skip one you have seen:
+
+```js
+const id = request.headers.get("webhook-id");
+if (await alreadyProcessed(id)) return new Response(null, { status: 204 });
+```
+
+Keep the IDs for at least the tolerance window, in a database or a durable
+worker if the service runs in more than one process.
+
+## Sending a webhook
+
+Sign the exact bytes you send, and send the three headers:
+
+```js
+const webhook = new Webhook(endpoint.secret);
+const id = `msg_${crypto.randomUUID()}`;
+const timestamp = new Date();
+const body = JSON.stringify(event);
+
+await fetch(endpoint.url, {
+  method: "POST",
+  body,
+  headers: {
+    "content-type": "application/json",
+    "webhook-id": id,
+    "webhook-timestamp": String(Math.floor(timestamp.getTime() / 1000)),
+    "webhook-signature": webhook.sign(id, timestamp, body),
+  },
+});
+```
+
+Use the same `id` when you retry a delivery, and a new timestamp and signature
+for each attempt.
+
+Give each endpoint its own secret:
+
+```js
+const secret = Webhook.generateSecret(); // "whsec_…", 32 random bytes
+```
+
+## Changing a secret
+
+Pass several secrets, newest first. `sign` writes a signature for each, and
+`verify` accepts a match with any:
+
+```js
+const webhook = new Webhook([env.WEBHOOK_SECRET_NEW, env.WEBHOOK_SECRET_OLD]);
+```
+
+The sender signs with both while receivers move to the new secret. Once every
+receiver has it, drop the old one.
+
+## Public-key signatures
+
+With an HMAC secret, anyone who can verify can also sign. When receivers belong
+to other people, sign with an Ed25519 key instead and give them only the public
+key, which the specification recommends:
+
+```js
+const { secretKey, publicKey } = Webhook.generateKeyPair();
+// Sender: new Webhook(secretKey)  — "whsk_…", keep it private
+// Receiver: new Webhook(publicKey) — "whpk_…", can verify, cannot sign
+```
+
+These signatures are `v1a`, beside the HMAC signatures' `v1`. Not every
+Standard Webhooks library supports `v1a` yet, so check the receiver's before
+switching.
+
+See the [`runtime:http` reference](/api/http#webhooks) for every option.

@@ -3350,3 +3350,24 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Bun's `encoding` and `algorithm` options.** One format is enough. Passing a value other than the defaults (`base64url`, `sha256`) is a `TypeError`, so ported code fails loudly instead of being read wrongly.
 
 **Consequences:** a token is 86 characters. It is sent in a form field or a header of the app's choosing; `verify` does not read the request body.
+
+### D163 — Webhooks: the Standard Webhooks reference API in `runtime:http` · *Accepted (2026-10-14)*
+
+**Context:** every service that sends webhooks signs them its own way, and every receiver writes the matching check, which is where the mistakes are: a `===` comparison, no timestamp check (so a captured delivery can be replayed), or a signature over a re-serialized body. [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks) (spec 1.0.0, Apache-2.0) fixes one scheme: the headers `webhook-id`, `webhook-timestamp` and `webhook-signature`, a signature over `id.timestamp.payload`, HMAC-SHA256 as `v1` with a `whsec_` base64 secret of 24 to 64 bytes, Ed25519 as `v1a` with `whsk_`/`whpk_` keys, which the spec prefers when the producer does not control the consumer's security, and several space-separated signatures in one header so a secret can be rotated. Its reference JavaScript library is `new Webhook(secret)` with `verify(payload, headers)`, which returns the parsed JSON or throws `WebhookVerificationError`, and `sign(msgId, timestamp, payload)`, with a fixed 5-minute tolerance. It implements `v1` only. Node, Deno and Bun ship nothing.
+
+**Decision (maintainer, 2026-10-14):**
+
+- **`Webhook` and `WebhookVerificationError` are exported from `runtime:http` with the reference library's API and error messages,** so code written against `standardwebhooks` ports, and so do its test vectors. Built on the existing synchronous HMAC, Ed25519 and constant-time ops; no new Rust.
+- **`v1a` is supported on both sides.** A `whpk_` public key verifies only; a `whsk_` secret key signs and verifies. A secret key is accepted as a 32-byte seed or as 64 bytes (seed then public key, the layout of Go and libsodium); `generateKeyPair()` writes the 64-byte form. The spec does not fix the layout and no reference library implements `v1a` yet, so this is our reading.
+- **Several secrets, for rotation:** `new Webhook([newSecret, oldSecret])`. `sign` writes one signature per signing key, space-separated, as the spec describes; `verify` accepts a match with any key.
+- **Secrets are held to the spec's 24-byte minimum,** including with `format: "raw"`. The reference library only refuses an empty one. A `Secret` from `runtime:process` env is accepted.
+- **`verify` takes a `Headers`** (`request.headers`) as well as a plain object, and a `tolerance` in seconds (default 300, the reference's fixed value). The payload is the raw body as a string or bytes.
+- **`Webhook.generateSecret()`** returns a `whsec_` secret of 32 random bytes, and **`Webhook.generateKeyPair()`** a `{ secretKey, publicKey }` pair. Both need Entropy.
+- **Replay:** the timestamp window is checked. Processing a delivery twice is prevented by recording `webhook-id`, which the spec calls the idempotency key; that needs storage, so it stays with the application.
+
+**Rejected:**
+- **Returning `false` instead of throwing,** as `CSRF.verify` does. The reference library throws, and code ported from it catches; a different contract under the same names would break silently.
+- **Vendor schemes** (Stripe's `Stripe-Signature`, GitHub's `X-Hub-Signature-256`). Each is its own format; `hmac()` and `timingSafeEqual()` in `runtime:hashing` cover them in a few lines.
+- **A store of seen IDs.** It is a storage decision (memory, a database, a durable worker) that the runtime cannot make for the application.
+
+**Consequences:** a payload must be verified exactly as received, so a handler reads `await request.text()` before parsing. A secret shorter than 24 bytes that the reference library would accept is a `TypeError` here.
