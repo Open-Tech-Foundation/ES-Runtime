@@ -271,4 +271,196 @@ export const password = {
   },
 };
 
-export default { hash, Hasher, hashStream, hmac, timingSafeEqual, password };
+// ---- TOTP (D164) -----------------------------------------------------------
+//
+// RFC 6238 codes over RFC 4226's HOTP, the `otpauth://` URI authenticator apps
+// scan (Google's Key URI Format), and backup codes. `verify` returns the step
+// it matched so the caller can refuse it next time: RFC 6238 §5.2 says a code
+// MUST NOT be accepted twice, and that needs storage the runtime does not have.
+
+const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+// Crockford's base32 alphabet: no I, L, O or U, so a code read aloud or copied
+// from paper is not misread.
+const RECOVERY = "0123456789abcdefghjkmnpqrstvwxyz";
+const MIN_TOTP_SECRET = 16; // RFC 4226 R6: at least 128 bits
+const MAX_TOTP_WINDOW = 10;
+const TOTP_ALGORITHMS = { SHA1: "sha1", SHA256: "sha256", SHA512: "sha512" };
+const TOTP_OPTIONS = new Set(["algorithm", "digits", "period", "time"]);
+
+function base32Encode(bytes) {
+  let out = "";
+  let bits = 0;
+  let value = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += BASE32[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+// Read as typed: any case, spaces and `=` padding ignored.
+function base32Decode(text) {
+  const clean = text.replace(/[\s=]/g, "").toUpperCase();
+  const out = [];
+  let bits = 0;
+  let value = 0;
+  for (const char of clean) {
+    const index = BASE32.indexOf(char);
+    if (index === -1) throw new TypeError(`the TOTP secret is not base32: unexpected "${char}"`);
+    value = ((value << 5) | index) & 0xffff;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return new Uint8Array(out);
+}
+
+function totpKey(secret) {
+  const key =
+    typeof secret === "string" ? base32Decode(secret) : toInput(secret, "the TOTP secret");
+  if (key.byteLength < MIN_TOTP_SECRET) {
+    throw new TypeError(
+      `a TOTP secret must be at least ${MIN_TOTP_SECRET} bytes (128 bits); this one is ${key.byteLength}`,
+    );
+  }
+  return key;
+}
+
+function totpOptions(options, allowed, fn) {
+  if (options === null || typeof options !== "object") {
+    throw new TypeError(`totp.${fn} options must be an object`);
+  }
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) throw new TypeError(`unknown totp.${fn} option "${key}"`);
+  }
+  const name = String(options.algorithm ?? "SHA1").toUpperCase().replace("-", "");
+  const algorithm = TOTP_ALGORITHMS[name];
+  if (!algorithm) throw new TypeError('algorithm must be "SHA1", "SHA256" or "SHA512"');
+  const digits = options.digits ?? 6;
+  if (![6, 7, 8].includes(digits)) throw new TypeError("digits must be 6, 7 or 8");
+  const period = options.period ?? 30;
+  if (!Number.isInteger(period) || period <= 0) {
+    throw new TypeError("period must be a positive whole number of seconds");
+  }
+  const time = options.time ?? Date.now();
+  const ms = time instanceof Date ? time.getTime() : time;
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
+    throw new TypeError("time must be a Date or milliseconds since the epoch");
+  }
+  return { name, algorithm, digits, period, step: Math.floor(ms / 1000 / period) };
+}
+
+// RFC 4226 §5.3: HMAC over the counter, dynamic truncation, then the digits.
+function hotp(key, counter, algorithm, digits) {
+  const message = new Uint8Array(8);
+  const high = Math.floor(counter / 2 ** 32);
+  const low = counter >>> 0;
+  new DataView(message.buffer).setUint32(0, high);
+  new DataView(message.buffer).setUint32(4, low);
+  const mac = ops.hash_hmac(algorithm, key, message);
+  const offset = mac[mac.length - 1] & 0x0f;
+  const binary =
+    ((mac[offset] & 0x7f) << 24) |
+    (mac[offset + 1] << 16) |
+    (mac[offset + 2] << 8) |
+    mac[offset + 3];
+  return String(binary % 10 ** digits).padStart(digits, "0");
+}
+
+/**
+ * Time-based one-time passwords for two-factor sign-in (D164).
+ */
+export const totp = {
+  /** A new base32 secret of 20 random bytes (160 bits). Needs Entropy. */
+  generateSecret() {
+    return base32Encode(crypto.getRandomValues(new Uint8Array(20)));
+  },
+
+  /**
+   * The `otpauth://totp/…` URI an authenticator app reads from a QR code.
+   * Google Authenticator ignores `algorithm`, `digits` and `period`, so keep
+   * the defaults for it.
+   */
+  uri(options) {
+    if (options === null || typeof options !== "object") {
+      throw new TypeError("totp.uri takes { secret, issuer, account }");
+    }
+    const { secret, issuer, account, ...rest } = options;
+    const { name, digits, period } = totpOptions(
+      rest,
+      new Set(["algorithm", "digits", "period"]),
+      "uri",
+    );
+    for (const [what, value] of [["issuer", issuer], ["account", account]]) {
+      if (typeof value !== "string" || value === "") throw new TypeError(`${what} is required`);
+      if (value.includes(":")) throw new TypeError(`${what} must not contain ":"`);
+    }
+    const encoded = base32Encode(totpKey(secret));
+    const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(account)}`;
+    return (
+      `otpauth://totp/${label}?secret=${encoded}&issuer=${encodeURIComponent(issuer)}` +
+      `&algorithm=${name}&digits=${digits}&period=${period}`
+    );
+  },
+
+  /** The code for `time` (default now). */
+  generate(secret, options = {}) {
+    const { algorithm, digits, step } = totpOptions(options, TOTP_OPTIONS, "generate");
+    return hotp(totpKey(secret), step, algorithm, digits);
+  },
+
+  /**
+   * The time step `code` belongs to, within `window` steps of `time`, or
+   * `null`. A step at or before `after` is refused: store the step this
+   * returns and pass it as `after` next time, so a code works only once.
+   * A malformed code is `null`, never a throw: it is request input.
+   */
+  verify(code, secret, options = {}) {
+    const { window = 1, after, ...rest } = options;
+    if (!Number.isInteger(window) || window < 0 || window > MAX_TOTP_WINDOW) {
+      throw new TypeError(`window must be a whole number from 0 to ${MAX_TOTP_WINDOW}`);
+    }
+    if (after !== undefined && after !== null && !Number.isInteger(after)) {
+      throw new TypeError("after must be the step a previous verify returned");
+    }
+    const { algorithm, digits, step } = totpOptions(rest, TOTP_OPTIONS, "verify");
+    const key = totpKey(secret);
+    if (typeof code !== "string") return null;
+    const given = code.replace(/\s/g, "");
+    if (given.length !== digits || !/^\d+$/.test(given)) return null;
+    // Every step in the window is computed and compared, so the time taken
+    // does not say which one matched.
+    let matched = null;
+    for (let s = step - window; s <= step + window; s++) {
+      if (s < 0) continue;
+      if (ops.hash_equal(hotp(key, s, algorithm, digits), given)) matched = s;
+    }
+    if (matched === null || (after != null && matched <= after)) return null;
+    return matched;
+  },
+
+  /**
+   * One-time recovery codes, `xxxxx-xxxxx` (50 bits each). Store them with
+   * `password.hash` and check with `password.verify`. Needs Entropy.
+   */
+  backupCodes(count = 10) {
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      throw new TypeError("count must be a whole number from 1 to 100");
+    }
+    const codes = [];
+    for (let i = 0; i < count; i++) {
+      const chars = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => RECOVERY[b & 31]);
+      codes.push(`${chars.slice(0, 5).join("")}-${chars.slice(5).join("")}`);
+    }
+    return codes;
+  },
+};
+
+export default { hash, Hasher, hashStream, hmac, timingSafeEqual, password, totp };

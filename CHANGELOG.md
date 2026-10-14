@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `totp` in `runtime:hashing` (D164) for two-factor sign-in:
+  `generateSecret()`, `uri()` for the `otpauth://` QR code, `generate()`,
+  `verify()` and `backupCodes()`. Codes match the RFC 6238 and RFC 4226 test
+  vectors and the `otpauth` library. `verify` returns the time step it matched,
+  so passing it back as `after` refuses a code the second time, as RFC 6238
+  requires. The hashing guide has a two-factor section, the homepage a 2FA tile
+  and the comparison page a row.
+
 - `Webhook` and `WebhookVerificationError` in `runtime:http` (D163) sign and
   verify webhooks by the Standard Webhooks specification, with the API and error
   messages of its reference library (`new Webhook(secret)`, `sign`, `verify`);

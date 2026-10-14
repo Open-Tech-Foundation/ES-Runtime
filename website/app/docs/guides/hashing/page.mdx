@@ -159,6 +159,52 @@ await password.hash(input, { algorithm: "bcrypt", cost: 12 });
   a stored hash may have been written by one that did.
 </Callout>
 
+## Two-factor sign-in
+
+`totp` makes the six-digit codes that authenticator apps show (RFC 6238). Give
+each user a secret when they turn on two-factor sign-in, and show it as a QR
+code of its `otpauth://` URI:
+
+```js
+import { totp } from "runtime:hashing";
+
+const secret = totp.generateSecret(); // base32, 160 bits
+const uri = totp.uri({ secret, issuer: "Acme", account: user.email });
+// Render `uri` as a QR code; store `secret` with the user.
+```
+
+Ask for one code before switching it on, so a user who scanned it wrong is not
+locked out. At sign-in, check the code and store the step it matched:
+
+```js
+const step = totp.verify(code, user.totpSecret, { after: user.totpLastStep });
+if (step === null) return unauthorized();
+user.totpLastStep = step; // the same code is refused next time
+await users.save(user);
+```
+
+`verify` accepts a code from one step (30 seconds) either side of now, for
+clocks that differ slightly. Passing the last accepted step as `after` refuses
+that code and older ones, so a code seen over someone's shoulder cannot be used
+again. It returns `null`, and never throws, for a wrong or malformed code.
+
+Store the secret encrypted, since anyone who has it can make codes. Keep the
+defaults (SHA-1, 6 digits, 30 seconds): Google Authenticator ignores any other
+setting in the URI and would show codes that never match.
+
+### Backup codes
+
+Give the user recovery codes for when the phone is lost. Show them once, and
+store each one as a password:
+
+```js
+const codes = totp.backupCodes(); // 10 codes like "4kq7m-x2c9d"
+user.backupCodes = await Promise.all(codes.map((c) => password.hash(c)));
+```
+
+At sign-in, accept a code that matches one stored hash, and delete that hash so
+the code works once.
+
 ## Deriving a key
 
 A password hash is for checking a password, not for encrypting with. To turn a
@@ -220,6 +266,7 @@ const key = await crypto.subtle.deriveKey(
 | Argon2id | <Yes /> | <No /> npm | <Yes /> | <No /> npm | <No /> |
 | bcrypt | <Yes /> | <No /> npm | <Yes /> | <No /> npm | <No /> |
 | `needsRehash` | <Yes /> | <No /> | <No /> | <No /> | <No /> |
+| TOTP (two-factor codes) | <Yes /> `totp` | <No /> npm | <No /> npm | <No /> npm | <No /> |
 | Constant-time compare | <Yes /> | <Yes /> | <Partial /> via `node:crypto` | <Yes /> | <No /> |
 | Needs a capability | <No /> — except the salt | ambient | ambient | ambient | <No /> |
 

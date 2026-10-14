@@ -541,7 +541,7 @@ fn the_default_export_carries_the_same_surface() {
             r#"
 import hashing from "runtime:hashing";
 {EQ}
-for (const name of ["hash", "Hasher", "hashStream", "hmac", "timingSafeEqual", "password"]) {{
+for (const name of ["hash", "Hasher", "hashStream", "hmac", "timingSafeEqual", "password", "totp"]) {{
   if (!hashing[name]) throw new Error(`missing ${{name}}`);
 }}
 eq(hashing.hash("sha256", "abc", "hex").slice(0, 8), "ba7816bf", "hash");
@@ -551,4 +551,148 @@ console.log("ok");
         ),
     );
     assert!(s.contains("ok"), "{s}");
+}
+
+/// RFC 6238 Appendix B, every row, for all three algorithms (8 digits, the
+/// RFC's ASCII seeds), and RFC 4226 Appendix D's HOTP values as the 6-digit
+/// codes of steps 0 to 9 (D164).
+#[test]
+fn totp_matches_the_rfc_vectors() {
+    let s = run(
+        "totp_vectors.mjs",
+        &format!(
+            r#"
+import {{ totp }} from "runtime:hashing";
+{EQ}
+const enc = new TextEncoder();
+const seeds = {{
+  SHA1: enc.encode("12345678901234567890"),
+  SHA256: enc.encode("12345678901234567890123456789012"),
+  SHA512: enc.encode("1234567890123456789012345678901234567890123456789012345678901234"),
+}};
+const rows = [
+  [59, "94287082", "46119246", "90693936"],
+  [1111111109, "07081804", "68084774", "25091201"],
+  [1111111111, "14050471", "67062674", "99943326"],
+  [1234567890, "89005924", "91819424", "93441116"],
+  [2000000000, "69279037", "90698825", "38618901"],
+  [20000000000, "65353130", "77737706", "47863826"],
+];
+for (const [seconds, ...codes] of rows) {{
+  ["SHA1", "SHA256", "SHA512"].forEach((algorithm, i) => {{
+    const options = {{ algorithm, digits: 8, time: seconds * 1000 }};
+    eq(totp.generate(seeds[algorithm], options), codes[i], `${{algorithm}} at ${{seconds}}`);
+    eq(totp.verify(codes[i], seeds[algorithm], {{ ...options, window: 0 }}), Math.floor(seconds / 30), `verify ${{algorithm}} at ${{seconds}}`);
+  }});
+}}
+const hotp = ["755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583", "399871", "520489"];
+hotp.forEach((code, step) => eq(totp.generate(seeds.SHA1, {{ time: step * 30_000 }}), code, `HOTP ${{step}}`));
+// The same key as base32, in any case, with spaces and padding, is the same key.
+eq(totp.generate("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", {{ time: 59_000, digits: 8 }}), "94287082", "base32");
+eq(totp.generate("gezd gnbv gy3t qojq gezd gnbv gy3t qojq====", {{ time: 59_000, digits: 8 }}), "94287082", "typed base32");
+console.log("ok");
+"#
+        ),
+    );
+    assert!(s.contains("ok"), "{s}");
+}
+
+/// The window allows one step of clock drift either side, and `after` stops a
+/// code from working twice (RFC 6238 §5.2's MUST).
+#[test]
+fn totp_verify_bounds_drift_and_refuses_reuse() {
+    let s = run(
+        "totp_verify.mjs",
+        &format!(
+            r#"
+import {{ totp }} from "runtime:hashing";
+{EQ}
+const secret = totp.generateSecret();
+const now = 1_800_000_000_000;
+const at = (offsetSteps) => totp.generate(secret, {{ time: now + offsetSteps * 30_000 }});
+const step = Math.floor(now / 30_000);
+eq(totp.verify(at(0), secret, {{ time: now }}), step, "now");
+eq(totp.verify(at(-1), secret, {{ time: now }}), step - 1, "one step behind");
+eq(totp.verify(at(1), secret, {{ time: now }}), step + 1, "one step ahead");
+eq(totp.verify(at(-2), secret, {{ time: now }}), null, "two steps behind");
+eq(totp.verify(at(-2), secret, {{ time: now, window: 2 }}), step - 2, "wider window");
+eq(totp.verify(at(-1), secret, {{ time: now, window: 0 }}), null, "no window");
+// Replay: the step just accepted, and anything older, is refused.
+eq(totp.verify(at(0), secret, {{ time: now, after: step }}), null, "the same code again");
+eq(totp.verify(at(-1), secret, {{ time: now, after: step }}), null, "an older code");
+eq(totp.verify(at(1), secret, {{ time: now, after: step }}), step + 1, "a newer code");
+// Request input never throws.
+for (const bad of [undefined, null, 123456, "", "12345", "1234567", "12a456", "000000"]) {{
+  eq(totp.verify(bad, secret, {{ time: now }}), null, `bad code ${{bad}}`);
+}}
+eq(totp.verify(` ${{at(0).slice(0, 3)}} ${{at(0).slice(3)}} `, secret, {{ time: now }}), step, "spaces in a typed code");
+eq(totp.verify(at(0), totp.generateSecret(), {{ time: now }}), null, "another secret");
+console.log("ok");
+"#
+        ),
+    );
+    assert!(s.contains("ok"), "{s}");
+}
+
+#[test]
+fn totp_uri_secrets_and_backup_codes() {
+    let s = run(
+        "totp_uri.mjs",
+        r#"
+import { totp } from "runtime:hashing";
+const secret = totp.generateSecret();
+console.log(secret.length, /^[A-Z2-7]+$/.test(secret), totp.generateSecret() !== secret);
+console.log(totp.uri({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", issuer: "Acme Co", account: "alice@example.com" }));
+console.log(totp.uri({ secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", issuer: "Acme", account: "bob", algorithm: "sha256", digits: 8, period: 60 }));
+const codes = totp.backupCodes();
+console.log(codes.length, new Set(codes).size, codes.every((c) => /^[0-9a-hjkmnp-tv-z]{5}-[0-9a-hjkmnp-tv-z]{5}$/.test(c)), totp.backupCodes(3).length);
+for (const call of [
+  () => totp.generate("GEZDGNBVGY3TQOJQ"),
+  () => totp.generate("GEZD!"),
+  () => totp.generate(secret, { digits: 9 }),
+  () => totp.generate(secret, { algorithm: "md5" }),
+  () => totp.generate(secret, { period: 0 }),
+  () => totp.generate(secret, { window: 1 }),
+  () => totp.verify("123456", secret, { window: 11 }),
+  () => totp.verify("123456", secret, { after: "last" }),
+  () => totp.uri({ secret, issuer: "A:B", account: "x" }),
+  () => totp.uri({ secret, account: "x" }),
+  () => totp.backupCodes(0),
+]) { try { call(); console.log("NO THROW"); } catch (e) { console.log(e.name, e.message); } }
+"#,
+    );
+    assert_eq!(
+        s,
+        "32 true true\n\
+         otpauth://totp/Acme%20Co:alice%40example.com?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Acme%20Co&algorithm=SHA1&digits=6&period=30\n\
+         otpauth://totp/Acme:bob?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Acme&algorithm=SHA256&digits=8&period=60\n\
+         10 10 true 3\n\
+         TypeError a TOTP secret must be at least 16 bytes (128 bits); this one is 10\n\
+         TypeError the TOTP secret is not base32: unexpected \"!\"\n\
+         TypeError digits must be 6, 7 or 8\n\
+         TypeError algorithm must be \"SHA1\", \"SHA256\" or \"SHA512\"\n\
+         TypeError period must be a positive whole number of seconds\n\
+         TypeError unknown totp.generate option \"window\"\n\
+         TypeError window must be a whole number from 0 to 10\n\
+         TypeError after must be the step a previous verify returned\n\
+         TypeError issuer must not contain \":\"\n\
+         TypeError issuer is required\n\
+         TypeError count must be a whole number from 1 to 100\n"
+    );
+}
+
+/// Codes need no authority: a service that only checks second factors runs
+/// under `--deny-all`, as one that only checks passwords does.
+#[test]
+fn totp_codes_need_no_capability() {
+    let s = run_denied(
+        "totp_denied.mjs",
+        r#"
+import { totp } from "runtime:hashing";
+const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+const code = totp.generate(secret);
+console.log(typeof totp.verify(code, secret), totp.uri({ secret, issuer: "A", account: "b" }).startsWith("otpauth://"));
+"#,
+    );
+    assert_eq!(s, "number true\n");
 }

@@ -193,6 +193,54 @@ declare module "runtime:hashing" {
     needsRehash(stored: string, options?: PasswordOptions): boolean;
   };
 
+  /** Options shared by the TOTP functions (D164). The defaults are the RFC's. */
+  export interface TotpOptions {
+    /** Default `"SHA1"`. Google Authenticator supports only SHA-1. */
+    algorithm?: "SHA1" | "SHA256" | "SHA512";
+    /** Default 6. */
+    digits?: 6 | 7 | 8;
+    /** Seconds per code. Default 30. */
+    period?: number;
+    /** The moment to generate or check for. Default now. */
+    time?: Date | number;
+  }
+
+  /**
+   * Time-based one-time passwords (RFC 6238) for two-factor sign-in (D164).
+   * A secret is base32, as authenticator apps expect, or bytes; at least 16
+   * bytes.
+   */
+  export const totp: {
+    /** A new base32 secret of 20 random bytes. Needs Entropy. */
+    generateSecret(): string;
+    /** The `otpauth://totp/…` URI for a QR code. */
+    uri(options: {
+      secret: string | BufferSource;
+      issuer: string;
+      account: string;
+      algorithm?: TotpOptions["algorithm"];
+      digits?: TotpOptions["digits"];
+      period?: number;
+    }): string;
+    /** The code for `options.time`, default now. */
+    generate(secret: string | BufferSource, options?: TotpOptions): string;
+    /**
+     * The time step `code` matched, within `window` steps (default 1, at most
+     * 10), or `null`. Store the step and pass it as `after` next time, so a
+     * code works only once. A malformed code is `null`.
+     */
+    verify(
+      code: unknown,
+      secret: string | BufferSource,
+      options?: TotpOptions & { window?: number; after?: number | null },
+    ): number | null;
+    /**
+     * One-time recovery codes, `xxxxx-xxxxx`; default 10. Store them with
+     * `password.hash`. Needs Entropy.
+     */
+    backupCodes(count?: number): string[];
+  };
+
   const hashing: {
     hash: typeof hash;
     Hasher: typeof Hasher;
@@ -200,6 +248,7 @@ declare module "runtime:hashing" {
     hmac: typeof hmac;
     timingSafeEqual: typeof timingSafeEqual;
     password: typeof password;
+    totp: typeof totp;
   };
   export default hashing;
 }

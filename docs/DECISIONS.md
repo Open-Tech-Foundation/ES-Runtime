@@ -3371,3 +3371,24 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **A store of seen IDs.** It is a storage decision (memory, a database, a durable worker) that the runtime cannot make for the application.
 
 **Consequences:** a payload must be verified exactly as received, so a handler reads `await request.text()` before parsing. A secret shorter than 24 bytes that the reference library would accept is a `TypeError` here.
+
+### D164 — `totp` in `runtime:hashing`: RFC 6238 codes, authenticator URIs and backup codes · *Accepted (2026-10-14)* · *pairs with D57*
+
+**Context:** two-factor sign-in with an authenticator app is TOTP (RFC 6238 over RFC 4226's HOTP): a shared secret, shown to the user as an `otpauth://totp/…` URI in a QR code (Google's Key URI Format), and a 6-digit code per 30-second step. It is small to write and easy to get wrong: the secret is base32, the window for clock drift must be bounded, the comparison must be constant-time, and RFC 6238 §5.2 says a verifier "MUST NOT accept the second attempt of the OTP after the successful validation", which needs the last accepted step to be remembered. Node, Deno and Bun ship nothing (Deno has base32 only). The usual libraries are `otpauth` (`new TOTP({...}).validate({ token, window })`, which returns the step difference or `null`) and `otplib`.
+
+**Decision (maintainer, 2026-10-14):**
+
+- **`totp` is exported from `runtime:hashing`, beside `password`,** as plain functions: `generateSecret()`, `uri({ secret, issuer, account })`, `generate(secret)`, `verify(code, secret, options)` and `backupCodes()`. Built on the existing synchronous HMAC and constant-time ops.
+- **`verify` returns the time step it matched, or `null`.** Passing the step stored from the last successful sign-in as `after` refuses that code and every older one, which is how an application meets the MUST against reuse; the runtime has no storage to do it alone. `otpauth` returns a difference from now instead, which cannot be stored to stop a replay.
+- **Defaults are the RFC's and the authenticator apps':** SHA-1, 6 digits, 30-second steps, and a window of one step either side (RFC 6238 §5.2). SHA-256/512, 7 or 8 digits and other periods are accepted; the URI says so, and the docs warn that Google Authenticator ignores them.
+- **Secrets are base32 (RFC 4648),** as authenticator apps expect. `generateSecret()` makes 20 random bytes (160 bits, RFC 4226's recommendation). Input is read case-insensitively, with spaces and padding ignored, since users type secrets by hand. Under 16 bytes (RFC 4226's 128-bit minimum) is a `TypeError`.
+- **`backupCodes(count = 10)`** returns one-time recovery codes: 10 characters each from a 32-letter alphabet without look-alike characters, grouped `xxxxx-xxxxx` (50 bits). They are stored with `password.hash` and checked with `password.verify`, like any password.
+- **`generateSecret` and `backupCodes` need Entropy.** Generating and verifying codes need nothing.
+- **The window is capped at 10 steps** each side. A wider window gives an attacker more codes to guess per attempt.
+
+**Rejected:**
+- **A class per secret (`otpauth`).** `password` is plain functions, and the two are used together.
+- **HOTP as its own API.** Counter-based codes are rare in sign-in, and a TOTP step is the counter.
+- **Remembering used steps in the runtime.** It needs storage that spans processes; returning the step gives the application what to store.
+
+**Consequences:** a sign-in flow stores two things per user: the secret (encrypted at rest, since it is a credential) and the last accepted step.

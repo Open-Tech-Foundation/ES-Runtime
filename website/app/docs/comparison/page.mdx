@@ -87,6 +87,7 @@ The server, the protocols it speaks, and the socket surface around it.
 | Signed / sealed cookies | <Yes /> | <No /> | <No /> | <Partial /> |
 | CSRF tokens | <Yes /> | <No /> | <Yes /> | <No /> |
 | Webhook signing (Standard Webhooks) | <Yes /> | <No /> | <No /> | <No /> |
+| TOTP two-factor codes | <Yes /> | <No /> | <No /> | <No /> |
 | Stalled-connection timeouts by default | <Yes /> | <Partial /> | <Yes /> | <No /> |
 | UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
@@ -124,6 +125,12 @@ and `Origin` when given the request; Bun makes both optional. Deno's `@std/http`
 and Ed25519 (`v1a`), byte-compatible with the spec's reference library. Bun
 1.4.3, Node 24 and Deno's `@std/http` and `@std/crypto` have no webhook API.
 See [Webhooks](/docs/guides/webhooks).
+
+**On the TOTP row.** esrun generates and checks RFC 6238 codes, writes
+`otpauth://` URIs and makes backup codes, matching the `otpauth` library's codes
+and URIs. Bun 1.4.3, Node 24 and Deno's `@std/crypto` have no TOTP API; Deno's
+`@std/encoding` has base32 only. See
+[Two-factor sign-in](/docs/guides/hashing#two-factor-sign-in).
 
 **On the UDP rows.** All four have it. Deno's stable path is `node:dgram`;
 Bun's surface is widest (`sendMany`, source-specific membership); esrun's is

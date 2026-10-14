@@ -6,7 +6,7 @@
 // YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML, WebAssembly and
 // JavaScript from Simple Icons (CC0). MessagePack, Protobuf, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
-// hashing, CSRF, webhooks, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
+// hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
 // original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile.
 //
@@ -263,6 +263,14 @@ export default function StackIcon({ name }) {
             <path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2" />
             <path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" />
             <path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" />
+          </svg>
+        </span>
+      )}
+      {name === "totp" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+            <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
           </svg>
         </span>
       )}

@@ -3019,7 +3019,7 @@ incrementally instead of all at once, encoded output, and passwords.
 - **Status:** Available
 
 ```js
-import { hash, Hasher, hashStream, hmac, timingSafeEqual, password } from "runtime:hashing";
+import { hash, Hasher, hashStream, hmac, timingSafeEqual, password, totp } from "runtime:hashing";
 
 hash("sha256", "hello", "hex");            // "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 hash("xxhash3", buffer);                   // Uint8Array — a cache key, at a tenth of the cost
@@ -3105,6 +3105,33 @@ it, not a hundred concurrent calls. And **bcrypt refuses a password longer than
 71 bytes** rather than truncating it, because truncating quietly makes two
 different passwords the same password; verification still truncates, since a
 stored hash may have been written by an implementation that did.
+
+### `totp`
+
+Time-based one-time passwords (RFC 6238) for two-factor sign-in (D164).
+
+| Function | Description | Capability |
+| --- | --- | --- |
+| `totp.generateSecret()` | A base32 secret of 20 random bytes. | Entropy |
+| `totp.uri({ secret, issuer, account, algorithm?, digits?, period? })` | The `otpauth://totp/issuer:account?…` URI for a QR code. `issuer` and `account` are required and may not contain `:`. | — |
+| `totp.generate(secret, { algorithm?, digits?, period?, time? })` | The code for `time` (a `Date` or milliseconds; default now). | — |
+| `totp.verify(code, secret, { window?, after?, algorithm?, digits?, period?, time? })` | The time step `code` matched, or `null`. | — |
+| `totp.backupCodes(count?)` | `count` (default 10, at most 100) recovery codes, `xxxxx-xxxxx`, from Crockford's base32 alphabet. | Entropy |
+
+`secret` is a base32 string (any case; spaces and `=` ignored) or bytes, at
+least 16 bytes. The defaults are SHA-1, 6 digits and 30 seconds; `algorithm` may
+be `"SHA256"` or `"SHA512"`, `digits` 7 or 8. Google Authenticator ignores any
+other setting.
+
+`verify` checks `window` steps either side of `time` (default 1, at most 10). A
+step at or before `after` is refused: store the step `verify` returns and pass
+it as `after` next time, so each code is accepted once (RFC 6238 §5.2). A
+missing, malformed or wrong code is `null`; `verify` does not throw for one.
+
+These are `TypeError`s: a secret under 16 bytes or not base32, an unknown
+option, `digits` other than 6, 7 or 8, an unknown `algorithm`, a `period` that
+is not a positive whole number, a `window` out of range, an `after` that is not
+a whole number, and a URI without `issuer` or `account`.
 
 ## `runtime:images`
 

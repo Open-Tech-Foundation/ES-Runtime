@@ -15,6 +15,7 @@ itself.
 
 ### Added
 
+- `runtime:hashing`: `totp` and `TotpOptions` (DECISIONS D164).
 - `runtime:http`: `Webhook` and `WebhookVerificationError` (DECISIONS D163).
 - `runtime:http`: `CSRF` with `CSRFGenerateOptions` and `CSRFVerifyOptions`
   (DECISIONS D162).
