@@ -39,7 +39,9 @@ def chunk(kind, body):
 
 
 def samples():
-    if os.path.exists(os.path.join(SAMPLES, "photo.jpg")):
+    if os.path.exists(os.path.join(SAMPLES, "photo.jpg")) and os.path.exists(
+        os.path.join(SAMPLES, "progressive.jpg")
+    ):
         return
     os.makedirs(SAMPLES, exist_ok=True)
     s = os.path.join
@@ -47,6 +49,7 @@ def samples():
     img.putdata([(x * 4, y * 5, 128) for y in range(48) for x in range(64)])
     img.save(s(SAMPLES, "sample.png"))
     img.save(s(SAMPLES, "sample.jpg"), quality=90)
+    img.save(s(SAMPLES, "progressive.jpg"), quality=90, progressive=True)
     img.save(s(SAMPLES, "sample.webp"), quality=90)
     img.save(s(SAMPLES, "sample.gif"))
     img.save(s(SAMPLES, "sample.tiff"))
@@ -87,7 +90,7 @@ CASES = (
     + [f"encode:{f}" for f in FORMATS]
     + ["fit:cover", "fit:contain", "fit:outside", "crop", "rotate", "rotate-free",
        "blur", "composite", "text", "animated-out", "progressive-jpg",
-       "orient", "bomb", "malformed", "animation", "offthread"]
+       "progressive-in", "orient", "bomb", "malformed", "animation", "offthread"]
 )
 
 MAGIC = {
@@ -130,6 +133,8 @@ def judge(case, result):
     if name == "decode":
         # sample.heic is square (128x128), the rest are 4:3 (64x48).
         return size(result) == ((32, 32) if arg == "heic" else (32, 24))
+    if name == "progressive-in":
+        return size(result) == (32, 24)
     if name == "encode":
         return MAGIC[arg](open(result["out"], "rb").read(16))
     if name == "fit":
@@ -189,7 +194,7 @@ GROUPS = [
     ("Decoding", [
         ("Decode JPEG", ["decode:jpeg"]), ("Decode PNG", ["decode:png"]), ("Decode WebP", ["decode:webp"]),
         ("Decode AVIF", ["decode:avif"]), ("Decode GIF", ["decode:gif"]), ("Decode TIFF", ["decode:tiff"]),
-        ("Decode HEIC", ["decode:heic"]),
+        ("Decode HEIC", ["decode:heic"]), ("Decode progressive JPEG", ["progressive-in"]),
     ]),
     ("Encoding", [
         ("Encode JPEG", ["encode:jpeg"]), ("Encode PNG", ["encode:png"]), ("Encode WebP", ["encode:webp"]),

@@ -24,6 +24,8 @@ async function run(name, arg, data, out, api) {
   switch (name) {
     case "decode":
       return write(await api.decodeResize(await api.read(`${data}/sample.${EXT[arg]}`), 32));
+    case "progressive-in":
+      return write(await api.decodeResize(await api.read(`${data}/progressive.jpg`), 32));
     case "encode":
       return write(await api.encode(await api.read(`${data}/sample.png`), arg), EXT[arg]);
     case "fit":

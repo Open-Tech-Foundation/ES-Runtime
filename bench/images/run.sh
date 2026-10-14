@@ -24,14 +24,14 @@ data="$here/.data"
 esrun_bin="${ESRUN:-$root/target/release/esrun}"
 
 REPS="${REPS:-5}"
-WORKLOADS="${WORKLOADS:-jpeg_webp jpeg_jpeg png_jpeg jpeg_avif}"
+WORKLOADS="${WORKLOADS:-jpeg_webp jpeg_jpeg png_jpeg jpeg_avif pjpeg_webp}"
 RUNTIMES="${RUNTIMES:-esrun node bun deno}"
 
 # Human-readable progress goes to stderr when the JSON is wanted on stdout.
 if [ "${BENCH_JSON:-0}" = 1 ]; then exec 3>&1 1>&2; fi
 
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
-if [ ! -f "$data/photo.jpg" ] || [ ! -f "$data/screen.png" ]; then
+if [ ! -f "$data/photo.jpg" ] || [ ! -f "$data/photo-progressive.jpg" ] || [ ! -f "$data/screen.png" ]; then
   mkdir -p "$data"
   python3 -I "$here/gen.py" "$data" || { echo "generating inputs needs Pillow (pip install pillow)" >&2; exit 1; }
 fi

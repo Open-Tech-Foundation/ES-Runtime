@@ -20,6 +20,10 @@ photo = photo.filter(ImageFilter.GaussianBlur(3))
 noise = Image.effect_noise((4000, 3000), 12).convert("RGB")
 photo = Image.blend(photo, noise, 0.08)
 photo.save(f"{out}/photo.jpg", quality=90)
+# The same pixels as a progressive JPEG: thumbnails of it decode at reduced
+# scale without holding the full image, which is what the pjpeg_webp
+# workload measures.
+photo.save(f"{out}/photo-progressive.jpg", quality=90, progressive=True)
 
 screen = Image.new("RGB", (1280, 800), (245, 246, 248))
 draw = ImageDraw.Draw(screen)

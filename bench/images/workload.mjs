@@ -15,4 +15,7 @@ export const WORKLOADS = {
   png_jpeg: { input: "screen.png", width: 320, format: "jpeg" },
   // The same JPEG to an AVIF thumbnail. Bun has no AVIF encoder on Linux.
   jpeg_avif: { input: "photo.jpg", width: 400, format: "avif" },
+  // The same pixels as a progressive JPEG to a WebP thumbnail: the input
+  // opens from its headers and thumbnails shrink on load.
+  pjpeg_webp: { input: "photo-progressive.jpg", width: 400, format: "webp" },
 };
