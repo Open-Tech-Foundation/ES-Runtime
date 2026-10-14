@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-14
+
 ### Added
 
 - `runtime:hashing`: `totp` and `TotpOptions` (DECISIONS D164).

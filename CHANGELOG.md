@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-14
+
 ### Added
 
 - `totp` in `runtime:hashing` (D164) for two-factor sign-in:
