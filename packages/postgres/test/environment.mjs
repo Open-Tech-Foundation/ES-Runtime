@@ -2,7 +2,13 @@
 // has them. run.sh exports the ones for the test server, so each rung of the
 // precedence is visible by what the server answers.
 import { connect } from "runtime:db";
+import { env } from "runtime:process";
 import { driver as postgres } from "../dist/index.js";
+
+// The port comes from the environment like the rest of the suite: the two
+// connects below need the server run.sh points at, on whatever port that is,
+// while the database they name stays one the server does not have.
+const port = env.PGPORT ?? "5433";
 
 // `postgres://` names nothing, so everything comes from the environment.
 const bare = await connect("postgres://", { driver: postgres });
@@ -12,14 +18,14 @@ await bare.close();
 // The URL wins over the environment: it names a database the server does not
 // have, and the server says so, rather than PGDATABASE's being used.
 try {
-  await connect("postgres://127.0.0.1:5433/esrun_no_such_db", { driver: postgres });
+  await connect(`postgres://127.0.0.1:${port}/esrun_no_such_db`, { driver: postgres });
   console.log("url wins: connected (should not happen)");
 } catch (e) {
   console.log("url wins:", e.server?.code === "3D000", e.message.includes("esrun_no_such_db"));
 }
 
 // Explicit options win over both.
-const explicit = await connect("postgres://127.0.0.1:5433/esrun_no_such_db", {
+const explicit = await connect(`postgres://127.0.0.1:${port}/esrun_no_such_db`, {
   driver: postgres,
   database: "esrun_test",
 });

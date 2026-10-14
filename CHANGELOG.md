@@ -13,6 +13,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- The postgres driver's `environment` test no longer dials a hardcoded port
+  5433: it takes the test server's port from `PGPORT`, like the rest of the
+  suite. CI serves postgres on 5432, so the two URL-precedence connects
+  failed with connection refused there while passing locally.
+
 - Security dependency bumps with no API change: `rustls` 0.23.45 → 0.23.46
   (RUSTSEC-2026-0346 through RUSTSEC-2026-0349) and `quinn-proto` 0.11.16 →
   0.11.19 (RUSTSEC-2026-0338 through RUSTSEC-2026-0342).
