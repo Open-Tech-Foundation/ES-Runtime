@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-14
+
 ### Changed
 
 - **Breaking:** `esdev create` has no default template. An unattended run
