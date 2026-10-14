@@ -10,6 +10,7 @@ const WORKLOADS = {
   jpeg_jpeg: "12 MP JPEG → 400 px JPEG",
   png_jpeg: "1280×800 PNG → 320 px JPEG",
   jpeg_avif: "12 MP JPEG → 400 px AVIF",
+  pjpeg_webp: "12 MP progressive JPEG → 400 px WebP",
 };
 
 // Each runtime's own image API; Node.js has none, so it runs sharp.

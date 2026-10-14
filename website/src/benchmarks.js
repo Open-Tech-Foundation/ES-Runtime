@@ -372,75 +372,92 @@ export default {
   "results_images": {
     "jpeg_webp": {
       "esrun": {
-        "ms": 518.2,
-        "rss_mb": 144.5,
+        "ms": 521.7,
+        "rss_mb": 146.1,
         "bytes": 16888
       },
       "node": {
-        "ms": 375.1,
-        "rss_mb": 98.2,
+        "ms": 357.7,
+        "rss_mb": 98.7,
         "bytes": 16512
       },
       "bun": {
-        "ms": 170.9,
-        "rss_mb": 141.1,
+        "ms": 169.1,
+        "rss_mb": 127.8,
         "bytes": 16634
       }
     },
     "jpeg_jpeg": {
       "esrun": {
-        "ms": 251,
-        "rss_mb": 114.9,
+        "ms": 247.5,
+        "rss_mb": 115,
         "bytes": 23856
       },
       "node": {
-        "ms": 246.2,
-        "rss_mb": 99.3,
+        "ms": 249.6,
+        "rss_mb": 98.7,
         "bytes": 23637
       },
       "bun": {
-        "ms": 118.5,
-        "rss_mb": 103.3,
+        "ms": 118.1,
+        "rss_mb": 105.2,
         "bytes": 25011
       },
       "deno": {
-        "ms": 54453.3,
-        "rss_mb": 197,
+        "ms": 52302,
+        "rss_mb": 196.7,
         "bytes": 36797
       }
     },
     "png_jpeg": {
       "esrun": {
-        "ms": 224.5,
-        "rss_mb": 349.5,
+        "ms": 223.5,
+        "rss_mb": 334.5,
         "bytes": 16799
       },
       "node": {
-        "ms": 220.6,
-        "rss_mb": 142.4,
+        "ms": 216.5,
+        "rss_mb": 140.1,
         "bytes": 15766
       },
       "bun": {
-        "ms": 63.5,
-        "rss_mb": 123.4,
+        "ms": 62.1,
+        "rss_mb": 120,
         "bytes": 16792
       },
       "deno": {
-        "ms": 4883.2,
-        "rss_mb": 62.1,
+        "ms": 4540.7,
+        "rss_mb": 61.7,
         "bytes": 20353
       }
     },
     "jpeg_avif": {
       "esrun": {
-        "ms": 684.4,
-        "rss_mb": 216.3,
+        "ms": 690.7,
+        "rss_mb": 217.8,
         "bytes": 24843
       },
       "node": {
-        "ms": 6741.3,
-        "rss_mb": 201.7,
+        "ms": 6776.1,
+        "rss_mb": 204.5,
         "bytes": 24007
+      }
+    },
+    "pjpeg_webp": {
+      "esrun": {
+        "ms": 930.3,
+        "rss_mb": 1513.2,
+        "bytes": 16888
+      },
+      "node": {
+        "ms": 982.9,
+        "rss_mb": 614.6,
+        "bytes": 16512
+      },
+      "bun": {
+        "ms": 469.4,
+        "rss_mb": 601.2,
+        "bytes": 16634
       }
     }
   },
