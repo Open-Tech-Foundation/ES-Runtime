@@ -26,7 +26,7 @@ An HTTP/1.1 and HTTP/2 server: `serve((request) => response)`. The handler takes
 ## Import
 
 ```js
-import { serve, trailersOf, withTrailers, Cookie, CookieMap } from "runtime:http";
+import { serve, trailersOf, withTrailers, Cookie, CookieMap, CSRF } from "runtime:http";
 ```
 
 ## Functions
@@ -316,6 +316,34 @@ has about 3 KB of room.
 In a handler, `request.cookies` is a `CookieMap` of the request's cookies, parsed
 on first read. Its `set` and `delete` calls are sent with the response as
 `Set-Cookie` headers, next to the response's own.
+
+## CSRF
+
+`CSRF` (D162) follows Bun's `Bun.CSRF`. A token is an HMAC-SHA256 over the
+session ID, a random nonce, its issue time and its lifetime; nothing is stored.
+
+| Function | Description |
+| --- | --- |
+| `CSRF.generate(secret, { sessionId, expiresIn? })` | A token (86 characters, base64url) for `sessionId`, valid for `expiresIn` milliseconds (default 24 hours). Draws a nonce, so it needs Entropy. |
+| `CSRF.verify(token, { secret, sessionId, maxAge?, request?, trustedOrigins? })` | `true` if `token` was issued for `sessionId` under the secret and is younger than both its lifetime and `maxAge` (default 24 hours). |
+
+`secret` is a string, bytes or `Secret` of at least 32 bytes, or an array of them
+for rotation: `generate` uses the first, `verify` accepts any.
+
+With `request`, `verify` also fails when the browser reports another site: a
+`Sec-Fetch-Site` of `cross-site` or `same-site`, or, without that header, an
+`Origin` other than the request's own. An `Origin` listed in `trustedOrigins`
+passes. A request with neither header is judged by the token alone.
+
+`verify` returns `false`, and never throws, for a missing, non-string,
+malformed, changed, foreign or expired token. These are `TypeError`s: a missing
+secret or `sessionId`, a secret under 32 bytes, an unknown option, a
+non-positive `expiresIn` or `maxAge`, a `request` that is not a `Request`, and
+an `encoding` other than `"base64url"` or an `algorithm` other than `"sha256"`
+(Bun's other formats).
+
+Different from Bun: the secret and `sessionId` are required, `verify` does not
+throw for a bad token, and `request` is checked.
 
 ## Errors
 

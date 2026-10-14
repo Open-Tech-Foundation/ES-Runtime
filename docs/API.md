@@ -2298,6 +2298,7 @@ await server.stop();
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
 | `Cookie`                          | `class`                                       | One cookie: attributes, `serialize()`, `Cookie.parse()`. See [Cookies](#cookies). |
 | `CookieMap`                       | `class`                                       | Cookies by name, from a `Cookie` header; records `Set-Cookie` changes. See [Cookies](#cookies). |
+| `CSRF`                            | `object`                                      | `generate`/`verify` CSRF tokens bound to a session. See [CSRF](#csrf). |
 | `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
@@ -2364,6 +2365,34 @@ In a handler, `request.cookies` is a `CookieMap` of the request's cookies, parse
 on first read. Its `set` and `delete` calls are sent with the response as
 `Set-Cookie` headers, next to the response's own.
 
+
+#### CSRF
+
+`CSRF` (D162) follows Bun's `Bun.CSRF`. A token is an HMAC-SHA256 over the
+session ID, a random nonce, its issue time and its lifetime; nothing is stored.
+
+| Function | Description |
+| --- | --- |
+| `CSRF.generate(secret, { sessionId, expiresIn? })` | A token (86 characters, base64url) for `sessionId`, valid for `expiresIn` milliseconds (default 24 hours). Draws a nonce, so it needs Entropy. |
+| `CSRF.verify(token, { secret, sessionId, maxAge?, request?, trustedOrigins? })` | `true` if `token` was issued for `sessionId` under the secret and is younger than both its lifetime and `maxAge` (default 24 hours). |
+
+`secret` is a string, bytes or `Secret` of at least 32 bytes, or an array of them
+for rotation: `generate` uses the first, `verify` accepts any.
+
+With `request`, `verify` also fails when the browser reports another site: a
+`Sec-Fetch-Site` of `cross-site` or `same-site`, or, without that header, an
+`Origin` other than the request's own. An `Origin` listed in `trustedOrigins`
+passes. A request with neither header is judged by the token alone.
+
+`verify` returns `false`, and never throws, for a missing, non-string,
+malformed, changed, foreign or expired token. These are `TypeError`s: a missing
+secret or `sessionId`, a secret under 32 bytes, an unknown option, a
+non-positive `expiresIn` or `maxAge`, a `request` that is not a `Request`, and
+an `encoding` other than `"base64url"` or an `algorithm` other than `"sha256"`
+(Bun's other formats).
+
+Different from Bun: the secret and `sessionId` are required, `verify` does not
+throw for a bad token, and `request` is checked.
 
 #### The connection a request came from
 

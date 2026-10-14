@@ -178,6 +178,79 @@ To set cookies outside a handler, build them with `Cookie` or `CookieMap` and
 add `toSetCookieHeaders()` to the response yourself. See the
 [`runtime:http` reference](/api/http#cookies) for every option.
 
+## CSRF
+
+Another site can make a signed-in user's browser send a `POST` to your app, and
+the browser attaches the user's cookies. To refuse it, put a token in every form
+and check it on every request that changes something. `CSRF` from
+`runtime:http` issues and checks the token.
+
+```js
+import { serve, CSRF } from "runtime:http";
+import { env } from "runtime:process";
+
+const secret = env.CSRF_KEY; // at least 32 bytes
+
+serve(async (request) => {
+  const sessionId = currentSessionId(request); // see below
+
+  if (request.method === "GET") {
+    const token = CSRF.generate(secret, { sessionId });
+    return new Response(
+      `<form method="post"><input type="hidden" name="csrf" value="${token}">…</form>`,
+      { headers: { "content-type": "text/html" } },
+    );
+  }
+
+  const form = await request.formData();
+  if (!CSRF.verify(form.get("csrf"), { secret, sessionId, request })) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  // …change state
+  return new Response("Saved");
+});
+```
+
+- **`sessionId` is required.** The token is bound to it, so a token taken from
+  one user's page does not work for another. Use the ID of the session cookie,
+  or of a pre-login session on a login form, so that the login form is protected
+  too.
+- **Passing `request`** also checks what the browser reports about where the
+  request came from. A request marked `Sec-Fetch-Site: cross-site` or
+  `same-site`, or with another site's `Origin`, fails even with a valid token.
+  Allow a known partner with `trustedOrigins: ["https://partner.example"]`.
+- **`verify` returns `false`** for a missing, changed, expired or foreign token.
+  It does not throw, so a forged request is a 403, not a 500.
+- Check every method that changes state. `GET` should never change state.
+
+From JavaScript, send the token in a header instead of a form field:
+
+```js
+await fetch("/api/items", { method: "POST", headers: { "x-csrf-token": token }, body });
+// on the server:
+CSRF.verify(request.headers.get("x-csrf-token"), { secret, sessionId, request });
+```
+
+Tokens last 24 hours unless you set `expiresIn` (milliseconds). To change the
+secret, pass `[newSecret, oldSecret]` to `verify` until old tokens have expired.
+
+The session ID itself can live in a signed cookie, so it cannot be swapped:
+
+```js
+function currentSessionId(request) {
+  const secrets = [env.SESSION_KEY];
+  let id = request.cookies.getSigned("sid", { secrets });
+  if (id === null) {
+    id = crypto.randomUUID();
+    request.cookies.setSigned("sid", id, { secrets, httpOnly: true });
+  }
+  return id;
+}
+```
+
+`CSRF` follows Bun's `Bun.CSRF`, but requires the secret and the session ID,
+which Bun leaves optional. See the [`runtime:http` reference](/api/http#csrf).
+
 ## Client disconnects
 
 `request.signal` aborts when the client hangs up before your handler produced a

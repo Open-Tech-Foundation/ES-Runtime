@@ -19,6 +19,7 @@ mod builtins;
 mod compression_ops;
 mod cookie_ops;
 mod crypto_ops;
+mod csrf_ops;
 mod curve25519_ops;
 mod db_conns;
 mod db_ops;

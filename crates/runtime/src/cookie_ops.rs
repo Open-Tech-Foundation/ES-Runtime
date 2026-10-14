@@ -27,7 +27,7 @@ const NONCE: usize = 12;
 const SIGN_INFO: &[u8] = b"esrun cookie hmac-sha256 v1";
 const SEAL_INFO: &[u8] = b"esrun cookie aes-256-gcm v1";
 
-fn derive(secret: &[u8], info: &[u8]) -> [u8; 32] {
+pub(crate) fn derive(secret: &[u8], info: &[u8]) -> [u8; 32] {
     let mut key = [0u8; 32];
     Hkdf::<Sha256>::new(None, secret)
         .expand(info, &mut key)
@@ -134,11 +134,11 @@ pub(crate) fn open(secrets: &[Vec<u8>], name: &str, text: &str) -> Option<(u64, 
     })
 }
 
-fn type_error(message: &str) -> OpError {
+pub(crate) fn type_error(message: &str) -> OpError {
     OpError::type_error(message.to_string())
 }
 
-fn str_arg(args: &[Value], index: usize) -> Result<&str, OpError> {
+pub(crate) fn str_arg(args: &[Value], index: usize) -> Result<&str, OpError> {
     args.get(index)
         .and_then(Value::as_str)
         .ok_or_else(|| type_error("expected a string"))
@@ -152,7 +152,7 @@ fn expiry_arg(args: &[Value], index: usize) -> u64 {
 }
 
 /// The secrets, already checked and encoded to bytes in JS.
-fn secrets_arg(args: &mut [Value], index: usize) -> Result<Vec<Vec<u8>>, OpError> {
+pub(crate) fn secrets_arg(args: &mut [Value], index: usize) -> Result<Vec<Vec<u8>>, OpError> {
     let Some(Value::Array(items)) = args
         .get_mut(index)
         .map(|slot| std::mem::replace(slot, Value::Undefined))

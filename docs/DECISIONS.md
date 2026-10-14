@@ -3329,3 +3329,24 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Keeping the value readable in a sealed cookie, or encrypting a signed one.** Two clear choices are easier to use correctly than one cookie with modes.
 
 **Consequences:** the oversized-cookie check (D144) applies after signing or sealing, so a sealed value has about 3 KB of room. A key shorter than 32 bytes is a `TypeError` at the call.
+
+### D162 — CSRF tokens: Bun's `CSRF`, bound to a session, with the browser's own signal · *Accepted (2026-10-14)* · *pairs with D161*
+
+**Context:** a page on another site can make a signed-in user's browser send a POST to the app, cookies attached. The defence is to require something that page cannot produce. OWASP's cheat sheet lists three: the synchronizer token (a random token kept in the server-side session), the signed token bound to the session (an HMAC over the session ID, nothing stored), and checking `Sec-Fetch-Site` and `Origin`, which it now calls "the primary signal" but says must have a fallback. Node and Deno ship nothing. Bun ships `Bun.CSRF.generate(secret, { sessionId, expiresIn })` and `verify(token, { secret, sessionId, maxAge })`: signed tokens, where the session binding is optional and an omitted secret is a random one per thread, so tokens fail across workers and restarts. Go 1.25 (`http.CrossOriginProtection`) and Hono's `csrf()` check the headers and use no tokens. The runtime has no session store, so a literal synchronizer token would have to live in the app.
+
+**Decision (maintainer, 2026-10-14):**
+
+- **`CSRF` is exported from `runtime:http` with Bun's two functions,** `generate(secret, options)` and `verify(token, options)`, so code written for Bun ports. The token is HMAC-SHA256 over the session ID, a random nonce, the issue time and the lifetime, with a key derived from the secret by HKDF-SHA256 (separate from the cookie keys of D161). Synchronous, base64url.
+- **The secret is required** and is what D161 takes: a string, bytes or `Secret` of at least 32 bytes, or an array of them, newest first, to rotate. **Different from Bun,** which falls back to a per-thread random secret.
+- **`sessionId` is required.** OWASP: signing "without session binding provides minimal protection", because any token the server issued would then work for every user. **Different from Bun,** where it is optional. Before login, the session ID is the pre-session's (OWASP's answer to login CSRF).
+- **`expiresIn` and `maxAge`** default to 24 hours, as in Bun. Both are checked: a token older than either fails, as does one issued in the future (beyond 60 seconds of clock skew).
+- **`verify` returns `false` for anything that is not a valid token,** including a missing or non-string one. **Different from Bun,** which throws: the token is request input, and a throw would let any client cause a 500.
+- **`verify(token, { request })` also checks the browser's signal.** `Sec-Fetch-Site: cross-site` or `same-site` fails, as does an `Origin` that does not match the request's URL, unless it is listed in `trustedOrigins`. A request with neither header is judged by the token alone, as Go does. This is OWASP's layering: the browser's signal first, the token as the fallback it requires.
+- **`generate` needs Entropy** for its nonce, drawn through `crypto.getRandomValues` (D57, D161).
+
+**Rejected:**
+- **A literal synchronizer token in a runtime-managed session.** There is no session store, and adding one is a much larger decision. An app that wants a stored token keeps it in a sealed cookie (D161); the guide shows the signed form instead.
+- **Header checks alone (Go, Hono).** OWASP requires a fallback, and a reverse proxy that strips the headers would leave nothing.
+- **Bun's `encoding` and `algorithm` options.** One format is enough. Passing a value other than the defaults (`base64url`, `sha256`) is a `TypeError`, so ported code fails loudly instead of being read wrongly.
+
+**Consequences:** a token is 86 characters. It is sent in a form field or a header of the app's choosing; `verify` does not read the request body.

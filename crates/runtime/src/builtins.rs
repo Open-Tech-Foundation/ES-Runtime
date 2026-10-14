@@ -128,6 +128,9 @@ pub(crate) fn install(
     // Signed and sealed cookies for runtime:http (D161). Pure computation; a
     // seal's nonce is drawn in JS, through the Entropy gate.
     crate::cookie_ops::install(engine)?;
+    // CSRF tokens for runtime:http (D162). Pure; the nonce and the clock
+    // reading come from JS.
+    crate::csrf_ops::install(engine)?;
     // runtime:images ops (D159): bytes in and out need nothing; a file() source
     // is FileRead and a file() destination FileWrite, through the provider. The
     // work runs on the TaskSpawner, inline without one.

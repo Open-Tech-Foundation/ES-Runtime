@@ -129,7 +129,7 @@ const NAV = [
           { title: "Connections & limits", path: "/docs/internals/http/connections" },
           { title: "Handoff & draining", path: "/docs/internals/http/handoff" },
           { title: "Identity & observability", path: "/docs/internals/http/identity" },
-          { title: "Cookies", path: "/docs/internals/http/cookies" },
+          { title: "Cookies & CSRF", path: "/docs/internals/http/cookies" },
           { title: "Compared", path: "/docs/internals/http/comparison" },
         ],
       },

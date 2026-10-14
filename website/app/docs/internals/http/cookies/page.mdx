@@ -1,9 +1,9 @@
 ---
-title: Cookies
-description: Why ES-Runtime refuses cookies a browser would drop, and how signed and sealed cookies are built.
+title: Cookies and CSRF
+description: Why ES-Runtime refuses cookies a browser would drop, how signed and sealed cookies are built, and how CSRF tokens are checked.
 ---
 
-# Cookies
+# Cookies and CSRF
 
 ## Strict on the way out
 
@@ -66,8 +66,43 @@ Signing and sealing run in Rust, synchronously, like the rest of `CookieMap`.
 There is nothing to wait for, and an `await` on every session read would make
 every handler that reads one async.
 
+## CSRF tokens
+
+OWASP describes three defences: a random token kept in a server-side session
+(the synchronizer token), a token signed over the session ID, and the browser's
+own report of where a request came from. `CSRF` uses the second and checks the
+third when it is given the request.
+
+**Signed, not stored.** The runtime has no session store, and a token that has
+to be stored is a write on every page view. A signed token carries its own
+proof: the server recomputes the HMAC over the session ID, the nonce, the issue
+time and the lifetime. Its key comes from the secret through HKDF with its own
+`info`, so it never equals a cookie key, even with the same secret.
+
+**Bound to a session, always.** A signed token that is not tied to a session is
+valid for anyone who holds one, and an attacker can get one by visiting the
+site. This is why `sessionId` is required, where Bun makes it optional.
+
+**The browser's signal first, the token behind it.** `Sec-Fetch-Site` says
+whether a request came from the same origin, and OWASP now calls it the primary
+signal. It is not always there: older browsers, privacy tools and some proxies
+remove it. A request without it falls back to `Origin`, and a request with
+neither is judged by the token. A header check alone, as in Go 1.25 and Hono,
+would have nothing left in that case.
+
+**`false` for any bad token.** The token is request input, so a missing or
+malformed one is what an attacker sends. Throwing on it would turn every forged
+request into a 500. A misused API (no secret, no session ID) still throws,
+because that is a mistake in the code.
+
+**Two lifetimes.** `expiresIn` is written into the token and cannot be changed
+without breaking the HMAC. `maxAge` is the verifier's own limit, so a server can
+shorten the window for tokens already issued. An issue time more than 60 seconds
+in the future fails, which allows for clocks that differ between servers.
+
 ## See also
 
 - [Cookies](/docs/http/basics#cookies) — how to use them
 - [`runtime:http` reference](/api/http#cookies) — every method and option
-- `docs/DECISIONS.md` D144 and D161 — what was decided and rejected
+- [CSRF](/docs/http/basics#csrf) — how to protect a form
+- `docs/DECISIONS.md` D144, D161 and D162 — what was decided and rejected

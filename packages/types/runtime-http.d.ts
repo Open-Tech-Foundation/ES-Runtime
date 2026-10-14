@@ -150,6 +150,52 @@ declare module "runtime:http" {
     [Symbol.iterator](): MapIterator<[string, string]>;
   }
 
+  /** Options for `CSRF.generate` (D162). */
+  interface CSRFGenerateOptions {
+    /** The session the token is for. Required: an unbound token works for every user. */
+    sessionId: string;
+    /** Milliseconds until the token expires. Default 24 hours. */
+    expiresIn?: number;
+    /** Accepted for Bun compatibility; only `"base64url"`. */
+    encoding?: "base64url";
+    /** Accepted for Bun compatibility; only `"sha256"`. */
+    algorithm?: "sha256";
+  }
+
+  /** Options for `CSRF.verify` (D162). */
+  interface CSRFVerifyOptions {
+    /** The secret, or secrets newest first; each at least 32 bytes. */
+    secret: CookieSecrets[number] | CookieSecrets;
+    /** The session the token must have been issued for. */
+    sessionId: string;
+    /** The oldest token accepted, in milliseconds. Default 24 hours. */
+    maxAge?: number;
+    /**
+     * The request, to also check `Sec-Fetch-Site` and `Origin`: a cross-site
+     * or same-site request, or a foreign `Origin`, fails.
+     */
+    request?: Request;
+    /** Origins allowed to post here from another site. */
+    trustedOrigins?: string[];
+    encoding?: "base64url";
+    algorithm?: "sha256";
+  }
+
+  /**
+   * CSRF tokens — Bun's `Bun.CSRF` (D162). A token is an HMAC-SHA256 over the
+   * session ID, a nonce and its issue time; nothing is stored.
+   */
+  export const CSRF: {
+    /** A token for `options.sessionId`. Needs Entropy for its nonce. */
+    generate(secret: CookieSecrets[number] | CookieSecrets, options: CSRFGenerateOptions): string;
+    /**
+     * Whether `token` was issued for this session under one of the secrets and
+     * has not expired. `false` for a missing or malformed token; never throws
+     * for one.
+     */
+    verify(token: unknown, options: CSRFVerifyOptions): boolean;
+  };
+
   /** What the handler is told about the connection a request arrived on. */
   export interface ConnectionInfo {
     /**

@@ -1,6 +1,6 @@
 // A type test for `runtime:http`'s cookies. Compiled by `tsc -p .`, never run.
 
-import { Cookie, CookieMap, serve } from "runtime:http";
+import { Cookie, CookieMap, CSRF, serve } from "runtime:http";
 import { env } from "runtime:process";
 
 serve((req) => {
@@ -18,6 +18,14 @@ serve((req) => {
   // @ts-expect-error — reading needs the secrets.
   req.cookies.getSealed("session");
   void [session, uid];
+  // CSRF (D162): the token from the form; the session ID from the session.
+  const token: string = CSRF.generate(secrets, { sessionId: "s1", expiresIn: 3_600_000 });
+  const ok: boolean = CSRF.verify(token, { secret: env.COOKIE_KEY, sessionId: "s1", request: req });
+  // @ts-expect-error — a token must be bound to a session.
+  CSRF.generate("k".repeat(32), {});
+  // @ts-expect-error — only base64url is produced.
+  CSRF.generate("k".repeat(32), { sessionId: "s1", encoding: "hex" });
+  void ok;
   return new Response(sid);
 });
 

@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `CSRF` in `runtime:http` (D162): `CSRF.generate(secret, { sessionId })` and
+  `CSRF.verify(token, { secret, sessionId, request })`, with Bun's API. A token
+  is an HMAC-SHA256 over the session ID, a nonce and its issue time, so nothing
+  is stored. Unlike Bun, the secret and the session ID are required, `verify`
+  returns `false` instead of throwing for a missing or malformed token, and,
+  given the request, it also rejects what `Sec-Fetch-Site` or `Origin` reports
+  as another site. The HTTP guide has a CSRF section, the homepage a CSRF tile,
+  and the comparison page a row.
+
 - Signed and sealed cookies in `runtime:http` (D161). `CookieMap.setSigned` and
   `getSigned` protect a readable value with HMAC-SHA256; `setSealed` and
   `getSealed` encrypt it with AES-256-GCM. Both take `secrets`, newest first,

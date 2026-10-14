@@ -1213,5 +1213,98 @@ function serve(options, handler) {
   );
 }
 
-export { serve, withTrailers, trailersOf, Cookie, CookieMap };
-export default { serve, withTrailers, trailersOf, Cookie, CookieMap };
+// ---- CSRF tokens (D162) ----------------------------------------------------
+//
+// Bun's `CSRF.generate`/`CSRF.verify`, with the differences D162 records: the
+// secret and the session ID are required, `verify` answers `false` rather than
+// throwing for any bad token (it is request input), and `verify` given the
+// request also checks what the browser says about where it came from.
+
+const CSRF_LIFETIME_MS = 86_400_000;
+const GENERATE_OPTIONS = new Set(["sessionId", "expiresIn", "encoding", "algorithm"]);
+const VERIFY_OPTIONS = new Set([
+  "secret",
+  "sessionId",
+  "maxAge",
+  "encoding",
+  "algorithm",
+  "request",
+  "trustedOrigins",
+]);
+
+function csrfOptions(options, allowed, fn) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError(`CSRF.${fn} options must be an object`);
+  }
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) throw new TypeError(`unknown CSRF.${fn} option "${key}"`);
+  }
+  // One format. Bun's other choices would be read wrongly, so they throw.
+  if (options.encoding !== undefined && options.encoding !== "base64url") {
+    throw new TypeError('CSRF tokens are base64url; encoding must be "base64url"');
+  }
+  if (options.algorithm !== undefined && options.algorithm !== "sha256") {
+    throw new TypeError('CSRF tokens are HMAC-SHA256; algorithm must be "sha256"');
+  }
+  const { sessionId } = options;
+  if (typeof sessionId !== "string" || sessionId === "") {
+    throw new TypeError(
+      "sessionId is required: a token not bound to a session would work for every user",
+    );
+  }
+  return options;
+}
+
+function csrfSecrets(secret, fn) {
+  if (secret == null) throw new TypeError(`CSRF.${fn} needs a secret`);
+  return cookieSecrets(Array.isArray(secret) ? secret : [secret]);
+}
+
+function positiveMs(value, name) {
+  if (value === undefined) return CSRF_LIFETIME_MS;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(`${name} must be a positive number of milliseconds`);
+  }
+  return value;
+}
+
+// What the browser reports about where the request came from. Go 1.25's
+// `CrossOriginProtection` rule: `Sec-Fetch-Site` first, then `Origin` against
+// the request's own origin; with neither, there is nothing to judge by.
+function fromThisSite(request, trustedOrigins) {
+  if (!(request instanceof Request)) throw new TypeError("request must be a Request");
+  const trusted = (trustedOrigins ?? []).map((o) => new URL(o).origin);
+  const origin = request.headers.get("origin");
+  if (origin !== null && trusted.includes(origin)) return true;
+  const site = request.headers.get("sec-fetch-site");
+  if (site !== null) return site === "same-origin" || site === "none";
+  if (origin !== null) return origin === new URL(request.url).origin;
+  return true;
+}
+
+const CSRF = {
+  generate(secret, options = {}) {
+    const keys = csrfSecrets(secret, "generate");
+    const { sessionId, expiresIn } = csrfOptions(options, GENERATE_OPTIONS, "generate");
+    const lifetime = positiveMs(expiresIn, "expiresIn");
+    // The nonce comes through the Entropy gate.
+    const nonce = crypto.getRandomValues(new Uint8Array(16));
+    return ops.csrf_generate(keys, sessionId, Date.now(), lifetime, nonce);
+  },
+
+  verify(token, options = {}) {
+    const { sessionId, maxAge, request, trustedOrigins, secret } = csrfOptions(
+      options,
+      VERIFY_OPTIONS,
+      "verify",
+    );
+    const keys = csrfSecrets(secret, "verify");
+    const limit = positiveMs(maxAge, "maxAge");
+    if (request !== undefined && !fromThisSite(request, trustedOrigins)) return false;
+    if (typeof token !== "string" || token === "") return false;
+    return ops.csrf_verify(keys, sessionId, token, Date.now(), limit);
+  },
+};
+
+export { serve, withTrailers, trailersOf, Cookie, CookieMap, CSRF };
+export default { serve, withTrailers, trailersOf, Cookie, CookieMap, CSRF };

@@ -15,6 +15,8 @@ itself.
 
 ### Added
 
+- `runtime:http`: `CSRF` with `CSRFGenerateOptions` and `CSRFVerifyOptions`
+  (DECISIONS D162).
 - `runtime:http`: `CookieMap.setSigned`/`getSigned`, `setSealed`/`getSealed`
   and the `CookieSecrets` type (DECISIONS D161).
 

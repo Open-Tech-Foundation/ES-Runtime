@@ -6,7 +6,7 @@
 // YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML, WebAssembly and
 // JavaScript from Simple Icons (CC0). MessagePack, Protobuf, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
-// hashing, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
+// hashing, CSRF, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
 // original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile.
 //
@@ -246,6 +246,14 @@ export default function StackIcon({ name }) {
             <path d="M12 12v.01" />
             <path d="M11 17v.01" />
             <path d="M7 14v.01" />
+          </svg>
+        </span>
+      )}
+      {name === "csrf" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+            <path d="m9 12 2 2 4-4" />
           </svg>
         </span>
       )}
