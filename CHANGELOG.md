@@ -84,6 +84,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `runtime:images` now runs on `otf-pixels` 0.3.0 instead of 0.2.0, with no
+  API change: JPEG decoding is about twice as fast with identical output,
+  progressive JPEG is decoded in-house (opening one reads only its headers,
+  and the published crates have no dependencies outside the Pixels
+  workspace), and the tile worker pool no longer uses `crossbeam`. The new
+  0.3.0 APIs — resize `position`/`without_reduction`, sharp's per-pixel
+  adjustments and multi-page TIFF reading — are not exposed yet. The image
+  and workloads benchmark rows were re-measured on this build through
+  `bench/publish.sh`.
+
 - `runtime:serialization`'s `YAML` now uses the runtime's own YAML 1.2 reader
   and writer, in safe Rust, instead of `serde_yaml`. That removes
   `unsafe-libyaml` (RUSTSEC-2024-0449: unmaintained, with no safe upgrade). The
