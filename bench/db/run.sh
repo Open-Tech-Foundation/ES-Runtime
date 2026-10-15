@@ -30,9 +30,11 @@ RUNTIMES="${RUNTIMES:-esrun node bun deno}"
 command -v python3 >/dev/null || { echo "python3 is required for the measurements" >&2; exit 1; }
 
 # `cmd <runtime>` — how to launch a runtime, minus the script and its arguments.
+# esrun runs --allow-all, matching the other runners: this measures the
+# database, not the permission model.
 cmd() {
   case "$1" in
-    esrun) echo "$esrun_bin" ;;
+    esrun) echo "$esrun_bin --allow-all" ;;
     node)  echo "node" ;;
     bun)   echo "bun" ;;
     # Deno is sandboxed by default; the grants are the equivalent of the others

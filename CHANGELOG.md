@@ -39,6 +39,11 @@ namespace) is unstable and may change between minor releases until the API freez
   (RUSTSEC-2026-0346 through RUSTSEC-2026-0349) and `quinn-proto` 0.11.16 →
   0.11.19 (RUSTSEC-2026-0338 through RUSTSEC-2026-0342).
 
+- `bench/db/run.sh` launches esrun with `--allow-all`, like every other
+  bench runner. Without it the esrun column failed on the imports
+  permission before running a single query, so the SQLite benchmark had no
+  esrun numbers at all.
+
 ### Added
 
 - `runtime:path`: `toSlash(p)`, the forward-slash form of a path. On Windows
@@ -79,6 +84,16 @@ namespace) is unstable and may change between minor releases until the API freez
   published crates have no dependencies outside the Pixels workspace), and
   the tile worker pool no longer uses `crossbeam`. The image and workloads
   benchmark rows were re-measured on this build through `bench/publish.sh`.
+
+- `runtime:db`'s SQLite engine (`turso_core`) moves from the 0.8.0
+  pre-release to stable 0.8.3: final 0.8.0 with MVCC concurrent writes no
+  longer experimental, full window-frame support and `TransactionBehavior`
+  concurrency in the Rust bindings, plus the 0.8.1–0.8.3 MVCC and sync
+  fixes. No API change on this side — the engine is used through one
+  module — and the 28 database CLI tests and 386 provider tests pass
+  unchanged. The benchmarks page gains the SQLite section it was missing,
+  measured on this build through `bench/db/run.sh` against Node, Bun and
+  Deno.
 
 ## [0.39.0] - 2026-10-14
 

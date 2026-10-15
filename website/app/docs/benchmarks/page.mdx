@@ -345,6 +345,66 @@ Unlike the rest of this page, these runs are **not interleaved** — each column
 is measured in turn — so treat small differences as noise and the order of
 magnitude as the finding. Reproduce with `bench/db/redis/run.sh`.
 
+## SQLite
+
+esrun's [`runtime:db`](/docs/db/sqlite) — async over an op boundary, on Turso
+0.8.3 — against each runtime's synchronous in-process SQLite: `node:sqlite`
+`DatabaseSync` on Node and Deno, `bun:sqlite` on Bun. One shared workload
+definition (`bench/db/workload.mjs`): the same schema, the same 50 000 rows,
+and a checksum per workload that all four runtimes agreed on, so nobody wins
+by doing less. `insert_many` is esrun's batched path — one crossing and one
+prepare for the whole run — which the synchronous APIs have no equivalent of,
+so they sit it out.
+
+Wall ms, **min of 5**, lower is better.
+
+| Workload | esrun | Node | Bun | Deno |
+| --- | ---: | ---: | ---: | ---: |
+| `open` — fresh file + schema | 26.3 | 33.0 | <Win>11.6</Win> | 30.9 |
+| `insert` — 50 000 rows, one statement each | 1198.4 | 187.3 | <Win>146.8</Win> | 204.1 |
+| `insert_many` — the same 50 000 in one batch | 391.1 | n/a | n/a | n/a |
+| `scan_num` — full scan, 3 numeric columns | 41.4 | 98.5 | <Win>22.1</Win> | 123.8 |
+| `scan_text` — full scan, 2 text columns | 52.1 | 91.5 | <Win>25.5</Win> | 118.0 |
+| `point` — 5 000 lookups by id | 162.5 | 81.4 | <Win>52.1</Win> | 76.0 |
+| `stream` — 200 000-row scan through the cursor | 77.9 | 201.9 | <Win>47.6</Win> | 312.9 |
+
+Peak RSS, MB:
+
+| Workload | esrun | Node | Bun | Deno |
+| --- | ---: | ---: | ---: | ---: |
+| `open` | 36.2 | 46.8 | <Win>18.5</Win> | 36.0 |
+| `insert` | 64.3 | 59.5 | <Win>44.5</Win> | 52.3 |
+| `insert_many` | 149.6 | n/a | n/a | n/a |
+| `scan_num` | 53.9 | 59.7 | <Win>35.7</Win> | 57.8 |
+| `scan_text` | 55.4 | 59.6 | <Win>41.3</Win> | 57.2 |
+| `point` | 47.3 | 50.2 | <Win>27.5</Win> | 41.3 |
+| `stream` | 61.9 | 65.4 | <Win>41.0</Win> | 64.9 |
+
+**Bun leads every shared row.** A synchronous call into an in-process engine
+is the cheapest shape here, and the table shows it — roughly 2× esrun on the
+scans, 3–8× on the per-statement writes.
+
+**esrun's cost is per-statement crossings, and its answer is the batch.**
+`insert` runs 50 000 statements at one async op each: 1198 ms against
+~150–200 for the sync loops. `insert_many` sends the same rows in one batch —
+391 ms, a third of the loop — and the streaming scan lands second at 78 ms
+against Node's 202 and Deno's 313: rows leave the engine encoded into one
+buffer per fetch, capped by a byte budget, so a wide table costs the same per
+fetch as a narrow one. The one loss that is not the boundary is `point`
+lookups at 163 ms against 52–81 — each lookup is a prepare, a step, and a
+recycle across it.
+
+Memory is mid-pack everywhere except the batch, which holds all 50 000 rows
+in JS up front (150 MB). The streaming workloads are the memory story, not
+the batch: `stream` reads 200 000 rows at 62 MB, level with Node and Deno.
+
+Unlike the rest of this page, these runs are **not interleaved** — each column
+is measured in turn — so treat small differences as noise and the order of
+magnitude as the finding. Measured with esrun 0.39.0 (turso_core 0.8.3),
+Node v24.21.0, Bun 1.4.3, Deno 2.9.7, on the same i7-8700K Linux box as the
+tables above. Reproduce with `bench/db/run.sh` (needs a release build first:
+`cargo build --release -p es-runtime-cli`).
+
 ## Images
 
 Each runtime's own way of making a thumbnail — 40 pipelines at once, as a

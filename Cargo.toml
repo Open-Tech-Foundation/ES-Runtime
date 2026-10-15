@@ -72,9 +72,9 @@ tempfile = "3.27.0"
 # through the same jail `runtime:fs` uses. `series` and `percentile` (extra SQL
 # functions, neither in SQLite core) are dropped and can return when asked for.
 #
-# Pinned at a pre-release deliberately (D56): it is the only reliable Rust
+# Pinned at a stable release deliberately (D56): it is the only reliable Rust
 # implementation, and the `sqlite:` scheme keeps the choice swappable.
-turso_core = { version = "0.8.0-pre.13", default-features = false, features = ["fs", "encryption", "json", "uuid", "time"] }
+turso_core = { version = "0.8.3", default-features = false, features = ["fs", "encryption", "json", "uuid", "time"] }
 # WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
 url = "2.5.8"
 # URLPattern, used by `runtime` for the URLPattern global. Same reasoning as
