@@ -145,7 +145,7 @@ fn stderr(out: &Output) -> String {
 /// Diagnostic paths are native filesystem paths; compare their separators as
 /// paths rather than accidentally making a Unix spelling part of the contract.
 fn slash_paths(text: &str) -> String {
-    text.replace('\\', "/")
+    es_runtime_default_providers::path::to_slash(text)
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn top_level_await_and_imports_work() {
     // A `file:` URL rather than the path as written: on Windows an absolute
     // path is a URL whose scheme is `c`, so the import never reaches the
     // loader as a file — the same spelling the `esrun` module suite uses.
-    let dep = url::Url::from_file_path(&dep)
+    let dep = es_runtime_default_providers::path::file_url(&dep)
         .expect("a file URL")
         .to_string();
     let app = write(
@@ -1738,6 +1738,27 @@ fn build_rejects_a_missing_entry_and_a_second_one() {
 // Source maps, and the frames they put back
 // ---------------------------------------------------------------------------
 
+/// A frame in TypeScript run directly names the line it was written on — also
+/// in a directory with a space, which its `file:` URL spells `%20`. The map
+/// was registered under the encoded spelling and looked up under the decoded
+/// one, so it was never found and the frame named a line of the stripped
+/// output instead (D165).
+#[test]
+fn a_stack_trace_names_the_written_line_in_a_directory_with_a_space() {
+    let dir = build_dir("b_sourcemap space");
+    write_in(
+        &dir,
+        "app.ts",
+        "type T = {\n  a: number;\n};\nconst x: T = { a: 1 };\n\
+         function boom(): never {\n  throw new Error('boom ' + x.a);\n}\nboom();\n",
+    );
+    let out = esdev_in(&dir).arg("app.ts").output().expect("spawn esdev");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("app.ts:6:9)"), "{err}");
+    assert!(err.contains("app.ts:8:1"), "{err}");
+}
+
 /// A stack trace from a deployed bundle names the bundle, which is a true
 /// statement and a useless one. This is both halves: the build writes the map,
 /// and the binary that runs the bundle reads it when it prints the stack.
@@ -1787,7 +1808,8 @@ fn a_source_map_puts_a_stack_trace_back_in_the_source() {
         dir.join("dist").join(first).is_file(),
         "the map names a file that is not there: {first}"
     );
-    let built_in = std::fs::canonicalize(&dir).expect("canonical build dir");
+    let built_in =
+        es_runtime_default_providers::path::canonicalize(&dir).expect("canonical build dir");
     assert!(!map.contains(built_in.to_str().expect("utf-8")), "{map}");
     assert!(!map.contains(".esdev-build-"), "{map}");
 
@@ -10622,13 +10644,9 @@ fn a_library_drops_its_css_imports_and_warns_when_exports_miss_them() {
     }
     let mut files: Vec<String> = Vec::new();
     for entry in walk(&dir.join("dist")) {
-        files.push(
-            entry
-                .strip_prefix(dir.join("dist"))
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/"),
-        );
+        files.push(es_runtime_default_providers::path::to_slash(
+            entry.strip_prefix(dir.join("dist")).unwrap(),
+        ));
     }
     files.sort();
     assert_eq!(

@@ -52,6 +52,14 @@ declare module "runtime:path" {
   /** Converts a path (resolved to absolute) to a `file:` URL. */
   export function toFileURL(p: string): URL;
 
+  /**
+   * The forward-slash form of a path: what a module id given to an esdev
+   * plugin looks like. On Windows a backslash becomes `/`; on POSIX the path
+   * is returned unchanged, because a backslash is part of a file name there.
+   * Not a normalization — that is `normalize`.
+   */
+  export function toSlash(p: string): string;
+
   const path: {
     sep: typeof sep;
     delimiter: typeof delimiter;
@@ -66,6 +74,7 @@ declare module "runtime:path" {
     relative: typeof relative;
     fromFileURL: typeof fromFileURL;
     toFileURL: typeof toFileURL;
+    toSlash: typeof toSlash;
   };
   export default path;
 }

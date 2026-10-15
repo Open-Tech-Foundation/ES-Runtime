@@ -37,7 +37,7 @@ impl FsModuleLoader {
 
     /// Builds a loader whose entry-point base is `dir` (must be absolute).
     pub fn with_base_dir(dir: impl AsRef<std::path::Path>) -> Result<Self, ProviderError> {
-        let base = Url::from_directory_path(dir.as_ref()).map_err(|()| {
+        let base = crate::path::directory_url(dir.as_ref()).ok_or_else(|| {
             ProviderError::Other(format!(
                 "module base directory is not absolute: {}",
                 dir.as_ref().display()
@@ -104,7 +104,7 @@ impl ModuleLoader for FsModuleLoader {
             let url = Url::parse(&specifier).map_err(|e| {
                 ProviderError::Other(format!("invalid module id {specifier:?}: {e}"))
             })?;
-            let path: PathBuf = url.to_file_path().map_err(|()| {
+            let path: PathBuf = crate::path::file_path(&url).ok_or_else(|| {
                 ProviderError::Other(format!("module id is not a file path: {specifier}"))
             })?;
             // `.wasm` is binary and joins the graph through the WebAssembly ESM
@@ -168,7 +168,7 @@ mod tests {
     /// failed there in the helper rather than in anything it meant to check.
     fn loader() -> (FsModuleLoader, Url) {
         let dir = std::env::current_dir().expect("working directory");
-        let base = Url::from_directory_path(&dir).expect("base dir");
+        let base = crate::path::directory_url(&dir).expect("base dir");
         let loader = FsModuleLoader::with_base_dir(&dir).expect("base dir");
         (loader, base)
     }
@@ -221,7 +221,7 @@ mod tests {
         let expected = if drive.is_empty() {
             "file:///abs/x.mjs".to_string()
         } else {
-            format!("file:///{drive}/abs/x.mjs")
+            format!("file:///{drive}/abs/x.mjs") // path-discipline: the URL under test
         };
         assert_eq!(l.resolve("/abs/x.mjs", &referrer).await.unwrap(), expected);
         // And the drive half, against a synthetic Windows base: `url` parsing
@@ -269,7 +269,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("m.mjs");
         std::fs::write(&path, "export const v = 1;").unwrap();
-        let id = Url::from_file_path(&path).unwrap().to_string();
+        let id = crate::path::file_url(&path).unwrap().to_string();
 
         let source = loader().0.load(&id).await.unwrap();
         assert_eq!(source, ModuleSource::Text("export const v = 1;".into()));
@@ -285,7 +285,7 @@ mod tests {
         // `\0asm` + version 1 — an empty but well-formed module.
         let bytes = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
         std::fs::write(&path, bytes).unwrap();
-        let id = Url::from_file_path(&path).unwrap().to_string();
+        let id = crate::path::file_url(&path).unwrap().to_string();
 
         // Read as bytes, not decoded as UTF-8 (which these are not).
         let source = loader().0.load(&id).await.unwrap();
@@ -302,7 +302,7 @@ mod tests {
         // Windows, which would fail the test in URL parsing instead of in
         // the read it is about.
         let missing = std::env::temp_dir().join(format!("esrt-mod-missing-{}", std::process::id()));
-        let id = Url::from_file_path(missing.join("module.mjs"))
+        let id = crate::path::file_url(missing.join("module.mjs"))
             .unwrap()
             .to_string();
         let err = loader().0.load(&id).await.unwrap_err();

@@ -97,7 +97,8 @@ fn read(
     out: &mut Bundled,
     stack: &mut Vec<PathBuf>,
 ) -> Result<Vec<Item>, String> {
-    let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+    let canonical = es_runtime_default_providers::path::canonicalize(file)
+        .unwrap_or_else(|_| file.to_path_buf());
     if stack.contains(&canonical) {
         return Err(format!(
             "{} imports itself, through:\n  {}\n\n\
@@ -120,12 +121,10 @@ fn read(
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     // Against the canonical directory, because an absolute path is the point
-    // of rewriting a Tailwind directive's (below). Without the Windows verbatim
-    // prefix, which is not a path Tailwind or a glob can read.
+    // of rewriting a Tailwind directive's (below).
     let absolute_dir = canonical
         .parent()
-        .map(|parent| dunce::simplified(parent).to_path_buf())
-        .unwrap_or_else(|| dir.clone());
+        .map_or_else(|| dir.clone(), Path::to_path_buf);
 
     stack.push(canonical.clone());
     out.sources += 1;
@@ -181,7 +180,7 @@ fn inline_import(
         }
         out.missing.push(message);
         let mut kept = at.clone();
-        if let Ok(absolute) = dunce::canonicalize(dir) {
+        if let Ok(absolute) = es_runtime_default_providers::path::canonicalize(dir) {
             absolutize_source_function(&mut kept.prelude, &absolute);
         }
         items.push(Item::Rule(Rule::At(kept)));
@@ -322,9 +321,7 @@ fn absolutize_first_string(
     }
     let absolute = format!(
         "{}/{}",
-        dir.to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/'),
+        es_runtime_default_providers::path::to_slash(dir).trim_end_matches('/'),
         path.strip_prefix("./").unwrap_or(&path)
     );
     *token = Token::new(Kind::String, quote(&absolute));

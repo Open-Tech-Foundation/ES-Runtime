@@ -131,7 +131,8 @@ impl Graph {
         path: &Path,
         declarations: &HashMap<PathBuf, String>,
     ) -> Result<ModuleId, String> {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical = es_runtime_default_providers::path::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf());
         if let Some(id) = self.by_path.get(&canonical) {
             return Ok(*id);
         }

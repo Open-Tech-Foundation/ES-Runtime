@@ -24,8 +24,32 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **Plugin module ids use forward slashes on every OS** (DECISIONS D165).
+  On Windows, a hook's `id` and `importer`, `ctx.resolve()`'s answer, a
+  chunk's `facadeModuleId` and `moduleIds`, a build failure's `id` and the
+  id an `external` predicate is asked about are now `C:/app/src/a.jsx`, not
+  `C:\app\src\a.jsx`, and `filter.id` matches that form. An id a plugin
+  returns may use either separator. File paths (`watchFiles`, `dependsOn`,
+  a target's `outDir`) keep the OS's form. A plugin that matched
+  backslashes on Windows now matches `/`; `toSlash` from `runtime:path`
+  converts a file path for comparison with an id.
+
 ### Fixed
 
+- A stack trace from TypeScript run directly named a line of the
+  type-stripped output, not the line it was written on, when the file's
+  directory needed percent-encoding in a URL (a space, for one), and on
+  Windows for every file. The source map was registered under one spelling
+  of the path and looked up under another.
+- Windows: `esdev build --lib` wrote no nested modules. Their output names
+  carried a backslash, which is not a directory in a file name there.
+- Windows: bundling a stylesheet's `@import`s never matched a file already on
+  the import stack, and `composes … from` wrote a `\\?\`-prefixed path into
+  the emitted `@import`.
+- Windows: `esdev test --changed` matched no test, because changed files and
+  resolved imports were spelled differently.
 - The Windows build passes `clippy -D warnings` again (a `return` that only
   Unix needs), and the `mock.env` test runs on a host with no `HOME`.
 

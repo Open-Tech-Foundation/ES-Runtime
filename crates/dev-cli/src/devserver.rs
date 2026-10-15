@@ -423,7 +423,7 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str,
     // The served root, settled once: every resolution below is checked
     // against this. `None` when the root itself is unreachable, in which
     // case nothing under it resolves either.
-    let canonical_root = std::fs::canonicalize(root).ok();
+    let canonical_root = es_runtime_default_providers::path::canonicalize(root).ok();
     // `symlink_metadata` only reveals a link at the final component, while a
     // link in any parent (`linkdir -> /etc`, asking for `/linkdir/passwd`)
     // is followed silently — so the check cannot be "is this a link", it has
@@ -450,7 +450,7 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str,
     fn resolve(canonical_root: Option<&Path>, logical: PathBuf) -> Resolved {
         let contained =
             |canonical: &Path| canonical_root.is_none_or(|root| canonical.starts_with(root));
-        let Ok(canonical) = std::fs::canonicalize(&logical) else {
+        let Ok(canonical) = es_runtime_default_providers::path::canonicalize(&logical) else {
             return Resolved::Missing;
         };
         if !contained(&canonical) {
@@ -474,7 +474,7 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str,
         // single-version guarantee holds.
         let (canonical, logical) = if kind.is_dir() {
             let index = logical.join("index.html");
-            let Ok(settled) = std::fs::canonicalize(&index) else {
+            let Ok(settled) = es_runtime_default_providers::path::canonicalize(&index) else {
                 return Resolved::Missing;
             };
             if !contained(&settled) {

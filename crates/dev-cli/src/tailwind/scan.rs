@@ -198,7 +198,7 @@ fn absolute(base: &Path, pattern: &str) -> PathBuf {
 
 /// A path with `/` separators, which is what a glob is written in.
 fn slashed(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    es_runtime_default_providers::path::to_slash(path)
 }
 
 /// Files automatic detection never reads: stylesheets (a class a stylesheet

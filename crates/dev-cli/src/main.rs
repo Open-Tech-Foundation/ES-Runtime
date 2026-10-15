@@ -2825,7 +2825,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     let stripper = if config.run.setup.is_empty() && !config.run.dom {
         TypeStripper::new()
     } else {
-        let entry = std::fs::canonicalize(&file)
+        let entry = es_runtime_default_providers::path::canonicalize(&file)
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
         TypeStripper::before_with(
             &entry,
@@ -2934,7 +2934,7 @@ fn select_test_files(
             .iter()
             .chain(&config.global_setup)
             .filter_map(|module| match url::Url::parse(module) {
-                Ok(url) => url.to_file_path().ok(),
+                Ok(url) => es_runtime_default_providers::path::file_path(&url),
                 Err(_) => Some(root.join(module)).filter(|path| path.exists()),
             })
             .collect();
@@ -3027,9 +3027,9 @@ pub(crate) async fn run_tests_unisolated(
         for setup in &config.run.setup {
             source.push_str(&module_import(setup));
         }
-        let url = url::Url::from_file_path(file)
+        let url = es_runtime_default_providers::path::file_url(file)
             .map(|url| url.to_string())
-            .unwrap_or_else(|()| file.display().to_string());
+            .unwrap_or_else(|| file.display().to_string());
         // With the file's `@module-tag`s, which tag the tests it registers.
         let module_tags = std::fs::read_to_string(file)
             .map(|source| tags::module_tags(&source))

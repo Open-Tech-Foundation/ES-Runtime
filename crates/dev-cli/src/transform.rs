@@ -533,9 +533,8 @@ impl TypeStripper {
             // The loader names modules with `Url::from_file_path`, so use that
             // exact spelling for the entry the prelude belongs to.
             prelude: Some((
-                url::Url::from_file_path(entry)
-                    .map(|url| url.to_string())
-                    .unwrap_or_else(|()| format!("file://{}", entry.display())),
+                es_runtime_default_providers::path::file_url(entry)
+                    .map_or_else(|| entry.display().to_string(), String::from),
                 modules,
             )),
             jsx: JsxSettings::default(),
@@ -552,14 +551,13 @@ impl TypeStripper {
     }
 
     /// The prelude for this module, or empty for every other module.
-    fn prelude_for(&self, specifier: &str, path: &str) -> String {
+    fn prelude_for(&self, specifier: &str) -> String {
         let Some((entry, modules)) = &self.prelude else {
             return String::new();
         };
-        let mine = entry == specifier
-            || entry
-                .strip_prefix("file://")
-                .is_some_and(|file| file == path);
+        // The entry, with or without a query: both are spelled by
+        // `path::file_url`, so the text before the query is the comparison.
+        let mine = specifier.split(['?', '#']).next() == Some(entry.as_str());
         if !mine {
             return String::new();
         }
@@ -626,10 +624,7 @@ impl TypeStripper {
             .map(|(code, _)| code)?;
         // Under coverage, what V8 is about to compile, and where it came from.
         if crate::coverage::collect::recording() {
-            let path = specifier.strip_prefix("file://").map_or(specifier, |rest| {
-                rest.split(['?', '#']).next().unwrap_or(rest)
-            });
-            let prelude = self.prelude_for(specifier, path);
+            let prelude = self.prelude_for(specifier);
             crate::coverage::collect::record(
                 specifier,
                 crate::coverage::collect::Executed {
@@ -678,19 +673,21 @@ impl TypeStripper {
         if let Some(mocked) = crate::module_mocks::synthetic(specifier) {
             return Ok((mocked, None));
         }
-        // The specifier is a file: URL; oxc wants a path, and only to read the
-        // extension off it. A URL that will not convert (there should be none —
-        // the loader produces file: URLs) is left alone rather than guessed at.
-        let path = match specifier.strip_prefix("file://") {
-            Some(rest) => rest.split(['?', '#']).next().unwrap_or(rest),
-            None => specifier,
-        };
+        // The specifier is a file: URL; oxc wants the path, to read the
+        // extension off and to name in the map. A URL that will not convert
+        // (there should be none — the loader produces file: URLs) is left
+        // alone rather than guessed at.
+        let file = es_runtime_default_providers::path::specifier_path(specifier);
+        let path = file
+            .as_deref()
+            .map_or(std::borrow::Cow::Borrowed(specifier), Path::to_string_lossy);
+        let path = path.as_ref();
         // Applied to the *output* below, never to the input. Prepending it here
         // would put it through the printer, which lays a statement out on a
         // line of its own — and the file would run one line lower than it was
         // written, which is the property D71 is built on. A plain `.js` is not
         // reprinted at all, so it takes the prelude directly.
-        let prelude = self.prelude_for(specifier, path);
+        let prelude = self.prelude_for(specifier);
         // `mock.module` calls resolved from this file, and hoisted above its
         // imports when they are at its top level (D101).
         let source = crate::module_mocks::rewrite(&source, Path::new(path)).unwrap_or(source);
@@ -870,12 +867,20 @@ enum Registration {
 mod tests {
     use super::*;
 
+    /// The specifier the loader would name `name` by: a `file:` URL that
+    /// means a file on every OS.
+    fn specifier(name: &str) -> String {
+        es_runtime_default_providers::path::file_url(std::env::temp_dir().join(name))
+            .expect("an absolute path")
+            .to_string()
+    }
+
     fn strip(name: &str, source: &str) -> Result<String, String> {
-        TypeStripper::new().transform(&format!("file:///{name}"), source.to_string())
+        TypeStripper::new().transform(&specifier(name), source.to_string())
     }
 
     fn strip_with(jsx: JsxSettings, name: &str, source: &str) -> Result<String, String> {
-        TypeStripper::with_jsx(jsx).transform(&format!("file:///{name}"), source.to_string())
+        TypeStripper::with_jsx(jsx).transform(&specifier(name), source.to_string())
     }
 
     #[test]
@@ -915,7 +920,7 @@ mod tests {
     #[test]
     fn a_setup_prelude_matches_the_loader_file_url() {
         let entry = std::env::temp_dir().join("esdev_setup_prelude.ts");
-        let specifier = url::Url::from_file_path(&entry)
+        let specifier = es_runtime_default_providers::path::file_url(&entry)
             .expect("an absolute temporary path has a file URL")
             .to_string();
         let out = TypeStripper::before(&entry, vec!["./setup.ts".into()])

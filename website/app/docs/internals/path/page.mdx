@@ -92,6 +92,22 @@ On Windows both `/` and `\` separate on input, a drive letter is kept verbatim
 through `toFileURL` while every other segment is percent-encoded, and
 `fromFileURL` strips the leading slash that a `file:///C:/…` URL carries.
 
+## Ids are written with `/`, files in the OS's form
+
+A module id that reaches JavaScript from esdev — a plugin hook's `id`, a
+chunk's `moduleIds` — is written with forward slashes on every OS; a path that
+names a file to read or watch keeps the OS's separator. `toSlash` converts the
+second into the first. On POSIX it returns its argument, because a backslash is
+a character of a file name there, not a separator.
+
+The split follows what each value is for. An id is compared and matched as
+text: a filter written `/src\/a\.js$/` on Linux has to match on Windows, and
+it can only do that if the id has one spelling. A file path is handed back to
+`runtime:fs` or `runtime:watch`, which take and return the OS's form, as Node,
+Deno and Bun do. Vite draws the same line, with `normalizePath` as its `toSlash`.
+The decision and what was rejected is
+[D165](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
 ## What it costs
 
 Nothing, in the sense that matters: no I/O, no capability except the `Env` that

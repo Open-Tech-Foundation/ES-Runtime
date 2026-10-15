@@ -15,6 +15,7 @@ itself.
 
 ### Added
 
+- `runtime:path`: `toSlash`, the forward-slash form of a path.
 - `runtime:images`: `Position` and the `position`/`withoutReduction` resize
   options, `modulate`'s `lightness`, the adjustments `negate`, `gamma`,
   `linear`, `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha` and

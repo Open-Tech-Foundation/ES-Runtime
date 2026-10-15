@@ -139,6 +139,11 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) {
         // Always `/`, whatever wrote it: this string is a path the scaffolder
         // joins onto a destination, and on Windows a backslash in it would be
         // part of a filename rather than a separator.
-        files.push((relative.to_string_lossy().replace('\\', "/"), path.clone()));
+        let relative = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        files.push((relative, path.clone()));
     }
 }

@@ -34,7 +34,7 @@ fn scene() -> (PathBuf, PathBuf) {
     std::fs::write(project.join("policy.json"), r#"{"allow":["./app.mjs"]}"#).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(base.join("outside/secret.txt"), project.join("data/link")).unwrap();
-    let base = std::fs::canonicalize(&base).unwrap();
+    let base = es_runtime_default_providers::path::canonicalize(&base).unwrap();
     (base.clone(), base.join("project"))
 }
 

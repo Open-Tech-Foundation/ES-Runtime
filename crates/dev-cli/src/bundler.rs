@@ -470,10 +470,7 @@ fn published_source(source: &str, map: &str) -> String {
                 .collect()
         })
         .unwrap_or_default();
-    relative_to(&home, &absolute)
-        .unwrap_or(absolute)
-        .to_string_lossy()
-        .replace('\\', "/")
+    es_runtime_default_providers::path::to_slash(relative_to(&home, &absolute).unwrap_or(absolute))
 }
 
 /// `to` as a path from the directory `from`, or `None` when the two share no

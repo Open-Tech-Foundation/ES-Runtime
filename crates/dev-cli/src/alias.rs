@@ -127,7 +127,7 @@ fn importer(referrer: &str) -> PathBuf {
     url::Url::parse(referrer)
         .ok()
         .filter(|url| url.scheme() == "file")
-        .and_then(|url| url.to_file_path().ok())
+        .and_then(|url| es_runtime_default_providers::path::file_path(&url))
         // A directory URL resolves from inside it: the tsconfig that owns a
         // file there is the one that owns the directory.
         .map(|path| {
@@ -191,9 +191,9 @@ pub(crate) fn join(base: &Path, relative: &str) -> PathBuf {
 }
 
 fn file_url(path: &Path) -> String {
-    url::Url::from_file_path(path)
+    es_runtime_default_providers::path::file_url(path)
         .map(|url| url.to_string())
-        .unwrap_or_else(|()| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -212,11 +212,13 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, text).unwrap();
         }
-        dunce::canonicalize(&dir).unwrap()
+        es_runtime_default_providers::path::canonicalize(&dir).unwrap()
     }
 
     fn url_of(path: &Path) -> String {
-        url::Url::from_file_path(path).unwrap().to_string()
+        es_runtime_default_providers::path::file_url(path)
+            .unwrap()
+            .to_string()
     }
 
     /// The longest name wins, and a name matches whole or up to a `/` — `@`

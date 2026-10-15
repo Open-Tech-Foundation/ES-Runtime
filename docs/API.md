@@ -1843,6 +1843,7 @@ const cfg = resolve(here, "config", "app.json");
 | `relative(from, to)`    | `(string, string) => string`  | Relative path from `from` to `to` (both resolved first).                    |
 | `fromFileURL(url)`      | `(string \| URL) => string`   | Converts a `file:` URL to a path.                                           |
 | `toFileURL(p)`          | `(string) => URL`             | Converts a path (resolved to absolute) to a `file:` URL.                    |
+| `toSlash(p)`            | `(string) => string`          | `p` with forward slashes: on Windows `\` becomes `/`; on POSIX `p` is unchanged. The form of a module id an esdev plugin is given. |
 | `default`               | `object`                      | An aggregate of all named exports.                                          |
 
 ---

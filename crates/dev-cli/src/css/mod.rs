@@ -575,10 +575,9 @@ mod tests {
         let root = entry
             .parent()
             .and_then(Path::parent)
-            .map(|root| dunce::canonicalize(root).expect("canonical"))
-            .expect("a root")
-            .to_string_lossy()
-            .replace('\\', "/");
+            .map(|root| es_runtime_default_providers::path::canonicalize(root).expect("canonical"))
+            .map(es_runtime_default_providers::path::to_slash)
+            .expect("a root");
         for expected in [
             format!("@import \"tailwindcss\" source(\"{root}/styles/../src\")"),
             format!("@plugin \"{root}/styles/plugin.js\""),

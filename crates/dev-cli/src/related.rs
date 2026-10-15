@@ -90,7 +90,7 @@ pub fn changed_files(root: &Path, since: Option<&str>) -> Result<Vec<PathBuf>, S
 /// `path`, with symlinks resolved when it exists — the form resolved imports
 /// come back in — and as given when it was deleted.
 pub fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    es_runtime_default_providers::path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Which of `tests` the `changed` files affect. `setup` are the modules every
@@ -164,8 +164,9 @@ impl Graph {
     /// the project, as the plugin host resolves them. One that resolves to
     /// nothing is the host's to report.
     fn plugin_modules(&self, source: &crate::settings::Source) -> Vec<PathBuf> {
-        let Ok(referrer) = url::Url::from_file_path(source.root.join(crate::config::FILE_NAME))
-        else {
+        let Some(referrer) = es_runtime_default_providers::path::file_url(
+            source.root.join(crate::config::FILE_NAME),
+        ) else {
             return Vec::new();
         };
         source
@@ -175,7 +176,7 @@ impl Graph {
                 self.resolver
                     .resolve(&spec.module, referrer.as_str())
                     .and_then(|url| url::Url::parse(&url).ok())
-                    .and_then(|url| url.to_file_path().ok())
+                    .and_then(|url| es_runtime_default_providers::path::file_path(&url))
                     .map(|path| canonical(&path))
             })
             .collect()
@@ -226,7 +227,7 @@ impl Graph {
         let Ok(text) = std::fs::read_to_string(module) else {
             return imports;
         };
-        let Ok(referrer) = url::Url::from_file_path(module) else {
+        let Some(referrer) = es_runtime_default_providers::path::file_url(module) else {
             return imports;
         };
         let allocator = Allocator::default();
@@ -245,7 +246,7 @@ impl Graph {
                 .resolver
                 .resolve(&specifier, referrer.as_str())
                 .and_then(|url| url::Url::parse(&url).ok())
-                .and_then(|url| url.to_file_path().ok())
+                .and_then(|url| es_runtime_default_providers::path::file_path(&url))
             {
                 Some(path) => imports.files.push(canonical(&path)),
                 None => imports.unresolved = true,

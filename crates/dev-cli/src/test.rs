@@ -1231,8 +1231,9 @@ pub fn change_watcher(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Change>();
     let scope = root.to_path_buf();
     let same = |a: &Path, b: &Path| {
-        dunce::canonicalize(a).unwrap_or_else(|_| a.to_path_buf())
-            == dunce::canonicalize(b).unwrap_or_else(|_| b.to_path_buf())
+        es_runtime_default_providers::path::canonicalize(a).unwrap_or_else(|_| a.to_path_buf())
+            == es_runtime_default_providers::path::canonicalize(b)
+                .unwrap_or_else(|_| b.to_path_buf())
     };
     let project_file = project_file.to_path_buf();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {

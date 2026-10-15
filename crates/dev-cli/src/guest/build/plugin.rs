@@ -296,7 +296,7 @@ impl contract::Pass for GuestPass {
                     vec![
                         Value::String(specifier.to_string()),
                         match importer {
-                            Some(importer) => Value::String(importer.to_string()),
+                            Some(importer) => slash(importer),
                             None => Value::Null,
                         },
                     ],
@@ -319,12 +319,7 @@ impl contract::Pass for GuestPass {
         let ctx = ctx.clone();
         Box::pin(async move {
             let out = self
-                .call(
-                    Hook::Load,
-                    vec![Value::String(id.to_string())],
-                    Vec::new(),
-                    ctx,
-                )
+                .call(Hook::Load, vec![slash(id)], Vec::new(), ctx)
                 .await?;
             contract::module_result(&out, Hook::Load)
         })
@@ -342,10 +337,7 @@ impl contract::Pass for GuestPass {
             let out = self
                 .call(
                     Hook::Transform,
-                    vec![
-                        Value::String(code.to_string()),
-                        Value::String(id.to_string()),
-                    ],
+                    vec![Value::String(code.to_string()), slash(id)],
                     // On the context, like `isEntry` on a resolve: the
                     // signature stays `(code, id, ctx)` and anything a
                     // particular hook needs to say rides alongside rather than
@@ -434,10 +426,7 @@ impl contract::Pass for GuestPass {
             let out = self
                 .call(
                     Hook::Html,
-                    vec![
-                        Value::String(html.to_string()),
-                        Value::String(id.to_string()),
-                    ],
+                    vec![Value::String(html.to_string()), slash(id)],
                     meta,
                     ctx,
                 )
@@ -461,6 +450,12 @@ impl contract::Pass for GuestPass {
             Ok(())
         })
     }
+}
+
+/// A module id as JavaScript is shown it: forward slashes on every OS
+/// (D165). Ids coming back are read by `contract`, which accepts either form.
+pub(crate) fn slash(id: &str) -> Value {
+    Value::String(es_runtime_default_providers::path::slash_id(id).into_owned())
 }
 
 /// One produced file, as the guest reads it.
@@ -489,9 +484,12 @@ fn output_value(output: &contract::Output) -> Value {
             ("isDynamicEntry".to_string(), Value::Bool(*is_dynamic_entry)),
             (
                 "facadeModuleId".to_string(),
-                facade_module_id.clone().map_or(Value::Null, Value::String),
+                facade_module_id.as_deref().map_or(Value::Null, slash),
             ),
-            ("moduleIds".to_string(), strings(module_ids)),
+            (
+                "moduleIds".to_string(),
+                Value::Array(module_ids.iter().map(|id| slash(id)).collect()),
+            ),
             ("imports".to_string(), strings(imports)),
             ("dynamicImports".to_string(), strings(dynamic_imports)),
         ]),

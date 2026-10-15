@@ -109,7 +109,8 @@ pub fn apply(entry: &Path, bundled: &mut Bundled) -> Result<(), String> {
     if !uses(&bundled.sheet) {
         return Ok(());
     }
-    let entry = dunce::canonicalize(entry).unwrap_or_else(|_| entry.to_path_buf());
+    let entry = es_runtime_default_providers::path::canonicalize(entry)
+        .unwrap_or_else(|_| entry.to_path_buf());
     let dir = entry.parent().unwrap_or(Path::new(".")).to_path_buf();
     let fail = |message: String| {
         format!(
@@ -222,11 +223,11 @@ fn locate(dir: &Path) -> Result<String, String> {
                 manifest_path.display()
             )
         })?;
-    let path = dunce::canonicalize(root.join(module))
+    let path = es_runtime_default_providers::path::canonicalize(root.join(module))
         .map_err(|e| format!("cannot read the Tailwind compiler at {module}: {e}"))?;
-    url::Url::from_file_path(&path)
+    es_runtime_default_providers::path::file_url(&path)
         .map(|url| url.to_string())
-        .map_err(|()| format!("cannot name {} as a module", path.display()))
+        .ok_or_else(|| format!("cannot name {} as a module", path.display()))
 }
 
 /// The compiler isolate for one installed `tailwindcss`, started on first use.

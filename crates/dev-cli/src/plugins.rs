@@ -167,7 +167,8 @@ pub fn invalidate_if_changed(changed: &[std::path::PathBuf]) -> bool {
     let edited = host.files.lock().is_ok_and(|files| {
         changed.iter().any(|path| {
             files.contains(path)
-                || dunce::canonicalize(path).is_ok_and(|canonical| files.contains(&canonical))
+                || es_runtime_default_providers::path::canonicalize(path)
+                    .is_ok_and(|canonical| files.contains(&canonical))
         })
     });
     if !edited {
@@ -353,7 +354,7 @@ impl es_runtime_cli_common::run::SourceTransform for Recording {
             .filter(|url| url.scheme() == "file")
             .and_then(|mut url| {
                 url.set_query(None);
-                url.to_file_path().ok()
+                es_runtime_default_providers::path::file_path(&url)
             })
             && let Ok(mut files) = self.files.lock()
         {
@@ -432,20 +433,16 @@ fn specifier(dir: &std::path::Path, module: &str) -> Result<String, String> {
         return Ok(module.to_string());
     }
     let path = dir.join(module);
-    // Stripped of the Windows verbatim prefix: the next call turns this into a
-    // `file:` URL, and `Url::from_file_path` refuses `\\?\`-prefixed paths —
-    // so without this every file-path plugin fails on Windows with "cannot
-    // name the plugin as a module".
-    let path = dunce::canonicalize(&path).map_err(|e| {
+    let path = es_runtime_default_providers::path::canonicalize(&path).map_err(|e| {
         format!(
             "cannot read the plugin {module}: {e}\n\n\
              Plugin paths are relative to the project, like every other path in \
              esdev.json."
         )
     })?;
-    url::Url::from_file_path(&path)
+    es_runtime_default_providers::path::file_url(&path)
         .map(|url| url.to_string())
-        .map_err(|()| format!("cannot name the plugin {module} as a module"))
+        .ok_or_else(|| format!("cannot name the plugin {module} as a module"))
 }
 
 /// Drives a hook's answer to completion on this thread.

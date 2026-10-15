@@ -113,11 +113,6 @@ reqwest.workspace = true
 # `derive` named here rather than inherited from whichever crate happens to
 # turn it on: the resolved settings a test child receives are derived types.
 serde = { workspace = true, features = ["derive"] }
-# Canonical paths without the Windows `\\?\` verbatim prefix (D25): a
-# canonicalized path becomes a bundler input, a plugin module URL and a display
-# string, and the verbatim form breaks the first two while uglifying the
-# third. Already in the graph via `default-providers`, so no new crate.
-dunce.workspace = true
 # A browser run's file snapshots, carried to and from the page as text. The
 # workspace's own pin, already in the graph for `esrun`'s `atob`/`btoa`.
 base64.workspace = true

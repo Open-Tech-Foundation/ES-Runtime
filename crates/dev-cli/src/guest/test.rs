@@ -422,7 +422,7 @@ fn count(counts: &mut Counts, case_id: usize, passed: bool) {
 fn set_snapshot_file(text: &str) {
     let file = url::Url::parse(text)
         .ok()
-        .and_then(|url| url.to_file_path().ok())
+        .and_then(|url| es_runtime_default_providers::path::file_path(&url))
         .unwrap_or_else(|| PathBuf::from(text));
     SNAPSHOTS.with_borrow_mut(|state| state.current_file = Some(file));
 }
@@ -773,7 +773,7 @@ fn caller(stack: &str) -> Option<(PathBuf, u32, u32)> {
             .unwrap_or(rest.len());
         let (url, column) = rest[..end].rsplit_once(':')?;
         let (url, line) = url.rsplit_once(':')?;
-        let path = url::Url::parse(url).ok()?.to_file_path().ok()?;
+        let path = es_runtime_default_providers::path::specifier_path(url)?;
         Some((path, line.parse().ok()?, column.parse().ok()?))
     })
 }

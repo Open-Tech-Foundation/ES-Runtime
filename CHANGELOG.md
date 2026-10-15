@@ -28,6 +28,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `runtime:path`: `toSlash(p)`, the forward-slash form of a path. On Windows
+  a backslash becomes `/`; on POSIX the path is returned unchanged, because a
+  backslash is part of a file name there. It is the form esdev gives a
+  plugin's module ids, for comparing one with a path from `runtime:fs` or
+  `runtime:watch`.
+- One path interface (DECISIONS D165): every path, `file:` URL and module-id
+  conversion in the workspace goes through `default-providers`' `path`
+  module. A workspace `clippy.toml` refuses direct `canonicalize` and
+  `Url::from_file_path`-family calls, and `tsr path-discipline` (run in CI)
+  refuses the hand-written string forms.
+
 - `runtime:images` exposes the `otf-pixels` 0.3.0 additions: resize
   `position` (nine gravities) and `withoutReduction`, `modulate`'s
   `lightness`, the adjustments `negate`, `gamma`, `linear`, `threshold`,

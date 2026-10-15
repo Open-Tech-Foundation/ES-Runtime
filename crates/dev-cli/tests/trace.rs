@@ -191,10 +191,7 @@ fn a_workers_capabilities_are_in_the_same_report() {
 
 /// A `file:` URL for a path, which is what `new Worker(...)` takes.
 fn url_of(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    if text.starts_with('/') {
-        format!("file://{text}")
-    } else {
-        format!("file:///{text}")
-    }
+    es_runtime_default_providers::path::file_url(path)
+        .expect("an absolute path")
+        .to_string()
 }

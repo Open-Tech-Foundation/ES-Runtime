@@ -308,10 +308,7 @@ impl CssModules {
     /// A file's identity for hashing and for error messages: its path relative
     /// to the project root, so the result is the same on every machine.
     fn ident(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/")
+        es_runtime_default_providers::path::to_slash(path.strip_prefix(&self.root).unwrap_or(path))
     }
 
     /// Bundles one stylesheet and, if it is a module, scopes it.
@@ -391,7 +388,7 @@ struct Imports {
 impl crate::css::modules::Resolve for Imports {
     fn names(&mut self, specifier: &str) -> Result<BTreeMap<String, String>, String> {
         let path = self.from.join(specifier);
-        let path = path.canonicalize().unwrap_or(path);
+        let path = es_runtime_default_providers::path::canonicalize(&path).unwrap_or(path);
         if self.seen.contains(&path) {
             return Err(format!(
                 "`composes` cycles through {}.\n\n                 A class composing one that composes it back has no answer.",
@@ -402,11 +399,9 @@ impl crate::css::modules::Resolve for Imports {
             return Err(format!("`composes … from {specifier}` names no file."));
         }
 
-        let ident = path
-            .strip_prefix(&self.root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let ident = es_runtime_default_providers::path::to_slash(
+            path.strip_prefix(&self.root).unwrap_or(&path),
+        );
 
         // The composed module's CSS is collected as well as read. Nothing else
         // will: `composes` is the only thing referring to it, so without this

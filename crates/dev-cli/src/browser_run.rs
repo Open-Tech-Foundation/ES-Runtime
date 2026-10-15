@@ -472,11 +472,12 @@ impl Job {
         let mut entries = Vec::new();
         for (index, module) in config.run.setup.iter().enumerate() {
             let import = match url::Url::parse(module) {
-                Ok(url) if url.scheme() == "file" => url
-                    .to_file_path()
-                    .map_err(|()| format!("cannot read setup module {module}"))?
-                    .display()
-                    .to_string(),
+                Ok(url) if url.scheme() == "file" => {
+                    es_runtime_default_providers::path::file_path(&url)
+                        .ok_or_else(|| format!("cannot read setup module {module}"))?
+                        .display()
+                        .to_string()
+                }
                 _ => module.clone(),
             };
             entries.push((format!("setup{index}"), import));
@@ -1122,8 +1123,8 @@ struct Locations {
 
 impl Locations {
     fn new(origin: &str, stage: &Path, runtime_test: &Path) -> Locations {
-        let stage = url::Url::from_directory_path(stage).ok();
-        let runtime_test = url::Url::from_file_path(runtime_test).ok();
+        let stage = es_runtime_default_providers::path::directory_url(stage);
+        let runtime_test = es_runtime_default_providers::path::file_url(runtime_test);
         Locations {
             served: stage.map(|stage| (format!("{origin}/"), stage.to_string())),
             runtime_test: runtime_test.map(|url| url.to_string()),
@@ -1337,7 +1338,7 @@ mod tests {
             &stage,
             &stage.join("runtime-test.js"),
         );
-        let stage_url = url::Url::from_directory_path(&stage).unwrap();
+        let stage_url = es_runtime_default_providers::path::directory_url(&stage).unwrap();
         // No map beside either file, so the frames keep their positions: what
         // changes is which file they name.
         let text = "Error: no\n    at fail (http://127.0.0.1:4000/runtime-test.js:9:1)\n    \

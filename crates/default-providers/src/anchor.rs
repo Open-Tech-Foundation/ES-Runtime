@@ -583,8 +583,8 @@ mod tests {
         let outside = base.join("outside");
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let root = std::fs::canonicalize(&root).unwrap();
-        let outside = std::fs::canonicalize(&outside).unwrap();
+        let root = crate::path::canonicalize(&root).unwrap();
+        let outside = crate::path::canonicalize(&outside).unwrap();
         (base, root, outside)
     }
 
@@ -607,7 +607,7 @@ mod tests {
         // The check: `data` is a real directory inside the jail. Whatever a
         // caller concludes here, it concludes about *this* directory.
         assert!(
-            std::fs::canonicalize(root.join("data"))
+            crate::path::canonicalize(root.join("data"))
                 .unwrap()
                 .starts_with(&root)
         );

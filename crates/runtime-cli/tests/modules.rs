@@ -867,7 +867,7 @@ fn an_installed_program_is_still_jailed_to_the_project() {
     // whose scheme is `c`, so a bare path never reaches the jail check at all
     // and the test would be asserting about the specifier parser. The `file:`
     // spelling is the portable one and is the escape this test is about.
-    let target = url::Url::from_file_path(&outside).expect("an absolute path");
+    let target = es_runtime_default_providers::path::file_url(&outside).expect("an absolute path");
     std::fs::write(
         proj.join("node_modules/@acme/cli/src/cli.js"),
         format!(
@@ -1200,7 +1200,8 @@ fn runtime_path_exposes_modern_surface() {
              o('upSlash',p.normalize('a/b/../'));\
              o('joinSlash',p.join('a','b/'));\
              o('resolveSlash',p.resolve('/a','b/'));\
-             o('resolveRoot',p.resolve('/'));",
+             o('resolveRoot',p.resolve('/'));\
+             o('toSlash',p.toSlash('a\\\\b/c'));",
         ))
         .output()
         .expect("spawn esrun");
@@ -1232,9 +1233,36 @@ fn runtime_path_exposes_modern_surface() {
         "joinSlash=a/b/\n",
         "resolveSlash=/a/b\n",
         "resolveRoot=/\n",
+        // On POSIX a backslash is a character of the name, not a separator.
+        "toSlash=a\\b/c\n",
     ] {
         assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
     }
+}
+
+/// The Windows half of `toSlash`: a native path in the form a plugin's ids
+/// take (D165), drive and UNC host kept.
+#[cfg(windows)]
+#[test]
+fn runtime_path_writes_a_windows_path_with_forward_slashes() {
+    let out = esrun()
+        .arg(
+            "-e=import { toSlash } from 'runtime:path';\
+             console.log(toSlash('C:\\\\proj\\\\src\\\\a.jsx'));\
+             console.log(toSlash('\\\\\\\\host\\\\share\\\\a.js'));\
+             console.log(toSlash('C:/already/slashed'));",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).lines().collect::<Vec<_>>(),
+        [
+            "C:/proj/src/a.jsx",
+            "//host/share/a.js",
+            "C:/already/slashed"
+        ]
+    );
 }
 
 /// The jail root is not a target. `base.join("")` is `base`, so an empty path

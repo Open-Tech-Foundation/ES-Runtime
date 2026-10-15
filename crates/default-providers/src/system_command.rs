@@ -226,7 +226,7 @@ fn usable_with_extensions(candidate: &Path) -> Option<PathBuf> {
 /// comparing a policy entry with what a spawn actually found. `None` if it names
 /// no program.
 fn real_program(program: &str) -> Option<PathBuf> {
-    std::fs::canonicalize(resolve_program(program, None).ok()?).ok()
+    crate::path::canonicalize(resolve_program(program, None).ok()?).ok()
 }
 
 /// `Some(path)` if this is a file that can actually be executed. On Unix that
@@ -449,7 +449,7 @@ impl CommandProvider for SystemCommands {
                 // is, so matching on it let `--allow-run=git` admit any file
                 // called `git` the guest could reach — including one it had
                 // just written itself, which turns the allowlist inside out.
-                let real = std::fs::canonicalize(&resolved).ok();
+                let real = crate::path::canonicalize(&resolved).ok();
                 if !real.is_some_and(|real| allow.contains(&real)) {
                     return Err(coded(
                         ErrorCode::PermissionDenied,
@@ -876,9 +876,9 @@ mod tests {
         let (id, _) = commands.spawn(s).await.unwrap();
         let out = collect(&commands, id, ChildStream::Stdout).await;
         // Compared through the real path: macOS temp dirs are symlinked.
-        let expected = std::fs::canonicalize(dir.path()).unwrap();
+        let expected = crate::path::canonicalize(dir.path()).unwrap();
         assert_eq!(
-            std::fs::canonicalize(out.trim()).unwrap(),
+            crate::path::canonicalize(out.trim()).unwrap(),
             expected,
             "child ran in {out}"
         );

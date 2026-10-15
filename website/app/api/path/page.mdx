@@ -49,6 +49,7 @@ const cfg = resolve(here, "config", "app.json");
 | `relative(from, to)` | `(string, string) => string` | Relative path from `from` to `to` (both resolved first). | `relative("/a/b", "/a/c/d") // "../c/d"` |
 | `fromFileURL(url)` | `(string \| URL) => string` | Converts a `file:` URL to a path. | `fromFileURL(import.meta.url)` |
 | `toFileURL(p)` | `(string) => URL` | Converts a path (resolved to absolute) to a `file:` URL. | `toFileURL("/a/b.txt").href // "file:///a/b.txt"` |
+| `toSlash(p)` | `(string) => string` | `p` with forward slashes: on Windows `\` becomes `/`; on POSIX `p` is unchanged. The form of a module id an esdev plugin is given. | `toSlash("C:\\app\\a.js") // "C:/app/a.js" on Windows` |
 
 ## Errors
 

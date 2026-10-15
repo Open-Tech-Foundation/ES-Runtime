@@ -495,7 +495,7 @@ fn walk_error(base: &str, base_real: &Path, e: walkdir::Error) -> ProviderError 
     let below = e
         .path()
         .and_then(|at| at.strip_prefix(base_real).ok())
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .map(crate::path::to_slash)
         .filter(|rel| !rel.is_empty());
     let shown = match below {
         Some(rel) => format!("{}/{rel}", base.trim_end_matches('/')),
@@ -802,7 +802,7 @@ impl FileSystem for SystemFileSystem {
             // does not exist is reattached literally — so canonicalize again and
             // re-check. Answering with a real location outside the jail would
             // defeat the point of the jail.
-            let real = tokio::fs::canonicalize(&p)
+            let real = crate::path::canonicalize_async(&p)
                 .await
                 .map_err(|e| other(&path, e))?;
             let real = confine(&real, &roots).map_err(|refused| refused.named(&path))?;
@@ -980,7 +980,7 @@ impl FileSystem for SystemFileSystem {
                     continue; // a followed link left what this run may read
                 }
                 let rel = path.strip_prefix(&base_real).unwrap_or(path);
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let rel_str = crate::path::to_slash(rel);
                 if !opts.dot && rel_str.split('/').any(|c| c.starts_with('.')) {
                     continue;
                 }
@@ -1170,7 +1170,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&granted);
         std::fs::create_dir_all(&granted).unwrap();
         std::fs::write(granted.join("cert.pem"), b"PEM").unwrap();
-        let granted = std::fs::canonicalize(&granted).unwrap();
+        let granted = crate::path::canonicalize(&granted).unwrap();
 
         let fs = SystemFileSystem::new(&root, &root)
             .with_read_allowlist(PathAllowlist::parse([granted.to_string_lossy()], &root).unwrap());
@@ -1193,14 +1193,14 @@ mod tests {
         std::fs::create_dir_all(&granted).unwrap();
         std::fs::write(granted.join("cert.pem"), b"PEM").unwrap();
         std::fs::write(parent.join("sibling.txt"), b"nope").unwrap();
-        let granted = std::fs::canonicalize(&granted).unwrap();
+        let granted = crate::path::canonicalize(&granted).unwrap();
 
         let fs = SystemFileSystem::new(&root, &root)
             .with_read_allowlist(PathAllowlist::parse([granted.to_string_lossy()], &root).unwrap());
         // A sibling of the granted path was never named.
         let err = fs
             .read(
-                std::fs::canonicalize(parent.join("sibling.txt"))
+                crate::path::canonicalize(parent.join("sibling.txt"))
                     .unwrap()
                     .to_string_lossy()
                     .into_owned(),
@@ -1464,9 +1464,9 @@ mod tests {
         let dir = fs.make_temp_dir(String::new(), "d-".into()).await.unwrap();
         let file = fs.make_temp_file(String::new(), "f-".into()).await.unwrap();
         for made in [&dir, &file] {
-            let real = std::fs::canonicalize(made).unwrap();
+            let real = crate::path::canonicalize(made).unwrap();
             assert!(
-                real.starts_with(std::fs::canonicalize(&root).unwrap()),
+                real.starts_with(crate::path::canonicalize(&root).unwrap()),
                 "{made} must be inside the jail"
             );
         }
@@ -1750,7 +1750,7 @@ mod tests {
         std::fs::write(outside.join("secret.txt"), b"s").unwrap();
         std::fs::write(root.join("out/file"), b"f").unwrap();
         std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("data/link")).unwrap();
-        let root = std::fs::canonicalize(&root).unwrap();
+        let root = crate::path::canonicalize(&root).unwrap();
         let fs = SystemFileSystem::new(&root, &root)
             .with_read_allowlist(
                 PathAllowlist::parse(["data", granted.to_str().unwrap()], &root).unwrap(),

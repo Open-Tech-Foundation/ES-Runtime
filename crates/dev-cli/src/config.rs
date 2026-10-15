@@ -514,8 +514,8 @@ pub fn load(named: Option<&str>) -> Result<Option<Project>, String> {
     // to be — which is the same place only by coincidence. Stripped of the
     // Windows verbatim prefix: this directory becomes bundler inputs and
     // module URLs, which `\\?\` breaks.
-    let dir =
-        dunce::canonicalize(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    let dir = es_runtime_default_providers::path::canonicalize(&dir)
+        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     parse(&text, dir, &path.display().to_string())
 }
 

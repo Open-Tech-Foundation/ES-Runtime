@@ -79,9 +79,8 @@ fn remap_line(line: &str) -> String {
     let Some((source, mapped_line, mapped_column)) = map.lookup(source_line, column) else {
         return line.to_string();
     };
-    let source_url = url::Url::from_file_path(source)
-        .map(|url| url.to_string())
-        .unwrap_or_else(|()| format!("file://{source}"));
+    let source_url = es_runtime_default_providers::path::file_url(source)
+        .map_or_else(|| source.to_string(), String::from);
     format!(
         "{}{source_url}:{}:{}{}",
         &line[..start],
@@ -93,19 +92,13 @@ fn remap_line(line: &str) -> String {
 
 /// `file:///a/b.js:12:34` → the path, the 1-based line, and the 1-based column.
 fn split_position(url: &str) -> Option<(PathBuf, u32, u32)> {
-    let without_scheme = url.strip_prefix("file://")?;
-    let (rest, column) = without_scheme.rsplit_once(':')?;
-    let (path, line) = rest.rsplit_once(':')?;
+    let (rest, column) = url.rsplit_once(':')?;
+    let (location, line) = rest.rsplit_once(':')?;
     let line = line.parse::<u32>().ok()?;
     let column = column.parse::<u32>().ok()?;
-    // A stack URL has a leading slash before a Windows drive (`/D:/…`). Feeding
-    // that text directly to `PathBuf` makes it a rooted path on the current
-    // drive, not `D:\\…`, so the map beside the output is never found. Let the
-    // URL parser perform the platform-specific file-URL conversion.
-    let path = url::Url::parse(&format!("file://{path}"))
-        .ok()?
-        .to_file_path()
-        .ok()?;
+    // The same conversion the loader named the module with, so a Windows
+    // drive (`file:///D:/…`) comes back as `D:\…`, never `/D:/…`.
+    let path = es_runtime_default_providers::path::specifier_path(location)?;
     Some((path, line, column))
 }
 

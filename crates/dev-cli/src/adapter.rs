@@ -528,7 +528,10 @@ fn declare(ctx: &Arc<dyn contract::Context>, files: &[String]) {
         if path.is_absolute() {
             ctx.depends_on(file);
         } else {
-            ctx.depends_on(&cwd.join(path).to_string_lossy());
+            // Segment by segment: `a/b` is two names on every OS.
+            ctx.depends_on(
+                &es_runtime_default_providers::path::join_relative(&cwd, file).to_string_lossy(),
+            );
         }
     }
 }

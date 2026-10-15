@@ -332,8 +332,7 @@ pub fn end(pid: u32) {
 /// answer: a working directory that no longer exists.
 fn watch_root(entry: &Path) -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| {
-        entry
-            .canonicalize()
+        es_runtime_default_providers::path::canonicalize(entry)
             .unwrap_or_else(|_| entry.to_path_buf())
             .parent()
             .map(Path::to_path_buf)

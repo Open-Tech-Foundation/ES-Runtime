@@ -1,18 +1,25 @@
-//! Cross-OS path ↔ `file:` URL resolution, shared by the module loaders (and
-//! reused by the future `runtime:fs` provider). Centralizing it keeps module
-//! ids, `import.meta.url`, and the sandbox jail byte-identical across platforms.
+//! The one implementation of every path, `file:` URL and module-id conversion
+//! (D25, D165). Nothing else in the workspace calls `canonicalize` or `Url`'s
+//! file conversions — `clippy.toml` refuses them — so the same file always
+//! has the same spelling: module ids, `import.meta.url`, the sandbox jail and
+//! every lookup table agree on every platform.
 //!
 //! The platform-sensitive parts it pins down:
 //! - **Windows verbatim prefix.** `std::fs::canonicalize` returns `\\?\C:\…`,
-//!   which corrupts `file:` URL conversion. [`canonicalize`] uses `dunce` to
-//!   return a normal path (no-op on Unix), so URLs/keys stay clean (D25).
+//!   which corrupts `file:` URL conversion and matches no plain root.
+//!   [`canonicalize`] uses `dunce` to return a normal path (no-op on Unix).
 //! - **Separators.** Specifier/target strings are always `/`-separated;
 //!   [`join_relative`] splits and joins one segment at a time so no path
 //!   component ever carries an embedded separator (robust on `\` platforms).
-//! - **One round-trip.** [`to_file_url`]/[`from_file_url`] are the single
-//!   path↔URL implementation, so the same file always yields the same id
+//!   [`to_slash`] and [`slash_id`] write the `/` form JavaScript is shown;
+//!   [`native_id`] reads it back.
+//! - **One round-trip.** [`file_url`]/[`file_path`] are the single path↔URL
+//!   implementation, so the same file always yields the same id
 //!   (module-instance identity + jail comparisons depend on this).
 
+#![allow(clippy::disallowed_methods)] // the one place they are allowed (D165)
+
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use es_runtime_providers::ProviderError;
@@ -26,25 +33,133 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     dunce::canonicalize(path)
 }
 
+/// The plain spelling of a path another library made: Windows' verbatim
+/// `\\?\C:\…` read as `C:\…`, which every API there accepts. Unchanged
+/// anywhere else. For a path this crate makes, [`canonicalize`] already
+/// returns it.
+pub fn simplified(path: impl AsRef<Path>) -> PathBuf {
+    dunce::simplified(path.as_ref()).to_path_buf()
+}
+
+/// [`canonicalize`] for async code.
+pub async fn canonicalize_async(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let path = path.as_ref().to_path_buf();
+    tokio::task::spawn_blocking(move || canonicalize(path))
+        .await
+        .map_err(std::io::Error::other)?
+}
+
+/// The `file:` URL of an absolute path, or `None` for a relative one. A
+/// verbatim (`\\?\…`) path is read as the plain path it names, which `Url`
+/// alone refuses.
+pub fn file_url(path: impl AsRef<Path>) -> Option<Url> {
+    Url::from_file_path(dunce::simplified(path.as_ref())).ok()
+}
+
+/// [`file_url`] for a directory: the URL ends in `/`, so a relative
+/// specifier joined onto it lands inside the directory, not beside it.
+pub fn directory_url(path: impl AsRef<Path>) -> Option<Url> {
+    Url::from_directory_path(dunce::simplified(path.as_ref())).ok()
+}
+
+/// The path a `file:` URL names, percent-decoded, with the drive or UNC host
+/// Windows needs. `None` for any other scheme.
+pub fn file_path(url: &Url) -> Option<PathBuf> {
+    url.to_file_path().ok()
+}
+
+/// The file a module specifier names: a `file:` URL's path, its query and
+/// hash dropped. `None` for any other scheme and for a bare or relative
+/// specifier, which name no file until something resolves them.
+pub fn specifier_path(specifier: &str) -> Option<PathBuf> {
+    file_path(&Url::parse(specifier).ok()?)
+}
+
 /// Converts an absolute path to a `file:` URL string.
 pub fn to_file_url(path: &Path) -> Result<String, ProviderError> {
-    Url::from_file_path(path)
+    file_url(path)
         .map(String::from)
-        .map_err(|()| ProviderError::Other(format!("path is not absolute: {}", path.display())))
+        .ok_or_else(|| ProviderError::Other(format!("path is not absolute: {}", path.display())))
 }
 
 /// Parses a `file:` URL string back to a path.
 pub fn from_file_url(url: &str) -> Result<PathBuf, ProviderError> {
-    Url::parse(url)
-        .map_err(|e| ProviderError::Other(format!("invalid module id {url:?}: {e}")))?
-        .to_file_path()
-        .map_err(|()| ProviderError::Other(format!("module id is not a file path: {url}")))
+    let parsed = Url::parse(url)
+        .map_err(|e| ProviderError::Other(format!("invalid module id {url:?}: {e}")))?;
+    file_path(&parsed)
+        .ok_or_else(|| ProviderError::Other(format!("module id is not a file path: {url}")))
+}
+
+/// The forward-slash form of `path`, as a module id is written for JavaScript
+/// (D165): `C:/proj/a.js` on Windows, the path itself elsewhere. Only Windows
+/// has a second separator; on POSIX a `\` is part of a file name and is kept.
+pub fn to_slash(path: impl AsRef<Path>) -> String {
+    slash_on(&path.as_ref().to_string_lossy(), cfg!(windows))
+}
+
+/// A module id in the form JavaScript is shown (D165): an absolute path id
+/// becomes [`to_slash`]'s form; a virtual (`\0…`) or relative id is left
+/// alone, because its backslashes are not separators.
+pub fn slash_id(id: &str) -> Cow<'_, str> {
+    slash_id_on(id, cfg!(windows))
+}
+
+/// An id JavaScript handed back, in the native form the bundler keys modules
+/// by: [`slash_id`] undone. Either form is accepted, so a plugin may return
+/// what it was given or a path it built itself.
+pub fn native_id(id: &str) -> Cow<'_, str> {
+    native_on(id, cfg!(windows))
+}
+
+fn slash_on(text: &str, windows: bool) -> String {
+    if windows {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    }
+}
+
+fn slash_id_on(id: &str, windows: bool) -> Cow<'_, str> {
+    if !windows || !is_windows_absolute(id) {
+        return Cow::Borrowed(id);
+    }
+    swap_in_path(id, '\\', "/")
+}
+
+fn native_on(id: &str, windows: bool) -> Cow<'_, str> {
+    if !windows || !is_windows_absolute(id) {
+        return Cow::Borrowed(id);
+    }
+    swap_in_path(id, '/', "\\")
+}
+
+/// `from` replaced in the path part of an id only: a query or hash is not
+/// part of the path, and may carry separators of its own (`?url=a/b`).
+fn swap_in_path<'a>(id: &'a str, from: char, to: &str) -> Cow<'a, str> {
+    let end = id.find(['?', '#']).unwrap_or(id.len());
+    let (path, rest) = id.split_at(end);
+    if !path.contains(from) {
+        return Cow::Borrowed(id);
+    }
+    Cow::Owned(format!("{}{rest}", path.replace(from, to)))
+}
+
+/// `C:\…`, `C:/…`, `\\host\share` or `//host/share`: a path Windows reads as
+/// absolute, in either separator.
+fn is_windows_absolute(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    let sep = |b: u8| b == b'\\' || b == b'/';
+    match bytes {
+        [drive, b':', s, ..] if drive.is_ascii_alphabetic() && sep(*s) => true,
+        [a, b, c, ..] if sep(*a) && sep(*b) && !sep(*c) => true,
+        _ => false,
+    }
 }
 
 /// Joins a `/`-separated relative path onto `base`, one segment at a time, so no
 /// component carries an embedded separator. Leading/empty `.` segments are
-/// skipped; `..` pops. (`base` is a real path; `relative` comes from
-/// `package.json` `exports`/`main`, always `/`-separated.)
+/// skipped; `..` pops. (`base` is a real path; `relative` is `/`-separated: a
+/// `package.json` `exports`/`main` target, or a plugin's `dependsOn` entry.)
 pub fn join_relative(base: &Path, relative: &str) -> PathBuf {
     let mut out = base.to_path_buf();
     for segment in relative.split('/') {
@@ -119,6 +234,69 @@ mod tests {
         // `..` pops, `.`/empty skip.
         assert_eq!(join_relative(base, "x/../y"), Path::new("/pkg/y"));
         assert_eq!(join_relative(base, "./a//b"), Path::new("/pkg/a/b"));
+    }
+
+    #[test]
+    fn a_windows_path_takes_forward_slashes_and_a_posix_one_keeps_its_name() {
+        assert_eq!(slash_on(r"C:\proj\src\a.jsx", true), "C:/proj/src/a.jsx");
+        assert_eq!(slash_on(r"\\host\share\a.js", true), "//host/share/a.js");
+        // On POSIX a backslash is a character of the file name.
+        assert_eq!(slash_on(r"/proj/a\b.js", false), r"/proj/a\b.js");
+    }
+
+    #[test]
+    fn only_a_path_id_is_shown_with_forward_slashes() {
+        assert_eq!(slash_id_on(r"C:\proj\a.jsx?raw", true), "C:/proj/a.jsx?raw");
+        assert_eq!(
+            slash_id_on(r"C:\proj\a.svg?x=a\b", true),
+            r"C:/proj/a.svg?x=a\b"
+        );
+        assert_eq!(slash_id_on("C:/proj/a.jsx", true), "C:/proj/a.jsx");
+        // A virtual id's backslashes are its own, not separators.
+        assert_eq!(slash_id_on("\0plugin\\entry", true), "\0plugin\\entry");
+        assert_eq!(slash_id_on(r"C:\proj\a.jsx", false), r"C:\proj\a.jsx");
+    }
+
+    #[test]
+    fn a_slash_id_comes_back_native_with_its_query_untouched() {
+        assert_eq!(native_on("C:/proj/a.jsx", true), r"C:\proj\a.jsx");
+        assert_eq!(native_on(r"C:\proj\a.jsx", true), r"C:\proj\a.jsx");
+        assert_eq!(native_on("//host/share/a.js", true), r"\\host\share\a.js");
+        assert_eq!(
+            native_on("C:/proj/icon.svg?url=a/b#x/y", true),
+            r"C:\proj\icon.svg?url=a/b#x/y"
+        );
+        // Not a path: a virtual id, a bare or relative specifier.
+        assert_eq!(native_on("\0virtual/entry", true), "\0virtual/entry");
+        assert_eq!(native_on("react/jsx-runtime", true), "react/jsx-runtime");
+        assert_eq!(native_on("./a/b.js", true), "./a/b.js");
+        // Nothing to do on POSIX.
+        assert_eq!(native_on("/proj/a.jsx", false), "/proj/a.jsx");
+    }
+
+    #[test]
+    fn only_an_absolute_path_reads_as_one() {
+        assert!(is_windows_absolute(r"C:\a"));
+        assert!(is_windows_absolute("c:/a"));
+        assert!(is_windows_absolute(r"\\host\share"));
+        assert!(is_windows_absolute("//host/share"));
+        // Drive-relative, rooted, verbatim-less relative and virtual ids are not.
+        assert!(!is_windows_absolute("C:a"));
+        assert!(!is_windows_absolute(r"\a"));
+        assert!(!is_windows_absolute("///a"));
+        assert!(!is_windows_absolute("\0x"));
+        assert!(!is_windows_absolute("a/b"));
+    }
+
+    #[test]
+    fn a_specifier_names_its_file_decoded_and_without_its_query() {
+        let file = std::env::temp_dir().join("a b.jsx");
+        let specifier = format!("{}?raw#top", file_url(&file).unwrap());
+        assert!(specifier.contains("a%20b.jsx"), "{specifier}");
+        assert_eq!(specifier_path(&specifier), Some(file));
+        assert_eq!(specifier_path("https://example.com/a.js"), None);
+        assert_eq!(specifier_path("react"), None);
+        assert_eq!(specifier_path("./a.js"), None);
     }
 
     #[test]

@@ -122,7 +122,9 @@ pub fn generate(
             Ok(text) => {
                 // Both spellings, so a lookup by either the path as written or
                 // the canonical one finds it.
-                if let Ok(canonical) = source_path.canonicalize() {
+                if let Ok(canonical) =
+                    es_runtime_default_providers::path::canonicalize(&source_path)
+                {
                     generated.insert(canonical, text.clone());
                 }
                 generated.insert(source_path, text);

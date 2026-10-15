@@ -150,7 +150,7 @@ impl Collected {
         let mut files: Vec<PathBuf> = self
             .modules
             .keys()
-            .filter_map(|url| url::Url::parse(url).ok()?.to_file_path().ok())
+            .filter_map(|url| es_runtime_default_providers::path::specifier_path(url))
             .collect();
         files.sort();
         files.dedup();
@@ -161,7 +161,7 @@ impl Collected {
     /// test loaded it.
     pub fn measure(&self, path: &Path) -> Option<FileCoverage> {
         let source = std::fs::read_to_string(path).ok()?;
-        let url = url::Url::from_file_path(path).ok()?.to_string();
+        let url = es_runtime_default_providers::path::file_url(path)?.to_string();
         let run = self.modules.get(&url);
         Some(measure(
             path,

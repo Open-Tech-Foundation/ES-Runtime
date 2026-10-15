@@ -166,7 +166,7 @@ pub fn write(out: &Path, root: &Path) {
     let under_root = |url: &str| {
         url::Url::parse(url)
             .ok()
-            .and_then(|url| url.to_file_path().ok())
+            .and_then(|url| es_runtime_default_providers::path::file_path(&url))
             .is_some_and(|path| path.starts_with(root))
     };
     let takes: Vec<Json> = client

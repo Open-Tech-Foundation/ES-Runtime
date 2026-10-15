@@ -221,6 +221,26 @@ const mdx = {
 else must be the object — a bare string of code is refused by name. Data comes
 first and the context last, with nothing positional between them.
 
+### Ids and paths
+
+A **module id** is written with forward slashes on every OS — `C:/app/src/a.jsx`
+on Windows, `/app/src/a.jsx` elsewhere. That is every `id` and `importer` a hook
+receives, what `ctx.resolve()` answers, a chunk's `facadeModuleId` and
+`moduleIds`, and what an `external` predicate is asked. A `filter.id` matches
+that form, so a pattern written on one OS matches on the others. An id a hook
+returns may use either separator.
+
+A **file path** — `watchFiles`, `dependsOn`, a finished target's `outDir` — is
+in the OS's own form, as [`runtime:fs`](/api/fs) and [`runtime:watch`](/api/watch)
+give it, so it can be handed straight back to them. To compare one with an id,
+convert it with [`toSlash`](/api/path):
+
+```js
+import { toSlash } from "runtime:path";
+
+if (chunk.moduleIds.includes(toSlash(event.path))) rebuild(chunk);
+```
+
 ### bundle: what the build produced
 
 `bundle` runs once, after the graph has been split into chunks and before any of

@@ -24,12 +24,9 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 # Test-only: a self-signed cert, so the telemetry e2e can stand up a TLS
 # listener and fail a handshake against it hermetically.
 rcgen.workspace = true
-# Test-only: spelling an absolute path as a `file:` URL, which is the one
-# specifier form that means the same thing on Windows as it does on Unix.
-url.workspace = true
-# Test-only: `dunce::simplified`, to spell a canonical Windows path the way the
-# runtime does rather than in the verbatim `\\?\` form (D25).
-dunce.workspace = true
+# Test-only: the runtime's own path conversions (D165), so a test spells a
+# canonical path or a `file:` URL exactly as the runtime does on every OS.
+es-runtime-default-providers.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 # Test-only: a pseudo-terminal, so the stdin tests can drive `prompt()` and raw

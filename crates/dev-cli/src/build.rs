@@ -433,8 +433,11 @@ fn collect_sources(root: &Path, dir: &Path, entries: &mut Vec<(String, String)>)
         let Ok(relative) = path.strip_prefix(root) else {
             continue;
         };
+        // Forward slashes even on Windows: the name becomes `[name].js`, and
+        // a backslash in it is an illegal filename there rather than a
+        // directory — nested modules would silently never be written.
         entries.push((
-            relative.with_extension("").to_string_lossy().into_owned(),
+            es_runtime_default_providers::path::to_slash(relative.with_extension("")),
             path.to_string_lossy().into_owned(),
         ));
     }
@@ -520,7 +523,7 @@ fn copy_library_styles(
                         .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
                 }
             }
-            copied.push(relative.to_string_lossy().replace('\\', "/"));
+            copied.push(es_runtime_default_providers::path::to_slash(relative));
         }
     }
     Ok(())
@@ -550,8 +553,10 @@ impl LibraryUrls {
             std::fs::read(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
         // One file however it was spelled: a relative `url()` in a copied
         // sheet and the absolute path a CSS Module records are the same file.
-        self.files
-            .insert(file.canonicalize().unwrap_or_else(|_| file.to_path_buf()));
+        self.files.insert(
+            es_runtime_default_providers::path::canonicalize(file)
+                .unwrap_or_else(|_| file.to_path_buf()),
+        );
         match self.mode {
             crate::config::CssUrls::Inline => {
                 use base64::Engine as _;
@@ -573,7 +578,7 @@ impl LibraryUrls {
                 }
                 let from = stylesheet.parent().unwrap_or(Path::new("."));
                 let url = crate::bundler::relative_to(from, &target)
-                    .map(|url| url.to_string_lossy().replace('\\', "/"))
+                    .map(es_runtime_default_providers::path::to_slash)
                     .unwrap_or_else(|| target.to_string_lossy().into_owned());
                 Ok(if url.starts_with("../") {
                     url
@@ -678,7 +683,7 @@ fn write_library_modules(
         let from = sheet.path.parent().unwrap_or(Path::new("."));
         let url_to = |path: &Path| {
             let url = crate::bundler::relative_to(from, path)
-                .map(|url| url.to_string_lossy().replace('\\', "/"))
+                .map(es_runtime_default_providers::path::to_slash)
                 .unwrap_or_else(|| path.to_string_lossy().into_owned());
             if url.starts_with("../") {
                 url
@@ -710,7 +715,7 @@ fn write_library_modules(
         }
         std::fs::write(&target, code)
             .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
-        written.push(relative.to_string_lossy().replace('\\', "/"));
+        written.push(es_runtime_default_providers::path::to_slash(relative));
     }
     Ok(())
 }
@@ -747,11 +752,8 @@ fn warn_unexported_styles(root: &Path, out: &Path, styles: &[String]) {
     };
     let mut targets = Vec::new();
     export_targets(exports, &mut targets);
-    let dir = out
-        .strip_prefix(package)
-        .unwrap_or(&out)
-        .to_string_lossy()
-        .replace('\\', "/");
+    let dir =
+        es_runtime_default_providers::path::to_slash(out.strip_prefix(package).unwrap_or(&out));
     let prefix = if dir.is_empty() {
         ".".to_string()
     } else {
@@ -905,11 +907,9 @@ fn guard_replacement(out_dir: &Path, source_root: &Path) -> Result<(), String> {
     // Resolved rather than compared as written: `dist`, `./dist` and an absolute
     // path to it are one directory, and a symlink is whatever it points at.
     // Every question below is about that real directory.
-    let resolved = out_dir
-        .canonicalize()
+    let resolved = es_runtime_default_providers::path::canonicalize(out_dir)
         .map_err(|e| format!("cannot read {}: {e}", out_dir.display()))?;
-    let source = source_root
-        .canonicalize()
+    let source = es_runtime_default_providers::path::canonicalize(source_root)
         .map_err(|e| format!("cannot read {}: {e}", source_root.display()))?;
     let cwd = std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
 
@@ -979,11 +979,7 @@ fn owned_dirs(
     if project.targets.is_some() || project.dev.is_some() {
         return Ok(Vec::new());
     }
-    let root = project
-        .settings
-        .source
-        .root
-        .canonicalize()
+    let root = es_runtime_default_providers::path::canonicalize(&project.settings.source.root)
         .unwrap_or_else(|_| project.settings.source.root.clone());
 
     let mut owned = Vec::new();
@@ -994,7 +990,7 @@ fn owned_dirs(
         let out = project.settings.source.root.join(dir);
         // A directory that is not there yet is the first build, which has
         // nothing to replace and still owns where it is going.
-        if let Ok(resolved) = out.canonicalize()
+        if let Ok(resolved) = es_runtime_default_providers::path::canonicalize(&out)
             && root.starts_with(&resolved)
         {
             return Err(format!(

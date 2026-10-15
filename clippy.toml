@@ -1,0 +1,13 @@
+# One path interface (DECISIONS.md D165). Each conversion below has exactly one
+# implementation, in `es_runtime_default_providers::path`; a second call site
+# is how a Windows path came to be spelled two ways and match nothing.
+disallowed-methods = [
+    { path = "std::fs::canonicalize", reason = "returns `\\\\?\\C:\\…` on Windows; use `es_runtime_default_providers::path::canonicalize` (D165)" },
+    { path = "std::path::Path::canonicalize", reason = "returns `\\\\?\\C:\\…` on Windows; use `es_runtime_default_providers::path::canonicalize` (D165)" },
+    { path = "tokio::fs::canonicalize", reason = "returns `\\\\?\\C:\\…` on Windows; use `es_runtime_default_providers::path::canonicalize` (D165)" },
+    { path = "dunce::canonicalize", reason = "use `es_runtime_default_providers::path::canonicalize`, the one spelling of a real path (D165)" },
+    { path = "dunce::simplified", reason = "use `es_runtime_default_providers::path::simplified` (D165)" },
+    { path = "url::Url::from_file_path", reason = "use `es_runtime_default_providers::path::file_url` (D165)" },
+    { path = "url::Url::from_directory_path", reason = "use `es_runtime_default_providers::path::directory_url` (D165)" },
+    { path = "url::Url::to_file_path", reason = "use `es_runtime_default_providers::path::file_path` (D165)" },
+]

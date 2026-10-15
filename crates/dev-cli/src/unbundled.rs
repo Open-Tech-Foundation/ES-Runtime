@@ -176,7 +176,7 @@ impl Pipeline {
             .and_then(|mut url| {
                 url.set_query(None);
                 url.set_fragment(None);
-                url.to_file_path().ok()
+                es_runtime_default_providers::path::file_path(&url)
             })
             .map(|path| path.to_string_lossy().into_owned())
     }
@@ -217,9 +217,9 @@ impl ModuleHooks for Pipeline {
             if virtual_module || !Path::new(&id).is_absolute() {
                 return Ok(Some(format!("{VIRTUAL}{id}")));
             }
-            return url::Url::from_file_path(&id)
+            return es_runtime_default_providers::path::file_url(&id)
                 .map(|url| Some(url.to_string()))
-                .map_err(|()| {
+                .ok_or_else(|| {
                     format!(
                         "[plugin {}] resolved {specifier} to {id}, which is not a path",
                         pass.name()
@@ -234,7 +234,7 @@ impl ModuleHooks for Pipeline {
         // resolve against the root, and packages from the project's own
         // `node_modules`.
         referrer.starts_with(VIRTUAL).then(|| {
-            url::Url::from_file_path(self.root.join("[virtual]"))
+            es_runtime_default_providers::path::file_url(self.root.join("[virtual]"))
                 .map(|url| url.to_string())
                 .unwrap_or_default()
         })
@@ -510,7 +510,7 @@ fn resolve_file(specifier: &str, importer: Option<&str>) -> Option<contract::Res
     candidates
         .into_iter()
         .find(|path| path.is_file())
-        .and_then(|path| dunce::canonicalize(path).ok())
+        .and_then(|path| es_runtime_default_providers::path::canonicalize(path).ok())
         .map(|path| contract::ResolvedId {
             id: path.to_string_lossy().into_owned(),
             external: false,
@@ -553,7 +553,7 @@ mod tests {
     /// given; the binary's own modules are nobody's.
     #[test]
     fn a_pass_names_modules_by_path_or_by_their_own_id() {
-        let file = url::Url::from_file_path(std::env::temp_dir().join("a.jsx"))
+        let file = es_runtime_default_providers::path::file_url(std::env::temp_dir().join("a.jsx"))
             .unwrap()
             .to_string();
         assert!(

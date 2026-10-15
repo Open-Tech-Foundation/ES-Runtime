@@ -20,7 +20,6 @@ use es_runtime_default_providers::{
     SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, WorkerProcess, path,
 };
 use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
-use url::Url;
 
 use crate::SNAPSHOT;
 use crate::args::RunOptions;
@@ -468,11 +467,7 @@ impl BundlerStyleLoader {
     /// "is a directory". That answer is a miss, not a hit: what the specifier
     /// means is the directory's index, which is what the candidates below find.
     fn is_a_directory(id: &str) -> bool {
-        url::Url::parse(id)
-            .ok()
-            .filter(|url| url.scheme() == "file")
-            .and_then(|url| url.to_file_path().ok())
-            .is_some_and(|path| path.is_dir())
+        es_runtime_default_providers::path::specifier_path(id).is_some_and(|path| path.is_dir())
     }
 
     /// The spellings to try for a specifier that named nothing, in order.
@@ -749,8 +744,8 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             let cwd = std::env::current_dir()
                 .map_err(|e| format!("cannot read working directory: {e}"))?;
             let cwd = path::canonicalize(&cwd).unwrap_or(cwd);
-            let base = Url::from_directory_path(&cwd)
-                .map_err(|()| "working directory is not absolute".to_string())?;
+            let base = es_runtime_default_providers::path::directory_url(&cwd)
+                .ok_or_else(|| "working directory is not absolute".to_string())?;
             let url = base
                 .join("[eval]")
                 .map_err(|e| format!("cannot derive eval specifier: {e}"))?;

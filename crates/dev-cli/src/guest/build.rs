@@ -374,7 +374,9 @@ impl HostExtension for BuildExtension {
             let this = this.clone();
             let call = arg_id(&args, 0);
             let specifier = arg_str(&args, 1);
-            let importer = args.get(2).and_then(Value::as_str).map(str::to_string);
+            let importer = args.get(2).and_then(Value::as_str).map(|importer| {
+                es_runtime_default_providers::path::native_id(importer).into_owned()
+            });
             let skip_self = matches!(
                 args.get(3).and_then(|v| field(v, "skipSelf")),
                 Some(Value::Bool(true))
@@ -390,7 +392,7 @@ impl HostExtension for BuildExtension {
                 Ok(match found {
                     None => Value::Null,
                     Some(resolved) => Value::Object(vec![
-                        ("id".to_string(), Value::String(resolved.id)),
+                        ("id".to_string(), plugin::slash(&resolved.id)),
                         ("external".to_string(), Value::Bool(resolved.external)),
                     ]),
                 })
@@ -475,13 +477,13 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
     };
 
     let input = match get("input") {
-        Some(Value::String(one)) => vec![(None, one)],
+        Some(Value::String(one)) => vec![(None, native(&one))],
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(|item| match item {
-                Value::String(import) => Some((None, import.clone())),
+                Value::String(import) => Some((None, native(import))),
                 Value::Object(_) => {
-                    let import = field(item, "import")?.as_str()?.to_string();
+                    let import = native(field(item, "import")?.as_str()?);
                     let name = field(item, "name")
                         .and_then(Value::as_str)
                         .map(str::to_string);
@@ -492,7 +494,7 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             .collect(),
         Some(Value::Object(entries)) => entries
             .iter()
-            .filter_map(|(name, import)| Some((Some(name.clone()), import.as_str()?.to_string())))
+            .filter_map(|(name, import)| Some((Some(name.clone()), native(import.as_str()?))))
             .collect(),
         _ => Vec::new(),
     };
@@ -518,12 +520,11 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             Some(External::Predicate(std::sync::Arc::new(
                 move |specifier: &str, importer: Option<&str>, resolved: bool| {
                     let bridge = bridge.clone();
+                    // Once resolved, the specifier is an id: shown as every
+                    // id is (D165). A raw specifier passes through untouched.
                     let args = vec![
-                        Value::String(specifier.to_string()),
-                        match importer {
-                            Some(importer) => Value::String(importer.to_string()),
-                            None => Value::Null,
-                        },
+                        plugin::slash(specifier),
+                        importer.map_or(Value::Null, plugin::slash),
                         Value::Bool(resolved),
                     ];
                     Box::pin(async move {
@@ -643,6 +644,11 @@ fn plugins(value: Option<&Value>) -> Result<Vec<Arc<contract::Plugin>>, OpError>
         .collect()
 }
 
+/// An entry as JavaScript wrote it, in either form (D165).
+fn native(import: &str) -> String {
+    es_runtime_default_providers::path::native_id(import).into_owned()
+}
+
 /// A finished build, as the guest reads it.
 fn built_value(built: server::Built) -> Value {
     let mut output = Vec::with_capacity(built.chunks.len() + built.assets.len());
@@ -655,13 +661,25 @@ fn built_value(built: server::Built) -> Value {
             ("isEntry".to_string(), Value::Bool(chunk.is_entry)),
             (
                 "facadeModuleId".to_string(),
-                chunk.facade_module_id.map_or(Value::Null, Value::String),
+                chunk
+                    .facade_module_id
+                    .as_deref()
+                    .map_or(Value::Null, plugin::slash),
             ),
             (
                 "isDynamicEntry".to_string(),
                 Value::Bool(chunk.is_dynamic_entry),
             ),
-            ("moduleIds".to_string(), strings(chunk.module_ids)),
+            (
+                "moduleIds".to_string(),
+                Value::Array(
+                    chunk
+                        .module_ids
+                        .iter()
+                        .map(|id| plugin::slash(id))
+                        .collect(),
+                ),
+            ),
             ("imports".to_string(), strings(chunk.imports)),
             ("dynamicImports".to_string(), strings(chunk.dynamic_imports)),
             (
@@ -704,7 +722,10 @@ fn failed_value(failures: &[crate::bundler::Failure]) -> Value {
                     "message".to_string(),
                     Value::String(failure.message.clone()),
                 ),
-                ("id".to_string(), text(&failure.id)),
+                (
+                    "id".to_string(),
+                    failure.id.as_deref().map_or(Value::Null, plugin::slash),
+                ),
                 ("plugin".to_string(), text(&failure.plugin)),
                 ("kind".to_string(), Value::String(failure.kind.clone())),
                 ("line".to_string(), number(failure.line)),

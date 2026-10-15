@@ -165,7 +165,7 @@ fn selected(
         .iter()
         .chain(&config.global_setup)
         .filter_map(|module| match url::Url::parse(module) {
-            Ok(url) => url.to_file_path().ok(),
+            Ok(url) => es_runtime_default_providers::path::file_path(&url),
             Err(_) => Some(root.join(module)),
         })
         .map(|path| crate::related::canonical(&path))

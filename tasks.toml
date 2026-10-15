@@ -77,6 +77,11 @@ run = "cargo deny check"
 [tasks.copyleft-stays-out-of-esrun]
 run = "bash scripts/copyleft-confined.sh"
 
+# One path interface (D165): clippy bans the functions that spell a path two
+# ways; this refuses the string arithmetic that does it by hand.
+[tasks.path-discipline]
+run = "bash scripts/path-discipline.sh"
+
 [tasks.audit]
 run = "cargo audit"
 

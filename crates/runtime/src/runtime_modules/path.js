@@ -183,6 +183,16 @@ function toFileURL(p) {
   return new URL("file://" + (WINDOWS ? "/" + encoded : encoded));
 }
 
+// The forward-slash form of a path (D165), which is how esdev shows a plugin
+// a module id: on Windows a backslash becomes "/"; on POSIX it is part of a
+// file name and is kept. For comparing an id with a path from elsewhere —
+// cwd(), a directory listing, a watch event. Not a normalization: that is
+// normalize().
+function toSlash(p) {
+  str(p);
+  return WINDOWS ? p.replace(/\\/g, "/") : p;
+}
+
 export {
   sep,
   delimiter,
@@ -197,6 +207,7 @@ export {
   relative,
   fromFileURL,
   toFileURL,
+  toSlash,
 };
 export default {
   sep,
@@ -212,4 +223,5 @@ export default {
   relative,
   fromFileURL,
   toFileURL,
+  toSlash,
 };

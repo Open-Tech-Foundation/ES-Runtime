@@ -159,6 +159,10 @@ impl Filter {
     /// `id` and `code` are **and**ed; the patterns within each are **or**ed. An
     /// empty list is not a constraint.
     pub fn admits(&self, id: &str, code: Option<&str>) -> bool {
+        // Matched against the id a plugin is shown: forward slashes on every
+        // OS (D165), so `/src\/x\.js$/` matches on Windows too.
+        let id = es_runtime_default_providers::path::slash_id(id);
+        let id = id.as_ref();
         let id_ok = self.id.is_empty() || self.id.iter().any(|p| p.matches(id));
         if !id_ok {
             return false;
@@ -724,7 +728,8 @@ pub fn resolved(value: &Value) -> Resolved {
         _ => External::No,
     };
     Resolved::To {
-        id: id.to_string(),
+        // Either form, as the plugin built it (D165).
+        id: es_runtime_default_providers::path::native_id(id).into_owned(),
         external,
         virtual_module: matches!(field(value, "virtual"), Some(Value::Bool(true))),
     }
@@ -769,7 +774,10 @@ pub fn depends_on(value: &Value) -> Vec<String> {
     match field(value, "dependsOn") {
         Some(Value::Array(items)) => items
             .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
+            .filter_map(|v| {
+                v.as_str()
+                    .map(|file| es_runtime_default_providers::path::native_id(file).into_owned())
+            })
             .collect(),
         _ => Vec::new(),
     }
@@ -809,8 +817,8 @@ pub fn emit(value: &Value) -> Result<Emit, String> {
         Some("chunk") => Ok(Emit::Chunk {
             id: field(value, "id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "emit: a chunk needs an id".to_string())?
-                .to_string(),
+                .map(|id| es_runtime_default_providers::path::native_id(id).into_owned())
+                .ok_or_else(|| "emit: a chunk needs an id".to_string())?,
             name,
             file_name,
         }),
@@ -1336,6 +1344,38 @@ mod tests {
         let filter = &plugin.hooks.transform.as_ref().expect("transform").filter;
         assert!(filter.admits("/app/page.mdx", Some("# hi")));
         assert!(!filter.admits("/app/main.js", Some("export {}")));
+    }
+
+    /// A filter is written against the id a plugin is shown (D165): forward
+    /// slashes, so the pattern an author writes on Linux matches on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn a_filter_matches_a_windows_id_in_its_slash_form() {
+        let filter = Filter {
+            id: vec![compile(r"src\/x\.js$", "").expect("pattern")],
+            code: Vec::new(),
+        };
+        assert!(filter.admits(r"C:\proj\src\x.js", None));
+        assert!(filter.admits("C:/proj/src/x.js", None));
+    }
+
+    /// What a plugin hands back may be in either form; the bundler keys
+    /// modules by the native one (D165).
+    #[cfg(windows)]
+    #[test]
+    fn an_id_from_a_plugin_comes_back_native() {
+        for given in ["C:/proj/src/a.jsx", r"C:\proj\src\a.jsx"] {
+            let answer = object(vec![("id", Value::String(given.to_string()))]);
+            let Resolved::To { id, .. } = resolved(&answer) else {
+                panic!("a resolved id");
+            };
+            assert_eq!(id, r"C:\proj\src\a.jsx");
+        }
+        let answer = object(vec![(
+            "dependsOn",
+            Value::Array(vec![Value::String("C:/proj/data.json".to_string())]),
+        )]);
+        assert_eq!(depends_on(&answer), [r"C:\proj\data.json"]);
     }
 
     /// An exact id is exact — not a substring, because a filter whose meaning

@@ -1461,13 +1461,12 @@ dependencies = [
 name = "es-runtime-cli"
 version = "0.39.0"
 dependencies = [
- "dunce",
  "es-runtime-cli-common",
  "es-runtime-common",
+ "es-runtime-default-providers",
  "rcgen",
  "rustix 1.1.4",
  "tokio",
- "url",
 ]
 
 [[package]]
@@ -1483,7 +1482,6 @@ dependencies = [
  "self_update",
  "serde_json",
  "tokio",
- "url",
 ]
 
 [[package]]
@@ -1538,7 +1536,6 @@ dependencies = [
  "arcstr",
  "base64 0.22.1",
  "crc32fast",
- "dunce",
  "es-runtime-cli-common",
  "es-runtime-common",
  "es-runtime-default-providers",

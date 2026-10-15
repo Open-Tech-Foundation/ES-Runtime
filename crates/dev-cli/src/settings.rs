@@ -198,9 +198,9 @@ impl Settings {
                 .map(|module| -> Result<_, String> {
                     let path = root.join(module);
                     if path.exists() {
-                        url::Url::from_file_path(&path)
+                        es_runtime_default_providers::path::file_url(&path)
                             .map(|url| url.to_string())
-                            .map_err(|()| {
+                            .ok_or_else(|| {
                                 format!("cannot name setup module {module} as a file URL")
                             })
                     } else {
@@ -263,9 +263,9 @@ impl Settings {
 fn module_url(dir: &std::path::Path, module: &str) -> Result<String, String> {
     let path = dir.join(module);
     if path.exists() {
-        url::Url::from_file_path(&path)
+        es_runtime_default_providers::path::file_url(&path)
             .map(|url| url.to_string())
-            .map_err(|()| format!("cannot name module {module} as a file URL"))
+            .ok_or_else(|| format!("cannot name module {module} as a file URL"))
     } else {
         Ok(module.to_string())
     }

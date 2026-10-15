@@ -563,7 +563,7 @@ mod tests {
     fn a_refusal_names_the_path_as_written_for_wasi_too() {
         let (_, dir) = fs_in("spelling");
         std::fs::create_dir_all(dir.join("data")).unwrap();
-        let root = std::fs::canonicalize(&dir).unwrap();
+        let root = crate::path::canonicalize(&dir).unwrap();
         let fs = SystemSyncFileSystem::new(&root, &root)
             .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap());
         for (written, err) in [

@@ -35,15 +35,13 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// An existing path in the spelling the rest of the system uses.
-///
-/// `std::fs::canonicalize` returns Windows' verbatim `\\?\` form, which most
-/// APIs there do not accept; the runtime strips it with `dunce` for exactly this
-/// reason (D25). A test that hands one to a flag is handing over a path the
-/// runtime would never produce itself.
+/// An existing path in the spelling the rest of the system uses: the
+/// runtime's own `canonicalize` (D165), never Windows' verbatim `\\?\` form.
 fn real(path: &std::path::Path) -> String {
-    let canonical = std::fs::canonicalize(path).expect("canonicalize");
-    dunce::simplified(&canonical).display().to_string()
+    es_runtime_default_providers::path::canonicalize(path)
+        .expect("canonicalize")
+        .display()
+        .to_string()
 }
 
 /// The same path, escaped for a JavaScript string literal.
@@ -906,7 +904,7 @@ fn scoped_tree(name: &str) -> PathBuf {
     // tests use as "outside the jail" is then inside it. The fixture describing
     // itself is also what a real project looks like.
     std::fs::write(root.join("package.json"), "{}").expect("write");
-    std::fs::canonicalize(&root).expect("canonicalize")
+    es_runtime_default_providers::path::canonicalize(&root).expect("canonicalize")
 }
 
 /// Runs `code` with `dir` as the working directory — the directory a relative
@@ -1120,7 +1118,7 @@ fn import_project(name: &str) -> PathBuf {
         .unwrap();
         std::fs::write(dir.join("index.js"), format!("export const n = '{pkg}';")).unwrap();
     }
-    let root = std::fs::canonicalize(&root).unwrap();
+    let root = es_runtime_default_providers::path::canonicalize(&root).unwrap();
     std::fs::write(
         root.join("app.mjs"),
         "import { v } from './src/lib.mjs'; \

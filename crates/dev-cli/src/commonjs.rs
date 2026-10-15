@@ -148,7 +148,7 @@ impl Converter {
 
     fn plan_uncached(&self, specifier: &str, dir: &Path) -> Option<Plan> {
         let entry = self.resolver.resolve(dir, specifier).ok()?.full_path();
-        let entry = dunce::simplified(&entry).to_path_buf();
+        let entry = es_runtime_default_providers::path::simplified(&entry);
         if !is_commonjs(&entry) {
             return None;
         }
@@ -159,7 +159,7 @@ impl Converter {
         if fresh {
             prune_other_installs(&deps);
         }
-        let deps = dunce::canonicalize(&deps).ok()?;
+        let deps = es_runtime_default_providers::path::canonicalize(&deps).ok()?;
         let name = format!("{}-{}.mjs", slug(specifier), fingerprint(&entry));
         Some(Plan {
             specifier: specifier.to_string(),
@@ -176,13 +176,11 @@ impl Converter {
 impl PackageConverter for Converter {
     fn resolve(&self, specifier: &str, referrer: &str) -> Option<String> {
         let plan = self.plan(specifier, &referrer_dir(referrer))?;
-        url::Url::from_file_path(&plan.module)
-            .ok()
-            .map(|url| url.to_string())
+        es_runtime_default_providers::path::file_url(&plan.module).map(|url| url.to_string())
     }
 
     fn prepare(&self, id: &str) -> Option<es_runtime_providers::BoxFuture<Result<(), String>>> {
-        let path = url::Url::parse(id).ok()?.to_file_path().ok()?;
+        let path = es_runtime_default_providers::path::specifier_path(id)?;
         let plan = self.planned(&path)?;
         if plan.module.is_file() {
             return Some(Box::pin(std::future::ready(Ok(()))));
@@ -357,10 +355,12 @@ fn registration(required: &[(String, Other)]) -> String {
     for (index, (key, other)) in required.iter().enumerate() {
         let url = match other {
             Other::Module(url) => url.clone(),
-            Other::Converted(plan) => match url::Url::from_file_path(&plan.module) {
-                Ok(url) => url.to_string(),
-                Err(()) => continue,
-            },
+            Other::Converted(plan) => {
+                match es_runtime_default_providers::path::file_url(&plan.module) {
+                    Some(url) => url.to_string(),
+                    None => continue,
+                }
+            }
             Other::Missing => continue,
         };
         let quoted_url = serde_json::Value::String(url);
@@ -424,7 +424,7 @@ fn classify(specifier: &str, importer: &Path) -> Other {
     }
     // The runtime's own answer, so this is the instance everything else in the
     // run imports.
-    let referrer = url::Url::from_file_path(importer)
+    let referrer = es_runtime_default_providers::path::file_url(importer)
         .map(|url| url.to_string())
         .unwrap_or_default();
     if let Ok(loader) = es_runtime_default_providers::NodeModuleLoader::with_base_dir(dir)
@@ -486,14 +486,11 @@ impl Plugin for Packaging {
                 external: Some(ResolvedExternal::Bool(true)),
                 ..HookResolveIdOutput::from_id(url)
             }),
-            Other::Converted(plan) => {
-                url::Url::from_file_path(&plan.module)
-                    .ok()
-                    .map(|url| HookResolveIdOutput {
-                        external: Some(ResolvedExternal::Bool(true)),
-                        ..HookResolveIdOutput::from_id(url.to_string())
-                    })
-            }
+            Other::Converted(plan) => es_runtime_default_providers::path::file_url(&plan.module)
+                .map(|url| HookResolveIdOutput {
+                    external: Some(ResolvedExternal::Bool(true)),
+                    ..HookResolveIdOutput::from_id(url.to_string())
+                }),
             Other::Missing => None,
         })
     }
@@ -681,7 +678,7 @@ fn referrer_dir(referrer: &str) -> PathBuf {
     url::Url::parse(referrer)
         .ok()
         .filter(|url| url.scheme() == "file")
-        .and_then(|url| url.to_file_path().ok())
+        .and_then(|url| es_runtime_default_providers::path::file_path(&url))
         .and_then(|path| {
             if referrer.ends_with('/') {
                 Some(path)

@@ -3394,3 +3394,25 @@ The day before, the same reasoning had been taken one step further and an out-of
 - **Remembering used steps in the runtime.** It needs storage that spans processes; returning the step gives the application what to store.
 
 **Consequences:** a sign-in flow stores two things per user: the secret (encrypted at rest, since it is a credential) and the last accepted step.
+
+### D165 — One path interface: `path` owns every path, URL and id conversion; plugins see forward-slash ids · *Accepted (2026-10-15)* · *extends D25*
+
+**Context:** Windows path bugs kept coming back one at a time (`2365ef0e`, `b34b5f37`, `5903b9eb`, `300f7fa1`, `85402501`, and five more in flight), and each fix patched one call site. D25 had already made `default-providers::path` "the single path↔URL implementation", but nothing made code use it. An audit found about 15 direct `std`/`tokio` `canonicalize` calls (which return `\\?\C:\…` on Windows, so the path never matches a plain root again), about 25 direct `dunce::canonicalize` calls, 65 direct `Url::from_file_path`/`to_file_path` calls, three hand-written `strip_prefix("file://")` (which produce `/D:/…` and leave `%20` encoded), and 18 ad-hoc `replace('\\', "/")`. The source-map table had grown a `key()` that repairs four spellings of one file after the fact. Plugins were handed OS-native ids, so a plugin written on Linux broke on Windows (`id.split("/")`, `/src\/x\.js$/`), and the plugin contract never said what form an id takes.
+
+Others: Vite gives plugins forward-slash ids that keep the drive (`C:/…`) and exports `normalizePath`; Rollup passes native ids and plugins normalize them with `@rollup/pluginutils`; Node documents `fileURLToPath`/`pathToFileURL` as the only correct conversions; Deno keeps them in one crate, `deno_path_util`.
+
+**Decision (maintainer, 2026-10-15):**
+
+- **`es_runtime_default_providers::path` is the one implementation.** It owns `canonicalize` (`dunce`: real path, no verbatim prefix), `to_file_url`/`from_file_url` (percent-encoding, drive letters and UNC hosts), `specifier_path` (the file a `file:` specifier names), `to_slash` (a path's forward-slash form), `slash_id`/`native_id` (a module id as JavaScript is shown it, and back) and `join_relative`. Each key has one spelling, made where the key is made, so nothing downstream has to repair one.
+- **Enforced by the compiler.** A workspace `clippy.toml` disallows `std::fs::canonicalize`, `Path::canonicalize`, `tokio::fs::canonicalize`, `dunce::canonicalize`, `Url::from_file_path`, `Url::from_directory_path` and `Url::to_file_path`, each pointing at its replacement. `path.rs` is the only allowed caller. Clippy cannot ban the two string patterns without banning the methods, so `scripts/path-discipline.sh` (task `path-discipline`, run in CI) refuses `strip_prefix("file://")` and `replace('\\', "/")` outside `path.rs`.
+- **Plugins and `runtime:build` see forward-slash module ids.** Every module id esdev hands to JavaScript is in slash form (`C:/proj/src/a.jsx` on Windows): a hook's `id` and `importer`, `ctx.resolve()`'s answer, a chunk's `facadeModuleId`, `moduleIds`, `imports` and `dynamicImports`, and the `html` hook's `id`. A filter matches that form. An id JavaScript hands back (`resolve`'s `id`, `ctx.resolve`'s importer, `ctx.emit`'s `id`) is accepted in either form and converted to the native form at the boundary. Virtual ids (`\0…`) and anything that is not an absolute path pass through unchanged.
+- **File paths that come from or feed I/O stay in the OS's form,** as `runtime:fs`, `runtime:watch` and `cwd()` give them: `watchFiles`, `dependsOn`, a finished target's `outDir`. They can be handed straight back to those modules. `runtime:path` already accepts both separators on Windows.
+- **`runtime:path` gains `toSlash(p)`,** for a plugin that compares an id with a path from elsewhere. On Windows it replaces `\` with `/`; on POSIX it returns `p` unchanged, because `\` is a filename character there (Go's `filepath.ToSlash` behaves the same way). It does not normalize: `normalize` does that.
+
+**Rejected:**
+- **Fixing each site as it breaks.** It is what produced this list.
+- **Native ids for plugins (Rollup).** Every third-party plugin would have to remember to normalize, and the ones written on Linux would not.
+- **Slash form for every runtime path, including `runtime:fs`, `runtime:watch` and `cwd()`.** Node, Deno and Bun all return the OS's form; a Windows user reads `C:\`, and the change would break every program that prints or compares a path.
+- **A new crate for paths.** `path.rs` already sits where real I/O lives (D11), and every crate that touches the filesystem already depends on it.
+
+**Consequences:** A new direct call is a clippy error, not a Windows bug found later. `sourcemap::key()` is removed because keys are made in one spelling. On Windows the id a plugin receives changes from `C:\…` to `C:/…`, a breaking change for a plugin that matched backslashes (changelogged). The point fixes in flight (`build.rs`, `contract.rs`, `css/bundle.rs`, `cssmodules.rs`, `related.rs`, `sourcemap.rs`) are folded into this change rather than landing separately.

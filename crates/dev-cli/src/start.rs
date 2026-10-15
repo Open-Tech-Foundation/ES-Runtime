@@ -742,7 +742,7 @@ fn is_stylesheet(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
         || crate::build::is_stylesheet_input(path)
-        || dunce::canonicalize(path)
+        || es_runtime_default_providers::path::canonicalize(path)
             .is_ok_and(|canonical| crate::build::is_stylesheet_input(&canonical))
 }
 
@@ -900,7 +900,8 @@ fn is_source(path: &Path, root: &Path, outputs: &[PathBuf], gitignore: Option<&G
 /// extensions above cover what could become an input; this covers what is one.
 fn is_read_by_a_build(path: &Path) -> bool {
     crate::build::is_input(path)
-        || dunce::canonicalize(path).is_ok_and(|canonical| crate::build::is_input(&canonical))
+        || es_runtime_default_providers::path::canonicalize(path)
+            .is_ok_and(|canonical| crate::build::is_input(&canonical))
 }
 
 /// The project's `.gitignore`, kept current while the loop runs.
