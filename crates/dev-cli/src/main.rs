@@ -2270,7 +2270,7 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
                         eprintln!("error: cannot find the esdev binary");
                         return ExitCode::FAILURE;
                     };
-                    return restart_watch(&exe, config).await;
+                    return restart_watch(&exe, config, None).await;
                 }
                 Some(_) => {}
             },
@@ -2286,7 +2286,11 @@ async fn run_browser_tests(config: &TestConfig) -> ExitCode {
 /// every setting was resolved from that file, so the session that read the old
 /// one ends and a new one reads the new one — as Vitest restarts on a change to
 /// its config.
-async fn restart_watch(exe: &std::path::Path, config: &TestConfig) -> ExitCode {
+async fn restart_watch(
+    exe: &std::path::Path,
+    config: &TestConfig,
+    keys: Option<watch_keys::Handover>,
+) -> ExitCode {
     let paint = style::Palette::stderr();
     eprintln!(
         "\n{}",
@@ -2295,14 +2299,17 @@ async fn restart_watch(exe: &std::path::Path, config: &TestConfig) -> ExitCode {
             config.config_path.as_deref().unwrap_or(config::FILE_NAME)
         ))
     );
-    relaunch(exe).await
+    relaunch(exe, keys).await
 }
 
 /// Runs `esdev` again with the same arguments, replacing this process: a
 /// session restarted ten times is one process, not ten waiting on each other.
+///
+/// The keys are dropped: the thread reading them goes with this process.
 #[cfg(unix)]
-async fn relaunch(exe: &std::path::Path) -> ExitCode {
+async fn relaunch(exe: &std::path::Path, keys: Option<watch_keys::Handover>) -> ExitCode {
     use std::os::unix::process::CommandExt;
+    drop(keys);
     let err = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .exec();
@@ -2311,13 +2318,34 @@ async fn relaunch(exe: &std::path::Path) -> ExitCode {
 }
 
 /// Where a process cannot replace itself, the new session runs as a child and
-/// this one waits for it.
+/// this one waits for it — feeding it the keys this one goes on reading, on
+/// a stdin of its own (see `watch_keys::Keys::handover`).
 #[cfg(not(unix))]
-async fn relaunch(exe: &std::path::Path) -> ExitCode {
-    let status = tokio::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .status()
-        .await;
+async fn relaunch(exe: &std::path::Path, keys: Option<watch_keys::Handover>) -> ExitCode {
+    use tokio::io::AsyncWriteExt;
+    let mut command = tokio::process::Command::new(exe);
+    command.args(std::env::args_os().skip(1));
+    if keys.is_some() {
+        command.stdin(std::process::Stdio::piped());
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!("error: cannot restart esdev: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let (Some(watch_keys::Handover(mut rx)), Some(mut stdin)) = (keys, child.stdin.take()) {
+        tokio::spawn(async move {
+            while let Some(key) = rx.recv().await {
+                // One write per key, so an Escape arrives as a read of its own.
+                if stdin.write_all(&key.bytes()).await.is_err() || stdin.flush().await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    let status = child.wait().await;
     match status {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
@@ -2620,8 +2648,8 @@ async fn run_tests_inner(mut config: TestConfig) -> ExitCode {
         let code = global_setup::stop_into(setup, code).await;
         // After the teardown, so the new session's global setup is the only
         // one running.
-        if matches!(ended, Ok(test::WatchEnd::Restart)) {
-            return restart_watch(&exe, &config).await;
+        if let Ok(test::WatchEnd::Restart(keys)) = ended {
+            return restart_watch(&exe, &config, keys).await;
         }
         return code;
     }

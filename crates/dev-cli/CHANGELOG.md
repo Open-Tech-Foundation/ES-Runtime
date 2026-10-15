@@ -55,6 +55,11 @@ is the point, since none of the three has any business in a deployment.
   the emitted `@import`.
 - Windows: `esdev test --changed` matched no test, because changed files and
   resolved imports were spelled differently.
+- Windows: a watching `esdev test` that reads its keys from a pipe never
+  came back after `esdev.json` changed. The waiting session's key reader was
+  still blocked on the shared stdin, and Windows serializes I/O on one pipe,
+  so the new session hung on its first look at stdin. The new session now
+  gets a stdin of its own, and the old one forwards each key into it.
 - The Windows build passes `clippy -D warnings` again (a `return` that only
   Unix needs), and the `mock.env` test runs on a host with no `HOME`.
 

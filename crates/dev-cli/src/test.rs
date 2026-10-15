@@ -948,7 +948,7 @@ pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<Watch
                         let Some(first) = change else { return Ok(WatchEnd::Stopped) };
                         let burst = crate::watch::coalesce_from(first, &mut rx).await;
                         if burst.contains(&Change::Project) {
-                            return Ok(WatchEnd::Restart);
+                            return Ok(WatchEnd::Restart(keys.map(crate::watch_keys::Keys::handover)));
                         }
                         break 'idle Pass::Filtered;
                     }
@@ -1193,12 +1193,14 @@ pub enum Change {
 }
 
 /// How a watch session ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum WatchEnd {
     /// The developer stopped it.
     Stopped,
-    /// The project file changed: start the session again.
-    Restart,
+    /// The project file changed: start the session again. Carries the keys
+    /// still being read, for a restart that cannot replace this process and
+    /// has to pass them on (see `crate::watch_keys::Keys::handover`).
+    Restart(Option<crate::watch_keys::Handover>),
 }
 
 impl TestConfig {

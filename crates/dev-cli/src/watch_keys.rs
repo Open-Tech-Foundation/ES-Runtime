@@ -114,6 +114,42 @@ pub struct Keys {
     pub terminal: Option<Terminal>,
 }
 
+/// The keys of a session that is restarting, without its terminal mode.
+// Read only where a restart cannot replace the process.
+#[cfg_attr(unix, allow(dead_code))]
+#[derive(Debug)]
+pub struct Handover(pub tokio::sync::mpsc::UnboundedReceiver<Key>);
+
+impl Keys {
+    /// The key stream alone, for a restart, with the terminal put back.
+    ///
+    /// Where the restart replaces the process (Unix), this is dropped: the
+    /// reader thread goes with the process. Where it cannot (Windows), the
+    /// old process waits on the new one with its reader still blocked on
+    /// stdin. The new session must not read that stdin too — Windows
+    /// serializes synchronous I/O on one file object, so the new session's
+    /// first look at its stdin waits behind the old one's pending read and
+    /// it never starts — so it is given a pipe of its own, and the old
+    /// session forwards every key it reads into it.
+    pub fn handover(self) -> Handover {
+        drop(self.terminal);
+        Handover(self.rx)
+    }
+}
+
+impl Key {
+    /// The bytes that [`parse`] reads back as this key.
+    #[cfg_attr(unix, allow(dead_code))]
+    pub fn bytes(self) -> Vec<u8> {
+        match self {
+            Key::Char(c) => c.to_string().into_bytes(),
+            Key::Enter => b"\n".to_vec(),
+            Key::Escape => vec![0x1b],
+            Key::Backspace => vec![0x7f],
+        }
+    }
+}
+
 /// Starts reading keys: from a terminal, or with `forced` from any stdin.
 /// `None` when there are none to read.
 pub fn start(forced: bool) -> Option<Keys> {
@@ -127,7 +163,9 @@ pub fn start(forced: bool) -> Option<Keys> {
     };
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     // A thread of its own, blocked on stdin for the life of the process: a
-    // read cannot be cancelled, and nothing else reads this stdin.
+    // read cannot be cancelled. Nothing else may read this stdin — a restart
+    // that cannot replace the process hands the keys over instead
+    // ([`Keys::handover`]).
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
         let mut buffer = [0u8; 64];
@@ -253,6 +291,20 @@ pub async fn prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key forwarded to a restarted session is read back as itself.
+    #[test]
+    fn a_forwarded_key_parses_back_to_itself() {
+        for key in [
+            Key::Char('q'),
+            Key::Char('é'),
+            Key::Enter,
+            Key::Escape,
+            Key::Backspace,
+        ] {
+            assert_eq!(parse(&key.bytes()), [key], "{key:?}");
+        }
+    }
 
     #[test]
     fn a_read_becomes_keys() {
