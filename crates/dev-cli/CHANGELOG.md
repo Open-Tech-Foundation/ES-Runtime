@@ -38,6 +38,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- `esdev start` no longer reloads the page when a file is created that
+  nothing loads: a module nothing imports, a note, an editor's swap file.
+  The page is told only when the build's output changed (DECISIONS D166),
+  so a new file a target does pick up, such as one under a copied `public/`,
+  still reloads it.
 - A stack trace from TypeScript run directly named a line of the
   type-stripped output, not the line it was written on, when the file's
   directory needed percent-encoding in a URL (a space, for one), and on

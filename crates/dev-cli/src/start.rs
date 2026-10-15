@@ -408,6 +408,8 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         (Some(output), true) => spawn(&exe, output, &root, app.as_ref().map(|a| a.port))?,
         _ => None,
     };
+    // What the page loads: the dev build's whole output.
+    let devdir = project.source.root.join(project.start.devdir());
 
     loop {
         let woken = match &mut child {
@@ -448,6 +450,11 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
         // What the server was reading, before the build replaces any of it.
         let before = output.as_deref().map(fingerprint);
+        // And what the page was, with whether it is showing a failed build:
+        // a fix that rebuilds to the last good output still has to clear the
+        // overlay.
+        let page_before = output_fingerprint(&devdir);
+        let was_failing = error.borrow().is_some();
 
         // **Before the rebuild, not after.** A hot update is computed by
         // scanning what changed against the graph the page is running; a full
@@ -547,6 +554,11 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             // A server that was replaced and no patch to offer: the browser has
             // new bundles to fetch either way.
             None if replaced_the_server => Update::Reload,
+            // Nothing the page loads changed — a new file nothing imports, a
+            // note, an editor's swap file. Nothing to tell it, and no line:
+            // the save did nothing visible, and saying "reloaded" would be
+            // false (D166).
+            None if !was_failing && output_fingerprint(&devdir) == page_before => continue,
             // rolldown could not express this change as a patch, or there is no
             // graph to compute one against yet.
             None => update_for(&changed),
@@ -696,7 +708,8 @@ async fn wait_for_change(rx: &mut mpsc::UnboundedReceiver<PathBuf>) -> Option<Ve
 /// and it costs none of what a reload costs: scroll position, an open dialog,
 /// whatever was typed into a form.
 ///
-/// Anything else is a reload, and mixtures are too. A burst containing a
+/// Anything else is a reload, and mixtures are too — once the output has
+/// moved: a burst that rebuilt to the same bytes never gets here (D166). A burst containing a
 /// stylesheet *and* a component is a burst whose module graph moved, and
 /// swapping only the styles would leave a page half updated — which is worse
 /// than reloading, because it looks like it worked.
@@ -765,22 +778,42 @@ fn is_stylesheet(path: &Path) -> bool {
 /// time and this would be the unconditional restart it replaces. Reading a
 /// megabyte twice is nothing beside the build that just produced it.
 fn fingerprint(output: &Path) -> u64 {
+    match output.parent() {
+        Some(dir) => tree_fingerprint(dir, true),
+        None => 0,
+    }
+}
+
+/// A fingerprint of everything the dev build wrote, which is everything the
+/// page can load (D166).
+///
+/// The page is told to reload only when this moves. A file created in the
+/// project that nothing imports rebuilds to the same bytes, and reloading for
+/// it throws away the page's state to show what it already shows. Comparing
+/// the output rather than asking whether the file is in the module graph is
+/// what keeps it right for every plugin: a glob, a file-based route or a
+/// copied asset that does pick the new file up changes the output, and that
+/// reloads.
+fn output_fingerprint(devdir: &Path) -> u64 {
+    tree_fingerprint(devdir, false)
+}
+
+/// Every file under `dir`, path and contents, hashed in path order.
+fn tree_fingerprint(dir: &Path, skip_assets: bool) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut entries: Vec<(PathBuf, Vec<u8>)> = Vec::new();
-    let Some(dir) = output.parent() else {
-        return 0;
-    };
-    collect(dir, &mut entries);
+    collect(dir, skip_assets, &mut entries);
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     entries.hash(&mut hasher);
     hasher.finish()
 }
 
-/// Walks `dir`, skipping the client assets. Unreadable is empty: a directory
-/// the build has not written yet is a fingerprint that changes once it has.
-fn collect(dir: &Path, into: &mut Vec<(PathBuf, Vec<u8>)>) {
+/// Walks `dir`, skipping the client assets when asked. Unreadable is empty: a
+/// directory the build has not written yet is a fingerprint that changes once
+/// it has.
+fn collect(dir: &Path, skip_assets: bool, into: &mut Vec<(PathBuf, Vec<u8>)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -788,13 +821,14 @@ fn collect(dir: &Path, into: &mut Vec<(PathBuf, Vec<u8>)>) {
         let path = entry.path();
         let Ok(meta) = entry.metadata() else { continue };
         if meta.is_dir() {
-            if path
-                .file_name()
-                .is_some_and(|name| name == crate::html::ASSET_DIR)
+            if skip_assets
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == crate::html::ASSET_DIR)
             {
                 continue;
             }
-            collect(&path, into);
+            collect(&path, skip_assets, into);
         } else if let Ok(bytes) = std::fs::read(&path) {
             into.push((path, bytes));
         }
@@ -1084,6 +1118,31 @@ mod tests {
     /// *contained* something else — swapping only the styles there would leave
     /// a page half updated, which is worse than reloading it, because it looks
     /// like it worked.
+    /// The page's fingerprint moves with what the build wrote — a new file
+    /// or a changed byte — and with nothing else (D166).
+    #[test]
+    fn the_output_fingerprint_follows_contents_not_writes() {
+        let dir = std::env::temp_dir().join(format!("esdev-fp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(crate::html::ASSET_DIR)).unwrap();
+        std::fs::write(dir.join("index.html"), "<p>one</p>").unwrap();
+        let first = output_fingerprint(&dir);
+        // Rewritten with the same bytes, as every rebuild does.
+        std::fs::write(dir.join("index.html"), "<p>one</p>").unwrap();
+        assert_eq!(output_fingerprint(&dir), first);
+        // The client assets are the page's, so they count here — and only
+        // here: the server's fingerprint leaves them out.
+        let server = fingerprint(&dir.join("index.html"));
+        std::fs::write(dir.join(crate::html::ASSET_DIR).join("main.js"), "1").unwrap();
+        assert_ne!(output_fingerprint(&dir), first);
+        assert_eq!(fingerprint(&dir.join("index.html")), server);
+        std::fs::write(dir.join("robots.txt"), "User-agent: *").unwrap();
+        let with_new = output_fingerprint(&dir);
+        std::fs::write(dir.join("robots.txt"), "User-agent: x").unwrap();
+        assert_ne!(output_fingerprint(&dir), with_new);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn anything_but_a_stylesheet_reloads() {
         assert!(matches!(

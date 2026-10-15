@@ -16,13 +16,14 @@ a module can be replaced in place — and it is written under the dev
 directory (`.dev` by default) rather than where `esdev build` deploys.
 
 On a change: rebuild, restart the server if its bundle moved, and patch the
-page — or reload it if nothing accepted the change. Read the details in
-[Hot module replacement](/esdev/start/hmr).
+page — or reload it if nothing accepted the change. A change that leaves the
+build's output as it was, such as a new file nothing imports, leaves the page
+alone. Read the details in [Hot module replacement](/esdev/start/hmr).
 
 ## What it prints
 
-A banner once it is listening *and* built, then one line per save — nothing
-else. Build reports and errors go to stderr, so stdout stays the program's:
+A banner once it is listening *and* built, then one line per save that
+changed the output — nothing else. Build reports and errors go to stderr, so stdout stays the program's:
 
 ```text
 esdev <version> — ready in <duration>

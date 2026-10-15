@@ -13343,6 +13343,75 @@ fn the_dev_loop_rebuilds_for_a_file_a_plugin_compiles() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A web project for the reload tests: one module, `public/` copied into the
+/// output, served on `port`.
+fn reload_project(name: &str) -> PathBuf {
+    let dir = watch_dir(name);
+    let port = test_port(name);
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::create_dir_all(dir.join("public")).expect("create public");
+    write_in(&dir, "src/main.mjs", "document.title = 'ONE';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{"build": {{"targets": {{"web": {{"entry": "index.html", "outdir": "dist", "assets": ["public"]}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+        ),
+    );
+    dir
+}
+
+/// Creating a file nothing loads — a module nothing imports, a note beside
+/// the project — rebuilds to the same output, and the page is not reloaded
+/// for it (D166). Only the edit after it is.
+#[test]
+fn a_new_file_nothing_loads_does_not_reload_the_page() {
+    let dir = reload_project("s_newfile_quiet");
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
+    let ready = wait_for_file(&log, Duration::from_secs(30), |t| t.contains("ready in"));
+    assert!(ready.contains("ready in"), "{ready}");
+    let builds = |text: &str| text.matches("built →").count();
+
+    write_in(&dir, "src/unused.mjs", "export const unused = 1;\n");
+    let after = wait_for_file(&log, Duration::from_secs(30), |t| builds(t) >= 2);
+    write_in(&dir, "notes.txt", "remember the milk\n");
+    let after = wait_for_file(&log, Duration::from_secs(30), |t| {
+        builds(t) > builds(&after)
+    });
+    assert!(
+        !after.contains('✓'),
+        "a file nothing loads reloaded the page:\n{after}"
+    );
+
+    write_in(&dir, "src/main.mjs", "document.title = 'TWO';\n");
+    let printed = wait_for_file(&log, Duration::from_secs(30), |t| t.contains('✓'));
+    assert_eq!(printed.matches('✓').count(), 1, "{printed}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A new file that does reach the output — here one under `public/`, which
+/// the target copies — reloads the page, as any change to what it loads does.
+#[test]
+fn a_new_file_the_output_picks_up_reloads_the_page() {
+    let dir = reload_project("s_newfile_copied");
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
+    let ready = wait_for_file(&log, Duration::from_secs(30), |t| t.contains("ready in"));
+    assert!(ready.contains("ready in"), "{ready}");
+
+    write_in(&dir, "public/robots.txt", "User-agent: *\n");
+    let printed = wait_for_file(&log, Duration::from_secs(30), |t| t.contains("✓ reloaded"));
+    assert!(printed.contains("✓ reloaded"), "{printed}");
+    assert!(dir.join(".dev/dist/robots.txt").is_file());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A plugin that rewrites CSS and keeps it CSS — PostCSS's shape — runs
 /// `pre`, and esdev bundles what it wrote rather than reading the file again.
 #[test]

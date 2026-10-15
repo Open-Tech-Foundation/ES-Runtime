@@ -3416,3 +3416,21 @@ Others: Vite gives plugins forward-slash ids that keep the drive (`C:/…`) and 
 - **A new crate for paths.** `path.rs` already sits where real I/O lives (D11), and every crate that touches the filesystem already depends on it.
 
 **Consequences:** A new direct call is a clippy error, not a Windows bug found later. `sourcemap::key()` is removed because keys are made in one spelling. On Windows the id a plugin receives changes from `C:\…` to `C:/…`, a breaking change for a plugin that matched backslashes (changelogged). The point fixes in flight (`build.rs`, `contract.rs`, `css/bundle.rs`, `cssmodules.rs`, `related.rs`, `sourcemap.rs`) are folded into this change rather than landing separately.
+
+### D166 — The dev loop tells the page about a change only when the output moved · *Accepted (2026-10-15)*
+
+**Context:** `esdev start` reloaded the page for every file created in the project. Every watched change rebuilds; a change with no hot patch fell through to `update_for`, which reloads for anything that is not a stylesheet. A file nothing imports gets no patch, so a new module, a note or an editor's swap file threw away the page's state to show it what it already showed. The loop already compared contents for the server (`fingerprint`, which restarts only when `server.js` and its neighbours changed); the page had no such check.
+
+Others: Vite's docs describe an update in terms of the "modules … affected by the changed file" and leave a full reload to a hook that asks for one.
+
+**Decision (maintainer, 2026-10-15):**
+
+- **The page is told only when what it loads changed.** Before each rebuild the loop fingerprints the whole dev output directory (paths and contents); after it, a pass with no hot patch, no replaced server, no failure to clear and the same fingerprint sends nothing and prints no line.
+- **A failed build always gets an answer.** If the previous pass failed, the page is showing the overlay, and a fix that rebuilds to the last good output still reloads it.
+- **The rebuild still runs.** Whether a new file matters is the build's question: a glob, a file-based route, a plugin that lists a directory or a copied `public/` asset can all pick it up, and the output says so.
+
+**Rejected:**
+- **Asking whether the file is in the module graph.** Right for imports and wrong for everything that reads a directory, which is exactly what plugins and asset copying do; it would need every plugin to declare what it lists.
+- **Ignoring created files.** A new file under `public/` is a change the page should see.
+
+**Consequences:** each pass reads the dev output once more, as the server check already does. A save that changes nothing visible prints no `✓` line.
