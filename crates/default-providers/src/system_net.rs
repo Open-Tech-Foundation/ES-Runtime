@@ -160,6 +160,7 @@ pub struct SystemNet {
 /// successor has already bound the same path, the file there is a different
 /// one, and it is left alone.
 struct SocketFile {
+    #[cfg(unix)]
     path: std::path::PathBuf,
     #[cfg(unix)]
     id: (u64, u64),

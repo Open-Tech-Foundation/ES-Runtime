@@ -24,6 +24,11 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Windows build passes `clippy -D warnings` again (a `return` that only
+  Unix needs), and the `mock.env` test runs on a host with no `HOME`.
+
 ## [0.18.0] - 2026-10-14
 
 ### Changed

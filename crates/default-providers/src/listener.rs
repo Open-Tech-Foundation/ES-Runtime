@@ -17,7 +17,9 @@ use tokio::net::TcpListener;
 
 /// The pending-connection queue depth for a hand-built listener. Matches what
 /// `TcpListener::bind` uses, so turning `reuse_port` on does not quietly change
-/// how many connections the kernel will hold for a busy server.
+/// how many connections the kernel will hold for a busy server. Unix only, as
+/// the hand-built listener is.
+#[cfg(unix)]
 const BACKLOG: i32 = 1024;
 
 /// Binds a TCP listener on `host:port`.

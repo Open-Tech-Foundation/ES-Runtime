@@ -311,6 +311,8 @@ pub fn end(pid: u32) {
                 .stderr(std::process::Stdio::null())
                 .status();
         }
+        // Only Unix has anything after this block to skip.
+        #[cfg(unix)]
         return;
     }
     // A test that ignores SIGTERM is a test that has stopped responding, which

@@ -17204,6 +17204,9 @@ test("exhausted failure message", () => {
 });
 test("env", () => {
   env.KEEP = "kept";
+  // A host without HOME (Windows runners) would leave nothing to restore;
+  // the mechanics under test are mock, delete and restore, not the host.
+  if (env.HOME === undefined) env.HOME = "home";
   mock.env("KEEP", "changed").env("NEW_ONE", "1").env("HOME", undefined).env("MY_TOKEN", "abc");
   expect(env.KEEP).toBe("changed");
   expect(env.NEW_ONE).toBe("1");

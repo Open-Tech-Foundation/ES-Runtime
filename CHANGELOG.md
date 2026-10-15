@@ -18,6 +18,10 @@ namespace) is unstable and may change between minor releases until the API freez
   suite. CI serves postgres on 5432, so the two URL-precedence connects
   failed with connection refused there while passing locally.
 
+- The Windows build passes `clippy -D warnings` again: a listener backlog
+  constant and a socket file's path, both used only on Unix, are compiled
+  only there.
+
 - Security dependency bumps with no API change: `rustls` 0.23.45 → 0.23.46
   (RUSTSEC-2026-0346 through RUSTSEC-2026-0349) and `quinn-proto` 0.11.16 →
   0.11.19 (RUSTSEC-2026-0338 through RUSTSEC-2026-0342).
