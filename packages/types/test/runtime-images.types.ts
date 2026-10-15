@@ -8,7 +8,13 @@ const fromFile = new Image(file("photo.jpg"));
 const fromBlob = new Image(new Blob([]));
 
 const chain: Image = image
-  .resize(400, null, { fit: "cover", filter: "mitchell", background: "#fff", position: "north", withoutReduction: true })
+  .resize(400, null, {
+    fit: "cover",
+    filter: "mitchell",
+    background: "#fff",
+    position: "north",
+    withoutReduction: true,
+  })
   .crop({ width: 10, height: 10 })
   .rotate(90)
   .modulate({ hue: 30, lightness: 10 })
@@ -18,7 +24,11 @@ const chain: Image = image
   .linear([1, 1, 1], [0, 10, 10])
   .threshold(200, { greyscale: false })
   .tint("#ff0000")
-  .recomb([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+  .recomb([
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ])
   .ensureAlpha(0.5)
   .removeAlpha()
   .greyscale()
