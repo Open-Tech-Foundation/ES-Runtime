@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-15
+
 ### Changed
 
 - **Plugin module ids use forward slashes on every OS** (DECISIONS D165).

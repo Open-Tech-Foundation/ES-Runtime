@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-15
+
 ### Added
 
 - `runtime:path`: `toSlash`, the forward-slash form of a path.
