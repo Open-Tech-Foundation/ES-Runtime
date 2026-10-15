@@ -400,10 +400,7 @@ the batch: `stream` reads 200 000 rows at 62 MB, level with Node and Deno.
 
 Unlike the rest of this page, these runs are **not interleaved** — each column
 is measured in turn — so treat small differences as noise and the order of
-magnitude as the finding. Measured with esrun 0.39.0 (turso_core 0.8.3),
-Node v24.21.0, Bun 1.4.3, Deno 2.9.7, on the same i7-8700K Linux box as the
-tables above. Reproduce with `bench/db/run.sh` (needs a release build first:
-`cargo build --release -p es-runtime-cli`).
+magnitude as the finding. Reproduce with `bench/db/run.sh`.
 
 ## Images
 
