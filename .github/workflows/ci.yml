@@ -105,6 +105,11 @@ jobs:
       # For now, one test at a time in esdev's suite on Linux: something in it
       # stops the runner there with no error, and with tests in parallel the
       # last name printed is not necessarily the one that did.
+      # What already listens on this runner, and which process: esdev's suite
+      # serves and fetches on fixed ports in 20000-29999, and a port the
+      # runner's own agents hold is one a test must not talk to.
+      - if: matrix.suite == 'esdev' && runner.os == 'Linux'
+        run: sudo ss -ltnp
       - if: matrix.suite == 'esdev' && runner.os == 'Linux'
         run: tsr test:esdev
         env:

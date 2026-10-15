@@ -38,6 +38,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- The dev-loop tests no longer use a port something else on the machine
+  already listens on. Each started from a fixed port hashed from its name,
+  and on the Ubuntu CI runner `a_browser_only_change_reloads_without_
+  restarting_the_server` was stopped mid-test, with the runner, while
+  sending requests to its port. A test now takes the first free port from
+  its hashed one.
 - The global-setup watch test no longer hangs CI. It sent ^C through the
   `kill` binary, which did not reach the watch on the Ubuntu runner, and
   then waited for the watch to end with no limit, so the job sat there until

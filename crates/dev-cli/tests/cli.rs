@@ -11513,7 +11513,39 @@ fn start_in(dir: &Path) -> Supervisor {
 ///
 /// 20000–29999 sits entirely below the floor, and is disjoint from the range
 /// `tests/hot.rs` takes for the same reason.
+///
+/// **And free.** The hashed port is where the search starts, not the answer:
+/// a port something else on the machine already listens on is passed over,
+/// so a test never sends its requests to a process it did not start. On the
+/// Ubuntu CI runner a test kept talking to whatever held its port, and the
+/// runner was stopped mid-test with no error. Each name gets one answer per
+/// run, and no two names the same one.
 fn test_port(name: &str) -> u16 {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static GIVEN: OnceLock<Mutex<HashMap<String, u16>>> = OnceLock::new();
+    let mut given = GIVEN
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(port) = given.get(name) {
+        return *port;
+    }
+    let base = port_base(name);
+    let port = (0..10_000u16)
+        .map(|step| 20000 + (base - 20000 + step) % 10_000)
+        .find(|port| {
+            !given.values().any(|held| held == port)
+                && std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok()
+        })
+        .expect("a free port in 20000-29999");
+    given.insert(name.to_string(), port);
+    port
+}
+
+/// Where [`test_port`] starts looking for `name`: a hash of it, so each test
+/// has a port of its own when the machine has nothing else on them.
+fn port_base(name: &str) -> u16 {
     let hash = name.bytes().fold(0u32, |acc, b| {
         acc.wrapping_mul(31).wrapping_add(u32::from(b))
     });
@@ -11529,11 +11561,14 @@ fn test_port(name: &str) -> u16 {
 fn every_named_port_is_its_own_and_below_the_ephemeral_range() {
     // Every name passed to `test_port` in this file.
     const NAMED: &[&str] = &[
+        "p_react_package",
         "preview",
         "s_asset",
         "s_broken_app",
         "s_frontend",
         "s_norestart_app",
+        "s_plugin_edit",
+        "s_plugin_stylesheet",
         "s_plugins",
         "s_refresh",
         "s_takenport",
@@ -11541,7 +11576,7 @@ fn every_named_port_is_its_own_and_below_the_ephemeral_range() {
 
     let mut taken: Vec<(u16, &str)> = Vec::new();
     for name in NAMED {
-        let port = test_port(name);
+        let port = port_base(name);
         assert!(
             port < 32768,
             "{name}'s port {port} is inside the ephemeral range, where the \
