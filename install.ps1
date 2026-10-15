@@ -12,6 +12,9 @@
 #   $env:ESRUN_VERSION = '0.24.0'     pin one binary; '0.24.0' or 'esrun@0.24.0'
 #   $env:ESDEV_VERSION = '0.1.0'      likewise
 #   $env:ES_RUNTIME_INSTALL           install prefix (default $HOME\.es-runtime)
+#   $env:GITHUB_TOKEN                 sent with the release lookup, if set: GitHub
+#                                     allows an unauthenticated address 60 API
+#                                     requests an hour, which a CI runner can use up
 #
 # Releases are tagged per binary - `esrun@0.24.0`, `esdev@0.1.0` - so the version
 # for each is resolved from the newest tag carrying *its* prefix. Asking GitHub
@@ -69,7 +72,10 @@ if ($target -eq 'windows-arm64') {
 # why its pattern accepts both.
 function Get-LatestTag($bin) {
   $pattern = if ($bin -eq 'esrun') { '^(esrun@|v[0-9])' } else { "^$bin@" }
-  $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=100"
+  # The token goes to the API only; release downloads need none.
+  $headers = @{}
+  if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+  $releases = Invoke-RestMethod -Headers $headers "https://api.github.com/repos/$Repo/releases?per_page=100"
   ($releases | ForEach-Object { $_.tag_name } | Where-Object { $_ -match $pattern } | Select-Object -First 1)
 }
 

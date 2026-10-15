@@ -14,6 +14,9 @@
 #   ESRUN_VERSION=0.24.0  pin one binary; either `0.24.0` or `esrun@0.24.0`
 #   ESDEV_VERSION=0.1.0   likewise
 #   ES_RUNTIME_INSTALL    install prefix (default ~/.es-runtime)
+#   GITHUB_TOKEN          sent with the release lookup, if set: GitHub allows
+#                         an unauthenticated address 60 API requests an hour,
+#                         which a shared CI runner can use up before this asks
 #
 # Releases are tagged per binary — `esrun@0.24.0`, `esdev@0.1.0` — so the
 # version for each is resolved from the newest tag carrying *its* prefix.
@@ -78,13 +81,23 @@ target="${os_part}-${arch_part}"
 # Tags are listed newest-first by the releases API, so the first match wins.
 # `esrun` also answers to the pre-0.24 `v<version>` tags (release.toml's
 # legacy_tag_formats), which is why its pattern accepts both.
+# A GitHub API request, with the token when there is one. Only the API sees
+# it: the archives come from release download URLs, which need none.
+api_get() {
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$1"
+  else
+    curl -fsSL "$1"
+  fi
+}
+
 latest_tag() {
   bin="$1"
   case "$bin" in
     esrun) pattern='^(esrun@|v[0-9])' ;;
     *) pattern="^${bin}@" ;;
   esac
-  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" |
+  api_get "https://api.github.com/repos/$REPO/releases?per_page=100" |
     grep -oE '"tag_name": *"[^"]+"' |
     cut -d'"' -f4 |
     grep -E "$pattern" |

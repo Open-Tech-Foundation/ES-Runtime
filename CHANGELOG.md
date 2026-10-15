@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- The installers send `GITHUB_TOKEN`, when it is set, with their one GitHub
+  API request (the release lookup). Unauthenticated, an address gets 60
+  requests an hour, and a shared CI runner can find them spent: the JS
+  workflow's `setup-esdev` step failed that way, and now passes the
+  workflow's token. Release downloads never see the token.
+
 - The postgres driver's `environment` test no longer dials a hardcoded port
   5433: it takes the test server's port from `PGPORT`, like the rest of the
   suite. CI serves postgres on 5432, so the two URL-precedence connects

@@ -26,6 +26,9 @@ runs:
       shell: bash
       env:
         ESDEV_VERSION: ${{ inputs.version }}
+        # The release lookup is a GitHub API request; unauthenticated, a
+        # shared runner's address runs out of them.
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh \
           | bash -s -- --only=esdev
@@ -35,6 +38,9 @@ runs:
       shell: pwsh
       env:
         ESDEV_VERSION: ${{ inputs.version }}
+        # The release lookup is a GitHub API request; unauthenticated, a
+        # shared runner's address runs out of them.
+        GITHUB_TOKEN: ${{ github.token }}
         ES_RUNTIME_ONLY: esdev
       run: |
         irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
