@@ -116,12 +116,16 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<()>();
     let watch_scope = root.clone();
+    let edits = Edits::new();
     // The watcher runs on its own thread and must outlive this scope, so it is
     // held here for the duration.
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res
             && is_change(&event.kind)
-            && event.paths.iter().any(|p| is_interesting(p, &watch_scope))
+            && event
+                .paths
+                .iter()
+                .any(|p| is_interesting(p, &watch_scope) && edits.is_edit(&event.kind, p))
         {
             // Unbounded and ignore-on-failure: the receiver only ever needs to
             // learn *that* something changed, so a full or closed channel costs
@@ -357,6 +361,62 @@ pub fn is_change(kind: &EventKind) -> bool {
     }
 }
 
+/// Tells an edit from an event that only looks like one.
+///
+/// [`is_change`] goes by the event's kind, and on macOS the kind is not
+/// enough. FSEvents can deliver, after the stream starts, a write made just
+/// before it; and its per-file flags accumulate, so a metadata event soon
+/// after a file was written — the child reading its entry — arrives still
+/// marked created and modified. Either way the file's modification time did
+/// not move, and that is what this checks: an event is an edit when the
+/// file's time and size are not ones acted on before, or, for a file not
+/// seen yet, its time is not from before watching began. A removal or a
+/// rename is always one.
+///
+/// The cost: a file put back with an older time preserved (`cp -p`, an
+/// archive) over one not yet seen by this watch is not an edit. File times
+/// come from a coarser clock than the one watching began by — a few
+/// milliseconds on Linux, whole seconds on some filesystems — so neither is
+/// a first edit made within that much of the start.
+pub struct Edits {
+    began: std::time::SystemTime,
+    seen: std::sync::Mutex<std::collections::HashMap<PathBuf, (std::time::SystemTime, u64)>>,
+}
+
+impl Edits {
+    pub fn new() -> Edits {
+        Edits {
+            began: std::time::SystemTime::now(),
+            seen: std::sync::Mutex::default(),
+        }
+    }
+
+    /// Whether `kind`, reported for `path`, is an edit to it.
+    pub fn is_edit(&self, kind: &EventKind, path: &Path) -> bool {
+        if matches!(
+            kind,
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        ) {
+            return true;
+        }
+        let Ok((modified, len)) =
+            std::fs::metadata(path).and_then(|meta| Ok((meta.modified()?, meta.len())))
+        else {
+            // Gone by the time it is looked at: something happened to it.
+            return true;
+        };
+        let Ok(mut seen) = self.seen.lock() else {
+            return true;
+        };
+        // The size as well as the time: two saves inside one tick of a
+        // coarse file clock share a time, and usually not a size.
+        match seen.insert(path.to_path_buf(), (modified, len)) {
+            Some(previous) => previous != (modified, len),
+            None => modified >= self.began,
+        }
+    }
+}
+
 /// Whether a changed path is one a restart should answer to.
 pub fn is_interesting(path: &Path, root: &Path) -> bool {
     is_watchable(path, root, WATCHED_EXTENSIONS)
@@ -425,6 +485,57 @@ pub async fn stopped() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An event whose file did not move in time is not an edit: one about a
+    /// write from before watching began, and one repeating a time already
+    /// acted on — what FSEvents delivers on macOS (see [`Edits`]).
+    #[test]
+    fn an_edit_is_a_new_modification_time() {
+        use notify::event::{CreateKind, DataChange, RemoveKind, RenameMode};
+        use std::time::{Duration, SystemTime};
+
+        let dir = std::env::temp_dir().join(format!("esdev-edits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("app.mjs");
+        let set = |at: SystemTime| {
+            std::fs::write(&file, "x").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        };
+        let written = EventKind::Modify(ModifyKind::Data(DataChange::Any));
+
+        set(SystemTime::now() - Duration::from_secs(60));
+        let edits = Edits::new();
+        // Written before the watch began, reported after it.
+        assert!(!edits.is_edit(&EventKind::Create(CreateKind::File), &file));
+        // Saved while watching.
+        set(SystemTime::now() + Duration::from_secs(1));
+        assert!(edits.is_edit(&written, &file));
+        // The same save, reported again.
+        assert!(!edits.is_edit(&written, &file));
+        // A rename or a removal is a change whatever the time says.
+        let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::Any));
+        assert!(edits.is_edit(&renamed, &file));
+        assert!(edits.is_edit(&EventKind::Remove(RemoveKind::File), &file));
+        // A file first seen after watching began, written then. Its time is
+        // set rather than taken: file times come from a coarser clock than
+        // `SystemTime::now`, so one written this instant can read as earlier.
+        let other = dir.join("new.mjs");
+        std::fs::write(&other, "y").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1))
+            .unwrap();
+        assert!(edits.is_edit(&EventKind::Create(CreateKind::File), &other));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// The lull is what ends a burst, so the events of one save — which land
     /// within a millisecond or two of each other — become one rebuild.

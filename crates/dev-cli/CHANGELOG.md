@@ -38,6 +38,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- macOS: `esdev --watch` could run a program twice with no edit, and the
+  test and dev loops could rerun or rebuild the same way. FSEvents can
+  deliver a write from before the watch began, and reports a later read
+  still flagged as a modification. A change now counts only when the file's
+  time or size moved (DECISIONS D167).
 - `esdev start` no longer reloads the page when a file is created that
   nothing loads: a module nothing imports, a note, an editor's swap file.
   The page is told only when the build's output changed (DECISIONS D166),

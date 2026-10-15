@@ -1238,18 +1238,21 @@ pub fn change_watcher(
                 .unwrap_or_else(|_| b.to_path_buf())
     };
     let project_file = project_file.to_path_buf();
+    let edits = crate::watch::Edits::new();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
         if !crate::watch::is_change(&event.kind) {
             return;
         }
-        if event.paths.iter().any(|path| same(path, &project_file)) {
-            let _ = tx.send(Change::Project);
-        } else if event
+        if event
             .paths
             .iter()
-            .any(|path| crate::watch::is_interesting(path, &scope))
+            .any(|path| same(path, &project_file) && edits.is_edit(&event.kind, path))
         {
+            let _ = tx.send(Change::Project);
+        } else if event.paths.iter().any(|path| {
+            crate::watch::is_interesting(path, &scope) && edits.is_edit(&event.kind, path)
+        }) {
             let _ = tx.send(Change::Source);
         }
     })

@@ -3434,3 +3434,15 @@ Others: Vite's docs describe an update in terms of the "modules … affected by 
 - **Ignoring created files.** A new file under `public/` is a change the page should see.
 
 **Consequences:** each pass reads the dev output once more, as the server check already does. A save that changes nothing visible prints no `✓` line.
+
+### D167 — A watch event is an edit only if the file's time or size moved · *Accepted (2026-10-15)* · *extends D59*
+
+**Context:** D59 made the watchers count only modifying event kinds, because `inotify` reports reads. On macOS the kind is not enough. CI's `watch_does_not_restart_because_it_restarted` saw `esdev --watch` run twice with no edit: FSEvents can deliver, after the stream starts, a write made just before it, and its per-file flags accumulate, so a metadata event (the child reading its entry) can arrive still marked created and modified.
+
+**Decision:** the three loops that restart on a change (`esdev --watch`, `esdev test --watch`, `esdev start`) share `watch::Edits`. An event of a modifying kind is an edit when the file's modification time and size are not ones already acted on, or, for a file not seen before, its time is not from before watching began. Removals and renames always are. `runtime:watch` is unchanged: it reports events to a program, which decides for itself.
+
+**Rejected:**
+- **A fixed quiet period after each start.** It hides the late event only when it is late by less than the period, and delays every real first edit.
+- **Hashing contents.** It needs each file's previous contents, which means reading the whole watched tree at startup.
+
+**Consequences:** a file put back with an older time preserved (`cp -p`, an archive) over one this watch has not seen is not an edit. File times come from a coarser clock than the one watching began by (milliseconds on Linux, whole seconds on some filesystems), so a first edit within that much of the start is not one either.

@@ -305,6 +305,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // into a running page and everything else has to reload it, and only the
     // path says which this was.
     let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
+    let edits = crate::watch::Edits::new();
     // Held for the duration: dropping the watcher stops the thread behind it.
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res
@@ -318,6 +319,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 if scopes
                     .iter()
                     .any(|scope| is_source(path, scope, &ignored, rules.as_ref()))
+                    && edits.is_edit(&event.kind, path)
                 {
                     let _ = tx.send(path.clone());
                 }
