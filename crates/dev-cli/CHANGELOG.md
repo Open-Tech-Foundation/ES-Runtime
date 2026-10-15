@@ -38,6 +38,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- The global-setup watch test no longer hangs CI. It sent ^C through the
+  `kill` binary, which did not reach the watch on the Ubuntu runner, and
+  then waited for the watch to end with no limit, so the job sat there until
+  the next push cancelled it, with no error. It now signals the process
+  group directly and fails after 30 seconds with the watch's stderr.
 - macOS: `esdev --watch` could run a program twice with no edit, and the
   test and dev loops could rerun or rebuild the same way. FSEvents can
   deliver a write from before the watch began, and reports a later read

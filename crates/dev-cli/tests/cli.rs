@@ -16253,12 +16253,30 @@ fn test_global_setup_tears_down_when_a_watch_is_interrupted() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    // As a terminal delivers ^C: to the whole foreground group.
-    let _ = Command::new("kill")
-        .arg("-INT")
-        .arg(format!("-{}", child.id()))
-        .status();
-    let status = child.wait().expect("wait for the watch");
+    // As a terminal delivers ^C: to the whole foreground group. Sent here
+    // rather than through a `kill` binary, whose spelling of a negative group
+    // varies between implementations: a ^C that never arrives leaves the
+    // watch waiting, and the wait below is what keeps that from hanging CI.
+    let group =
+        rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).expect("a child pid");
+    rustix::process::kill_process_group(group, rustix::process::Signal::INT)
+        .expect("send ^C to the watch's group");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait for the watch") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "the watch did not end within 30s of ^C.\nstderr:\n{}\nstdout:\n{}",
+                std::fs::read_to_string(dir.join("watch.err")).unwrap_or_default(),
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert!(status.success(), "{status}");
     let text = std::fs::read_to_string(&log).unwrap_or_default();
     assert_eq!(text.matches("first setup").count(), 1, "{text}");
