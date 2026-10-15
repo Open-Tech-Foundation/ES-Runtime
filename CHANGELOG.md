@@ -71,9 +71,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
-- The Ubuntu CI test jobs log memory and disk beside `tsr test`
-  (`scripts/with-resource-log.sh`): at the start, every 30 seconds, and at
-  the end. Both have ended "cancelled" with no error partway through on
+- The Ubuntu CI test jobs log memory, memory pressure, disk and the largest
+  processes beside `tsr test` (`scripts/with-resource-log.sh`): at the
+  start, every 2 seconds, and at the end, with whether `systemd-oomd` runs
+  and what swap there is. Both have ended "cancelled" with no error partway through on
   every run since early October, which is how a runner that ran out of one
   of them stops, and until now nothing said which.
 

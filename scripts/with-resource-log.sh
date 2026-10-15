@@ -24,6 +24,10 @@ snapshot() {
 }
 
 echo "cores: $(nproc)"
+# Whether a userspace OOM killer is running, which would stop the runner
+# itself rather than the process using the memory.
+systemctl is-active systemd-oomd 2>/dev/null | sed 's/^/systemd-oomd: /'
+swapon --show 2>/dev/null | sed 's/^/swap: /'
 snapshot
 
 # One line per interval outside a group too, so a log read without
@@ -32,8 +36,11 @@ snapshot
   while sleep "$interval"; do
     read -r _ total used _ _ _ available < <(free -m | sed -n 2p)
     disk=$(df -h "$PWD" | awk 'NR == 2 { print $4 " free of " $2 }')
-    top=$(ps -eo rss=,comm= --sort=-rss | head -1 | awk '{ print $2 " " int($1 / 1024) "MB" }')
-    echo "[resources $(date -u +%H:%M:%S)] memory ${used}/${total}MB used, ${available}MB available; disk ${disk}; largest ${top}" >&2
+    top=$(ps -eo rss=,comm= --sort=-rss | head -3 | awk '{ printf "%s%s %dMB", sep, $2, $1 / 1024; sep = ", " }')
+    # Memory pressure: the share of the last 10s some task stalled waiting
+    # for memory. systemd-oomd acts on this, before memory is used up.
+    pressure=$(awk '/^some/ { sub("avg10=", "", $2); print $2 "%" }' /proc/pressure/memory 2>/dev/null)
+    echo "[resources $(date -u +%H:%M:%S)] memory ${used}/${total}MB used, ${available}MB available, pressure ${pressure:-n/a}; disk ${disk}; largest ${top}" >&2
   done
 ) &
 monitor=$!
