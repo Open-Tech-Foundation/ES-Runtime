@@ -173,6 +173,11 @@ The per-agent half is [`runtime:process`](/api/process) — `memoryUsage()`,
 `cpuTime()`, `uptime()`, no capability, because they describe the caller. These
 describe the agents around it, so they sit behind `diagnostics`.
 
+On Windows both CPU figures advance in clock-tick steps rather than
+continuously, and the process total is updated separately from a thread's, so
+`cpu` can briefly read lower than the calling thread's `cpuTime()`. Compare
+them over an interval, not at one instant.
+
 ## Inventory
 
 The handles this agent **owns** — an id and a kind, never the resource.

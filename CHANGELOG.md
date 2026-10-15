@@ -18,6 +18,13 @@ namespace) is unstable and may change between minor releases until the API freez
   suite. CI serves postgres on 5432, so the two URL-precedence connects
   failed with connection refused there while passing locally.
 
+- The Windows CI leg passes again. `metrics_reports_the_whole_process`
+  allowed 1ms between the process's and the thread's CPU time, and on
+  Windows the two are kept apart and advance in clock ticks; it now allows
+  one tick there, and the `runtime:diagnostics` reference says so. The
+  watch-restart test waits for the restarted run's output itself, and
+  prints stderr when it is missing.
+
 - The Windows build passes `clippy -D warnings` again: a listener backlog
   constant and a socket file's path, both used only on Unix, are compiled
   only there.

@@ -1090,9 +1090,11 @@ fn a_failure_reason_is_payload_and_follows_detail() {
 /// `runtime:process`, because these describe the agents *around* the caller.
 #[test]
 fn metrics_reports_the_whole_process() {
-    let out = lines(
-        "process-metrics",
-        r#"
+    // Windows counts CPU time in clock ticks, and the process total is kept
+    // apart from the thread's: it can trail it by a tick (15.625ms at the
+    // default rate). Unix's CPU clocks are exact, so 1ms is rounding there.
+    let slack = if cfg!(windows) { 16 } else { 1 };
+    let script = r#"
         import { metrics } from "runtime:diagnostics";
         import { cpuTime, memoryUsage } from "runtime:process";
         const until = Date.now() + 40;
@@ -1102,11 +1104,11 @@ fn metrics_reports_the_whole_process() {
         // Resident memory holds the whole isolate, so it exceeds the JS heap.
         console.log("rss > heap:", p.rss > memoryUsage().heapUsed);
         // Every thread together is at least this one.
-        console.log("cpu >= mine:", p.cpu + 1 >= cpuTime());
+        console.log("cpu >= mine:", p.cpu + SLACK >= cpuTime());
         console.log("uptime advancing:", p.uptime > 0);
-        "#,
-        &["--allow-diagnostics"],
-    );
+        "#
+    .replace("SLACK", &slack.to_string());
+    let out = lines("process-metrics", &script, &["--allow-diagnostics"]);
     assert_eq!(out[0], "keys: cpu,rss,uptime");
     assert_eq!(out[1], "rss > heap: true");
     assert_eq!(out[2], "cpu >= mine: true");

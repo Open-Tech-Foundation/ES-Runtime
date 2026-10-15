@@ -19315,13 +19315,17 @@ fn test_watch_restarts_when_the_project_file_changes() {
         "esdev.json",
         r#"{ "resolve": { "alias": { "@": "./b" } } }"#,
     );
-    let err = wait_for_file(&watch.err, Duration::from_secs(30), |text| {
-        text.contains("esdev.json changed — restarting")
-            && text.matches("watching for changes").count() >= 2
+    // Waited for on stdout, where the new session's run lands: the idle line
+    // on stderr follows any pass, including one that found nothing to run.
+    let out = wait_for_file(&watch.out, Duration::from_secs(30), |text| {
+        text.contains("VALUE from b")
     });
+    let err = watch.stderr();
     assert!(err.contains("esdev.json changed — restarting"), "{err}");
-    let out = std::fs::read_to_string(&watch.out).unwrap_or_default();
-    assert!(out.contains("VALUE from b"), "{out}");
+    assert!(
+        out.contains("VALUE from b"),
+        "the restarted session did not run with the new alias.\nstdout:\n{out}\nstderr:\n{err}"
+    );
     watch.passes = 2;
     watch.quit();
     let _ = std::fs::remove_dir_all(&dir);
