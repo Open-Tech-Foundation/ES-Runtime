@@ -38,6 +38,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- The `esrun` CLI test suites run outside Cargo too. Every path they need
+  (the binary under test, a scratch directory and the fixture tree) comes
+  from one `tests/common` module, which reads `ESRUN_TEST_BIN`,
+  `ESRUN_TEST_TMPDIR` and `ESRUN_TEST_MANIFEST` and otherwise uses Cargo's
+  own paths, as before. The Windows build of the suites runs that way in a
+  Windows guest, where the paths baked in at compile time do not exist.
+
 - `runtime:images` now runs on `otf-pixels` 0.3.0 instead of 0.2.0: JPEG
   decoding is about twice as fast with identical output, progressive JPEG
   is decoded in-house (opening one reads only its headers, and the

@@ -17,8 +17,10 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 /// A minimal OTLP/HTTP collector: accepts POSTs, answers 200, and hands each
@@ -99,8 +101,8 @@ fn export(name: &str, source: &str, flags: &[&str]) -> Vec<String> {
     let app = temp(&format!("otel-{name}.mjs"));
     std::fs::write(&app, source).expect("write app");
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    let mut command = Command::new(common::esrun_bin());
+    command.current_dir(common::tmpdir());
     command.arg(format!("--otel={}", collector.endpoint()));
     command.args(flags);
     command.arg(&app);
@@ -367,8 +369,8 @@ fn malformed_otel_options_are_refused() {
     ] {
         let app = temp("otel-bad.mjs");
         std::fs::write(&app, "console.log('ran');\n").expect("write app");
-        let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-            .current_dir(env!("CARGO_TARGET_TMPDIR"))
+        let out = Command::new(common::esrun_bin())
+            .current_dir(common::tmpdir())
             .arg(flag)
             .arg(&app)
             .output()
@@ -407,8 +409,8 @@ fn an_unreachable_collector_does_not_fail_the_program() {
     .expect("write app");
 
     let started = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .current_dir(env!("CARGO_TARGET_TMPDIR"))
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
         .arg(format!("--otel=http://127.0.0.1:{port}"))
         .args(["--allow-read", "--allow-write"])
         .arg(&app)
@@ -448,8 +450,8 @@ fn exporting_grants_the_program_nothing() {
     )
     .expect("write app");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .current_dir(env!("CARGO_TARGET_TMPDIR"))
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
         .arg(format!("--otel={}", collector.endpoint()))
         .arg(&app)
         .output()

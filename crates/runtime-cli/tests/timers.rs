@@ -8,8 +8,10 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn stdout(out: &Output) -> String {
@@ -26,8 +28,8 @@ fn run(name: &str, source: &str) -> (Vec<String>, Duration) {
     let app = temp(&format!("timers-{name}.mjs"));
     std::fs::write(&app, source).expect("write app");
     let started = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .current_dir(env!("CARGO_TARGET_TMPDIR"))
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
         // Ungated: it decides only when this program may end.
         .arg("--deny-all")
         .arg(&app)
@@ -153,8 +155,8 @@ fn a_worker_lets_its_own_timer_go_and_its_parent_lets_the_worker_go() {
     )
     .expect("write app");
     let started = Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .current_dir(env!("CARGO_TARGET_TMPDIR"))
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
         .args(["--allow-imports", "--allow-workers"])
         .arg(&app)
         .output()

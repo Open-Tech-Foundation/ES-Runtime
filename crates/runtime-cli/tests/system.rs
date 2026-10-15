@@ -10,8 +10,10 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn write(name: &str, contents: &str) -> PathBuf {
@@ -26,11 +28,11 @@ fn write(name: &str, contents: &str) -> PathBuf {
 /// and these tests are about what the runtime *does*, not about what it may.
 /// The capability model has its own suite in `permissions.rs`.
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     command.arg("--allow-all");
     // Run *from* the directory these fixtures are written into: the sandbox is
     // the working directory (D79), so a program is run from where it lives.
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command.current_dir(common::tmpdir());
     command
 }
 
@@ -420,7 +422,7 @@ import * as system from "runtime:system";
 const out = await new system.Command({:?}, {{ args: [{:?}] }}).output();
 console.log(new TextDecoder().decode(out.stdout).trim());
 "#,
-            env!("CARGO_BIN_EXE_esrun"),
+            common::esrun_bin(),
             worker.to_string_lossy(),
         ),
     );

@@ -8,8 +8,10 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn stdout(out: &Output) -> String {
@@ -23,9 +25,9 @@ fn stderr(out: &Output) -> String {
 fn run(name: &str, source: &str, flags: &[&str]) -> Output {
     let app = temp(&format!("diag-{name}.mjs"));
     std::fs::write(&app, source).expect("write app");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     // The sandbox is the working directory (D79), so a program runs where it lives.
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command.current_dir(common::tmpdir());
     command.args(flags);
     command.arg(&app);
     command.output().expect("run esrun")

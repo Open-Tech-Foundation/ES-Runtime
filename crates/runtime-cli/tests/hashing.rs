@@ -10,8 +10,10 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn write(name: &str, contents: &str) -> PathBuf {
@@ -21,10 +23,10 @@ fn write(name: &str, contents: &str) -> PathBuf {
 }
 
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     // Run *from* the directory these fixtures are written into: the sandbox is
     // the working directory (D79), so a program is run from where it lives.
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command.current_dir(common::tmpdir());
     command
 }
 

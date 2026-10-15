@@ -8,8 +8,10 @@
 
 use std::process::{Command, Output};
 
+mod common;
+
 fn esrun(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .args(args)
         .output()
         .expect("failed to spawn esrun")

@@ -7,18 +7,20 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn dir(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("db-{name}"));
+    let path = common::tmpdir().join(format!("db-{name}"));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create temp dir");
     path
 }
 
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     // Run *from* the directory these fixtures are written into: the sandbox is
     // the working directory (D79), so a program is run from where it lives.
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command.current_dir(common::tmpdir());
     command
 }
 

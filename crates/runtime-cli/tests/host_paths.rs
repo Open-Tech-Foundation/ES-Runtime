@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+
 /// `base/project` (the root, where the run starts) and `base/outside`, which
 /// holds a real file for links and paths to point at.
 fn scene() -> (PathBuf, PathBuf) {
@@ -68,7 +70,7 @@ for (const [name, run] of Object.entries(probes)) {
 fn a_caught_refusal_names_no_host_path() {
     let (base, project) = scene();
     std::fs::write(project.join("app.mjs"), PROBE).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let out = Command::new(common::esrun_bin())
         .current_dir(&project)
         .args([
             "--allow-read=data",
@@ -136,7 +138,7 @@ fn a_failed_fetch_names_no_secret_from_its_url() {
         console.log([e.code, e.message, e.cause && e.cause.message].join("\t"));
       }
     "#;
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let out = Command::new(common::esrun_bin())
         .args(["--allow-net", &format!("-e={code}")])
         .output()
         .expect("spawn esrun");

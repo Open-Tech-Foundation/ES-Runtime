@@ -4,8 +4,10 @@
 
 use std::process::{Command, Output};
 
+mod common;
+
 fn esrun(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .args(args)
         .output()
         .expect("spawn esrun")
@@ -83,14 +85,15 @@ fn a_bad_command_line_throws_with_nodes_codes() {
 /// own `util.parseArgs` on the same script — the parity D142 promises.
 #[test]
 fn it_parses_as_node_does() {
-    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .current_dir(fixtures)
+    let fixtures = common::fixtures();
+    let out = Command::new(common::esrun_bin())
+        .current_dir(&fixtures)
         .arg("parse-args-cases.mjs")
         .output()
         .expect("spawn esrun");
-    let expected = std::fs::read_to_string(format!("{fixtures}/parse-args-cases.expected"))
-        .expect("read expected output");
+    let expected =
+        std::fs::read_to_string(format!("{}/parse-args-cases.expected", fixtures.display()))
+            .expect("read expected output");
     let actual = stdout(&out);
     for (index, (got, want)) in actual.lines().zip(expected.lines()).enumerate() {
         assert_eq!(got, want, "case {index}");

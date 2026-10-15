@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+mod common;
+
 fn workdir(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("esrun-wasi-{test}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -29,7 +31,7 @@ fn run(dir: &Path, entry: &str) -> Output {
     // the project root — the jail, and the `node_modules` walk's ceiling — is
     // the working directory's project (D79), so an entry the cwd does not
     // contain is refused before it starts.
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .arg("--allow-all")
         .current_dir(dir)
         .arg(entry)
@@ -495,7 +497,7 @@ console.log("ENVCOUNT:", new DataView(memory.buffer).getUint32(0, true));
 "#,
     );
 
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let out = Command::new(common::esrun_bin())
         .arg("--allow-all")
         .current_dir(&dir)
         .arg("main.js")

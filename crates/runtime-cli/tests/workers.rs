@@ -7,8 +7,10 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn write(name: &str, contents: &str) -> PathBuf {
@@ -18,10 +20,10 @@ fn write(name: &str, contents: &str) -> PathBuf {
 }
 
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     // Run *from* the directory these fixtures are written into: the sandbox is
     // the working directory (D79), so a program is run from where it lives.
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command.current_dir(common::tmpdir());
     command
 }
 
@@ -50,7 +52,7 @@ fn run(prefix: &str, worker: &str, main: &str, flags: &[&str]) -> Output {
             // have. Quoted through `Debug`, which escapes the backslashes a
             // Windows path is full of — pasted raw they would be JavaScript
             // escape sequences rather than a path.
-            .replace("ESRUN_BIN", &format!("{:?}", env!("CARGO_BIN_EXE_esrun"))),
+            .replace("ESRUN_BIN", &format!("{:?}", common::esrun_bin())),
     );
     let mut command = esrun();
     // `--max-heap`/`--timeout` shape a run without saying anything about its

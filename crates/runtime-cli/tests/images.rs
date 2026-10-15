@@ -9,12 +9,14 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn fixture(name: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let path = common::manifest_dir()
         .join("tests/fixtures/images")
         .join(name);
     std::fs::read(path).expect("read fixture")
@@ -34,8 +36,8 @@ fn bytes_literal(name: &str) -> String {
 }
 
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    let mut command = Command::new(common::esrun_bin());
+    command.current_dir(common::tmpdir());
     command
 }
 

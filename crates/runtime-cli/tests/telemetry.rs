@@ -14,8 +14,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 /// A TLS server on an ephemeral port that prints `PORT <n>` when listening.
@@ -42,9 +44,9 @@ fn stderr_after_a_failed_handshake(name: &str, rust_log: Option<&str>) -> String
     let app = temp(name);
     std::fs::write(&app, TLS_SERVER).expect("write app");
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut cmd = Command::new(common::esrun_bin());
     // Fixture, not subject (D65): this is a test about tracing output.
-    cmd.current_dir(env!("CARGO_TARGET_TMPDIR"))
+    cmd.current_dir(common::tmpdir())
         .arg("--allow-all")
         .arg(&app)
         .env("CERT", cert)

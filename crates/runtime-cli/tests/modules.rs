@@ -7,22 +7,22 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 /// A `Command` for the built `esrun` binary, granted everything.
 ///
 /// The grant is fixture, not subject: esrun grants nothing on its own (D65) and
 /// these tests are about module resolution, HTTP, fs and net *behaviour*. The
 /// capability model has its own suite in `permissions.rs`.
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     command.arg("--allow-all");
     command
 }
 
 /// Absolute path to a file under `tests/fixtures/`.
 fn fixture(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(rel)
+    common::manifest_dir().join("tests/fixtures").join(rel)
 }
 
 fn run_file(rel: &str) -> Output {
@@ -285,7 +285,7 @@ fn a_file_body_is_served_host_side_and_readable_everywhere_else() {
 /// server without the grant answers 500 and reports the refusal.
 #[test]
 fn a_file_body_without_file_read_is_a_500() {
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let out = Command::new(common::esrun_bin())
         .args(["--allow-listen", "--allow-net"])
         .arg(fixture("http-file-body-denied.mjs"))
         .output()
@@ -958,7 +958,7 @@ fn an_entry_outside_the_project_is_refused() {
 
     // cwd is this crate; the entry is in the system temp directory.
     let out = esrun()
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .current_dir(common::manifest_dir())
         .arg(elsewhere.join("app.mjs"))
         .output()
         .expect("spawn esrun");

@@ -8,6 +8,8 @@
 
 use std::process::{Command, Output};
 
+mod common;
+
 fn esrun(code: &str) -> Output {
     esrun_granted(&[], code)
 }
@@ -15,7 +17,7 @@ fn esrun(code: &str) -> Output {
 /// esrun under `flags`. Nothing is granted by default (D65), so a test whose
 /// subject reaches past the isolate names what it needs.
 fn esrun_granted(flags: &[&str], code: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .args(flags)
         .arg(format!("-e={code}"))
         .output()
@@ -115,7 +117,7 @@ fn a_late_handler_fires_rejectionhandled() {
 /// Runs `code` under `flags` — the socket cases need a permission flag to fail
 /// a connection without depending on name resolution.
 fn esrun_with(flags: &[&str], code: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .args(flags)
         .arg(format!("-e={code}"))
         .output()

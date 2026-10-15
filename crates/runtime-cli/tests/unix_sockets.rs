@@ -2,12 +2,15 @@
 //! D140): the flag grammar, the rule that a path is always named, and a real
 //! round trip through the `esrun` binary.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    let mut command = Command::new(common::esrun_bin());
+    command.current_dir(common::tmpdir());
     command
 }
 

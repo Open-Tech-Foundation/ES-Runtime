@@ -13,10 +13,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn fixture(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(rel)
+    common::manifest_dir().join("tests/fixtures").join(rel)
 }
 
 /// Sends `signal` to `pid` via the `kill` binary — no libc dependency just for
@@ -35,7 +35,7 @@ fn send(pid: u32, signal: &str) {
 /// that the watch suppressed it.
 #[test]
 fn a_guest_handler_intercepts_a_real_sigterm() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .arg("--allow-all")
         .arg(fixture("signals.mjs"))
         .stdout(Stdio::piped())
@@ -80,7 +80,7 @@ fn a_guest_handler_intercepts_a_real_sigterm() {
 /// not ask for it.
 #[test]
 fn an_unwatched_signal_still_terminates() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .arg("--allow-all")
         .arg("-e=console.log('READY'); await new Promise(() => {});")
         .stdout(Stdio::piped())
@@ -136,7 +136,7 @@ fn http_get(port: u16, path: &str) -> String {
 /// arrives, so a server that merely stopped would answer nothing.
 #[test]
 fn sigterm_drains_an_in_flight_request_before_exiting() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .arg("--allow-all")
         .arg(fixture("shutdown-server.mjs"))
         .stdout(Stdio::piped())
@@ -175,7 +175,7 @@ fn sigterm_drains_an_in_flight_request_before_exiting() {
 /// for a plain script would be a regression, not a feature.
 #[test]
 fn an_interrupt_with_no_server_exits_at_once() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .arg("--allow-all")
         // A long grace, so a wrongly-applied drain would be unmistakable.
         .arg("--shutdown-grace=30000")
@@ -204,7 +204,7 @@ fn an_interrupt_with_no_server_exits_at_once() {
 /// grace is the backstop, and a short one makes that observable.
 #[test]
 fn the_shutdown_grace_bounds_the_drain() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .arg("--allow-all")
         .arg("--shutdown-grace=300")
         .arg(format!(

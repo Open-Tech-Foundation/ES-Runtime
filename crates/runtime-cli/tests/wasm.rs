@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+mod common;
+
 // --- a minimal WASM encoder, enough for the fixtures below ---
 
 /// `\0asm` + version 1.
@@ -108,7 +110,7 @@ fn run(dir: &Path, entry: &str) -> Output {
     // tests are about WebAssembly, not about the capability model.
     // Run *from* the work directory: the project root is the working
     // directory's project (D79), and an entry outside it is refused.
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .arg("--allow-all")
         .current_dir(dir)
         .arg(entry)

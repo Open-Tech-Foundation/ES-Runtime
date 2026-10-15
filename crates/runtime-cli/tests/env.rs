@@ -8,9 +8,11 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-/// A unique path under Cargo's per-test temp dir (`CARGO_TARGET_TMPDIR`).
+mod common;
+
+/// A unique path under the harness scratch directory (`common::tmpdir`).
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn write(name: &str, contents: &str) -> PathBuf {
@@ -26,11 +28,11 @@ fn write(name: &str, contents: &str) -> PathBuf {
 /// spell the flag would say the same thing thirty times. A test about the gate
 /// itself lives in `permissions.rs`.
 fn esrun() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    let mut command = Command::new(common::esrun_bin());
     command.arg("--allow-env");
     // Run *from* the directory these fixtures are written into: the sandbox is
     // the working directory (D79), so a program is run from where it lives.
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command.current_dir(common::tmpdir());
     command
 }
 
@@ -314,7 +316,7 @@ fn a_coerced_env_value_reaches_a_child_process() {
     // interpolated with `{:?}`, whose `Debug` for a string escapes the
     // backslashes a Windows path is full of — pasted with `{}` it would be a
     // JavaScript escape sequence instead of a path.
-    let esrun_path = env!("CARGO_BIN_EXE_esrun");
+    let esrun_path = common::esrun_bin();
     let app = write(
         "env-coercion-child.mjs",
         &format!(
@@ -331,7 +333,7 @@ console.log(new TextDecoder().decode(out.stdout).trim());
         ),
     );
     let out = esrun()
-        .arg(format!("--allow-run={esrun_path}"))
+        .arg(format!("--allow-run={}", esrun_path.display()))
         .arg(&app)
         .output()
         .expect("spawn esrun");

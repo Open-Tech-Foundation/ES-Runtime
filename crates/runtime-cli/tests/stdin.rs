@@ -9,6 +9,8 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+mod common;
+
 /// esrun running `code`, with `input` piped to its standard input.
 fn piped(flags: &[&str], code: &str, input: &str) -> Output {
     piped_in(&std::env::temp_dir(), flags, code, input)
@@ -16,7 +18,7 @@ fn piped(flags: &[&str], code: &str, input: &str) -> Output {
 
 /// The same, from `dir`.
 fn piped_in(dir: &std::path::Path, flags: &[&str], code: &str, input: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .current_dir(dir)
         .args(flags)
         .arg(format!("-e={code}"))
@@ -138,6 +140,7 @@ fn a_worker_cannot_read_stdin() {
 
 #[cfg(unix)]
 mod terminal {
+    use crate::common;
     use std::os::fd::{AsFd, OwnedFd};
     use std::process::{Child, Command, Stdio};
     use std::sync::mpsc;
@@ -165,7 +168,7 @@ mod terminal {
     /// esrun on the terminal's user side, for all three streams.
     fn spawn(code: &str, user: &OwnedFd) -> Child {
         let stream = || Stdio::from(user.try_clone().expect("dup"));
-        Command::new(env!("CARGO_BIN_EXE_esrun"))
+        Command::new(common::esrun_bin())
             .arg(format!("-e={code}"))
             .stdin(stream())
             .stdout(stream())

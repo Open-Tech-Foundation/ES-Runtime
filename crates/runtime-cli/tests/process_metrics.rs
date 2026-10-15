@@ -8,8 +8,10 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+mod common;
+
 fn temp(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    common::tmpdir().join(name)
 }
 
 fn stdout(out: &Output) -> String {
@@ -23,8 +25,8 @@ fn stderr(out: &Output) -> String {
 fn lines(name: &str, source: &str, flags: &[&str]) -> Vec<String> {
     let app = temp(&format!("pm-{name}.mjs"));
     std::fs::write(&app, source).expect("write app");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
-    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    let mut command = Command::new(common::esrun_bin());
+    command.current_dir(common::tmpdir());
     command.args(flags);
     command.arg(&app);
     let out = command.output().expect("run esrun");

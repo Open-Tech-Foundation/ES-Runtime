@@ -4,8 +4,10 @@
 
 use std::process::{Command, Output};
 
+mod common;
+
 fn esrun(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .args(args)
         .output()
         .expect("spawn esrun")
@@ -19,13 +21,13 @@ fn stdout(out: &Output) -> String {
 /// recorded from Bun on the same script, differing only where D144 says.
 #[test]
 fn cookies_behave_as_bun_except_where_d144_says() {
-    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .current_dir(fixtures)
+    let fixtures = common::fixtures();
+    let out = Command::new(common::esrun_bin())
+        .current_dir(&fixtures)
         .arg("cookie-cases.mjs")
         .output()
         .expect("spawn esrun");
-    let expected = std::fs::read_to_string(format!("{fixtures}/cookie-cases.expected"))
+    let expected = std::fs::read_to_string(format!("{}/cookie-cases.expected", fixtures.display()))
         .expect("read expected output");
     let actual = stdout(&out);
     for (index, (got, want)) in actual.lines().zip(expected.lines()).enumerate() {

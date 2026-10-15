@@ -10,8 +10,10 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
+mod common;
+
 fn dir(name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("durable-{name}"));
+    let path = common::tmpdir().join(format!("durable-{name}"));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create temp dir");
     path
@@ -35,7 +37,7 @@ fn run_in(base: &PathBuf, name: &str, source: &str, flags: &[&str]) -> Output {
     } else {
         flags
     };
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    Command::new(common::esrun_bin())
         .current_dir(base)
         .args(grants)
         .arg(name)
@@ -150,7 +152,7 @@ fn acknowledged_writes_survive_a_kill() {
     )
     .expect("write module");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .current_dir(&base)
         .args(["--allow-read", "--allow-write", "--allow-imports"])
         .arg("write.mjs")
@@ -205,7 +207,7 @@ fn a_second_process_is_refused_while_the_first_holds_the_directory() {
     )
     .expect("write module");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .current_dir(&base)
         .args(["--allow-read", "--allow-write", "--allow-imports"])
         .arg("hold.mjs")
@@ -1771,7 +1773,7 @@ fn acknowledged_writes_from_a_shard_survive_a_kill() {
            await new Promise(() => {});"#,
     )
     .expect("write module");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .current_dir(&base)
         .args(SHARD_GRANTS)
         .arg("write.mjs")
@@ -1811,7 +1813,7 @@ fn an_idle_shard_does_not_keep_the_process_alive() {
            console.log(await Cart.get("c").add("x"));"#,
     )
     .expect("write module");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut child = Command::new(common::esrun_bin())
         .current_dir(&base)
         .args(SHARD_GRANTS)
         .arg("app.mjs")
