@@ -68,18 +68,29 @@ jobs:
   # so Linux-only coverage misses them. The `v8` crate ships prebuilt static libs
   # for x86_64-pc-windows-msvc and aarch64-apple-darwin, so no source V8 build is
   # needed. `fail-fast: false` so one platform's failure still reports the others.
+  #
+  # esrun and esdev are separate jobs: a failure in one does not hide the
+  # other's result, and each saves its own build cache. rust-cache saves only
+  # when a job succeeds, so while both shared one job, an esdev problem on
+  # Linux meant that leg never had a cache and rebuilt everything every run.
   test:
-    name: test (${{ matrix.os }})
+    name: test ${{ matrix.suite }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        suite: [esrun, esdev]
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
+          # One cache per suite: they build different test binaries.
+          key: ${{ matrix.suite }}
+          # Saved when the tests fail too: the build is still good, and a job
+          # that never saves rebuilds the whole tree on every run.
+          cache-on-failure: true
           # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
           # and it lands beside the directories rust-cache caches by default
           # rather than inside them — so without this every job downloads it
@@ -89,18 +100,18 @@ jobs:
             target/debug/gn_out
             target/release/gn_out
       - uses: ./.github/actions/setup-tsr
-      # On Linux with memory and disk logged beside it: this leg ends
-      # "cancelled" with no error partway through, the shape of a runner that
-      # ran out of one of them, and the log is the only place that can say.
-      - if: runner.os == 'Linux'
-        run: bash scripts/with-resource-log.sh tsr test
+      - if: matrix.suite != 'esdev' || runner.os != 'Linux'
+        run: tsr test:${{ matrix.suite }}
+      # For now, one test at a time in esdev's suite on Linux: something in it
+      # stops the runner there with no error, and with tests in parallel the
+      # last name printed is not necessarily the one that did.
+      - if: matrix.suite == 'esdev' && runner.os == 'Linux'
+        run: tsr test:esdev
         env:
-          RESOURCE_LOG_INTERVAL: 2
-      - if: runner.os != 'Linux'
-        run: tsr test
+          RUST_TEST_THREADS: 1
       # One platform is enough for the conformance suite — it checks the driver,
       # not platform semantics — and the binary is already built above.
-      - if: matrix.os == 'ubuntu-latest'
+      - if: matrix.os == 'ubuntu-latest' && matrix.suite == 'esrun'
         run: tsr conformance
 
   miri:
