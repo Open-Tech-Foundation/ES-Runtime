@@ -34,7 +34,8 @@ run = "cargo test --workspace --all-features --no-fail-fast"
 # esdev's suite again with the V8 inspector compiled in (DECISIONS D59), as the
 # released esdev is built: `--inspect` and `--coverage` only work there, and
 # their tests otherwise only check the refusal. `-p es-runtime-dev-cli` alone,
-# because the variable must never reach an esrun build.
+# because the variable must never reach an esrun build. Not run in CI; run it
+# locally before touching `--inspect` or `--coverage`.
 [tasks."test:inspector"]
 run = "cargo test -p es-runtime-dev-cli --no-fail-fast"
 env = { ES_RUNTIME_INSPECTOR = "1" }
