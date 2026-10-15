@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-15
+
 ### Fixed
 
 - The installers send `GITHUB_TOKEN`, when it is set, with their one GitHub
