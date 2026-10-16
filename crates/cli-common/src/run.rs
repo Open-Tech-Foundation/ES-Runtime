@@ -1055,10 +1055,11 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     let mut runtime =
         Runtime::with_snapshot_and_limits(SNAPSHOT, heap_limits(max_heap_bytes), providers)
             .map_err(|e| e.to_string())?;
-    // A local script is trusted by default: the full capability set (incl.
-    // FileSystem, which module loading requires). `--deny-all` / `--deny-<name>`
-    // narrow it (D38); the entry file has already been read by this point, so a
-    // fully denied run still executes what the user named.
+    // The set the binary resolved from its baseline (D65) and the command line
+    // (D38): `esdev` starts from every capability, `esrun` from none.
+    // `--allow-all` / `--allow-<name>` widen that start, `--deny-*` narrow it,
+    // and here it is simply applied. The entry file has already been read by
+    // this point, so a fully denied run still executes what the user named.
     runtime.set_capabilities(config.capabilities);
     if let Some(observer) = &config.observer {
         runtime.set_capability_observer(observer.clone());
