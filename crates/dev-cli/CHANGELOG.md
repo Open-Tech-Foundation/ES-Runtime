@@ -33,6 +33,10 @@ is the point, since none of the three has any business in a deployment.
   TypeScript like the file it would have been. JSX in a snippet stays refused:
   a snippet has no file for a `jsx-runtime` import to resolve against
   (DECISIONS D168).
+- `esdev init` detects a root `main.ts`, `main.js` or `main.mjs` as the entry,
+  the Node convention `package.json` names. It is a candidate like `index.*`
+  and `server.*`, so `esdev init -y` adopts such a project instead of
+  reporting that there is no entry.
 
 ## [0.19.0] - 2026-10-15
 

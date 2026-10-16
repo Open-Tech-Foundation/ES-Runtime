@@ -60,10 +60,14 @@ const ENTRY_CANDIDATES: &[&str] = &[
     "src/server.js",
     "src/main.ts",
     "src/main.js",
+    "src/main.mjs",
     "index.ts",
     "index.js",
     "server.ts",
     "server.js",
+    "main.ts",
+    "main.js",
+    "main.mjs",
 ];
 
 /// Starts a bare project in an empty directory, or adopts the project in a
@@ -579,6 +583,21 @@ mod tests {
         let dir = root("none", &["README.md"]);
         assert_eq!(detect_entry(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A root `main.*` is the Node convention and an ordinary entry: adopting
+    /// one must detect it rather than report that there is nothing to adopt.
+    #[test]
+    fn a_root_main_is_an_entry() {
+        for (name, file) in [
+            ("root-main-js", "main.js"),
+            ("root-main-ts", "main.ts"),
+            ("root-main-mjs", "main.mjs"),
+        ] {
+            let dir = root(name, &["package.json", file]);
+            assert_eq!(detect_entry(&dir).as_deref(), Some(file), "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// A document is served, a module is run: the manifest says which.

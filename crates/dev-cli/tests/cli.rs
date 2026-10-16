@@ -9968,6 +9968,27 @@ fn init_adopts_an_existing_project() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The Node convention — `main.js` at the root, named by `package.json` — is an
+/// entry like any other: adopting detects it instead of reporting that there is
+/// nothing to adopt.
+#[test]
+fn init_adopts_a_root_main() {
+    let dir = build_dir("t_init_main");
+    write_in(&dir, "package.json", "{\"type\":\"module\"}\n");
+    write_in(&dir, "main.js", "console.log(\"legacy\");\n");
+
+    let out = esdev_in(&dir)
+        .args(["init", "-y"])
+        .output()
+        .expect("spawn esdev init");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let manifest = std::fs::read_to_string(dir.join("esdev.json")).expect("read esdev.json");
+    assert!(manifest.contains("\"entry\": \"main.js\""), "{manifest}");
+    assert!(manifest.contains("\"run\": \"server\""), "{manifest}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An OTF Web project is built and run by `otfw`, not esdev — so `esdev
 /// build` and `esdev start` name that toolchain rather than refusing with
 /// the missing `esdev.json`, which reads as a misconfiguration.
