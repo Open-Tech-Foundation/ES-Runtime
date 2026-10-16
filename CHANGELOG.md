@@ -11,6 +11,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- `runtime:wasi`'s filesystem provider resolved a path and then acted on the
+  *name*, so a directory swapped for a symlink in between was followed: a
+  guest could read a file outside the directory its preopen granted
+  (a check-then-use race). Every content-bearing operation now pins the
+  parent directory open and acts by descriptor, as the async `runtime:fs`
+  provider already did, so the path the check agreed to is the path the
+  syscall acts on. This also makes `remove` and `rename` about a symlink act
+  on the link rather than the file it points at, matching `runtime:fs`.
+
 ## [0.40.0] - 2026-10-15
 
 ### Fixed

@@ -7,6 +7,13 @@
 //! `Capability::FileWrite` by `runtime` before any method here runs, so a WASI
 //! guest reaching a file goes through exactly the same two checks — the
 //! capability, then the jail — as `runtime:fs` does.
+//!
+//! The jail is the async one's, not a weaker copy of it: every content-bearing
+//! operation resolves through [`confine`](crate::system_fs::confine) and then
+//! **pins** the parent directory open (see [`crate::anchor`]), acting by
+//! descriptor. A path checked and then used by name is two lookups the
+//! filesystem can change between, so this door follows none of them: a
+//! component swapped for a symlink after the check is refused, never followed.
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -17,6 +24,7 @@ use es_runtime_providers::{
     DirEntry, FileStat, ProviderError, SyncFd, SyncFileSystem, SyncOpenOptions, SyncWhence,
 };
 
+use crate::anchor::{Anchored, OpenMode, anchor};
 use crate::path;
 use crate::path_allowlist::{Access, PathAllowlist};
 use crate::refusal::Refusal;
@@ -132,6 +140,74 @@ impl SystemSyncFileSystem {
         Ok(resolved)
     }
 
+    /// The three refusals every resolution passes, in order — the jail, the
+    /// root-mutation guard, the scope list — on an absolute path. The same as
+    /// [`SystemFileSystem::admit`](crate::system_fs::SystemFileSystem), so both
+    /// doors agree on what is reachable.
+    fn admit(&self, abs: &Path, access: Access) -> Result<PathBuf, Refusal> {
+        let resolved = confine(abs, self.roots(access))?;
+        self.scoped(
+            reject_root_mutation(resolved, self.roots(access), access)?,
+            access,
+        )
+    }
+
+    /// Like [`jailed`](Self::jailed) but without resolving the **final**
+    /// component: the parent chain is canonicalized and confined, then the last
+    /// name is reattached literally.
+    ///
+    /// `mkdir`, `remove` and `rename` need this. Removing or renaming a symlink
+    /// is about the link, not what it points at: resolving the whole path would
+    /// delete the file at the other end, or refuse a link that points out of the
+    /// jail rather than removing the link. The parent is still fully resolved
+    /// and jailed, so the name being acted on is provably inside the root.
+    fn jailed_nofollow(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
+        let raw = reject_empty(p)?;
+        let abs = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            self.base.join(raw)
+        };
+        // A path that names a **root itself** — `.`, `./`, `data/..`, or the
+        // root's own absolute path — has no parent this may resolve: resolved
+        // whole instead, which is also where the root-mutation guard lives.
+        if let Ok(real) = path::canonicalize(&abs)
+            && self.roots(access).contains(&real)
+        {
+            return reject_root_mutation(real, self.roots(access), access)
+                .and_then(|real| self.scoped(real, access))
+                .map_err(|refused| refused.named(p));
+        }
+        let (parent, name) = match (abs.parent(), abs.file_name()) {
+            (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
+            // No final component to hold back (a bare root); fall through.
+            _ => return self.admit(&abs, access).map_err(|refused| refused.named(p)),
+        };
+        let resolved = confine(&parent, self.roots(access))
+            .map(|parent| parent.join(name))
+            .and_then(|resolved| reject_root_mutation(resolved, self.roots(access), access))
+            .and_then(|resolved| self.scoped(resolved, access))
+            .map_err(|refused| refused.named(p))?;
+        reject_trailing_slash_on_a_file(p, &resolved)?;
+        Ok(resolved)
+    }
+
+    /// A jailed path **pinned to the directory it resolved in** — the async
+    /// jail's anchoring, so a component swapped for a symlink between the check
+    /// and the syscall cannot point the operation out of the root. The check's
+    /// answer is only real if the syscall acts where the check looked.
+    fn anchored(&self, p: &str, access: Access) -> Result<Anchored, ProviderError> {
+        let real = self.jailed(p, access)?;
+        anchor(&real, self.roots(access), p)
+    }
+
+    /// [`anchored`](Self::anchored) without resolving the final component — for
+    /// an operation about the link rather than what it points at.
+    fn anchored_nofollow(&self, p: &str, access: Access) -> Result<Anchored, ProviderError> {
+        let real = self.jailed_nofollow(p, access)?;
+        anchor(&real, self.roots(access), p)
+    }
+
     /// Runs `f` against the handle for `fd`, holding the table lock for the call.
     fn with_handle<T>(
         &self,
@@ -175,28 +251,35 @@ impl SyncFileSystem for SystemSyncFileSystem {
             || options.truncate
             || options.create
             || options.create_new;
-        let resolved = self.jailed(path, if writes { Access::Write } else { Access::Read })?;
+        let access = if writes { Access::Write } else { Access::Read };
+        // Resolved, then pinned to the directory it resolved in: the open below
+        // is `openat` against that descriptor with `O_NOFOLLOW` at the final
+        // name, so a component swapped for a symlink between the check and the
+        // call cannot point the open somewhere the check did not agree to.
+        let anchored = self.anchored(path, access)?;
         if writes && options.read {
-            self.scoped(resolved.clone(), Access::Read)
+            // A handle that also reads needs the read scope too, and the
+            // fd-based `read` below has no path left to re-check it against.
+            self.scoped(anchored.path().to_path_buf(), Access::Read)
                 .map_err(|refused| refused.named(path))?;
         }
 
         let handle = if options.directory {
-            let meta = std::fs::metadata(&resolved).map_err(|e| io(path, e))?;
-            if !meta.is_dir() {
+            // A directory fd is an anchor, not a stream: record the path and
+            // check it really is a directory, without holding a host handle.
+            if !anchored.is_dir()? {
                 return Err(ProviderError::Other(format!("{path} is not a directory")));
             }
-            Handle::Dir(resolved)
+            Handle::Dir(anchored.path().to_path_buf())
         } else {
-            let file = std::fs::OpenOptions::new()
-                .read(options.read)
-                .write(options.write)
-                .append(options.append)
-                .truncate(options.truncate)
-                .create(options.create)
-                .create_new(options.create_new)
-                .open(&resolved)
-                .map_err(|e| io(path, e))?;
+            let file = anchored.open_mode(OpenMode {
+                read: options.read,
+                write: options.write,
+                append: options.append,
+                truncate: options.truncate,
+                create: options.create,
+                create_new: options.create_new,
+            })?;
             Handle::File(file)
         };
 
@@ -276,25 +359,26 @@ impl SyncFileSystem for SystemSyncFileSystem {
     }
 
     fn mkdir(&self, path: &str) -> Result<(), ProviderError> {
-        let resolved = self.jailed(path, Access::Write)?;
-        std::fs::create_dir(&resolved).map_err(|e| io(path, e))
+        self.anchored_nofollow(path, Access::Write)?.mkdir()
     }
 
     fn remove_file(&self, path: &str) -> Result<(), ProviderError> {
-        let resolved = self.jailed(path, Access::Write)?;
-        std::fs::remove_file(&resolved).map_err(|e| io(path, e))
+        // Not `jailed`: removing a symlink removes the link, so the final
+        // component must not be resolved — otherwise this would be a decision
+        // about the file at the other end of it.
+        self.anchored_nofollow(path, Access::Write)?.unlink(false)
     }
 
     fn remove_dir(&self, path: &str) -> Result<(), ProviderError> {
-        let resolved = self.jailed(path, Access::Write)?;
-        std::fs::remove_dir(&resolved).map_err(|e| io(path, e))
+        self.anchored_nofollow(path, Access::Write)?.unlink(true)
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), ProviderError> {
-        let shown = from;
-        let from = self.jailed(from, Access::Write)?;
-        let to = self.jailed(to, Access::Write)?;
-        std::fs::rename(&from, &to).map_err(|e| io(shown, e))
+        // Both ends pinned, and neither final component resolved: renaming a
+        // symlink moves the link.
+        let from = self.anchored_nofollow(from, Access::Write)?;
+        let to = self.anchored_nofollow(to, Access::Write)?;
+        from.rename_to(&to)
     }
 }
 
@@ -579,6 +663,119 @@ mod tests {
                 "{written}: {message}"
             );
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The link may be *written* pointing out of the jail — it is data — and it
+    /// still cannot be *followed* out: following is an access, and the jail is
+    /// where accesses are judged. Same rule as the async door.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_jail_is_not_followed_for_wasi_too() {
+        let (fs, dir) = fs_in("link-outside");
+        let outside = dir
+            .parent()
+            .unwrap()
+            .join(format!("esrt-syncfs-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), b"top secret").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("out")).unwrap();
+
+        let opts = SyncOpenOptions {
+            read: true,
+            ..Default::default()
+        };
+        let err = fs.open("out/secret", opts).unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+        assert!(fs.stat("out/secret").is_err());
+
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Following a link that was already there is not the attack: the jail
+    /// resolves and confines the target, so it is checked, and the write lands
+    /// through the link rather than replacing it.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_follows_a_link_that_was_already_there_for_wasi_too() {
+        let (fs, dir) = fs_in("write-through-link");
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/config.json"), b"old").unwrap();
+        std::os::unix::fs::symlink("real/config.json", dir.join("config.json")).unwrap();
+
+        let fd = fs
+            .open(
+                "config.json",
+                SyncOpenOptions {
+                    write: true,
+                    truncate: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        fs.write(fd, b"new").unwrap();
+        fs.close(fd).unwrap();
+        assert_eq!(std::fs::read(dir.join("real/config.json")).unwrap(), b"new");
+        assert!(dir.join("config.json").is_symlink());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `remove_file` and `rename` are about the **link**, not what it points
+    /// at. Resolving the final component first deleted the file at the other
+    /// end of it — or refused a link that pointed out of the jail rather than
+    /// removing the link — neither of which is what the async door does.
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_link_removes_the_link_for_wasi_too() {
+        let (fs, dir) = fs_in("remove-link");
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/kept.txt"), b"keep me").unwrap();
+        std::os::unix::fs::symlink("real/kept.txt", dir.join("link.txt")).unwrap();
+
+        fs.remove_file("link.txt").unwrap();
+        assert!(!dir.join("link.txt").exists());
+        assert_eq!(
+            std::fs::read(dir.join("real/kept.txt")).unwrap(),
+            b"keep me",
+            "the file the link pointed at must survive"
+        );
+
+        std::os::unix::fs::symlink("real/kept.txt", dir.join("moved.txt")).unwrap();
+        fs.rename("moved.txt", "elsewhere.txt").unwrap();
+        assert!(dir.join("elsewhere.txt").is_symlink());
+        assert!(std::fs::read(dir.join("real/kept.txt")).is_ok());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A link that pointed out of the jail can be removed — removing it is
+    /// about the link, not the file it names — where resolving it first would
+    /// have refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_jail_can_still_be_removed_for_wasi_too() {
+        let (fs, dir) = fs_in("remove-link-outside");
+        let outside = dir
+            .parent()
+            .unwrap()
+            .join(format!("esrt-syncfs-rm-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), b"top secret").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("out")).unwrap();
+
+        fs.remove_file("out").unwrap();
+        assert!(!dir.join("out").exists());
+        assert_eq!(
+            std::fs::read(outside.join("secret")).unwrap(),
+            b"top secret",
+            "the file the link pointed at must survive"
+        );
+
+        let _ = std::fs::remove_dir_all(&outside);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

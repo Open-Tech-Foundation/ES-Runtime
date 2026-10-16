@@ -104,6 +104,25 @@ impl Anchored {
     }
 }
 
+/// The access a [`Anchored::open_mode`] open asks for — the combination a
+/// `SyncOpenOptions` can express, which is richer than the read-only `open` and
+/// write-only `create` the async provider happens to need (read+write, `O_EXCL`).
+#[derive(Debug, Clone, Copy)]
+pub struct OpenMode {
+    /// Open for reading.
+    pub read: bool,
+    /// Open for writing.
+    pub write: bool,
+    /// Append rather than overwrite.
+    pub append: bool,
+    /// Truncate an existing file to zero length.
+    pub truncate: bool,
+    /// Create the file if it does not exist.
+    pub create: bool,
+    /// Fail if the file already exists (implies `create`).
+    pub create_new: bool,
+}
+
 /// A component of the path was replaced while it was being used.
 ///
 /// Reported as an escape rather than as an I/O error because that is what it
@@ -280,6 +299,52 @@ impl Anchored {
             self.name.as_os_str(),
             OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             Mode::empty(),
+        )
+        .map_err(|e| self.io(e))?;
+        Ok(std::fs::File::from(fd))
+    }
+
+    /// Opens the final name with exactly the access `mode` names, refusing a
+    /// symlink swapped in at it.
+    ///
+    /// [`open`](Self::open) and [`create`](Self::create) are the two shapes the
+    /// async provider needs; this is the general form, because `runtime:wasi`
+    /// hands the provider a read+write+`O_EXCL` combination neither covers. The
+    /// `NOFOLLOW` here is the same guarantee: a link that appeared at the *last*
+    /// component since the check is refused, so it cannot redirect the bytes.
+    pub fn open_mode(&self, mode: OpenMode) -> Result<std::fs::File, ProviderError> {
+        use rustix::fs::{Mode, OFlags, openat};
+        if !(mode.read || mode.write || mode.append || mode.create || mode.create_new) {
+            return Err(failed(
+                &self.shown,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "open requires at least one of read, write, append or create",
+                ),
+            ));
+        }
+        let mut flags = OFlags::CLOEXEC | OFlags::NOFOLLOW;
+        flags |= match (mode.read, mode.write) {
+            (true, true) => OFlags::RDWR,
+            (false, true) => OFlags::WRONLY,
+            _ => OFlags::RDONLY,
+        };
+        if mode.append {
+            flags |= OFlags::APPEND;
+        }
+        if mode.truncate {
+            flags |= OFlags::TRUNC;
+        }
+        if mode.create_new {
+            flags |= OFlags::CREATE | OFlags::EXCL;
+        } else if mode.create {
+            flags |= OFlags::CREATE;
+        }
+        let fd = openat(
+            &self.parent,
+            self.name.as_os_str(),
+            flags,
+            Mode::from(0o666),
         )
         .map_err(|e| self.io(e))?;
         Ok(std::fs::File::from(fd))
@@ -505,6 +570,37 @@ impl Anchored {
     /// Opens the final name for reading.
     pub fn open(&self) -> Result<std::fs::File, ProviderError> {
         std::fs::File::open(self.target()).map_err(|e| self.io(e))
+    }
+
+    /// Opens the final name with exactly the access `mode` names.
+    ///
+    /// Windows carries the parent as a path (see the module note), so this is
+    /// the same weaker, path-based open as every other method on this arm — the
+    /// name is resolved again from the root and a swap keeps its window.
+    pub fn open_mode(&self, mode: OpenMode) -> Result<std::fs::File, ProviderError> {
+        if !(mode.read || mode.write || mode.append || mode.create || mode.create_new) {
+            return Err(failed(
+                &self.shown,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "open requires at least one of read, write, append or create",
+                ),
+            ));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(mode.read).write(mode.write);
+        if mode.append {
+            options.append(true);
+        }
+        if mode.truncate {
+            options.truncate(true);
+        }
+        if mode.create_new {
+            options.create_new(true);
+        } else if mode.create {
+            options.create(true);
+        }
+        options.open(self.target()).map_err(|e| self.io(e))
     }
 
     /// Opens it for writing **without** creating or truncating — what

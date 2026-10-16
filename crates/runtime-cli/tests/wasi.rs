@@ -508,3 +508,138 @@ console.log("ENVCOUNT:", new DataView(memory.buffer).getUint32(0, true));
     // No ambient authority (D5): the environment is exactly what was passed in.
     assert!(stdout(&out).contains("ENVCOUNT: 0"), "{}", stdout(&out));
 }
+
+/// The racing guest. A tight loop opens `dir/target` through WASI while a
+/// Worker flips `dir` between a real directory and a symlink to a directory
+/// outside the jail. It reports how each successful read was classified, then
+/// terminates the Worker so the process can exit with the race still in flight.
+const RACE_MAIN_JS: &str = r#"
+import { WASI } from "runtime:wasi";
+
+const memory = new WebAssembly.Memory({ initial: 1 });
+const wasi = new WASI({ preopens: { "/": "." } });
+wasi.start({ exports: { memory, _start() {} } });
+const w = wasi.getImportObject().wasi_snapshot_preview1;
+
+const dv = () => new DataView(memory.buffer);
+const u8 = () => new Uint8Array(memory.buffer);
+const enc = new TextEncoder(), dec = new TextDecoder();
+const put = (s, at) => { const b = enc.encode(s); u8().set(b, at); return b.length; };
+
+const worker = new Worker("./swapper.mjs", { permissions: "inherit" });
+// Let the swapper take hold before the first burst.
+await new Promise((r) => setTimeout(r, 50));
+
+let reads = 0, inside = 0, denied = 0, escapes = 0;
+const deadline = Date.now() + 2000;
+while (Date.now() < deadline) {
+  // A synchronous burst: the directory state cannot change mid-burst, so each
+  // burst sees one state and the swap lands between bursts.
+  for (let i = 0; i < 10000; i++) {
+    const l = put("dir/target", 1000);
+    if (w.path_open(3, 0, 1000, l, 0, 0n, 0n, 0, 2000) !== 0) { denied++; continue; }
+    const fd = dv().getUint32(2000, true);
+    dv().setUint32(2100, 2200, true);
+    dv().setUint32(2104, 64, true);
+    if (w.fd_read(fd, 2100, 1, 2108) === 0) {
+      const s = dec.decode(u8().subarray(2200, 2200 + dv().getUint32(2108, true)));
+      reads++;
+      if (s.startsWith("PWNED")) escapes++;
+      else if (s === "INSIDE") inside++;
+    }
+    w.fd_close(fd);
+  }
+}
+worker.terminate();
+console.log("RACE " + JSON.stringify({ reads, inside, denied, escapes }));
+"#;
+
+/// The toggler. It only ever works inside the jail; the symlink it writes is
+/// the escape route, and its target — outside the jail — is substituted by the
+/// test. Every step is awaited and swallowed on failure: the Worker must stay
+/// alive for the whole run, because a dead swapper would let the guest look
+/// safe by never racing it at all.
+const RACE_SWAPPER_JS: &str = r#"
+import * as fs from "runtime:fs";
+
+const OUTSIDE = "__OUTSIDE__";
+
+let flips = 0;
+for (;;) {
+  try {
+    // A directory becomes a symlink to outside, then back again. Between the
+    // two renames `dir` briefly does not exist, which is itself a race.
+    await fs.rename("dir", "dir.real");
+    await fs.symlink(OUTSIDE, "dir", { type: "dir" });
+    await fs.remove("dir");
+    await fs.rename("dir.real", "dir");
+  } catch {
+    // Restore a real directory so the next cycle starts from a known state.
+    try { await fs.rename("dir.real", "dir"); } catch {}
+  }
+  flips++;
+  if ((flips & 0x3ff) === 0) await new Promise((r) => setTimeout(r, 0));
+}
+"#;
+
+/// A regression for the check-then-use race in the WASI filesystem jail.
+///
+/// The provider resolves a path, then acts on the *name*. A directory swapped
+/// for a symlink between the two used to be followed, so a guest could read a
+/// file outside the jail it was never granted. The async `runtime:fs` door
+/// avoids this by pinning the parent directory open and acting by descriptor;
+/// this asserts the synchronous door does too.
+///
+/// The race is real concurrency, so the assertion is "never leaks" rather than
+/// "leaks once": anchored, zero escapes is the only possible result. Unanchored,
+/// the same loop reads the outside file tens of thousands of times.
+#[test]
+fn wasi_path_open_cannot_follow_a_swapped_directory_out_of_the_jail() {
+    let dir = workdir("race");
+    std::fs::create_dir_all(dir.join("dir")).unwrap();
+    write(&dir, "dir/target", b"INSIDE");
+
+    let outside =
+        std::env::temp_dir().join(format!("esrun-wasi-race-outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("target"), b"PWNED-OUTSIDE").unwrap();
+
+    write(&dir, "main.js", RACE_MAIN_JS.as_bytes());
+    write(
+        &dir,
+        "swapper.mjs",
+        RACE_SWAPPER_JS
+            .replace("__OUTSIDE__", &outside.to_string_lossy())
+            .as_bytes(),
+    );
+
+    let out = run(&dir, "main.js");
+    let _ = std::fs::remove_dir_all(&outside);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let stdout = stdout(&out);
+    let race = stdout
+        .lines()
+        .find(|l| l.starts_with("RACE "))
+        .unwrap_or_else(|| panic!("no RACE line in stdout: {stdout}"));
+    assert!(
+        race.contains("\"escapes\":0"),
+        "a read escaped the jail: {race}"
+    );
+    // Liveness: the loop must actually have read the real file (proving the
+    // path works), and must have been refused at least once (proving the
+    // swapper really ran). Without these, a zero-escape result is vacuous.
+    assert!(
+        !race.contains("\"reads\":0"),
+        "the loop never read anything: {race}"
+    );
+    assert!(
+        !race.contains("\"inside\":0"),
+        "the loop never saw the inside file: {race}"
+    );
+    assert!(
+        !race.contains("\"denied\":0"),
+        "the swapper never raced the jail: {race}"
+    );
+}
