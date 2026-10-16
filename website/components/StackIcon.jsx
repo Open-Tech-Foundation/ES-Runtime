@@ -2,9 +2,10 @@
 // with a label under each, no paragraphs.
 //
 // Sources, all vendored under public/img/brands/ so the site makes no
-// external requests: SQLite, PostgreSQL, MySQL, Redis, Rust, TypeScript,
-// YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML, WebAssembly and
-// JavaScript from Simple Icons (CC0). MessagePack, Protobuf, HTTP,
+// external requests: SQLite, PostgreSQL, MySQL, MariaDB, Redis, Rust,
+// TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
+// WebAssembly and JavaScript from Simple Icons (CC0). The JSX tile is that
+// JavaScript mark with an "x" added. MessagePack, Protobuf, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
@@ -33,6 +34,9 @@ export default function StackIcon({ name }) {
       )}
       {name === "mysql" && (
         <img src="/img/brands/mysql.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+      )}
+      {name === "mariadb" && (
+        <img src="/img/brands/mariadb.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
       )}
       {name === "redis" && (
         <img src="/img/brands/redis.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
@@ -87,6 +91,9 @@ export default function StackIcon({ name }) {
       )}
       {name === "typescript" && (
         <img src="/img/brands/typescript.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+      )}
+      {name === "jsx" && (
+        <img src="/img/brands/jsx.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
       )}
       {name === "http" && (
         <span className={TILE}>

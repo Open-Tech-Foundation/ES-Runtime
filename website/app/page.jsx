@@ -27,11 +27,12 @@ const groups = [
   },
   {
     name: "Store",
-    desc: "Embedded SQLite plus first-party Postgres, MySQL, and Redis.",
+    desc: "Embedded SQLite plus first-party Postgres, MySQL/MariaDB, and Redis.",
     tiles: [
       { icon: "sqlite", label: "SQLite", to: "/docs/db" },
       { icon: "postgres", label: "PostgreSQL", to: "/docs/db" },
       { icon: "mysql", label: "MySQL", to: "/docs/db" },
+      { icon: "mariadb", label: "MariaDB", to: "/docs/db" },
       { icon: "redis", label: "Redis", to: "/docs/db/redis" },
     ],
   },
@@ -60,6 +61,7 @@ const groups = [
       { icon: "oxc", label: "Bundler", to: "/esdev/build" },
       { icon: "css", label: "CSS", to: "/esdev/build/css" },
       { icon: "tailwind", label: "Tailwind", to: "/esdev/build/tailwind" },
+      { icon: "jsx", label: "JSX", to: "/esdev/build/project#jsx" },
     ],
   },
   {
