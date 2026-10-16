@@ -204,6 +204,34 @@ fn runs_an_inline_snippet() {
     assert_eq!(stdout(&out).trim(), "inline");
 }
 
+/// `-e` is source being edited, so a type annotation strips like it would in a
+/// `.ts` file instead of reaching the engine as a syntax error.
+#[test]
+fn runs_a_typescript_inline_snippet() {
+    let out = esdev()
+        .arg("-e=const n: number = 41; console.log(n + 1)")
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "42");
+}
+
+/// JSX in a snippet stays refused: a snippet has no file for a `jsx-runtime`
+/// import to resolve against, so `-e` does not compile it.
+#[test]
+fn an_inline_snippet_with_jsx_is_refused() {
+    let out = esdev()
+        .arg("-e=const x = <div/>; console.log(x)")
+        .output()
+        .expect("spawn esdev");
+    assert!(
+        !out.status.success(),
+        "JSX compiled in a snippet: {}",
+        stdout(&out)
+    );
+    assert_eq!(stdout(&out).trim(), "");
+}
+
 #[test]
 fn top_level_await_and_imports_work() {
     let dep = write("dep.mjs", "export const answer = 42;\n");

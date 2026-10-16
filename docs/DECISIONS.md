@@ -3446,3 +3446,21 @@ Others: Vite's docs describe an update in terms of the "modules … affected by 
 - **Hashing contents.** It needs each file's previous contents, which means reading the whole watched tree at startup.
 
 **Consequences:** a file put back with an older time preserved (`cp -p`, an archive) over one this watch has not seen is not an edit. File times come from a coarser clock than the one watching began by (milliseconds on Linux, whole seconds on some filesystems), so a first edit within that much of the start is not one either.
+
+---
+
+### D168 — `esdev -e` compiles as TypeScript, not JSX · *Accepted (2026-10-16)*
+
+**Context:** `esdev -e=<code>` runs a snippet under the synthetic `[eval]` id, which has no file extension. The stripping transform read a module's language off its extension, so a snippet ran as plain JavaScript and `esdev -e='const n: number = 1'` died with `SyntaxError: Missing initializer in const declaration` — against the help's "TypeScript and JSX are stripped as they load". A snippet is source a developer is editing in the inner loop; it should strip like a file.
+
+**Decision (maintainer, 2026-10-16):**
+
+- **A snippet compiles as TypeScript.** The transform recognizes the inline module id and treats it as `.ts`, so annotations, `enum`, `interface` and parameter properties strip as they would in a file.
+- **JSX in a snippet stays refused.** `-e` does not compile JSX: a snippet has no file for a `jsx-runtime` import to resolve against, and a snippet is not where a framework's JSX runtime belongs.
+
+**Rejected:**
+- **Compiling the snippet as TSX.** Where the project configures JSX it would resolve `jsx-runtime` against the working directory, making `-e` a JSX entry point by accident. A `.ts` compile refuses `<div/>` outright.
+- **Giving the snippet a `.ts` file URL.** The id appears in stack frames and in the debugger's entry name; a fake path would be shown to the developer.
+- **An option naming the snippet's language.** The common case is TypeScript, and JavaScript without JSX parses as TypeScript, so nothing is lost by always stripping.
+
+**Consequences:** the inline module's name is one constant in `cli-common` (`INLINE_MODULE`) that `esdev`'s transform reads, rather than a literal in two crates. `esrun -e` is unchanged: it carries no transform, so a snippet there still runs as written.

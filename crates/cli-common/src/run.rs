@@ -30,6 +30,12 @@ use crate::extension::{ExtensionContext, HostExtension};
 use crate::permissions::{Scopes, address_scope, path_scope, signal_scope};
 use crate::shutdown::{SHUTDOWN_CODE, spawn_shutdown_watcher};
 
+/// The synthetic module name an inline `-e` snippet runs under, in the working
+/// directory: `file://<cwd>/[eval]`. Named here so the transform that compiles a
+/// snippet can recognize it — a snippet has no extension for a transform to read
+/// a language from.
+pub const INLINE_MODULE: &str = "[eval]";
+
 /// What to run, parsed from argv.
 pub enum Source {
     /// A module file at this path.
@@ -747,7 +753,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             let base = es_runtime_default_providers::path::directory_url(&cwd)
                 .ok_or_else(|| "working directory is not absolute".to_string())?;
             let url = base
-                .join("[eval]")
+                .join(INLINE_MODULE)
                 .map_err(|e| format!("cannot derive eval specifier: {e}"))?;
             (url.to_string(), code, "<eval>".to_string(), cwd)
         }

@@ -581,6 +581,14 @@ fn needs_transform(path: &str) -> bool {
     )
 }
 
+/// Whether `path` is the synthetic module an `-e` snippet runs under, named by
+/// [`es_runtime_cli_common::run::INLINE_MODULE`]: a file: URL by construction,
+/// so it has no extension to read a language from.
+fn is_inline(path: &str) -> bool {
+    Path::new(path).file_name().and_then(|name| name.to_str())
+        == Some(es_runtime_cli_common::run::INLINE_MODULE)
+}
+
 /// The first error-severity diagnostic, formatted, or `None` if the batch holds
 /// only advisories. The first is the one that matters — the rest are usually
 /// cascades from it.
@@ -695,7 +703,17 @@ impl TypeStripper {
         // which the engine cannot parse. The word is the trigger, not the
         // answer: the parse below decides, and a file that turns out to have
         // none is returned byte for byte as it always was.
-        let module_type = module_type.filter(|kind| matches!(*kind, "js" | "jsx" | "ts" | "tsx"));
+        let module_type = module_type
+            .filter(|kind| matches!(*kind, "js" | "jsx" | "ts" | "tsx"))
+            // An `-e` snippet runs under the synthetic `[eval]` id, which
+            // carries no extension for `needs_transform` to read: without this
+            // it would run as plain JavaScript and a type annotation would
+            // reach the engine as a syntax error. It is source being edited, so
+            // it compiles as TypeScript like the file it would have been.
+            // Deliberately not JSX: a snippet has no file for a `jsx-runtime`
+            // import to resolve against, so JSX in `-e` stays refused — as a
+            // `.ts` compile, `<div/>` is not an element.
+            .or_else(|| is_inline(path).then_some("ts"));
         let javascript = match module_type {
             Some(kind) => kind == "js",
             None => !needs_transform(path),
@@ -879,6 +897,17 @@ mod tests {
         TypeStripper::new().transform(&specifier(name), source.to_string())
     }
 
+    /// The synthetic `[eval]` id an `esdev -e` snippet runs under: no
+    /// extension, so only the inline rule can decide its language.
+    fn strip_inline(source: &str) -> Result<String, String> {
+        let inline = es_runtime_default_providers::path::file_url(
+            std::env::temp_dir().join(es_runtime_cli_common::run::INLINE_MODULE),
+        )
+        .expect("an absolute path")
+        .to_string();
+        TypeStripper::new().transform(&inline, source.to_string())
+    }
+
     fn strip_with(jsx: JsxSettings, name: &str, source: &str) -> Result<String, String> {
         TypeStripper::with_jsx(jsx).transform(&specifier(name), source.to_string())
     }
@@ -890,6 +919,22 @@ mod tests {
         let source = "const   x =  1;\n\n// a comment\nexport default x;\n";
         assert_eq!(strip("app.js", source).unwrap(), source);
         assert_eq!(strip("app.mjs", source).unwrap(), source);
+    }
+
+    #[test]
+    fn an_inline_snippet_is_compiled_as_typescript() {
+        let out = strip_inline("const n: number = 1;").expect("strip");
+        assert!(!out.contains(": number"), "{out}");
+        assert!(out.contains("const n = 1"), "{out}");
+    }
+
+    /// The same synthetic id is not JSX: a snippet has no file for a
+    /// `jsx-runtime` import to resolve against, so `<div/>` stays an error
+    /// rather than half-compiling.
+    #[test]
+    fn an_inline_snippet_with_jsx_is_refused() {
+        let out = strip_inline("const x = <div/>;");
+        assert!(out.is_err(), "{out:?}");
     }
 
     #[test]

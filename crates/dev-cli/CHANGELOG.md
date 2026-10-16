@@ -24,6 +24,16 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev -e` now strips TypeScript, as the help always said it did. A snippet
+  runs under the synthetic `[eval]` id, which has no extension to read a
+  language from, so a type annotation reached the engine as
+  `SyntaxError: Missing initializer in const declaration`. It compiles as
+  TypeScript like the file it would have been. JSX in a snippet stays refused:
+  a snippet has no file for a `jsx-runtime` import to resolve against
+  (DECISIONS D168).
+
 ## [0.19.0] - 2026-10-15
 
 ### Changed
