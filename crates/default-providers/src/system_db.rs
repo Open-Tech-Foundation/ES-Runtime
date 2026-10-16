@@ -11,7 +11,11 @@
 //! reached by a route nothing checked. So the engine's `IO` is
 //! [`JailedVfs`], which resolves **every** open through the same
 //! [`SystemFileSystem`](crate::SystemFileSystem) that backs `runtime:fs`. No filename has to be
-//! guessed, because the engine has to ask.
+//! guessed, because the engine has to ask. It does not merely *check* each
+//! path and hand the engine the name: checking a path and then opening it are
+//! two lookups a concurrent swap can come between, so on Unix the jail opens
+//! the file itself, by descriptor, and the engine reopens that descriptor —
+//! the file the check agreed to, not whatever the name resolves to now.
 //!
 //! **Rows leave as bytes.** [`fetch`](EmbeddedDb::fetch) encodes a run of rows
 //! into one buffer in the layout `EmbeddedDb` documents — Postgres's `DataRow`
@@ -34,6 +38,8 @@ use es_runtime_providers::{
     BoxFuture, DbColumn, DbParams, DbResult, DbValue, EmbeddedDb, EmbeddedDbOptions, ExecuteResult,
     ProviderError, RowBatch,
 };
+#[cfg(unix)]
+use turso_core::CompletionError;
 use turso_core::types::Text;
 use turso_core::{
     Clock, Completion, Connection, Database, DatabaseOpts, EncryptionKey, EncryptionOpts, File, IO,
@@ -41,6 +47,8 @@ use turso_core::{
     SqliteDialect, Statement, StepResult, TempStore, Value as TursoValue, WallClockInstant,
 };
 
+#[cfg(unix)]
+use crate::anchor::OpenMode;
 use crate::path_allowlist::Access;
 use crate::system_fs::SystemFileSystem;
 
@@ -73,6 +81,10 @@ struct JailedVfs {
 }
 
 impl JailedVfs {
+    /// Resolves `path` to the absolute path the jail admits, without opening
+    /// anything. Used where the platform can only be handed a path; Unix opens
+    /// by descriptor instead (see [`open_file`](JailedVfs::open_file)).
+    #[cfg(not(unix))]
     fn resolve(&self, path: &str, access: Access) -> turso_core::Result<String> {
         let real = self
             .fs
@@ -81,6 +93,35 @@ impl JailedVfs {
         real.to_str()
             .map(str::to_string)
             .ok_or_else(|| LimboError::InvalidArgument(format!("path is not UTF-8: {path}")))
+    }
+
+    /// The access [`PlatformIO::open_file`] opens a file with, as an
+    /// [`OpenMode`] so the **jail** can perform that open instead: it always
+    /// reads, and writes (and creates) unless the engine asked for read-only.
+    #[cfg(unix)]
+    fn open_mode(flags: OpenFlags) -> OpenMode {
+        let writable = !flags.contains(OpenFlags::ReadOnly);
+        OpenMode {
+            read: true,
+            write: writable,
+            append: false,
+            truncate: false,
+            create: writable && flags.contains(OpenFlags::Create),
+            create_new: false,
+        }
+    }
+}
+
+/// Where an open descriptor can be named by number rather than by a path the
+/// filesystem would resolve afresh. Linux exposes `/proc/self/fd` and the BSDs,
+/// macOS included, `/dev/fd`; either names the file the descriptor already
+/// refers to, which no directory swap can redirect.
+#[cfg(unix)]
+fn fd_dir() -> &'static str {
+    if std::path::Path::new("/proc/self/fd").is_dir() {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
     }
 }
 
@@ -101,16 +142,50 @@ impl IO for JailedVfs {
         flags: OpenFlags,
         direct: bool,
     ) -> turso_core::Result<Arc<dyn File>> {
-        let real = self.resolve(path, self.access)?;
-        self.inner.open_file(&real, flags, direct)
+        // Resolve **and open** here, pinned to the directory that was checked.
+        // Resolving and then handing the engine the *name* is a check and a use
+        // the filesystem can change between: a directory swapped for a symlink
+        // in that window points the engine at a file outside the jail, which it
+        // then reads and writes. `fd_dir()` names the descriptor just opened
+        // instead of a path, and no swap can redirect it — the engine reopens
+        // the very file the jail agreed to. (On the platforms this crate
+        // already treats as path-based for the jail, it stays path-based here
+        // too; see `crate::anchor`.)
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let file = self
+                .fs
+                .open_anchored(path, self.access, Self::open_mode(flags))
+                .map_err(|e| engine_io_error(&e, "open"))?;
+            let via = format!("{}/{fd}", fd_dir(), fd = file.as_raw_fd());
+            let opened = self.inner.open_file(&via, flags, direct)?;
+            drop(file);
+            Ok(opened)
+        }
+        #[cfg(not(unix))]
+        {
+            let real = self.resolve(path, self.access)?;
+            self.inner.open_file(&real, flags, direct)
+        }
     }
 
     fn remove_file(&self, path: &str) -> turso_core::Result<()> {
         // Removal is a mutation whatever the database was opened as, so it is
         // judged against the write scope even on a read-only connection —
-        // which then simply cannot reach it.
-        let real = self.resolve(path, Access::Write)?;
-        self.inner.remove_file(&real)
+        // which then simply cannot reach it. Anchored like `open_file`, so a
+        // swap cannot turn it into a removal somewhere the jail allowed.
+        #[cfg(unix)]
+        {
+            self.fs
+                .remove_anchored(path, Access::Write, false)
+                .map_err(|e| engine_io_error(&e, "remove_file"))
+        }
+        #[cfg(not(unix))]
+        {
+            let real = self.resolve(path, Access::Write)?;
+            self.inner.remove_file(&real)
+        }
     }
 
     fn supports_shared_wal_coordination(&self) -> bool {
@@ -870,6 +945,32 @@ fn other(message: &str) -> ProviderError {
 /// return, so a jail refusal has to travel as one and is unwrapped again above.
 fn provider_message(e: &ProviderError) -> String {
     e.to_string()
+}
+
+/// A jail refusal as the engine's error type, **keeping the I/O
+/// classification**.
+///
+/// The engine tells "the file is not there" (it degrades a missing shared-WAL
+/// coordination file to the legacy WAL path) from "the path is not allowed"
+/// (a hard failure) by the error's *kind*, not its message. A refusal that
+/// carries one of the kinds the engine acts on travels as that kind; anything
+/// else — a jail escape, a scope refusal — is a plain failure, because there is
+/// no file to speak of.
+#[cfg(unix)]
+fn engine_io_error(e: &ProviderError, op: &'static str) -> LimboError {
+    let kind = match e.code() {
+        Some(ErrorCode::NotFound) => Some(std::io::ErrorKind::NotFound),
+        Some(ErrorCode::AlreadyExists) => Some(std::io::ErrorKind::AlreadyExists),
+        Some(ErrorCode::PermissionDenied) => Some(std::io::ErrorKind::PermissionDenied),
+        Some(ErrorCode::IsDirectory) => Some(std::io::ErrorKind::IsADirectory),
+        Some(ErrorCode::NotDirectory) => Some(std::io::ErrorKind::NotADirectory),
+        Some(ErrorCode::DirectoryNotEmpty) => Some(std::io::ErrorKind::DirectoryNotEmpty),
+        _ => None,
+    };
+    match kind {
+        Some(kind) => LimboError::CompletionError(CompletionError::IOError(kind, op)),
+        None => LimboError::InvalidArgument(provider_message(e)),
+    }
 }
 
 #[cfg(test)]

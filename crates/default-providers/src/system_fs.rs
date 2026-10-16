@@ -278,6 +278,38 @@ impl SystemFileSystem {
         crate::anchor::anchor(&real, self.roots(access), shown)
     }
 
+    /// Opens `p` through the jail and returns a handle **pinned to what the
+    /// check agreed on**.
+    ///
+    /// `runtime:db`'s VFS needs a raw handle it can hand the engine, not the
+    /// provider's own read/write. Resolving and then giving the engine the
+    /// *path* would reopen the check-then-use race this crate closes everywhere
+    /// else — a directory swapped for a symlink after the check — so the open
+    /// happens here, by descriptor, and the caller gets the handle that was
+    /// approved.
+    #[cfg(unix)]
+    pub(crate) fn open_anchored(
+        &self,
+        p: &str,
+        access: Access,
+        mode: crate::anchor::OpenMode,
+    ) -> Result<std::fs::File, ProviderError> {
+        self.anchored(p, access)?.open_mode(mode)
+    }
+
+    /// Removes `p` through the jail, acting on the link at it rather than what
+    /// it points at, with the parent pinned — the same rule
+    /// [`remove_file`](crate::SystemFileSystem::remove_file) follows.
+    #[cfg(unix)]
+    pub(crate) fn remove_anchored(
+        &self,
+        p: &str,
+        access: Access,
+        directory: bool,
+    ) -> Result<(), ProviderError> {
+        self.anchored_nofollow(p, access)?.unlink(directory)
+    }
+
     pub(crate) fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
         self.jailed_as(p, p, access)
     }

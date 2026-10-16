@@ -22,6 +22,14 @@ namespace) is unstable and may change between minor releases until the API freez
   syscall acts on. This also makes `remove` and `rename` about a symlink act
   on the link rather than the file it points at, matching `runtime:fs`.
 
+- `runtime:db`'s embedded SQLite engine resolved a file path and then opened
+  it by *name*, so a directory swapped for a symlink in between let the engine
+  create and write a database outside the directory a `sqlite:` grant covered
+  — the same check-then-use race. On Unix the jailed VFS now opens through the
+  jail by descriptor and the engine reopens that descriptor, so the file the
+  check agreed to is the file the engine gets; `remove` is anchored the same
+  way.
+
 ## [0.40.0] - 2026-10-15
 
 ### Fixed

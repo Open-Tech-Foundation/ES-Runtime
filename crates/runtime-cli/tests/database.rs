@@ -1209,6 +1209,123 @@ fn the_postgres_driver_connects_only_with_what_net_grants() {
     }
 }
 
+/// The racing program: a tight loop opens and closes a database under `dir`
+/// while a Worker flips `dir` between a real directory and a symlink to a
+/// directory outside the jail. It reports how many opens succeeded or were
+/// refused, then terminates the Worker so the process can exit mid-race.
+#[cfg(unix)]
+const DB_RACE_MAIN_JS: &str = r#"
+import { connect, sqlite } from "runtime:db";
+
+const worker = new Worker("./swapper.mjs", { permissions: "inherit" });
+// Let the swapper take hold before the first attempt.
+await new Promise((r) => setTimeout(r, 50));
+
+let ok = 0, refused = 0;
+const deadline = Date.now() + 3000;
+while (Date.now() < deadline) {
+  try {
+    const db = await connect("sqlite:./dir/app.db", { driver: sqlite });
+    await db.execute("CREATE TABLE IF NOT EXISTS t (a INTEGER)");
+    await db.close();
+    ok++;
+  } catch {
+    refused++;
+  }
+}
+worker.terminate();
+console.log("DBRACE " + JSON.stringify({ ok, refused }));
+"#;
+
+/// The toggler. It works only inside the jail; the symlink it writes is the
+/// escape route. Every step is awaited and swallowed on failure, so the Worker
+/// stays alive for the whole run — a dead swapper would let the program look
+/// safe by never racing the jail at all.
+#[cfg(unix)]
+const DB_RACE_SWAPPER_JS: &str = r#"
+import * as fs from "runtime:fs";
+
+const OUTSIDE = "__OUTSIDE__";
+
+let flips = 0;
+for (;;) {
+  try {
+    await fs.rename("dir", "dir.real");
+    await fs.symlink(OUTSIDE, "dir", { type: "dir" });
+    await fs.remove("dir");
+    await fs.rename("dir.real", "dir");
+  } catch {
+    try { await fs.rename("dir.real", "dir"); } catch {}
+  }
+  flips++;
+  if ((flips & 0x3ff) === 0) await new Promise((r) => setTimeout(r, 0));
+}
+"#;
+
+/// A regression for the check-then-use race in `runtime:db`'s jailed VFS.
+///
+/// The VFS resolved a path and then handed the engine the *name* to open, so a
+/// directory swapped for a symlink between the two let the engine create and
+/// write a database outside the jail — a preopen the guest was never granted.
+/// On Unix the jail now opens the file by descriptor and the engine reopens
+/// that, so no swap can redirect it.
+///
+/// The race is real concurrency, so the assertion is "never escapes": anchored,
+/// an empty outside directory is the only possible result. Unanchored, the same
+/// loop leaves a database behind it.
+#[cfg(unix)]
+#[test]
+fn the_jailed_vfs_cannot_follow_a_swapped_directory_out_of_the_jail() {
+    let base = dir("vfs-race");
+    std::fs::create_dir_all(base.join("dir")).unwrap();
+
+    let outside = common::tmpdir().join(format!("db-vfs-race-outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+
+    std::fs::write(base.join("app.mjs"), DB_RACE_MAIN_JS).unwrap();
+    std::fs::write(
+        base.join("swapper.mjs"),
+        DB_RACE_SWAPPER_JS.replace("__OUTSIDE__", &outside.to_string_lossy()),
+    )
+    .unwrap();
+
+    let out = Command::new(common::esrun_bin())
+        .current_dir(&base)
+        .arg("--allow-all")
+        .arg("app.mjs")
+        .output()
+        .expect("failed to spawn esrun");
+
+    let leaked: Vec<_> = std::fs::read_dir(&outside)
+        .expect("read outside dir")
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    let _ = std::fs::remove_dir_all(&outside);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    let race = stdout
+        .lines()
+        .find(|l| l.starts_with("DBRACE "))
+        .unwrap_or_else(|| panic!("no DBRACE line in stdout: {stdout}"));
+    assert!(
+        leaked.is_empty(),
+        "the engine wrote outside the jail: {leaked:?}"
+    );
+    // Liveness: the loop must actually have opened a database (proving the path
+    // works), and must have been refused at least once (proving the swapper
+    // really ran). Without these, an empty outside directory is vacuous.
+    assert!(
+        !race.contains("\"ok\":0"),
+        "the loop never opened a database: {race}"
+    );
+    assert!(
+        !race.contains("\"refused\":0"),
+        "the swapper never raced the jail: {race}"
+    );
+}
+
 /// The built-in MySQL driver (D147) holds no authority of its own either: the
 /// same three answers as PostgreSQL's, from the same network provider.
 #[test]
