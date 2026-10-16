@@ -11,6 +11,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- `install_gc_metrics` is no longer part of `es-runtime-engine`'s public API.
+  Its signature names `v8::Isolate`, and `runtime` re-exports the `diagnostics`
+  module to embedders, so a `pub` there put a V8 type on `runtime`'s public
+  surface — the boundary `ARCHITECTURE.md` §3 says a second engine could
+  replace. The engine installs it itself, during isolate setup.
+
 ### Fixed
 
 - `runtime:wasi`'s filesystem provider resolved a path and then acted on the

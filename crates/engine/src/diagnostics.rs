@@ -1258,7 +1258,12 @@ unsafe extern "C" fn gc_epilogue(
 /// and `metrics()` is pull-only — a reader asking for the first time still wants
 /// to see what the heap has been doing since before it asked. There is nothing
 /// to subscribe to here that could turn it on in time.
-pub fn install_gc_metrics(isolate: &mut v8::Isolate) {
+///
+/// `pub(crate)` and not `pub`: it names [`v8::Isolate`], and `runtime` re-exports
+/// this module to embedders, so a `pub` here would put a V8 type on `runtime`'s
+/// public surface — the boundary §3 says a second engine could replace. The
+/// engine installs it itself, as part of isolate setup (`engine.rs`).
+pub(crate) fn install_gc_metrics(isolate: &mut v8::Isolate) {
     let null = std::ptr::null_mut();
     isolate.add_gc_prologue_callback(gc_prologue, null, v8::GCType::kGCTypeAll);
     isolate.add_gc_epilogue_callback(gc_epilogue, null, v8::GCType::kGCTypeAll);
