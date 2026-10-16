@@ -295,6 +295,28 @@ a bundler carrying stale ones is a build that silently ignores what it was asked
 for. For the dev-server pattern — one build per route, discarded after — there is
 nothing to cache anyway.
 
+## Output is modern JavaScript, on purpose
+
+The build erases types and compiles JSX. It does **not** down-level the
+JavaScript that is left: there is no syntax target, no `es2015`, no table of
+engine versions, and the syntax an author wrote is the syntax in the bundle.
+Optional chaining, `??`, class fields, `#private` names and top-level `await`
+reach the output as written.
+
+That is a choice about who the build is for. `esrun` runs on a current V8, and
+the browser half of a build is served to evergreens; both already understand
+the syntax. Lowering would mean carrying the whole apparatus of it — helper
+injection, a polyfill budget, a matrix of what each engine lacks — to serve
+engines this toolchain otherwise does not support, and every knob in that
+apparatus is a way for two builds of one project to disagree. There is no
+older-browser target, and adding one is a decision about who is supported
+rather than a flag.
+
+The cost is real, and it is the reader's to weigh. A `--lib` package or a
+browser bundle keeps whatever modern syntax it was written with, so a consumer
+that must reach an older engine transpiles the output itself — the build
+states what it targets rather than guessing on the consumer's behalf.
+
 ## What is not scoped
 
 `--allow-read` bounds where a build may be **started**: `cwd` is resolved
