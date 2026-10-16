@@ -13,6 +13,15 @@ Filesystem access, including module resolution, is confined to the working
 directory. Paths are canonicalized to their real location before the check, so
 a symlink cannot escape the jail. This is on by default and is not optional.
 
+<Callout type="warning" title="Descriptor-anchored on Unix and macOS only">
+  On Unix and macOS the jail also pins each path to the directory it resolved
+  in, so a directory swapped for a symlink between the check and the operation
+  cannot redirect it. On Windows the jail is path-based and that check-then-use
+  race is a known, accepted gap — treat the jail as weaker there and withhold
+  `Write` from untrusted code. Current status:
+  [SECURITY.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/SECURITY.md).
+</Callout>
+
 The root is the working directory exactly: there is no walk up to a
 `package.json`, marker file, or flag that moves it. A path grant can add a
 specific subtree outside the root, but guest code cannot widen the grant.
