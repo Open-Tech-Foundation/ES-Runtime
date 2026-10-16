@@ -27,14 +27,17 @@ Strict dependency direction — each crate depends only on those below it.
 | `providers` | I/O provider **traits only** — no concrete implementations. Plus capability/permission traits. |
 | `runtime` | The WinterTC Minimum Common Web API, built on `engine` (abstraction) + `providers` (traits). Contains the JS prelude and host-call wiring. **No direct `v8` dependency.** |
 | `default-providers` | Reference tokio-backed implementation of every provider trait. The **only** crate that owns a real loop / real sockets / real clock. For standalone use and tests. |
-| `runtime-cli` | Thin binary wiring `runtime` + `default-providers`; runs a JS file or REPL. Proves standalone end-to-end operation. |
+| `cli-common` | Everything that decides *how a run behaves*, shared by both binaries so a program cannot mean one thing in one and another in the other (D59): the baked prelude snapshot, the permission grammar, the provider wiring, the drive loop, graceful shutdown, and the error block. Internal — published only because the binaries depend on it, with no stability promise of its own. |
+| `runtime-cli` (`esrun`) | Thin binary wiring `cli-common`; runs a JS file or REPL. Proves standalone end-to-end operation. |
+| `dev-cli` (`esdev`) | The local development binary — watch, restart, inspect, test, build, create. It changes what happens *around* a run, never what the JS sees; everything else is shared with `esrun` through `cli-common`. The one sanctioned difference is its default grant (D65). |
 
 ```
-runtime-cli ──▶ runtime ──▶ engine ──▶ [v8 crate]
-     │             │  └────▶ providers
-     └──▶ default-providers ──▶ providers
-                                  ▲
-                            common (used by all)
+runtime-cli ─┐
+             ├──▶ cli-common ──▶ runtime ──▶ engine ──▶ [v8 crate]
+dev-cli     ─┘        │                └──▶ providers
+                      └──▶ default-providers ──▶ providers
+                                                    ▲
+                                              common (used by all)
 ```
 
 ---
