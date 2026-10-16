@@ -10552,6 +10552,76 @@ fn a_changed_file_gets_a_changed_name() {
     assert_ne!(before, after, "the stylesheet changed and its URL did not");
 }
 
+/// A stylesheet the document links **and** the JavaScript imports is one file.
+///
+/// The link is where the author put it; the import put the same rules in the
+/// bundle's collected sheet, and the build wrote both — two content-hashed
+/// copies of one stylesheet, both `<link>`ed, so a browser fetched it twice.
+#[test]
+fn a_stylesheet_that_is_linked_and_imported_is_written_once() {
+    let dir = build_dir("h_css_both");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/style.css", "body { color: red }\n");
+    write_in(&dir, "src/other.css", ".other { color: blue }\n");
+    write_in(
+        &dir,
+        "src/main.js",
+        "import './style.css';\nimport './other.css';\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        r#"<!doctype html><html><head><link rel="stylesheet" href="./src/style.css"><script type="module" src="./src/main.js"></script></head><body></body></html>"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    // The files whose CSS carries a given rule, by name. A rule in two files is
+    // the same stylesheet written twice.
+    let assets: Vec<PathBuf> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    let carrying = |needle: &str| -> Vec<String> {
+        let mut found: Vec<String> = assets
+            .iter()
+            .filter(|path| path.extension().is_some_and(|e| e == "css"))
+            .filter(|path| {
+                std::fs::read_to_string(path)
+                    .unwrap_or_default()
+                    .contains(needle)
+            })
+            .map(|path| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        found.sort();
+        found
+    };
+
+    // The linked stylesheet's rules are in exactly one file — the document's
+    // own copy, not also a second sheet the bundle's collector produced.
+    let linked = carrying("color: red");
+    assert_eq!(
+        linked.len(),
+        1,
+        "the linked stylesheet was written {linked:?}"
+    );
+    // The stylesheet only the JavaScript imports still reaches the output.
+    let imported = carrying("color: blue");
+    assert_eq!(imported.len(), 1, "imported-only stylesheet is missing");
+}
+
 /// A stylesheet is an entry, not a file to copy: what the document ends up
 /// pointing at is the whole tree, with every `url()` aimed at where the file it
 /// named actually landed.

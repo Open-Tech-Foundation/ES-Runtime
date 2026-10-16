@@ -42,6 +42,10 @@ is the point, since none of the three has any business in a deployment.
   file, so it resolved against *that file's* directory: `--setup=./test/setup.ts`
   worked for a test at the root and failed for one under `src/`, while the same
   path in `esdev.json` worked for both.
+- A stylesheet an HTML document both `<link>`s and its JavaScript imports is
+  written once. The document's copy and the sheet the bundle's CSS collector
+  produced were both emitted — two content-hashed files carrying the same CSS,
+  both `<link>`ed — so a browser fetched the rules twice.
 
 ## [0.19.0] - 2026-10-15
 

@@ -53,7 +53,7 @@
 //! pointing at nothing.
 
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use html5gum::emitters::default::DefaultEmitter;
 use html5gum::{Token, Tokenizer};
@@ -572,6 +572,19 @@ fn is_stylesheet(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension == "css")
 }
 
+/// A stylesheet's identity for the linked-versus-imported check: the file it
+/// is, with `.` and symlinks resolved, so a path spelled from the document and
+/// one the bundler resolved compare equal even when they are spelled
+/// differently.
+///
+/// A path that cannot be canonicalised is used as written rather than dropped:
+/// the file was read to get here, so the only thing that fails is the
+/// canonicalisation itself, and keeping the raw path is the answer that still
+/// matches a `sheet.path` spelled the same way.
+fn canonical(path: &Path) -> PathBuf {
+    es_runtime_default_providers::path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Bundles a stylesheet and writes out the files it references.
 ///
 /// Returns the CSS to write, which is deliberately *not* written here: its
@@ -675,6 +688,10 @@ pub async fn build(
     // string that two tags might spell differently.
     let mut rewritten: Vec<(&Reference, String)> = Vec::new();
     let mut modules: Vec<(String, String)> = Vec::new();
+    // The stylesheets this document links, so that one the JavaScript *also*
+    // imports is written once rather than twice — see where the bundle's
+    // collected sheets are filtered, below.
+    let mut linked_styles: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     // Counted for the summary, and counted directly rather than derived from
     // `rewritten`: what a `<link>` becomes is no longer one file, so the tags in
     // the document have stopped being a count of anything.
@@ -736,7 +753,11 @@ pub async fn build(
                     .await?
                     .filter(|(_, kind)| kind == "css")
                     .map(|(code, _)| code);
-                let (bytes, named) = if compiled.is_some() || is_stylesheet(&path) {
+                let is_style = compiled.is_some() || is_stylesheet(&path);
+                if is_style {
+                    linked_styles.insert(canonical(&path));
+                }
+                let (bytes, named) = if is_style {
                     (
                         stylesheet(
                             &path,
@@ -820,6 +841,18 @@ pub async fn build(
         )
         .await?
     };
+    // A stylesheet the document *links* and the JavaScript *imports* is one
+    // file, and is written once: the link is where the author put it, so the
+    // import contributes no second copy. A CSS Module is exempt — the
+    // document's copy is unscoped, and only the module's sheet carries the
+    // scoped names the markup renders.
+    let sheets: Vec<crate::cssmodules::Sheet> = sheets
+        .into_iter()
+        .filter(|sheet| {
+            crate::cssmodules::is_css_module(&sheet.path.to_string_lossy())
+                || !linked_styles.contains(&canonical(&sheet.path))
+        })
+        .collect();
     for (name, filename) in &bundled {
         // Back to the tag that named it. The reference is found again by its
         // entry name rather than kept alongside, because the bundler is what
