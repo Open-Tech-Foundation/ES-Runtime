@@ -368,6 +368,40 @@ revisited rather than forgotten.
   `elliptic-curve` 0.14 / `digest` 0.11 generation reshapes the stack such that
   a vetted, constant-time, provider-routable backend becomes available.
 
+### Filesystem jail is path-based on Windows
+
+- **What.** The root jail is descriptor-anchored (DECISIONS D83): a resolved
+  path is pinned to the directory it resolved in, and every file operation acts
+  relative to that descriptor, so a directory swapped for a symlink between the
+  check and the use cannot redirect it. That anchoring is **Unix-only**.
+  `default-providers` is `#![forbid(unsafe_code)]`, and the Windows equivalent —
+  `NtCreateFile` with `RootDirectory` in its `OBJECT_ATTRIBUTES` — is exposed by
+  neither `std` nor `rustix` (D83). On Windows the jail therefore keeps the
+  older check-then-use behaviour, and the race the descriptor closes on Unix is
+  live there: a `runtime:fs`, `runtime:wasi` or `runtime:db` operation can be
+  raced against a directory swap and read or write outside the project root.
+- **Reproduced (2026-10-16).** On the Windows build
+  (`x86_64-pc-windows-msvc`, run under the project's `winrun`), a `runtime:db`
+  connect loop ran while a `Worker` flipped a directory between a real directory
+  and a symlink pointing outside the root. The run created `app.db` and
+  `app.db-wal` in the outside directory; the identical loop with no swap left it
+  empty.
+- **Why accepted.** Raising it is an architecture decision, not a local change:
+  a raw `NtCreateFile` walk means relaxing the `default-providers` `unsafe` ban
+  (D11/D83 keep `unsafe` in `engine` alone) or adding a crate that wraps it.
+  Tracked under D83. Reach is bounded in practice by symlink creation: a Windows
+  directory symlink needs Developer Mode or `SeCreateSymbolicLinkPrivilege`, so
+  a guest's own `runtime:fs.symlink` normally fails there — but any actor that
+  *can* create the link (a host process, an elevated child, or a machine with
+  Developer Mode on) reaches the escape.
+- **Mitigations.** Withhold `FileSystem` — `Write` in particular — from
+  untrusted code on Windows rather than relying on the root jail alone; the jail
+  still rejects any path that canonicalizes outside the root when no race is
+  won. Unix and macOS deployments are unaffected.
+- **Revisit when.** The Windows descriptor walk lands — in a scoped `unsafe`
+  module, a small dedicated crate, or via a crate such as `cap-std` — and the
+  Windows jail gets the anchored-open tests the Unix arm already has.
+
 ### `paste` unmaintained — RUSTSEC-2024-0436
 
 Informational (unmaintained, not a vulnerability). Reaches us only transitively
