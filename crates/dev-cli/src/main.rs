@@ -553,12 +553,14 @@ A PROJECT (esdev.json)
     the command that deployed it.
 
 AN APPLICATION vs A LIBRARY
-    A bundle has no imports left to resolve, so production needs no
-    --allow-imports. A library is an input to somebody else's build, so --lib
-    makes none of that build's decisions: module structure is kept file for
-    file, dependencies stay external, nothing is defined, no condition is
-    asserted, and a .d.ts is emitted from the annotations the source carries —
-    derived, never inferred, so an unannotated export fails the build.
+    A bundle that stays one file has no imports left to resolve, so production
+    needs no --allow-imports; a bundle that code-splits — a dynamic import(),
+    or a module named by URL — loads those chunks at run time, and that does.
+    A library is an input to somebody else's build, so --lib makes none of
+    that build's decisions: module structure is kept file for file,
+    dependencies stay external, nothing is defined, no condition is asserted,
+    and a .d.ts is emitted from the annotations the source carries — derived,
+    never inferred, so an unannotated export fails the build.
 
     Each of --lib, --format, --no-types and --dts-bundle is also a target key
     — \"lib\", \"format\", \"types\", \"dts-bundle\" — so a library is describable in

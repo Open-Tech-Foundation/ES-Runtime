@@ -46,6 +46,10 @@ is the point, since none of the three has any business in a deployment.
   written once. The document's copy and the sheet the bundle's CSS collector
   produced were both emitted — two content-hashed files carrying the same CSS,
   both `<link>`ed — so a browser fetched the rules twice.
+- The `esdev build` help no longer says a bundle needs no `--allow-imports`. It
+  is true of a bundle that stays one file; a bundle that code-splits — a dynamic
+  `import()`, or a module named with `new URL(…, import.meta.url)` — loads those
+  chunks at run time, and that does need the grant.
 
 ## [0.19.0] - 2026-10-15
 

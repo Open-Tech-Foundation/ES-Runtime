@@ -66,8 +66,9 @@ in the report alongside the main agent's.
 ## Then shorten it further
 
 Bundling removes a capability outright: an unbundled program needs
-`--allow-imports` so the loader can walk `node_modules`, and a bundle has no
-imports left to resolve.
+`--allow-imports` so the loader can walk `node_modules`, and a bundle that stays
+one file has no imports left to resolve. A bundle that code-splits keeps the
+grant — see [A shorter deploy line](/esdev/build#a-shorter-deploy-line).
 
 ```sh
 esdev build app.mjs

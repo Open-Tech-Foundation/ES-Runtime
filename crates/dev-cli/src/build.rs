@@ -9,11 +9,21 @@
 //!
 //! It also **narrows what production needs to be granted.** An unbundled
 //! program needs `--allow-imports`, because the loader must walk `node_modules`
-//! at runtime; a bundle has no imports left to resolve, so that grant can go:
+//! at runtime; a bundle resolved to one file has no imports left to resolve, so
+//! that grant can go:
 //!
 //! ```text
 //! unbundled:  esrun --allow-imports --allow-listen=8080 app.js
 //! bundled:    esrun --allow-listen=8080 dist/app.js
+//! ```
+//!
+//! A bundle that code-splits is the exception. A dynamic `import()` becomes a
+//! chunk of its own, and a module a `new URL(…, import.meta.url)` names becomes
+//! a chunk too; loading either at run time is an import the runtime must
+//! resolve, so that build needs the grant as well:
+//!
+//! ```text
+//! split:      esrun --allow-imports --allow-listen=8080 dist/app.js
 //! ```
 //!
 //! Four settings are what make this a command rather than a note in the README

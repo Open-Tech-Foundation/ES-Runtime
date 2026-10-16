@@ -38,11 +38,20 @@ test needs no build step. See [Imports](/esdev/test/imports#commonjs-packages).
 ## A shorter deploy line
 
 An unbundled program needs `--allow-imports`, because the loader walks
-`node_modules` at runtime. A bundle has no imports left to resolve:
+`node_modules` at runtime. A bundle that stays one file has no imports left to
+resolve:
 
 ```sh
 esrun --allow-imports --allow-listen=8080 app.js  # unbundled
 esrun --allow-listen=8080 dist/app.js             # bundled
+```
+
+A bundle that **splits** keeps the grant. A dynamic `import()`, and a module
+named with `new URL(…, import.meta.url)`, each become a chunk of their own, and
+loading one at run time is an import the runtime must resolve:
+
+```sh
+esrun --allow-imports --allow-listen=8080 dist/app.js  # code-split
 ```
 
 The build is a security step, not only a packaging one.

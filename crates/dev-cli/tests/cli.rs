@@ -1665,8 +1665,8 @@ fn a_commonjs_dependency_is_converted_rather_than_refused() {
     assert_eq!(stdout(&ran).trim(), "from cjs");
 }
 
-/// The claim the help makes, asserted: a bundle needs no `imports` grant,
-/// because it has no imports left to resolve.
+/// The claim the help makes, asserted: a bundle that stays one file needs no
+/// `imports` grant, because it has no imports left to resolve.
 #[test]
 fn a_bundle_runs_without_the_imports_capability() {
     let dir = build_dir("b_caps");
@@ -1704,6 +1704,45 @@ fn a_bundle_runs_without_the_imports_capability() {
         .expect("spawn esrun");
     assert!(bundled.status.success(), "{}", stderr(&bundled));
     assert_eq!(stdout(&bundled).trim(), "n = 7");
+}
+
+/// The exception the help names: a bundle that code-splits loads its chunks at
+/// run time, and that is an import the runtime has to grant.
+#[test]
+fn a_code_split_bundle_needs_the_imports_capability() {
+    let dir = build_dir("b_caps_split");
+    write_in(&dir, "lazy.mjs", "export const n = 41;\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        "const m = await import('./lazy.mjs');\nconsole.log('n =', m.n + 1);\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    // The chunk is a file the runtime must load, so --deny-all refuses it.
+    let denied = Command::new(&esrun)
+        .current_dir(&dir)
+        .args(["--deny-all", "dist/app.js"])
+        .output()
+        .expect("spawn esrun");
+    assert!(!denied.status.success(), "{}", stdout(&denied));
+
+    // Granted, it runs.
+    let granted = Command::new(&esrun)
+        .current_dir(&dir)
+        .args(["--allow-imports", "dist/app.js"])
+        .output()
+        .expect("spawn esrun");
+    assert!(granted.status.success(), "{}", stderr(&granted));
+    assert_eq!(stdout(&granted).trim(), "n = 42");
 }
 
 #[test]
