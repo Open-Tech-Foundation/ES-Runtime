@@ -9074,6 +9074,61 @@ test("and the line is the one written", () => {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--setup` names its module from the project root, exactly as the `setup` key
+/// does — not from each test file's own directory.
+///
+/// The bases only differ once a test sits under a subdirectory, so that is the
+/// case that pins it: with both files at the root a relative path resolves the
+/// same way under either reading, and a wrong base stays invisible. A path that
+/// the file accepts must be the path the flag accepts.
+#[test]
+fn a_setup_flag_names_its_module_from_the_project_root() {
+    let dir = build_dir("t_setup_root");
+    std::fs::create_dir_all(dir.join("test")).expect("create test dir");
+    std::fs::create_dir_all(dir.join("src")).expect("create src dir");
+    write_in(
+        &dir,
+        "test/setup.ts",
+        "(globalThis as unknown as { __ready: string }).__ready = \"yes\";\n",
+    );
+    write_in(
+        &dir,
+        "src/a.test.ts",
+        r#"import { test, expect } from "runtime:test";
+test("the setup ran first", () => {
+  expect((globalThis as unknown as { __ready?: string }).__ready).toBe("yes");
+});
+"#,
+    );
+
+    // The flag's path is the project's, so `./test/setup.ts` is the file under
+    // `test/` — read from `src/` it would name a file that does not exist.
+    let out = esdev_in(&dir)
+        .args(["test", "--setup=./test/setup.ts"])
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "{text}");
+
+    // The same path in `esdev.json` resolves the same way: a flag and the file
+    // cannot disagree about which file a setup path names.
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "setup": ["./test/setup.ts"] } }"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A file that never finishes is **ended**, not waited on.
 ///
 /// The failure this pins is subtle: cancelling the future that waits on a child

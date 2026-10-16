@@ -37,6 +37,11 @@ is the point, since none of the three has any business in a deployment.
   the Node convention `package.json` names. It is a candidate like `index.*`
   and `server.*`, so `esdev init -y` adopts such a project instead of
   reporting that there is no entry.
+- `--setup` resolves its module against the project root, as the `setup` key
+  already did. A relative path was left as written and imported by each test
+  file, so it resolved against *that file's* directory: `--setup=./test/setup.ts`
+  worked for a test at the root and failed for one under `src/`, while the same
+  path in `esdev.json` worked for both.
 
 ## [0.19.0] - 2026-10-15
 

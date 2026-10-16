@@ -192,23 +192,21 @@ impl Settings {
             tags,
             strict_tags,
         } = &self.test;
+        // `--setup` and the project's `setup` name the same kind of module, so
+        // they resolve the same way: against the project root, whichever was
+        // given (the flag wins when both name one). A relative path left as it
+        // was written would be imported by each file and so resolve against
+        // *that file's* directory — a path that works in `esdev.json` would
+        // fail on the command line, and only for tests outside the root.
         if config.run.setup.is_empty() {
-            config.run.setup = setup
-                .iter()
-                .map(|module| -> Result<_, String> {
-                    let path = root.join(module);
-                    if path.exists() {
-                        es_runtime_default_providers::path::file_url(&path)
-                            .map(|url| url.to_string())
-                            .ok_or_else(|| {
-                                format!("cannot name setup module {module} as a file URL")
-                            })
-                    } else {
-                        Ok(module.clone())
-                    }
-                })
-                .collect::<Result<_, _>>()?;
+            config.run.setup.clone_from(setup);
         }
+        config.run.setup = config
+            .run
+            .setup
+            .iter()
+            .map(|module| module_url(root, module))
+            .collect::<Result<_, _>>()?;
         config.run.tag_definitions.clone_from(tags);
         if config.run.max_concurrency.is_none() {
             config.run.max_concurrency = *max_concurrency;
