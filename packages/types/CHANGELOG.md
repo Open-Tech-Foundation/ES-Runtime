@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-17
+
 ### Added
 
 - `runtime:serialization`: the `CSV` namespace with `CSV.parse`, `CSV.build`,

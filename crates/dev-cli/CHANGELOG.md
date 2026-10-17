@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-17
+
 ### Fixed
 
 - `esdev -e` now strips TypeScript, as the help always said it did. A snippet
