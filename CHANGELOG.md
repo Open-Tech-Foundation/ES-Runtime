@@ -30,18 +30,22 @@ namespace) is unstable and may change between minor releases until the API freez
   lexicographic order of their encodings — and `decode` accepts definite and
   indefinite-length strings, arrays and maps while refusing tags, which have no
   JavaScript counterpart. Integer forms cover the full ranges their major types
-  allow (major type 1 reaches -2<sup>64</sup>), integers past 2<sup>53</sup> are
-  `f64` as for MessagePack, and `undefined` and `null` stay distinct. A negative
-  integer just past 2<sup>53</sup> decodes exactly — the negative is formed in
-  integer arithmetic rather than by subtracting in floating point — and
-  `validate` walks the document without building the value tree, so testing
-  untrusted input for validity costs its own bytes rather than a decoded
-  structure. A non-string map key is coerced the way a JavaScript property access
-  coerces it (numbers by `String(n)`, arrays and byte strings as comma-joined
-  elements, a nested map as `[object Object]`, which is fixed rather than running
-  a nested value's own `toString`). A new namespace in the existing module (no
-  new specifier, no capability); the codec is the runtime's own safe-Rust
-  implementation (DECISIONS D170).
+  allow (major type 1 reaches -2<sup>64</sup>), and integers past 2<sup>53</sup>
+  decode to a `BigInt` — so no CBOR integer is rounded — which `encode` also
+  accepts within `[-2<sup>64</sup>, 2<sup>64</sup>-1]`; `undefined` and `null`
+  stay distinct. `validate` walks the document without building the value tree,
+  so testing untrusted input for validity costs its own bytes rather than a
+  decoded structure. A non-string map key is coerced the way a JavaScript
+  property access coerces it (numbers by `String(n)`, a `BigInt` by its exact
+  digits, arrays and byte strings as comma-joined elements, a nested map as
+  `[object Object]`, which is fixed rather than running a nested value's own
+  `toString`). A new namespace in the existing module (no new specifier, no
+  capability); the codec is the runtime's own safe-Rust implementation (DECISIONS
+  D170).
+
+- The engine's `Value` bridge gains a `BigInt(i128)` variant, marshaled from and
+  to a JavaScript `BigInt`. It carries a CBOR integer past 2<sup>53</sup>
+  exactly; a `BigInt` too large for `i128` is refused at the boundary.
 
 ### Changed
 

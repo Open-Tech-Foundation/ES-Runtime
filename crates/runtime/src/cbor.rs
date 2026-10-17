@@ -21,9 +21,10 @@
 //!   inventing one would make a tagged value indistinguishable from real data.
 //!   `decode` reports the tag number; `encode` never writes one.
 //!
-//! Numbers are JavaScript numbers (IEEE-754 doubles) once decoded, so an
-//! integer past 2<sup>53</sup> loses precision on the way in, exactly as with
-//! MessagePack. That is the isolate's limit, not the codec's.
+//! Numbers inside JavaScript's safe range decode to a `number`; an integer past
+//! 2<sup>53</sup> decodes to a `BigInt`, which CBOR can carry whole where the
+//! JSON pivot of MessagePack cannot. `encode` accepts a `BigInt` in
+//! `[-2^64, 2^64-1]` and refuses one beyond it, which would need a bignum tag.
 
 use es_runtime_engine::Value;
 
@@ -33,6 +34,20 @@ use es_runtime_engine::Value;
 /// bound that keeps a hostile document from exhausting the stack. Deeper than
 /// this is not a document anyone wrote by hand.
 const MAX_DEPTH: usize = 256;
+
+/// JavaScript's `Number.MAX_SAFE_INTEGER` (2<sup>53</sup> - 1): the largest
+/// magnitude a `number` holds exactly.
+const MAX_SAFE_INTEGER: i128 = 9_007_199_254_740_991;
+
+/// Wraps an exact CBOR integer as a `number` while it is inside JavaScript's
+/// safe range and as a `BigInt` once it is not.
+fn int_to_value(i: i128) -> Value {
+    if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&i) {
+        Value::Number(i as f64)
+    } else {
+        Value::BigInt(i)
+    }
+}
 
 /// Why a CBOR document could not be read.
 #[derive(Debug, PartialEq, Eq)]
@@ -309,14 +324,13 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
     let major = head >> 5;
     let ai = head & 0x1f;
     Ok(match major {
-        // Unsigned and negative integers. Both end up in an `f64`, which is
-        // exact through 2^53 and rounds beyond it — the isolate's limit. The
-        // negative value is formed in `i128` first: negating and subtracting in
-        // `f64` rounds the argument *before* the `- 1`, so an argument just past
-        // 2^53 would land one ulp off a number that is itself exactly
-        // representable (2^53 + 1 encodes -9007199254740994, not ...992).
-        0 => Value::Number(read_arg(cur, ai)? as f64),
-        1 => Value::Number((-1 - i128::from(read_arg(cur, ai)?)) as f64),
+        // Unsigned and negative integers. An integer inside JavaScript's safe
+        // range is a `number`; one past it is a `BigInt`, so no CBOR integer
+        // loses precision. The negative value is formed in `i128` first, so an
+        // argument just past 2^53 lands on the exact integer rather than one ulp
+        // off a number that is itself exactly representable.
+        0 => int_to_value(i128::from(read_arg(cur, ai)?)),
+        1 => int_to_value(-1 - i128::from(read_arg(cur, ai)?)),
         // Byte string.
         2 => {
             if ai == 31 {
@@ -461,6 +475,8 @@ fn to_property_key(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => crate::js_number::to_js_string(*n),
+        // `String(bigint)` is its exact decimal digits, with no exponent form.
+        Value::BigInt(i) => i.to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Null => "null".to_string(),
         Value::Undefined => "undefined".to_string(),
@@ -630,6 +646,10 @@ fn write_one(v: &Value, out: &mut Vec<u8>, depth: usize) -> Result<(), EncodeErr
         Value::Bool(false) => out.push(0xf4),
         Value::Bool(true) => out.push(0xf5),
         Value::Number(n) => write_number(*n, out),
+        // A `BigInt` has no CBOR type of its own; it is an integer while it fits
+        // one of the two integer major types, and beyond that a bignum tag this
+        // codec refuses.
+        Value::BigInt(i) => write_bigint(*i, out)?,
         Value::String(s) => write_text(out, s),
         Value::Bytes(b) => {
             write_head(out, 2, b.len() as u64);
@@ -711,12 +731,31 @@ fn write_number(n: f64, out: &mut Vec<u8>) {
     }
 }
 
+/// Writes a `BigInt` as a CBOR integer, or refuses one outside the range the two
+/// integer major types cover (`[-2^64, 2^64-1]`), which would need a bignum tag
+/// this codec does not write.
+fn write_bigint(i: i128, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+    if (0..=u64::MAX as i128).contains(&i) {
+        write_head(out, 0, i as u64);
+        Ok(())
+    } else if (-(u64::MAX as i128) - 1..0).contains(&i) {
+        // Major type 1 carries `-1 - value`, so it reaches -2^64.
+        write_head(out, 1, (-(i + 1)) as u64);
+        Ok(())
+    } else {
+        Err(EncodeError(
+            "cannot encode a BigInt outside -2^64..2^64-1 as CBOR (a bignum tag is refused)".into(),
+        ))
+    }
+}
+
 fn describe(v: &Value) -> &'static str {
     match v {
         Value::Undefined => "undefined",
         Value::Null => "null",
         Value::Bool(_) => "a boolean",
         Value::Number(_) => "a number",
+        Value::BigInt(_) => "a BigInt",
         Value::String(_) => "a string",
         Value::Bytes(_) => "bytes",
         Value::Array(_) => "an array",
@@ -775,13 +814,47 @@ mod tests {
             -65537.0,
             -4294967296.0,
             -4294967297.0,
-            // The integer major types' floors: `i64::MIN` (-2^63) and the
-            // format's own -2^64.
-            -9_223_372_036_854_775_808.0,
-            -18_446_744_073_709_551_616.0,
+            // JavaScript's safe-integer bounds stay `number`.
+            9_007_199_254_740_991.0,
+            -9_007_199_254_740_991.0,
         ] {
             assert_eq!(round(Value::Number(n)), Value::Number(n), "{n}");
         }
+    }
+
+    #[test]
+    fn integers_past_the_safe_range_round_trip_as_bigint() {
+        // Past 2^53 (positive or negative) a CBOR integer is a `BigInt`, so it
+        // survives exactly instead of rounding to a nearby `number`. Includes
+        // `i64::MIN` (-2^63) and the format's own -2^64.
+        for i in [
+            9_007_199_254_740_992_i128, // 2^53
+            i128::from(u64::MAX),
+            -9_007_199_254_740_994,      // just past the negative bound
+            -9_223_372_036_854_775_808,  // i64::MIN
+            -18_446_744_073_709_551_616, // -2^64
+        ] {
+            assert_eq!(round(Value::BigInt(i)), Value::BigInt(i), "{i}");
+        }
+        // A `BigInt` inside the safe range has no BigInt form on the wire: it
+        // encodes as an integer and decodes back as a `number`.
+        assert_eq!(round(Value::BigInt(5)), Value::Number(5.0));
+        // A `number` holding an exactly-representable integer past the safe
+        // range encodes as an integer and decodes to the matching `BigInt`.
+        assert_eq!(
+            round(Value::Number(-18_446_744_073_709_551_616.0)),
+            Value::BigInt(-18_446_744_073_709_551_616)
+        );
+    }
+
+    #[test]
+    fn a_bigint_outside_the_integer_major_types_is_refused() {
+        // Beyond [-2^64, 2^64-1] CBOR would need a bignum tag, which this codec
+        // refuses, so encoding says so rather than writing a float.
+        let too_big = u64::MAX as i128 + 1;
+        let err = write_value(&Value::BigInt(too_big)).expect_err("must refuse");
+        assert!(err.0.contains("BigInt outside"), "{}", err.0);
+        assert!(write_value(&Value::BigInt(-too_big - 1)).is_err());
     }
 
     #[test]
@@ -943,29 +1016,29 @@ mod tests {
 
     #[test]
     fn negative_integers_just_past_2_53_decode_exactly() {
-        // Major type 1 with argument 2^53 + 1 encodes -9007199254740994, which
-        // is itself exactly representable. Forming the value as `-1.0 - arg as
-        // f64` rounds the argument to 2^53 before the subtraction and lands one
-        // ulp off, at -9007199254740992; the subtraction must stay integral.
+        // Major type 1 with argument 2^53 + 1 encodes -9007199254740994, past
+        // JavaScript's safe range, so it decodes to a `BigInt` — exactly.
         let bytes = [0x3b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
         assert_eq!(
             read_value(&bytes).expect("decode"),
-            Value::Number(-9_007_199_254_740_994.0)
+            Value::BigInt(-9_007_199_254_740_994)
         );
         // The integer form survives a round trip.
-        assert_eq!(enc(Value::Number(-9_007_199_254_740_994.0)), bytes.to_vec());
+        assert_eq!(enc(Value::BigInt(-9_007_199_254_740_994)), bytes.to_vec());
     }
 
     #[test]
     fn large_numeric_map_keys_do_not_saturate() {
-        // A uint64 key past `i64::MAX` (9.22e18). A cast would saturate to
-        // `i64::MAX` and spell "9223372036854775807".
+        // A uint64 key past `i64::MAX` (9.22e18) is past the safe range, so it
+        // decodes to a `BigInt` and spells its exact digits. A saturating cast
+        // would have produced "9223372036854775807", and a `number` path would
+        // have rounded it to "18446744073709552000".
         assert_eq!(
             read_value(&[
                 0xa1, 0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02
             ])
             .expect("decode"),
-            Value::Object(vec![("18446744073709552000".into(), Value::Number(2.0))])
+            Value::Object(vec![("18446744073709551615".into(), Value::Number(2.0))])
         );
         // A float64 key of 1e20, past `i64::MAX` but below the exponential
         // threshold, so it is written out in full.

@@ -80,13 +80,13 @@ stops a cyclic object from encoding forever.
 
 ### CBOR
 
-CBOR (RFC 8949) is the second binary format, and it shares MessagePack's type
-mapping: a byte string decodes to a `Uint8Array`, a `Map`/`Set`/`ArrayBuffer` is
-converted rather than flattened to `{}`, and a value with no representation
+CBOR (RFC 8949) is the second binary format, and it mostly shares MessagePack's
+type mapping: a byte string decodes to a `Uint8Array`, a `Map`/`Set`/`ArrayBuffer`
+is converted rather than flattened to `{}`, and a value with no representation
 throws. It decodes straight to the value tree rather than through the JSON
 pivot — JSON has no byte string *and* no `Infinity`/`NaN`, so a document using a
-byte string or a non-finite float would be narrowed on the way in. Two things
-are the format's own.
+byte string or a non-finite float would be narrowed on the way in. In two places
+it goes further than MessagePack.
 
 **Encoding is the deterministic form of RFC 8949 §4.2.** Integers and lengths
 are written shortest-form — the integer forms reach their major types' full
@@ -101,6 +101,16 @@ the cost is that a decode/encode round trip returns an object whose keys are in
 canonical order, not the order they were written in. An integer-valued number
 takes an integer form, so a float that happens to be whole re-encodes as an
 integer.
+
+**An integer past JavaScript's safe range is a `BigInt`.** A double cannot hold
+an integer past 2<sup>53</sup> exactly, so `decode` yields a `number` inside that
+range and a `BigInt` outside it: no CBOR integer is silently rounded, and a
+`BigInt` re-encodes as the same integer. This is where CBOR parts from
+MessagePack, whose JSON pivot has no `BigInt` and narrows the value instead. The
+two integer major types span `[-2^64, 2^64-1]`; a `BigInt` beyond that would need
+a bignum tag, which is refused, so `encode` throws rather than approximating. It
+carries the value across the host bridge as a `BigInt(i128)` — the variant
+MessagePack's target type never needed.
 
 **A map becomes a plain object, so a non-string key becomes a property name.**
 CBOR allows any item as a key, but a JavaScript object's keys are strings, so a

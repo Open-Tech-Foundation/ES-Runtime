@@ -55,6 +55,13 @@ fn marshal_inner<'s>(
         Ok(Value::Bool(value.boolean_value(scope)))
     } else if value.is_number() {
         Ok(Value::Number(value.number_value(scope).unwrap_or(f64::NAN)))
+    } else if value.is_big_int() {
+        // A BigInt is a primitive, so it arrives before the object branch. It is
+        // kept whole as an `i128` rather than coerced to a number, which would
+        // round anything past 2^53; a value too large for `i128` has no exact
+        // form here and is refused.
+        let big = v8::Local::<v8::BigInt>::try_from(value).expect("checked bigint");
+        Ok(Value::BigInt(bigint_to_i128(big)?))
     } else if value.is_string() {
         Ok(Value::String(js_to_string(scope, value)))
     } else if value.is_array_buffer_view() {
@@ -170,6 +177,7 @@ pub(crate) fn value_to_js<'s>(
         Value::Null => v8::null(scope).into(),
         Value::Bool(b) => v8::Boolean::new(scope, b).into(),
         Value::Number(n) => v8::Number::new(scope, n).into(),
+        Value::BigInt(i) => bigint_to_js(scope, i).into(),
         Value::String(s) | Value::Other(s) => js_string(scope, &s).into(),
         Value::Bytes(bytes) => bytes_to_uint8array(scope, bytes).into(),
         Value::Array(items) => {
@@ -195,6 +203,55 @@ pub(crate) fn value_to_js<'s>(
             obj.into()
         }
     }
+}
+
+/// Reads a V8 `BigInt` as an `i128`.
+///
+/// V8 exposes only signed and unsigned 64-bit extraction, so the underlying
+/// 64-bit words are read directly: two of them make an `i128`, and a BigInt
+/// needing more than two cannot be carried here. The range this bridge must
+/// hold is CBOR's `[-2^64, 2^64-1]`, well inside.
+fn bigint_to_i128(big: v8::Local<v8::BigInt>) -> Result<i128, OpError> {
+    if big.word_count() > 2 {
+        return Err(OpError::range_error(out_of_range_message()));
+    }
+    let mut words = [0u64; 2];
+    let (negative, filled) = big.to_words_array(&mut words);
+    let mut magnitude: u128 = 0;
+    for (i, &w) in filled.iter().enumerate() {
+        magnitude |= u128::from(w) << (64 * i);
+    }
+    if negative {
+        // `-magnitude`; `2^127` is `i128::MIN`, the one magnitude past
+        // `i128::MAX` that negation still represents.
+        if magnitude > (i128::MAX as u128) + 1 {
+            return Err(OpError::range_error(out_of_range_message()));
+        }
+        Ok((magnitude as i128).wrapping_neg())
+    } else if magnitude > i128::MAX as u128 {
+        Err(OpError::range_error(out_of_range_message()))
+    } else {
+        Ok(magnitude as i128)
+    }
+}
+
+/// Builds a V8 `BigInt` from an `i128`, using the narrowest constructor that
+/// fits and falling back to explicit 64-bit words only for the values beyond
+/// signed 64-bit.
+fn bigint_to_js<'s>(scope: &mut v8::PinScope<'s, '_>, value: i128) -> v8::Local<'s, v8::BigInt> {
+    if let Ok(small) = i64::try_from(value) {
+        v8::BigInt::new_from_i64(scope, small)
+    } else if let Ok(small) = u64::try_from(value) {
+        v8::BigInt::new_from_u64(scope, small)
+    } else {
+        let magnitude = value.unsigned_abs();
+        let words = [magnitude as u64, (magnitude >> 64) as u64];
+        v8::BigInt::new_from_words(scope, value < 0, &words).expect("a two-word BigInt")
+    }
+}
+
+fn out_of_range_message() -> &'static str {
+    "a BigInt outside the range the host can carry"
 }
 
 /// Builds a `Uint8Array` whose `ArrayBuffer` takes ownership of `bytes` — no

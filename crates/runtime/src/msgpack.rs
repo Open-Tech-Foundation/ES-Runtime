@@ -431,6 +431,7 @@ fn describe(v: &Value) -> &'static str {
         Value::Null => "null",
         Value::Bool(_) => "a boolean",
         Value::Number(_) => "a number",
+        Value::BigInt(_) => "a BigInt (MessagePack has no BigInt; use CBOR)",
         Value::String(_) => "a string",
         Value::Bytes(_) => "bytes",
         Value::Array(_) => "an array",

@@ -3048,17 +3048,21 @@ is the canonical one, not the order it was written in.
 Numerics and binary map as they do for MessagePack: a typed-array view or
 `ArrayBuffer` becomes a **byte string** (major type 2) and decodes back to a
 `Uint8Array`; a `Map` becomes a map (keys stringified), a `Set` an array, and a
-`Date` its ISO-8601 string. A non-string CBOR map key is coerced the way a
-JavaScript property access coerces it — numbers by `String(n)`, arrays and byte
-strings as comma-joined elements, a nested map as `[object Object]` — so keys
-that coerce alike share a property name. A nested map always spells
-`[object Object]`: the decoder does not run a nested value's own `toString`, the
-one place this coercion is a fixed simplification rather than `String`'s exact
-behaviour. An integer-valued number encodes as an
-integer, so a float that happens to be whole (a decoded `100000.0`) re-encodes as
-the integer `100000`. `undefined` and `null` are distinct on the wire
-(`0xf7`/`0xf6`). A value with no CBOR form (a function, a symbol, a `BigInt`)
-**throws** a `TypeError`.
+`Date` its ISO-8601 string. An integer inside JavaScript's safe range decodes to
+a `number`; an integer past 2<sup>53</sup> decodes to a **`BigInt`**, so no CBOR
+integer is rounded — where MessagePack, which has no `BigInt`, narrows the value.
+`encode` writes a `BigInt` as an integer while it is within
+[−2<sup>64</sup>, 2<sup>64</sup>−1] and **throws** a `TypeError` beyond that
+range, which would need a bignum tag. A non-string CBOR map key is coerced the way
+a JavaScript property access coerces it — numbers by `String(n)`, a `BigInt` by
+its exact digits, arrays and byte strings as comma-joined elements, a nested map
+as `[object Object]` — so keys that coerce alike share a property name. A nested
+map always spells `[object Object]`: the decoder does not run a nested value's own
+`toString`, the one place this coercion is a fixed simplification rather than
+`String`'s exact behaviour. An integer-valued number encodes as an integer, so a
+float that happens to be whole (a decoded `100000.0`) re-encodes as the integer
+`100000`. `undefined` and `null` are distinct on the wire (`0xf7`/`0xf6`). A value
+with no CBOR form (a function, a symbol) **throws** a `TypeError`.
 
 **Tags (major type 6) are refused.** No JavaScript type corresponds to a CBOR
 tag, and inventing a wrapper would make a tagged value indistinguishable from

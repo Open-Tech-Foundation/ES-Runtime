@@ -363,19 +363,44 @@ test("CBOR and MessagePack encode an own __proto__ key", async () => {
 test("CBOR decodes negative integers just past 2^53 exactly", async () => {
   const { CBOR } = await import("runtime:serialization");
   // Major type 1, argument 2^53 + 1: the CBOR integer is -9007199254740994,
-  // which is exactly representable. Subtracting in floating point rounded the
-  // argument to 2^53 first and produced -9007199254740992.
+  // past the safe range, so it decodes to a bigint — exactly. Subtracting in
+  // floating point used to round the argument first and produce -9007199254740992.
   const bytes = [0x3b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
-  assertEquals(CBOR.decode(new Uint8Array(bytes)), -9007199254740994);
-  assertEquals([...CBOR.encode(-9007199254740994)].join(), bytes.join());
+  assertEquals(CBOR.decode(new Uint8Array(bytes)), -9007199254740994n);
+  assertEquals([...CBOR.encode(-9007199254740994n)].join(), bytes.join());
+});
+
+test("CBOR uses BigInt past the safe integer range", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // Inside the safe range an integer is a number; past it a bigint, so no CBOR
+  // integer is ever silently rounded (unlike MessagePack, which has no BigInt).
+  assertEquals(typeof CBOR.decode(CBOR.encode(9007199254740991)), "number");
+  assertEquals(typeof CBOR.decode(CBOR.encode(9007199254740993n)), "bigint");
+  assertEquals(CBOR.decode(CBOR.encode(9007199254740993n)), 9007199254740993n);
+  // The decoded value is exact, and a `number` cannot spell it.
+  assertEquals(
+    CBOR.decode(new Uint8Array([0x1b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01])),
+    9007199254740993n,
+  );
+  // The widest integers the major types carry, both ways.
+  assertEquals(CBOR.decode(CBOR.encode(18446744073709551615n)), 18446744073709551615n);
+  assertEquals(CBOR.decode(CBOR.encode(-18446744073709551616n)), -18446744073709551616n);
+  // A BigInt inside the safe range has no BigInt form on the wire: it encodes
+  // as an integer and decodes back as a number.
+  assertEquals(typeof CBOR.decode(CBOR.encode(5n)), "number");
+  // Beyond that the format needs a bignum tag, which is refused.
+  assertThrows(() => CBOR.encode(18446744073709551616n), "TypeError");
+  // A BigInt too large even for the host bridge is refused, not truncated.
+  assertThrows(() => CBOR.encode(2n ** 200n), "RangeError");
 });
 
 test("CBOR keeps negative integers in integer form down to -2^64", async () => {
   const { CBOR } = await import("runtime:serialization");
   // Major type 1 reaches -2^64 (0x3b then eight 0xff); the encoder used to
-  // stop at i64::MIN and write a float.
+  // stop at i64::MIN and write a float. Decoding yields a bigint at this
+  // magnitude, which is where the format's own floor is.
   assertEquals([...CBOR.encode(-18446744073709551616)].join(), "59,255,255,255,255,255,255,255,255");
-  assertEquals(CBOR.decode(CBOR.encode(-18446744073709551616)), -18446744073709551616);
+  assertEquals(CBOR.decode(CBOR.encode(-18446744073709551616)), -18446744073709551616n);
   // One `f64` lower has no integer form, so it stays a float (0xfb).
   assertEquals(CBOR.encode(-(18446744073709551616 + 4096))[0], 0xfb);
 });

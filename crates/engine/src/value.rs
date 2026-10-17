@@ -18,6 +18,14 @@ pub enum Value {
     Bool(bool),
     /// A JS number (IEEE-754 double; integers included).
     Number(f64),
+    /// A JS `BigInt`, held as `i128`.
+    ///
+    /// A double cannot hold an integer past 2<sup>53</sup> exactly, so a codec
+    /// that must preserve one — CBOR's integer major types span
+    /// `[-2^64, 2^64-1]` — carries it here instead of narrowing it to
+    /// [`Value::Number`]. `i128` holds that whole range; a JS `BigInt` outside
+    /// `i128` cannot cross the bridge and is refused at the boundary.
+    BigInt(i128),
     /// A JS string, decoded to a Rust `String`.
     String(String),
     /// Bytes from a JS `Uint8Array`/typed array view (copied). Marshals back to
