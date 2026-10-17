@@ -482,6 +482,293 @@ fn compose(records: Vec<Vec<String>>, options: &Options) -> Result<Value, Error>
     }
 }
 
+/// [`parse_records`] made resumable, for `CSV.DecoderStream`.
+///
+/// A chunk boundary can fall anywhere — between a `\r` and its `\n`, inside a
+/// doubled quote (`""`), between the escape character and the byte it prefixes,
+/// or inside a quoted field that spans records. So the scanner *defers* the few
+/// decisions that need the next byte (`quote_pending`, `escape_pending`,
+/// `skip_lf`) and keeps the current field and record across calls. A chunk is
+/// then consumed exactly once, and feeding one input in any split yields the
+/// same rows as [`parse`]; no re-scanning, so a stream stays linear.
+///
+/// Fields accumulate as raw bytes and become a `String` only when the field
+/// ends, so a multi-byte character split across chunks reassembles instead of
+/// being replaced — the JS side decodes with a streaming `TextDecoder`, but a
+/// caller may hand-split a string, and this holds either way.
+pub(crate) struct StreamDecoder {
+    options: Options,
+    field: Vec<u8>,
+    record: Vec<String>,
+    out: Vec<Value>,
+    in_quotes: bool,
+    field_was_quoted: bool,
+    after_quote: bool,
+    at_field_start: bool,
+    at_record_start: bool,
+    pending: bool,
+    /// The last byte consumed was a `\r` terminator; a `\n` right after belongs
+    /// to it and is dropped.
+    skip_lf: bool,
+    in_comment: bool,
+    /// Inside quotes: a quote was seen, but whether it is doubled (an escaped
+    /// quote) or closing needs the next byte.
+    quote_pending: bool,
+    /// Inside quotes: the escape character was seen; the next byte is literal.
+    escape_pending: bool,
+    /// Whether the leading-BOM window has passed.
+    started: bool,
+    /// The header names once known (`Header::FirstRow`).
+    header: Option<Vec<String>>,
+    header_settled: bool,
+}
+
+impl StreamDecoder {
+    pub(crate) fn new(options: Options) -> StreamDecoder {
+        let header_settled = !matches!(options.header, Header::FirstRow);
+        StreamDecoder {
+            options,
+            field: Vec::new(),
+            record: Vec::new(),
+            out: Vec::new(),
+            in_quotes: false,
+            field_was_quoted: false,
+            after_quote: false,
+            at_field_start: true,
+            at_record_start: true,
+            pending: false,
+            skip_lf: false,
+            in_comment: false,
+            quote_pending: false,
+            escape_pending: false,
+            started: false,
+            header: None,
+            header_settled,
+        }
+    }
+
+    /// Feeds one chunk (which must be valid UTF-8) and returns the rows that
+    /// completed during it. A row that is malformed is an error, and the stream
+    /// is finished: the caller drops the state rather than continuing.
+    pub(crate) fn push(&mut self, chunk: &str) -> Result<Vec<Value>, Error> {
+        let had_bytes = !chunk.is_empty();
+        // The BOM is stripped once, at the very start, like `parse`.
+        let text = if !self.started && self.options.bom {
+            chunk.strip_prefix('\u{feff}').unwrap_or(chunk)
+        } else {
+            chunk
+        };
+        for &b in text.as_bytes() {
+            self.step(b)?;
+        }
+        if had_bytes {
+            self.started = true;
+        }
+        Ok(std::mem::take(&mut self.out))
+    }
+
+    /// Flushes the last, unterminated record (if any) and rejects a quote left
+    /// open, so the end of a stream is checked exactly like the end of a string.
+    pub(crate) fn finish(&mut self) -> Result<Vec<Value>, Error> {
+        // A dangling quote inside a quoted field is a closing one: a doubled
+        // pair needs a second byte, and there is none left.
+        if self.quote_pending {
+            self.quote_pending = false;
+            self.in_quotes = false;
+            self.after_quote = true;
+        }
+        // A dangling escape character is literal, as it is at the end of a
+        // string — which then leaves the field open, so the check below fires.
+        if self.escape_pending {
+            self.escape_pending = false;
+            if let Some(esc) = self.options.escape {
+                push_byte(&mut self.field, esc, &self.options)?;
+            }
+        }
+        if self.in_quotes {
+            return Err(Error::syntax("unterminated quoted field".to_string()));
+        }
+        // A comment that ran to the end of input is discarded, like any other.
+        self.in_comment = false;
+        if self.pending {
+            end_field(
+                &mut self.record,
+                &mut self.field,
+                self.field_was_quoted,
+                &self.options,
+            )?;
+            self.pending = false;
+            self.complete_record()?;
+        }
+        Ok(std::mem::take(&mut self.out))
+    }
+
+    fn reset_record(&mut self) {
+        self.field.clear();
+        self.record.clear();
+        self.field_was_quoted = false;
+        self.after_quote = false;
+        self.at_field_start = true;
+        self.at_record_start = true;
+        self.pending = false;
+    }
+
+    /// Applies `skipEmptyLines` and the header rules to one finished record,
+    /// mirroring [`compose`]: the first record may be consumed as a header
+    /// (`Header::FirstRow`) and something may be emitted instead.
+    fn complete_record(&mut self) -> Result<(), Error> {
+        if self.options.skip_empty_lines && self.record.len() == 1 && self.record[0].is_empty() {
+            self.record.clear();
+            return Ok(());
+        }
+        let value = match &self.options.header {
+            Header::None => row_value(std::mem::take(&mut self.record), &self.options),
+            Header::Names(names) => {
+                let row = std::mem::take(&mut self.record);
+                row_object(names, row, &self.options)?
+            }
+            Header::FirstRow => {
+                if !self.header_settled {
+                    let header = std::mem::take(&mut self.record);
+                    check_duplicates(&header)?;
+                    self.header = Some(header);
+                    self.header_settled = true;
+                    return Ok(());
+                }
+                let row = std::mem::take(&mut self.record);
+                let names = self.header.as_deref().unwrap_or(&[]);
+                row_object(names, row, &self.options)?
+            }
+        };
+        self.out.push(value);
+        Ok(())
+    }
+
+    fn step(&mut self, b: u8) -> Result<(), Error> {
+        let delimiter = self.options.delimiter;
+        let quote = self.options.quote;
+        let escape = self.options.escape;
+        let comment = self.options.comment;
+        let doubling = escape.is_none() || escape == Some(quote);
+
+        if self.skip_lf {
+            self.skip_lf = false;
+            if b == b'\n' {
+                return Ok(());
+            }
+        }
+
+        if self.in_comment {
+            if b == b'\n' {
+                self.in_comment = false;
+                self.reset_record();
+            } else if b == b'\r' {
+                self.in_comment = false;
+                self.skip_lf = true;
+                self.reset_record();
+            }
+            return Ok(());
+        }
+
+        if self.quote_pending {
+            self.quote_pending = false;
+            if doubling && b == quote {
+                push_byte(&mut self.field, quote, &self.options)?;
+                return Ok(());
+            }
+            // The quote closed the field: read `b` as the byte that follows a
+            // closing quote — a delimiter, a line break, or a stray character.
+            self.in_quotes = false;
+            self.after_quote = true;
+        } else if self.escape_pending {
+            self.escape_pending = false;
+            push_byte(&mut self.field, b, &self.options)?;
+            return Ok(());
+        } else if self.in_quotes {
+            if b == quote {
+                if doubling {
+                    self.quote_pending = true;
+                } else {
+                    self.in_quotes = false;
+                    self.after_quote = true;
+                }
+                return Ok(());
+            }
+            if let Some(esc) = escape
+                && esc != quote
+                && b == esc
+            {
+                self.escape_pending = true;
+                return Ok(());
+            }
+            push_byte(&mut self.field, b, &self.options)?;
+            return Ok(());
+        }
+
+        if self.after_quote && b != delimiter && b != b'\n' && b != b'\r' {
+            return Err(Error::syntax(
+                "unexpected character after closing quote".to_string(),
+            ));
+        }
+
+        if self.at_record_start && comment == Some(b) {
+            self.in_comment = true;
+            self.reset_record();
+            return Ok(());
+        }
+
+        if self.at_field_start && b == quote {
+            self.in_quotes = true;
+            self.field_was_quoted = true;
+            self.at_field_start = false;
+            self.at_record_start = false;
+            self.pending = true;
+            return Ok(());
+        }
+
+        if b == b'\n' || b == b'\r' {
+            end_field(
+                &mut self.record,
+                &mut self.field,
+                self.field_was_quoted,
+                &self.options,
+            )?;
+            self.complete_record()?;
+            self.field_was_quoted = false;
+            self.after_quote = false;
+            self.at_field_start = true;
+            self.at_record_start = true;
+            self.pending = false;
+            if b == b'\r' {
+                self.skip_lf = true;
+            }
+            return Ok(());
+        }
+
+        if b == delimiter {
+            end_field(
+                &mut self.record,
+                &mut self.field,
+                self.field_was_quoted,
+                &self.options,
+            )?;
+            self.field_was_quoted = false;
+            self.after_quote = false;
+            self.at_field_start = true;
+            self.at_record_start = false;
+            self.pending = true;
+            return Ok(());
+        }
+
+        push_byte(&mut self.field, b, &self.options)?;
+        self.at_field_start = false;
+        self.at_record_start = false;
+        self.after_quote = false;
+        self.pending = true;
+        Ok(())
+    }
+}
+
 fn check_duplicates(header: &[String]) -> Result<(), Error> {
     let mut seen = std::collections::HashSet::with_capacity(header.len());
     for name in header {
@@ -648,6 +935,52 @@ fn write_field(out: &mut String, field: &str, options: &Options) {
     }
 }
 
+/// Writes the header row (the column names), then the record separator.
+fn write_header_row(out: &mut String, columns: &[String], options: &Options) {
+    for (idx, name) in columns.iter().enumerate() {
+        if idx > 0 {
+            out.push(options.delimiter as char);
+        }
+        write_field(out, name, options);
+    }
+    out.push_str(&options.newline);
+}
+
+/// Writes one array-row record (fields verbatim), then the record separator.
+fn write_array_record(out: &mut String, fields: &[Value], options: &Options) -> Result<(), Error> {
+    for (idx, field) in fields.iter().enumerate() {
+        if idx > 0 {
+            out.push(options.delimiter as char);
+        }
+        let cell = cell_to_string(field)?;
+        write_field(out, &cell, options);
+    }
+    out.push_str(&options.newline);
+    Ok(())
+}
+
+/// Writes one object-row record keyed by `columns`, then the record separator.
+/// A key missing from the object is written empty; extras are dropped.
+fn write_object_record(
+    out: &mut String,
+    obj: &[(String, Value)],
+    columns: &[String],
+    options: &Options,
+) -> Result<(), Error> {
+    for (idx, name) in columns.iter().enumerate() {
+        if idx > 0 {
+            out.push(options.delimiter as char);
+        }
+        let cell = match obj.iter().find(|(k, _)| k == name) {
+            Some((_, v)) => cell_to_string(v)?,
+            None => String::new(),
+        };
+        write_field(out, &cell, options);
+    }
+    out.push_str(&options.newline);
+    Ok(())
+}
+
 /// Writes an array of rows as CSV text. Array rows are fields verbatim; object
 /// rows are keyed by `header` (or by the first object's keys when none is given).
 pub(crate) fn emit(value: &Value, options: &Options) -> Result<String, Error> {
@@ -656,10 +989,9 @@ pub(crate) fn emit(value: &Value, options: &Options) -> Result<String, Error> {
         _ => return Err(Error::type_("CSV build expects an array of rows")),
     };
 
-    let object_rows = matches!(rows.first(), Some(Value::Object(_)));
     let mut out = String::new();
 
-    if object_rows {
+    if matches!(rows.first(), Some(Value::Object(_))) {
         let columns: Vec<String> = match &options.header {
             Header::Names(names) => names.clone(),
             // With no explicit names the first object's keys are the header, so
@@ -671,13 +1003,7 @@ pub(crate) fn emit(value: &Value, options: &Options) -> Result<String, Error> {
             },
         };
         if !columns.is_empty() {
-            for (idx, name) in columns.iter().enumerate() {
-                if idx > 0 {
-                    out.push(options.delimiter as char);
-                }
-                write_field(&mut out, name, options);
-            }
-            out.push_str(&options.newline);
+            write_header_row(&mut out, &columns, options);
         }
         for row in rows {
             let obj = match row {
@@ -688,17 +1014,7 @@ pub(crate) fn emit(value: &Value, options: &Options) -> Result<String, Error> {
                     ));
                 }
             };
-            for (idx, name) in columns.iter().enumerate() {
-                if idx > 0 {
-                    out.push(options.delimiter as char);
-                }
-                let cell = match obj.iter().find(|(k, _)| k == name) {
-                    Some((_, v)) => cell_to_string(v)?,
-                    None => String::new(),
-                };
-                write_field(&mut out, &cell, options);
-            }
-            out.push_str(&options.newline);
+            write_object_record(&mut out, obj, &columns, options)?;
         }
         return Ok(out);
     }
@@ -712,16 +1028,86 @@ pub(crate) fn emit(value: &Value, options: &Options) -> Result<String, Error> {
                 ));
             }
         };
-        for (idx, field) in fields.iter().enumerate() {
-            if idx > 0 {
-                out.push(options.delimiter as char);
-            }
-            let cell = cell_to_string(field)?;
-            write_field(&mut out, &cell, options);
-        }
-        out.push_str(&options.newline);
+        write_array_record(&mut out, fields, options)?;
     }
     Ok(out)
+}
+
+/// One row's worth of [`emit`], made resumable for `CSV.EncoderStream`.
+///
+/// The first row fixes the shape, exactly as `emit` decides it from the first
+/// row of the whole array: an array row is written verbatim, an object row is
+/// keyed by `header` (or by the first object's keys) after writing the header
+/// line. A later row of the other shape is the same `TypeError` `emit` raises.
+pub(crate) struct StreamEncoder {
+    options: Options,
+    mode: EncoderMode,
+    columns: Vec<String>,
+}
+
+enum EncoderMode {
+    Unknown,
+    Array,
+    Object,
+}
+
+impl StreamEncoder {
+    pub(crate) fn new(options: Options) -> StreamEncoder {
+        StreamEncoder {
+            options,
+            mode: EncoderMode::Unknown,
+            columns: Vec::new(),
+        }
+    }
+
+    /// Writes one row and returns its text (which always ends in the record
+    /// separator).
+    pub(crate) fn push(&mut self, row: &Value) -> Result<String, Error> {
+        let mut out = String::new();
+        match self.mode {
+            EncoderMode::Unknown => match row {
+                Value::Array(fields) => {
+                    self.mode = EncoderMode::Array;
+                    write_array_record(&mut out, fields, &self.options)?;
+                }
+                Value::Object(obj) => {
+                    self.mode = EncoderMode::Object;
+                    self.columns = match &self.options.header {
+                        Header::Names(names) => names.clone(),
+                        _ => obj.iter().map(|(k, _)| k.clone()).collect(),
+                    };
+                    if !self.columns.is_empty() {
+                        write_header_row(&mut out, &self.columns, &self.options);
+                    }
+                    write_object_record(&mut out, obj, &self.columns, &self.options)?;
+                }
+                _ => {
+                    return Err(Error::type_(
+                        "CSV build expects every row to be an array or an object",
+                    ));
+                }
+            },
+            EncoderMode::Array => match row {
+                Value::Array(fields) => write_array_record(&mut out, fields, &self.options)?,
+                _ => {
+                    return Err(Error::type_(
+                        "CSV build cannot mix object rows with array rows",
+                    ));
+                }
+            },
+            EncoderMode::Object => match row {
+                Value::Object(obj) => {
+                    write_object_record(&mut out, obj, &self.columns, &self.options)?
+                }
+                _ => {
+                    return Err(Error::type_(
+                        "CSV build cannot mix array rows with object rows",
+                    ));
+                }
+            },
+        }
+        Ok(out)
+    }
 }
 
 /// Fuzz entry: parse arbitrary text and, when it parses, write it back and read
@@ -734,6 +1120,32 @@ pub(crate) fn fuzz_round_trip(input: &str) {
         && let Ok(text) = emit(&value, &options)
     {
         let _ = parse(&text, &options);
+    }
+}
+
+/// Fuzz entry: feed arbitrary text to the streaming decoder a byte at a time and
+/// check it agrees with [`parse`] wherever both succeed. A chunk boundary must
+/// be invisible — the one property the whole state machine exists to hold.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn fuzz_stream_decode(input: &str) {
+    let options = Options::default();
+    let mut decoder = StreamDecoder::new(options.clone());
+    let mut rows = Vec::new();
+    for ch in input.chars() {
+        // One character at a time is the worst case for a boundary: every `\r\n`,
+        // every doubled quote and every escape sequence is split across pushes.
+        let mut buf = [0u8; 4];
+        match decoder.push(ch.encode_utf8(&mut buf)) {
+            Ok(emitted) => rows.extend(emitted),
+            Err(_) => return,
+        }
+    }
+    let Ok(emitted) = decoder.finish() else {
+        return;
+    };
+    rows.extend(emitted);
+    if let Ok(expected) = parse(input, &options) {
+        debug_assert_eq!(Value::Array(rows), expected, "input {input:?}");
     }
 }
 
@@ -1041,8 +1453,16 @@ mod tests {
 
     #[test]
     fn fuzz_entry_does_not_panic() {
-        for input in ["", "\"", "a,b\n", "\u{feff}\"x\ny\"\r\n"] {
+        for input in [
+            "",
+            "\"",
+            "a,b\n",
+            "\u{feff}\"x\ny\"\r\n",
+            "a,\"b\r\nc\",d\n",
+            "#c\nx\r\n",
+        ] {
             fuzz_round_trip(input);
+            fuzz_stream_decode(input);
         }
     }
 
@@ -1126,5 +1546,133 @@ mod tests {
             let err = Options::from_value(Some(&bad)).expect_err("must fail");
             assert_eq!(err.kind, ErrorKind::Type);
         }
+    }
+
+    fn decode_chunks(chunks: &[&str], options: &Options) -> Result<Vec<Value>, Error> {
+        let mut decoder = StreamDecoder::new(options.clone());
+        let mut rows = Vec::new();
+        for chunk in chunks {
+            rows.extend(decoder.push(chunk)?);
+        }
+        rows.extend(decoder.finish()?);
+        Ok(rows)
+    }
+
+    /// The whole contract of the streaming scanner: feeding any input in any
+    /// split must equal the one-shot `parse`. This is what a `TransformStream`
+    /// that re-sends on a chunk boundary silently gets wrong.
+    #[test]
+    fn stream_decoder_matches_parse_at_every_split() {
+        let cases: &[&str] = &[
+            "a,b\n1,2\n",
+            "a,b\r\n1,2\r\n",
+            "name,note\r\nAlice,\"hi, there\"\r\nBob,\"say \"\"hi\"\"\"\r\n",
+            // A quoted field whose content spans the `\r\n` terminator.
+            "\"line1\r\nline2\",x\r\n",
+            // Bare CR, no final newline, empty input, lone newline.
+            "a,b\r1,2",
+            "",
+            "\n",
+            // A comment line and a leading BOM.
+            "# a comment\na,b\n",
+            "\u{feff}a,b\n",
+        ];
+        let options = Options::default();
+        for input in cases {
+            let expected = parse(input, &options).unwrap();
+            for split in 0..=input.len() {
+                if !input.is_char_boundary(split) {
+                    continue;
+                }
+                let got = Value::Array(
+                    decode_chunks(&[&input[..split], &input[split..]], &options).unwrap(),
+                );
+                assert_eq!(got, expected, "input {input:?} split at {split}");
+            }
+        }
+    }
+
+    #[test]
+    fn stream_decoder_applies_header_across_chunks() {
+        let options = opts(obj(&[("header", Value::Bool(true))]));
+        let input = "name,note\r\nAlice,\"hi, there\"\r\nBob,\"say \"\"hi\"\"\"\r\n";
+        let expected = parse(input, &options).unwrap();
+        for split in 0..=input.len() {
+            if !input.is_char_boundary(split) {
+                continue;
+            }
+            let got =
+                Value::Array(decode_chunks(&[&input[..split], &input[split..]], &options).unwrap());
+            assert_eq!(got, expected, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn stream_decoder_honours_a_custom_escape_across_chunks() {
+        let options = opts(obj(&[
+            ("quote", Value::String("'".into())),
+            ("escape", Value::String("\\".into())),
+        ]));
+        let input = "'a\\'b',c\n";
+        let expected = parse(input, &options).unwrap();
+        for split in 0..=input.len() {
+            if !input.is_char_boundary(split) {
+                continue;
+            }
+            let got =
+                Value::Array(decode_chunks(&[&input[..split], &input[split..]], &options).unwrap());
+            assert_eq!(got, expected, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn stream_decoder_rejects_an_unterminated_quote_at_finish() {
+        let mut decoder = StreamDecoder::new(Options::default());
+        assert!(decoder.push("\"a,b").unwrap().is_empty());
+        assert_eq!(decoder.finish().unwrap_err().kind, ErrorKind::Syntax);
+    }
+
+    #[test]
+    fn stream_encoder_matches_emit_for_object_rows() {
+        let options = Options::default();
+        let rows = Value::Array(vec![
+            obj(&[
+                ("name", Value::String("Alice".into())),
+                ("age", Value::Number(30.0)),
+            ]),
+            obj(&[
+                ("name", Value::String("Bob".into())),
+                ("age", Value::Number(41.0)),
+            ]),
+        ]);
+        let expected = emit(&rows, &options).unwrap();
+        let Value::Array(rows) = rows else {
+            unreachable!()
+        };
+        let mut encoder = StreamEncoder::new(options);
+        let mut out = String::new();
+        for row in &rows {
+            out.push_str(&encoder.push(row).unwrap());
+        }
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn stream_encoder_refuses_to_mix_row_shapes() {
+        let options = Options::default();
+        let mut encoder = StreamEncoder::new(options);
+        assert_eq!(
+            encoder.push(&strings(&["a", "b,c"])).unwrap(),
+            "a,\"b,c\"\n"
+        );
+        // The first row fixed the shape; an object now is the same refusal
+        // `emit` makes for a mixed array.
+        assert_eq!(
+            encoder
+                .push(&obj(&[("x", Value::Number(1.0))]))
+                .unwrap_err()
+                .kind,
+            ErrorKind::Type
+        );
     }
 }

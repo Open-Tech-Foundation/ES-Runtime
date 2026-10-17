@@ -148,6 +148,28 @@ declare module "runtime:serialization" {
      * Writes an array of rows (arrays or objects) as CSV text.
      */
     export function build(rows: any, options?: CSVOptions): string;
+
+    /**
+     * Decodes a stream of CSV text into rows, honouring the same options as
+     * `parse`. A `TransformStream`: `source.pipeThrough(new CSV.DecoderStream())`.
+     * Quoted fields may span chunks (a quoted newline, a doubled quote, a CRLF
+     * split across the boundary), so the scanner state lives in the host.
+     */
+    export class DecoderStream<T = any> extends TransformStream<string | Uint8Array, T> {
+      constructor(options?: CSVOptions);
+    }
+
+    /**
+     * Encodes a stream of rows (one per chunk) into CSV text, with the same
+     * shape rules as `build`: the first row fixes whether rows are arrays or
+     * objects, and an object stream infers its header from the first object.
+     */
+    export class EncoderStream<T = any> extends TransformStream<T, string> {
+      constructor(options?: CSVOptions);
+      pipeTo(destination: WritableStream<string | Uint8Array>, options?: StreamPipeOptions): Promise<void>;
+      write(chunk: T): Promise<void>;
+      close(): Promise<void>;
+    }
   }
 
   export namespace MessagePack {

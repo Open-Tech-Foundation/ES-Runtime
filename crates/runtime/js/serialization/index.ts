@@ -21,6 +21,12 @@ const {
   csv_parse,
   csv_validate,
   csv_build,
+  csv_stream_new,
+  csv_stream_push,
+  csv_stream_close,
+  csv_encode_new,
+  csv_encode_push,
+  csv_encode_close,
   msgpack_parse,
   msgpack_validate,
   msgpack_build,
@@ -64,6 +70,70 @@ export interface CSVValidateOptions extends CSVOptions {
   detailed?: boolean;
 }
 
+// Streaming decode. Unlike JSONL, which can split a chunk on `\n` in JS, a CSV
+// field may contain quoted newlines and quotes, and a chunk may break between a
+// `\r` and its `\n`, inside a doubled quote, or across the escape character — so
+// the scanner cannot live here. The Rust op holds that state (csv.rs
+// `StreamDecoder`); this only decodes bytes with a streaming TextDecoder and
+// forwards each completed row. `flush` returns the last record and reports an
+// unterminated quote, both of which are only knowable at the end.
+class CSVDecoderStream extends TransformStream<string | Uint8Array, unknown> {
+  constructor(options: CSVOptions = {}) {
+    // One decoder for the whole stream: `{ stream: true }` only buffers a
+    // partial multi-byte sequence if the *same* decoder sees the next chunk.
+    const decoder = new TextDecoder();
+    let streamId: number | null = null;
+    super({
+      start() {
+        streamId = csv_stream_new(options);
+      },
+      transform(chunk, controller) {
+        const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+        for (const row of csv_stream_push(streamId, text)) controller.enqueue(row);
+      },
+      flush(controller) {
+        // A trailing incomplete UTF-8 sequence decodes to U+FFFD; anything the
+        // decoder still held is the last field's bytes, so push it before close.
+        const tail = decoder.decode();
+        if (tail) for (const row of csv_stream_push(streamId, tail)) controller.enqueue(row);
+        for (const row of csv_stream_close(streamId)) controller.enqueue(row);
+      },
+    });
+  }
+}
+
+// Streaming encode: one row per chunk, matching `CSV.build`'s row semantics. The
+// first row fixes the shape and, for objects, the header, so the Rust op keeps
+// that state and this reuses the same writer as `build`.
+class CSVEncoderStream extends TransformStream<unknown, string> {
+  private _writer: WritableStreamDefaultWriter | null = null;
+  constructor(options: CSVOptions = {}) {
+    let streamId: number | null = null;
+    super({
+      start() {
+        streamId = csv_encode_new(options);
+      },
+      transform(chunk, controller) {
+        const text = csv_encode_push(streamId, chunk);
+        if (text) controller.enqueue(text);
+      },
+      flush() {
+        csv_encode_close(streamId);
+      },
+    });
+  }
+  pipeTo(destination: WritableStream, options?: StreamPipeOptions) {
+    return this.readable.pipeTo(destination, options);
+  }
+  write(chunk: unknown) {
+    this._writer ??= this.writable.getWriter();
+    return this._writer.write(chunk);
+  }
+  close() {
+    return (this._writer ?? this.writable.getWriter()).close();
+  }
+}
+
 // CSV is the one format whose *validity* depends on the parse options: a ragged
 // row is fine by default but an error once `header` is set, so `validate` has to
 // forward the options rather than just the text the way XML/YAML/TOML do. The
@@ -76,6 +146,8 @@ export const CSV = {
   },
   parse: (csv: string, options?: CSVOptions) => csv_parse(csv, options),
   build: (rows: unknown, options?: CSVOptions) => csv_build(rows, options),
+  DecoderStream: CSVDecoderStream,
+  EncoderStream: CSVEncoderStream,
 };
 
 export const YAML = {

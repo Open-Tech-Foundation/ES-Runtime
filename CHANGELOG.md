@@ -14,12 +14,14 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Added
 
 - `runtime:serialization` gains a `CSV` namespace (`CSV.parse`, `CSV.validate`,
-  `CSV.build`). `parse` returns arrays of fields by default and objects with
-  `header`, casts nothing unless `cast` is set, and throws on malformed input —
-  the output shape the mainstream readers (Papa Parse, csv-parse, fast-csv, the
-  Rust `csv` crate) agree on. CSV is a new namespace in the existing module (no
-  new specifier, no capability); the reader is the runtime's own safe-Rust
-  implementation (DECISIONS D169).
+  `CSV.build`, `CSV.DecoderStream`, `CSV.EncoderStream`). `parse` returns arrays
+  of fields by default and objects with `header`, casts nothing unless `cast` is
+  set, and throws on malformed input — the output shape the mainstream readers
+  (Papa Parse, csv-parse, fast-csv, the Rust `csv` crate) agree on. The streams
+  are Web `TransformStream`s over a resumable Rust scanner, so a quoted field may
+  span chunks; the encoder takes one row per chunk with `build`'s semantics. CSV
+  is a new namespace in the existing module (no new specifier, no capability);
+  the reader is the runtime's own safe-Rust implementation (DECISIONS D169).
 
 ### Changed
 

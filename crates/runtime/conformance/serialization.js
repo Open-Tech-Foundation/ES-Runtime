@@ -392,6 +392,67 @@ test("CSV round-trips and refuses the shapes the reader would misread", async ()
   assertThrows(() => CSV.parse("a,b\n", { quote: "\n" }), "TypeError");
 });
 
+test("CSV DecoderStream parses identically at any chunk boundary", async () => {
+  const { CSV } = await import("runtime:serialization");
+
+  const decode = async (chunks, options) => {
+    const dec = new CSV.DecoderStream(options);
+    const writer = dec.writable.getWriter();
+    const reader = dec.readable.getReader();
+    const out = [];
+    const drain = (async () => {
+      for (;;) { const { done, value } = await reader.read(); if (done) break; out.push(value); }
+    })();
+    for (const chunk of chunks) await writer.write(chunk);
+    await writer.close();
+    await drain;
+    return out;
+  };
+
+  // A quoted newline, a CRLF and a doubled quote all cross the boundaries of
+  // some split, so every split point must equal the one-shot parse.
+  const text = 'name,note\r\nAlice,"hi, there"\r\nBob,"say ""hi"""\r\n';
+  const whole = JSON.stringify(CSV.parse(text, { header: true }));
+  for (let i = 1; i < text.length; i++) {
+    const rows = await decode([text.slice(0, i), text.slice(i)], { header: true });
+    assertEquals(JSON.stringify(rows), whole, `split at ${i}`);
+  }
+
+  // Byte chunks, with a multi-byte character split mid-sequence.
+  const bytes = new TextEncoder().encode('name\n"café"\n');
+  const rows = await decode([bytes.slice(0, 10), bytes.slice(10)]);
+  assertEquals(JSON.stringify(rows), JSON.stringify([["name"], ["café"]]));
+
+  // An unterminated quote is only knowable at the end, and still throws.
+  await assertRejects(() => decode(['"a,b']), "SyntaxError");
+});
+
+test("CSV EncoderStream writes rows like build", async () => {
+  const { CSV } = await import("runtime:serialization");
+
+  const encode = async (rows, options) => {
+    const enc = new CSV.EncoderStream(options);
+    const writer = enc.writable.getWriter();
+    const reader = enc.readable.getReader();
+    let out = "";
+    const drain = (async () => {
+      for (;;) { const { done, value } = await reader.read(); if (done) break; out += value; }
+    })();
+    for (const row of rows) await writer.write(row);
+    await writer.close();
+    await drain;
+    return out;
+  };
+
+  // Object rows: the first fixes the header, exactly as build infers it.
+  const objects = [{ name: "Alice", age: 30 }, { name: "Bob", age: 41 }];
+  assertEquals(await encode(objects), CSV.build(objects));
+  assertEquals(await encode([["a", "b,c"]]), CSV.build([["a", "b,c"]]));
+
+  // Mixing shapes is refused, exactly as build refuses a mixed array.
+  await assertRejects(() => encode([["a"], { x: 1 }]), "TypeError");
+});
+
 test("runtime:serialization has a default export like every other runtime: module", async () => {
   // It was the only one of the nine without one, so
   // `import serialization from "runtime:serialization"` was a SyntaxError for

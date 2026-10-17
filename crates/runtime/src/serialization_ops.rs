@@ -719,6 +719,129 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             .map_err(|e| OpError::new(csv_class(e.kind), format!("Build failed: {e}")))
     }))?;
 
+    // Streaming decode/encode. The state lives here (like the XML stream) so a
+    // chunk can be fed as it arrives; the JS side owns the `TransformStream`.
+    // Unlike XML, `close` returns the flushed rows and can fail — a quote left
+    // open is only knowable at the end — so the decoder's `flush` enqueues them.
+    let csv_decoders = Rc::new(RefCell::new(
+        HashMap::<u32, crate::csv::StreamDecoder>::new(),
+    ));
+    let csv_encoders = Rc::new(RefCell::new(
+        HashMap::<u32, crate::csv::StreamEncoder>::new(),
+    ));
+    let mut next_decoder_id = 1u32;
+    let mut next_encoder_id = 1u32;
+
+    let decoders_new = Rc::clone(&csv_decoders);
+    engine.register_op(OpDecl::sync("csv_stream_new", move |args| {
+        let options = crate::csv::Options::from_value(args.first())
+            .map_err(|e| OpError::new(csv_class(e.kind), e.message))?;
+        let id = next_decoder_id;
+        next_decoder_id += 1;
+        decoders_new
+            .borrow_mut()
+            .insert(id, crate::csv::StreamDecoder::new(options));
+        Ok(Value::Number(id as f64))
+    }))?;
+
+    let decoders_push = Rc::clone(&csv_decoders);
+    engine.register_op(OpDecl::sync("csv_stream_push", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => 0,
+        };
+        let chunk = match args.get(1) {
+            Some(Value::String(s)) => s.as_str(),
+            _ => "",
+        };
+        let result = {
+            let mut states = decoders_push.borrow_mut();
+            match states.get_mut(&id) {
+                Some(state) => state.push(chunk),
+                None => return Ok(Value::Array(vec![])),
+            }
+        };
+        match result {
+            Ok(rows) => Ok(Value::Array(rows)),
+            Err(e) => {
+                // A malformed row breaks the stream: drop it so the state cannot
+                // be resumed into a second, inconsistent parse.
+                decoders_push.borrow_mut().remove(&id);
+                Err(OpError::new(
+                    csv_class(e.kind),
+                    format!("Parse failed: {e}"),
+                ))
+            }
+        }
+    }))?;
+
+    let decoders_close = Rc::clone(&csv_decoders);
+    engine.register_op(OpDecl::sync("csv_stream_close", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => 0,
+        };
+        let mut state = match decoders_close.borrow_mut().remove(&id) {
+            Some(state) => state,
+            None => return Ok(Value::Array(vec![])),
+        };
+        match state.finish() {
+            Ok(rows) => Ok(Value::Array(rows)),
+            Err(e) => Err(OpError::new(
+                csv_class(e.kind),
+                format!("Parse failed: {e}"),
+            )),
+        }
+    }))?;
+
+    let encoders_new = Rc::clone(&csv_encoders);
+    engine.register_op(OpDecl::sync("csv_encode_new", move |args| {
+        let options = crate::csv::Options::from_value(args.first())
+            .map_err(|e| OpError::new(csv_class(e.kind), e.message))?;
+        let id = next_encoder_id;
+        next_encoder_id += 1;
+        encoders_new
+            .borrow_mut()
+            .insert(id, crate::csv::StreamEncoder::new(options));
+        Ok(Value::Number(id as f64))
+    }))?;
+
+    let encoders_push = Rc::clone(&csv_encoders);
+    engine.register_op(OpDecl::sync("csv_encode_push", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => 0,
+        };
+        let row = args.get(1).cloned().unwrap_or(Value::Null);
+        let result = {
+            let mut states = encoders_push.borrow_mut();
+            match states.get_mut(&id) {
+                Some(state) => state.push(&row),
+                None => return Ok(Value::String(String::new())),
+            }
+        };
+        match result {
+            Ok(text) => Ok(Value::String(text)),
+            Err(e) => {
+                encoders_push.borrow_mut().remove(&id);
+                Err(OpError::new(
+                    csv_class(e.kind),
+                    format!("Build failed: {e}"),
+                ))
+            }
+        }
+    }))?;
+
+    let encoders_close = Rc::clone(&csv_encoders);
+    engine.register_op(OpDecl::sync("csv_encode_close", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => 0,
+        };
+        encoders_close.borrow_mut().remove(&id);
+        Ok(Value::Null)
+    }))?;
+
     Ok(())
 }
 

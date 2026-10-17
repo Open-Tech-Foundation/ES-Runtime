@@ -98,6 +98,8 @@ every field is a **string** unless `cast` is set.
 | `CSV.parse(csv, options?)` | `(string, object) => any` | Parses CSV text. `string[][]` by default, or an array of objects when `header` is set. | `CSV.parse("a,b\n1,2\n")` |
 | `CSV.build(rows, options?)` | `(any, object) => string` | Writes an array of rows (arrays, or objects keyed by `header`) as CSV text. | `CSV.build([["a", "b"]])` |
 | `CSV.validate(csv, options?)` | `(string, object) => boolean \| object` | Validates under the same options as `parse`. Option `detailed?` (default `false`): return `{ valid, error? }`. | `CSV.validate("a,b\n1,2\n")` |
+| `CSV.DecoderStream(options?)` | `TransformStream<string \| Uint8Array, any>` | Streams rows from text/byte chunks, with `parse`'s options and row shapes. A quoted field may span chunks. | `source.pipeThrough(new CSV.DecoderStream({ header: true }))` |
+| `CSV.EncoderStream(options?)` | `TransformStream<any, string>` | Streams CSV text from rows (one per chunk), with `build`'s options and shape rules. | `rows.pipeThrough(new CSV.EncoderStream())` |
 
 | Option | Default | Meaning |
 | --- | --- | --- |

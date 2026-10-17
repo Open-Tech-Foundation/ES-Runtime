@@ -661,12 +661,17 @@ fn serialization_format_ops_need_no_capability() {
          const rows = CSV.parse('a,b\\n1,2\\n', { header: true }); \
          console.log(JSON.stringify(rows)); \
          console.log(CSV.validate('a,b\\n1\\n', { header: true })); \
-         console.log(JSON.stringify(CSV.build(rows)));",
+         console.log(JSON.stringify(CSV.build(rows))); \
+         const src = new ReadableStream({ start(c) { c.enqueue('x,y\\n3,4\\n'); c.close(); } }); \
+         const got = []; \
+         await src.pipeThrough(new CSV.DecoderStream({ header: true })) \
+           .pipeTo(new WritableStream({ write(r) { got.push(r); } })); \
+         console.log(JSON.stringify(got));",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "[{\"a\":\"1\",\"b\":\"2\"}]\nfalse\n\"a,b\\n1,2\\n\"\n"
+        "[{\"a\":\"1\",\"b\":\"2\"}]\nfalse\n\"a,b\\n1,2\\n\"\n[{\"x\":\"3\",\"y\":\"4\"}]\n"
     );
 }
 

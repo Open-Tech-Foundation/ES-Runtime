@@ -16,8 +16,8 @@ itself.
 ### Added
 
 - `runtime:serialization`: the `CSV` namespace with `CSV.parse`, `CSV.build`,
-  `CSV.validate`, and the `CSVOptions`/`CSVValidateOptions` types (DECISIONS
-  D169).
+  `CSV.validate`, `CSV.DecoderStream`, `CSV.EncoderStream`, and the
+  `CSVOptions`/`CSVValidateOptions` types (DECISIONS D169).
 
 ## [0.16.0] - 2026-10-15
 

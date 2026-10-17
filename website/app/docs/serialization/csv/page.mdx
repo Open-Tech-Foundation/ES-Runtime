@@ -84,3 +84,40 @@ A field is quoted only when it contains the delimiter, the quote or a line break
 or (with `comment` set) starts with the comment byte, so a round trip through
 `parse` keeps the row. An absent (`null` or `undefined`) field is written empty.
 `NaN` and `±Infinity` have no CSV representation and throw a `TypeError`.
+
+## Streaming
+
+For input too large to hold at once, `CSV.DecoderStream` and `CSV.EncoderStream`
+are Web `TransformStream`s. They take the same options as `parse` and `build`,
+so a CSV file reads at the cost of a row instead of the whole document.
+
+```js
+import { CSV } from "runtime:serialization";
+import { file } from "runtime:fs";
+
+// Decode: text or byte chunks in, rows out — the same shapes `parse` produces.
+const rows = file("users.csv")
+  .stream()
+  .pipeThrough(new CSV.DecoderStream({ header: true }));
+
+for await (const user of rows) {
+  console.log(user.email);
+}
+```
+
+A quoted field may span chunk boundaries — its embedded newline, a doubled
+quote, even the two halves of a multi-byte character — because the scan resumes
+rather than splitting on `\n` the way JSONL can. An unterminated quote is
+reported when the stream ends, not mid-chunk.
+
+Writing streams one row per chunk; the first object fixes the header, exactly as
+`CSV.build` infers it.
+
+```js
+const encoder = new CSV.EncoderStream();
+encoder.pipeTo(file("out.csv").writable());
+
+await encoder.write({ name: "Alice", age: 30 });
+await encoder.write({ name: "Bob", age: 41 });
+await encoder.close();
+```

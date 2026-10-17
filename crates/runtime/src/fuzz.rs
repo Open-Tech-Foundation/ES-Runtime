@@ -65,6 +65,13 @@ pub fn parse_csv(input: &str) {
     crate::csv::fuzz_round_trip(input);
 }
 
+/// Decodes CSV through the streaming state machine a character at a time and
+/// checks it agrees with the one-shot reader — a chunk boundary must be
+/// invisible, which is the property the resumable scanner exists to hold.
+pub fn stream_csv(input: &str) {
+    crate::csv::fuzz_stream_decode(input);
+}
+
 /// Decodes base64 the way `atob` does, including its stricter-than-usual
 /// whitespace and padding rules.
 pub fn atob(input: &str) {

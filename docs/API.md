@@ -2956,6 +2956,8 @@ objects when asked. Every field is a **string**; nothing is type-cast unless
 | `CSV.parse(text, options?)` | Parses CSV text. Returns `string[][]` by default, or an array of objects when `header` is set. |
 | `CSV.build(rows, options?)` | Writes an array of rows (arrays, or objects keyed by `header`) as CSV text. |
 | `CSV.validate(text, options?)` | Validates under the same options as `parse`. `opts.detailed` gives `{ valid, error }`. |
+| `CSV.DecoderStream(options?)` | A `TransformStream` from text/bytes to rows, with `parse`'s options and row shapes. |
+| `CSV.EncoderStream(options?)` | A `TransformStream` from rows (one per chunk) to text, with `build`'s options and shape rules. |
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -2992,6 +2994,16 @@ array or object used as a field value.
 
 An option set whose `delimiter` or `quote` is a line break, or whose `delimiter`
 equals its `quote`, cannot be read back unambiguously and is a `TypeError`.
+
+`CSV.DecoderStream` and `CSV.EncoderStream` are Web `TransformStream`s for input
+too large to hold at once. The decoder takes text or byte chunks and emits rows
+shaped exactly as `parse` would; a quoted field may span chunks — its newline,
+its doubled quote, even the two halves of a multi-byte character — because the
+scan is resumable, not a line split. The encoder takes **one row per chunk** and
+emits the text `build` would, inferring its header from the first object. Both
+take the same options as `parse`/`build`; a malformed row errors the stream, and
+the decoder's `flush` reports an unterminated quote, which is only knowable at
+the end.
 
 For binary formats like MessagePack, the namespace is slightly different:
 

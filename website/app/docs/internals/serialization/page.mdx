@@ -190,6 +190,22 @@ becoming `Infinity`, which `build` would then refuse. And an option set whose
 front: such input has no unambiguous reading, so accepting it would emit rows the
 writer could not rebuild.
 
+**Streaming is a hybrid: the scan in Rust, the stream in JavaScript.** A CSV field
+cannot be isolated by splitting on `\n` the way JSONL can — a quoted field may
+contain newlines and quotes, and a chunk boundary may fall between a `\r` and its
+`\n`, inside a doubled quote, or between the escape character and the byte it
+prefixes. So the byte scanner stays in Rust (`csv.rs` `StreamDecoder`) and is
+made *resumable*: it defers the few decisions that need the next byte and keeps
+the current field and record, so a chunk is consumed once and any split of an
+input yields the rows one `parse` would. `CSV.DecoderStream` is then a thin
+`TransformStream` that decodes bytes with a single, streaming `TextDecoder` and
+forwards each completed row. The encoder is the mirror image: the first row fixes
+the shape and the header (`csv.rs` `StreamEncoder`), and both reuse exactly the
+writer `build` uses, so a streamed document and a built one cannot drift. The
+decoder's `flush` returns the last record *and* reports an unterminated quote —
+the one error only the end of the stream can see — which is why
+`csv_stream_close` returns rows where XML's `close` returns nothing.
+
 ### JSONL
 
 Streams only: `JSONL.DecoderStream` and `JSONL.EncoderStream`, both

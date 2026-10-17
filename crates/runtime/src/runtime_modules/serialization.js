@@ -2593,7 +2593,7 @@ const Protobuf = { Schema: class Schema {
 } };
 //#endregion
 //#region serialization/index.ts
-const { xml_parse, xml_validate, xml_build, yaml_parse, yaml_validate, yaml_build, toml_parse, toml_validate, toml_build, csv_parse, csv_validate, csv_build, msgpack_parse, msgpack_validate, msgpack_build, xml_stream_new, xml_stream_push, xml_stream_close } = globalThis.__ops;
+const { xml_parse, xml_validate, xml_build, yaml_parse, yaml_validate, yaml_build, toml_parse, toml_validate, toml_build, csv_parse, csv_validate, csv_build, csv_stream_new, csv_stream_push, csv_stream_close, csv_encode_new, csv_encode_push, csv_encode_close, msgpack_parse, msgpack_validate, msgpack_build, xml_stream_new, xml_stream_push, xml_stream_close } = globalThis.__ops;
 function validateWith(fn, input, options = {}) {
 	const result = fn(input);
 	if (result === true) return options.detailed ? { valid: true } : true;
@@ -2607,6 +2607,54 @@ const TOML = {
 	parse: (toml) => toml_parse(toml),
 	build: (obj) => toml_build(obj)
 };
+var CSVDecoderStream = class extends TransformStream {
+	constructor(options = {}) {
+		const decoder = new TextDecoder();
+		let streamId = null;
+		super({
+			start() {
+				streamId = csv_stream_new(options);
+			},
+			transform(chunk, controller) {
+				const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+				for (const row of csv_stream_push(streamId, text)) controller.enqueue(row);
+			},
+			flush(controller) {
+				const tail = decoder.decode();
+				if (tail) for (const row of csv_stream_push(streamId, tail)) controller.enqueue(row);
+				for (const row of csv_stream_close(streamId)) controller.enqueue(row);
+			}
+		});
+	}
+};
+var CSVEncoderStream = class extends TransformStream {
+	_writer = null;
+	constructor(options = {}) {
+		let streamId = null;
+		super({
+			start() {
+				streamId = csv_encode_new(options);
+			},
+			transform(chunk, controller) {
+				const text = csv_encode_push(streamId, chunk);
+				if (text) controller.enqueue(text);
+			},
+			flush() {
+				csv_encode_close(streamId);
+			}
+		});
+	}
+	pipeTo(destination, options) {
+		return this.readable.pipeTo(destination, options);
+	}
+	write(chunk) {
+		this._writer ??= this.writable.getWriter();
+		return this._writer.write(chunk);
+	}
+	close() {
+		return (this._writer ?? this.writable.getWriter()).close();
+	}
+};
 const CSV = {
 	validate: (csv, options = {}) => {
 		const result = csv_validate(csv, options);
@@ -2617,7 +2665,9 @@ const CSV = {
 		} : false;
 	},
 	parse: (csv, options) => csv_parse(csv, options),
-	build: (rows, options) => csv_build(rows, options)
+	build: (rows, options) => csv_build(rows, options),
+	DecoderStream: CSVDecoderStream,
+	EncoderStream: CSVEncoderStream
 };
 const YAML = {
 	validate: (yaml, options) => validateWith(yaml_validate, yaml, options),
