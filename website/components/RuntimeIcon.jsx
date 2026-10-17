@@ -13,35 +13,39 @@
 // Compiler quirks to respect (see components/StatusIcon.jsx): branch on
 // `name` via JSX conditionals, NOT body `if`s — a body read leaves `name` as
 // the raw signal, so the lookup misses and no icon renders.
+//
+// Pass `size` to change the box (default `size-4`); the standings table uses
+// `size-6` so its single-column logos read at a glance.
 const CHIP =
-  "size-4 shrink-0 rounded-[4px] bg-white object-contain p-px ring-1 ring-zinc-900/10 dark:ring-white/25";
+  "shrink-0 rounded-[4px] bg-white object-contain p-px ring-1 ring-zinc-900/10 dark:ring-white/25";
 
-export default function RuntimeIcon({ name }) {
+export default function RuntimeIcon({ name, size = "size-4" }) {
+  const chip = size + " " + CHIP;
   return (
     <>
       {(name === "esrun" || name === "esdev") && (
-        <img src="/img/otf-logo.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/img/otf-logo.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "bun" && (
-        <img src="/bun.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/bun.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "deno" && (
-        <img src="/img/brands/deno.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/img/brands/deno.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "node" && (
-        <img src="/img/brands/node.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/img/brands/node.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "vite" && (
-        <img src="/img/brands/vite.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/img/brands/vite.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "esbuild" && (
-        <img src="/img/brands/esbuild.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/img/brands/esbuild.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "llrt" && (
-        <img src="/img/brands/aws.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+        <img src="/img/brands/aws.svg" alt="" aria-hidden="true" draggable="false" className={chip} />
       )}
       {name === "oj" && (
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="size-4 shrink-0 opacity-80">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className={size + " shrink-0 opacity-80"}>
           <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="currentColor" opacity="0.16" />
           <rect x="1.5" y="1.5" width="21" height="21" rx="5" stroke="currentColor" stroke-width="1.6" />
           <circle cx="9" cy="12" r="3.2" stroke="currentColor" stroke-width="1.8" />

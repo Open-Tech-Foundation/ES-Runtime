@@ -10,6 +10,7 @@
 import bench from "../src/benchmarks.js";
 import { isHigherBetter } from "../src/metric-direction.js";
 import { LABELS, ORDER } from "../src/runtimes.js";
+import RuntimeIcon from "./RuntimeIcon.jsx";
 
 
 
@@ -89,7 +90,10 @@ export default function BenchStandings() {
               return (
                 <tr className="border-t border-zinc-100 dark:border-zinc-800">
                   <td className="px-3 py-2 font-semibold text-zinc-900 dark:text-zinc-100">
-                    {LABELS[r]}
+                    <span className="inline-flex items-center gap-2">
+                      <RuntimeIcon name={r} size="size-6" />
+                      {LABELS[r]}
+                    </span>
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-zinc-500 dark:text-zinc-400">{t.tests}</td>
                   {positions.map((p) => {
