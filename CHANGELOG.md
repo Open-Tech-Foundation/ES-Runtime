@@ -33,6 +33,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `TransformStream`'s writable side ignored backpressure: the sink write ran the
+  transform immediately, so a transform fed in one go — a `writer.write` loop, or
+  a streaming `runtime:serialization` decoder — buffered its entire output in the
+  readable queue at once. A 50 000-row CSV pushed through `CSV.DecoderStream`
+  held every parsed row in memory and peaked at 226 MB. The write now waits on
+  the readable side's `pull`, as `TransformStreamDefaultSinkWriteAlgorithm`
+  requires, so only the high water mark's worth is buffered; the same decode now
+  peaks at 89 MB and runs a little faster (483 ms, measured by the `csv_stream`
+  benchmark row). Because `CompressionStream`'s and `DecompressionStream`'s
+  chunk-type check lives in the transform algorithm, a write of a wrong-typed
+  chunk now rejects once the readable side is read rather than eagerly.
+
 - The stream controller queue dequeued with `Array.prototype.shift`, so a reader
   draining a queue that a burst had filled moved the tail on every read and cost
   O(n²). A transform that enqueues a whole chunk's worth of rows at once — the

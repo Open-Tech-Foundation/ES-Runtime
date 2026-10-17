@@ -26,9 +26,15 @@ test("TransformStream maps chunks", async () => {
   });
   const reader = ts.readable.getReader();
   const w = ts.writable.getWriter();
-  await w.write(3);
-  await w.close();
+  // Reading while writing: a sink write waits for the readable side to pull
+  // (see the backpressure test below), so writing first would never finish.
+  const writing = (async () => {
+    await w.write(3);
+    await w.close();
+  })();
   assertEquals((await reader.read()).value, 30);
+  await writing;
+  assertEquals((await reader.read()).done, true);
 });
 
 test("ReadableStream.tee produces two independent branches", async () => {
@@ -269,14 +275,17 @@ test("a transform may enqueue many chunks per input chunk", async () => {
   });
   const reader = ts.readable.getReader();
   const w = ts.writable.getWriter();
-  await w.write(4);
-  await w.close();
+  const writing = (async () => {
+    await w.write(4);
+    await w.close();
+  })();
   let done = false;
   while (!done) {
     const r = await reader.read();
     if (r.done) done = true;
     else out.push(r.value);
   }
+  await writing;
   assertEquals(out.join(","), "0,1,2,3");
 });
 
@@ -296,4 +305,50 @@ test("enqueue after a partial drain stays ordered and close waits for the drain"
   assertEquals((await reader.read()).value, "b");
   assertEquals((await reader.read()).value, "c");
   assertEquals((await reader.read()).done, true);
+});
+
+// TransformStreamDefaultSinkWriteAlgorithm: while the readable side is
+// backpressured a sink write waits for the readable to pull, so its transform
+// does not run yet. With the default zero readable high water mark and no
+// pending read, the first write must stay inside the gate — that gate is what
+// keeps a transform fed in one go from buffering the whole document.
+test("a transform write waits for a read before its transform runs", async () => {
+  let transformed = 0;
+  const ts = new TransformStream({
+    transform(chunk, c) {
+      transformed++;
+      c.enqueue(chunk);
+    },
+  });
+  const w = ts.writable.getWriter();
+  const writing = w.write("x");
+  await new Promise((r) => setTimeout(r, 0));
+  assertEquals(transformed, 0);
+  const reader = ts.readable.getReader();
+  assertEquals((await reader.read()).value, "x");
+  await writing;
+  assertEquals(transformed, 1);
+});
+
+test("a transform under concurrent writes and reads stays ordered and completes", async () => {
+  const n = 1000;
+  const ts = new TransformStream({
+    transform(chunk, c) { c.enqueue(chunk * 2); },
+  });
+  const reader = ts.readable.getReader();
+  const w = ts.writable.getWriter();
+  const writing = (async () => {
+    for (let i = 0; i < n; i++) await w.write(i);
+    await w.close();
+  })();
+  const out = [];
+  for (;;) {
+    const r = await reader.read();
+    if (r.done) break;
+    out.push(r.value);
+  }
+  await writing;
+  assertEquals(out.length, n);
+  assertEquals(out[0], 0);
+  assertEquals(out[n - 1], (n - 1) * 2);
 });

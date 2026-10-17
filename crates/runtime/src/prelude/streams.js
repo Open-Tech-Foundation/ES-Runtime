@@ -1584,13 +1584,22 @@
 
       slots.writable = new WritableStream(
         {
+          // TransformStreamDefaultSinkWriteAlgorithm: while the readable side is
+          // backpressured the write does not run at all — it waits for the
+          // readable to request data (its `pull`, which clears the flag). Without
+          // this gate every written chunk is transformed eagerly and its output
+          // piles up in the readable queue, so a transform fed in one go holds
+          // the whole document in memory.
           write: (chunk) => {
-            const readableController = slots.readable[S].controller;
-            void readableController;
-            return controller[S].transformAlgorithm(chunk).then(undefined, (e) => {
-              transformStreamError(this, e);
-              throw e;
-            });
+            const performWrite = () =>
+              controller[S].transformAlgorithm(chunk).then(undefined, (e) => {
+                transformStreamError(this, e);
+                throw e;
+              });
+            if (slots.backpressure) {
+              return slots.backpressureChange.promise.then(performWrite);
+            }
+            return performWrite();
           },
           close: () => {
             return controller[S].flushAlgorithm().then(

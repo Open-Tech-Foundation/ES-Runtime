@@ -5532,6 +5532,9 @@ mod tests {
     fn compression_stream_validates_format_and_chunk_type() {
         let _g = v8_guard();
         let mut rt = runtime();
+        // The chunk type is checked by the transform algorithm, which the sink
+        // write only reaches once the readable side pulls, so a reader must be
+        // pending for the write to run (and reject) at all.
         let out = eval_async(
             &mut rt,
             "const log = []; \
@@ -5540,6 +5543,7 @@ mod tests {
              try { new CompressionStream(); } catch (e) { log.push('none:' + e.name); } \
              const cs = new CompressionStream('gzip'); \
              const w = cs.writable.getWriter(); \
+             cs.readable.getReader().read().catch(() => {}); \
              try { await w.write('not bytes'); } catch (e) { log.push('chunk:' + e.name); } \
              return log.join('|');",
         );
@@ -6206,7 +6210,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 404;
+        const BASELINE: u32 = 406;
 
         assert!(
             pass >= BASELINE,
