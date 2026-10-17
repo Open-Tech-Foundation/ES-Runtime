@@ -5,7 +5,7 @@
 // external requests: SQLite, PostgreSQL, MySQL, MariaDB, Redis, Rust,
 // TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
 // WebAssembly and JavaScript from Simple Icons (CC0). The JSX tile is that
-// JavaScript mark with an "x" added. MessagePack, Protobuf, HTTP,
+// JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
@@ -52,6 +52,17 @@ export default function StackIcon({ name }) {
       )}
       {name === "toml" && (
         <img src="/img/brands/toml.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+      )}
+      {name === "csv" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect width="18" height="18" x="3" y="3" rx="2" />
+            <path d="M3 9h18" />
+            <path d="M3 15h18" />
+            <path d="M9 3v18" />
+            <path d="M15 3v18" />
+          </svg>
+        </span>
       )}
       {name === "messagepack" && (
         <span className={TILE}>

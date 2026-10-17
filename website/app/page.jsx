@@ -44,6 +44,7 @@ const groups = [
       { icon: "yaml", label: "YAML", to: "/docs/serialization/yaml" },
       { icon: "json", label: "JSON", to: "/docs/serialization/jsonl" },
       { icon: "toml", label: "TOML", to: "/docs/serialization/toml" },
+      { icon: "csv", label: "CSV", to: "/docs/serialization/csv" },
       { icon: "messagepack", label: "MessagePack", to: "/docs/serialization/msgpack" },
       { icon: "protobuf", label: "Protobuf", to: "/docs/serialization/protobuf" },
     ],
