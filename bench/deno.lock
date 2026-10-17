@@ -1,0 +1,42 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@std/csv@1.0.6": "1.0.6",
+    "jsr:@std/streams@^1.0.9": "1.2.0"
+  },
+  "jsr": {
+    "@std/csv@1.0.6": {
+      "integrity": "52ef0e62799a0028d278fa04762f17f9bd263fad9a8e7f98c14fbd371d62d9fd",
+      "dependencies": [
+        "jsr:@std/streams"
+      ]
+    },
+    "@std/streams@1.2.0": {
+      "integrity": "256b934254778f2bf45f5713b934209ff29e9b4b7fd4ec095219966813758c5f"
+    }
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:@bufbuild/buf@^1.71.0",
+        "npm:@bufbuild/protobuf@^2.12.1",
+        "npm:@bufbuild/protoc-gen-es@^2.12.1",
+        "npm:@hono/node-server@^2.0.4",
+        "npm:@iarna/toml@^2.2.5",
+        "npm:csv-parse@^7.0.3",
+        "npm:elysia@^1.4.30",
+        "npm:fast-xml-parser@^5.9.2",
+        "npm:hono@^4.12.25",
+        "npm:ioredis@6",
+        "npm:js-yaml@^4.2.0",
+        "npm:msgpackr@^1.11.2",
+        "npm:mysql2@^3.24.4",
+        "npm:ndjson@2",
+        "npm:postgres@^3.4.9",
+        "npm:puppeteer-core@^25.11.0",
+        "npm:redis@^6.2.0",
+        "npm:sharp@~0.35.5"
+      ]
+    }
+  }
+}

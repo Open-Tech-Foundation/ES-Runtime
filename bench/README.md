@@ -198,7 +198,7 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 | `net` | `fetch`, `fetch_upload`, `http`, `websocket`, `udp_echo`, `udp_send` |
 | `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
 | `system` | `spawn` |
-| `serialization` | `jsonl_stream`, `xml_*`, `yaml_*`, `toml_*`, `msgpack_*` |
+| `serialization` | `jsonl_stream`, `xml_*`, `yaml_*`, `toml_*`, `msgpack_*`, `csv_*` |
 | `protobuf` | `protobuf_small`, `protobuf_large` |
 | `wasm` | `wasm_compile`, `wasm_call`, `wasm_mem` |
 | `wasi` | `wasi_start`, `wasi_syscall` |
@@ -342,14 +342,15 @@ run to run (see Sources for the rationale):
   JIT-backed parser libraries ~10% and the native parsers nothing — a systematic
   tilt toward whichever runtime needed no warmup at all.
 - **Each runtime uses the best facility it ships.** Where a workload is not a
-  shared Web API — filesystem, HTTP server, YAML/TOML/XML/MessagePack — every
+  shared Web API — filesystem, HTTP server, YAML/TOML/XML/MessagePack/CSV — every
   runtime gets its own native surface: `Bun.YAML`/`Bun.TOML`/`Bun.Glob`,
-  `Deno.serve`, `llrt:xml`, esrun's `runtime:serialization`. Only where a runtime
-  genuinely ships nothing does it fall back to the library you would reach for
-  anyway (`js-yaml`, `@iarna/toml`, `fast-xml-parser`, `msgpackr` on Node and
-  Deno). Holding a runtime to a library it does not need understates it — Bun's
-  native TOML is ~3x its `@iarna/toml` number — and turns a native-vs-library
-  row into a claim about the runtime. Those rows are labelled as such on the site.
+  `Deno.serve`, `llrt:xml`, Deno's `@std/csv`, esrun's `runtime:serialization`.
+  Only where a runtime genuinely ships nothing does it fall back to the library
+  you would reach for anyway (`js-yaml`, `@iarna/toml`, `fast-xml-parser`,
+  `msgpackr`, `csv-parse` on Node and Bun). Holding a runtime to a library it
+  does not need understates it — Bun's native TOML is ~3x its `@iarna/toml`
+  number — and turns a native-vs-library row into a claim about the runtime.
+  Those rows are labelled as such on the site.
 - **Min, not median/mean.** Interference only ever *adds* time, so the minimum
   over repetitions is the contention-free floor — the stablest, fairest
   comparator. `startup`/`bigscript` use process wall-time (the launch/parse cost
@@ -469,6 +470,9 @@ toml_small    |    209.7 |     52.4 |    238.5 |   4057.1 |    164.1
 toml_large    |    409.5 |    104.4 |    503.5 |   8230.7 |    344.0
 msgpack_small |     41.8 |     48.3 |     38.5 |    849.5 |     50.0
 msgpack_large |     42.8 |     50.3 |     42.3 |    922.5 |     55.5
+csv_small     |     94.2 |    141.8 |     76.0 |      n/a |     33.2
+csv_large     |    177.4 |    185.4 |    163.9 |      n/a |     68.2
+csv_stream    |    973.5 |   1145.3 |    572.2 |      n/a |    515.1
 protobuf_small|     61.2 |     80.5 |     73.7 |   1092.7 |     77.7
 protobuf_large|    336.8 |    373.4 |    431.7 |   5440.5 |    406.7
 wasm_compile  |     46.5 |     65.7 |     37.4 |      n/a |     39.3
@@ -482,7 +486,7 @@ rss_loaded    |    134.0 |    140.0 |    123.0 |    157.0 |    107.0
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.111+deb13-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.21.0, bun 1.4.3, deno 2.9.7, llrt v0.9.0-beta, esrun 0.39.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.21.0, bun 1.4.3, deno 2.9.7, llrt v0.9.0-beta, esrun 0.40.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 

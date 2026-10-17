@@ -172,6 +172,9 @@ ROW_DEFS=(
   "serialization|toml_large|ms|chart|TOML parsing (large dataset)"
   "serialization|msgpack_small|ms|chart|MessagePack parsing (small dataset)"
   "serialization|msgpack_large|ms|chart|MessagePack parsing (large dataset)"
+  "serialization|csv_small|ms|chart|CSV parsing (small dataset)"
+  "serialization|csv_large|ms|chart|CSV parsing (large dataset)"
+  "serialization|csv_stream|ms|chart|CSV streaming (large dataset)"
 
   "protobuf|protobuf_small|ms|chart|Protobuf decode (small dataset)"
   "protobuf|protobuf_large|ms|chart|Protobuf decode (large dataset)"

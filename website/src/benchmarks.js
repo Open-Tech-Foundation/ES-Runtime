@@ -476,7 +476,7 @@ export default {
     "bun": "1.4.3+c6da4a4d3",
     "deno": "deno 2.9.7 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.9.0-beta (linux, x64)",
-    "esrun": "esrun 0.39.0"
+    "esrun": "esrun 0.40.0"
   },
   "method": {
     "aggregate": "min",
@@ -912,6 +912,27 @@ export default {
       "display": "chart",
       "better": "lower"
     },
+    "csv_small": {
+      "label": "CSV parsing (small dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "csv_large": {
+      "label": "CSV parsing (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "csv_stream": {
+      "label": "CSV streaming (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
     "protobuf_small": {
       "label": "Protobuf decode (small dataset)",
       "unit": "ms",
@@ -1088,7 +1109,10 @@ export default {
         "toml_small",
         "toml_large",
         "msgpack_small",
-        "msgpack_large"
+        "msgpack_large",
+        "csv_small",
+        "csv_large",
+        "csv_stream"
       ]
     },
     {
@@ -1593,6 +1617,27 @@ export default {
       "deno": 123,
       "llrt": 157,
       "esrun": 107
+    },
+    "csv_small": {
+      "node": 94.2,
+      "bun": 141.8,
+      "deno": 76,
+      "llrt": null,
+      "esrun": 33.2
+    },
+    "csv_large": {
+      "node": 177.4,
+      "bun": 185.4,
+      "deno": 163.9,
+      "llrt": null,
+      "esrun": 68.2
+    },
+    "csv_stream": {
+      "node": 973.5,
+      "bun": 1145.3,
+      "deno": 572.2,
+      "llrt": null,
+      "esrun": 515.1
     }
   },
   "results_rss": {
@@ -2071,6 +2116,27 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "csv_small": {
+      "node": 64,
+      "bun": 60,
+      "deno": 49,
+      "llrt": null,
+      "esrun": 33
+    },
+    "csv_large": {
+      "node": 81,
+      "bun": 71,
+      "deno": 116,
+      "llrt": null,
+      "esrun": 42
+    },
+    "csv_stream": {
+      "node": 100,
+      "bun": 88,
+      "deno": 96,
+      "llrt": null,
+      "esrun": 226
     }
   },
   "results_cov": {
@@ -2549,6 +2615,27 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "csv_small": {
+      "node": 1.4,
+      "bun": 3.2,
+      "deno": 3.5,
+      "llrt": null,
+      "esrun": 2.1
+    },
+    "csv_large": {
+      "node": 0.6,
+      "bun": 2.3,
+      "deno": 0.8,
+      "llrt": null,
+      "esrun": 3.9
+    },
+    "csv_stream": {
+      "node": 1.2,
+      "bun": 1.6,
+      "deno": 5.5,
+      "llrt": null,
+      "esrun": 1.8
     }
   },
   "results_n": {
@@ -3027,6 +3114,27 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "csv_small": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": null,
+      "esrun": 3
+    },
+    "csv_large": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": null,
+      "esrun": 3
+    },
+    "csv_stream": {
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": null,
+      "esrun": 5
     }
   },
   "results_floor_gap": {
@@ -3505,6 +3613,27 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "csv_small": {
+      "node": 2.3,
+      "bun": 1.6,
+      "deno": 3.2,
+      "llrt": null,
+      "esrun": 0.3
+    },
+    "csv_large": {
+      "node": 1.1,
+      "bun": 2.9,
+      "deno": 0.2,
+      "llrt": null,
+      "esrun": 5.9
+    },
+    "csv_stream": {
+      "node": 0.3,
+      "bun": 1.1,
+      "deno": 1.6,
+      "llrt": null,
+      "esrun": 0.2
     }
   },
   "status": {
@@ -3982,6 +4111,27 @@ export default {
       "bun": "ok",
       "deno": "ok",
       "llrt": "ok",
+      "esrun": "ok"
+    },
+    "csv_small": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "unsupported",
+      "esrun": "ok"
+    },
+    "csv_large": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "unsupported",
+      "esrun": "ok"
+    },
+    "csv_stream": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "unsupported",
       "esrun": "ok"
     }
   }
