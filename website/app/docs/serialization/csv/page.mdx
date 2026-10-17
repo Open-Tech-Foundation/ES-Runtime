@@ -121,3 +121,41 @@ await encoder.write({ name: "Alice", age: 30 });
 await encoder.write({ name: "Bob", age: 41 });
 await encoder.close();
 ```
+
+## How it compares
+
+CSV is the one structured format with no common standard: ECMA-429's Minimum
+Common Web API covers JSON and structured clone and stops there. Node.js and Bun
+ship no reader at all, and Deno's lives in `@std/csv`, a JSR package rather than a
+core module. Everywhere else it is an npm dependency.
+
+ES-Runtime puts CSV in `runtime:serialization` beside the other formats, so it
+arrives with the module, needs no package and takes no capability.
+
+| | Default output | Header → objects | Type inference | Streaming | Errors |
+| --- | --- | --- | --- | --- | --- |
+| **ES-Runtime** | `string[][]` | opt-in (`header: true`) | off (`cast: false`) | decoder + encoder | throw |
+| Deno `@std/csv` | arrays | opt-in (`skipFirstRow`) | off | stream pair | throw |
+| Node.js / Bun | — (no built-in) | — | — | — | — |
+| Papa Parse 5 | `string[][]` | opt-in (`header: true`) | off (`dynamicTyping: false`) | `step` / `chunk` | `{ data, errors, meta }` |
+| csv-parse | `string[][]` | opt-in (`columns`) | off (`cast: false`) | Node streams | throw |
+| fast-csv | arrays | opt-in | off | format + parse streams | throw |
+| d3-dsv | objects | always | off | no | throw |
+
+The two choices `parse` makes are the ones the field already agrees on: rows as
+field sequences, and no type inference. Objects only when a header is asked for is
+the shape that loses nothing when the file has none, and a guessed `1` — a ZIP
+code, a phone number — is harder to get back than to avoid.
+
+Where it goes further than most: streaming is **symmetric**, decode and encode
+sharing the writer `build` uses, so a streamed document and a built one cannot
+drift, and both directions are **boundable** — `maxFieldBytes` and `maxColumns`
+cap what a single line can cost.
+
+What the others do that this does not — Papa Parse auto-detects the delimiter,
+reports a `meta` object and can run in a worker; csv-parse and Deno can rename
+columns positionally — is a deliberate omission; the
+[internals page](/docs/internals/serialization#csv) says why. The
+[benchmarks](/docs/benchmarks#native-vs-third-party-parsers) measure this reader
+against the facility each other runtime ships, from the committed results rather
+than a number typed here.
