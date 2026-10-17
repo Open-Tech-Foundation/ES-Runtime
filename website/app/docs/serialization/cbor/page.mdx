@@ -63,9 +63,11 @@ console.log([...bytes].map((b) => b.toString(16).padStart(2, "0")).join(" "));
 
 ## What maps to what
 
-Numbers are IEEE-754 doubles once they are in the isolate, so an integer past
-2<sup>53</sup> loses precision on the way in — JavaScript's limit, not the
-codec's.
+An integer up to 2<sup>53</sup> − 1 comes back a JavaScript `number`; the first
+integer past that is a `BigInt`, so no CBOR integer is ever rounded. `encode`
+writes a `BigInt` back as an integer while it fits the range the major types
+cover, [−2<sup>64</sup>, 2<sup>64</sup>-1]; a `BigInt` beyond that would need a
+bignum tag, which is refused, so it throws.
 
 | JavaScript | Wire | Comes back as |
 | --- | --- | --- |
@@ -75,7 +77,8 @@ codec's.
 | `Date` | text string (ISO 8601) | **`string`, not a `Date`** |
 | `undefined` | `0xf7` | `undefined` |
 | `null` | `0xf6` | `null` |
-| function, symbol, `BigInt` | — | **throws `TypeError`** |
+| `BigInt` | integer (major 0/1), within ±2<sup>64</sup> | `bigint` past 2<sup>53</sup>, else `number` |
+| function, symbol | — | **throws `TypeError`** |
 
 `Map`, `Set` and `ArrayBuffer` are converted because they reach the host as
 *empty objects* — they carry no own enumerable properties, so without the
@@ -143,6 +146,40 @@ Reach for CBOR when a standard's canonical form matters — a signature or a
 content address over the encoded bytes — or when you need `undefined` to survive
 distinctly from `null`. Reach for MessagePack when you want the ext family to
 pass through as bytes.
+
+## How it compares to other libraries
+
+CBOR is an IETF standard, so the encoders agree on the wire and part company on
+what JavaScript types come back — and, past the safe integer range, on whether
+the value survives at all.
+
+| | Outside-safe integers | Tags | Canonical output | Ships as |
+| --- | --- | --- | --- | --- |
+| **ES-Runtime** | **`bigint`** (past 2<sup>53</sup> − 1) | **refused** | always | `runtime:serialization` |
+| Deno `@std/cbor` | `bigint` (from 2<sup>32</sup>) | `CborTag` | no (always float64) | a JSR package |
+| cborg | `bigint` (past ±2<sup>53</sup>) | `Tag` | smallest forms, map order free | an npm package |
+| cbor-x | `bigint` (opt out with `int64AsNumber`) | extension tags | no (record extension) | an npm package |
+| node-cbor | `BigInt` (bignum tags 2/3) | to native types | opt-in (`encodeCanonical`) | an npm package |
+
+The integer boundary here is the field's: as in cborg and cbor-x, a small
+integer stays a `number` and the first one past 2<sup>53</sup> − 1 becomes a
+`BigInt`, so the exact value survives a round trip. Deno's `@std/cbor` draws the
+line lower, at 2<sup>32</sup>, so it returns a `bigint` for a value this keeps as
+an exact `number`. A `BigInt` *inside* the safe range encodes as an integer and
+comes back a `number` — the wire has no `BigInt` type to return — which is the
+same round-trip cborg documents.
+
+Two differences are deliberate. The 64-bit range is the end of the road: a value
+past 2<sup>64</sup>-1 or −2<sup>64</sup> throws, where the others carry it in a
+bignum tag (2/3) — the same refusal a `Date` gets, for the same reason. And the
+canonical form is what `encode` always writes rather than an option you turn on
+(node-cbor's `encodeCanonical`), because a deterministic encoding is the point of
+choosing CBOR here.
+
+The [benchmarks](/docs/benchmarks#native-vs-third-party-parsers) measure this
+decoder against the facility each other runtime ships — esrun's native CBOR,
+Deno's `@std/cbor`, and cbor-x on Node and Bun — from the committed results
+rather than a number typed here.
 
 ## See also
 
