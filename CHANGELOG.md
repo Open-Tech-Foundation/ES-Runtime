@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-17
+
 ### Added
 
 - `runtime:serialization` gains a `CSV` namespace (`CSV.parse`, `CSV.validate`,
