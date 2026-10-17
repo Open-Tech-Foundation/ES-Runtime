@@ -5,7 +5,7 @@
 // external requests: SQLite, PostgreSQL, MySQL, MariaDB, Redis, Rust,
 // TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
 // WebAssembly and JavaScript from Simple Icons (CC0). The JSX tile is that
-// JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, HTTP,
+// JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, CBOR, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
@@ -70,6 +70,18 @@ export default function StackIcon({ name }) {
             <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
             <path d="m3.3 7 8.7 5 8.7-5" />
             <path d="M12 22V12" />
+          </svg>
+        </span>
+      )}
+      {name === "cbor" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="14" y="14" width="4" height="6" rx="2" />
+            <rect x="6" y="4" width="4" height="6" rx="2" />
+            <path d="M6 20h4" />
+            <path d="M14 10h4" />
+            <path d="M6 14h2v6" />
+            <path d="M14 4h2v6" />
           </svg>
         </span>
       )}

@@ -1,0 +1,146 @@
+---
+title: CBOR
+description: Native CBOR (RFC 8949) decoding and encoding in runtime:serialization — the deterministic form on the way out, tags refused on the way in.
+---
+
+# CBOR
+
+CBOR — Concise Binary Object Representation, [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) —
+lives in `runtime:serialization` and runs in Rust: bytes in, a JavaScript value
+out, with no npm package to add. It shares MessagePack's binary footprint but
+carries a wider range of values and a defined *deterministic* form, which is what
+this implementation encodes.
+
+## Decoding CBOR
+
+Use `CBOR.decode` to turn a CBOR byte array into a JavaScript value.
+
+```js
+import { CBOR } from "runtime:serialization";
+
+const bytes = new Uint8Array([
+  0xa1, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x65, 0x77, 0x6f, 0x72, 0x6c, 0x64,
+]);
+
+const value = CBOR.decode(bytes);
+console.log(value); // { hello: "world" }
+```
+
+Both definite-length and **indefinite-length** strings, arrays and maps are
+accepted, so a document produced by any conforming encoder reads back. The whole
+input must be consumed: a trailing byte is a `SyntaxError`, not silently ignored.
+
+## Encoding CBOR
+
+Use `CBOR.encode` to write a JavaScript value as CBOR bytes.
+
+```js
+import { CBOR } from "runtime:serialization";
+
+const bytes = CBOR.encode({ hello: "world" });
+console.log(bytes); // Uint8Array(13) [161, 101, 104, 101, 108, 108, 111, 101, 119, 111, 114, 108, 100]
+```
+
+Encoding is the **deterministic** form of RFC 8949 §4.2:
+
+- integers and lengths use the **shortest** form that holds the value;
+- a float uses the **shortest width** that preserves it exactly — half, single,
+  or double — with the canonical half-precision NaN `f97e00`;
+- map keys are sorted by the **bytewise lexicographic order of their encodings**.
+
+The same value therefore always encodes to the same bytes. Because keys are
+sorted, a document you encode and decode comes back with its keys in canonical
+order, not the order you wrote them in:
+
+```js
+const bytes = CBOR.encode({ b: 1, a: 2, aa: 3 });
+// Keys sort by their encoded bytes: the length prefix sorts first, so the order
+// is "a", "b", "aa" — not the insertion order, and not plain lexicographic order.
+console.log([...bytes].map((b) => b.toString(16).padStart(2, "0")).join(" "));
+// a3 61 61 02 61 62 01 62 61 61 03
+```
+
+## What maps to what
+
+Numbers are IEEE-754 doubles once they are in the isolate, so an integer past
+2<sup>53</sup> loses precision on the way in — JavaScript's limit, not the
+codec's.
+
+| JavaScript | Wire | Comes back as |
+| --- | --- | --- |
+| `Uint8Array`, any typed-array view, `ArrayBuffer` | byte string (major 2) | `Uint8Array` |
+| `Map` | map, keys stringified | plain object |
+| `Set` | array | `Array` |
+| `Date` | text string (ISO 8601) | **`string`, not a `Date`** |
+| `undefined` | `0xf7` | `undefined` |
+| `null` | `0xf6` | `null` |
+| function, symbol, `BigInt` | — | **throws `TypeError`** |
+
+`Map`, `Set` and `ArrayBuffer` are converted because they reach the host as
+*empty objects* — they carry no own enumerable properties, so without the
+conversion every entry would be silently dropped. An integer-valued number
+encodes as an integer, so a float that happens to be whole (a decoded
+`100000.0`) re-encodes as the integer `100000`. A value with no CBOR form
+**throws** rather than being written as `null`, since a silent substitution is
+exactly the data loss a format chosen for fidelity exists to avoid.
+
+## Tags are refused
+
+CBOR's major type 6 attaches a *tag* — a number giving a value a semantic
+meaning, such as a date (`0`/`1`), a bignum (`2`/`3`), or a decimal fraction
+(`4`). No JavaScript type corresponds to a CBOR tag, and inventing a wrapper
+object would make a tagged value indistinguishable from real data the document
+contained. So `decode` refuses a tag and reports its number, and `encode` never
+writes one:
+
+```js
+CBOR.decode(new Uint8Array([0xc0, 0x61, 0x61]));
+// SyntaxError: Parse failed: unsupported tag 0 (tags have no JavaScript counterpart)
+```
+
+The same reasoning refuses an *unassigned simple value* (major type 7), for
+which there is likewise no JavaScript counterpart. Tags are a candidate to
+revisit — a future `Date` mapping would decode tag `1`, for instance — but the
+readiness check and the encoder would both have to change together.
+
+## Validating CBOR
+
+`CBOR.validate` checks a byte array without your having to catch a throw. It
+reads the document exactly as `decode` does, so the two always agree: a document
+the decoder would refuse (a tag, a trailing byte) is not reported valid.
+
+```js
+import { CBOR } from "runtime:serialization";
+
+CBOR.validate(new Uint8Array([0x00])); // true
+CBOR.validate(new Uint8Array([0xc0, 0x61, 0x61])); // false — a tag
+
+const result = CBOR.validate(new Uint8Array([0x00, 0x00]), { detailed: true });
+console.log(result.valid); // false
+console.log(result.error); // "Validation failed: bytes remain after the top-level value"
+```
+
+## How it compares to MessagePack
+
+MessagePack and CBOR cover much the same ground, and this module treats them
+identically where they overlap: a byte string decodes to a `Uint8Array`, a `Map`
+and a `Set` are converted rather than flattened, and an unrepresentable value
+throws. The differences are the ones the formats themselves have:
+
+| | MessagePack | CBOR |
+| --- | --- | --- |
+| Encoding | shortest forms, but no defined canonical output | **deterministic** (RFC 8949 §4.2) |
+| `undefined` | encoded as `nil` | `undefined` (`0xf7`), distinct from `null` |
+| Extensions | `ext`, decoded as raw bytes | tags, **refused** |
+| Float width | always float64 | shortest (half / single / double) |
+| Spec | a compact de-facto standard | an IETF standard (RFC 8949) |
+
+Reach for CBOR when a standard's canonical form matters — a signature or a
+content address over the encoded bytes — or when you need `undefined` to survive
+distinctly from `null`. Reach for MessagePack when you want the ext family to
+pass through as bytes.
+
+## See also
+
+- [`runtime:serialization` reference](/api/serialization#cbor) — signatures and the type mapping
+- [Internals: serialization](/docs/internals/serialization) — why the codec works the way it does

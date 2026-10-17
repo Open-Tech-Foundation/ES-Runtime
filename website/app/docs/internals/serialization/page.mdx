@@ -78,6 +78,41 @@ decoder recurse, so a document deeper than 256 levels is refused rather than
 exhausting the stack. The same bound applies on the way out, which is also what
 stops a cyclic object from encoding forever.
 
+### CBOR
+
+CBOR (RFC 8949) is the second binary format, and it shares MessagePack's type
+mapping: a byte string decodes to a `Uint8Array`, a `Map`/`Set`/`ArrayBuffer` is
+converted rather than flattened to `{}`, and a value with no representation
+throws. It decodes straight to the value tree rather than through the JSON
+pivot — JSON has no byte string *and* no `Infinity`/`NaN`, so a document using a
+byte string or a non-finite float would be narrowed on the way in. Two things
+are the format's own.
+
+**Encoding is the deterministic form of RFC 8949 §4.2.** Integers and lengths
+are written shortest-form, a float uses the shortest width that preserves it
+(half, single, or double; NaN is the canonical `f97e00`), and map keys are
+sorted by the bytewise lexicographic order of their encodings. That last one is
+subtle enough to state plainly: because the length prefix sorts first, `"z"`
+encodes before `"aa"`. The payoff is that the same value always produces the
+same bytes — which is what makes CBOR usable for a signature or a content
+address over the encoding — and the cost is that a decode/encode round trip
+returns an object whose keys are in canonical order, not the order they were
+written in. An integer-valued number takes an integer form, so a float that
+happens to be whole re-encodes as an integer.
+
+**Tags are refused.** A tag (major type 6) is a number that gives a value a
+semantic meaning — a date, a bignum, a decimal fraction. No JavaScript type
+corresponds to one, and a wrapper object would be indistinguishable from real
+data the document contained, so `decode` reports the tag number and `encode`
+never writes one. The same reasoning refuses an *unassigned simple value* (major
+type 7), for which there is likewise no JavaScript counterpart.
+
+**Decoding is permissive over well-formed input.** Definite and
+indefinite-length strings, arrays and maps all read, and the whole input must be
+consumed — a trailing byte is an error, because a decoder that stopped early
+would hide the difference between one document and two concatenated ones.
+Nesting is bounded at 256 levels, as everywhere else.
+
 ### XML
 
 Elements become object keys; attributes are prefixed `@`; an element's own text

@@ -1,16 +1,16 @@
 ---
 title: runtime:serialization
-description: Native parsers for JSONL, XML, YAML, TOML, CSV, MessagePack, and Protobuf — running directly in Rust.
+description: Native parsers for JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, and Protobuf — running directly in Rust.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # runtime:serialization
 
-XML, YAML, TOML, CSV, MessagePack and JSONL parse in Rust — the text or bytes
-cross the op boundary once and a JavaScript value comes back. Protobuf is the
-exception: it is a reflective pure-JavaScript implementation, because a `.proto`
-is compiled at run time rather than by a build step.
+XML, YAML, TOML, CSV, MessagePack, CBOR and JSONL parse in Rust — the text or
+bytes cross the op boundary once and a JavaScript value comes back. Protobuf is
+the exception: it is a reflective pure-JavaScript implementation, because a
+`.proto` is compiled at run time rather than by a build step.
 
 <Callout type="info" title="Capability: none">
   Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
@@ -20,7 +20,7 @@ is compiled at run time rather than by a build step.
 
 ```js
 import {
-  JSONL, XML, YAML, TOML, CSV, MessagePack, Protobuf
+  JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, Protobuf
 } from "runtime:serialization";
 ```
 
@@ -147,6 +147,36 @@ Synchronous parsing, building, and validation of binary MessagePack data.
 | function, symbol, `BigInt` | — | throws `TypeError` |
 | — | `ext` | `Uint8Array` (payload) |
 
+## CBOR
+
+Synchronous decoding, encoding, and validation of CBOR (RFC 8949, Concise Binary
+Object Representation). `encode` writes the **deterministic** form: shortest
+integer and length forms, the shortest float that preserves the value, and
+bytewise-sorted map keys.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `CBOR.decode(cbor)` | `(Uint8Array) => any` | Decodes a CBOR byte array into a JavaScript value. Accepts definite and indefinite-length strings, arrays and maps; refuses tags. | `CBOR.decode(bytes)` |
+| `CBOR.encode(obj)` | `(any) => Uint8Array` | Encodes a JavaScript value into a CBOR byte array in the deterministic form of RFC 8949 §4.2. | `CBOR.encode({ key: "value" })` |
+| `CBOR.validate(cbor, options?)` | `(Uint8Array, object) => boolean \| object` | Validates a CBOR byte array, agreeing with `decode`. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `CBOR.validate(bytes, { detailed: true })` |
+
+### Type mapping
+
+| JavaScript | Wire | Decodes back as |
+| --- | --- | --- |
+| `Uint8Array`, any view, `ArrayBuffer` | byte string (major 2) | `Uint8Array` |
+| `Map` | map (keys stringified) | `object` |
+| `Set` | array | `Array` |
+| `Date` | ISO-8601 text string | `string` |
+| `undefined` / `null` | `0xf7` / `0xf6` | `undefined` / `null` |
+| function, symbol, `BigInt` | — | throws `TypeError` |
+| — | tag (major 6) | throws `SyntaxError` |
+
+An integer-valued number encodes as an integer (the shortest form), so a decoded
+float that happens to be whole re-encodes as an integer. A reserved initial byte,
+a stray `break`, a trailing byte, a malformed or oversized length, an unassigned
+simple value, a tag, or nesting past 256 levels is a `SyntaxError`.
+
 ## Protobuf
 
 Schema-aware Protobuf decoding and encoding. Pure-JS and reflective: the `.proto`
@@ -170,6 +200,6 @@ value-names, and `Uint8Array` for bytes.
 
 | Error | When |
 | --- | --- |
-| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, or CSV input (an unterminated quote, a duplicate column name, a ragged row under `header`). |
+| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, CSV or CBOR input (an unterminated quote, a duplicate column name, a ragged row under `header`, a CBOR tag or trailing byte). |
 | `TypeError` | Building fails because the provided JavaScript object cannot be serialized into the target format (e.g., circular references, invalid keys). |
 | `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap, YAML alias expansion). |

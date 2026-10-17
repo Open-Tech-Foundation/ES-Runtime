@@ -102,6 +102,7 @@ const NAV = [
         title: "Binary serialization",
         items: [
           { title: "MessagePack", path: "/docs/serialization/msgpack" },
+          { title: "CBOR", path: "/docs/serialization/cbor" },
           { title: "Protobuf", path: "/docs/serialization/protobuf" },
         ],
       },

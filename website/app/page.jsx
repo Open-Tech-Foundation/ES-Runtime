@@ -46,6 +46,7 @@ const groups = [
       { icon: "toml", label: "TOML", to: "/docs/serialization/toml" },
       { icon: "csv", label: "CSV", to: "/docs/serialization/csv" },
       { icon: "messagepack", label: "MessagePack", to: "/docs/serialization/msgpack" },
+      { icon: "cbor", label: "CBOR", to: "/docs/serialization/cbor" },
       { icon: "protobuf", label: "Protobuf", to: "/docs/serialization/protobuf" },
     ],
   },
