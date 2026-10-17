@@ -1304,18 +1304,18 @@ export default {
       "esrun": 136.9
     },
     "streams": {
-      "node": 11.8,
-      "bun": 5.6,
-      "deno": 10.9,
-      "llrt": 96.2,
-      "esrun": 10.5
+      "node": 11.6,
+      "bun": 5.7,
+      "deno": 10.5,
+      "llrt": 95.7,
+      "esrun": 10.3
     },
     "compression": {
-      "node": 289.9,
-      "bun": 25.7,
-      "deno": 82.3,
+      "node": 290.6,
+      "bun": 26,
+      "deno": 79.8,
       "llrt": null,
-      "esrun": 73
+      "esrun": 72.7
     },
     "sha256": {
       "node": 519.8,
@@ -1493,11 +1493,11 @@ export default {
       "esrun": 87.6
     },
     "jsonl_stream": {
-      "node": 642.3,
-      "bun": 875.5,
-      "deno": 704.5,
+      "node": 650.9,
+      "bun": 885,
+      "deno": 700.2,
       "llrt": null,
-      "esrun": 595.3
+      "esrun": 631.8
     },
     "xml_small": {
       "node": 517.9,
@@ -1619,25 +1619,25 @@ export default {
       "esrun": 107
     },
     "csv_small": {
-      "node": 94.2,
-      "bun": 141.8,
-      "deno": 76,
+      "node": 95.1,
+      "bun": 140.9,
+      "deno": 76.3,
       "llrt": null,
-      "esrun": 33.2
+      "esrun": 32.8
     },
     "csv_large": {
-      "node": 177.4,
-      "bun": 185.4,
-      "deno": 163.9,
+      "node": 175.9,
+      "bun": 183.8,
+      "deno": 164.2,
       "llrt": null,
-      "esrun": 68.2
+      "esrun": 68.3
     },
     "csv_stream": {
-      "node": 973.5,
-      "bun": 1145.3,
-      "deno": 572.2,
+      "node": 980.6,
+      "bun": 1159.8,
+      "deno": 604.6,
       "llrt": null,
-      "esrun": 515.1
+      "esrun": 483.6
     }
   },
   "results_rss": {
@@ -1803,18 +1803,18 @@ export default {
       "esrun": 41
     },
     "streams": {
-      "node": 60,
-      "bun": 25,
+      "node": 62,
+      "bun": 24,
       "deno": 42,
       "llrt": 11,
-      "esrun": 39
+      "esrun": 42
     },
     "compression": {
-      "node": 72,
-      "bun": 37,
+      "node": 69,
+      "bun": 36,
       "deno": 53,
       "llrt": null,
-      "esrun": 48
+      "esrun": 49
     },
     "sha256": {
       "node": 56,
@@ -1993,10 +1993,10 @@ export default {
     },
     "jsonl_stream": {
       "node": 216,
-      "bun": 83,
-      "deno": 144,
+      "bun": 82,
+      "deno": 145,
       "llrt": null,
-      "esrun": 68
+      "esrun": 70
     },
     "xml_small": {
       "node": 77,
@@ -2118,25 +2118,25 @@ export default {
       "esrun": null
     },
     "csv_small": {
-      "node": 64,
+      "node": 63,
       "bun": 60,
-      "deno": 49,
+      "deno": 48,
       "llrt": null,
-      "esrun": 33
+      "esrun": 32
     },
     "csv_large": {
-      "node": 81,
-      "bun": 71,
-      "deno": 116,
+      "node": 79,
+      "bun": 70,
+      "deno": 118,
       "llrt": null,
       "esrun": 42
     },
     "csv_stream": {
-      "node": 100,
-      "bun": 88,
+      "node": 99,
+      "bun": 86,
       "deno": 96,
       "llrt": null,
-      "esrun": 226
+      "esrun": 89
     }
   },
   "results_cov": {
@@ -2302,18 +2302,18 @@ export default {
       "esrun": 1.1
     },
     "streams": {
-      "node": 9.8,
-      "bun": 1.8,
-      "deno": 14,
-      "llrt": 1.9,
-      "esrun": 6.7
+      "node": 2.6,
+      "bun": 11,
+      "deno": 12.7,
+      "llrt": 2.7,
+      "esrun": 6.4
     },
     "compression": {
-      "node": 3.2,
-      "bun": 6.1,
-      "deno": 2.8,
+      "node": 3,
+      "bun": 5.3,
+      "deno": 5,
       "llrt": null,
-      "esrun": 2.8
+      "esrun": 3.5
     },
     "sha256": {
       "node": 1.8,
@@ -2491,11 +2491,11 @@ export default {
       "esrun": 2.1
     },
     "jsonl_stream": {
-      "node": 0.9,
-      "bun": 3.8,
-      "deno": 1.5,
+      "node": 3.6,
+      "bun": 1.6,
+      "deno": 3.3,
       "llrt": null,
-      "esrun": 1.5
+      "esrun": 7.3
     },
     "xml_small": {
       "node": 2.7,
@@ -2617,25 +2617,25 @@ export default {
       "esrun": null
     },
     "csv_small": {
-      "node": 1.4,
-      "bun": 3.2,
-      "deno": 3.5,
+      "node": 5.7,
+      "bun": 3.1,
+      "deno": 3.3,
       "llrt": null,
-      "esrun": 2.1
+      "esrun": 5.1
     },
     "csv_large": {
-      "node": 0.6,
-      "bun": 2.3,
-      "deno": 0.8,
+      "node": 1.5,
+      "bun": 3,
+      "deno": 1.7,
       "llrt": null,
-      "esrun": 3.9
+      "esrun": 2
     },
     "csv_stream": {
-      "node": 1.2,
-      "bun": 1.6,
-      "deno": 5.5,
+      "node": 3.6,
+      "bun": 1.2,
+      "deno": 2,
       "llrt": null,
-      "esrun": 1.8
+      "esrun": 1.1
     }
   },
   "results_n": {
@@ -2990,11 +2990,11 @@ export default {
       "esrun": 3
     },
     "jsonl_stream": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
       "llrt": null,
-      "esrun": 3
+      "esrun": 5
     },
     "xml_small": {
       "node": 5,
@@ -3116,11 +3116,11 @@ export default {
       "esrun": null
     },
     "csv_small": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
       "llrt": null,
-      "esrun": 3
+      "esrun": 5
     },
     "csv_large": {
       "node": 3,
@@ -3130,11 +3130,11 @@ export default {
       "esrun": 3
     },
     "csv_stream": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 5
+      "esrun": 3
     }
   },
   "results_floor_gap": {
@@ -3300,18 +3300,18 @@ export default {
       "esrun": 1.2
     },
     "streams": {
-      "node": 2.5,
-      "bun": 0,
-      "deno": 2.8,
-      "llrt": 0.8,
-      "esrun": 5.7
+      "node": 1.7,
+      "bun": 10.5,
+      "deno": 9.5,
+      "llrt": 1.7,
+      "esrun": 0
     },
     "compression": {
-      "node": 2.2,
-      "bun": 8.6,
-      "deno": 1.6,
+      "node": 1.5,
+      "bun": 1.5,
+      "deno": 4.1,
       "llrt": null,
-      "esrun": 1.1
+      "esrun": 0.8
     },
     "sha256": {
       "node": 1.4,
@@ -3489,11 +3489,11 @@ export default {
       "esrun": 3.2
     },
     "jsonl_stream": {
-      "node": 0.8,
-      "bun": 0.6,
-      "deno": 1.8,
+      "node": 3.4,
+      "bun": 1.8,
+      "deno": 4,
       "llrt": null,
-      "esrun": 1.4
+      "esrun": 3.3
     },
     "xml_small": {
       "node": 1.9,
@@ -3615,25 +3615,25 @@ export default {
       "esrun": null
     },
     "csv_small": {
-      "node": 2.3,
-      "bun": 1.6,
-      "deno": 3.2,
+      "node": 1.6,
+      "bun": 0.4,
+      "deno": 1.4,
       "llrt": null,
-      "esrun": 0.3
+      "esrun": 2.4
     },
     "csv_large": {
-      "node": 1.1,
-      "bun": 2.9,
-      "deno": 0.2,
+      "node": 1.4,
+      "bun": 0.4,
+      "deno": 2.6,
       "llrt": null,
-      "esrun": 5.9
+      "esrun": 0.9
     },
     "csv_stream": {
-      "node": 0.3,
-      "bun": 1.1,
-      "deno": 1.6,
+      "node": 2,
+      "bun": 1.6,
+      "deno": 1.7,
       "llrt": null,
-      "esrun": 0.2
+      "esrun": 0.6
     }
   },
   "status": {
