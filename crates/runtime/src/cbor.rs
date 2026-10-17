@@ -288,29 +288,62 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
     })
 }
 
-/// Reads one key/value pair of a map, stringifying the key the way a JavaScript
-/// property access would when it is not already a string.
+/// Reads one key/value pair of a map.
 fn read_pair(cur: &mut &[u8], depth: usize) -> Result<(String, Value), DecodeError> {
-    let key = match read_one(cur, depth + 1)? {
-        Value::String(s) => s,
-        Value::Number(n) => format_number(n),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Undefined => "undefined".to_string(),
-        _ => "[object]".to_string(),
-    };
+    let key = to_property_key(&read_one(cur, depth + 1)?);
     let value = read_one(cur, depth + 1)?;
     Ok((key, value))
 }
 
-/// `String(n)` for a JS number, so a numeric map key round-trips as JS spells
-/// it (`1`, not `1.0`).
-fn format_number(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i64)
-    } else {
-        format!("{n}")
+/// Coerces a CBOR map key to the property name a JavaScript access would use.
+///
+/// CBOR allows *any* item as a key, but a JavaScript object's keys are strings,
+/// so a non-string key is coerced exactly as `String(key)` would (and a property
+/// access coerces its key the same way): numbers by `String(n)` (see
+/// [`crate::js_number`]), booleans and `null`/`undefined` by their literals,
+/// arrays and byte strings as their elements joined with commas, and a nested
+/// map as `"[object Object]"`. The coercions can collide (`[1, 2]` and
+/// `["1", "2"]` share a name) — that is JavaScript's behaviour, not a choice
+/// here.
+fn to_property_key(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => crate::js_number::to_js_string(*n),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+        Value::Undefined => "undefined".to_string(),
+        // `Uint8Array`'s `toString` is `Array.prototype.join`, so it spells as
+        // its bytes, not as text.
+        Value::Bytes(bytes) => join_elements(bytes.iter().map(|b| b.to_string())),
+        Value::Array(items) => join_elements(items.iter().map(element_to_string)),
+        Value::Object(_) => "[object Object]".to_string(),
+        // Never produced by the decoder, but `Other` already carries the
+        // guest's own `String(value)`.
+        Value::Other(s) => s.clone(),
+        // `Value` is `#[non_exhaustive]`; a future variant has no defined
+        // string form here.
+        _ => "[object Object]".to_string(),
     }
+}
+
+/// One element of an array key: `Array.prototype.join` spells `null` and
+/// `undefined` as the empty string and every other value by `String`.
+fn element_to_string(v: &Value) -> String {
+    match v {
+        Value::Null | Value::Undefined => String::new(),
+        other => to_property_key(other),
+    }
+}
+
+fn join_elements(parts: impl Iterator<Item = String>) -> String {
+    let mut out = String::new();
+    for (i, part) in parts.enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&part);
+    }
+    out
 }
 
 // ---- half-precision floats -------------------------------------------------
@@ -497,18 +530,17 @@ fn write_number(n: f64, out: &mut Vec<u8>) {
     // An integer-valued number takes an integer form, the shortest that holds
     // it. Negative zero is excluded so its sign survives as a float.
     if n.fract() == 0.0 && !(n == 0.0 && n.is_sign_negative()) {
-        if n >= 0.0 {
-            if n < 18_446_744_073_709_551_616.0 {
-                let u = n as u64;
-                if u as f64 == n {
-                    write_head(out, 0, u);
-                    return;
-                }
+        // `i128` holds every integral `f64` either integer major type can
+        // carry, so this cast is exact where a `u64`/`i64` cast would saturate.
+        let i = n as i128;
+        if i as f64 == n {
+            if (0..=u64::MAX as i128).contains(&i) {
+                write_head(out, 0, i as u64);
+                return;
             }
-        } else if n >= -9_223_372_036_854_775_808.0 {
-            let i = n as i64;
-            if i as f64 == n {
-                // Major type 1 carries `-1 - value`.
+            // Major type 1 carries `-1 - value`, so it reaches -2^64 — one past
+            // `i64::MIN`, where the old `i64` cast gave up and wrote a float.
+            if (-(u64::MAX as i128) - 1..0).contains(&i) {
                 write_head(out, 1, (-(i + 1)) as u64);
                 return;
             }
@@ -591,9 +623,30 @@ mod tests {
             -65537.0,
             -4294967296.0,
             -4294967297.0,
+            // The integer major types' floors: `i64::MIN` (-2^63) and the
+            // format's own -2^64.
+            -9_223_372_036_854_775_808.0,
+            -18_446_744_073_709_551_616.0,
         ] {
             assert_eq!(round(Value::Number(n)), Value::Number(n), "{n}");
         }
+    }
+
+    #[test]
+    fn negative_integers_keep_integer_form_down_to_the_cbor_floor() {
+        // Major type 1 carries `-1 - value`, so it reaches -2^64, one past
+        // `i64::MIN` — where the encoder used to give up and write a float.
+        assert_eq!(
+            enc(Value::Number(-18_446_744_073_709_551_616.0)),
+            vec![0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(
+            enc(Value::Number(-9_223_372_036_854_775_808.0)),
+            vec![0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        // The `f64` below -2^64 has no integer form and stays a float.
+        let below = -(18_446_744_073_709_551_616.0 + 4096.0);
+        assert_eq!(enc(Value::Number(below))[0], 0xfb);
     }
 
     #[test]
@@ -733,6 +786,60 @@ mod tests {
         assert_eq!(
             read_value(&[0xa1, 0x01, 0x02]).expect("decode"),
             Value::Object(vec![("1".into(), Value::Number(2.0))])
+        );
+    }
+
+    #[test]
+    fn large_numeric_map_keys_do_not_saturate() {
+        // A uint64 key past `i64::MAX` (9.22e18). A cast would saturate to
+        // `i64::MAX` and spell "9223372036854775807".
+        assert_eq!(
+            read_value(&[
+                0xa1, 0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02
+            ])
+            .expect("decode"),
+            Value::Object(vec![("18446744073709552000".into(), Value::Number(2.0))])
+        );
+        // A float64 key of 1e20, past `i64::MAX` but below the exponential
+        // threshold, so it is written out in full.
+        assert_eq!(
+            read_value(&[
+                0xa1, 0xfb, 0x44, 0x15, 0xaf, 0x1d, 0x78, 0xb5, 0x8c, 0x40, 0x02
+            ])
+            .expect("decode"),
+            Value::Object(vec![("100000000000000000000".into(), Value::Number(2.0))])
+        );
+        // A float64 key at 1e21, where `String(n)` switches to exponential.
+        assert_eq!(
+            read_value(&[
+                0xa1, 0xfb, 0x44, 0x4b, 0x1a, 0xe4, 0xd6, 0xe2, 0xef, 0x50, 0x02
+            ])
+            .expect("decode"),
+            Value::Object(vec![("1e+21".into(), Value::Number(2.0))])
+        );
+    }
+
+    #[test]
+    fn non_string_map_keys_are_coerced_like_a_property_access() {
+        // An array key spells as its elements joined by commas.
+        assert_eq!(
+            read_value(&[0xa1, 0x82, 0x01, 0x02, 0x03]).expect("decode"),
+            Value::Object(vec![("1,2".into(), Value::Number(3.0))])
+        );
+        // A byte string key is a `Uint8Array`, whose `toString` joins bytes.
+        assert_eq!(
+            read_value(&[0xa1, 0x42, 0x01, 0x02, 0x03]).expect("decode"),
+            Value::Object(vec![("1,2".into(), Value::Number(3.0))])
+        );
+        // `null` inside an array key is the empty string, not "null".
+        assert_eq!(
+            read_value(&[0xa1, 0x83, 0x01, 0xf6, 0x02, 0x03]).expect("decode"),
+            Value::Object(vec![("1,,2".into(), Value::Number(3.0))])
+        );
+        // A nested map key is `[object Object]`, not the old `[object]`.
+        assert_eq!(
+            read_value(&[0xa1, 0xa1, 0x61, 0x61, 0x01, 0x03]).expect("decode"),
+            Value::Object(vec![("[object Object]".into(), Value::Number(3.0))])
         );
     }
 

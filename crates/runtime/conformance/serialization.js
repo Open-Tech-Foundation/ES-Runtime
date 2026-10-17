@@ -304,6 +304,39 @@ test("CBOR sorts map keys canonically", async () => {
   );
 });
 
+test("CBOR spells large numeric map keys as the guest would", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // A float64 key at 1e20 is written out in full, and at 1e21 String(n)
+  // switches to exponential notation. A saturating cast would spell 1e20 as
+  // i64::MAX and collapse it with every other large key.
+  const doc = CBOR.decode(
+    new Uint8Array([
+      0xa2, 0xfb, 0x44, 0x15, 0xaf, 0x1d, 0x78, 0xb5, 0x8c, 0x40, 0x01,
+      0xfb, 0x44, 0x4b, 0x1a, 0xe4, 0xd6, 0xe2, 0xef, 0x50, 0x02,
+    ]),
+  );
+  assertEquals(Object.keys(doc).join(), "100000000000000000000,1e+21");
+});
+
+test("CBOR coerces non-string map keys like a property access", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // An array key [1, 2] spells "1,2"; a nested map key is "[object Object]".
+  const arr = CBOR.decode(new Uint8Array([0xa1, 0x82, 0x01, 0x02, 0x03]));
+  assertEquals(Object.keys(arr).join(), "1,2");
+  const obj = CBOR.decode(new Uint8Array([0xa1, 0xa1, 0x61, 0x61, 0x01, 0x03]));
+  assertEquals(Object.keys(obj).join(), "[object Object]");
+});
+
+test("CBOR keeps negative integers in integer form down to -2^64", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // Major type 1 reaches -2^64 (0x3b then eight 0xff); the encoder used to
+  // stop at i64::MIN and write a float.
+  assertEquals([...CBOR.encode(-18446744073709551616)].join(), "59,255,255,255,255,255,255,255,255");
+  assertEquals(CBOR.decode(CBOR.encode(-18446744073709551616)), -18446744073709551616);
+  // One `f64` lower has no integer form, so it stays a float (0xfb).
+  assertEquals(CBOR.encode(-(18446744073709551616 + 4096))[0], 0xfb);
+});
+
 test("CBOR keeps byte strings and reads indefinite-length input", async () => {
   const { CBOR } = await import("runtime:serialization");
   const back = CBOR.decode(CBOR.encode({ data: new Uint8Array([0, 1, 254, 255]) }));

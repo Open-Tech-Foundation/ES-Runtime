@@ -29,10 +29,14 @@ namespace) is unstable and may change between minor releases until the API freez
   (NaN as the canonical `f97e00`), and map keys sorted by the bytewise
   lexicographic order of their encodings — and `decode` accepts definite and
   indefinite-length strings, arrays and maps while refusing tags, which have no
-  JavaScript counterpart. Integers past 2<sup>53</sup> are `f64`, as for
-  MessagePack, and `undefined` and `null` stay distinct. A new namespace in the
-  existing module (no new specifier, no capability); the codec is the runtime's
-  own safe-Rust implementation (DECISIONS D170).
+  JavaScript counterpart. Integer forms cover the full ranges their major types
+  allow (major type 1 reaches -2<sup>64</sup>), integers past 2<sup>53</sup> are
+  `f64` as for MessagePack, and `undefined` and `null` stay distinct. A
+  non-string map key is coerced the way a JavaScript property access coerces it
+  (numbers by `String(n)`, arrays and byte strings as comma-joined elements, a
+  nested map as `[object Object]`). A new namespace in the existing module (no
+  new specifier, no capability); the codec is the runtime's own safe-Rust
+  implementation (DECISIONS D170).
 
 ### Changed
 

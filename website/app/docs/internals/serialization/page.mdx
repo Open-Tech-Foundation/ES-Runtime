@@ -89,16 +89,26 @@ byte string or a non-finite float would be narrowed on the way in. Two things
 are the format's own.
 
 **Encoding is the deterministic form of RFC 8949 §4.2.** Integers and lengths
-are written shortest-form, a float uses the shortest width that preserves it
-(half, single, or double; NaN is the canonical `f97e00`), and map keys are
-sorted by the bytewise lexicographic order of their encodings. That last one is
-subtle enough to state plainly: because the length prefix sorts first, `"z"`
-encodes before `"aa"`. The payoff is that the same value always produces the
-same bytes — which is what makes CBOR usable for a signature or a content
-address over the encoding — and the cost is that a decode/encode round trip
-returns an object whose keys are in canonical order, not the order they were
-written in. An integer-valued number takes an integer form, so a float that
-happens to be whole re-encodes as an integer.
+are written shortest-form — the integer forms reach their major types' full
+ranges, so major type 1 goes down to −2<sup>64</sup> rather than stopping at
+`i64::MIN` — a float uses the shortest width that preserves it (half, single, or
+double; NaN is the canonical `f97e00`), and map keys are sorted by the bytewise
+lexicographic order of their encodings. That last one is subtle enough to state
+plainly: because the length prefix sorts first, `"z"` encodes before `"aa"`. The
+payoff is that the same value always produces the same bytes — which is what
+makes CBOR usable for a signature or a content address over the encoding — and
+the cost is that a decode/encode round trip returns an object whose keys are in
+canonical order, not the order they were written in. An integer-valued number
+takes an integer form, so a float that happens to be whole re-encodes as an
+integer.
+
+**A map becomes a plain object, so a non-string key becomes a property name.**
+CBOR allows any item as a key, but a JavaScript object's keys are strings, so a
+non-string key is coerced exactly as a property access coerces it: a number by
+`String(n)`, an array or byte string as its elements joined with commas, a nested
+map as `[object Object]`. The cost is JavaScript's own — keys that coerce alike
+share a name, so `[1, 2]` and `["1", "2"]` land on the same property. A caller
+who needs the keys kept distinct must write them as strings.
 
 **Tags are refused.** A tag (major type 6) is a number that gives a value a
 semantic meaning — a date, a bignum, a decimal fraction. No JavaScript type

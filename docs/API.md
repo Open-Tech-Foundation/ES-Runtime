@@ -3038,20 +3038,24 @@ CBOR (RFC 8949) is the other binary format, under the `CBOR` namespace:
 | `CBOR.validate(bytes, opts?)` | Validates the given byte array; agrees with `decode`. |
 
 **CBOR encoding is deterministic (RFC 8949 §4.2).** Integers and lengths use the
-shortest form, a float uses the shortest width that preserves it exactly — half,
-single, or double, with NaN as the canonical `f97e00` — and map keys are sorted
-by the bytewise lexicographic order of their encodings. The same value therefore
-always encodes to the same bytes, and a decoded object's key order is the
-canonical one, not the order it was written in.
+shortest form (the integer major types cover their full ranges, with major type 1
+reaching −2<sup>64</sup>), a float uses the shortest width that preserves it
+exactly — half, single, or double, with NaN as the canonical `f97e00` — and map
+keys are sorted by the bytewise lexicographic order of their encodings. The same
+value therefore always encodes to the same bytes, and a decoded object's key order
+is the canonical one, not the order it was written in.
 
 Numerics and binary map as they do for MessagePack: a typed-array view or
 `ArrayBuffer` becomes a **byte string** (major type 2) and decodes back to a
 `Uint8Array`; a `Map` becomes a map (keys stringified), a `Set` an array, and a
-`Date` its ISO-8601 string. An integer-valued number encodes as an integer, so a
-float that happens to be whole (a decoded `100000.0`) re-encodes as the integer
-`100000`. `undefined` and `null` are distinct on the wire (`0xf7`/`0xf6`). A
-value with no CBOR form (a function, a symbol, a `BigInt`) **throws** a
-`TypeError`.
+`Date` its ISO-8601 string. A non-string CBOR map key is coerced the way a
+JavaScript property access coerces it — numbers by `String(n)`, arrays and byte
+strings as comma-joined elements, a nested map as `[object Object]` — so keys
+that coerce alike share a property name. An integer-valued number encodes as an
+integer, so a float that happens to be whole (a decoded `100000.0`) re-encodes as
+the integer `100000`. `undefined` and `null` are distinct on the wire
+(`0xf7`/`0xf6`). A value with no CBOR form (a function, a symbol, a `BigInt`)
+**throws** a `TypeError`.
 
 **Tags (major type 6) are refused.** No JavaScript type corresponds to a CBOR
 tag, and inventing a wrapper would make a tagged value indistinguishable from

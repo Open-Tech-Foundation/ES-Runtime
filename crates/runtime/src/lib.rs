@@ -37,6 +37,7 @@ mod handles;
 mod hashing_ops;
 mod http_ops;
 mod image_ops;
+mod js_number;
 mod module_ops;
 mod msgpack;
 mod my_ops;
@@ -6211,7 +6212,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 411;
+        const BASELINE: u32 = 414;
 
         assert!(
             pass >= BASELINE,
