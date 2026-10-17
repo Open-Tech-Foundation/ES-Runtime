@@ -110,6 +110,12 @@ map as `[object Object]`. The cost is JavaScript's own — keys that coerce alik
 share a name, so `[1, 2]` and `["1", "2"]` land on the same property. A caller
 who needs the keys kept distinct must write them as strings.
 
+One spelling is fixed rather than `String`'s exact behaviour: a nested map always
+spells `[object Object]`. `String(plainObject)` agrees, but a nested map carrying
+its own `toString` would make `String` call it — and throw on a non-callable one
+— and a codec should not run a decoded value's accessors during a structural
+walk.
+
 **Tags are refused.** A tag (major type 6) is a number that gives a value a
 semantic meaning — a date, a bignum, a decimal fraction. No JavaScript type
 corresponds to one, and a wrapper object would be indistinguishable from real

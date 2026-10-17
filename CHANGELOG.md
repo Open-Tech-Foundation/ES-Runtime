@@ -31,10 +31,15 @@ namespace) is unstable and may change between minor releases until the API freez
   indefinite-length strings, arrays and maps while refusing tags, which have no
   JavaScript counterpart. Integer forms cover the full ranges their major types
   allow (major type 1 reaches -2<sup>64</sup>), integers past 2<sup>53</sup> are
-  `f64` as for MessagePack, and `undefined` and `null` stay distinct. A
-  non-string map key is coerced the way a JavaScript property access coerces it
-  (numbers by `String(n)`, arrays and byte strings as comma-joined elements, a
-  nested map as `[object Object]`). A new namespace in the existing module (no
+  `f64` as for MessagePack, and `undefined` and `null` stay distinct. A negative
+  integer just past 2<sup>53</sup> decodes exactly — the negative is formed in
+  integer arithmetic rather than by subtracting in floating point — and
+  `validate` walks the document without building the value tree, so testing
+  untrusted input for validity costs its own bytes rather than a decoded
+  structure. A non-string map key is coerced the way a JavaScript property access
+  coerces it (numbers by `String(n)`, arrays and byte strings as comma-joined
+  elements, a nested map as `[object Object]`, which is fixed rather than running
+  a nested value's own `toString`). A new namespace in the existing module (no
   new specifier, no capability); the codec is the runtime's own safe-Rust
   implementation (DECISIONS D170).
 
@@ -53,6 +58,12 @@ namespace) is unstable and may change between minor releases until the API freez
   `__proto__` setter instead of creating the key, so the field was absent and its
   value became the object's prototype. Fields are now defined as own data
   properties, matching `JSON.parse`.
+
+- Encoding an object with an own `__proto__` field dropped it: the shared
+  `MessagePack`/`CBOR` conversion built its host object with an ordinary `{}` and
+  assigned each key, so the inherited `__proto__` setter ran instead of a
+  property being created. The conversion now uses a null-prototype object, the
+  encode-side counterpart of the own-data-property fix above.
 
 - `TransformStream`'s writable side ignored backpressure: the sink write ran the
   transform immediately, so a transform fed in one go — a `writer.write` loop, or

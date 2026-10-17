@@ -159,6 +159,148 @@ pub(crate) fn read_value(bytes: &[u8]) -> Result<Value, DecodeError> {
     Ok(v)
 }
 
+/// Checks that `bytes` is exactly one well-formed CBOR value, without building
+/// the value tree.
+///
+/// `validate` accepts exactly what [`read_value`] accepts — same headers, same
+/// depth bound, the same UTF-8 requirement on text strings, the same refusal of
+/// tags — but the walk allocates nothing: a string is checked in place and a map
+/// key is skipped rather than spelled. So testing untrusted input for validity
+/// costs its own bytes, not a decoded array or map the caller will throw away.
+pub(crate) fn validate(bytes: &[u8]) -> Result<(), DecodeError> {
+    let mut cur = bytes;
+    skip_one(&mut cur, 0)?;
+    if !cur.is_empty() {
+        return Err(DecodeError::TrailingData);
+    }
+    Ok(())
+}
+
+/// The value-free counterpart of [`read_one`]: walks one item and checks it is
+/// well-formed, building nothing. It must accept exactly what `read_one`
+/// accepts; `validate_agrees_with_decode` pins that agreement.
+fn skip_one(cur: &mut &[u8], depth: usize) -> Result<(), DecodeError> {
+    if depth > MAX_DEPTH {
+        return Err(DecodeError::TooDeep);
+    }
+    let head = byte(cur)?;
+    let major = head >> 5;
+    let ai = head & 0x1f;
+    match major {
+        // Integers: the argument is read only to be consumed.
+        0 | 1 => {
+            read_arg(cur, ai)?;
+        }
+        // Byte string.
+        2 => {
+            if ai == 31 {
+                loop {
+                    if at_break(cur) {
+                        byte(cur)?;
+                        break;
+                    }
+                    let chunk = byte(cur)?;
+                    if chunk >> 5 != 2 || chunk & 0x1f == 31 {
+                        return Err(DecodeError::BadIndefiniteChunk);
+                    }
+                    let n = read_arg(cur, chunk & 0x1f)? as usize;
+                    take(cur, n)?;
+                }
+            } else {
+                let n = read_arg(cur, ai)? as usize;
+                take(cur, n)?;
+            }
+        }
+        // Text string: each chunk is checked for UTF-8 where it lies.
+        3 => {
+            if ai == 31 {
+                loop {
+                    if at_break(cur) {
+                        byte(cur)?;
+                        break;
+                    }
+                    let chunk = byte(cur)?;
+                    if chunk >> 5 != 3 || chunk & 0x1f == 31 {
+                        return Err(DecodeError::BadIndefiniteChunk);
+                    }
+                    let n = read_arg(cur, chunk & 0x1f)? as usize;
+                    check_utf8(cur, n)?;
+                }
+            } else {
+                let n = read_arg(cur, ai)? as usize;
+                check_utf8(cur, n)?;
+            }
+        }
+        // Array.
+        4 => {
+            if ai == 31 {
+                loop {
+                    if at_break(cur) {
+                        byte(cur)?;
+                        break;
+                    }
+                    skip_one(cur, depth + 1)?;
+                }
+            } else {
+                let n = read_arg(cur, ai)? as usize;
+                for _ in 0..n {
+                    skip_one(cur, depth + 1)?;
+                }
+            }
+        }
+        // Map: keys and values are skipped the same way.
+        5 => {
+            if ai == 31 {
+                loop {
+                    if at_break(cur) {
+                        byte(cur)?;
+                        break;
+                    }
+                    skip_one(cur, depth + 1)?;
+                    skip_one(cur, depth + 1)?;
+                }
+            } else {
+                let n = read_arg(cur, ai)? as usize;
+                for _ in 0..n {
+                    skip_one(cur, depth + 1)?;
+                    skip_one(cur, depth + 1)?;
+                }
+            }
+        }
+        // Tags have no JavaScript counterpart.
+        6 => return Err(DecodeError::Tag(read_arg(cur, ai)?)),
+        // Simple values and floats.
+        7 => match ai {
+            20..=23 => {}
+            24 => match byte(cur)? {
+                20..=23 => {}
+                other => return Err(DecodeError::UnsupportedSimple(other)),
+            },
+            25 => {
+                take(cur, 2)?;
+            }
+            26 => {
+                take(cur, 4)?;
+            }
+            27 => {
+                take(cur, 8)?;
+            }
+            28..=30 => return Err(DecodeError::ReservedHeader),
+            31 => return Err(DecodeError::UnexpectedBreak),
+            _ => return Err(DecodeError::UnsupportedSimple(ai)),
+        },
+        _ => unreachable!("major type is three bits"),
+    }
+    Ok(())
+}
+
+/// Validates a definite-length text string in place, allocating no `String` for
+/// it.
+fn check_utf8(cur: &mut &[u8], n: usize) -> Result<(), DecodeError> {
+    std::str::from_utf8(take(cur, n)?).map_err(|_| DecodeError::InvalidUtf8)?;
+    Ok(())
+}
+
 fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
     if depth > MAX_DEPTH {
         return Err(DecodeError::TooDeep);
@@ -167,10 +309,14 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
     let major = head >> 5;
     let ai = head & 0x1f;
     Ok(match major {
-        // Unsigned and negative integers. Both are carried in an `f64`, which
-        // is exact through 2^53 and rounds beyond it — the isolate's limit.
+        // Unsigned and negative integers. Both end up in an `f64`, which is
+        // exact through 2^53 and rounds beyond it — the isolate's limit. The
+        // negative value is formed in `i128` first: negating and subtracting in
+        // `f64` rounds the argument *before* the `- 1`, so an argument just past
+        // 2^53 would land one ulp off a number that is itself exactly
+        // representable (2^53 + 1 encodes -9007199254740994, not ...992).
         0 => Value::Number(read_arg(cur, ai)? as f64),
-        1 => Value::Number(-1.0 - read_arg(cur, ai)? as f64),
+        1 => Value::Number((-1 - i128::from(read_arg(cur, ai)?)) as f64),
         // Byte string.
         2 => {
             if ai == 31 {
@@ -305,6 +451,12 @@ fn read_pair(cur: &mut &[u8], depth: usize) -> Result<(String, Value), DecodeErr
 /// map as `"[object Object]"`. The coercions can collide (`[1, 2]` and
 /// `["1", "2"]` share a name) — that is JavaScript's behaviour, not a choice
 /// here.
+///
+/// A nested map is the one deliberate simplification: it always spells
+/// `"[object Object]"`. `String(plainObject)` is the same, but a nested map that
+/// carries its own `toString` is not — `String` would call it, and throw on a
+/// non-callable one — and running a decoded value's accessors during a structural
+/// walk is not something a codec should do. The spelling here is fixed instead.
 fn to_property_key(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -790,6 +942,21 @@ mod tests {
     }
 
     #[test]
+    fn negative_integers_just_past_2_53_decode_exactly() {
+        // Major type 1 with argument 2^53 + 1 encodes -9007199254740994, which
+        // is itself exactly representable. Forming the value as `-1.0 - arg as
+        // f64` rounds the argument to 2^53 before the subtraction and lands one
+        // ulp off, at -9007199254740992; the subtraction must stay integral.
+        let bytes = [0x3b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+        assert_eq!(
+            read_value(&bytes).expect("decode"),
+            Value::Number(-9_007_199_254_740_994.0)
+        );
+        // The integer form survives a round trip.
+        assert_eq!(enc(Value::Number(-9_007_199_254_740_994.0)), bytes.to_vec());
+    }
+
+    #[test]
     fn large_numeric_map_keys_do_not_saturate() {
         // A uint64 key past `i64::MAX` (9.22e18). A cast would saturate to
         // `i64::MAX` and spell "9223372036854775807".
@@ -903,6 +1070,33 @@ mod tests {
             read_value(&[0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
             Err(DecodeError::Truncated)
         );
+    }
+
+    #[test]
+    fn validate_agrees_with_decode() {
+        // Well-formed and malformed inputs alike: `validate` must return the
+        // same result as a decode, since it is the same syntax without the tree.
+        let inputs: &[&[u8]] = &[
+            &[0x00],
+            &[0x1b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+            &[0xa1, 0x01, 0x02],
+            &[0x7f, 0x62, 0x68, 0x69, 0xff],
+            &[0x9f, 0x01, 0x02, 0xff],
+            &[0xa1, 0xa1, 0x61, 0x61, 0x01, 0x03],
+            &[],
+            &[0xff],
+            &[0xc0, 0x61, b'a'],
+            &[0x00, 0x00],
+            &[0x61, 0xff],
+            &[0x7f, 0x41, 0x01, 0xff],
+            &[0x1c],
+            &[0xf0],
+        ];
+        for input in inputs {
+            assert_eq!(validate(input), read_value(input).map(|_| ()), "{input:?}");
+        }
+        let bomb = vec![0x9fu8; MAX_DEPTH + 8];
+        assert_eq!(validate(&bomb), read_value(&bomb).map(|_| ()));
     }
 
     #[test]

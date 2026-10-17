@@ -3051,7 +3051,10 @@ Numerics and binary map as they do for MessagePack: a typed-array view or
 `Date` its ISO-8601 string. A non-string CBOR map key is coerced the way a
 JavaScript property access coerces it — numbers by `String(n)`, arrays and byte
 strings as comma-joined elements, a nested map as `[object Object]` — so keys
-that coerce alike share a property name. An integer-valued number encodes as an
+that coerce alike share a property name. A nested map always spells
+`[object Object]`: the decoder does not run a nested value's own `toString`, the
+one place this coercion is a fixed simplification rather than `String`'s exact
+behaviour. An integer-valued number encodes as an
 integer, so a float that happens to be whole (a decoded `100000.0`) re-encodes as
 the integer `100000`. `undefined` and `null` are distinct on the wire
 (`0xf7`/`0xf6`). A value with no CBOR form (a function, a symbol, a `BigInt`)

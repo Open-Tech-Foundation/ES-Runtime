@@ -187,14 +187,18 @@ function toEncodable(value: unknown, format: string, depth = 0, seen: object[] =
   if (value instanceof Date) return value.toISOString();
   if (seen.includes(value)) throw new TypeError("Converting circular structure to a host value");
   seen = [...seen, value];
+  // A null-prototype object is what carries the keys across: assigning to an
+  // ordinary `{}` runs any setter the key names on `Object.prototype` — a
+  // `__proto__` key would set the prototype and silently drop the field — so
+  // there is no prototype to intercept the assignment.
   if (value instanceof Map) {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     for (const [k, v] of value) out[String(k)] = toEncodable(v, format, depth + 1, seen);
     return out;
   }
   if (value instanceof Set) return [...value].map((v) => toEncodable(v, format, depth + 1, seen));
   if (Array.isArray(value)) return value.map((v) => toEncodable(v, format, depth + 1, seen));
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null);
   for (const k of Object.keys(value))
     out[k] = toEncodable((value as Record<string, unknown>)[k], format, depth + 1, seen);
   return out;

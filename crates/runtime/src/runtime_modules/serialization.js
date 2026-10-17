@@ -2687,13 +2687,13 @@ function toEncodable(value, format, depth = 0, seen = []) {
 	if (seen.includes(value)) throw new TypeError("Converting circular structure to a host value");
 	seen = [...seen, value];
 	if (value instanceof Map) {
-		const out = {};
+		const out = Object.create(null);
 		for (const [k, v] of value) out[String(k)] = toEncodable(v, format, depth + 1, seen);
 		return out;
 	}
 	if (value instanceof Set) return [...value].map((v) => toEncodable(v, format, depth + 1, seen));
 	if (Array.isArray(value)) return value.map((v) => toEncodable(v, format, depth + 1, seen));
-	const out = {};
+	const out = Object.create(null);
 	for (const k of Object.keys(value)) out[k] = toEncodable(value[k], format, depth + 1, seen);
 	return out;
 }

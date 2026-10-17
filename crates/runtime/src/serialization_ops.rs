@@ -702,11 +702,12 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             Some(b) => b,
             None => return Ok(Value::String("Expected a Uint8Array".into())),
         };
-        // `validate` agrees with `decode` by construction: both read the whole
-        // document, so a value the decoder refuses (a tag, a trailing byte) is
-        // not reported valid.
-        match crate::cbor::read_value(cbor_bytes) {
-            Ok(_) => Ok(Value::Bool(true)),
+        // `validate` walks the document without building the value tree, so a
+        // validity check of untrusted input costs its own bytes rather than an
+        // array or map the caller throws away. It accepts exactly what `decode`
+        // accepts — a tag, a trailing byte, invalid UTF-8 are all still refused.
+        match crate::cbor::validate(cbor_bytes) {
+            Ok(()) => Ok(Value::Bool(true)),
             Err(e) => Ok(Value::String(format!("Validation failed: {e}"))),
         }
     }))?;

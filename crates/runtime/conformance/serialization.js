@@ -342,6 +342,34 @@ test("CBOR keeps a __proto__ key as an own property", async () => {
   assertEquals(Object.getPrototypeOf(obj), Object.prototype);
 });
 
+test("CBOR and MessagePack encode an own __proto__ key", async () => {
+  const { CBOR, MessagePack } = await import("runtime:serialization");
+  // A parsed document (or a Map) can carry an own `__proto__` field. Building
+  // the host object with a plain `{}` assignment ran the inherited prototype
+  // setter, so the field was dropped; a null-prototype object keeps it.
+  const parsed = JSON.parse('{"__proto__": 1, "x": 2}');
+  assertEquals(Object.prototype.hasOwnProperty.call(parsed, "__proto__"), true);
+  for (const codec of [CBOR, MessagePack]) {
+    const back = codec.decode(codec.encode(parsed));
+    assertEquals(Object.prototype.hasOwnProperty.call(back, "__proto__"), true);
+    assertEquals(back.__proto__, 1);
+    assertEquals(back.x, 2);
+  }
+  const viaMap = CBOR.decode(CBOR.encode(new Map([["__proto__", 3]])));
+  assertEquals(Object.prototype.hasOwnProperty.call(viaMap, "__proto__"), true);
+  assertEquals(viaMap.__proto__, 3);
+});
+
+test("CBOR decodes negative integers just past 2^53 exactly", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // Major type 1, argument 2^53 + 1: the CBOR integer is -9007199254740994,
+  // which is exactly representable. Subtracting in floating point rounded the
+  // argument to 2^53 first and produced -9007199254740992.
+  const bytes = [0x3b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+  assertEquals(CBOR.decode(new Uint8Array(bytes)), -9007199254740994);
+  assertEquals([...CBOR.encode(-9007199254740994)].join(), bytes.join());
+});
+
 test("CBOR keeps negative integers in integer form down to -2^64", async () => {
   const { CBOR } = await import("runtime:serialization");
   // Major type 1 reaches -2^64 (0x3b then eight 0xff); the encoder used to
