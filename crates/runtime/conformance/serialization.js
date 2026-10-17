@@ -327,6 +327,21 @@ test("CBOR coerces non-string map keys like a property access", async () => {
   assertEquals(Object.keys(obj).join(), "[object Object]");
 });
 
+test("CBOR keeps a __proto__ key as an own property", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // The map {__proto__: 7}. A plain `set` would run the inherited prototype
+  // setter — losing the key and making 7 the prototype — so the field must be
+  // defined as an own data property, exactly as `JSON.parse` does.
+  const obj = CBOR.decode(
+    new Uint8Array([
+      0xa1, 0x69, 0x5f, 0x5f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x5f, 0x5f, 0x07,
+    ]),
+  );
+  assertEquals(Object.prototype.hasOwnProperty.call(obj, "__proto__"), true);
+  assertEquals(obj.__proto__, 7);
+  assertEquals(Object.getPrototypeOf(obj), Object.prototype);
+});
+
 test("CBOR keeps negative integers in integer form down to -2^64", async () => {
   const { CBOR } = await import("runtime:serialization");
   // Major type 1 reaches -2^64 (0x3b then eight 0xff); the encoder used to

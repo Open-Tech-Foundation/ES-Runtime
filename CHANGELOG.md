@@ -48,6 +48,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- A host object marshalled into JavaScript lost a `__proto__` key: the conversion
+  assigned each field with an ordinary property set, which runs the inherited
+  `__proto__` setter instead of creating the key, so the field was absent and its
+  value became the object's prototype. Fields are now defined as own data
+  properties, matching `JSON.parse`.
+
 - `TransformStream`'s writable side ignored backpressure: the sink write ran the
   transform immediately, so a transform fed in one go — a `writer.write` loop, or
   a streaming `runtime:serialization` decoder — buffered its entire output in the

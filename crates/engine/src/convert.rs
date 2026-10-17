@@ -185,7 +185,12 @@ pub(crate) fn value_to_js<'s>(
                 let v8_key =
                     v8::String::new(scope, &key).unwrap_or_else(|| v8::String::empty(scope));
                 let v8_val = value_to_js(scope, val);
-                obj.set(scope, v8_key.into(), v8_val);
+                // Keys come from a decoded document, so a plain `set` would run
+                // any setter the key names on `Object.prototype` — `__proto__`
+                // worst of all, which would set the prototype instead of
+                // creating the key and silently drop an own property. Define an
+                // own data property, which no inherited accessor can intercept.
+                obj.create_data_property(scope, v8_key.into(), v8_val);
             }
             obj.into()
         }
