@@ -206,6 +206,10 @@ decoder's `flush` returns the last record *and* reports an unterminated quote â€
 the one error only the end of the stream can see â€” which is why
 `csv_stream_close` returns rows where XML's `close` returns nothing.
 
+Being a `TransformStream`, the decoder is backpressured: a writer that runs ahead
+of the reader is throttled at the readable side's high water mark, so decoding a
+large document holds only what the consumer has not read, not the whole thing.
+
 ### JSONL
 
 Streams only: `JSONL.DecoderStream` and `JSONL.EncoderStream`, both
