@@ -196,6 +196,38 @@ declare module "runtime:serialization" {
     export function encode(obj: any): Uint8Array;
   }
 
+  export namespace CBOR {
+    /**
+     * Validates a CBOR byte array, agreeing with `decode`: a document it would
+     * refuse (a tag, a trailing byte, a malformed value) is not valid.
+     * @param cbor The CBOR byte array to validate.
+     * @param options Validation options.
+     * @returns True if valid, false if invalid. If options.detailed is true, returns an object with valid and error properties.
+     */
+    export function validate(cbor: Uint8Array, options?: ValidationOptions): boolean | ValidationDetailedResult;
+
+    /**
+     * Decodes a CBOR (RFC 8949) byte array into a JavaScript value. Definite and
+     * indefinite-length strings, arrays and maps are accepted; tags are refused,
+     * since no JavaScript type corresponds to one.
+     * @param cbor The CBOR byte array to decode.
+     * @returns The decoded JavaScript value.
+     */
+    export function decode(cbor: Uint8Array): any;
+
+    /**
+     * Encodes a JavaScript value to a CBOR byte array in the deterministic
+     * (canonical) form of RFC 8949 §4.2: shortest-form integers and lengths,
+     * the shortest float that preserves the value, and bytewise-sorted map
+     * keys. A `Date` encodes as its ISO-8601 string, a `Map` as a map, a `Set`
+     * as an array, and a typed array as a byte string; a value with no CBOR
+     * representation throws rather than being written as `null`.
+     * @param obj The JavaScript value to serialize.
+     * @returns The serialized CBOR byte array.
+     */
+    export function encode(obj: any): Uint8Array;
+  }
+
   export interface JSONLParseError {
     line: number;
     raw: string;

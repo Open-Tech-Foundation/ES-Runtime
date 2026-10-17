@@ -2593,7 +2593,7 @@ const Protobuf = { Schema: class Schema {
 } };
 //#endregion
 //#region serialization/index.ts
-const { xml_parse, xml_validate, xml_build, yaml_parse, yaml_validate, yaml_build, toml_parse, toml_validate, toml_build, csv_parse, csv_validate, csv_build, csv_stream_new, csv_stream_push, csv_stream_close, csv_encode_new, csv_encode_push, csv_encode_close, msgpack_parse, msgpack_validate, msgpack_build, xml_stream_new, xml_stream_push, xml_stream_close } = globalThis.__ops;
+const { xml_parse, xml_validate, xml_build, yaml_parse, yaml_validate, yaml_build, toml_parse, toml_validate, toml_build, csv_parse, csv_validate, csv_build, csv_stream_new, csv_stream_push, csv_stream_close, csv_encode_new, csv_encode_push, csv_encode_close, msgpack_parse, msgpack_validate, msgpack_build, cbor_parse, cbor_validate, cbor_build, xml_stream_new, xml_stream_push, xml_stream_close } = globalThis.__ops;
 function validateWith(fn, input, options = {}) {
 	const result = fn(input);
 	if (result === true) return options.detailed ? { valid: true } : true;
@@ -2674,8 +2674,8 @@ const YAML = {
 	parse: (yaml) => yaml_parse(yaml),
 	build: (obj) => yaml_build(obj)
 };
-function toEncodable(value, depth = 0, seen = []) {
-	if (depth > 256) throw new RangeError("MessagePack: value nests too deeply to encode");
+function toEncodable(value, format, depth = 0, seen = []) {
+	if (depth > 256) throw new RangeError(`${format}: value nests too deeply to encode`);
 	if (value === null || typeof value !== "object") return value;
 	if (value instanceof Uint8Array) return value;
 	if (ArrayBuffer.isView(value)) {
@@ -2688,13 +2688,13 @@ function toEncodable(value, depth = 0, seen = []) {
 	seen = [...seen, value];
 	if (value instanceof Map) {
 		const out = {};
-		for (const [k, v] of value) out[String(k)] = toEncodable(v, depth + 1, seen);
+		for (const [k, v] of value) out[String(k)] = toEncodable(v, format, depth + 1, seen);
 		return out;
 	}
-	if (value instanceof Set) return [...value].map((v) => toEncodable(v, depth + 1, seen));
-	if (Array.isArray(value)) return value.map((v) => toEncodable(v, depth + 1, seen));
+	if (value instanceof Set) return [...value].map((v) => toEncodable(v, format, depth + 1, seen));
+	if (Array.isArray(value)) return value.map((v) => toEncodable(v, format, depth + 1, seen));
 	const out = {};
-	for (const k of Object.keys(value)) out[k] = toEncodable(value[k], depth + 1, seen);
+	for (const k of Object.keys(value)) out[k] = toEncodable(value[k], format, depth + 1, seen);
 	return out;
 }
 const MessagePack = {
@@ -2703,7 +2703,12 @@ const MessagePack = {
 		const decoded = msgpack_parse(msgpack);
 		return typeof decoded === "string" ? JSON.parse(decoded) : decoded;
 	},
-	encode: (obj) => msgpack_build(toEncodable(obj))
+	encode: (obj) => msgpack_build(toEncodable(obj, "MessagePack"))
+};
+const CBOR = {
+	validate: (cbor, options) => validateWith(cbor_validate, cbor, options),
+	decode: (cbor) => cbor_parse(cbor),
+	encode: (obj) => cbor_build(toEncodable(obj, "CBOR"))
 };
 var JSONLDecoderStream = class extends TransformStream {
 	onError;
@@ -2806,7 +2811,8 @@ var serialization_default = {
 	CSV,
 	JSONL,
 	MessagePack,
+	CBOR,
 	Protobuf
 };
 //#endregion
-export { CSV, JSONL, MessagePack, Protobuf, TOML, XML, YAML, serialization_default as default };
+export { CBOR, CSV, JSONL, MessagePack, Protobuf, TOML, XML, YAML, serialization_default as default };

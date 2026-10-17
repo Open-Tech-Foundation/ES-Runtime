@@ -1,8 +1,8 @@
 // runtime:serialization — entry bundled into
 // crates/runtime/src/runtime_modules/serialization.js (via `pnpm run build`).
 //
-// XML/YAML/TOML/CSV/JSONL/MessagePack are thin wrappers over the Rust host ops;
-// Protobuf is a pure-JS reflective implementation (./protobuf).
+// XML/YAML/TOML/CSV/JSONL/MessagePack/CBOR are thin wrappers over the Rust host
+// ops; Protobuf is a pure-JS reflective implementation (./protobuf).
 export { Protobuf } from "./protobuf/schema.ts";
 
 import { Protobuf as ProtobufDefault } from "./protobuf/schema.ts";
@@ -30,6 +30,9 @@ const {
   msgpack_parse,
   msgpack_validate,
   msgpack_build,
+  cbor_parse,
+  cbor_validate,
+  cbor_build,
   xml_stream_new,
   xml_stream_push,
   xml_stream_close,
@@ -158,8 +161,9 @@ export const YAML = {
 
 // Values that cross to the host as an *empty object* because they carry no own
 // enumerable properties — a `Map`, a `Set`, an `ArrayBuffer`. Encoding those as
-// `{}` is silent data loss, so the ones MessagePack can carry faithfully are
-// converted to a shape that survives, and the rest are refused by the encoder.
+// `{}` is silent data loss, so the ones the binary formats can carry faithfully
+// are converted to a shape that survives, and the rest are refused by the
+// encoder.
 //
 // Only containers are walked, and only on the encode path.
 //
@@ -167,8 +171,11 @@ export const YAML = {
 // reachable twice by different routes is still converted twice — only a genuine
 // cycle is refused. Without the check a cycle bottomed out on the depth cap
 // instead, reporting "nests too deeply" for a document that is not deep at all.
-function toEncodable(value: unknown, depth = 0, seen: object[] = []): unknown {
-  if (depth > 256) throw new RangeError("MessagePack: value nests too deeply to encode");
+//
+// `format` names the caller in the messages, since MessagePack and CBOR share
+// this conversion.
+function toEncodable(value: unknown, format: string, depth = 0, seen: object[] = []): unknown {
+  if (depth > 256) throw new RangeError(`${format}: value nests too deeply to encode`);
   if (value === null || typeof value !== "object") return value;
   if (value instanceof Uint8Array) return value;
   // Any other view, and a bare buffer, become bytes — this is a binary format.
@@ -182,14 +189,14 @@ function toEncodable(value: unknown, depth = 0, seen: object[] = []): unknown {
   seen = [...seen, value];
   if (value instanceof Map) {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of value) out[String(k)] = toEncodable(v, depth + 1, seen);
+    for (const [k, v] of value) out[String(k)] = toEncodable(v, format, depth + 1, seen);
     return out;
   }
-  if (value instanceof Set) return [...value].map((v) => toEncodable(v, depth + 1, seen));
-  if (Array.isArray(value)) return value.map((v) => toEncodable(v, depth + 1, seen));
+  if (value instanceof Set) return [...value].map((v) => toEncodable(v, format, depth + 1, seen));
+  if (Array.isArray(value)) return value.map((v) => toEncodable(v, format, depth + 1, seen));
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(value))
-    out[k] = toEncodable((value as Record<string, unknown>)[k], depth + 1, seen);
+    out[k] = toEncodable((value as Record<string, unknown>)[k], format, depth + 1, seen);
   return out;
 }
 
@@ -205,7 +212,17 @@ export const MessagePack = {
     const decoded = msgpack_parse(msgpack);
     return typeof decoded === "string" ? JSON.parse(decoded) : decoded;
   },
-  encode: (obj: unknown) => msgpack_build(toEncodable(obj)),
+  encode: (obj: unknown) => msgpack_build(toEncodable(obj, "MessagePack")),
+};
+
+// CBOR decodes straight to a value — never through the JSON string pivot — so
+// there is no string/value ambiguity to resolve here, and a top-level string
+// arrives as a string rather than as a document to parse.
+export const CBOR = {
+  validate: (cbor: Uint8Array, options?: ValidateOptions) =>
+    validateWith(cbor_validate, cbor, options),
+  decode: (cbor: Uint8Array) => cbor_parse(cbor),
+  encode: (obj: unknown) => cbor_build(toEncodable(obj, "CBOR")),
 };
 
 class JSONLDecoderStream extends TransformStream {
@@ -319,5 +336,6 @@ export default {
   CSV,
   JSONL,
   MessagePack,
+  CBOR,
   Protobuf: ProtobufDefault,
 };

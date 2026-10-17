@@ -3489,3 +3489,25 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 - **Type inference by default.** A guessed `1` cannot be told from a real one, and a phone number or ZIP code comes back changed.
 
 **Consequences:** `runtime:serialization` has a seventh namespace; the internals and reference pages say why `CSV.validate` alone forwards its options. The reader is exercised by the conformance suite, a fuzz target (parse → write → parse, and a byte-at-a-time stream decode that must equal `parse` at every split) and an E2E test under `--deny-all`. `csv_stream_close` returns the flushed rows and can throw (an unterminated quote is only knowable at the end), unlike `xml_stream_close`, so the decoder's `flush` enqueues its result.
+
+### D170 — `runtime:serialization` gains CBOR, in its deterministic form with tags refused · *Accepted (2026-10-17)*
+
+**Context:** The module ships XML, YAML, TOML, CSV, JSONL, MessagePack and Protobuf. CBOR (RFC 8949) is the IETF standard for the same binary, schema-less niche MessagePack fills, and unlike MessagePack it defines a *deterministic* encoding — the property a signature or a content address over the bytes needs. Adding it forces four choices before any code: how tags are handled, whether encoding is canonical, what the surface is, and how integers past 2<sup>53</sup> are carried.
+
+**Decision (maintainer, 2026-10-17):**
+
+- **CBOR joins the existing module** as a `CBOR` namespace — `decode`, `encode`, `validate` — with no new specifier and no capability. The binary shape follows MessagePack (`decode`/`encode`, not `parse`/`build`).
+- **Tags (major type 6) are refused,** and an unassigned simple value (major type 7) with them. No JavaScript type corresponds to a tag, and a wrapper object would make a tagged value indistinguishable from real data; `decode` reports the tag number and `encode` never writes one.
+- **`encode` writes the deterministic form of RFC 8949 §4.2:** shortest-form integers and lengths, the shortest float that preserves the value (half/single/double, with NaN as the canonical `f97e00`), and map keys sorted by the bytewise lexicographic order of their encodings. A decode/encode round trip therefore returns keys in canonical order, not the order written.
+- **Decoding is permissive over well-formed CBOR:** definite and indefinite-length strings, arrays and maps read; the whole input must be consumed; nesting is bounded at 256 levels, as everywhere else.
+- **Integers past 2<sup>53</sup> are `f64`,** exactly as MessagePack already behaves — the isolate's limit, not the codec's. `undefined` and `null` stay distinct (`0xf7`/`0xf6`).
+- **The codec is the runtime's own,** in safe Rust (`crates/runtime/src/cbor.rs`) — the marker table is small, MessagePack is already hand-written against it, and owning it keeps the codec fuzzable and boundable on its own terms. It decodes straight to the value tree, not through the JSON pivot, because JSON has neither a byte string nor `Infinity`/`NaN`.
+
+**Rejected:**
+- **A dependency (`ciborium`/`serde_cbor`).** Neither is in the tree, both bring a serde data model for a codec that is one match arm per major type, and neither yields the deterministic float widths and map ordering without its own options. Hand-writing keeps it dependency-free and fuzzable, as MessagePack's is.
+- **Decoding tags to native types (0/1 → `Date`, 2/3 → `BigInt`).** It needs a type-mapping policy and `Value`/engine changes for `BigInt`, and it would make a tag that names a date silently become a `Date` while a tag that names anything else becomes bytes — a rule with no principle behind it. Refusing is honest until a real use case forces the mapping.
+- **Ignoring tags (decoding the tagged value).** It never fails, which is the problem: the meaning the tag carried is dropped with nothing to see.
+- **A `canonical` option or byte-preserving passthrough.** One output form is simpler to reason about and to test; a caller who wants a different form can transform the value first.
+- **The JSON pivot for JSON-shaped documents.** It is MessagePack's fast path, but for CBOR it would break `Infinity`/`NaN` (JSON has none) and byte strings; one structural walk avoids both.
+
+**Consequences:** `runtime:serialization` has an eighth namespace; the internals and reference pages state the tag policy and the canonical-ordering consequence. The codec is exercised by unit tests against RFC 8949 Appendix A vectors, the conformance suite, and a `cbor` fuzz target (decode → encode → decode, which must not panic and must round-trip). A future `Date`/bignum mapping is a new record plus a readiness change, not a silent widening.

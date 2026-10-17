@@ -1,4 +1,4 @@
-//! Host ops backing the `runtime:serialization` module (XML/YAML/TOML/JSONL/MessagePack).
+//! Host ops backing the `runtime:serialization` module (XML/YAML/TOML/CSV/JSONL/MessagePack/CBOR).
 use es_runtime_common::ExceptionClass;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use quick_xml::Reader;
@@ -679,6 +679,41 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         // reach the encoder as JSON `null` and go out as `nil`, silently losing
         // the payload in the one format chosen for carrying it.
         match crate::msgpack::write_value(&val) {
+            Ok(bytes) => Ok(Value::Bytes(bytes)),
+            Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("cbor_parse", |args| {
+        let cbor_bytes = match args.first().and_then(Value::as_bytes) {
+            Some(b) => b,
+            None => return Err(OpError::type_error("cbor_parse expects a Uint8Array")),
+        };
+        // CBOR decodes straight to the value tree, not through the JSON pivot:
+        // JSON has neither a byte string nor `Infinity`/`NaN`, so a document
+        // using a byte string or a non-finite float would be narrowed on the
+        // way in. One structural walk avoids both.
+        crate::cbor::read_value(cbor_bytes)
+            .map_err(|e| OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {e}")))
+    }))?;
+
+    engine.register_op(OpDecl::sync("cbor_validate", |args| {
+        let cbor_bytes = match args.first().and_then(Value::as_bytes) {
+            Some(b) => b,
+            None => return Ok(Value::String("Expected a Uint8Array".into())),
+        };
+        // `validate` agrees with `decode` by construction: both read the whole
+        // document, so a value the decoder refuses (a tag, a trailing byte) is
+        // not reported valid.
+        match crate::cbor::read_value(cbor_bytes) {
+            Ok(_) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {e}"))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("cbor_build", |mut args| {
+        let val = args.drain(..).next().unwrap_or(Value::Null);
+        match crate::cbor::write_value(&val) {
             Ok(bytes) => Ok(Value::Bytes(bytes)),
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }

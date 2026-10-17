@@ -23,6 +23,17 @@ namespace) is unstable and may change between minor releases until the API freez
   is a new namespace in the existing module (no new specifier, no capability);
   the reader is the runtime's own safe-Rust implementation (DECISIONS D169).
 
+- `runtime:serialization` gains a `CBOR` namespace (`CBOR.decode`, `CBOR.validate`,
+  `CBOR.encode`) implementing RFC 8949. `encode` writes the deterministic form —
+  shortest-form integers and lengths, the shortest float that preserves the value
+  (NaN as the canonical `f97e00`), and map keys sorted by the bytewise
+  lexicographic order of their encodings — and `decode` accepts definite and
+  indefinite-length strings, arrays and maps while refusing tags, which have no
+  JavaScript counterpart. Integers past 2<sup>53</sup> are `f64`, as for
+  MessagePack, and `undefined` and `null` stay distinct. A new namespace in the
+  existing module (no new specifier, no capability); the codec is the runtime's
+  own safe-Rust implementation (DECISIONS D170).
+
 ### Changed
 
 - `install_gc_metrics` is no longer part of `es-runtime-engine`'s public API.

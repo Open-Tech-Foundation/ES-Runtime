@@ -2885,19 +2885,21 @@ pub/sub topics are follow-ups (D29).
 
 ## `runtime:serialization`
 
-A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, MessagePack, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, MessagePack, CBOR, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
 
 - **Capability:** None (pure computation)
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, CSV, MessagePack, Protobuf } from "runtime:serialization";
+import { XML, YAML, TOML, CSV, MessagePack, CBOR, Protobuf } from "runtime:serialization";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");
 const rows = CSV.parse("name,age\nAlice,30\n", { header: true }); // [{ name: "Alice", age: "30" }]
 const msgpackBytes = new Uint8Array([0x81, 0xa5, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa5, 0x77, 0x6f, 0x72, 0x6c, 0x64]);
 const obj2 = MessagePack.decode(msgpackBytes);
+const cborBytes = CBOR.encode({ hello: "world" }); // 0xa1 0x65 0x68 0x65 0x6c 0x6c 0x6f 0x65 0x77 0x6f 0x72 0x6c 0x64
+const obj3 = CBOR.decode(cborBytes); // { hello: "world" }
 
 const schema = new Protobuf.Schema(`
   syntax = "proto3";
@@ -3027,6 +3029,39 @@ a `Date`. Anything with no MessagePack representation at all (a function, a
 symbol, a `BigInt`) **throws** a `TypeError`; the encoder never substitutes
 `nil` for a value it could not represent.
 
+CBOR (RFC 8949) is the other binary format, under the `CBOR` namespace:
+
+| Export | Description |
+| --- | --- |
+| `CBOR.decode(bytes)` | Decodes a CBOR byte array into a JavaScript value. |
+| `CBOR.encode(obj)` | Encodes a JavaScript value into a CBOR `Uint8Array`. |
+| `CBOR.validate(bytes, opts?)` | Validates the given byte array; agrees with `decode`. |
+
+**CBOR encoding is deterministic (RFC 8949 §4.2).** Integers and lengths use the
+shortest form, a float uses the shortest width that preserves it exactly — half,
+single, or double, with NaN as the canonical `f97e00` — and map keys are sorted
+by the bytewise lexicographic order of their encodings. The same value therefore
+always encodes to the same bytes, and a decoded object's key order is the
+canonical one, not the order it was written in.
+
+Numerics and binary map as they do for MessagePack: a typed-array view or
+`ArrayBuffer` becomes a **byte string** (major type 2) and decodes back to a
+`Uint8Array`; a `Map` becomes a map (keys stringified), a `Set` an array, and a
+`Date` its ISO-8601 string. An integer-valued number encodes as an integer, so a
+float that happens to be whole (a decoded `100000.0`) re-encodes as the integer
+`100000`. `undefined` and `null` are distinct on the wire (`0xf7`/`0xf6`). A
+value with no CBOR form (a function, a symbol, a `BigInt`) **throws** a
+`TypeError`.
+
+**Tags (major type 6) are refused.** No JavaScript type corresponds to a CBOR
+tag, and inventing a wrapper would make a tagged value indistinguishable from
+real data the document contained, so `decode` reports the tag number and `encode`
+never writes one. Decoding accepts definite *and* indefinite-length strings,
+arrays and maps; a reserved initial byte, a stray `break`, a trailing byte, a
+malformed or oversized length, an unassigned simple value, or nesting past 256
+levels is a `SyntaxError`. `CBOR.validate` reads the whole document exactly as
+`decode` does, so the two always agree.
+
 For JSONL, it provides transform streams under the `JSONL` namespace:
 
 | Export | Description |
@@ -3044,7 +3079,7 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 
 | Export | Description |
 | --- | --- |
-| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `MessagePack`, `Protobuf`), as every other `runtime:` module provides. |
+| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `MessagePack`, `CBOR`, `Protobuf`), as every other `runtime:` module provides. |
 
 For Protobuf, schemas are compiled from `.proto` source at runtime:
 

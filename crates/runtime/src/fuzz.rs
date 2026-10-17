@@ -72,6 +72,13 @@ pub fn stream_csv(input: &str) {
     crate::csv::fuzz_stream_decode(input);
 }
 
+/// Decodes CBOR and, when a document decodes, re-encodes the value and decodes
+/// it again. The reader and writer both recurse over untrusted bytes, so the
+/// interesting cases are length arithmetic, truncation and nesting depth.
+pub fn decode_cbor(bytes: &[u8]) {
+    crate::cbor::fuzz_round_trip(bytes);
+}
+
 /// Decodes base64 the way `atob` does, including its stricter-than-usual
 /// whitespace and padding rules.
 pub fn atob(input: &str) {

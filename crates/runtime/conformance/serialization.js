@@ -253,6 +253,78 @@ test("MessagePack still round-trips the JSON-shaped documents on the fast path",
   assertEquals(JSON.stringify(MessagePack.decode(MessagePack.encode([]))), "[]");
 });
 
+// ---- CBOR ------------------------------------------------------------------
+//
+// CBOR (RFC 8949) joins as a second binary format. It shares MessagePack's
+// byte-for-byte concerns but adds the format's own decisions: the deterministic
+// encoding (shortest forms, canonical float width, sorted keys) on the way out,
+// and tags refused on the way in.
+test("CBOR round-trips the JSON-shaped documents and prefers integer forms", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // Canonical encoding sorts map keys, so an object comes back with its keys
+  // reordered — compare order-insensitively.
+  const sortKeys = (v) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, sortKeys(x)]))
+      : Array.isArray(v)
+        ? v.map(sortKeys)
+        : v;
+  const doc = {
+    t: true, f: false, nil: null, n: -25, big: 4294967296,
+    s: "héllo 😀", float: 1.5, arr: [1, 2, 3], nested: { a: "b" },
+  };
+  assertEquals(JSON.stringify(sortKeys(CBOR.decode(CBOR.encode(doc)))), JSON.stringify(sortKeys(doc)));
+  // The shortest integer form, and major type 1 for negatives.
+  assertEquals([...CBOR.encode(0)].join(), "0");
+  assertEquals([...CBOR.encode(23)].join(), "23");
+  assertEquals([...CBOR.encode(24)].join(), "24,24");
+  assertEquals([...CBOR.encode(-1)].join(), "32");
+  assertEquals([...CBOR.encode(-25)].join(), "56,24");
+});
+
+test("CBOR floats take the shortest exact width and special values are canonical", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  assertEquals([...CBOR.encode(1.5)].join(), "249,62,0");
+  assertEquals([...CBOR.encode(Infinity)].join(), "249,124,0");
+  assertEquals([...CBOR.encode(-0.0)].join(), "249,128,0");
+  // Hand-built f64 pi decodes exactly.
+  assertEquals(
+    CBOR.decode(new Uint8Array([0xfb, 0x40, 0x09, 0x21, 0xfb, 0x54, 0x44, 0x2d, 0x18])),
+    3.141592653589793,
+  );
+});
+
+test("CBOR sorts map keys canonically", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  // By encoded bytes the length prefix sorts first, so "a" < "b" < "aa" — not
+  // the insertion order and not plain lexicographic order.
+  assertEquals(
+    [...CBOR.encode({ b: 1, a: 2, aa: 3 })].join(),
+    "163,97,97,2,97,98,1,98,97,97,3",
+  );
+});
+
+test("CBOR keeps byte strings and reads indefinite-length input", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  const back = CBOR.decode(CBOR.encode({ data: new Uint8Array([0, 1, 254, 255]) }));
+  assert(back.data instanceof Uint8Array, "a byte string must decode to a Uint8Array");
+  assertEquals([...back.data].join(), "0,1,254,255");
+  // Indefinite-length text (_ "hi", "!!") and array (_ 1, 2).
+  assertEquals(CBOR.decode(new Uint8Array([0x7f, 0x62, 0x68, 0x69, 0x62, 0x21, 0x21, 0xff])), "hi!!");
+  assertEquals(JSON.stringify(CBOR.decode(new Uint8Array([0x9f, 0x01, 0x02, 0xff]))), "[1,2]");
+});
+
+test("CBOR refuses tags and malformed input, and validate agrees", async () => {
+  const { CBOR } = await import("runtime:serialization");
+  assertThrows(() => CBOR.decode(new Uint8Array([0xc0, 0x61, 0x61])), "SyntaxError"); // tag 0
+  assertThrows(() => CBOR.decode(new Uint8Array([0x00, 0x00])), "SyntaxError"); // trailing byte
+  assertThrows(() => CBOR.decode(new Uint8Array([0xff])), "SyntaxError"); // stray break
+  assert(!CBOR.validate(new Uint8Array([0xc0, 0x61, 0x61])), "a tag is not valid");
+  assert(CBOR.validate(new Uint8Array([0x00])), "a bare integer is valid");
+  // A value with no CBOR form throws rather than being written as null.
+  assertThrows(() => CBOR.encode(() => {}), "TypeError");
+});
+
 // ---- XML well-formedness ---------------------------------------------------
 //
 // EOF inside an open element used to end the parse quietly, so a truncated
@@ -461,12 +533,13 @@ test("runtime:serialization has a default export like every other runtime: modul
   assert(mod.default !== undefined, "a default export must exist");
   assertEquals(
     Object.keys(mod.default).sort().join(","),
-    "CSV,JSONL,MessagePack,Protobuf,TOML,XML,YAML",
+    "CBOR,CSV,JSONL,MessagePack,Protobuf,TOML,XML,YAML",
   );
   // The aggregate carries the real namespaces, not copies of their names.
   assertEquals(mod.default.YAML, mod.YAML);
   assertEquals(mod.default.XML, mod.XML);
   assertEquals(mod.default.CSV, mod.CSV);
+  assertEquals(mod.default.CBOR, mod.CBOR);
   assertEquals(mod.default.Protobuf, mod.Protobuf);
   assertEquals(typeof mod.default.MessagePack.encode, "function");
 });

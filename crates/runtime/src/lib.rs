@@ -16,6 +16,7 @@
 
 mod base64_ops;
 mod builtins;
+mod cbor;
 mod compression_ops;
 mod cookie_ops;
 mod crypto_ops;
@@ -6210,7 +6211,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 406;
+        const BASELINE: u32 = 411;
 
         assert!(
             pass >= BASELINE,
