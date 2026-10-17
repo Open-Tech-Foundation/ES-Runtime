@@ -6206,7 +6206,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 401;
+        const BASELINE: u32 = 404;
 
         assert!(
             pass >= BASELINE,

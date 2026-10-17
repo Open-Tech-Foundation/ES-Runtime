@@ -39,7 +39,11 @@
 
   function resetQueue(c) {
     c.queue = [];
+    c.queueHead = 0;
     c.queueTotalSize = 0;
+  }
+  function queueIsEmpty(c) {
+    return c.queueHead >= c.queue.length;
   }
   function enqueueValueWithSize(c, value, size) {
     if (!(size >= 0) || size === Infinity) {
@@ -49,12 +53,24 @@
     c.queueTotalSize += size;
   }
   function dequeueValue(c) {
-    const pair = c.queue.shift();
+    const pair = c.queue[c.queueHead];
+    // Advance a head index rather than `shift`-ing: draining a queue that a
+    // burst filled (a transform that enqueues a whole chunk's worth of rows at
+    // once) would otherwise move the tail on every read and cost O(n²).
+    c.queue[c.queueHead] = undefined;
+    c.queueHead += 1;
+    if (c.queueHead === c.queue.length) {
+      c.queue = [];
+      c.queueHead = 0;
+    } else if (c.queueHead >= 1024 && c.queueHead * 2 >= c.queue.length) {
+      c.queue = c.queue.slice(c.queueHead);
+      c.queueHead = 0;
+    }
     c.queueTotalSize -= pair.size;
     if (c.queueTotalSize < 0) c.queueTotalSize = 0;
     return pair.value;
   }
-  const peekQueueValue = (c) => c.queue[0].value;
+  const peekQueueValue = (c) => c.queue[c.queueHead].value;
 
   // ======================================================================
   // ReadableStream
@@ -265,6 +281,7 @@
     const c = (controller[S] = {
       stream,
       queue: [],
+      queueHead: 0,
       queueTotalSize: 0,
       started: false,
       closeRequested: false,
@@ -358,7 +375,7 @@
     const c = controller[S];
     if (!readableStreamDefaultControllerCanCloseOrEnqueue(controller)) return;
     c.closeRequested = true;
-    if (c.queue.length === 0) {
+    if (queueIsEmpty(c)) {
       resetQueue(c);
       readableStreamClose(c.stream);
     }
@@ -371,9 +388,9 @@
   }
   function readableStreamDefaultControllerPull(controller, readRequest) {
     const c = controller[S];
-    if (c.queue.length > 0) {
+    if (!queueIsEmpty(c)) {
       const chunk = dequeueValue(c);
-      if (c.closeRequested && c.queue.length === 0) {
+      if (c.closeRequested && queueIsEmpty(c)) {
         readableStreamClose(c.stream);
       } else {
         readableStreamDefaultControllerCallPullIfNeeded(controller);
@@ -665,6 +682,7 @@
     const c = (controller[S] = {
       stream,
       queue: [], // entries: { buffer, byteOffset, byteLength }
+      queueHead: 0,
       queueTotalSize: 0,
       closeRequested: false,
       started: false,
@@ -1022,6 +1040,7 @@
     if (c.stream[S].state !== "readable") return;
     c.pendingPullIntos = [];
     c.queue = [];
+    c.queueHead = 0;
     c.queueTotalSize = 0;
     invalidateBYOBRequest(c);
     readableStreamError(c.stream, e);
@@ -1189,6 +1208,7 @@
     const c = (controller[S] = {
       stream,
       queue: [],
+      queueHead: 0,
       queueTotalSize: 0,
       started: false,
       strategyHWM: hwm,
@@ -1275,7 +1295,7 @@
       writableStreamFinishErroring(stream);
       return;
     }
-    if (c.queue.length === 0) return;
+    if (queueIsEmpty(c)) return;
     const value = peekQueueValue(c);
     if (value === "close") {
       writableStreamDefaultControllerProcessClose(controller);

@@ -241,3 +241,59 @@ test("a locked stream cannot be transferred", () => {
     "DataCloneError",
   );
 });
+
+// The controller queue advances a head index rather than `shift`-ing, so a
+// burst of enqueues and its draining must stay FIFO, survive an enqueue after a
+// partial drain, and still close only once the queue is empty.
+test("a ReadableStream keeps FIFO order across a large enqueue burst", async () => {
+  const n = 5000;
+  const rs = new ReadableStream({
+    start(c) {
+      for (let i = 0; i < n; i++) c.enqueue(i);
+      c.close();
+    },
+  });
+  const seen = [];
+  for await (const chunk of rs) seen.push(chunk);
+  assertEquals(seen.length, n);
+  assertEquals(seen[0], 0);
+  assertEquals(seen[n - 1], n - 1);
+});
+
+test("a transform may enqueue many chunks per input chunk", async () => {
+  const out = [];
+  const ts = new TransformStream({
+    transform(chunk, c) {
+      for (let i = 0; i < chunk; i++) c.enqueue(i);
+    },
+  });
+  const reader = ts.readable.getReader();
+  const w = ts.writable.getWriter();
+  await w.write(4);
+  await w.close();
+  let done = false;
+  while (!done) {
+    const r = await reader.read();
+    if (r.done) done = true;
+    else out.push(r.value);
+  }
+  assertEquals(out.join(","), "0,1,2,3");
+});
+
+test("enqueue after a partial drain stays ordered and close waits for the drain", async () => {
+  let controller;
+  const rs = new ReadableStream({
+    start(c) {
+      controller = c;
+      c.enqueue("a");
+      c.enqueue("b");
+    },
+  });
+  const reader = rs.getReader();
+  assertEquals((await reader.read()).value, "a");
+  controller.enqueue("c");
+  controller.close();
+  assertEquals((await reader.read()).value, "b");
+  assertEquals((await reader.read()).value, "c");
+  assertEquals((await reader.read()).done, true);
+});

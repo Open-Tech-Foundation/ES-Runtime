@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **401 / 401** (100%) |
+| Assertions passing | **404 / 404** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 25 |
 | Last updated | 2026-10-17 |
@@ -39,7 +39,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `events.js` | Event/EventTarget, ErrorEvent, global failure events §2.7 | 27 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle, key wrapping, secure curves §2.10 | 21 | — |
-| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
+| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 20 | — |
 | `performance.js` | performance, User Timing §2.11/§2.1 | 11 | — |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `navigator.js` | navigator.userAgent §2.1 | 5 | — |

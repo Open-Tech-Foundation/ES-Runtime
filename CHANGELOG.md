@@ -33,6 +33,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- The stream controller queue dequeued with `Array.prototype.shift`, so a reader
+  draining a queue that a burst had filled moved the tail on every read and cost
+  O(n²). A transform that enqueues a whole chunk's worth of rows at once — the
+  streaming `runtime:serialization` decoders — paid it directly: a 50 000-row
+  CSV through `CSV.DecoderStream` took ~1.5 s. The queue now advances a head
+  index and reclaims the consumed prefix in bulk, so the same decode is ~100 ms
+  (measured by the `csv_stream` benchmark row).
+
 - `runtime:wasi`'s filesystem provider resolved a path and then acted on the
   *name*, so a directory swapped for a symlink in between was followed: a
   guest could read a file outside the directory its preopen granted
