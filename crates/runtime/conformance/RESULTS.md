@@ -14,10 +14,10 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **395 / 395** (100%) |
+| Assertions passing | **399 / 399** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 25 |
-| Last updated | 2026-10-13 |
+| Last updated | 2026-10-17 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
 **has** — it is counted above and gated as a non-regression floor. `todo(...)`
@@ -51,7 +51,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `wasm.js` | WebAssembly JS API | 18 | — |
 | `protobuf.js` | `runtime:serialization` Protobuf | 11 | — |
 | `serialization_edge.js` | `runtime:serialization` edge cases | 10 | — |
-| `serialization.js` | `runtime:serialization` YAML/XML/TOML/MessagePack | 1 | — |
+| `serialization.js` | `runtime:serialization` YAML/XML/TOML/CSV/MessagePack | 14 | — |
 | `jsonl_test.js` | JSONL streams over `runtime:fs` | 1 | — |
 
 ### Known deviations

@@ -3464,3 +3464,27 @@ Others: Vite's docs describe an update in terms of the "modules … affected by 
 - **An option naming the snippet's language.** The common case is TypeScript, and JavaScript without JSX parses as TypeScript, so nothing is lost by always stripping.
 
 **Consequences:** the inline module's name is one constant in `cli-common` (`INLINE_MODULE`) that `esdev`'s transform reads, rather than a literal in two crates. `esrun -e` is unchanged: it carries no transform, so a snippet there still runs as written.
+
+---
+
+### D169 — `runtime:serialization` gains CSV, with the mainstream output shape and its own reader · *Accepted (2026-10-16)*
+
+**Context:** The module ships XML, YAML, TOML, JSONL, MessagePack and Protobuf, but CSV — the most common tabular interchange — was absent, so a program read a `.csv` by splitting lines and fields by hand and got quoted fields, embedded delimiters and CRLF wrong every time. Adding it forces two choices before any code: how `parse` shapes its result, and where the reader comes from.
+
+The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and the Rust `csv` crate all yield **rows as field sequences** (`string[][]`); object output is opt-in (`header`/`columns`/`headers`). Type inference is **off by default** everywhere (`dynamicTyping:false`, `cast:false`, `checkType:false`; the Rust reader does not infer at all). And only Papa Parse returns an error envelope (`{ data, errors, meta }`) — the others return the value or an error, which is also what every other `runtime:serialization` parser does.
+
+**Decision (maintainer, 2026-10-16):**
+
+- **CSV joins the existing module** as a `CSV` namespace — `parse`, `validate`, `build` — with no new specifier and no capability.
+- **`parse` returns `string[][]` by default;** `header: true` keys objects by the first row (consumed), and `header: [names]` names every row. **Nothing is cast unless `cast` is set**, which recognises only plain decimals and `true`/`false`.
+- **Malformed input throws** (`SyntaxError`/`TypeError`/`RangeError`); there is no result envelope.
+- **`validate` forwards the options,** because validity depends on them: a ragged row is valid without a header and an error with one.
+- **The reader is the runtime's own,** in safe Rust (`crates/runtime/src/csv.rs`), like YAML's. A duplicate column name, an unterminated quote, a stray character after a closing quote (`"a"b`), and a ragged row (without `relaxColumnCount`) are errors; a field past `maxFieldBytes` or a record past `maxColumns` is a `RangeError`.
+
+**Rejected:**
+- **A dependency (`csv`/`csv-core`).** It brings its own record, error and byte-record model for a grammar this small, and the runtime already hand-writes its own reader for a comparable surface (YAML) rather than take one. Keeping it dependency-free also keeps it fuzzable and boundable on its own terms.
+- **Object-first output (d3-dsv, csvtojson).** It only loses nothing when a header exists; arrays are the general default and the one that degrades cleanly.
+- **A `{ data, errors, meta }` envelope (Papa Parse).** It exists there because Papa Parse also reads files and streams; it is absent from every other reader, and it would make "parsed to an object" indistinguishable from "an error object".
+- **Type inference by default.** A guessed `1` cannot be told from a real one, and a phone number or ZIP code comes back changed.
+
+**Consequences:** `runtime:serialization` has a seventh namespace; the internals and reference pages say why `CSV.validate` alone forwards its options. The reader is exercised by the conformance suite, a fuzz target (parse → write → parse) and an E2E test under `--deny-all`.

@@ -652,6 +652,25 @@ fn runtime_modules_import_even_under_deny_all() {
 }
 
 #[test]
+fn serialization_format_ops_need_no_capability() {
+    // XML/YAML/TOML/CSV/MessagePack are pure computation, so they fall under the
+    // D26 invariant too: they run under `--deny-all` with no capability granted.
+    let out = run(
+        &["--deny-all"],
+        "const { CSV } = await import('runtime:serialization'); \
+         const rows = CSV.parse('a,b\\n1,2\\n', { header: true }); \
+         console.log(JSON.stringify(rows)); \
+         console.log(CSV.validate('a,b\\n1\\n', { header: true })); \
+         console.log(JSON.stringify(CSV.build(rows)));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "[{\"a\":\"1\",\"b\":\"2\"}]\nfalse\n\"a,b\\n1,2\\n\"\n"
+    );
+}
+
+#[test]
 fn deny_env_leaves_exit_and_permissions_working() {
     // Denying `env` must deny reading the environment — not the unrelated
     // ability to exit, nor the ability to ask what is denied.

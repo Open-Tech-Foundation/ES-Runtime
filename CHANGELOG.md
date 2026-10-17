@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:serialization` gains a `CSV` namespace (`CSV.parse`, `CSV.validate`,
+  `CSV.build`). `parse` returns arrays of fields by default and objects with
+  `header`, casts nothing unless `cast` is set, and throws on malformed input —
+  the output shape the mainstream readers (Papa Parse, csv-parse, fast-csv, the
+  Rust `csv` crate) agree on. CSV is a new namespace in the existing module (no
+  new specifier, no capability); the reader is the runtime's own safe-Rust
+  implementation (DECISIONS D169).
+
 ### Changed
 
 - `install_gc_metrics` is no longer part of `es-runtime-engine`'s public API.

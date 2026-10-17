@@ -45,7 +45,7 @@ esrun targets the WinterTC web-platform surface, so web globals (`URL`, `Blob`,
 - `runtime:net` — `connect`, `listen`, `bind`, `Socket`, `Listener`, `DatagramSocket`
 - `runtime:http` — `serve`, `Handler`, `Server`, `withTrailers`
 - `runtime:websocket` — `serve`, `upgradeWebSocket`, `WebSocketConnection`, `broadcast`
-- `runtime:serialization` — `XML`, `YAML`, `TOML`, `MessagePack`, `JSONL`, `Protobuf`
+- `runtime:serialization` — `XML`, `YAML`, `TOML`, `CSV`, `MessagePack`, `JSONL`, `Protobuf`
 - `runtime:hashing` — `hash`, `Hasher`, `hashStream`, `hmac`, `timingSafeEqual`, `password`
 - `runtime:images` — `Image`
 - `runtime:system` — `Command`, `ChildProcess`

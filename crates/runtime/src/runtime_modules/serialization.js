@@ -2593,7 +2593,7 @@ const Protobuf = { Schema: class Schema {
 } };
 //#endregion
 //#region serialization/index.ts
-const { xml_parse, xml_validate, xml_build, yaml_parse, yaml_validate, yaml_build, toml_parse, toml_validate, toml_build, msgpack_parse, msgpack_validate, msgpack_build, xml_stream_new, xml_stream_push, xml_stream_close } = globalThis.__ops;
+const { xml_parse, xml_validate, xml_build, yaml_parse, yaml_validate, yaml_build, toml_parse, toml_validate, toml_build, csv_parse, csv_validate, csv_build, msgpack_parse, msgpack_validate, msgpack_build, xml_stream_new, xml_stream_push, xml_stream_close } = globalThis.__ops;
 function validateWith(fn, input, options = {}) {
 	const result = fn(input);
 	if (result === true) return options.detailed ? { valid: true } : true;
@@ -2606,6 +2606,18 @@ const TOML = {
 	validate: (toml, options) => validateWith(toml_validate, toml, options),
 	parse: (toml) => toml_parse(toml),
 	build: (obj) => toml_build(obj)
+};
+const CSV = {
+	validate: (csv, options = {}) => {
+		const result = csv_validate(csv, options);
+		if (result === true) return options.detailed ? { valid: true } : true;
+		return options.detailed ? {
+			valid: false,
+			error: result
+		} : false;
+	},
+	parse: (csv, options) => csv_parse(csv, options),
+	build: (rows, options) => csv_build(rows, options)
 };
 const YAML = {
 	validate: (yaml, options) => validateWith(yaml_validate, yaml, options),
@@ -2741,9 +2753,10 @@ var serialization_default = {
 	XML,
 	YAML,
 	TOML,
+	CSV,
 	JSONL,
 	MessagePack,
 	Protobuf
 };
 //#endregion
-export { JSONL, MessagePack, Protobuf, TOML, XML, YAML, serialization_default as default };
+export { CSV, JSONL, MessagePack, Protobuf, TOML, XML, YAML, serialization_default as default };

@@ -57,6 +57,14 @@ pub fn parse_yaml(input: &str) {
     crate::yaml::fuzz_round_trip(input);
 }
 
+/// Parses CSV with the runtime's own reader and, when that succeeds, writes the
+/// value back out and reads it again. The reader is hand-written over a
+/// byte-oriented grammar, so quote- and length-boundary arithmetic is the
+/// interesting part.
+pub fn parse_csv(input: &str) {
+    crate::csv::fuzz_round_trip(input);
+}
+
 /// Decodes base64 the way `atob` does, including its stricter-than-usual
 /// whitespace and padding rules.
 pub fn atob(input: &str) {

@@ -303,6 +303,95 @@ test("XML requires a root element", async () => {
   assertEquals(JSON.stringify(XML.parse("<r/>")), '{"r":""}');
 });
 
+test("CSV parses as arrays by default and objects with header", async () => {
+  const { CSV } = await import("runtime:serialization");
+
+  // Default: array of field arrays, every field a string, no typing.
+  assertEquals(JSON.stringify(CSV.parse("a,b\n1,2\n")), JSON.stringify([["a", "b"], ["1", "2"]]));
+
+  // A quoted field keeps its delimiter and newline; doubled quotes unescape.
+  assertEquals(JSON.stringify(CSV.parse('"a,b","c\nd"\n')), JSON.stringify([["a,b", "c\nd"]]));
+  assertEquals(JSON.stringify(CSV.parse('"say ""hi"""\n')), JSON.stringify([['say "hi"']]));
+
+  // CRLF and a bare CR both end records; a trailing newline adds no row.
+  assertEquals(JSON.stringify(CSV.parse("a,b\r\n1,2\r\n")), JSON.stringify([["a", "b"], ["1", "2"]]));
+  assertEquals(JSON.stringify(CSV.parse("a,b\r1,2")), JSON.stringify([["a", "b"], ["1", "2"]]));
+
+  // header:true consumes the first row into keys.
+  assertEquals(
+    JSON.stringify(CSV.parse("name,age\nAlice,30\n", { header: true })),
+    JSON.stringify([{ name: "Alice", age: "30" }]),
+  );
+
+  // Explicit names treat every row as data.
+  assertEquals(
+    JSON.stringify(CSV.parse("1,2\n", { header: ["x", "y"] })),
+    JSON.stringify([{ x: "1", y: "2" }]),
+  );
+
+  // cast is off unless asked for.
+  assertEquals(typeof CSV.parse("n\n1\n", { header: true })[0].n, "string");
+  assertEquals(CSV.parse("n\n1\n", { header: true, cast: true })[0].n, 1);
+  // …and never invents a value the source did not spell out.
+  assertEquals(CSV.parse("n\ninf\n", { header: true, cast: true })[0].n, "inf");
+
+  // Malformed input throws rather than returning a result envelope.
+  assertThrows(() => CSV.parse('"a,b'), "SyntaxError");
+  assertThrows(() => CSV.parse('"a"b\n'), "SyntaxError");
+});
+
+test("CSV validates, and validity follows the parse options", async () => {
+  const { CSV } = await import("runtime:serialization");
+  assertEquals(CSV.validate("a,b\n1,2\n"), true);
+  assertEquals(
+    JSON.stringify(CSV.validate("a,b\n1,2\n", { detailed: true })),
+    JSON.stringify({ valid: true }),
+  );
+  // A ragged row is fine without a header but an error once one is declared —
+  // which is why `validate` forwards the parse options.
+  assertEquals(CSV.validate("a,b\n1\n"), true);
+  assertEquals(CSV.validate("a,b\n1\n", { header: true }), false);
+  const bad = CSV.validate("a,b\n1\n", { header: true, detailed: true });
+  assert(bad.valid === false && typeof bad.error === "string", "detailed invalid shape");
+});
+
+test("CSV build quotes only when needed and round-trips", async () => {
+  const { CSV } = await import("runtime:serialization");
+  assertEquals(CSV.build([["a", "b,c", 'd"e', "f\ng"]]), 'a,"b,c","d""e","f\ng"\n');
+  // Objects infer a header from the first row.
+  assertEquals(CSV.build([{ name: "Alice", age: 30 }]), "name,age\nAlice,30\n");
+  // Round-trip back through parse.
+  const rows = CSV.parse('name,note\nAlice,"hi, there"\n', { header: true });
+  assertEquals(JSON.stringify(CSV.parse(CSV.build(rows), { header: true })), JSON.stringify(rows));
+});
+
+test("CSV round-trips and refuses the shapes the reader would misread", async () => {
+  const { CSV } = await import("runtime:serialization");
+
+  // A field starting with the comment character is quoted, so the row survives
+  // a round trip instead of being dropped as a comment line.
+  const built = CSV.build([["#note", "val"]], { comment: "#" });
+  assertEquals(built, '"#note",val\n');
+  assertEquals(
+    JSON.stringify(CSV.parse(built, { comment: "#" })),
+    JSON.stringify([["#note", "val"]]),
+  );
+
+  // An absent (`undefined`) cell is an empty field, not an error.
+  assertEquals(CSV.build([["a", undefined]]), "a,\n");
+
+  // A decimal that overflows f64 stays the string it was, so `build` can still
+  // write it.
+  assertEquals(CSV.parse("1e500\n", { cast: true })[0][0], "1e500");
+
+  // Named columns share the inferred header's duplicate rule.
+  assertThrows(() => CSV.parse("1,2\n", { header: ["a", "a"] }), "SyntaxError");
+
+  // A delimiter or quote that cannot be told apart is refused.
+  assertThrows(() => CSV.parse("a,b\n", { delimiter: '"' }), "TypeError");
+  assertThrows(() => CSV.parse("a,b\n", { quote: "\n" }), "TypeError");
+});
+
 test("runtime:serialization has a default export like every other runtime: module", async () => {
   // It was the only one of the nine without one, so
   // `import serialization from "runtime:serialization"` was a SyntaxError for
@@ -311,11 +400,12 @@ test("runtime:serialization has a default export like every other runtime: modul
   assert(mod.default !== undefined, "a default export must exist");
   assertEquals(
     Object.keys(mod.default).sort().join(","),
-    "JSONL,MessagePack,Protobuf,TOML,XML,YAML",
+    "CSV,JSONL,MessagePack,Protobuf,TOML,XML,YAML",
   );
   // The aggregate carries the real namespaces, not copies of their names.
   assertEquals(mod.default.YAML, mod.YAML);
   assertEquals(mod.default.XML, mod.XML);
+  assertEquals(mod.default.CSV, mod.CSV);
   assertEquals(mod.default.Protobuf, mod.Protobuf);
   assertEquals(typeof mod.default.MessagePack.encode, "function");
 });

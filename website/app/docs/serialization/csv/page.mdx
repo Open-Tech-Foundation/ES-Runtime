@@ -1,0 +1,86 @@
+---
+title: CSV
+description: Native CSV parsing in runtime:serialization — arrays by default, objects on request, no npm package.
+---
+
+# CSV
+
+CSV lives in `runtime:serialization` and runs in Rust — parse, validate and
+build, with no npm package to add.
+
+## Parsing CSV
+
+`CSV.parse` returns an array of field arrays by default, every field a string.
+Pass `header: true` to key objects by the first row (which is then consumed).
+
+```js
+import { CSV } from "runtime:serialization";
+
+const text = `name,note
+Alice,"hi, there"
+Bob,"say ""hi"""`;
+
+CSV.parse(text);
+// [["name","note"],["Alice","hi, there"],["Bob",'say "hi"']]
+
+CSV.parse(text, { header: true });
+// [{ name: "Alice", note: "hi, there" }, { name: "Bob", note: 'say "hi"' }]
+```
+
+A quoted field keeps its delimiter and newlines, and `""` reads back as one `"`.
+`header` can also be an array of names, in which case every row is data:
+
+```js
+CSV.parse("1,2\n3,4\n", { header: ["x", "y"] });
+// [{ x: "1", y: "2" }, { x: "3", y: "4" }]
+```
+
+Nothing is type-cast unless you ask. `cast: true` turns plain decimal fields into
+numbers and `true`/`false` into booleans — and leaves anything it cannot read
+exactly (`inf`, `nan`, hex, a decimal too large for `f64`, an empty field) as the
+string it was.
+
+```js
+CSV.parse("n\n1\n", { header: true, cast: true }); // [{ n: 1 }]
+```
+
+Other options: `delimiter`, `quote`, `escape`, `trim`, `skipEmptyLines`,
+`comment`, `relaxColumnCount`, `maxFieldBytes`, `maxColumns`, `bom` and
+`newline`. See the [API reference](/api/serialization) for the full table.
+
+## Validating CSV
+
+`CSV.validate` takes the same options as `parse`, because validity depends on
+them: a ragged row is fine by default but an error once a header is declared.
+
+```js
+import { CSV } from "runtime:serialization";
+
+CSV.validate("a,b\n1,2\n");                 // true
+CSV.validate("a,b\n1\n");                   // true  (no header)
+CSV.validate("a,b\n1\n", { header: true }); // false (ragged)
+
+const result = CSV.validate("a,b\n1\n", { header: true, detailed: true });
+console.log(result.valid); // false
+console.log(result.error); // "Validation failed: expected 2 field(s) but found 1"
+```
+
+## Building CSV
+
+`CSV.build` writes an array of rows. An array of arrays is written verbatim; an
+array of objects infers its header from the first object's keys.
+
+```js
+import { CSV } from "runtime:serialization";
+
+CSV.build([["a", "b,c", 'd"e']]);
+// 'a,"b,c","d""e"\n'
+
+CSV.build([{ name: "Alice", age: 30 }]);
+// "name,age\nAlice,30\n"
+```
+
+A field is quoted only when it contains the delimiter, the quote or a line break,
+or (with `comment` set) starts with the comment byte, so a round trip through
+`parse` keeps the row. An absent (`null` or `undefined`) field is written empty.
+`NaN` and `±Infinity` have no CSV representation and throw a `TypeError`.

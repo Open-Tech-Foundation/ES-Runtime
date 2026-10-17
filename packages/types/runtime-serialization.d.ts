@@ -84,6 +84,72 @@ declare module "runtime:serialization" {
     export function build(obj: any): string;
   }
 
+  export interface CSVOptions {
+    /** Field separator; a single byte. Default ",". */
+    delimiter?: string;
+    /** Quote character; a single byte. Default "\"". */
+    quote?: string;
+    /** Escape character inside a quoted field. Default is RFC 4180 doubling. */
+    escape?: string;
+    /**
+     * `false` (default) returns arrays of fields; `true` keys objects by the
+     * first row; an array of names keys every row and treats the first row as
+     * data.
+     */
+    header?: boolean | string[];
+    /** Trim surrounding whitespace from unquoted fields. Default false. */
+    trim?: boolean;
+    /** Drop records that are a single empty field. Default false. */
+    skipEmptyLines?: boolean;
+    /**
+     * A single byte; lines beginning with it are skipped whole. `build` quotes a
+     * field that starts with it, so the row is not lost on a round trip.
+     */
+    comment?: string;
+    /**
+     * Convert plain decimal fields to numbers and `true`/`false` to booleans.
+     * Default false — every field is a string unless asked. `inf`, `nan`, hex,
+     * and a decimal that overflows `f64` stay strings.
+     */
+    cast?: boolean;
+    /**
+     * Allow rows whose field count differs from the header. Off by default, so
+     * a ragged row is an error. Missing keys are omitted; extras are dropped.
+     */
+    relaxColumnCount?: boolean;
+    /** Per-field byte cap. Default 16 MiB. */
+    maxFieldBytes?: number;
+    /** Per-record field cap. Default 1_048_576. */
+    maxColumns?: number;
+    /** Strip a leading UTF-8 BOM. Default true. */
+    bom?: boolean;
+    /** Record separator `build` writes. Default "\n". */
+    newline?: "\n" | "\r\n" | "\r";
+  }
+
+  export interface CSVValidateOptions extends CSVOptions {
+    detailed?: boolean;
+  }
+
+  export namespace CSV {
+    /**
+     * Validates CSV text under the same options as `parse`.
+     * @returns True if valid, false if invalid. If options.detailed is true, returns an object with valid and error properties.
+     */
+    export function validate(csv: string, options?: CSVValidateOptions): boolean | ValidationDetailedResult;
+
+    /**
+     * Parses CSV text. Returns an array of field arrays by default, or an array
+     * of objects when `header` is set.
+     */
+    export function parse(csv: string, options?: CSVOptions): any;
+
+    /**
+     * Writes an array of rows (arrays or objects) as CSV text.
+     */
+    export function build(rows: any, options?: CSVOptions): string;
+  }
+
   export namespace MessagePack {
     /**
      * Validates a MessagePack byte array.

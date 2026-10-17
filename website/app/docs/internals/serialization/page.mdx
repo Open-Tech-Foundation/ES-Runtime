@@ -152,6 +152,44 @@ Clip preserves a *final line break that exists*. A block scalar that ends at
 end-of-file with no newline after it has none to preserve, so `"l1\nl2"` is the
 correct answer there — not a dropped newline.
 
+### CSV
+
+**The reader is the runtime's own**, in safe Rust (`crates/runtime/src/csv.rs`),
+for the same reason YAML's is: the surface is small, the interesting cases are
+malformed, and it sits behind the op boundary where every byte is untrusted. A
+delimiter, a quote and a line break are all ASCII, so the byte scanner only ever
+splits on ASCII boundaries and never has to reason about code points.
+
+**Fields are strings and rows are arrays by default.** That is the shape the
+general-purpose parsers converge on — Papa Parse, csv-parse, fast-csv, neat-csv
+and the Rust `csv` crate all yield rows as field sequences — and the one that
+loses nothing when the file has no header. `header` is opt-in, consumes the first
+row, and only then does a row become an object. Typing is opt-in for the same
+reason: no general-purpose reader infers types by default, and a guessed `1` — a
+phone number, a ZIP code — is harder to get back than to avoid.
+
+**Malformed input throws rather than collecting errors into an envelope.** Only
+Papa Parse returns `{ data, errors, meta }`, and only because it also handles
+files and streams; csv-parse, d3-dsv and the Rust `csv` reader return the value
+or an error. Every other `runtime:serialization` parser already throws, so CSV
+does too.
+
+**Strictness is the reader's, not the file's.** A duplicate column name, an
+unterminated quote, and a stray character after a closing quote (`"a"b`) are all
+errors, and a row whose field count differs from the header is an error unless
+`relaxColumnCount` says otherwise. A field past `maxFieldBytes` or a record past
+`maxColumns` is a `RangeError`, so one very long line cannot be used to exhaust
+memory.
+
+**A round trip is preserved or refused, never silently lossy.** `comment` drops a
+whole line, so `build` quotes any field that starts with the comment byte —
+otherwise writing then reading would lose the row. `cast` accepts only a plain
+decimal `f64` holds exactly, so `1e500` stays the string it was rather than
+becoming `Infinity`, which `build` would then refuse. And an option set whose
+`delimiter` or `quote` is a line break, or where the two are equal, is refused up
+front: such input has no unambiguous reading, so accepting it would emit rows the
+writer could not rebuild.
+
 ### JSONL
 
 Streams only: `JSONL.DecoderStream` and `JSONL.EncoderStream`, both

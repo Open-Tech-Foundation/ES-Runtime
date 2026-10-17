@@ -684,7 +684,51 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         }
     }))?;
 
+    engine.register_op(OpDecl::sync("csv_parse", |args| {
+        let csv = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => return Err(OpError::type_error("csv_parse expects a string")),
+        };
+        let options = crate::csv::Options::from_value(args.get(1))
+            .map_err(|e| OpError::new(csv_class(e.kind), e.message))?;
+        crate::csv::parse(csv, &options)
+            .map_err(|e| OpError::new(csv_class(e.kind), format!("Parse failed: {e}")))
+    }))?;
+
+    engine.register_op(OpDecl::sync("csv_validate", |args| {
+        let csv = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => return Ok(Value::String("Expected a string".into())),
+        };
+        let options = match crate::csv::Options::from_value(args.get(1)) {
+            Ok(o) => o,
+            Err(e) => return Ok(Value::String(format!("Validation failed: {e}"))),
+        };
+        match crate::csv::validate(csv, &options) {
+            Ok(()) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {e}"))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("csv_build", |args| {
+        let value = args.first().cloned().unwrap_or(Value::Null);
+        let options = crate::csv::Options::from_value(args.get(1))
+            .map_err(|e| OpError::new(csv_class(e.kind), e.message))?;
+        crate::csv::emit(&value, &options)
+            .map(Value::String)
+            .map_err(|e| OpError::new(csv_class(e.kind), format!("Build failed: {e}")))
+    }))?;
+
     Ok(())
+}
+
+/// Maps a CSV error kind to the JavaScript exception class it should raise.
+fn csv_class(kind: crate::csv::ErrorKind) -> ExceptionClass {
+    match kind {
+        crate::csv::ErrorKind::Syntax => ExceptionClass::SyntaxError,
+        crate::csv::ErrorKind::Type => ExceptionClass::TypeError,
+        crate::csv::ErrorKind::Limit => ExceptionClass::RangeError,
+    }
 }
 
 /// Fuzz entry: parse XML into the runtime's value tree (see [`crate::fuzz`]).

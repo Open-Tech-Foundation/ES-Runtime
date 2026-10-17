@@ -1,7 +1,7 @@
 // runtime:serialization — entry bundled into
 // crates/runtime/src/runtime_modules/serialization.js (via `pnpm run build`).
 //
-// XML/YAML/TOML/JSONL/MessagePack are thin wrappers over the Rust host ops;
+// XML/YAML/TOML/CSV/JSONL/MessagePack are thin wrappers over the Rust host ops;
 // Protobuf is a pure-JS reflective implementation (./protobuf).
 export { Protobuf } from "./protobuf/schema.ts";
 
@@ -18,6 +18,9 @@ const {
   toml_parse,
   toml_validate,
   toml_build,
+  csv_parse,
+  csv_validate,
+  csv_build,
   msgpack_parse,
   msgpack_validate,
   msgpack_build,
@@ -39,6 +42,40 @@ export const TOML = {
   validate: (toml: string, options?: ValidateOptions) => validateWith(toml_validate, toml, options),
   parse: (toml: string) => toml_parse(toml),
   build: (obj: unknown) => toml_build(obj),
+};
+
+export interface CSVOptions {
+  delimiter?: string;
+  quote?: string;
+  escape?: string;
+  header?: boolean | string[];
+  trim?: boolean;
+  skipEmptyLines?: boolean;
+  comment?: string;
+  cast?: boolean;
+  relaxColumnCount?: boolean;
+  maxFieldBytes?: number;
+  maxColumns?: number;
+  bom?: boolean;
+  newline?: "\n" | "\r\n" | "\r";
+}
+
+export interface CSVValidateOptions extends CSVOptions {
+  detailed?: boolean;
+}
+
+// CSV is the one format whose *validity* depends on the parse options: a ragged
+// row is fine by default but an error once `header` is set, so `validate` has to
+// forward the options rather than just the text the way XML/YAML/TOML do. The
+// `detailed` flag is ignored by the host, which only reads the parse options.
+export const CSV = {
+  validate: (csv: string, options: CSVValidateOptions = {}) => {
+    const result = csv_validate(csv, options);
+    if (result === true) return options.detailed ? { valid: true } : true;
+    return options.detailed ? { valid: false, error: result } : false;
+  },
+  parse: (csv: string, options?: CSVOptions) => csv_parse(csv, options),
+  build: (rows: unknown, options?: CSVOptions) => csv_build(rows, options),
 };
 
 export const YAML = {
@@ -207,6 +244,7 @@ export default {
   XML,
   YAML,
   TOML,
+  CSV,
   JSONL,
   MessagePack,
   Protobuf: ProtobufDefault,

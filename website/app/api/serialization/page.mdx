@@ -1,14 +1,14 @@
 ---
 title: runtime:serialization
-description: Native parsers for JSONL, XML, YAML, TOML, MessagePack, and Protobuf — running directly in Rust.
+description: Native parsers for JSONL, XML, YAML, TOML, CSV, MessagePack, and Protobuf — running directly in Rust.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # runtime:serialization
 
-XML, YAML, TOML, MessagePack and JSONL parse in Rust — the text or bytes cross
-the op boundary once and a JavaScript value comes back. Protobuf is the
+XML, YAML, TOML, CSV, MessagePack and JSONL parse in Rust — the text or bytes
+cross the op boundary once and a JavaScript value comes back. Protobuf is the
 exception: it is a reflective pure-JavaScript implementation, because a `.proto`
 is compiled at run time rather than by a build step.
 
@@ -20,7 +20,7 @@ is compiled at run time rather than by a build step.
 
 ```js
 import {
-  JSONL, XML, YAML, TOML, MessagePack, Protobuf
+  JSONL, XML, YAML, TOML, CSV, MessagePack, Protobuf
 } from "runtime:serialization";
 ```
 
@@ -87,6 +87,43 @@ Synchronous parsing, building, and validation of TOML data.
 | `TOML.build(obj)` | `(object) => string` | Serializes a JavaScript object into a TOML string. The root must be an object/table. | `TOML.build({ key: "value" })` |
 | `TOML.validate(toml, options?)` | `(string, object) => boolean \| object` | Validates a TOML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `TOML.validate("key = 'value'", { detailed: true })` |
 
+## CSV
+
+Synchronous parsing, building, and validation of CSV. `CSV.parse` returns
+**arrays of fields** (`string[][]`) by default and only keys objects when asked;
+every field is a **string** unless `cast` is set.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `CSV.parse(csv, options?)` | `(string, object) => any` | Parses CSV text. `string[][]` by default, or an array of objects when `header` is set. | `CSV.parse("a,b\n1,2\n")` |
+| `CSV.build(rows, options?)` | `(any, object) => string` | Writes an array of rows (arrays, or objects keyed by `header`) as CSV text. | `CSV.build([["a", "b"]])` |
+| `CSV.validate(csv, options?)` | `(string, object) => boolean \| object` | Validates under the same options as `parse`. Option `detailed?` (default `false`): return `{ valid, error? }`. | `CSV.validate("a,b\n1,2\n")` |
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `delimiter` | `","` | Field separator (a single byte). |
+| `quote` | `"\""` | Quote character (a single byte). |
+| `escape` | doubling | Escape inside a quoted field; the default is RFC 4180 `""`. |
+| `header` | `false` | `false` → arrays; `true` → keys objects by the first row (consumed); a `string[]` → names every row and treats the first row as data. |
+| `trim` | `false` | Trim whitespace from **unquoted** fields. |
+| `skipEmptyLines` | `false` | Drop records that are a single empty field. |
+| `comment` | — | A single byte; lines beginning with it are skipped whole. `build` quotes a field that starts with it so the row survives a round trip. |
+| `cast` | `false` | Convert plain decimal fields to numbers and `true`/`false` to booleans. `inf`, `nan`, hex, and an overflowing decimal stay strings. |
+| `relaxColumnCount` | `false` | Allow rows whose field count differs from the header. |
+| `maxFieldBytes` | 16 MiB | Per-field byte cap. |
+| `maxColumns` | 1,048,576 | Per-record field cap. |
+| `bom` | `true` | Strip a leading UTF-8 BOM. |
+| `newline` | `"\n"` | The record separator `build` writes. |
+
+A quoted field keeps delimiters and newlines, and `""` reads back as one `"`. With
+`header` set, every row must match the header's field count unless
+`relaxColumnCount` is on. A duplicate column name (inferred or explicit), a
+stray character after a closing quote, and a `delimiter` or `quote` that is a
+line break (or a `delimiter` equal to the `quote`) are errors. `build` writes an
+absent (`null`/`undefined`) field empty and quotes a field that starts with the
+`comment` byte. Unlike XML/YAML/TOML, `CSV.validate` forwards the options,
+because a ragged row is valid without a header and invalid with one.
+
 ## MessagePack
 
 Synchronous parsing, building, and validation of binary MessagePack data.
@@ -131,6 +168,6 @@ value-names, and `Uint8Array` for bytes.
 
 | Error | When |
 | --- | --- |
-| `SyntaxError` | Parsing fails due to malformed XML, YAML, or TOML input. |
+| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, or CSV input (an unterminated quote, a duplicate column name, a ragged row under `header`). |
 | `TypeError` | Building fails because the provided JavaScript object cannot be serialized into the target format (e.g., circular references, invalid keys). |
 | `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap, YAML alias expansion). |

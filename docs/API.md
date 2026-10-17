@@ -2885,16 +2885,17 @@ pub/sub topics are follow-ups (D29).
 
 ## `runtime:serialization`
 
-A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, MessagePack, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, MessagePack, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
 
 - **Capability:** None (pure computation)
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, MessagePack, Protobuf } from "runtime:serialization";
+import { XML, YAML, TOML, CSV, MessagePack, Protobuf } from "runtime:serialization";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");
+const rows = CSV.parse("name,age\nAlice,30\n", { header: true }); // [{ name: "Alice", age: "30" }]
 const msgpackBytes = new Uint8Array([0x81, 0xa5, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa5, 0x77, 0x6f, 0x72, 0x6c, 0x64]);
 const obj2 = MessagePack.decode(msgpackBytes);
 
@@ -2943,6 +2944,55 @@ when, written plain, it would read back as something else, including the YAML
 1.1 booleans `yes`, `no`, `on`, `off`, `y`, `n`. `NaN` and `±Infinity` are
 written `.nan` and `±.inf`.
 
+### CSV
+
+`CSV.parse` returns **arrays of fields** by default (`string[][]`) and only keys
+objects when asked. Every field is a **string**; nothing is type-cast unless
+`cast` is set — the same default Papa Parse, csv-parse, fast-csv and the Rust
+`csv` crate use.
+
+| Export | Description |
+| --- | --- |
+| `CSV.parse(text, options?)` | Parses CSV text. Returns `string[][]` by default, or an array of objects when `header` is set. |
+| `CSV.build(rows, options?)` | Writes an array of rows (arrays, or objects keyed by `header`) as CSV text. |
+| `CSV.validate(text, options?)` | Validates under the same options as `parse`. `opts.detailed` gives `{ valid, error }`. |
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `delimiter` | `","` | Field separator (a single byte). |
+| `quote` | `"\""` | Quote character (a single byte). |
+| `escape` | doubling | Escape inside a quoted field; the default is RFC 4180 `""`. |
+| `header` | `false` | `false` → arrays; `true` → keys objects by the first row (consumed); a `string[]` → names every row and treats the first row as data. |
+| `trim` | `false` | Trim whitespace from **unquoted** fields. |
+| `skipEmptyLines` | `false` | Drop records that are a single empty field. |
+| `comment` | — | A single byte; lines beginning with it are skipped whole. `build` quotes a field that starts with it so the row is not lost on a round trip. |
+| `cast` | `false` | Convert plain decimal fields to numbers and `true`/`false` to booleans. `inf`, `nan`, hex, and a decimal that overflows `f64` stay strings. |
+| `relaxColumnCount` | `false` | Allow rows whose field count differs from the header. |
+| `maxFieldBytes` | 16 MiB | Per-field byte cap. |
+| `maxColumns` | 1,048,576 | Per-record field cap. |
+| `bom` | `true` | Strip a leading UTF-8 BOM. |
+| `newline` | `"\n"` | The record separator `build` writes. |
+
+`parse` accepts `\n`, `\r\n` and `\r` as record separators. A quoted field keeps
+delimiters and newlines, and `""` reads back as one `"`. A duplicate column name
+— inferred from the first row, or given as an explicit `header` — an unterminated
+quoted field, and a stray character after a closing quote (`"a"b`) are all a
+`SyntaxError`; a field or record past its cap is a `RangeError`. With `header`
+set, every row must have the same field count unless `relaxColumnCount` is on —
+then a short row omits its missing keys and a long one has its extras dropped.
+Because validity depends on these options, `CSV.validate` forwards them (unlike
+XML/YAML/TOML, whose validity does not depend on any).
+
+`build` quotes a field only when it contains the delimiter, the quote, a line
+break, or the leading `comment` byte, and writes a trailing newline. An array of
+objects infers its header from the first object's keys; an array of arrays writes
+fields verbatim; an absent (`null` or `undefined`) field is written empty. `NaN`
+and `±Infinity` have no CSV representation and are a `TypeError`, as is a nested
+array or object used as a field value.
+
+An option set whose `delimiter` or `quote` is a line break, or whose `delimiter`
+equals its `quote`, cannot be read back unambiguously and is a `TypeError`.
+
 For binary formats like MessagePack, the namespace is slightly different:
 
 | Export | Description |
@@ -2982,7 +3032,7 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 
 | Export | Description |
 | --- | --- |
-| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `JSONL`, `MessagePack`, `Protobuf`), as every other `runtime:` module provides. |
+| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `MessagePack`, `Protobuf`), as every other `runtime:` module provides. |
 
 For Protobuf, schemas are compiled from `.proto` source at runtime:
 
