@@ -172,6 +172,8 @@ ROW_DEFS=(
   "serialization|toml_large|ms|chart|TOML parsing (large dataset)"
   "serialization|msgpack_small|ms|chart|MessagePack parsing (small dataset)"
   "serialization|msgpack_large|ms|chart|MessagePack parsing (large dataset)"
+  "serialization|cbor_small|ms|chart|CBOR parsing (small dataset)"
+  "serialization|cbor_large|ms|chart|CBOR parsing (large dataset)"
   "serialization|csv_small|ms|chart|CSV parsing (small dataset)"
   "serialization|csv_large|ms|chart|CSV parsing (large dataset)"
   "serialization|csv_stream|ms|chart|CSV streaming (large dataset)"

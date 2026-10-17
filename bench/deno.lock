@@ -1,14 +1,27 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/bytes@^1.0.6": "1.0.6",
+    "jsr:@std/cbor@0.1.10": "0.1.10",
     "jsr:@std/csv@1.0.6": "1.0.6",
-    "jsr:@std/streams@^1.0.9": "1.2.0"
+    "jsr:@std/streams@^1.0.9": "1.2.0",
+    "jsr:@std/streams@^1.2.0": "1.2.0"
   },
   "jsr": {
+    "@std/bytes@1.0.6": {
+      "integrity": "f6ac6adbd8ccd99314045f5703e23af0a68d7f7e58364b47d2c7f408aeb5820a"
+    },
+    "@std/cbor@0.1.10": {
+      "integrity": "4cad9a0ec14dc9719451150174cf8ec5cd1695c8397dc4ee8a7b8369dc99b972",
+      "dependencies": [
+        "jsr:@std/bytes",
+        "jsr:@std/streams@^1.2.0"
+      ]
+    },
     "@std/csv@1.0.6": {
       "integrity": "52ef0e62799a0028d278fa04762f17f9bd263fad9a8e7f98c14fbd371d62d9fd",
       "dependencies": [
-        "jsr:@std/streams"
+        "jsr:@std/streams@^1.0.9"
       ]
     },
     "@std/streams@1.2.0": {
@@ -23,6 +36,7 @@
         "npm:@bufbuild/protoc-gen-es@^2.12.1",
         "npm:@hono/node-server@^2.0.4",
         "npm:@iarna/toml@^2.2.5",
+        "npm:cbor-x@^1.6.6",
         "npm:csv-parse@^7.0.3",
         "npm:elysia@^1.4.30",
         "npm:fast-xml-parser@^5.9.2",

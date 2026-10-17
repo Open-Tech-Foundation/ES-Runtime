@@ -11,6 +11,7 @@ packages:
 allowBuilds:
   '@bufbuild/buf': true
   '@opentf/web-compiler': true
+  cbor-extract: true
   esbuild: true
   msgpackr-extract: true
   workerd: true

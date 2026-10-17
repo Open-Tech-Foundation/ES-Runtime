@@ -912,6 +912,20 @@ export default {
       "display": "chart",
       "better": "lower"
     },
+    "cbor_small": {
+      "label": "CBOR parsing (small dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "cbor_large": {
+      "label": "CBOR parsing (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
     "csv_small": {
       "label": "CSV parsing (small dataset)",
       "unit": "ms",
@@ -1110,6 +1124,8 @@ export default {
         "toml_large",
         "msgpack_small",
         "msgpack_large",
+        "cbor_small",
+        "cbor_large",
         "csv_small",
         "csv_large",
         "csv_stream"
@@ -1638,6 +1654,20 @@ export default {
       "deno": 604.6,
       "llrt": null,
       "esrun": 483.6
+    },
+    "cbor_small": {
+      "node": 42.2,
+      "bun": 52.8,
+      "deno": 304.2,
+      "llrt": null,
+      "esrun": 106.8
+    },
+    "cbor_large": {
+      "node": 43.2,
+      "bun": 51.3,
+      "deno": 330.8,
+      "llrt": null,
+      "esrun": 110.8
     }
   },
   "results_rss": {
@@ -2137,6 +2167,20 @@ export default {
       "deno": 96,
       "llrt": null,
       "esrun": 89
+    },
+    "cbor_small": {
+      "node": 60,
+      "bun": 52,
+      "deno": 52,
+      "llrt": null,
+      "esrun": 32
+    },
+    "cbor_large": {
+      "node": 77,
+      "bun": 66,
+      "deno": 122,
+      "llrt": null,
+      "esrun": 57
     }
   },
   "results_cov": {
@@ -2636,6 +2680,20 @@ export default {
       "deno": 2,
       "llrt": null,
       "esrun": 1.1
+    },
+    "cbor_small": {
+      "node": 2.7,
+      "bun": 6.4,
+      "deno": 3.6,
+      "llrt": null,
+      "esrun": 7.4
+    },
+    "cbor_large": {
+      "node": 5,
+      "bun": 3.4,
+      "deno": 0.7,
+      "llrt": null,
+      "esrun": 1.2
     }
   },
   "results_n": {
@@ -3135,6 +3193,20 @@ export default {
       "deno": 3,
       "llrt": null,
       "esrun": 3
+    },
+    "cbor_small": {
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": null,
+      "esrun": 5
+    },
+    "cbor_large": {
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": null,
+      "esrun": 5
     }
   },
   "results_floor_gap": {
@@ -3634,6 +3706,20 @@ export default {
       "deno": 1.7,
       "llrt": null,
       "esrun": 0.6
+    },
+    "cbor_small": {
+      "node": 1.7,
+      "bun": 0.9,
+      "deno": 6.3,
+      "llrt": null,
+      "esrun": 0
+    },
+    "cbor_large": {
+      "node": 6.5,
+      "bun": 0.4,
+      "deno": 0.1,
+      "llrt": null,
+      "esrun": 2.2
     }
   },
   "status": {
@@ -4128,6 +4214,20 @@ export default {
       "esrun": "ok"
     },
     "csv_stream": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "unsupported",
+      "esrun": "ok"
+    },
+    "cbor_small": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "unsupported",
+      "esrun": "ok"
+    },
+    "cbor_large": {
       "node": "ok",
       "bun": "ok",
       "deno": "ok",

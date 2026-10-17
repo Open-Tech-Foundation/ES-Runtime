@@ -198,7 +198,7 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 | `net` | `fetch`, `fetch_upload`, `http`, `websocket`, `udp_echo`, `udp_send` |
 | `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
 | `system` | `spawn` |
-| `serialization` | `jsonl_stream`, `xml_*`, `yaml_*`, `toml_*`, `msgpack_*`, `csv_*` |
+| `serialization` | `jsonl_stream`, `xml_*`, `yaml_*`, `toml_*`, `msgpack_*`, `cbor_*`, `csv_*` |
 | `protobuf` | `protobuf_small`, `protobuf_large` |
 | `wasm` | `wasm_compile`, `wasm_call`, `wasm_mem` |
 | `wasi` | `wasi_start`, `wasi_syscall` |
@@ -342,15 +342,15 @@ run to run (see Sources for the rationale):
   JIT-backed parser libraries ~10% and the native parsers nothing — a systematic
   tilt toward whichever runtime needed no warmup at all.
 - **Each runtime uses the best facility it ships.** Where a workload is not a
-  shared Web API — filesystem, HTTP server, YAML/TOML/XML/MessagePack/CSV — every
-  runtime gets its own native surface: `Bun.YAML`/`Bun.TOML`/`Bun.Glob`,
-  `Deno.serve`, `llrt:xml`, Deno's `@std/csv`, esrun's `runtime:serialization`.
-  Only where a runtime genuinely ships nothing does it fall back to the library
-  you would reach for anyway (`js-yaml`, `@iarna/toml`, `fast-xml-parser`,
-  `msgpackr`, `csv-parse` on Node and Bun). Holding a runtime to a library it
-  does not need understates it — Bun's native TOML is ~3x its `@iarna/toml`
-  number — and turns a native-vs-library row into a claim about the runtime.
-  Those rows are labelled as such on the site.
+  shared Web API — filesystem, HTTP server, YAML/TOML/XML/MessagePack/CBOR/CSV —
+  every runtime gets its own native surface: `Bun.YAML`/`Bun.TOML`/`Bun.Glob`,
+  `Deno.serve`, `llrt:xml`, Deno's `@std/cbor`/`@std/csv`, esrun's
+  `runtime:serialization`. Only where a runtime genuinely ships nothing does it
+  fall back to the library you would reach for anyway (`js-yaml`, `@iarna/toml`,
+  `fast-xml-parser`, `msgpackr`, `cbor-x`, `csv-parse` on Node and Bun). Holding
+  a runtime to a library it does not need understates it — Bun's native TOML is
+  ~3x its `@iarna/toml` number — and turns a native-vs-library row into a claim
+  about the runtime. Those rows are labelled as such on the site.
 - **Min, not median/mean.** Interference only ever *adds* time, so the minimum
   over repetitions is the contention-free floor — the stablest, fairest
   comparator. `startup`/`bigscript` use process wall-time (the launch/parse cost
@@ -470,6 +470,8 @@ toml_small    |    209.7 |     52.4 |    238.5 |   4057.1 |    164.1
 toml_large    |    409.5 |    104.4 |    503.5 |   8230.7 |    344.0
 msgpack_small |     41.8 |     48.3 |     38.5 |    849.5 |     50.0
 msgpack_large |     42.8 |     50.3 |     42.3 |    922.5 |     55.5
+cbor_small    |     42.2 |     52.8 |    304.2 |      n/a |    106.8
+cbor_large    |     43.2 |     51.3 |    330.8 |      n/a |    110.8
 csv_small     |     95.1 |    140.9 |     76.3 |      n/a |     32.8
 csv_large     |    175.9 |    183.8 |    164.2 |      n/a |     68.3
 csv_stream    |    980.6 |   1159.8 |    604.6 |      n/a |    483.6
