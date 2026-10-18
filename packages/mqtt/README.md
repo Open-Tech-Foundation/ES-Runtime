@@ -81,7 +81,7 @@ without dialling: `hostname`, `port`, `tls`, and optionally `username`/`password
 | `subscribe(filter, options?)` | See below. |
 | `unsubscribe(filters, timeout?)` | One filter or a list. |
 | `request(topic, payload, options?)` | One `await` for a reply (5.0). |
-| `ping(timeout?)` | Sends a PINGREQ and resolves on the PINGRESP. |
+| `ping(timeout?)` | A PINGREQ, resolved by its PINGRESP. Concurrent calls share the one exchange; a timeout fails the connection, since a PINGRESP carries no identifier to match it to. |
 | `close(options?)` | A DISCONNECT, then the socket. `options` carries `reasonCode` and `properties`. |
 | `over(transport, options?, level?)` | Connects over an already-open transport — the seam a test stands on. |
 

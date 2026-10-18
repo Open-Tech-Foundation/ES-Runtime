@@ -372,16 +372,24 @@ export class MqttClient {
     // QoS 1 waits for PUBACK; QoS 2 waits for PUBCOMP, the connection having
     // answered the PUBREC in between.
     const waiter = this.#waitFor(this.#ackWaiters, packetId, options.timeout ?? this.#timeout());
-    await this.#connection.send({
-      type: PacketType.Publish,
-      topic,
-      payload: bytes,
-      qos,
-      retain,
-      dup: false,
-      packetId,
-      ...(properties === undefined ? {} : { properties }),
-    });
+    try {
+      await this.#connection.send({
+        type: PacketType.Publish,
+        topic,
+        payload: bytes,
+        qos,
+        retain,
+        dup: false,
+        packetId,
+        ...(properties === undefined ? {} : { properties }),
+      });
+    } catch (e) {
+      // Encoding can fail here, locally, before anything reaches the socket —
+      // the connection stays up, so its own failure handling will not clear this
+      // waiter. Drop it, or its timer rejects a promise nobody is awaiting.
+      this.#forget(this.#ackWaiters, packetId);
+      throw e;
+    }
     const ack = await waiter;
     if (isErrorReason(ack.reasonCode)) {
       throw new MqttError(

@@ -53,6 +53,16 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Fixed
 
+- Concurrent `ping` calls no longer share one outstanding flag. A PINGRESP
+  carries no identifier, so two exchanges could not be told apart — one reply
+  answered every caller, and a reply to a ping already given up on answered the
+  next one. There is now a single in-flight exchange that concurrent callers
+  join, its timeout is treated as a lost connection rather than a stray reply,
+  and keep-alive waits for it rather than sending a second PINGREQ.
+- A `publish` whose packet cannot be encoded no longer leaves its acknowledgement
+  waiter registered. This failure is local — the packet never reaches the socket,
+  so the connection stays up and its own cleanup never runs — and the abandoned
+  waiter's timer would reject with nobody listening.
 - A `Subscription.nextMessage` timeout no longer leaves its waiter queued. The
   waiter is now withdrawn, so a later delivery resolves the next read rather than
   the abandoned one — which had quietly dropped that message.

@@ -210,6 +210,14 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out;
 }
 
+/** One in-flight PINGREQ/PINGRESP exchange, and everyone waiting on it. */
+interface PingCycle {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: MqttError) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /**
  * Reads a fixed header and Remaining Length from the front of `bytes`.
  *
@@ -254,7 +262,7 @@ export class Connection {
   #lastRead = Date.now();
   #writeChain: Promise<void> = Promise.resolve();
   #nextPacketId = 1;
-  #outstandingPing = false;
+  #ping: PingCycle | null = null;
   #pendingQos2 = new Map<number, PublishPacket>();
   #connack: ConnackPacket;
 
@@ -318,29 +326,67 @@ export class Connection {
     await this.#write(encodePacket(packet, this.#level));
   }
 
-  /** Sends a PINGREQ and resolves when the PINGRESP arrives. */
+  /**
+   * Sends a PINGREQ and resolves when the PINGRESP arrives.
+   *
+   * A PINGRESP carries no identifier, so two PINGREQs in flight are
+   * indistinguishable: one reply answers either, and a reply to a ping already
+   * given up on would answer the next one. So there is at most one exchange at a
+   * time — concurrent callers share it — and a timeout is treated as a lost
+   * connection, because after it the next PINGRESP can no longer be attributed.
+   */
   async ping(timeout: number = DEFAULT_TIMEOUT): Promise<void> {
     if (this.#failure !== null) throw this.#failure;
     if (this.#closed) {
       throw new MqttError("the connection is closed", { code: MqttErrorCode.Closed });
     }
-    this.#outstandingPing = true;
-    await this.send({ type: PacketType.Pingreq });
-    await new Promise<void>((resolve, reject) => {
-      const started = Date.now();
-      const tick = () => {
-        if (!this.#outstandingPing) return resolve();
-        if (this.#failure !== null) return reject(this.#failure);
-        if (Date.now() - started > timeout) {
-          return reject(
-            new MqttError("no PINGRESP came back in time", { code: MqttErrorCode.Timeout }),
-          );
-        }
-        const timer = setTimeout(tick, 50);
-        unrefTimer(timer as unknown as number);
-      };
-      tick();
+    if (this.#ping !== null) return this.#ping.promise;
+
+    let resolve!: () => void;
+    let reject!: (error: MqttError) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
     });
+    // The timer is the failure: a PINGRESP that never came leaves the exchange
+    // uncorrelated, so the connection is failed rather than left half-alive.
+    const timer = setTimeout(
+      () =>
+        this.#fail(
+          new MqttError("no PINGRESP came back in time", { code: MqttErrorCode.Connection }),
+        ),
+      timeout,
+    );
+    unrefTimer(timer as unknown as number);
+    this.#ping = { promise, resolve, reject, timer };
+    // Kept handled so a caller that never awaits — because the send throws
+    // first — cannot trip the runtime's unhandled-rejection guard.
+    void promise.catch(() => {});
+
+    try {
+      await this.send({ type: PacketType.Pingreq });
+    } catch (e) {
+      const error =
+        e instanceof MqttError
+          ? e
+          : new MqttError(e instanceof Error ? e.message : String(e), {
+              code: MqttErrorCode.Connection,
+              cause: e,
+            });
+      this.#settlePing(error);
+      throw error;
+    }
+    return promise;
+  }
+
+  /** Settles the in-flight ping, if any: resolve on a PINGRESP, else reject. */
+  #settlePing(error: MqttError | null): void {
+    const cycle = this.#ping;
+    if (cycle === null) return;
+    this.#ping = null;
+    clearTimeout(cycle.timer);
+    if (error === null) cycle.resolve();
+    else cycle.reject(error);
   }
 
   /**
@@ -351,9 +397,12 @@ export class Connection {
     if (this.#closing || this.#failure !== null) {
       await this.#settle();
       this.#closed = true;
+      this.#settlePing(new MqttError("the connection was closed", { code: MqttErrorCode.Closed }));
       return;
     }
     this.#closing = true;
+    // Settled before the DISCONNECT so the ping timer cannot fire mid-close.
+    this.#settlePing(new MqttError("the connection was closed", { code: MqttErrorCode.Closed }));
     try {
       await this.send({
         type: PacketType.Disconnect,
@@ -623,7 +672,7 @@ export class Connection {
         this.#handlers.onUnsuback(packet);
         break;
       case PacketType.Pingresp:
-        this.#outstandingPing = false;
+        this.#settlePing(null);
         this.#handlers.onPingresp();
         break;
       case PacketType.Disconnect:
@@ -723,7 +772,9 @@ export class Connection {
         );
         return;
       }
-      void this.send({ type: PacketType.Pingreq }).catch(() => {});
+      // A caller's ping is already probing liveness; a second PINGREQ would be
+      // answered by the same uncorrelated PINGRESP.
+      if (this.#ping === null) void this.send({ type: PacketType.Pingreq }).catch(() => {});
       this.#keepAliveTimer = setTimeout(tick, every);
       unrefTimer(this.#keepAliveTimer as unknown as number);
     };
@@ -744,6 +795,7 @@ export class Connection {
     if (this.#failure === null) {
       this.#failure = error;
       this.#closed = true;
+      this.#settlePing(error);
       this.#stopKeepAlive();
       void this.#transport.close().catch(() => {});
       this.#handlers.onClosed(error);

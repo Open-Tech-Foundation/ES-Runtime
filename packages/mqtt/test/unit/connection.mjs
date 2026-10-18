@@ -332,6 +332,69 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
   await conn.close();
 }
 
+// --- concurrent pings share one exchange -----------------------------------
+
+{
+  const broker = fakeBroker(5);
+  const pending = Connection.over(broker.transport, { clientId: "c", keepAlive: 0 }, {}, 5);
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  const conn = await pending;
+
+  const first = conn.ping(2000);
+  const second = conn.ping(2000);
+  const pingreq = await broker.next();
+  ok(pingreq.type === PacketType.Pingreq, "a first ping sends a PINGREQ");
+  // A PINGRESP has no identifier, so a second PINGREQ could not be told apart;
+  // the second call must join the one in flight rather than send its own.
+  const raced = await Promise.race([
+    broker.next().then(() => "packet"),
+    tick(80).then(() => "none"),
+  ]);
+  ok(raced === "none", "a second, concurrent ping sends no second PINGREQ");
+  broker.send({ type: PacketType.Pingresp });
+  await Promise.all([first, second]);
+  ok(true, "one PINGRESP resolves both callers");
+
+  await conn.close();
+}
+
+// --- a PINGRESP that never comes is a lost connection ----------------------
+
+{
+  const failures = [];
+  const broker = fakeBroker(5);
+  const pending = Connection.over(
+    broker.transport,
+    { clientId: "c", keepAlive: 0 },
+    { onClosed: (error) => failures.push(error) },
+    5,
+  );
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  const conn = await pending;
+
+  let error = null;
+  const pong = conn.ping(60).catch((e) => {
+    error = e;
+  });
+  await broker.next(); // the PINGREQ, which the broker never answers
+  await pong;
+  ok(
+    error !== null && error.code === MqttErrorCode.Connection,
+    "an unanswered PINGREQ fails the ping",
+  );
+  ok(conn.closed && failures.length === 1, "and the connection is treated as lost, once");
+
+  let refused = null;
+  try {
+    await conn.ping(2000);
+  } catch (e) {
+    refused = e;
+  }
+  ok(refused !== null, "a later ping is refused, not answered by a stale PINGRESP");
+}
+
 // --- a broker's DISCONNECT is a failure ------------------------------------
 
 {

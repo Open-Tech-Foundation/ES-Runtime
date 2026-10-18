@@ -99,6 +99,15 @@ The keep-alive timer is **unreferenced**: it does not keep a script alive that
 has otherwise finished, so a program exits when its work is done rather than
 waiting out the interval.
 
+A PINGRESP carries no identifier, so two PINGREQs in flight cannot be told
+apart: either reply answers either, and a reply to a ping already given up on
+would answer the next one instead. The connection therefore keeps at most **one
+exchange at a time**. Concurrent `ping` calls join the one in flight, keep-alive
+sends nothing while a caller's ping is outstanding, and a ping's timeout is
+treated as a lost connection rather than a stray reply — after it, the next
+PINGRESP could no longer be attributed, so the connection is failed and every
+caller told the same cause.
+
 ## Writing is serialised
 
 A packet may be several writes — a header, then a body — and two publishes issued
