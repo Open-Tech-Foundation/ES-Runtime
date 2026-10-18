@@ -254,4 +254,40 @@ async function rejection(promise) {
   await closePool(pool, [brokers[1]]);
 }
 
+// Closing while asynchronous setup is running must not lend its connection.
+{
+  const { dial, brokers } = dialer();
+  let enterSetup;
+  let finishSetup;
+  const inSetup = new Promise((resolve) => {
+    enterSetup = resolve;
+  });
+  const setup = new Promise((resolve) => {
+    finishSetup = resolve;
+  });
+  const pool = new Pool(URL, {
+    heartbeat: 0,
+    dial,
+    onConnect: async () => {
+      enterSetup();
+      await setup;
+    },
+  });
+
+  const borrowing = pool.acquire();
+  await inSetup;
+  const closing = pool.close();
+  await brokers[0].expect("connection.close");
+  await brokers[0].send("connection.close-ok", {}, 0);
+  await closing;
+  finishSetup();
+  const failure = await rejection(borrowing);
+  is(
+    failure?.code,
+    "ERR_RABBITMQ_CLOSED",
+    "a setup finishing after close cannot lend a connection",
+  );
+  is(pool.size, 0, "the closed pool retains no connection");
+}
+
 if (report("pool") > 0) exit(1);

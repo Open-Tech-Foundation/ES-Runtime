@@ -318,6 +318,14 @@ export class Pool {
         throw e;
       }
     }
+    // `close()` may have run while an asynchronous onConnect was declaring
+    // topology. Do not hand the now-closed connection to the borrow that was
+    // waiting for setup to finish.
+    if (this.#closed) {
+      this.#all.delete(connection);
+      await connection.close().catch(() => {});
+      throw new RabbitError("the pool is closed", { code: RabbitErrorCode.Closed });
+    }
     return connection;
   }
 

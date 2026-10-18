@@ -177,6 +177,28 @@ async function rejection(promise) {
   ok(rpc.closed, "and the client is closed with it");
 }
 
+// A broker may cancel the reply consumer while leaving the channel open.
+{
+  const { broker, channel, number } = await openChannel();
+  const { rpc, consume } = await open(channel, broker, number, { timeout: 0 });
+  const calling = rpc.call("work", "x");
+  const failure = rejection(calling);
+  await readPublish(broker, number);
+  await broker.send(
+    "basic.cancel",
+    { consumerTag: consume.args.consumerTag, noWait: false },
+    number,
+  );
+  await broker.expect("basic.cancel-ok");
+  is((await failure)?.code, "ERR_RABBITMQ_CLOSED", "consumer cancellation fails pending calls");
+  ok(rpc.closed, "and closes the RPC client");
+  is(
+    (await rejection(rpc.call("work", "later")))?.code,
+    "ERR_RABBITMQ_CLOSED",
+    "later calls are refused",
+  );
+}
+
 // Closing fails what is still waiting and refuses what comes after.
 {
   const { broker, channel, number } = await openChannel();

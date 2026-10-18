@@ -210,6 +210,7 @@ export class Subscription implements AsyncIterable<Delivery> {
     if (this.#done) return;
     // Marked done first, so a delivery already buffered is dropped and a racing
     // `basic.deliver` finds nothing to route to.
+    this.#buffer.length = 0;
     this.finish(null, false);
     try {
       await this.#channel.cancelConsumer(this.#tag);

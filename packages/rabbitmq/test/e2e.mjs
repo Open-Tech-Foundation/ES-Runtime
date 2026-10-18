@@ -12,7 +12,7 @@
 import { env, exit } from "runtime:process";
 import { Connection } from "../dist/connection.js";
 import { subscribe } from "../dist/consumer.js";
-import { Pool, parseAmqpUrl } from "../dist/pool.js";
+import { openConnection, Pool, parseAmqpUrl } from "../dist/pool.js";
 import { RpcClient } from "../dist/rpc.js";
 import { netTransport } from "../dist/transport.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -35,6 +35,36 @@ async function connect(credentials = { username, password }) {
   const connection = new Connection(transport, { ...credentials, vhost });
   await connection.open();
   return connection;
+}
+
+// Optional local TLS listener. Passing its CA through the injected dial also
+// verifies that an AMQPS URL without a port selects 5671.
+if (env.RABBITMQ_TLS_URL !== undefined) {
+  if (env.RABBITMQ_CA === undefined) {
+    throw new Error("RABBITMQ_CA is required when RABBITMQ_TLS_URL is set");
+  }
+  const tlsAddress = parseAmqpUrl(env.RABBITMQ_TLS_URL);
+  is(tlsAddress.port, 5671, "an AMQPS URL without a port selects the TLS listener");
+  ok(tlsAddress.tls, "the AMQPS URL enables TLS");
+  const connection = await openConnection(env.RABBITMQ_TLS_URL, {}, (options) =>
+    netTransport({ ...options, ca: env.RABBITMQ_CA }),
+  );
+  is(
+    connection.server.properties.get("product").value,
+    "RabbitMQ",
+    "the TLS handshake reaches RabbitMQ",
+  );
+  await connection.close();
+
+  let untrusted = null;
+  try {
+    await openConnection(env.RABBITMQ_TLS_URL, {}, (options) =>
+      netTransport({ ...options, ca: "not a trusted certificate authority" }),
+    );
+  } catch (e) {
+    untrusted = e;
+  }
+  is(untrusted?.code, "ERR_RABBITMQ_CONNECTION", "an untrusted TLS certificate is rejected");
 }
 
 // -- the handshake ----------------------------------------------------------

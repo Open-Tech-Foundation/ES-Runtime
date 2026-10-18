@@ -198,8 +198,9 @@ export class RpcClient {
 
   // Reads the reply consumer for as long as it runs. A reply is routed to the
   // call whose correlation id it names; anything else — an unknown id, a
-  // delivery with no id at all — is dropped. When the consumer ends the channel
-  // has ended too, so whatever is still waiting fails with that reason.
+  // delivery with no id at all — is dropped. The iteration ends normally when
+  // the consumer is cancelled — by the broker, or by {@link close} — and throws
+  // when the channel itself died, carrying its reason.
   async #pump(): Promise<void> {
     try {
       for await (const delivery of this.#subscription as Subscription) {
@@ -210,6 +211,17 @@ export class RpcClient {
         this.#pending.delete(id);
         if (pending.timer !== null) clearTimeout(pending.timer);
         pending.resolve(delivery);
+      }
+      // A broker can cancel a consumer without closing its channel. The reply
+      // path is gone in that case too, so fail calls now instead of leaving
+      // them to time out and refusing no future calls.
+      if (!this.#closed) {
+        this.#closed = true;
+        this.#settleAll(
+          new RabbitError("the rpc reply consumer ended before the reply arrived", {
+            code: RabbitErrorCode.Closed,
+          }),
+        );
       }
     } catch (e) {
       this.#closed = true;

@@ -20,6 +20,6 @@ status=0
 printf "\n== e2e ==\n"
 # esrun grants nothing by default (DECISIONS D65): the tests load the built
 # package (imports), dial the broker (net) and read its address (env). The
-# address is scoped to the one host:port the tests use.
-"$esrun" --allow-imports --allow-net=127.0.0.1:5672 --allow-env "$here/e2e.mjs" || status=1
+# addresses are scoped to the plain and optional TLS listeners used by the tests.
+"$esrun" --allow-imports --allow-net=127.0.0.1:5672,localhost:5671 --allow-env "$here/e2e.mjs" || status=1
 exit $status

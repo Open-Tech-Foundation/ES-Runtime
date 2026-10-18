@@ -129,6 +129,21 @@ async function start(broker, channel, number, queue, options) {
   ok(subscription.closed, "the subscription is closed");
 }
 
+// Explicit cancellation drops deliveries that arrived but were not read yet.
+{
+  const { broker, channel, number } = await openChannel();
+  const { subscription } = await start(broker, channel, number, "jobs");
+  await deliver(broker, number, 1n, subscription.consumerTag, enc("buffered"));
+  await settle();
+
+  const cancelling = subscription.cancel();
+  await broker.expect("basic.cancel");
+  await broker.send("basic.cancel-ok", { consumerTag: subscription.consumerTag }, number);
+  await cancelling;
+  const result = await subscription[Symbol.asyncIterator]().next();
+  ok(result.done === true, "a read after explicit cancellation does not yield buffered work");
+}
+
 // The broker cancelling the consumer ends the iteration.
 {
   const { broker, channel, number } = await openChannel();

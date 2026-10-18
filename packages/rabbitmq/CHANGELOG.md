@@ -84,6 +84,14 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Fixed
 
+- A broker-initiated cancellation of the RPC reply consumer now closes the RPC
+  client and rejects calls in flight instead of leaving them to time out. A pool
+  closed while asynchronous `onConnect` setup is running now refuses the borrow
+  after setup completes, and explicit subscription cancellation drops buffered
+  deliveries as documented.
+- The end-to-end suite can also verify an AMQPS listener when
+  `RABBITMQ_TLS_URL` and its trusted `RABBITMQ_CA` are set, including the 5671
+  default port and the TLS handshake.
 - An `amqps://` URL without a port defaulted to 5672, so a standard TLS URL
   reached the plain AMQP listener and tried to negotiate TLS there. The default
   now follows the scheme: 5672 for `amqp:`, 5671 for `amqps:`.
