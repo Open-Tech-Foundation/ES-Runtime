@@ -593,7 +593,7 @@ export class MqttClient {
   }
 
   #waitFor<T>(map: Map<number, Waiter<T>>, packetId: number, timeout: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
+    const promise = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         map.delete(packetId);
         reject(new MqttError("the broker did not answer in time", { code: MqttErrorCode.Timeout }));
@@ -601,6 +601,13 @@ export class MqttClient {
       unrefTimer(timer as unknown as number);
       map.set(packetId, { resolve, reject, timer });
     });
+    // The timer starts here, but every caller awaits this only after its `send`
+    // has resolved. A write slower than the timeout therefore rejects the waiter
+    // while the caller is still awaiting the socket, with nobody yet awaiting
+    // it. Kept handled, so the rejection waits for the caller's `await` instead
+    // of tripping the runtime's unhandled-rejection guard.
+    void promise.catch(() => {});
+    return promise;
   }
 
   #settle<T>(map: Map<number, Waiter<T>>, packetId: number, value: T): void {

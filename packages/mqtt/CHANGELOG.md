@@ -63,6 +63,12 @@ package written entirely in JavaScript over `runtime:net`. See the root
   waiter registered. This failure is local — the packet never reaches the socket,
   so the connection stays up and its own cleanup never runs — and the abandoned
   waiter's timer would reject with nobody listening.
+- A waiter's timeout no longer rejects an unawaited promise when a write outlasts
+  it. A `publish`, `subscribe` or `unsubscribe` arms its timer before `send`, and
+  awaits the waiter only after `send` resolves; a write slower than the timeout —
+  writes are serialised, so this happens — fired the timer while the caller was
+  still awaiting the socket. The waiter now carries a handler from creation, so
+  that rejection waits for the caller's `await` instead of becoming unhandled.
 - A `Subscription.nextMessage` timeout no longer leaves its waiter queued. The
   waiter is now withdrawn, so a later delivery resolves the next read rather than
   the abandoned one — which had quietly dropped that message.

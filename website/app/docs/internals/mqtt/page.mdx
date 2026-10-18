@@ -115,6 +115,19 @@ at once must not interleave halfway. So a connection's writes go through **one
 chain**: each write waits for the last to finish. The cost is that a connection's
 throughput is serialised; the alternative is a packet the broker reads as two.
 
+## Timeouts and abandoned promises
+
+An acknowledgement waiter arms its timeout when it is created, and the write that
+should provoke the acknowledgement follows. Because writes are serialised, a
+write can take longer than the timeout, so the waiter's timer may fire while
+`publish`, `subscribe` or `unsubscribe` is still awaiting the socket — with
+nothing yet awaiting the waiter. Its rejection is attached a handler at creation
+for exactly this reason: the failure waits for the caller's `await` rather than
+reaching the runtime as an unhandled rejection, which this runtime treats as
+fatal. A local failure that never reaches the socket — an unencodable packet — is
+the same shape: the waiter is withdrawn immediately, since the connection, never
+having seen the bytes, will not clear it.
+
 ## Request/reply, without a reply queue
 
 The usual RPC shape costs a queue per caller. MQTT 5.0's convention removes it:
