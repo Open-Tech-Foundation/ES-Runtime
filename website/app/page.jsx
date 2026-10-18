@@ -79,16 +79,20 @@ const groups = [
   },
   {
     name: "Built-in Utils",
-    desc: "SMTP mail, RabbitMQ messaging, password-grade hashing, two-factor codes, cookies, CSRF tokens, and webhooks.",
+    desc: "SMTP mail, password-grade hashing, two-factor codes, cookies, CSRF tokens, and webhooks.",
     tiles: [
       { icon: "email", label: "Email", to: "/docs/guides/email" },
-      { icon: "rabbitmq", label: "RabbitMQ", to: "/docs/guides/rabbitmq" },
       { icon: "hashing", label: "Hashing", to: "/docs/guides/hashing" },
       { icon: "cookies", label: "Cookies", to: "/docs/http/basics#cookies" },
       { icon: "csrf", label: "CSRF", to: "/docs/http/basics#csrf" },
       { icon: "webhooks", label: "Webhooks", to: "/docs/guides/webhooks" },
       { icon: "totp", label: "2FA", to: "/docs/guides/hashing#two-factor-sign-in" },
     ],
+  },
+  {
+    name: "Message",
+    desc: "AMQP 0-9-1 messaging with RabbitMQ, in JavaScript.",
+    tiles: [{ icon: "rabbitmq", label: "RabbitMQ", to: "/docs/guides/rabbitmq" }],
   },
   {
     name: "Ships with",
@@ -229,7 +233,7 @@ export default function HomePage() {
           <div className="mx-auto grid max-w-5xl gap-6 sm:grid-cols-2">
             {[
               ["Connect", "Store", "Speak", "Ships with", "Secure"],
-              ["Develop", "Run on", "Built-in Utils", "Observe"],
+              ["Develop", "Run on", "Built-in Utils", "Message", "Observe"],
             ].map((column, ci) => (
               <div className="space-y-6">
                 {column.map((name) => {
