@@ -79,9 +79,10 @@ const groups = [
   },
   {
     name: "Built-in Utils",
-    desc: "SMTP mail, password-grade hashing, two-factor codes, cookies, CSRF tokens, and webhooks.",
+    desc: "SMTP mail, RabbitMQ messaging, password-grade hashing, two-factor codes, cookies, CSRF tokens, and webhooks.",
     tiles: [
       { icon: "email", label: "Email", to: "/docs/guides/email" },
+      { icon: "rabbitmq", label: "RabbitMQ", to: "/docs/guides/rabbitmq" },
       { icon: "hashing", label: "Hashing", to: "/docs/guides/hashing" },
       { icon: "cookies", label: "Cookies", to: "/docs/http/basics#cookies" },
       { icon: "csrf", label: "CSRF", to: "/docs/http/basics#csrf" },

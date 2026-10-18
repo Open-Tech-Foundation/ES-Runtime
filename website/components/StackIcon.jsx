@@ -4,7 +4,7 @@
 // Sources, all vendored under public/img/brands/ so the site makes no
 // external requests: SQLite, PostgreSQL, MySQL, MariaDB, Redis, Rust,
 // TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
-// WebAssembly and JavaScript from Simple Icons (CC0). The JSX tile is that
+// WebAssembly, JavaScript and RabbitMQ from Simple Icons (CC0). The JSX tile is that
 // JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, CBOR, HTTP,
 // WebSocket, images, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
@@ -40,6 +40,9 @@ export default function StackIcon({ name }) {
       )}
       {name === "redis" && (
         <img src="/img/brands/redis.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+      )}
+      {name === "rabbitmq" && (
+        <img src="/img/brands/rabbitmq.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
       )}
       {name === "xml" && (
         <img src="/img/brands/xml.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
