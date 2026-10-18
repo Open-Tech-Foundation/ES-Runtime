@@ -1,0 +1,270 @@
+/**
+ * Consuming: a queue's messages, as an async iterable.
+ *
+ * A channel already turns frames into messages; this layer decides what a
+ * *subscription* is. A subscription starts a broker consumer, hands each
+ * delivery to the code that asked for it, and ends — when it is cancelled, when
+ * the broker cancels it, or when the channel dies.
+ *
+ * ```js
+ * await channel.qos({ prefetchCount: 10 });      // how much to keep in flight
+ * const work = await subscribe(channel, "jobs");
+ * for await (const delivery of work) {
+ *   await handle(delivery.body);
+ *   await delivery.ack();
+ * }
+ * ```
+ *
+ * Three decisions are worth naming, because a consumer layer is mostly these:
+ *
+ * - **The consumer tag is chosen before the first delivery can arrive.** A
+ *   delivery names the consumer it was for, so if the tag were only learned when
+ *   the broker answers the subscription, a delivery that raced the answer could
+ *   not be routed. The tag is therefore ours (generated if the caller did not
+ *   pick one) and is sent in `basic.consume`; nothing arrives that cannot be
+ *   matched.
+ * - **Acknowledgement is manual by default.** The iterator yields the message
+ *   and waits; `ack`, `nack`, and `reject` on the delivery are how it is
+ *   settled. A consumer that acknowledges before the work succeeds is a
+ *   decision for the application, not a default here.
+ * - **Flow control is `basic.qos`.** Nothing in this layer bounds the broker on
+ *   its own: `prefetchCount` is what holds unacknowledged messages in check, and
+ *   it is set on the channel before subscribing.
+ *
+ * Ending the iteration — a `break`, or {@link Subscription.cancel} — cancels
+ * the consumer with the broker. A broken connection ends it too, with the error
+ * that broke it.
+ */
+
+import type { Channel, Delivery, Message } from "./channel.js";
+import { RabbitError, RabbitErrorCode } from "./errors.js";
+import type { FieldTable } from "./protocol/fields.js";
+
+export interface ConsumeOptions {
+  /** A tag of your choosing; one is generated otherwise. Unique per channel. */
+  consumerTag?: string;
+  /**
+   * Handle the message as acknowledged the moment it is delivered. Off by
+   * default, which is what makes a crash lose nothing: the broker keeps the
+   * message until you `ack` it.
+   */
+  noAck?: boolean;
+  /** Only this consumer may use the queue, and it is deleted when it ends. */
+  exclusive?: boolean;
+  /** Consumer arguments, such as `x-priority` or a dead-letter policy. */
+  arguments?: FieldTable;
+}
+
+/** How the broker or the channel ended a subscription. */
+export interface Cancellation {
+  /** The broker cancelled the consumer (`consumer_cancel_notify`). */
+  byBroker: boolean;
+  /** What ended it, when it was not a deliberate cancellation. */
+  error: Error | null;
+}
+
+let nextTag = 1;
+
+// One registry per channel: the consumer tags in flight, and whether the
+// channel's delivery hooks have been claimed by this layer yet.
+interface Registry {
+  consumers: Map<string, Subscription>;
+  installed: boolean;
+}
+
+const REGISTRIES = new WeakMap<Channel, Registry>();
+
+function registryFor(channel: Channel): Registry {
+  let registry = REGISTRIES.get(channel);
+  if (registry === undefined) {
+    registry = { consumers: new Map(), installed: false };
+    REGISTRIES.set(channel, registry);
+  }
+  return registry;
+}
+
+/**
+ * Subscribes to `queue` and answers with the subscription.
+ *
+ * Set the prefetch with `channel.qos(...)` first if the work should not all
+ * arrive at once; that is what bounds how many unacknowledged messages the
+ * broker will send.
+ */
+export async function subscribe(
+  channel: Channel,
+  queue: string,
+  options: ConsumeOptions = {},
+): Promise<Subscription> {
+  const registry = registryFor(channel);
+  install(channel, registry);
+  const consumerTag = options.consumerTag ?? `esrun-${nextTag++}`;
+  const noAck = options.noAck ?? false;
+  const subscription = new Subscription(channel, registry, queue, consumerTag, !noAck);
+  registry.consumers.set(consumerTag, subscription);
+  // A broken channel ends every subscription on it; the reason is the channel's.
+  void channel.whenClosed().then((error) => subscription.finish(error, false));
+
+  try {
+    await channel.consume(queue, {
+      consumerTag,
+      noAck,
+      exclusive: options.exclusive ?? false,
+      ...(options.arguments === undefined ? {} : { arguments: options.arguments }),
+    });
+  } catch (e) {
+    await subscription.cancel().catch(() => {});
+    throw e;
+  }
+  return subscription;
+}
+
+// The channel hands deliveries to one hook, so this layer claims it and routes
+// by consumer tag. It is claimed once, however many subscriptions follow.
+function install(channel: Channel, registry: Registry): void {
+  if (registry.installed) return;
+  registry.installed = true;
+  channel.onDelivery = (message) => {
+    const tag = message.consumerTag;
+    if (tag === undefined) return;
+    registry.consumers.get(tag)?.offer(message);
+  };
+  channel.onCancel = (tag) => {
+    registry.consumers.get(tag)?.finish(null, true);
+  };
+}
+
+/**
+ * One queue's messages, pulled one at a time.
+ *
+ * It is an async iterable of deliveries; breaking out of a `for await` cancels
+ * the consumer, and so does asking for {@link cancel}.
+ */
+export class Subscription implements AsyncIterable<Delivery> {
+  readonly #channel: Channel;
+  readonly #registry: Registry;
+  readonly #queue: string;
+  readonly #tag: string;
+  readonly #manual: boolean;
+
+  #buffer: Delivery[] = [];
+  #waiting: Array<{
+    resolve: (result: IteratorResult<Delivery>) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  #done = false;
+  #error: Error | null = null;
+  #cancellation: Cancellation | null = null;
+
+  constructor(channel: Channel, registry: Registry, queue: string, tag: string, manual: boolean) {
+    this.#channel = channel;
+    this.#registry = registry;
+    this.#queue = queue;
+    this.#tag = tag;
+    this.#manual = manual;
+  }
+
+  /** The consumer tag the broker knows this subscription by. */
+  get consumerTag(): string {
+    return this.#tag;
+  }
+
+  /** The queue it is consuming. */
+  get queue(): string {
+    return this.#queue;
+  }
+
+  /** Whether it has ended. */
+  get closed(): boolean {
+    return this.#done;
+  }
+
+  /** How it ended, once it has; `null` while it is still running. */
+  get cancellation(): Cancellation | null {
+    return this.#cancellation;
+  }
+
+  /** Routes a delivery to the iterator, or buffers it if nobody is waiting. */
+  offer(message: Message): void {
+    if (this.#done) return;
+    const delivery = deliveryOf(this.#channel, message, this.#manual);
+    const waiter = this.#waiting.shift();
+    if (waiter !== undefined) waiter.resolve({ value: delivery, done: false });
+    else this.#buffer.push(delivery);
+  }
+
+  /** Ends the subscription, with an error, or by the broker's cancellation. */
+  finish(error: Error | null, byBroker: boolean): void {
+    if (this.#done) return;
+    this.#done = true;
+    this.#error = error;
+    this.#cancellation = { byBroker, error };
+    this.#registry.consumers.delete(this.#tag);
+    for (const waiter of this.#waiting.splice(0)) {
+      if (error !== null) waiter.reject(error);
+      else waiter.resolve({ value: undefined, done: true });
+    }
+  }
+
+  /** Cancels the consumer with the broker and ends the iteration. */
+  async cancel(): Promise<void> {
+    if (this.#done) return;
+    // Marked done first, so a delivery already buffered is dropped and a racing
+    // `basic.deliver` finds nothing to route to.
+    this.finish(null, false);
+    try {
+      await this.#channel.cancelConsumer(this.#tag);
+    } catch {
+      // The channel is gone, which is the end the caller asked for anyway.
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterableIterator<Delivery> {
+    return {
+      next: () => this.#next(),
+      return: async () => {
+        await this.cancel();
+        return { value: undefined, done: true };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+  }
+
+  #next(): Promise<IteratorResult<Delivery>> {
+    const buffered = this.#buffer.shift();
+    if (buffered !== undefined) return Promise.resolve({ value: buffered, done: false });
+    if (this.#error !== null) return Promise.reject(this.#error);
+    if (this.#done) return Promise.resolve({ value: undefined, done: true });
+    return new Promise((resolve, reject) => this.#waiting.push({ resolve, reject }));
+  }
+}
+
+// A delivery is the message plus the three ways to settle it. They are refused
+// when acknowledgement is not manual: sending `basic.ack` for a tag the broker
+// has already forgotten — which is what `noAck` means — would kill the channel.
+function deliveryOf(channel: Channel, message: Message, manual: boolean): Delivery {
+  const require = (): void => {
+    if (!manual) {
+      throw new RabbitError(
+        "this subscription consumes without acknowledgements (noAck), so there is nothing to acknowledge",
+        { code: RabbitErrorCode.Channel },
+      );
+    }
+  };
+  return {
+    ...message,
+    ack: (options) => {
+      require();
+      return channel.ack(message.deliveryTag, options);
+    },
+    nack: (options) => {
+      require();
+      return channel.nack(message.deliveryTag, options);
+    },
+    reject: (options) => {
+      require();
+      return channel.reject(message.deliveryTag, options);
+    },
+  };
+}

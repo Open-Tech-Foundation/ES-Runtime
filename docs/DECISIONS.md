@@ -3512,3 +3512,22 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 - **The JSON pivot for JSON-shaped documents.** It is MessagePack's fast path, but for CBOR it would break `Infinity`/`NaN` (JSON has none) and byte strings; one structural walk avoids both.
 
 **Consequences:** `runtime:serialization` has an eighth namespace; the internals and reference pages state the tag policy and the canonical-ordering consequence. The codec is exercised by unit tests against RFC 8949 Appendix A vectors, the conformance suite, and a `cbor` fuzz target (decode → encode → decode, which must not panic and must round-trip). A future `Date`/bignum mapping is a new record plus a readiness change, not a silent widening.
+
+### D171 — RabbitMQ support is an external package speaking AMQP 0-9-1 over `runtime:net` · *Proposed (2026-10-18)* · *extends D56, D136*
+
+**Context:** The runtime speaks a database wire protocol in Rust (Postgres and MySQL, D147) and ships network clients as npm packages written in JavaScript over `runtime:net` (`@opentf/esrun-redis`, `@opentf/esrun-smtp`; D56, D136). Nothing reached a message broker. The request is "RabbitMQ support", which is AMQP 0-9-1 — RabbitMQ's native protocol, and what nearly all RabbitMQ client code means — but the repo has three plausible places for it: a new built-in `runtime:amqp` module, a Rust protocol behind a built-in driver as D147 did for the databases, or an external package. Adding any of them forces the protocol version and the language before a line is written.
+
+**Decision (maintainer, 2026-10-18):**
+
+- **It is an external npm package, `@opentf/esrun-rabbitmq`, under `packages/rabbitmq`** — an ordinary client, not a built-in `runtime:` module and not a new specifier.
+- **It speaks AMQP 0-9-1,** the protocol RabbitMQ implements natively. AMQP 1.0, the RabbitMQ Streams protocol, and the management HTTP API are out of scope.
+- **The protocol is JavaScript over `runtime:net`,** following `@opentf/esrun-redis` and `@opentf/esrun-smtp`. **No Rust is added and no capability is added:** the client reaches the broker through the socket and TLS the agent already provides, so the host allowlist (D38) and socket ownership (D50) apply unchanged, and connecting needs `Net` exactly as `runtime:net`'s `connect` does.
+- **The first release is a full client:** publish and consume, acknowledgements, `basic.qos` prefetch, publisher confirms, topology declaration (exchanges, queues, bindings), request/reply over `direct reply-to`, and a connection/channel pool with recovery.
+
+**Rejected:**
+- **A built-in `runtime:amqp` module.** Every `runtime:` name so far is either a Web-standard surface or something with no JavaScript-level equivalent to stand on (`runtime:db`'s embedded engine). A messaging client is ordinary socket code, and the two clients that already exist live as packages for exactly that reason.
+- **A Rust protocol (the D147 path).** D147 moved the *database* drivers because a `SELECT 1` allocated about 21 KB of JavaScript and grew V8's young generation (D146); it named those drivers and no broker, and a broker's framing has not been shown to cost the same. Porting is a benchmarked decision, not a default, and it can be taken later without changing this package's surface — as it was for the databases.
+- **A `runtime:db` driver only.** Redis is both a client and a `runtime:db` backend, but its model is commands over a connection, which `queryAst` carries. A broker's publish/consume is not a query/execute exchange, and forcing it through `runtime:db`'s dialect would invent a query form the protocol does not have.
+- **Targeting AMQP 1.0 or RabbitMQ Streams now.** Each is a second wire protocol with a different addressing model; 0-9-1 covers the overwhelming majority of RabbitMQ deployments.
+
+**Consequences:** a new npm package that needs no runtime change and no new grant; its guide lives beside the email guide, its design rationale on an Internals page, and it is tested the way the other clients are — protocol unit tests, a scriptable fake broker, and a live RabbitMQ service container in CI (`.github/workflows/js.yml`). If benchmarking later shows the JavaScript framing costing what D147 measured for Postgres, moving the wire protocol into Rust is a separate decision and does not change what this package exports.

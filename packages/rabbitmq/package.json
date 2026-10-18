@@ -1,0 +1,36 @@
+{
+  "name": "@opentf/esrun-rabbitmq",
+  "version": "0.1.0",
+  "description": "RabbitMQ (AMQP 0-9-1) client for esrun.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "esrun": ">=0.41.0"
+  },
+  "scripts": {
+    "build": "esdev build --lib src"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "workspace:*",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["esrun", "es-runtime", "opentf", "rabbitmq", "amqp", "messaging", "queue", "broker"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/rabbitmq"
+  },
+  "homepage": "https://esrun.opentechf.org/docs/guides/rabbitmq",
+  "publishConfig": {
+    "access": "public"
+  }
+}
