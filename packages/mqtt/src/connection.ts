@@ -247,6 +247,7 @@ export class Connection {
   #buffer: Uint8Array = new Uint8Array(0);
 
   #closing = false;
+  #closed = false;
   #failure: MqttError | null = null;
   #pump: Promise<void> | null = null;
   #keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -295,9 +296,9 @@ export class Connection {
     return this.connack.sessionPresent;
   }
 
-  /** Whether the connection is over. */
+  /** Whether the connection is over — deliberately closed, or failed. */
   get closed(): boolean {
-    return this.#failure !== null;
+    return this.#closed;
   }
 
   /** The failure that ended the connection, or `null` while it stands. */
@@ -320,6 +321,9 @@ export class Connection {
   /** Sends a PINGREQ and resolves when the PINGRESP arrives. */
   async ping(timeout: number = DEFAULT_TIMEOUT): Promise<void> {
     if (this.#failure !== null) throw this.#failure;
+    if (this.#closed) {
+      throw new MqttError("the connection is closed", { code: MqttErrorCode.Closed });
+    }
     this.#outstandingPing = true;
     await this.send({ type: PacketType.Pingreq });
     await new Promise<void>((resolve, reject) => {
@@ -346,6 +350,7 @@ export class Connection {
   async close(options: { reasonCode?: number; properties?: Properties } = {}): Promise<void> {
     if (this.#closing || this.#failure !== null) {
       await this.#settle();
+      this.#closed = true;
       return;
     }
     this.#closing = true;
@@ -361,6 +366,7 @@ export class Connection {
     await this.#transport.close().catch(() => {});
     await this.#settle();
     this.#stopKeepAlive();
+    this.#closed = true;
   }
 
   // -- the opening handshake ------------------------------------------------
@@ -501,20 +507,54 @@ export class Connection {
   // -- the read loop --------------------------------------------------------
 
   async #readPacket(level: ProtocolLevel, timeout: number): Promise<Packet | null> {
-    const deadline = Date.now() + timeout;
+    const deadline = Number.isFinite(timeout) ? Date.now() + timeout : Number.POSITIVE_INFINITY;
     for (;;) {
       const frame = readFrame(this.#buffer);
       if (frame !== null) {
         this.#buffer = this.#buffer.subarray(frame.total);
         return decodePacketBody(frame.firstByte, frame.body, level);
       }
-      if (Date.now() > deadline) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
         throw new MqttError("the broker did not answer in time", { code: MqttErrorCode.Timeout });
       }
-      const chunk = await this.#transport.read();
+      const chunk = await this.#readWithDeadline(remaining);
       if (chunk === null) return null;
       this.#buffer = concat(this.#buffer, chunk);
     }
+  }
+
+  /**
+   * `transport.read()`, with the wait bounded.
+   *
+   * The deadline has to race the read, not merely be checked between reads: a
+   * broker that accepts the socket and then sends nothing leaves the read
+   * pending forever, so a timeout that only guards the loop never fires. The
+   * abandoned read is harmless — it settles onto a closed stream — but its
+   * result is ignored, so the caller hears the timeout it asked for.
+   */
+  #readWithDeadline(remaining: number): Promise<Uint8Array | null> {
+    if (!Number.isFinite(remaining)) return this.#transport.read();
+    return new Promise<Uint8Array | null>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new MqttError("the broker did not answer in time", { code: MqttErrorCode.Timeout }),
+          ),
+        remaining,
+      );
+      unrefTimer(timer as unknown as number);
+      this.#transport.read().then(
+        (chunk) => {
+          clearTimeout(timer);
+          resolve(chunk);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   async #readLoop(): Promise<void> {
@@ -530,7 +570,6 @@ export class Connection {
           return;
         }
         this.#lastRead = Date.now();
-        this.#outstandingPing = false;
         this.#dispatch(packet);
       }
     } catch (e) {
@@ -556,11 +595,17 @@ export class Connection {
         this.#handlers.onAck(packet);
         break;
       case PacketType.Pubrec:
-        // Step two of an outbound QoS 2 exchange: acknowledge the receipt and
-        // release the message.
-        void this.send({ type: PacketType.Pubrel, packetId: packet.packetId, reasonCode: 0 }).catch(
-          () => {},
-        );
+        // Step two of an outbound QoS 2 exchange. A successful PUBREC is answered
+        // with PUBREL and the exchange waits on PUBCOMP; a negative one ends it
+        // here — the specification sends no PUBREL and frees the packet
+        // identifier — so it is reported at once rather than after a timeout.
+        if (!isErrorReason(packet.reasonCode)) {
+          void this.send({
+            type: PacketType.Pubrel,
+            packetId: packet.packetId,
+            reasonCode: 0,
+          }).catch(() => {});
+        }
         this.#handlers.onAck(packet);
         break;
       case PacketType.Pubrel:
@@ -641,6 +686,9 @@ export class Connection {
   #write(bytes: Uint8Array): Promise<void> {
     const next = this.#writeChain.then(() => {
       if (this.#failure !== null) throw this.#failure;
+      if (this.#closed) {
+        throw new MqttError("the connection is closed", { code: MqttErrorCode.Closed });
+      }
       return this.#transport.write(bytes);
     });
     // Keep the chain alive after a failure so later writes see the latch, not an
@@ -695,6 +743,7 @@ export class Connection {
   #fail(error: MqttError): MqttError {
     if (this.#failure === null) {
       this.#failure = error;
+      this.#closed = true;
       this.#stopKeepAlive();
       void this.#transport.close().catch(() => {});
       this.#handlers.onClosed(error);

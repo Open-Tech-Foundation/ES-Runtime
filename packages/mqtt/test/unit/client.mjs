@@ -125,6 +125,33 @@ async function subscribe(client, broker, filter, options = {}, reasons) {
   await client.close();
 }
 
+{
+  const { broker, client } = await connected();
+  const pending = client.publish("a/b", "two", { qos: 2 });
+  const packet = await broker.next();
+  broker.send({ type: PacketType.Pubrec, packetId: packet.packetId, reasonCode: 0x80 });
+  let error = null;
+  try {
+    await pending;
+  } catch (e) {
+    error = e;
+  }
+  ok(
+    error !== null && error.code === MqttErrorCode.Publish,
+    "a negative PUBREC fails the QoS 2 publish",
+  );
+  ok(error.reasonCode === 0x80, "with the broker's reason code");
+
+  // No PUBREL follows a negative PUBREC, so the next packet is the next thing
+  // the client sends — proving the exchange ended rather than carrying on.
+  const again = client.publish("a/b", "one", { qos: 1 });
+  const next = await broker.next();
+  ok(next.type === PacketType.Publish && next.qos === 1, "and no PUBREL is sent for it");
+  broker.send({ type: PacketType.Puback, packetId: next.packetId, reasonCode: 0 });
+  await again;
+  await client.close();
+}
+
 // --- subscribe, and routing by filter --------------------------------------
 
 {
@@ -145,6 +172,37 @@ async function subscribe(client, broker, filter, options = {}, reasons) {
   }
   ok(timedOut, "a non-matching topic is not delivered");
 
+  // A timed-out nextMessage must leave nothing behind: the waiter it queued has
+  // to be withdrawn, or the *next* message resolves that abandoned waiter and is
+  // lost instead of delivered here.
+  publishTo(broker, "sensor/temp", "22");
+  const after = await subscription.nextMessage(1000);
+  ok(after.text() === "22", "a message after a timeout is still delivered, not lost");
+
+  await client.close();
+}
+
+{
+  const { broker, client } = await connected();
+  const pending = client.subscribe("slow", { timeout: 60 });
+  await broker.next();
+  // No SUBACK: the subscribe must fail on its timeout, and the client must stay
+  // usable — the abandoned subscription is not left registered.
+  let error = null;
+  try {
+    await pending;
+  } catch (e) {
+    error = e;
+  }
+  ok(
+    error !== null && error.code === MqttErrorCode.Timeout,
+    "a missing SUBACK times the subscribe out",
+  );
+
+  const { subscription } = await subscribe(client, broker, "slow", { qos: 0 });
+  publishTo(broker, "slow", "late");
+  const message = await subscription.nextMessage(1000);
+  ok(message.text() === "late", "and the client still subscribes afterwards");
   await client.close();
 }
 

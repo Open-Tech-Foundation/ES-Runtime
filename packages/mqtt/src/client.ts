@@ -191,22 +191,43 @@ export class Subscription implements AsyncIterable<Message> {
   }
 
   /** The next message, rejecting if none arrives within `timeout` ms. */
-  async nextMessage(timeout: number = DEFAULT_TIMEOUT): Promise<Message> {
-    const result = await Promise.race([
-      this.next(),
-      new Promise<IteratorResult<Message>>((_, reject) => {
-        const timer = setTimeout(
-          () =>
-            reject(new MqttError("no message arrived in time", { code: MqttErrorCode.Timeout })),
-          timeout,
-        );
-        unrefTimer(timer as unknown as number);
-      }),
-    ]);
-    if (result.done) {
-      throw new MqttError("the subscription is closed", { code: MqttErrorCode.Closed });
+  nextMessage(timeout: number = DEFAULT_TIMEOUT): Promise<Message> {
+    const message = this.#queue.shift();
+    if (message !== undefined) return Promise.resolve(message);
+    if (this.#closed) {
+      return Promise.reject(
+        new MqttError("the subscription is closed", { code: MqttErrorCode.Closed }),
+      );
     }
-    return result.value;
+    return new Promise<Message>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter = (result: IteratorResult<Message>) => {
+        clearTimeout(timer);
+        if (result.done) {
+          reject(new MqttError("the subscription is closed", { code: MqttErrorCode.Closed }));
+        } else {
+          resolve(result.value);
+        }
+      };
+      timer = setTimeout(() => {
+        // Remove the waiter only if it is still queued. A delivery may have taken
+        // it already, and leaving it behind would let the *next* message resolve
+        // this abandoned waiter — which is to say, lose that message.
+        if (this.#removeWaiter(waiter)) {
+          reject(new MqttError("no message arrived in time", { code: MqttErrorCode.Timeout }));
+        }
+      }, timeout);
+      unrefTimer(timer as unknown as number);
+      this.#waiters.push(waiter);
+    });
+  }
+
+  /** @internal */
+  #removeWaiter(waiter: (result: IteratorResult<Message>) => void): boolean {
+    const at = this.#waiters.indexOf(waiter);
+    if (at < 0) return false;
+    this.#waiters.splice(at, 1);
+    return true;
   }
 
   /** Unsubscribes from the broker and ends the iterable. */
@@ -394,6 +415,7 @@ export class MqttClient {
     const properties = this.#subscribeProperties(options);
 
     const waiter = this.#waitFor(this.#subackWaiters, packetId, options.timeout ?? this.#timeout());
+    let ack: SubackPacket;
     try {
       await this.#connection.send({
         type: PacketType.Subscribe,
@@ -401,11 +423,15 @@ export class MqttClient {
         subscriptions: [entry],
         ...(properties === undefined ? {} : { properties }),
       });
+      ack = await waiter;
     } catch (e) {
+      // A send failure or a SUBACK that never came: drop the waiter and the
+      // subscription together, or the abandoned subscription keeps buffering
+      // every matching message with no one left to read them.
+      this.#forget(this.#subackWaiters, packetId);
       this.#dropSubscription(subscription);
       throw e;
     }
-    const ack = await waiter;
     const reason = ack.reasons[0];
     if (reason === undefined || isErrorReason(reason)) {
       this.#dropSubscription(subscription);
@@ -430,8 +456,13 @@ export class MqttClient {
     const list = Array.isArray(filters) ? filters : [filters];
     const packetId = this.#connection.allocatePacketId();
     const waiter = this.#waitFor(this.#unsubackWaiters, packetId, timeout ?? this.#timeout());
-    await this.#connection.send({ type: PacketType.Unsubscribe, packetId, filters: list });
-    await waiter;
+    try {
+      await this.#connection.send({ type: PacketType.Unsubscribe, packetId, filters: list });
+      await waiter;
+    } catch (e) {
+      this.#forget(this.#unsubackWaiters, packetId);
+      throw e;
+    }
     for (const filter of list) this.#removeSubscriptions(filter);
   }
 
@@ -483,9 +514,15 @@ export class MqttClient {
   }
 
   #onAck(packet: AckPacket): void {
-    // Only PUBACK and PUBCOMP terminate a publish; PUBREC and PUBREL are the
-    // connection's to answer and do not settle anything here.
-    if (packet.type !== PacketType.Puback && packet.type !== PacketType.Pubcomp) return;
+    // PUBACK ends a QoS 1 publish and PUBCOMP ends a successful QoS 2 one. A
+    // PUBREC is only news when it is negative: the connection sends no PUBREL
+    // then, so the publish fails here rather than waiting out a PUBCOMP that
+    // will never come.
+    if (packet.type === PacketType.Pubrec) {
+      if (!isErrorReason(packet.reasonCode)) return;
+    } else if (packet.type !== PacketType.Puback && packet.type !== PacketType.Pubcomp) {
+      return;
+    }
     const waiter = this.#ackWaiters.get(packet.packetId);
     if (waiter === undefined) return;
     this.#settle(this.#ackWaiters, packet.packetId, packet);
@@ -564,6 +601,14 @@ export class MqttClient {
     map.delete(packetId);
     clearTimeout(waiter.timer);
     waiter.resolve(value);
+  }
+
+  /** Drops a pending waiter without settling it, so its timer cannot reject alone. */
+  #forget<T>(map: Map<number, Waiter<T>>, packetId: number): void {
+    const waiter = map.get(packetId);
+    if (waiter === undefined) return;
+    map.delete(packetId);
+    clearTimeout(waiter.timer);
   }
 
   #dropSubscription(subscription: Subscription): void {

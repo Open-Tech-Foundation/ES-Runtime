@@ -50,3 +50,22 @@ package written entirely in JavaScript over `runtime:net`. See the root
   `mqtts://` reaches 8883 over TLS.
 - The `Will` type — the shape a connection's `will` setting names — is exported,
   so a last will can be built and named rather than only written inline.
+
+### Fixed
+
+- A `Subscription.nextMessage` timeout no longer leaves its waiter queued. The
+  waiter is now withdrawn, so a later delivery resolves the next read rather than
+  the abandoned one — which had quietly dropped that message.
+- The handshake timeout now races the socket read, not only checks it between
+  reads. A broker that accepts the connection and then sends nothing fails at the
+  timeout instead of leaving `connect` pending indefinitely.
+- A negative PUBREC now fails a QoS 2 publish at once, carrying the broker's
+  reason code, instead of sending PUBREL and waiting out a PUBCOMP that never
+  comes. Per the specification, no PUBREL is sent and the packet identifier is
+  free to reuse immediately.
+- `ping` is resolved only by a PINGRESP. Unrelated inbound traffic no longer
+  clears the outstanding ping and lets the call return early.
+- A `subscribe` that times out — or whose SUBSCRIBE never went out — no longer
+  leaves the subscription registered, where it would buffer matching messages
+  with no one left to read them. The same cleanup applies to `unsubscribe`.
+- `Connection.closed` now reports a deliberate `close()`, not only a failure.

@@ -99,6 +99,7 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
   const disconnect = await broker.next();
   ok(disconnect.type === PacketType.Disconnect, "close sends a DISCONNECT");
   await closing;
+  ok(conn.closed, "a deliberate close marks the connection closed");
   ok((await broker.next()) === null, "and then the pipe ends");
 }
 
@@ -119,6 +120,26 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
   ok(
     error.reasonCode === 0x87 && error.reasonName === "Not authorized",
     "carrying the broker's code and name",
+  );
+}
+
+// --- a silent broker times the handshake out -------------------------------
+
+{
+  const broker = fakeBroker(5);
+  const pending = Connection.over(broker.transport, { clientId: "c", timeout: 60 }, {}, 5);
+  await broker.next();
+  // The broker accepted the socket and then says nothing at all. The read must
+  // be raced against the deadline, or this never returns.
+  let error = null;
+  try {
+    await pending;
+  } catch (e) {
+    error = e;
+  }
+  ok(
+    error !== null && error.code === MqttErrorCode.Timeout,
+    "a broker that never answers times the handshake out",
   );
 }
 
@@ -262,6 +283,18 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
     "the PUBCOMP is reported to the client",
   );
 
+  // A negative PUBREC ends the exchange: it is reported, and no PUBREL is sent,
+  // so the packet identifier is free for reuse at once.
+  broker.send({ type: PacketType.Pubrec, packetId: 11, reasonCode: 0x80 });
+  await tick();
+  ok(
+    acks.some((packet) => packet.type === PacketType.Pubrec && packet.packetId === 11),
+    "a negative PUBREC is reported to the client",
+  );
+  await conn.send({ type: PacketType.Pingreq });
+  const after = await broker.next();
+  ok(after.type === PacketType.Pingreq, "and no PUBREL is sent for a negative PUBREC");
+
   await conn.close();
 }
 
@@ -277,9 +310,24 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
   const pong = conn.ping(2000);
   const pingreq = await broker.next();
   ok(pingreq.type === PacketType.Pingreq, "ping sends a PINGREQ");
+  // Unrelated inbound traffic must not stand in for the PINGRESP.
+  broker.send({
+    type: PacketType.Publish,
+    topic: "a/b",
+    payload: ENCODER.encode("x"),
+    qos: 0,
+    retain: false,
+    dup: false,
+  });
+  let resolved = false;
+  void pong.then(() => {
+    resolved = true;
+  });
+  await tick(60);
+  ok(!resolved, "unrelated traffic does not resolve ping");
   broker.send({ type: PacketType.Pingresp });
   await pong;
-  ok(true, "the PINGRESP resolves ping");
+  ok(resolved, "the PINGRESP resolves ping");
 
   await conn.close();
 }
