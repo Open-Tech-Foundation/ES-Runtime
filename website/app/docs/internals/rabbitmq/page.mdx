@@ -99,7 +99,10 @@ reply. RabbitMQ's `direct reply-to` removes both: a channel that consumes
 every request's `reply_to`, so the reply comes straight back to that channel.
 The consumer has to be `noAck`, and it has to be started *before* the first call
 goes out, or a fast reply arrives with nothing listening — which is why the RPC
-layer owns the consumer and opens it before it returns.
+layer owns the consumer and opens it before it returns. The consumer *is* the
+reply path, so a broker that cancels it — a variant that does not, a policy that
+does — has ended the conversation: the client closes and the calls in flight
+fail, rather than waiting out a timeout for an answer that can no longer come.
 
 Replies are matched by the correlation id the client generates, not by order, so
 concurrent calls on one channel are told apart and a stray or duplicated reply

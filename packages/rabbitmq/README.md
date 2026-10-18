@@ -185,8 +185,9 @@ A `Delivery` is a `Message` — `consumerTag`, `deliveryTag`, `redelivered`,
 Around the loop: `subscription.consumerTag`, `subscription.queue`,
 `subscription.closed`, `subscription.cancellation` (`{ byBroker, error }`) and
 `await subscription.cancel()`. Breaking out of a `for await` cancels the
-consumer. A broker-initiated cancellation ends the iterator with a
-`Cancellation` naming the broker.
+consumer, and cancelling drops deliveries that arrived but were not read. A
+broker-initiated cancellation ends the iterator with a `Cancellation` naming the
+broker.
 
 ## Request/reply
 
@@ -211,8 +212,10 @@ default 30 000; `0` waits forever) and `mandatory`. Replies are matched by id,
 so concurrent calls on one channel are told apart and a stray or unknown reply
 is dropped. A call left unanswered past its timeout rejects with
 `ERR_RABBITMQ_TIMEOUT`; a call in flight when the channel closes rejects with the
-channel's reason. `rpc.pending`, `rpc.closed`, and `await rpc.close()` — which
-cancels the reply consumer and fails whatever is still pending.
+channel's reason, and a reply consumer the broker cancels closes the client the
+same way. `rpc.pending` says how many calls are waiting and `rpc.closed` whether
+it is done; `await rpc.close()` cancels the reply consumer and fails whatever is
+still pending.
 
 ## The pool
 
