@@ -48,3 +48,5 @@ package written entirely in JavaScript over `runtime:net`. See the root
   topic filter, unsubscribe, and request/reply over the MQTT 5.0
   response-topic/correlation-data convention. `mqtt://` reaches 1883 and
   `mqtts://` reaches 8883 over TLS.
+- The `Will` type — the shape a connection's `will` setting names — is exported,
+  so a last will can be built and named rather than only written inline.

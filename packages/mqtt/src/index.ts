@@ -42,6 +42,7 @@ export {
   type Packet,
   PacketType,
   type ProtocolLevel,
+  type Will,
 } from "./protocol/packets.js";
 export type { Properties } from "./protocol/properties.js";
 export { isErrorReason, reasonName } from "./protocol/reason.js";
