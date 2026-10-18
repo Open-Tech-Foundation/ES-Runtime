@@ -1,0 +1,143 @@
+---
+title: "Internals: MQTT"
+description: Why the MQTT client is a package, how it frames the stream, why a lost socket is latched, and how QoS 2 is delivered exactly once.
+---
+
+# Internals: MQTT
+
+How [`@opentf/esrun-mqtt`](/docs/guides/mqtt) is put together, and why each rule
+it enforces is there. The decision and what was rejected are in
+`docs/DECISIONS.md` (D172).
+
+## A package, not a runtime module
+
+Everything the client needs is already in the runtime: `runtime:net` opens a TCP
+or TLS socket and hands back web streams. So the client is JavaScript over that
+API, as the [database drivers](/docs/db) are — no new code in `esrun`, and no new
+capability: reaching the broker is `--allow-net`, scoped to its host like any
+other socket.
+
+That also decides what it cannot do. It reaches only hosts the run was granted,
+and TLS is verified by the runtime's own verifier, with no option here to switch
+it off. It speaks MQTT 5.0, and falls back to 3.1.1 for a broker that does not —
+MQTT over WebSockets, and the 3.1 wire format below 3.1.1, are different framing
+and are out of scope.
+
+## The layers
+
+| Layer | Does |
+| --- | --- |
+| Protocol | The wire codec: the variable byte integer, the string and binary forms, the 5.0 property set, topic validation, and every control packet for both protocol levels. |
+| Transport | The byte pipe over `runtime:net`, behind an interface a test can stand in for. |
+| Connection | The handshake and version negotiation, the packet pump, the protocol's own acknowledgements, keep-alive, and the deliberate close. |
+| Client | Publish, subscribe, unsubscribe, and request/reply. |
+
+Each layer is usable alone; the ones below it decide what the ones above can
+assume. The client never touches a socket — it is handed a `Transport` — which is
+why the handshake and the packet routing can be tested against a scripted broker
+in memory, with no port and no capability granted.
+
+## The packet boundary
+
+MQTT is a stream: a **fixed header** (a type byte and its flags), a **Remaining
+Length** in one to four octets, and a variable header and payload of exactly that
+many bytes. A socket delivers it in whatever chunks it likes — a fixed header that
+arrives alone, a length split across two reads, several packets in one chunk are
+all possible.
+
+So the connection accumulates bytes and is what decides a packet is complete. A
+buffer too short to say is not an error, just a packet not yet arrived; only a
+length that is malformed — a fifth octet, which no amount of waiting fixes — is
+raised. This is solved once, in the connection, rather than by every packet.
+
+## Why a lost socket is latched
+
+If the socket is lost, or the bytes are not MQTT, the stream is at an unknown
+boundary and every later packet would be misread. So such a failure is **latched
+once**, and every caller — now and later — gets that one cause rather than a new
+symptom of the same dead connection. There is no resynchronisation: a stream that
+lost a byte cannot be repaired, only replaced.
+
+The client does not redial. A retry loop that guessed at what was in flight would
+either duplicate a message or drop one, silently; a `MqttError` that says what
+happened lets the application reconnect where it knows what it was doing.
+
+## Version negotiation
+
+A broker that will not speak 5.0 says so one of two ways: a CONNACK reason code
+of `0x84` (`Unsupported Protocol Version`), or an older CONNACK whose return code
+has no 5.0 meaning. Both mean the same thing — dial again as 3.1.1 — so the
+negotiation is a loop in one place, not a flag threaded through the codec. Any
+other refusal (bad credentials, a banned client) is reported, not retried,
+because a second protocol level would not change it.
+
+The two levels share a codec but not every rule: 5.0 properties exist only on a
+5.0 connection, and asking for one on 3.1.1 is refused rather than emitted as a
+packet the broker would reject. The same is true of request/reply, which is the
+5.0 response-topic convention and nothing else.
+
+## The protocol's own acknowledgements
+
+Some answers need no application decision, so the connection sends them itself: a
+PUBACK for an inbound QoS 1 message, and the PUBREC/PUBREL/PUBCOMP exchange for
+QoS 2, whichever side sent the message. What reaches the client is only what an
+application asked for or must decide on.
+
+QoS 2 delivery to the application happens **on PUBREL, not on PUBLISH**. The
+message is held against its identifier when the PUBLISH arrives, acknowledged with
+PUBREC, and released to the application when the broker's PUBREL comes back. That
+is what makes it exactly-once: a retransmitted PUBLISH — the broker resending
+because it saw no PUBREC — is stored again, not delivered a second time.
+
+## Keep-alive
+
+The connection sends a PINGREQ every half the keep-alive interval, and treats
+silence for twice the interval as a lost connection. The interval is what was
+negotiated: a broker's `serverKeepAlive` (5.0) overrides what was asked for.
+
+The keep-alive timer is **unreferenced**: it does not keep a script alive that
+has otherwise finished, so a program exits when its work is done rather than
+waiting out the interval.
+
+## Writing is serialised
+
+A packet may be several writes — a header, then a body — and two publishes issued
+at once must not interleave halfway. So a connection's writes go through **one
+chain**: each write waits for the last to finish. The cost is that a connection's
+throughput is serialised; the alternative is a packet the broker reads as two.
+
+## Request/reply, without a reply queue
+
+The usual RPC shape costs a queue per caller. MQTT 5.0's convention removes it:
+the request carries a **response topic** and **correlation data**, the responder
+publishes its answer to that topic carrying the same data, and the caller matches
+on it. `request` subscribes to a private response topic (`$esrun/reply/<token>`),
+publishes, and resolves the first reply whose correlation data matches — so a
+stray or duplicated reply is dropped rather than mistaken for the answer. It is
+5.0-only, and refuses on 3.1.1 rather than silently turning into a fire-and-forget
+publish.
+
+## Testing without a port
+
+`esrun` grants nothing by default, and a unit test should not be the reason to
+start a broker. So the `Transport` is an interface, and the connection and client
+sit on top of it: the unit suites drive a scripted broker in memory — it speaks
+the same packets, grants subscriptions and acknowledges publishes — with no
+socket and no `--allow-net`. The end-to-end suite then runs the same client
+against a real Mosquitto, where the framing either matches or nothing passes.
+
+## What it costs
+
+The client is JavaScript, so the wire codec — the connection's buffer, each
+packet, each message — lives on the JavaScript heap. That is the same line
+[`runtime:db`](/docs/internals/database) draws: Rust owns transport and the
+embedded engine, and JavaScript owns every network protocol, so a networked
+backend adds no runtime code. The cost is memory and the collector's time over it,
+not a capability — nothing here needs a grant beyond the socket it already had.
+Moving the codec into Rust later would not change what this package exports.
+
+## Not here
+
+MQTT over WebSockets, the 3.1 wire format below 3.1.1, automatic reconnection, and
+broker-side persistence management. Messages on a persistent session are
+redelivered by the broker; deciding to redial and resubscribe is the application's.

@@ -1,0 +1,213 @@
+---
+title: MQTT
+description: Publish, subscribe and request/reply over MQTT 5.0 (with 3.1.1 fallback) using @opentf/esrun-mqtt — connecting, QoS, retain, wildcards, wills and sessions.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# MQTT
+
+[`@opentf/esrun-mqtt`](https://www.npmjs.com/package/@opentf/esrun-mqtt) is an
+MQTT client speaking MQTT 5.0, falling back to 3.1.1 when a broker will not
+speak 5.0. It is written in JavaScript over
+[`runtime:net`](/api/net), so it needs no grant beyond reaching the broker.
+
+```sh
+npm install @opentf/esrun-mqtt
+```
+
+```sh
+esrun --allow-net=broker.example.com:1883 app.js
+```
+
+## Connect
+
+`MqttClient.connect` takes an `mqtt://` or `mqtts://` URL, dials it and finishes
+the handshake. `mqtts:` is TLS from the first byte. Everything below —
+subscriptions, acknowledgements, keep-alive — happens beneath it.
+
+```js
+import { MqttClient } from "@opentf/esrun-mqtt";
+
+const client = await MqttClient.connect("mqtt://broker.example.com:1883", {
+  clientId: "worker-1",
+  keepAlive: 30,
+});
+
+console.log(client.protocolLevel); // 5
+```
+
+The URL carries the host and credentials; the second argument holds the client
+identifier, keep-alive, the will and a session's expiry. The [package
+reference](https://www.npmjs.com/package/@opentf/esrun-mqtt#connecting) lists
+them all.
+
+## Publish and subscribe
+
+A topic is a `/`-separated path, and the two wildcards match within it: `+`
+matches one level, `#` matches the rest, and only as the last level. `subscribe`
+returns an async iterable of messages.
+
+```js
+const subscription = await client.subscribe("sensors/+/temperature", { qos: 1 });
+
+for await (const message of subscription) {
+  console.log(message.topic, message.text());
+}
+
+await client.publish("sensors/kitchen/temperature", "21.5", { qos: 1 });
+```
+
+A `Message` carries `topic`, `payload` (bytes), `qos`, `retain` and `dup`, plus
+`text()` and `json()` for the payload. `await subscription.unsubscribe()` leaves
+the broker, or breaking out of the `for await` does it for you.
+
+## Choose a QoS
+
+The QoS is the delivery guarantee, and it is per message.
+
+- **QoS 0** — at most once. `publish` resolves once the bytes are written.
+- **QoS 1** — at least once. `publish` resolves once the broker has acknowledged,
+  so awaiting the publish awaits the message's fate. It may arrive more than once.
+- **QoS 2** — exactly once. `publish` resolves once the full
+  PUBREC/PUBREL/PUBCOMP exchange has finished.
+
+```js
+await client.publish("events/order-paid", payload, { qos: 2 });
+```
+
+A message the broker refuses rejects with `ERR_MQTT_PUBLISH` carrying its reason
+code, rather than resolving as if it were sent.
+
+## Keep the last message
+
+A retained publish is kept by the broker and replayed to each future subscriber
+of that exact topic, which is how a device announces its current state.
+
+```js
+await client.publish("devices/thermostat/state", "on", { qos: 1, retain: true });
+
+const state = await client.subscribe("devices/thermostat/state");
+for await (const message of state) {
+  console.log(message.text(), message.retain); // "on" true
+  break;
+}
+```
+
+Publish an empty payload with `retain: true` to clear a retained topic.
+
+## Announce a will
+
+A will is a message the broker publishes on your behalf if this client vanishes
+without a clean disconnect. It is set at connect time and is the usual way to
+signal that a device went away.
+
+```js
+const client = await MqttClient.connect("mqtt://broker.example.com", {
+  clientId: "sensor-42",
+  will: {
+    topic: "devices/sensor-42/status",
+    payload: new TextEncoder().encode("offline"),
+    qos: 1,
+    retain: true,
+  },
+});
+```
+
+A deliberate `client.close()` sends a DISCONNECT and suppresses the will; an
+abrupt loss — a crash, a dropped socket — fires it.
+
+## Resume a session
+
+A clean start asks for no session. Set `sessionExpiryInterval` (5.0) so the
+broker keeps the subscription and the messages that arrive while you are gone,
+then reconnect with `cleanStart: false` to resume it.
+
+```js
+const client = await MqttClient.connect(url, {
+  clientId: "worker-1",
+  cleanStart: false,
+  sessionExpiryInterval: 300, // keep the session for five minutes after a drop
+});
+
+if (client.sessionPresent) {
+  // the broker kept the subscription and queued messages from the gap
+}
+```
+
+Redelivery after a reconnect is the broker's; deciding to reconnect at all is
+yours — this client does not redial on its own.
+
+## Request/reply
+
+MQTT 5.0 defines a convention for a request with a reply: the request carries a
+response topic and correlation data, and the answer comes back on that topic
+with the same data. `request` sets it up and resolves the matching reply.
+
+```js
+import { MqttClient } from "@opentf/esrun-mqtt";
+
+const client = await MqttClient.connect("mqtts://broker.example.com:8883");
+const reply = await client.request("service/fib", "10", { timeout: 5_000 });
+console.log(reply.text());
+```
+
+The responder is an ordinary subscriber. It reads the request's `responseTopic`
+and `correlationData`, and publishes its answer to the former carrying the
+latter:
+
+```js
+const service = await responder.subscribe("service/fib", { qos: 1 });
+for await (const request of service) {
+  const result = fib(Number(request.text()));
+  await responder.publish(request.responseTopic, String(result), {
+    correlationData: request.correlationData,
+  });
+}
+```
+
+Request/reply needs 5.0; on a 3.1.1 connection `request` refuses rather than
+downgrading to a fire-and-forget publish. An unanswered request rejects with
+`ERR_MQTT_TIMEOUT`.
+
+## Handle failures
+
+Every failure is an `MqttError` carrying a `code` and, when the broker gave one,
+its own `reasonCode` and `reasonName`.
+
+```js
+import { MqttError, MqttErrorCode } from "@opentf/esrun-mqtt";
+
+try {
+  await client.publish("events/user", payload, { qos: 1 });
+} catch (e) {
+  if (e instanceof MqttError && e.code === MqttErrorCode.Publish) await retry(payload);
+  else throw e;
+}
+```
+
+A lost socket is fatal and latched: a stream missing a byte cannot be
+resynchronised, so the connection is replaced rather than repaired. The client
+does not dial again on its own — that is the application's decision, made where
+it knows what was in flight.
+
+## Test locally
+
+Mosquitto 2 will not take an anonymous client off loopback without a config that
+says so, so the harness writes one and starts the broker for you:
+
+```sh
+eval "$(test/mosquitto-server.sh)"   # eclipse-mosquitto:2, plain and TLS
+```
+
+```js
+const client = await MqttClient.connect("mqtt://127.0.0.1:1883");
+```
+
+<Callout type="note" title="Every option and error code">
+  The [package README](https://www.npmjs.com/package/@opentf/esrun-mqtt)
+  lists every connection setting, publish and subscribe option, and error code.
+</Callout>
+
+How the client is put together — the packet boundary, why a lost socket is
+latched, and how QoS 2 is delivered once: [Internals: MQTT](/docs/internals/mqtt).
