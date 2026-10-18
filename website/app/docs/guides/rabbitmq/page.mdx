@@ -1,0 +1,194 @@
+---
+title: RabbitMQ
+description: Publish, consume and request/reply over AMQP 0-9-1 with @opentf/esrun-rabbitmq — connecting, topology, confirms, consumers and the pool.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# RabbitMQ
+
+[`@opentf/esrun-rabbitmq`](https://www.npmjs.com/package/@opentf/esrun-rabbitmq)
+is a RabbitMQ client speaking AMQP 0-9-1. It is written in JavaScript over
+[`runtime:net`](/api/net), so it needs no grant beyond reaching the broker.
+
+```sh
+npm install @opentf/esrun-rabbitmq
+```
+
+```sh
+esrun --allow-net=rabbitmq.example.com app.js
+```
+
+## Connect
+
+`openConnection` takes an `amqp://` URL, dials it and finishes the AMQP
+handshake. Everything the connection and its channels do happens beneath it; the
+default exchange (`""`) routes by queue name, so a first message needs no
+topology.
+
+```js
+import { openConnection } from "@opentf/esrun-rabbitmq";
+
+const connection = await openConnection("amqp://guest:guest@localhost/");
+const channel = await connection.channel();
+
+await channel.queueDeclare("jobs", { durable: true });
+await channel.publish("", "jobs", "hello");
+```
+
+`amqps:` is TLS from the first byte. The URL carries the credentials and the
+virtual host; any of them can be overridden in the second argument, which also
+holds the heartbeat, timeouts and limits. The [package
+reference](https://www.npmjs.com/package/@opentf/esrun-rabbitmq#connecting)
+lists them all.
+
+## Declare topology
+
+Exchanges, queues and the bindings between them are declared on a channel. A
+declaration is idempotent when it matches the existing one and a `406` when it
+does not, which is what makes declaring at startup safe.
+
+```js
+await channel.exchangeDeclare("events", "topic", { durable: true });
+
+const { queue } = await channel.queueDeclare("", { exclusive: true });
+await channel.queueBind(queue, "events", "user.*");
+
+await channel.publish("events", "user.created", payload, {
+  contentType: "application/json",
+  deliveryMode: 2, // persistent
+});
+```
+
+An empty queue name asks the broker to generate one; the declaration answers
+with it. `arguments` carries broker extensions such as `x-message-ttl` or a
+dead-letter policy.
+
+## Confirm your publishes
+
+By default `publish` resolves once the frames are written, which is all the
+protocol promises. `confirmSelect()` makes the broker acknowledge every publish,
+and then `publish` resolves only once it has — so awaiting the publish awaits
+the message's fate. A message the broker cannot take rejects with
+`ERR_RABBITMQ_NACK`.
+
+```js
+await channel.confirmSelect();
+await channel.publish("events", "user.created", payload); // resolves once RabbitMQ has it
+```
+
+## Consume a queue
+
+`subscribe` returns an async iterable of deliveries; each carries its own
+`ack`, `nack` and `reject`. Set the prefetch first, or the broker will push the
+whole queue at once.
+
+```js
+import { subscribe } from "@opentf/esrun-rabbitmq";
+
+await channel.qos({ prefetchCount: 16 });
+
+const subscription = await subscribe(channel, "jobs");
+for await (const delivery of subscription) {
+  try {
+    await handle(JSON.parse(new TextDecoder().decode(delivery.body)));
+    await delivery.ack();
+  } catch (e) {
+    await delivery.nack({ requeue: true }); // or reject it into a dead-letter queue
+  }
+}
+```
+
+Breaking out of the `for await` cancels the consumer; so does
+`await subscription.cancel()`. If the broker cancels it — a queue deleted under
+the consumer — the loop ends and `subscription.cancellation` says the broker did
+it and why.
+
+## Request/reply
+
+RabbitMQ's `direct reply-to` gives a private reply address on the calling
+channel, so an RPC needs no queue. `RpcClient` consumes it and matches answers
+by correlation id.
+
+```js
+import { RpcClient } from "@opentf/esrun-rabbitmq";
+
+const rpc = await RpcClient.open(await connection.channel());
+const answer = await rpc.call("fib", "10", { timeout: 5_000 });
+console.log(new TextDecoder().decode(answer.body));
+
+await rpc.close();
+```
+
+The responder consumes its queue as usual, and publishes its answer to the
+`replyTo` address the broker put on the request, echoing its `correlationId`.
+Concurrent calls on one channel are told apart by id. A call nobody answers
+rejects with `ERR_RABBITMQ_TIMEOUT`.
+
+## Pool connections
+
+A connection is one socket, so a burst of publishing shares it. A `Pool` spreads
+that over several, and dials a replacement when one dies. Re-establishing what
+you declared after a loss is yours to do in `onConnect`.
+
+```js
+import { Pool } from "@opentf/esrun-rabbitmq";
+
+const pool = new Pool("amqp://localhost/", {
+  size: 4,
+  onConnect: async (connection) => {
+    const channel = await connection.channel();
+    await channel.queueDeclare("jobs", { durable: true });
+    await channel.close();
+  },
+});
+
+await pool.withChannel((channel) => channel.publish("", "jobs", "hello"));
+await pool.close();
+```
+
+`withChannel` borrows a connection, opens a channel, runs your function and
+closes it. For something long-lived — a subscription — borrow whole with
+`pool.acquire()` and `pool.release(connection)`.
+
+## Handle failures
+
+Every failure is a `RabbitError` carrying the broker's own `replyCode` and
+`replyText`. `soft` is what is still usable: a channel exception (a queue that
+does not exist, a failed precondition) kills the channel and leaves the
+connection standing, while a connection exception kills everything.
+
+```js
+import { RabbitError } from "@opentf/esrun-rabbitmq";
+
+try {
+  await channel.publish("events", "user.created", payload);
+} catch (e) {
+  if (e instanceof RabbitError && e.soft) await republishOnANewChannel(payload);
+  else throw e;
+}
+```
+
+A lost socket is fatal and latched: a later frame cannot be trusted, so the
+connection does not try to resynchronise. A pool turns that into a new
+connection on the next borrow.
+
+## Test locally
+
+```sh
+docker run -d --name rabbitmq -p 5672:5672 rabbitmq:4-alpine
+```
+
+```js
+const connection = await openConnection("amqp://guest:guest@127.0.0.1:5672/");
+```
+
+<Callout type="note" title="Every option and error code">
+  The [package README](https://www.npmjs.com/package/@opentf/esrun-rabbitmq)
+  lists every connection setting, channel option, publish property and error
+  code.
+</Callout>
+
+How the client is put together — the framing, why writes are serialised, and
+what the pool's recovery does and does not do: [Internals:
+RabbitMQ](/docs/internals/rabbitmq).

@@ -1,0 +1,136 @@
+---
+title: "Internals: RabbitMQ"
+description: Why the RabbitMQ client is a package, why its writes are serialised, and what the pool's recovery does and does not do.
+---
+
+# Internals: RabbitMQ
+
+How [`@opentf/esrun-rabbitmq`](/docs/guides/rabbitmq) is put together, and why
+each rule it enforces is there. The decision and what was rejected are in
+`docs/DECISIONS.md` (D171).
+
+## A package, not a runtime module
+
+Everything the client needs is already in the runtime: `runtime:net` opens a TCP
+or TLS socket and hands back web streams. So the client is JavaScript over that
+API, as the [database drivers](/docs/db) are — no new code in `esrun`, and no new
+capability: reaching the broker is `--allow-net`, scoped to its host like any
+other socket.
+
+That also decides what it cannot do. It reaches only hosts the run was granted,
+and TLS is verified by the runtime's own verifier, with no option here to switch
+it off. It speaks AMQP 0-9-1, the protocol RabbitMQ implements natively; AMQP
+1.0, the Streams protocol, and the management HTTP API are different addressing
+models and are out of scope.
+
+## The layers
+
+| Layer | Does |
+| --- | --- |
+| Protocol | The wire codec: the frame decoder, the method table, RabbitMQ's field-table tags, and the `basic` content header. |
+| Connection | The handshake, the frame pump that routes frames to channels, channel bookkeeping, heartbeats, and the deliberate close. |
+| Channel | Topology, publishing and confirms, `get`, acknowledgements, and message assembly. |
+| Consumer | `subscribe`: a queue's messages as an async iterable of deliveries. |
+| RPC | `direct reply-to`, matching calls to replies by correlation id. |
+| Pool | A few connections, and the dial that replaces one that dies. |
+
+Each layer is usable alone; the ones below it decide what the ones above can
+assume. A delivery is a method frame, a content header, and one or more body
+frames, so it is the *channel's* job to reassemble it — the connection only
+routes frames by channel number.
+
+## Framing, and why a lost socket is fatal
+
+A frame is a type, a channel number, a length, the payload, and an end byte. On
+a stream, a read can end anywhere, so a resumable decoder accumulates bytes and
+yields a frame only when it is complete.
+
+If the socket is lost, or a frame is not AMQP, the stream is at an unknown
+boundary and every later frame would be misread. So such a failure is **latched
+once**, and every caller — now and later — gets that one cause rather than a new
+symptom of the same dead connection. There is no resynchronisation: a stream
+that lost a byte cannot be repaired, only replaced.
+
+## Why writes are serialised
+
+AMQP lets a connection carry many channels over one socket. A channel's frames
+may not overtake one another, and a content message's method, header and body
+frames must arrive together — a method for another publish that slipped between
+them is what RabbitMQ refuses with `505 UNEXPECTED_FRAME`.
+
+Writing each frame as it is asked for is not enough, because two publishes
+issued at once would interleave halfway. So a connection's writes — the protocol
+header aside — go through **one queue**, and a whole content message is one unit
+on it. A publish takes its turn, writes its three frames, and the next waits.
+The cost is that a connection's throughput is serialised; the alternative is a
+broker that rejects the message.
+
+## Heartbeats
+
+The heartbeat interval is negotiated under the specification's rule: a `0` on
+either side means "no proposal", so the greater of the two is used, and `0` on
+both means none. A quiet connection sends a heartbeat frame on the interval and
+expects traffic before twice it, or the broker will close it.
+
+The heartbeat timer is **unreferenced**: it does not keep a script alive that
+has otherwise finished, so a program exits when its work is done rather than
+waiting out the interval.
+
+## Confirms and acknowledgements
+
+They are opposite directions and use **separate counters**. A publisher confirm
+is the broker telling a *publishing* channel that it has taken the message;
+RabbitMQ numbers those from 1 per channel. An acknowledgement is a *consuming*
+channel telling the broker that a delivery is handled; the broker numbers those
+from 1 per channel. One message can be both, and the two numbers have nothing to
+do with each other.
+
+Awaited confirms change what `publish` means: in confirm mode it resolves once
+the broker has taken the message and rejects when it cannot, so awaiting the
+publish awaits the message's fate — the alternative is a publish that resolved
+before anything had happened to it.
+
+## Request/reply, without a reply queue
+
+The usual RPC shape — the caller declares a private queue, publishes a request
+naming it, and drains it — costs a queue per caller and a routing step for every
+reply. RabbitMQ's `direct reply-to` removes both: a channel that consumes
+`amq.rabbitmq.reply-to` gets a private pseudo-queue the broker rewrites onto
+every request's `reply_to`, so the reply comes straight back to that channel.
+The consumer has to be `noAck`, and it has to be started *before* the first call
+goes out, or a fast reply arrives with nothing listening — which is why the RPC
+layer owns the consumer and opens it before it returns.
+
+Replies are matched by the correlation id the client generates, not by order, so
+concurrent calls on one channel are told apart and a stray or duplicated reply
+is dropped rather than mistaken for the wrong answer.
+
+## Recovery is a dial, not a replay
+
+A connection is a socket; the pool's whole recovery story is to notice a latched
+failure and dial again. It does **not** replay topology or re-subscribe. It
+could not do so honestly: the broker cannot restore an exclusive or auto-delete
+queue, and a consumer re-established across a gap has no way to know what was
+delivered into it. A silent replay would hide the gap rather than close it, so
+re-establishing what an application declared is the application's, from
+`onConnect`, where it can also decide what to do about the messages it may have
+missed.
+
+The one thing the pool must get right is the count: a dead connection is dropped
+before a replacement is dialled, so `size` bounds how many sockets are open even
+under concurrent borrows.
+
+## What it costs
+
+The client is JavaScript, so the wire codec — the decoder's buffer, each frame,
+each reassembled message — lives on the JavaScript heap. That is the same line
+[`runtime:db`](/docs/internals/database) draws: Rust owns transport and the
+embedded engine, and JavaScript owns every network protocol, so a networked
+backend adds no runtime code. The cost is memory and the collector's time over
+it, not a capability — nothing here needs a grant beyond the socket it already
+had. Moving the codec into Rust later would not change what this package exports.
+
+## Not here
+
+AMQP 1.0 and the RabbitMQ Streams protocol, the management HTTP API, the `tx`
+(transactions) class, the `access` class, and `basic.recover-async`.
