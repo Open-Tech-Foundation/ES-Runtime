@@ -58,9 +58,14 @@ const NAV = [
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Sending email", path: "/docs/guides/email" },
-      { title: "RabbitMQ", path: "/docs/guides/rabbitmq" },
-      { title: "MQTT", path: "/docs/guides/mqtt" },
-      { title: "NATS", path: "/docs/guides/nats" },
+      {
+        title: "Messaging",
+        items: [
+          { title: "RabbitMQ", path: "/docs/guides/rabbitmq" },
+          { title: "MQTT", path: "/docs/guides/mqtt" },
+          { title: "NATS", path: "/docs/guides/nats" },
+        ],
+      },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "Workers", path: "/docs/guides/workers" },
       { title: "Durable workers", path: "/docs/guides/durable-workers" },
