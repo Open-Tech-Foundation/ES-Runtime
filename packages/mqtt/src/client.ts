@@ -372,25 +372,32 @@ export class MqttClient {
     // QoS 1 waits for PUBACK; QoS 2 waits for PUBCOMP, the connection having
     // answered the PUBREC in between.
     const waiter = this.#waitFor(this.#ackWaiters, packetId, options.timeout ?? this.#timeout());
+    let ack: AckPacket;
     try {
-      await this.#connection.send({
-        type: PacketType.Publish,
-        topic,
-        payload: bytes,
-        qos,
-        retain,
-        dup: false,
-        packetId,
-        ...(properties === undefined ? {} : { properties }),
-      });
+      // Both must succeed — the write, then the acknowledgement — but the first
+      // failure settles the call. Awaiting the send first would let a write that
+      // stalls past the timeout keep the call waiting on a waiter that has
+      // already given up.
+      [ack] = await Promise.all([
+        waiter,
+        this.#connection.send({
+          type: PacketType.Publish,
+          topic,
+          payload: bytes,
+          qos,
+          retain,
+          dup: false,
+          packetId,
+          ...(properties === undefined ? {} : { properties }),
+        }),
+      ]);
     } catch (e) {
-      // Encoding can fail here, locally, before anything reaches the socket —
-      // the connection stays up, so its own failure handling will not clear this
-      // waiter. Drop it, or its timer rejects a promise nobody is awaiting.
+      // Drop the waiter on any failure, so a write that never left — an
+      // unencodable packet, or one the connection refused — cannot leave its
+      // timer to reject alone.
       this.#forget(this.#ackWaiters, packetId);
       throw e;
     }
-    const ack = await waiter;
     if (isErrorReason(ack.reasonCode)) {
       throw new MqttError(
         `the broker refused the publish: ${reasonName(ack.reasonCode) ?? `reason ${ack.reasonCode}`}`,
@@ -425,13 +432,16 @@ export class MqttClient {
     const waiter = this.#waitFor(this.#subackWaiters, packetId, options.timeout ?? this.#timeout());
     let ack: SubackPacket;
     try {
-      await this.#connection.send({
-        type: PacketType.Subscribe,
-        packetId,
-        subscriptions: [entry],
-        ...(properties === undefined ? {} : { properties }),
-      });
-      ack = await waiter;
+      // Whichever fails first settles the call; see `publish`.
+      [ack] = await Promise.all([
+        waiter,
+        this.#connection.send({
+          type: PacketType.Subscribe,
+          packetId,
+          subscriptions: [entry],
+          ...(properties === undefined ? {} : { properties }),
+        }),
+      ]);
     } catch (e) {
       // A send failure or a SUBACK that never came: drop the waiter and the
       // subscription together, or the abandoned subscription keeps buffering
@@ -465,8 +475,11 @@ export class MqttClient {
     const packetId = this.#connection.allocatePacketId();
     const waiter = this.#waitFor(this.#unsubackWaiters, packetId, timeout ?? this.#timeout());
     try {
-      await this.#connection.send({ type: PacketType.Unsubscribe, packetId, filters: list });
-      await waiter;
+      // Whichever fails first settles the call; see `publish`.
+      await Promise.all([
+        waiter,
+        this.#connection.send({ type: PacketType.Unsubscribe, packetId, filters: list }),
+      ]);
     } catch (e) {
       this.#forget(this.#unsubackWaiters, packetId);
       throw e;

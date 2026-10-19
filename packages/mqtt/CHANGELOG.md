@@ -69,6 +69,10 @@ package written entirely in JavaScript over `runtime:net`. See the root
   writes are serialised, so this happens — fired the timer while the caller was
   still awaiting the socket. The waiter now carries a handler from creation, so
   that rejection waits for the caller's `await` instead of becoming unhandled.
+- A `publish`, `subscribe` or `unsubscribe` whose write stalls past the timeout
+  now rejects at the timeout, rather than waiting for a write that may never
+  finish. The write and the acknowledgement are awaited together, so whichever
+  fails first settles the call.
 - A `Subscription.nextMessage` timeout no longer leaves its waiter queued. The
   waiter is now withdrawn, so a later delivery resolves the next read rather than
   the abandoned one — which had quietly dropped that message.

@@ -9,18 +9,29 @@ import { fakeBroker } from "./broker.mjs";
 
 const ENCODER = new TextEncoder();
 
+const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function connected(level = 5, options = {}) {
   const broker = fakeBroker(level);
-  const pending = MqttClient.over(
-    broker.transport,
-    { clientId: "c", keepAlive: 0, ...options },
-    level,
-  );
+  // Writes can be stalled, so a test can hold one past an operation's timeout.
+  let stalled = false;
+  const transport = {
+    read: () => broker.transport.read(),
+    write: (bytes) => (stalled ? new Promise(() => {}) : broker.transport.write(bytes)),
+    close: () => broker.transport.close(),
+  };
+  const pending = MqttClient.over(transport, { clientId: "c", keepAlive: 0, ...options }, level);
   const connect = await broker.next();
   ok(connect.type === PacketType.Connect, "the client sends a CONNECT");
   broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
   const client = await pending;
-  return { broker, client };
+  return {
+    broker,
+    client,
+    stall() {
+      stalled = true;
+    },
+  };
 }
 
 function publishTo(broker, topic, payload, extra = {}) {
@@ -252,6 +263,29 @@ async function subscribe(client, broker, filter, options = {}, reasons) {
   await pending;
   ok(subscription.closed, "the subscription ends");
   await client.close();
+}
+
+// --- a stuck write does not outlast the timeout ----------------------------
+
+// The acknowledgement waiter is armed before the packet is written. A write that
+// stalls must not keep the call waiting on a waiter that has already given up:
+// each of the three paths has to settle, with the timeout error, on its own.
+for (const [name, call] of [
+  ["publish", (client) => client.publish("a/b", "x", { qos: 1, timeout: 60 })],
+  ["subscribe", (client) => client.subscribe("a/#", { timeout: 60 })],
+  ["unsubscribe", (client) => client.unsubscribe("a/#", 60)],
+]) {
+  const { client, stall } = await connected();
+  stall();
+  let error = null;
+  const settled = call(client).catch((e) => {
+    error = e;
+  });
+  const outcome = await Promise.race([settled.then(() => "settled"), tick(400).then(() => "hung")]);
+  ok(
+    outcome === "settled" && error !== null && error.code === MqttErrorCode.Timeout,
+    `${name} rejects at its timeout even when the write stalls`,
+  );
 }
 
 // --- request / reply -------------------------------------------------------
