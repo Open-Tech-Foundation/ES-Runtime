@@ -22,6 +22,8 @@ namespace) is unstable and may change between minor releases until the API freez
   streams that metadata instead of collecting it, `files(filter?)` returns a
   `Map<string, File>`, `extract(directory)` writes it out, and
   `Archive.write(destination, input, options)` writes to a path or `file()`.
+  Build entries accept web `Blob`/`File` values; a `runtime:fs` `file()` must
+  be read to bytes first, which loads that entry into memory.
   A `file()` source is scanned and streamed through the jailed synchronous
   filesystem, with one fd shared by metadata scans and extraction: `entries()`
   reads headers, `files()` reads only the selected entries, and `stream()` yields

@@ -25,6 +25,7 @@ Read and write tar, tar.gz and zip (DECISIONS D174). `Bun.Archive`'s shape:
 
 ```js
 import { Archive, ArchiveEntry } from "runtime:archive";
+import { file } from "runtime:fs";
 ```
 
 ## `new Archive(input, options?)`
@@ -43,6 +44,10 @@ A path string is a `TypeError`: pass `file(path)`. A `SharedArrayBuffer` is
 refused. Opening detects the format from the leading bytes — gzip, zip or
 tar — and never from a name or extension.
 
+For build entries, `Blob` and `File` mean the web APIs. A `runtime:fs` `file()`
+handle is not a build entry value; use `await file(path).bytes()` to add its
+contents. This reads the whole input file into memory.
+
 | Option | Default | Effect |
 | --- | --- | --- |
 | `format` | `"tar"` | `"tar"` or `"zip"` when building. Ignored when opening. |
@@ -56,9 +61,12 @@ modes are `0644` for files and `0755` for directories, and the timestamp is
 input produces the same bytes.
 
 ```js
+import { Archive } from "runtime:archive";
+import { file } from "runtime:fs";
+
 const entries = {
   "hello.txt": "Hello, world!",
-  "assets/logo.png": png,
+  "assets/logo.png": await file("assets/logo.png").bytes(),
   "empty/": null,
 };
 
@@ -95,6 +103,9 @@ than loaded whole. (A tar.gz entry still has to decompress through its
 predecessors to reach its data; those bytes are discarded as they are skipped.)
 
 ```js
+import { Archive } from "runtime:archive";
+import { file } from "runtime:fs";
+
 const opened = new Archive(file("bundle.tar.gz"));
 for (const entry of await opened.entries()) {
   if (!entry.directory) console.log(entry.path, entry.size);
@@ -103,7 +114,7 @@ const text = await (await opened.entries())[0].text();
 
 const images = await opened.files(/^assets\/.*\.png$/);
 await opened.extract("public");                  // creates public/ as needed
-await Archive.write(file("bundle.zip"), entries, { format: "zip" });
+await Archive.write(file("bundle.zip"), { "hello.txt": "Hello" }, { format: "zip" });
 ```
 
 ## Safety

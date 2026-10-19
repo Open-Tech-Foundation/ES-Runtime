@@ -3417,10 +3417,12 @@ import { Archive } from "runtime:archive";
 import { file } from "runtime:fs";
 
 // Build a tar by default, or a zip / tar.gz.
+const png = await file("assets/logo.png").bytes();
+const md = "# Example project";
 const entries = {
   "hello.txt": "Hello, world!",
   "assets/logo.png": png,          // Uint8Array, ArrayBuffer or view
-  "README.md": new File([md], "README.md"),
+  "README.md": new File([md], "README.md", { lastModified: 0 }),
   "empty/": null,
 };
 const tar = await new Archive(entries).bytes();
@@ -3454,6 +3456,10 @@ await Archive.write(file("bundle.zip"), entries, { format: "zip" });
 A path string is a `TypeError`: pass `file(path)`. A `SharedArrayBuffer` is
 refused. Opening detects the format from the leading bytes — gzip, zip or
 tar — and never from a name or extension.
+
+For build entries, `Blob` and `File` mean the web APIs. A `runtime:fs` `file()`
+handle is not a build entry value; read it with `await file(path).bytes()` to
+add its contents. That reads the whole input file into memory.
 
 | Option | Default | Effect |
 | --- | --- | --- |
