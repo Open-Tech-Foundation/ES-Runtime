@@ -16,7 +16,9 @@ Read and write tar, tar.gz and zip (DECISIONS D174). `Bun.Archive`'s shape:
 <Callout type="info" title="Capability: none for bytes">
   Bytes in and bytes out need nothing. A `runtime:fs` `file()` source needs
   **FileRead**; `extract()` and `Archive.write()` need **FileWrite**, with the
-  destination as the capability target. Status: **Available**.
+  destination as the capability target. A file source keeps its open handle,
+  but it is not a snapshot: in-place writes before or during extraction are
+  visible. Status: **Available**.
 </Callout>
 
 ## Import
@@ -107,19 +109,20 @@ await Archive.write(file("bundle.zip"), entries, { format: "zip" });
 ## Safety
 
 Every entry path is validated before that entry is returned or a file is
-written, and the eager listings finish the layout check before returning: it must be relative, slash-separated, valid UTF-8, with no empty,
+written, and the eager listings finish the layout check before returning. A
+path must be relative, slash-separated, valid UTF-8, with no empty,
 `.` or `..` component, no backslash and no drive letter. Tar symlinks and hard
 links, zip symlinks, special tar types (character/block/FIFO/sparse/global
 PAX) and encrypted zip entries are refused, as is zip compression other than
 Stored and Deflated. Duplicate entries, file/directory collisions, and names
 that would collide on a case-insensitive filesystem (Windows, macOS) are
-refused. An archive is never sanitized into a different one. `extract()`
-validates the whole archive before writing the first file: it reads every
-entry's data (so a bad zip CRC or decompressor stream is found), and refuses an
-existing symlink at the destination, in any parent directory, or at an output
-file path. A refused archive therefore leaves nothing behind. Validation reads
-the archive once and discards the bytes; extraction then streams it a second
-time, entry by entry, creating the destination and any implicit parents.
+refused. An archive is never sanitized into a different one. `extract()` checks
+the destination, parents and output paths for existing symlinks, then decodes
+and validates the whole archive into a temporary directory before copying
+staged files into the destination. A corrupt or unsafe archive therefore does
+not partially change destination files. Staging uses temporary disk space up
+to the uncompressed output size. An I/O error during the final copy can leave
+partial output.
 
 ## Errors
 
@@ -139,4 +142,4 @@ time, entry by entry, creating the destination and any implicit parents.
 - [Archives guide](/docs/guides/archive) — bundling downloads and unpacking
   uploads.
 - [Internals: archives](/docs/internals/archive) — what is validated, what is
-  held in memory, and why extraction validates before writing.
+  held in memory, and why extraction stages before writing.

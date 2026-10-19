@@ -28,7 +28,8 @@ namespace) is unstable and may change between minor releases until the API freez
   bounded chunks. `extract()` decodes into a temporary directory before copying
   files into the destination, so a decode or validation error leaves the
   destination untouched; staging uses disk space up to the uncompressed output
-  size. `compress: "none"` writes stored zip members.
+  size. A filesystem error during the final copy can leave partial output.
+  `compress: "none"` writes stored zip members.
   Bytes in and out need no capability; a `file()` source is `FileRead`, and
   extraction and writing are `FileWrite` with the destination as the target.
   Output is deterministic (sorted entries, `0:0`, `0644`/`0755`, epoch

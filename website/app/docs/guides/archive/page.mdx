@@ -63,11 +63,12 @@ try {
 }
 ```
 
-The whole archive is checked before the first file is written, so a refused
-upload leaves nothing behind. That check reads every entry's data, including
-zip CRCs, so extraction decompresses the archive twice: first to verify, then
-to stream the files to disk. Links, special entries, encrypted zips and
-unsupported compression methods are refused rather than followed or skipped.
+The archive is decoded and validated into a temporary directory before any
+staged file is copied into `uploads`. This catches bad zip CRCs and refuses
+unsafe paths, links, special entries, encrypted zips and unsupported
+compression methods before they can partially change destination files. The
+temporary directory uses disk space up to the uncompressed output size; an I/O
+failure during the final copy can still leave partial output.
 
 ### Lower the limits for uploads
 
@@ -130,10 +131,10 @@ The file is not read into memory first. Metadata, `files(filter)` and
 `extract()` scan it through the jailed filesystem, and `stream()` yields
 decompressed chunks, so a tarball much larger than the agent's memory budget
 can be inspected or unpacked. The fd is opened once and kept for the archive's
-lifetime, so validation and extraction read the same file even if the path is
-renamed or replaced in between. It is a stable handle rather than a snapshot:
-bytes rewritten in place between the two passes are visible to extraction.
-`bytes()` is the exception: it returns the whole archive, as its name says.
+lifetime, so operations stay attached to the same file if its path is renamed
+or replaced. It is not a snapshot: in-place writes before or during extraction
+are visible. `bytes()` is the exception: it returns the whole archive, as its
+name says.
 
 <Callout type="warn" title="No path strings">
   `new Archive("bundle.zip")` is a `TypeError`. Pass `file("bundle.zip")`, or
