@@ -91,7 +91,7 @@ const groups = [
   },
   {
     name: "Message",
-    desc: "AMQP 0-9-1 and MQTT messaging, in JavaScript.",
+    desc: "AMQP 0-9-1 and MQTT messaging.",
     tiles: [
       { icon: "rabbitmq", label: "RabbitMQ", to: "/docs/guides/rabbitmq" },
       { icon: "mqtt", label: "MQTT", to: "/docs/guides/mqtt" },
