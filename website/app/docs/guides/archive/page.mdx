@@ -104,6 +104,11 @@ if (readme) console.log(await readme.text());
 
 // A Map<string, File>, Bun.Archive's shape.
 const files = await opened.files((path) => path.endsWith(".json"));
+
+// Stream the metadata instead of collecting every entry up front.
+for await (const entry of opened) {
+  console.log(entry.path);
+}
 ```
 
 ## From a file
@@ -124,8 +129,11 @@ await Archive.write(file("release.zip"), { "app.js": source }, { format: "zip" }
 The file is not read into memory first. Metadata, `files(filter)` and
 `extract()` scan it through the jailed filesystem, and `stream()` yields
 decompressed chunks, so a tarball much larger than the agent's memory budget
-can be inspected or unpacked. `bytes()` is the exception: it returns the whole
-archive, as its name says.
+can be inspected or unpacked. The fd is opened once and kept for the archive's
+lifetime, so validation and extraction read the same file even if the path is
+renamed or replaced in between. It is a stable handle rather than a snapshot:
+bytes rewritten in place between the two passes are visible to extraction.
+`bytes()` is the exception: it returns the whole archive, as its name says.
 
 <Callout type="warn" title="No path strings">
   `new Archive("bundle.zip")` is a `TypeError`. Pass `file("bundle.zip")`, or

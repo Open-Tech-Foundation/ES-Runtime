@@ -3404,9 +3404,12 @@ archive, `entries()` exposes metadata with lazy entry reads, `files()` returns
 `Map<string, File>`, and `extract()` writes it out.
 
 - **Capability:** None for bytes in and bytes out, and for opening a `Blob`.
-  A `file()` source needs `FileRead`. `extract()` and `Archive.write()` need
-  `FileWrite`, with the destination as the capability target, checked and
-  jailed exactly as writing that path would be.
+  A `file()` source needs `FileRead`; its fd stays open for the archive's
+  lifetime, so metadata scans and extraction use the same file handle. It is
+  not a snapshot: in-place writes before or during extraction are visible.
+  `extract()` and `Archive.write()` need `FileWrite`, with the destination as
+  the capability target, checked and jailed exactly as writing that path would
+  be.
 - **Status:** Available
 
 ```js
@@ -3429,6 +3432,7 @@ const opened = new Archive(file("bundle.tar.gz"));
 const { path, size, lastModified } = (await opened.entries())[0];
 const text = await (await opened.entries())[0].text();
 const files = await opened.files(/^assets\//);   // Map<string, File>
+for await (const entry of opened) console.log(entry.path); // streamed metadata
 await opened.extract("out");                       // needs FileWrite
 
 // Write an archive to disk without holding it in a variable first.
@@ -3469,10 +3473,18 @@ input produces the same bytes.
 | --- | --- |
 | `bytes()` | A copy of the archive's bytes (`Uint8Array`). An opened archive returns its source bytes unchanged. |
 | `blob()` | A `Blob` whose `type` is `application/x-tar`, `application/gzip` or `application/zip`, from the format in the bytes. |
-| `entries()` | An array of `ArchiveEntry`, in archive order. |
+| `entries()` | An array of `ArchiveEntry`, in archive order. A snapshot: use the async iterator to stream it. |
+| `[Symbol.asyncIterator]` | An `AsyncIterable<ArchiveEntry>` over the same metadata, parsed one entry at a time. |
 | `files(filter?)` | A `Map<string, File>` of the file entries (directories skipped). `filter` is a predicate on the path, a path prefix string, or a `RegExp`. |
 | `extract(directory)` | Writes every entry under `directory` (a path string or `file()`) and resolves to `{ files, directories }`. Needs `FileWrite`. |
 | `Archive.write(destination, input, options?)` | Builds `input` as above and writes it to `destination` (a path string or `file()`), resolving to the byte count. Needs `FileWrite`. |
+
+`for await (const entry of archive)` streams metadata instead of collecting an
+array, so the guest holds only the current entry. Per-entry validation and the
+entry limits still apply, but the cross-entry checks run as entries arrive: a
+duplicate or file/directory collision later in the archive rejects the loop
+after earlier entries were yielded. A zip parser still holds its central
+directory, bounded by `maxEntries`.
 
 An `ArchiveEntry` has `path`, `size`, `directory` and `lastModified` (epoch
 milliseconds, or `null`), plus lazy `bytes()`, `text()`, `blob()` and
@@ -3484,20 +3496,22 @@ to reach its data; those bytes are discarded as they are skipped.)
 
 ### Safety
 
-Every entry path is validated before a listing is returned or a file is
-written: it must be relative, slash-separated, valid UTF-8, with no empty,
+Every entry path is validated before that entry is returned or a file is
+written, and the eager listings finish the layout check before returning. A
+path must be relative, slash-separated, valid UTF-8, with no empty,
 `.` or `..` component, no backslash and no drive letter. Tar symlinks and hard
 links, zip symlinks, special tar types (character/block/FIFO/sparse/global
 PAX) and encrypted zip entries are refused, as is zip compression other than
 Stored and Deflated. Duplicate entries, file/directory collisions, and names
 that would collide on a case-insensitive filesystem (Windows, macOS) are
-refused. An archive is never sanitized into a different one. `extract()`
-validates the whole archive before writing the first file: it reads every
-entry's data (so a bad zip CRC or decompressor stream is found), and refuses an
-existing symlink at the destination, in any parent directory, or at an output
-file path. A refused archive therefore leaves nothing behind. Validation reads
-the archive once and discards the bytes; extraction then streams it a second
-time, entry by entry, creating the destination and any implicit parents.
+refused. An archive is never sanitized into a different one. `extract()` checks
+the destination, parents and output paths for existing symlinks, then decodes
+and validates the whole archive into a temporary directory before copying
+staged files into the destination. A corrupt or unsafe archive therefore does
+not partially change destination files. Staging uses temporary disk space up
+to the uncompressed output size. An I/O error during the final copy can leave
+partial output. A `file()` source is read through one open handle, but in-place
+writes before or during extraction are visible.
 
 ### Errors
 

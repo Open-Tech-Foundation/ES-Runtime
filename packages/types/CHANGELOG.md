@@ -16,8 +16,8 @@ itself.
 ### Added
 
 - `runtime:archive`: `Archive`, `ArchiveEntry`, the build/read input and
-  options types, `ArchiveFilter`, `ExtractResult`, and the entry metadata shape
-  (DECISIONS D174).
+  options types, `ArchiveFilter`, `ExtractResult`, the entry metadata shape,
+  and `Archive`'s async metadata iterator (DECISIONS D174).
 
 ## [0.17.0] - 2026-10-17
 

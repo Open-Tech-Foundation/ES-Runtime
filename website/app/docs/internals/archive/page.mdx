@@ -29,14 +29,15 @@ a tar, and if it is not one it fails as a tar.
 
 ## Validation before use
 
-Every read builds a list of entries and validates each path:
+Every entry is validated as it is read, and the eager APIs finish a full layout
+check before returning. Each path must be:
 
 - relative, slash-separated, valid UTF-8;
 - no empty component, no `.` and no `..`;
 - no backslash and no drive letter;
-- no duplicate path and no file/directory collision;
-- on Windows and macOS, no two paths that differ only by ASCII case, because
-  the filesystem would merge entries the archive treats as distinct.
+- free of duplicates and file/directory collisions, tracked as entries arrive;
+- on Windows and macOS, not differing only by ASCII case from an earlier path,
+  because the filesystem would merge entries the archive treats as distinct.
 
 Tar links and special types, zip symlinks, encrypted zip entries, and zip
 compression other than Stored and Deflated are refused. A directory entry that
@@ -64,42 +65,47 @@ by `maxBytes` plus a per-entry allowance for tar headers. Over either limit is a
 
 Listing and single-entry reads do not materialize entries they do not return:
 zip metadata comes from the central directory and tar headers are read in order.
-`entries()` therefore costs a pass over headers, not a pass over contents. A
-tar.gz entry is reached by decompressing through its predecessors, but those
-bytes are discarded as they are skipped rather than retained.
+`entries()` therefore costs a pass over headers, not a pass over contents, and
+the async iterator yields those headers one at a time instead of collecting an
+array. A tar.gz entry is reached by decompressing through its predecessors, but
+those bytes are discarded as they are skipped rather than retained.
 
 ## File sources are streamed
 
 `file()` is opened through the jailed `SyncFileSystem`, which can seek and read
-on demand. The source is never read into a single buffer: `entries()` reads
-headers, `files(filter)` reads only the entries the filter selected,
-`ArchiveEntry.stream()` pulls decompressed chunks through a bounded channel, and
-`extract()` writes each chunk before the producer is allowed to read the next
-after its verification pass. Memory is bounded by the channel's few chunks, not
-by the archive's size.
+on demand. The fd is opened once and shared by every reader; each reader keeps
+its own position and seeks and reads under a lock. The handle remains attached
+to the same file if its path is renamed or removed, but it is not an immutable
+snapshot if another process writes to that file.
+
+The source is never read into a single buffer: `for await` yields metadata one
+entry at a time, `files(filter)` reads only the entries the filter selected,
+`ArchiveEntry.stream()` pulls decompressed chunks through a bounded channel.
+Extraction writes chunks into a temporary directory, so memory is bounded by
+the channel's few chunks and the paths needed for collision checks, not by the
+archive's size. Staging uses temporary disk space up to the uncompressed output
+size. A zip parser still builds its central-directory index, which `maxEntries`
+bounds.
 
 A provider with no synchronous filesystem falls back to reading the file once
 through `FileSystem`; that is the best its whole-file seam can do. `bytes()`
 also allocates the whole archive, because returning it is the operation.
 
-## Why extraction validates before it writes
+## Why extraction stages before it writes
 
-`extract()` makes two passes. The first re-scans and validates every entry,
-reads each entry to its end and discards the bytes, and checks every destination
-path — the destination itself, each parent directory and each output file — for
-an existing symlink. Reading the data is what catches a corrupt zip CRC or a
-bad decompressor stream, not just a malformed header. Only after that pass
-completes does extraction create directories and write, streaming the data a
-second time.
+`extract()` first scans metadata to check the destination paths for existing
+symlinks. It then decodes the archive once into a temporary directory, checking
+entry paths, limits, data lengths, zip CRCs and the gzip trailer while it
+streams. It checks symlinks again using the paths from the staged archive, then
+copies staged files into the destination. The metadata scan and extraction use
+the same open file handle, but in-place changes made during extraction are
+visible to that read.
 
-That is what makes a refused archive leave nothing behind: were entries written
-as they were parsed, an unsafe path or a corrupt entry near the end would fail
-after the earlier files had landed. The cost is that extraction reads and
-decompresses the archive twice. The alternative is a spool file, which keeps
-the all-or-nothing property only by adding a second place where half-written
-state lives. An I/O error on the destination during the second pass can still
-leave partial output; what is guaranteed is that nothing is written until the
-archive itself has been validated.
+If decoding or validation fails, no staged entry is copied to the destination.
+The temporary directory costs disk space proportional to uncompressed output.
+An I/O error while copying staged files into the destination can still leave
+partial output; the staging guarantee covers archive decoding and validation,
+not failures during the final filesystem writes.
 
 ## Determinism
 

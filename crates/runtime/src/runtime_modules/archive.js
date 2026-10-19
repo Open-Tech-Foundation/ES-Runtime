@@ -45,6 +45,9 @@ const archiveHandles = new FinalizationRegistry((handle) => {
 const streamHandles = new FinalizationRegistry((id) => {
   ops.archive_stream_close(id);
 });
+const metaHandles = new FinalizationRegistry((id) => {
+  ops.archive_entries_close(id);
+});
 
 function isFile(value) {
   return value !== null && typeof value === "object" && typeof value[FILE_BODY] === "function";
@@ -325,8 +328,10 @@ class Archive {
     );
   }
 
-  // One open per Archive: the host keeps the metadata and source, so entry
-  // reads, files() and extract() share the same validated archive.
+  // One open per Archive: the host keeps the source and format, so entry reads,
+  // listings and extraction share the same file handle. Metadata is not
+  // collected here; entries() asks for a snapshot and the async iterator
+  // streams it.
   [OPEN]() {
     if (this.#opening !== null) return this.#opening;
     this.#opening = (async () => {
@@ -374,15 +379,37 @@ class Archive {
     return new Blob([await this.bytes()], { type: MIME[format] });
   }
 
+  // Metadata as an async iterator, parsed and validated one entry at a time.
+  // `entries()` is the eager snapshot; this keeps only the current entry in the
+  // guest's heap, though the host retains the paths it needs for collision
+  // checks and a zip parser retains its central directory.
+  async *[Symbol.asyncIterator]() {
+    const { handle } = await this[OPEN]();
+    const token = {};
+    let id = ops.archive_entries_open(handle);
+    metaHandles.register(token, id, token);
+    try {
+      for (;;) {
+        const { entry, done } = await ops.archive_entries_next(id);
+        if (done) return;
+        yield new ArchiveEntry(this, entry);
+      }
+    } finally {
+      metaHandles.unregister(token);
+      ops.archive_entries_close(id);
+    }
+  }
+
   async entries() {
-    const { entries } = await this[OPEN]();
+    const { handle } = await this[OPEN]();
+    const entries = await ops.archive_entries(handle);
     return entries.map((meta) => new ArchiveEntry(this, meta));
   }
 
   async files(filter) {
-    const { handle, entries } = await this[OPEN]();
+    const { handle } = await this[OPEN]();
     const selected = [];
-    for (const entry of entries) {
+    for await (const entry of this) {
       if (!entry.directory && matches(filter, entry.path)) selected.push(entry);
     }
     const files = new Map();

@@ -24,6 +24,10 @@ async function use() {
   const blob: Blob = await gz.blob();
   const entries: ArchiveEntry[] = await opened.entries();
   const meta: ArchiveEntryMetadata = entries[0];
+  for await (const entry of opened) {
+    const streamed: ArchiveEntry = entry;
+    void streamed.path;
+  }
   const first: Uint8Array = await entries[0].bytes();
   const text: string = await entries[0].text();
   const entryBlob: Blob = await entries[0].blob();

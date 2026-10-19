@@ -95,6 +95,77 @@ console.log("ok");
     );
 }
 
+/// Entry metadata can be consumed one at a time with `for await`, and leaving
+/// the loop early does not close the archive for later calls.
+#[test]
+fn entries_are_async_iterable() {
+    let source = r#"
+import { Archive } from "runtime:archive";
+
+const archive = new Archive({
+  "a.txt": "A",
+  "dir/b.txt": "B",
+  "empty/": null,
+}, { format: "zip" });
+
+const seen = [];
+for await (const entry of archive) {
+  seen.push([entry.path, entry.size, entry.directory]);
+}
+eq(seen, [["a.txt", 1, false], ["dir/b.txt", 1, false], ["empty", 0, true]], "streamed metadata");
+
+// A partial pass ends its own listing; the archive stays open.
+for await (const entry of archive) {
+  eq(entry.path, "a.txt", "first path");
+  break;
+}
+eq((await archive.entries()).map((entry) => entry.path), ["a.txt", "dir/b.txt", "empty"], "snapshot after break");
+console.log("ok");
+"#;
+    assert_eq!(
+        run("archive_async_iter.mjs", source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// A file source keeps the fd it opened, so validation and extraction read the
+/// same file even if the path is renamed in between.
+#[test]
+fn file_source_stays_stable_across_validation_and_extraction() {
+    let out = temp("archive_stable_out");
+    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_file(temp("archive_stable_source.zip"));
+    let _ = std::fs::remove_file(temp("archive_stable_moved.zip"));
+
+    let source = r#"
+import { Archive } from "runtime:archive";
+import { file, rename } from "runtime:fs";
+
+await Archive.write(file("archive_stable_source.zip"), {
+  "a.txt": "A",
+}, { format: "zip" });
+
+const opened = new Archive(file("archive_stable_source.zip"));
+await opened.entries();
+await rename("archive_stable_source.zip", "archive_stable_moved.zip");
+await opened.extract("archive_stable_out");
+eq(await file("archive_stable_out/a.txt").text(), "A", "same file after rename");
+console.log("ok");
+"#;
+    assert_eq!(
+        run(
+            "archive_stable.mjs",
+            source,
+            &["--allow-write=.", "--allow-read=."]
+        )
+        .trim(),
+        "ok"
+    );
+
+    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_file(temp("archive_stable_moved.zip"));
+}
+
 /// Extraction is the one writing surface: denied without `FileWrite`, and with
 /// it the host writes every validated entry under the destination.
 #[test]
@@ -326,11 +397,13 @@ try {
 }
 
 /// A zip whose central directory is valid but whose later entry data is
-/// corrupt is refused before the first output file is created.
+/// corrupt is refused before staged files are copied to the destination.
 #[test]
-fn extraction_verifies_zip_contents_before_writing() {
+fn extraction_stages_before_writing_destination() {
     let out = temp("archive_corrupt_out");
     let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("existing.txt"), "keep me").unwrap();
 
     let source = r#"
 import { Archive } from "runtime:archive";
@@ -371,7 +444,19 @@ try {
         .trim(),
         "ERR_ARCHIVE_DECODE_FAILED"
     );
-    assert!(!out.exists(), "created output before verifying contents");
+    assert_eq!(
+        std::fs::read_to_string(out.join("existing.txt")).unwrap(),
+        "keep me",
+        "changed existing output before validating archive contents"
+    );
+    assert!(
+        !out.join("first.txt").exists(),
+        "copied a staged file before validating the complete archive"
+    );
+    assert!(
+        std::fs::read_dir(&out).unwrap().count() == 1,
+        "left staging files in the destination"
+    );
 }
 
 /// Entry metadata is read without decompressing entry data, and a missing name

@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
 use es_runtime_common::ErrorCode;
@@ -185,17 +185,44 @@ pub(crate) enum ExtractEvent {
     Error(Error),
 }
 
+/// One event in a streamed metadata listing.
+#[derive(Debug)]
+pub(crate) enum MetaEvent {
+    Entry(EntryMeta),
+    Done,
+    Error(Error),
+}
+
 /// Where an archive's bytes come from. A file source is read in bounded chunks
 /// through the synchronous filesystem provider, so listing, streaming and
 /// extraction never hold the whole archive in memory.
 #[derive(Clone)]
 pub(crate) enum Source {
     Bytes(Arc<[u8]>),
-    File {
-        fs: Arc<dyn SyncFileSystem>,
-        path: Arc<str>,
-        size: u64,
-    },
+    File(Arc<FileSource>),
+}
+
+/// One open file shared by every reader of a [`Source`]. Keeping the fd open
+/// for the archive's lifetime means validation and extraction read the same
+/// file even if its path is replaced or removed in between. It is not a
+/// snapshot: bytes rewritten in place between the two passes are visible to
+/// the second. Each [`FileReader`] keeps its own position and seeks and reads
+/// under the lock, so readers can be cloned across threads without sharing a
+/// cursor.
+pub(crate) struct FileSource {
+    fs: Arc<dyn SyncFileSystem>,
+    fd: Mutex<SyncFd>,
+    size: u64,
+}
+
+impl Drop for FileSource {
+    fn drop(&mut self) {
+        let fd = match self.fd.get_mut() {
+            Ok(fd) => *fd,
+            Err(poisoned) => *poisoned.into_inner(),
+        };
+        let _ = self.fs.close(fd);
+    }
 }
 
 impl Source {
@@ -203,9 +230,8 @@ impl Source {
         Source::Bytes(Arc::from(bytes))
     }
 
-    /// Opens `path` once to verify it is a readable regular file. The handle is
-    /// not kept: each reader reopens it, so concurrent reads have their own
-    /// cursor and no fd outlives an operation.
+    /// Opens `path` once, verifies it is a readable regular file, and keeps the
+    /// handle for the life of the source.
     pub(crate) fn file(fs: Arc<dyn SyncFileSystem>, path: String) -> Result<Source, ProviderError> {
         let fd = fs.open(
             &path,
@@ -214,34 +240,37 @@ impl Source {
                 ..SyncOpenOptions::default()
             },
         )?;
-        let stat = fs.fstat(fd);
-        let _ = fs.close(fd);
-        let stat = stat?;
+        let stat = match fs.fstat(fd) {
+            Ok(stat) => stat,
+            Err(error) => {
+                let _ = fs.close(fd);
+                return Err(error);
+            }
+        };
         if !stat.is_file {
+            let _ = fs.close(fd);
             return Err(ProviderError::Other(format!(
                 "{path:?} is not a regular file"
             )));
         }
-        Ok(Source::File {
+        Ok(Source::File(Arc::new(FileSource {
             fs,
-            path: Arc::from(path),
+            fd: Mutex::new(fd),
             size: stat.size,
-        })
+        })))
     }
 
     pub(crate) fn size(&self) -> u64 {
         match self {
             Source::Bytes(bytes) => bytes.len() as u64,
-            Source::File { size, .. } => *size,
+            Source::File(file) => file.size,
         }
     }
 
     pub(crate) fn reader(&self) -> Result<SourceReader, Error> {
         match self {
             Source::Bytes(bytes) => Ok(SourceReader::Bytes(Cursor::new(bytes.clone()))),
-            Source::File { fs, path, .. } => {
-                Ok(SourceReader::File(FileReader::new(fs.clone(), path)?))
-            }
+            Source::File(file) => Ok(SourceReader::File(FileReader::new(file.clone()))),
         }
     }
 
@@ -273,7 +302,7 @@ impl Source {
 }
 
 /// A `Read + Seek` view of one [`Source`]. File reads go through the jailed
-/// [`SyncFileSystem`]; the fd is closed when the reader is dropped.
+/// [`SyncFileSystem`] and share the source's fd.
 pub(crate) enum SourceReader {
     Bytes(Cursor<Arc<[u8]>>),
     File(FileReader),
@@ -298,57 +327,52 @@ impl Seek for SourceReader {
 }
 
 pub(crate) struct FileReader {
-    fs: Arc<dyn SyncFileSystem>,
-    fd: SyncFd,
+    source: Arc<FileSource>,
+    position: u64,
 }
 
 impl FileReader {
-    fn new(fs: Arc<dyn SyncFileSystem>, path: &str) -> Result<FileReader, Error> {
-        let fd = fs
-            .open(
-                path,
-                SyncOpenOptions {
-                    read: true,
-                    ..SyncOpenOptions::default()
-                },
-            )
-            .map_err(|error| Error::Decode(format!("could not open the archive: {error}")))?;
-        Ok(FileReader { fs, fd })
+    fn new(source: Arc<FileSource>) -> FileReader {
+        FileReader {
+            source,
+            position: 0,
+        }
     }
 }
 
 impl Read for FileReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self
+        let fd = self
+            .source
+            .fd
+            .lock()
+            .map_err(|_| std::io::Error::other("archive file handle is poisoned"))?;
+        let offset = i64::try_from(self.position)
+            .map_err(|_| std::io::Error::other("archive offset is too large"))?;
+        self.source
             .fs
-            .read(self.fd, buf)
+            .seek(*fd, offset, SyncWhence::Start)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let n = self
+            .source
+            .fs
+            .read(*fd, buf)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        self.position = self.position.saturating_add(n as u64);
         Ok(n)
     }
 }
 
 impl Seek for FileReader {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let (offset, whence) = match pos {
-            SeekFrom::Start(offset) => {
-                let offset = i64::try_from(offset)
-                    .map_err(|_| std::io::Error::other("archive offset is too large"))?;
-                (offset, SyncWhence::Start)
-            }
-            SeekFrom::Current(offset) => (offset, SyncWhence::Current),
-            SeekFrom::End(offset) => (offset, SyncWhence::End),
+        let next = match pos {
+            SeekFrom::Start(offset) => Some(offset),
+            SeekFrom::Current(offset) => self.position.checked_add_signed(offset),
+            SeekFrom::End(offset) => self.source.size.checked_add_signed(offset),
         };
-        let next = self
-            .fs
-            .seek(self.fd, offset, whence)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let next = next.ok_or_else(|| std::io::Error::other("archive offset is out of range"))?;
+        self.position = next;
         Ok(next)
-    }
-}
-
-impl Drop for FileReader {
-    fn drop(&mut self) {
-        let _ = self.fs.close(self.fd);
     }
 }
 
@@ -610,17 +634,6 @@ pub(crate) fn list_source(
     Ok((format, metas))
 }
 
-/// Reads every entry to its end and discards the bytes. Extraction runs this
-/// before writing anything so a corrupt or truncated entry, including a bad
-/// zip CRC, is reported while the destination is still untouched.
-pub(crate) fn verify_source(source: &Source, format: Format, limits: &Limits) -> Result<(), Error> {
-    match format {
-        Format::Zip => verify_zip(source.reader()?, limits),
-        Format::Tar => verify_tar(source.reader()?, limits),
-        Format::TarGz => verify_tar(gzip_reader(source.reader()?, limits), limits),
-    }
-}
-
 /// Reads only the named entries, in archive order. Unselected entries are
 /// skipped rather than read into memory.
 pub(crate) fn read_selected_source(
@@ -701,6 +714,90 @@ pub(crate) fn spawn_extract(
             ))),
         );
     }
+}
+
+/// Streams metadata for the whole archive from a worker thread, one validated
+/// entry at a time. The bounded channel is the backpressure, and the worker
+/// keeps only the paths needed for duplicate/collision checks.
+pub(crate) fn spawn_meta_stream(
+    source: Source,
+    format: Format,
+    limits: Limits,
+    mut tx: mpsc::Sender<MetaEvent>,
+) {
+    let mut error_tx = tx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("archive-meta".to_string())
+        .spawn(move || {
+            let result = stream_metas(&source, format, &limits, &mut tx);
+            let event = match result {
+                Ok(()) => MetaEvent::Done,
+                Err(error) => MetaEvent::Error(error),
+            };
+            send_event(&mut tx, event);
+        });
+    if let Err(error) = spawned {
+        send_event(
+            &mut error_tx,
+            MetaEvent::Error(Error::Decode(format!(
+                "could not start the archive reader: {error}"
+            ))),
+        );
+    }
+}
+
+fn stream_metas(
+    source: &Source,
+    format: Format,
+    limits: &Limits,
+    tx: &mut mpsc::Sender<MetaEvent>,
+) -> Result<(), Error> {
+    match format {
+        Format::Zip => stream_zip_metas(source.reader()?, limits, tx),
+        Format::Tar => stream_tar_metas(source.reader()?, limits, tx),
+        Format::TarGz => stream_tar_metas(gzip_reader(source.reader()?, limits), limits, tx),
+    }
+}
+
+fn stream_tar_metas<R: Read>(
+    reader: R,
+    limits: &Limits,
+    tx: &mut mpsc::Sender<MetaEvent>,
+) -> Result<(), Error> {
+    let mut archive = tar::Archive::new(reader);
+    let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
+    for (count, item) in archive.entries().map_err(tar_decode)?.enumerate() {
+        let entry = item.map_err(tar_decode)?;
+        let meta = tar_meta(&entry)?;
+        check_entry_limits(&meta, count, &mut total, limits)?;
+        layout.check(&meta)?;
+        if !send_event(tx, MetaEvent::Entry(meta)) {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn stream_zip_metas<R: Read + Seek>(
+    mut reader: R,
+    limits: &Limits,
+    tx: &mut mpsc::Sender<MetaEvent>,
+) -> Result<(), Error> {
+    zip_precheck(&mut reader, limits)?;
+    let mut archive = zip::ZipArchive::new(reader).map_err(zip_decode)?;
+    check_zip_count(archive.len(), limits)?;
+    let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
+    for index in 0..archive.len() {
+        let meta = zip_meta(&mut archive, index)?;
+        check_entry_limits(&meta, index, &mut total, limits)?;
+        layout.check(&meta)?;
+        if !send_event(tx, MetaEvent::Entry(meta)) {
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 fn gzip_reader(reader: SourceReader, limits: &Limits) -> impl Read {
@@ -929,10 +1026,12 @@ fn stream_tar<R: Read>(
 ) -> Result<(), Error> {
     let mut archive = tar::Archive::new(reader);
     let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
     for (count, item) in archive.entries().map_err(tar_decode)?.enumerate() {
         let mut entry = item.map_err(tar_decode)?;
         let meta = tar_meta(&entry)?;
         check_entry_limits(&meta, count, &mut total, limits)?;
+        layout.check(&meta)?;
         if meta.path != path {
             continue;
         }
@@ -1026,10 +1125,12 @@ fn extract_tar<R: Read>(
 ) -> Result<(), Error> {
     let mut archive = tar::Archive::new(reader);
     let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
     for (count, item) in archive.entries().map_err(tar_decode)?.enumerate() {
         let mut entry = item.map_err(tar_decode)?;
         let meta = tar_meta(&entry)?;
         check_entry_limits(&meta, count, &mut total, limits)?;
+        layout.check(&meta)?;
         if !send_event(tx, ExtractEvent::Entry(meta.clone())) {
             return Ok(());
         }
@@ -1052,9 +1153,11 @@ fn extract_zip<R: Read + Seek>(
     let mut archive = zip::ZipArchive::new(reader).map_err(zip_decode)?;
     check_zip_count(archive.len(), limits)?;
     let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
     for index in 0..archive.len() {
         let meta = zip_meta(&mut archive, index)?;
         check_entry_limits(&meta, index, &mut total, limits)?;
+        layout.check(&meta)?;
         if !send_event(tx, ExtractEvent::Entry(meta.clone())) {
             return Ok(());
         }
@@ -1065,67 +1168,6 @@ fn extract_zip<R: Read + Seek>(
         if !send_event(tx, ExtractEvent::EndEntry) {
             return Ok(());
         }
-    }
-    Ok(())
-}
-
-fn verify_tar<R: Read>(reader: R, limits: &Limits) -> Result<(), Error> {
-    let mut archive = tar::Archive::new(reader);
-    let mut total: u64 = 0;
-    for (count, item) in archive.entries().map_err(tar_decode)?.enumerate() {
-        let mut entry = item.map_err(tar_decode)?;
-        let meta = tar_meta(&entry)?;
-        check_entry_limits(&meta, count, &mut total, limits)?;
-        if !meta.directory {
-            verify_reader(&mut entry, &meta)?;
-        }
-    }
-    Ok(())
-}
-
-fn verify_zip<R: Read + Seek>(mut reader: R, limits: &Limits) -> Result<(), Error> {
-    zip_precheck(&mut reader, limits)?;
-    let mut archive = zip::ZipArchive::new(reader).map_err(zip_decode)?;
-    check_zip_count(archive.len(), limits)?;
-    let mut total: u64 = 0;
-    for index in 0..archive.len() {
-        let meta = zip_meta(&mut archive, index)?;
-        check_entry_limits(&meta, index, &mut total, limits)?;
-        if !meta.directory {
-            let mut file = archive.by_index(index).map_err(zip_decode)?;
-            verify_reader(&mut file, &meta)?;
-        }
-    }
-    Ok(())
-}
-
-/// Reads an entry to its declared end without keeping the bytes, so a bad
-/// decompressor stream or a zip CRC mismatch is detected before a write.
-fn verify_reader<R: Read>(reader: &mut R, meta: &EntryMeta) -> Result<(), Error> {
-    let mut buf = vec![0_u8; STREAM_CHUNK];
-    let mut total: u64 = 0;
-    loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|error| Error::Decode(format!("could not read {:?}: {error}", meta.path)))?;
-        if n == 0 {
-            break;
-        }
-        total = total
-            .checked_add(n as u64)
-            .ok_or_else(|| too_large("the archive's size overflowed"))?;
-        if total > meta.size {
-            return Err(Error::Decode(format!(
-                "entry {:?} is longer than its header says",
-                meta.path
-            )));
-        }
-    }
-    if total != meta.size {
-        return Err(Error::Decode(format!(
-            "entry {:?} is shorter than its header says",
-            meta.path
-        )));
     }
     Ok(())
 }
@@ -1514,36 +1556,60 @@ fn validate_path(raw: &str) -> Result<(String, bool), Error> {
     Ok((body.to_string(), trailing))
 }
 
-/// Refuses duplicate paths and file/directory collisions. Names are compared
-/// case-insensitively on Windows and macOS, where the filesystem would
-/// otherwise merge two entries the archive treats as distinct.
-fn check_layout(entries: &[EntryMeta]) -> Result<(), Error> {
-    let fold = cfg!(any(windows, target_os = "macos"));
-    let mut seen = BTreeSet::new();
-    let mut folded = BTreeSet::new();
-    let mut files = BTreeSet::new();
-    for entry in entries {
-        if !seen.insert(entry.path.clone()) {
+/// Refuses duplicate paths and file/directory collisions as entries arrive.
+/// Names are compared case-insensitively on Windows and macOS, where the
+/// filesystem would otherwise merge two entries the archive treats as distinct.
+/// It keeps only the seen paths, so a streamed listing can validate without
+/// holding every entry's metadata.
+struct LayoutChecker {
+    fold: bool,
+    seen: BTreeSet<String>,
+    folded: BTreeSet<String>,
+    files: BTreeSet<String>,
+}
+
+impl LayoutChecker {
+    fn new() -> LayoutChecker {
+        LayoutChecker {
+            fold: cfg!(any(windows, target_os = "macos")),
+            seen: BTreeSet::new(),
+            folded: BTreeSet::new(),
+            files: BTreeSet::new(),
+        }
+    }
+
+    fn check(&mut self, entry: &EntryMeta) -> Result<(), Error> {
+        if !self.seen.insert(entry.path.clone()) {
             return Err(Error::UnsafePath(format!(
                 "duplicate entry path {:?}",
                 entry.path
             )));
         }
-        if fold && !folded.insert(entry.path.to_ascii_lowercase()) {
+        if self.fold && !self.folded.insert(entry.path.to_ascii_lowercase()) {
             return Err(Error::UnsafePath(format!(
                 "entry path {:?} collides with another name on a case-insensitive filesystem",
                 entry.path
             )));
         }
         if !entry.directory {
-            files.insert(entry.path.as_str());
+            let prefix = format!("{}/", entry.path);
+            if self
+                .seen
+                .range(prefix.clone()..)
+                .next()
+                .is_some_and(|path| path.starts_with(&prefix))
+            {
+                return Err(Error::UnsafePath(format!(
+                    "entry {:?} is a file with entries nested beneath it",
+                    entry.path
+                )));
+            }
+            self.files.insert(entry.path.clone());
         }
-    }
-    for entry in entries {
         let mut end = entry.path.len();
         while let Some(position) = entry.path[..end].rfind('/') {
             let ancestor = &entry.path[..position];
-            if files.contains(ancestor) {
+            if self.files.contains(ancestor) {
                 return Err(Error::UnsafePath(format!(
                     "entry {:?} is nested under the file {ancestor:?}",
                     entry.path
@@ -1551,6 +1617,14 @@ fn check_layout(entries: &[EntryMeta]) -> Result<(), Error> {
             }
             end = position;
         }
+        Ok(())
+    }
+}
+
+fn check_layout(entries: &[EntryMeta]) -> Result<(), Error> {
+    let mut layout = LayoutChecker::new();
+    for entry in entries {
+        layout.check(entry)?;
     }
     Ok(())
 }
@@ -1875,6 +1949,230 @@ mod tests {
         let clean = raw_tar("fine.txt", b"x");
         let (_, entries) = read_all(&clean, &Limits::default()).unwrap();
         assert_eq!(entries[0].meta.path, "fine.txt");
+    }
+
+    #[test]
+    fn extraction_checks_tar_layout_as_entries_arrive() {
+        for (first_name, second_name) in [("same.txt", "same.txt"), ("a", "a/b"), ("a/b", "a")] {
+            let first = raw_tar(first_name, b"1");
+            let second = raw_tar(second_name, b"2");
+            let mut bytes = first[..first.len() - 1024].to_vec();
+            bytes.extend_from_slice(&second);
+
+            let (mut tx, _rx) = mpsc::channel(16);
+            assert!(
+                matches!(
+                    extract_tar(Cursor::new(bytes), &Limits::default(), &mut tx),
+                    Err(Error::UnsafePath(_))
+                ),
+                "{first_name:?} followed by {second_name:?} was accepted"
+            );
+        }
+    }
+
+    /// A streamed listing yields metadata before it knows the layout is sound:
+    /// a duplicate later in the archive rejects the loop after the earlier
+    /// entries were already delivered.
+    #[test]
+    fn metadata_stream_checks_layout_as_entries_arrive() {
+        use futures_util::StreamExt;
+        use zip::write::SimpleFileOptions;
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [("a", b"1".as_slice()), ("a/b", b"2".as_slice())] {
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(data).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let (tx, mut rx) = mpsc::channel(8);
+        spawn_meta_stream(Source::bytes(bytes), Format::Zip, Limits::default(), tx);
+
+        assert!(matches!(
+            block_on(rx.next()),
+            Some(MetaEvent::Entry(ref meta)) if meta.path == "a"
+        ));
+        assert!(matches!(
+            block_on(rx.next()),
+            Some(MetaEvent::Error(Error::UnsafePath(_)))
+        ));
+    }
+
+    /// Two readers share one fd and its cursor. The fake filesystem forces
+    /// their first seeks to overlap: if the reader released the fd mutex before
+    /// `seek`+`read`, the second seek would move the cursor under the first
+    /// read, changing its data. The check is explicit too, so a regression
+    /// fails even when the interleaving happens to return plausible bytes.
+    #[test]
+    fn concurrent_readers_do_not_interleave_the_shared_cursor() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Barrier, Condvar};
+        use std::thread::{self, ThreadId};
+        use std::time::Duration;
+
+        use es_runtime_providers::FileStat;
+
+        struct Gate {
+            state: Mutex<(usize, bool)>,
+            ready: Condvar,
+        }
+
+        impl Gate {
+            fn arrive(&self) {
+                let mut state = self.state.lock().unwrap();
+                if state.1 {
+                    return;
+                }
+                state.0 += 1;
+                if state.0 >= 2 {
+                    state.1 = true;
+                    self.ready.notify_all();
+                    return;
+                }
+                let (mut state, _) = self
+                    .ready
+                    .wait_timeout(state, Duration::from_secs(1))
+                    .unwrap();
+                if !state.1 {
+                    state.1 = true;
+                    self.ready.notify_all();
+                }
+            }
+        }
+
+        struct GatedFs {
+            data: Arc<Vec<u8>>,
+            cursor: Mutex<u64>,
+            gate: Gate,
+            last_seek: Mutex<Option<ThreadId>>,
+            violation: AtomicBool,
+        }
+
+        impl SyncFileSystem for GatedFs {
+            fn open(
+                &self,
+                _path: &str,
+                _options: SyncOpenOptions,
+            ) -> Result<SyncFd, ProviderError> {
+                Ok(1)
+            }
+
+            fn read(&self, _fd: SyncFd, buf: &mut [u8]) -> Result<usize, ProviderError> {
+                if *self.last_seek.lock().unwrap() != Some(thread::current().id()) {
+                    self.violation.store(true, Ordering::SeqCst);
+                }
+                let mut cursor = self.cursor.lock().unwrap();
+                let start = *cursor as usize;
+                let n = buf.len().min(self.data.len().saturating_sub(start));
+                buf[..n].copy_from_slice(&self.data[start..start + n]);
+                *cursor += n as u64;
+                Ok(n)
+            }
+
+            fn seek(
+                &self,
+                _fd: SyncFd,
+                offset: i64,
+                whence: SyncWhence,
+            ) -> Result<u64, ProviderError> {
+                *self.last_seek.lock().unwrap() = Some(thread::current().id());
+                self.gate.arrive();
+                let cursor = *self.cursor.lock().unwrap();
+                let next = match whence {
+                    SyncWhence::Start => offset,
+                    SyncWhence::Current => cursor as i64 + offset,
+                    SyncWhence::End => self.data.len() as i64 + offset,
+                };
+                let next = u64::try_from(next)
+                    .map_err(|_| ProviderError::Other("negative offset".to_string()))?;
+                *self.cursor.lock().unwrap() = next;
+                Ok(next)
+            }
+
+            fn fstat(&self, _fd: SyncFd) -> Result<FileStat, ProviderError> {
+                Ok(FileStat {
+                    size: self.data.len() as u64,
+                    is_file: true,
+                    is_dir: false,
+                    is_symlink: false,
+                    mtime_ms: None,
+                })
+            }
+
+            fn write(&self, _fd: SyncFd, _data: &[u8]) -> Result<usize, ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+
+            fn close(&self, _fd: SyncFd) -> Result<(), ProviderError> {
+                Ok(())
+            }
+
+            fn stat(&self, _path: &str) -> Result<FileStat, ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+
+            fn read_dir(
+                &self,
+                _path: &str,
+            ) -> Result<Vec<es_runtime_providers::DirEntry>, ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+
+            fn mkdir(&self, _path: &str) -> Result<(), ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+
+            fn remove_file(&self, _path: &str) -> Result<(), ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+
+            fn remove_dir(&self, _path: &str) -> Result<(), ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+
+            fn rename(&self, _from: &str, _to: &str) -> Result<(), ProviderError> {
+                Err(ProviderError::Other("not used".to_string()))
+            }
+        }
+
+        let data: Vec<u8> = (0..64 * 1024).map(|index| (index % 251) as u8).collect();
+        let fs = Arc::new(GatedFs {
+            data: Arc::new(data.clone()),
+            cursor: Mutex::new(0),
+            gate: Gate {
+                state: Mutex::new((0, false)),
+                ready: Condvar::new(),
+            },
+            last_seek: Mutex::new(None),
+            violation: AtomicBool::new(false),
+        });
+        let source = Source::file(fs.clone(), "archive".to_string()).unwrap();
+        let start = Arc::new(Barrier::new(3));
+
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let source = source.clone();
+                let start = start.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    let mut reader = source.reader().unwrap();
+                    let mut bytes = Vec::new();
+                    reader.read_to_end(&mut bytes).unwrap();
+                    bytes
+                })
+            })
+            .collect();
+        start.wait();
+
+        for reader in readers {
+            assert_eq!(reader.join().unwrap(), data);
+        }
+        assert!(
+            !fs.violation.load(Ordering::SeqCst),
+            "a seek from another reader ran between a seek and its read"
+        );
     }
 
     #[test]

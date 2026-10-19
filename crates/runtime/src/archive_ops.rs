@@ -12,9 +12,9 @@
 //! provider without a synchronous filesystem falls back to reading the file
 //! once, which is the best that seam can do.
 //!
-//! Every read is validated by [`crate::archive`] before the guest sees, or the
-//! filesystem receives, any entry. Extraction revalidates the whole archive
-//! before it writes the first file.
+//! Every read is validated by [`crate::archive`] before the guest sees an
+//! entry. Extraction decodes into a temporary directory first and only copies
+//! files into the destination after the complete pass succeeds.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -29,18 +29,22 @@ use futures_util::StreamExt;
 
 use crate::Result;
 use crate::archive::{
-    self, Compression, EntryMeta, ExtractEvent, Format, InputEntry, Limits, Source, StreamEvent,
+    self, Compression, EntryMeta, ExtractEvent, Format, InputEntry, Limits, MetaEvent, Source,
+    StreamEvent,
 };
 
 struct ArchiveHandle {
     source: Source,
     format: Format,
     limits: Limits,
-    entries: Vec<EntryMeta>,
 }
 
 struct StreamHandle {
     rx: mpsc::Receiver<StreamEvent>,
+}
+
+struct MetaHandle {
+    rx: mpsc::Receiver<MetaEvent>,
 }
 
 /// Registers the `runtime:archive` ops.
@@ -52,8 +56,10 @@ pub(crate) fn install(
 ) -> Result<()> {
     let archives: Rc<RefCell<HashMap<u64, ArchiveHandle>>> = Rc::new(RefCell::new(HashMap::new()));
     let streams: Rc<RefCell<HashMap<u64, StreamHandle>>> = Rc::new(RefCell::new(HashMap::new()));
+    let metas: Rc<RefCell<HashMap<u64, MetaHandle>>> = Rc::new(RefCell::new(HashMap::new()));
     let next_archive = Rc::new(RefCell::new(0_u64));
     let next_stream = Rc::new(RefCell::new(0_u64));
+    let next_meta = Rc::new(RefCell::new(0_u64));
 
     engine.register_op(OpDecl::sync("archive_build", |mut args| {
         let entries = parse_entries(args.get_mut(0))?;
@@ -64,19 +70,20 @@ pub(crate) fn install(
         Ok(Value::Bytes(bytes))
     }))?;
 
-    let (reg, ids, s) = (archives.clone(), next_archive.clone(), spawner.clone());
+    let (reg, ids) = (archives.clone(), next_archive.clone());
     engine.register_op(OpDecl::r#async("archive_open_bytes", move |args| {
         let parsed: std::result::Result<(Source, Limits), OpError> = (|| {
             let bytes = bytes_arg(&args, 0, "source")?;
             let limits = parse_limits(args.get(1))?;
             Ok((Source::bytes(bytes), limits))
         })();
-        let (reg, ids, spawner) = (reg.clone(), ids.clone(), s.clone());
+        let (reg, ids) = (reg.clone(), ids.clone());
         Box::pin(async move {
             let (source, limits) = parsed?;
-            let work = source.clone();
-            let listed = offload(spawner, move || archive::list_source(&work, &limits)).await?;
-            let (format, entries) = listed.map_err(op_error)?;
+            let format = archive::sniff(match &source {
+                Source::Bytes(bytes) => bytes,
+                Source::File(_) => unreachable!("open_bytes only receives bytes"),
+            });
             let id = mint(&ids);
             reg.borrow_mut().insert(
                 id,
@@ -84,17 +91,15 @@ pub(crate) fn install(
                     source,
                     format,
                     limits,
-                    entries: entries.clone(),
                 },
             );
-            Ok(open_value(id, format, &entries))
+            Ok(open_value(id, format))
         })
     }))?;
 
-    let (reg, ids, s, async_fs, sync_fs) = (
+    let (reg, ids, async_fs, sync_fs) = (
         archives.clone(),
         next_archive.clone(),
-        spawner.clone(),
         fs.clone(),
         sync_fs.clone(),
     );
@@ -105,7 +110,7 @@ pub(crate) fn install(
                 let limits = parse_limits(args.get(1))?;
                 Ok((path, limits))
             })();
-            let (reg, ids, spawner) = (reg.clone(), ids.clone(), s.clone());
+            let (reg, ids) = (reg.clone(), ids.clone());
             let (async_fs, sync_fs) = (async_fs.clone(), sync_fs.clone());
             Box::pin(async move {
                 let (path, limits) = parsed?;
@@ -116,9 +121,7 @@ pub(crate) fn install(
                         Source::bytes(fs.read(path).await.map_err(map_err)?)
                     }
                 };
-                let work = source.clone();
-                let listed = offload(spawner, move || archive::list_source(&work, &limits)).await?;
-                let (format, entries) = listed.map_err(op_error)?;
+                let format = archive::sniff(&source.read_prefix(8).map_err(op_error)?);
                 let id = mint(&ids);
                 reg.borrow_mut().insert(
                     id,
@@ -126,10 +129,9 @@ pub(crate) fn install(
                         source,
                         format,
                         limits,
-                        entries: entries.clone(),
                     },
                 );
-                Ok(open_value(id, format, &entries))
+                Ok(open_value(id, format))
             })
         })
         .requires(Capability::FileRead)
@@ -190,24 +192,15 @@ pub(crate) fn install(
         let id = number_arg(&args, 0, "handle")?;
         let path = string_arg(&args, 1, "entry")?;
         let handle = lookup(&reg, id)?;
-        let Some(meta) = handle.entries.iter().find(|meta| meta.path == path) else {
-            return Err(op_error(archive::Error::NotFound(format!(
-                "no entry named {path:?}"
-            ))));
-        };
         let stream_id = mint(&ids);
-        let (mut tx, rx) = mpsc::channel(2);
-        if meta.directory {
-            let _ = tx.try_send(StreamEvent::Done);
-        } else {
-            archive::spawn_entry_stream(
-                handle.source.clone(),
-                handle.format,
-                path,
-                handle.limits,
-                tx,
-            );
-        }
+        let (tx, rx) = mpsc::channel(2);
+        archive::spawn_entry_stream(
+            handle.source.clone(),
+            handle.format,
+            path,
+            handle.limits,
+            tx,
+        );
         stream_registry
             .borrow_mut()
             .insert(stream_id, StreamHandle { rx });
@@ -261,6 +254,79 @@ pub(crate) fn install(
         Ok(Value::Undefined)
     }))?;
 
+    let (reg, s) = (archives.clone(), spawner.clone());
+    engine.register_op(OpDecl::r#async("archive_entries", move |args| {
+        let parsed: std::result::Result<(Source, Limits), OpError> = (|| {
+            let id = number_arg(&args, 0, "handle")?;
+            let handle = lookup(&reg, id)?;
+            Ok((handle.source, handle.limits))
+        })();
+        let spawner = s.clone();
+        Box::pin(async move {
+            let (source, limits) = parsed?;
+            let work = source.clone();
+            let listed = offload(spawner, move || archive::list_source(&work, &limits)).await?;
+            let (_, entries) = listed.map_err(op_error)?;
+            Ok(Value::Array(entries.iter().map(meta_value).collect()))
+        })
+    }))?;
+
+    let (reg, meta_registry, ids) = (archives.clone(), metas.clone(), next_meta.clone());
+    engine.register_op(OpDecl::sync("archive_entries_open", move |args| {
+        let id = number_arg(&args, 0, "handle")?;
+        let handle = lookup(&reg, id)?;
+        let stream_id = mint(&ids);
+        let (tx, rx) = mpsc::channel(2);
+        archive::spawn_meta_stream(handle.source.clone(), handle.format, handle.limits, tx);
+        meta_registry
+            .borrow_mut()
+            .insert(stream_id, MetaHandle { rx });
+        Ok(Value::Number(stream_id as f64))
+    }))?;
+
+    let meta_next_registry = metas.clone();
+    engine.register_op(OpDecl::r#async("archive_entries_next", move |args| {
+        let parsed: std::result::Result<(u64, MetaHandle), OpError> = (|| {
+            let id = number_arg(&args, 0, "stream")?;
+            let state = meta_next_registry.borrow_mut().remove(&id).ok_or_else(|| {
+                OpError::new(
+                    ExceptionClass::TypeError,
+                    "this archive listing has already ended",
+                )
+            })?;
+            Ok((id, state))
+        })();
+        let meta_next_registry = meta_next_registry.clone();
+        Box::pin(async move {
+            let (id, mut state) = parsed?;
+            match state.rx.next().await {
+                Some(MetaEvent::Entry(meta)) => {
+                    meta_next_registry.borrow_mut().insert(id, state);
+                    Ok(Value::Object(vec![
+                        ("entry".to_string(), meta_value(&meta)),
+                        ("done".to_string(), Value::Bool(false)),
+                    ]))
+                }
+                Some(MetaEvent::Done) => Ok(Value::Object(vec![
+                    ("entry".to_string(), Value::Null),
+                    ("done".to_string(), Value::Bool(true)),
+                ])),
+                Some(MetaEvent::Error(error)) => Err(op_error(error)),
+                None => Err(OpError::new(
+                    ExceptionClass::Error,
+                    "the archive listing ended unexpectedly",
+                )),
+            }
+        })
+    }))?;
+
+    let metas = metas.clone();
+    engine.register_op(OpDecl::sync("archive_entries_close", move |args| {
+        let id = number_arg(&args, 0, "stream")?;
+        metas.borrow_mut().remove(&id);
+        Ok(Value::Undefined)
+    }))?;
+
     let reg = archives.clone();
     engine.register_op(OpDecl::sync("archive_close", move |args| {
         let id = number_arg(&args, 0, "handle")?;
@@ -291,92 +357,58 @@ pub(crate) fn install(
                 .await?;
                 let (format, metas) = listed.map_err(op_error)?;
 
-                // Read every entry once and discard it, so corrupt data is
-                // refused before any destination is touched. The writer below
-                // then decompresses a second time, chunk by chunk.
-                let verify = source.clone();
-                let verified = offload(spawner.clone(), move || {
-                    archive::verify_source(&verify, format, &limits)
-                })
-                .await?;
-                verified.map_err(op_error)?;
-
                 let fs = require(&fs)?;
 
                 for path in extraction_paths(&directory, &metas) {
                     ensure_no_symlink(&fs, &path).await?;
                 }
+                let destination_existed = directory.is_empty()
+                    || directory == "."
+                    || fs.exists(directory.clone()).await.map_err(map_err)?;
                 if !directory.is_empty() && directory != "." {
                     fs.mkdir(directory.clone(), true).await.map_err(map_err)?;
                 }
-
-                let (tx, mut rx) = mpsc::channel(2);
-                archive::spawn_extract(source, format, limits, tx);
-
-                let mut files = 0_u64;
-                let mut directories = 0_u64;
-                let mut parents = HashSet::new();
-                let mut current: Option<CurrentEntry> = None;
-                while let Some(event) = rx.next().await {
-                    match event {
-                        ExtractEvent::Entry(meta) => {
-                            let path = join(&directory, &meta.path);
-                            if meta.directory {
-                                fs.mkdir(path.clone(), true).await.map_err(map_err)?;
-                                current = Some(CurrentEntry {
-                                    path,
-                                    directory: true,
-                                    wrote: false,
-                                });
-                            } else {
-                                if let Some((parent, _)) = meta.path.rsplit_once('/') {
-                                    let parent = join(&directory, parent);
-                                    if parents.insert(parent.clone()) {
-                                        fs.mkdir(parent, true).await.map_err(map_err)?;
-                                    }
-                                }
-                                let wrote = if meta.size == 0 {
-                                    fs.write(path.clone(), Vec::new(), false)
-                                        .await
-                                        .map_err(map_err)?;
-                                    true
-                                } else {
-                                    false
-                                };
-                                current = Some(CurrentEntry {
-                                    path,
-                                    directory: false,
-                                    wrote,
-                                });
-                            }
+                let stage = match fs
+                    .make_temp_dir(directory.clone(), ".esrun-archive-".to_string())
+                    .await
+                    .map_err(map_err)
+                {
+                    Ok(stage) => stage,
+                    Err(error) => {
+                        if !destination_existed && !directory.is_empty() && directory != "." {
+                            let _ = fs.remove(directory, false).await;
                         }
-                        ExtractEvent::Data(data) => {
-                            if let Some(entry) = &mut current
-                                && !entry.directory
-                            {
-                                fs.write(entry.path.clone(), data, entry.wrote)
-                                    .await
-                                    .map_err(map_err)?;
-                                entry.wrote = true;
-                            }
-                        }
-                        ExtractEvent::EndEntry => {
-                            if let Some(entry) = current.take() {
-                                if entry.directory {
-                                    directories += 1;
-                                } else {
-                                    files += 1;
-                                }
-                            }
-                        }
-                        ExtractEvent::Done => break,
-                        ExtractEvent::Error(error) => return Err(op_error(error)),
+                        return Err(error);
                     }
+                };
+
+                let staged = stage_extract(&fs, source, format, limits, &stage).await;
+                let result = match staged {
+                    Ok(metas) => {
+                        let committed = async {
+                            // Check the paths from the bytes actually staged,
+                            // since a file source can be changed in place.
+                            for path in extraction_paths(&directory, &metas) {
+                                ensure_no_symlink(&fs, &path).await?;
+                            }
+                            commit_stage(&fs, &stage, &directory, &metas).await
+                        }
+                        .await;
+                        committed
+                    }
+                    Err(error) => Err(error),
+                };
+
+                let cleanup = fs.remove(stage, true).await.map_err(map_err);
+                if result.is_err()
+                    && !destination_existed
+                    && !directory.is_empty()
+                    && directory != "."
+                {
+                    let _ = fs.remove(directory, false).await;
                 }
-                Ok(Value::Object(vec![
-                    ("files".to_string(), Value::Number(files as f64)),
-                    ("directories".to_string(), Value::Number(directories as f64)),
-                ]))
+                cleanup?;
+                result
             })
         })
         .requires(Capability::FileWrite)
@@ -390,6 +422,116 @@ struct CurrentEntry {
     path: String,
     directory: bool,
     wrote: bool,
+}
+
+/// Decodes an archive into a private directory. Nothing under the requested
+/// destination is changed until the codec has consumed and validated every
+/// entry, including ZIP checksums and the gzip trailer.
+async fn stage_extract(
+    fs: &Arc<dyn FileSystem>,
+    source: Source,
+    format: Format,
+    limits: Limits,
+    stage: &str,
+) -> std::result::Result<Vec<EntryMeta>, OpError> {
+    let (tx, mut rx) = mpsc::channel(2);
+    archive::spawn_extract(source, format, limits, tx);
+
+    let mut parents = HashSet::new();
+    let mut metas = Vec::new();
+    let mut current: Option<CurrentEntry> = None;
+    while let Some(event) = rx.next().await {
+        match event {
+            ExtractEvent::Entry(meta) => {
+                let path = join(stage, &meta.path);
+                metas.push(meta.clone());
+                if meta.directory {
+                    fs.mkdir(path.clone(), true).await.map_err(map_err)?;
+                    current = Some(CurrentEntry {
+                        path,
+                        directory: true,
+                        wrote: false,
+                    });
+                } else {
+                    if let Some((parent, _)) = meta.path.rsplit_once('/') {
+                        let parent = join(stage, parent);
+                        if parents.insert(parent.clone()) {
+                            fs.mkdir(parent, true).await.map_err(map_err)?;
+                        }
+                    }
+                    let wrote = if meta.size == 0 {
+                        fs.write(path.clone(), Vec::new(), false)
+                            .await
+                            .map_err(map_err)?;
+                        true
+                    } else {
+                        false
+                    };
+                    current = Some(CurrentEntry {
+                        path,
+                        directory: false,
+                        wrote,
+                    });
+                }
+            }
+            ExtractEvent::Data(data) => {
+                if let Some(entry) = &mut current
+                    && !entry.directory
+                {
+                    fs.write(entry.path.clone(), data, entry.wrote)
+                        .await
+                        .map_err(map_err)?;
+                    entry.wrote = true;
+                }
+            }
+            ExtractEvent::EndEntry => {
+                current = None;
+            }
+            ExtractEvent::Done => break,
+            ExtractEvent::Error(error) => return Err(op_error(error)),
+        }
+    }
+    if current.is_some() {
+        return Err(OpError::new(
+            ExceptionClass::Error,
+            "archive extraction ended in the middle of an entry",
+        ));
+    }
+    Ok(metas)
+}
+
+/// Copies staged files into the destination after decoding has completed.
+async fn commit_stage(
+    fs: &Arc<dyn FileSystem>,
+    stage: &str,
+    destination: &str,
+    metas: &[EntryMeta],
+) -> std::result::Result<Value, OpError> {
+    let mut files = 0_u64;
+    let mut directories = 0_u64;
+    let mut parents = HashSet::new();
+    for meta in metas {
+        let target = join(destination, &meta.path);
+        if meta.directory {
+            fs.mkdir(target, true).await.map_err(map_err)?;
+            directories += 1;
+        } else {
+            if let Some((parent, _)) = meta.path.rsplit_once('/') {
+                let parent = join(destination, parent);
+                if parents.insert(parent.clone()) {
+                    fs.mkdir(parent, true).await.map_err(map_err)?;
+                }
+            }
+            fs.copy(join(stage, &meta.path), target)
+                .await
+                .map_err(map_err)?;
+            files += 1;
+        }
+    }
+    Ok(Value::Object(vec![
+        ("files".to_string(), Value::Number(files as f64)),
+        ("directories".to_string(), Value::Number(directories as f64)),
+    ]))
 }
 
 fn mint(ids: &Rc<RefCell<u64>>) -> u64 {
@@ -413,20 +555,15 @@ fn lookup(
         source: handle.source.clone(),
         format: handle.format,
         limits: handle.limits,
-        entries: handle.entries.clone(),
     })
 }
 
-fn open_value(id: u64, format: Format, entries: &[EntryMeta]) -> Value {
+fn open_value(id: u64, format: Format) -> Value {
     Value::Object(vec![
         ("handle".to_string(), Value::Number(id as f64)),
         (
             "format".to_string(),
             Value::String(format.as_str().to_string()),
-        ),
-        (
-            "entries".to_string(),
-            Value::Array(entries.iter().map(meta_value).collect()),
         ),
     ])
 }

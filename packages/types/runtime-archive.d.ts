@@ -77,6 +77,8 @@ declare module "runtime:archive" {
     blob(): Promise<Blob>;
     /** Every entry's metadata, in archive order. */
     entries(): Promise<ArchiveEntry[]>;
+    /** Streams each entry's metadata in archive order, one at a time. */
+    [Symbol.asyncIterator](): AsyncIterator<ArchiveEntry>;
     /** The file entries as Files (directories are skipped). */
     files(filter?: ArchiveFilter): Promise<Map<string, File>>;
     /** Writes every entry under `directory`. Needs FileWrite. */

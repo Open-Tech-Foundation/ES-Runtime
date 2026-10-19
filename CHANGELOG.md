@@ -18,13 +18,17 @@ namespace) is unstable and may change between minor releases until the API freez
   strings, bytes, `Blob`s/`File`s or `{ data, lastModified }`; `new Archive(bytes
   | blob | file())` opens one, detecting the format from the leading bytes.
   `bytes()`/`blob()` return the archive, `entries()` returns metadata with lazy
-  `bytes()`/`text()`/`blob()`/`stream()`, `files(filter?)` returns a
+  `bytes()`/`text()`/`blob()`/`stream()`, `for await (const entry of archive)`
+  streams that metadata instead of collecting it, `files(filter?)` returns a
   `Map<string, File>`, `extract(directory)` writes it out, and
   `Archive.write(destination, input, options)` writes to a path or `file()`.
   A `file()` source is scanned and streamed through the jailed synchronous
-  filesystem: `entries()` reads headers, `files()` reads only the selected
-  entries, `stream()` yields bounded chunks, and `extract()` writes each chunk
-  before reading the next. `compress: "none"` writes stored zip members.
+  filesystem, with one fd shared by metadata scans and extraction: `entries()`
+  reads headers, `files()` reads only the selected entries, and `stream()` yields
+  bounded chunks. `extract()` decodes into a temporary directory before copying
+  files into the destination, so a decode or validation error leaves the
+  destination untouched; staging uses disk space up to the uncompressed output
+  size. `compress: "none"` writes stored zip members.
   Bytes in and out need no capability; a `file()` source is `FileRead`, and
   extraction and writing are `FileWrite` with the destination as the target.
   Output is deterministic (sorted entries, `0:0`, `0644`/`0755`, epoch
@@ -32,10 +36,10 @@ namespace) is unstable and may change between minor releases until the API freez
   uncompressed) are enforced on declared and actual bytes. Unsafe paths, links,
   special entries, encrypted zips, unsupported zip methods, duplicates and
   file/directory collisions are refused with stable `ERR_ARCHIVE_*` codes.
-  Extraction verifies entry contents (including zip CRCs) and every destination
-  path for an existing symlink before writing anything, then streams the files
-  to disk. ZIP entry counts are checked from the end record before the central
-  directory is parsed.
+  Extraction verifies entry contents (including zip CRCs), checks destination
+  paths for existing symlinks, and stages files before copying them into the
+  destination. ZIP entry counts are checked from the end record before the
+  central directory is parsed.
 
 ## [0.41.0] - 2026-10-17
 
