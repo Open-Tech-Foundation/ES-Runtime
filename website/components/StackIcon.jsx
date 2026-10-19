@@ -6,7 +6,7 @@
 // TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
 // WebAssembly, JavaScript, RabbitMQ, MQTT and NATS from Simple Icons (CC0). The JSX tile is that
 // JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, CBOR, HTTP,
-// WebSocket, images, durable state, the toolchain, the sandbox, mail,
+// WebSocket, images, archives, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
 // original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile.
@@ -149,6 +149,15 @@ export default function StackIcon({ name }) {
             <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
             <circle cx="9" cy="9" r="2" />
             <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+          </svg>
+        </span>
+      )}
+      {name === "archive" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8" />
+            <path d="M23 3H1v5h22z" />
+            <path d="M10 12h4" />
           </svg>
         </span>
       )}

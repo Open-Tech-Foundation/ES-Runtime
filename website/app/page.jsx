@@ -79,9 +79,10 @@ const groups = [
   },
   {
     name: "Built-in Utils",
-    desc: "SMTP mail, password-grade hashing, two-factor codes, cookies, CSRF tokens, and webhooks.",
+    desc: "SMTP mail, archive handling, password-grade hashing, two-factor codes, cookies, CSRF tokens, and webhooks.",
     tiles: [
       { icon: "email", label: "Email", to: "/docs/guides/email" },
+      { icon: "archive", label: "Archives", to: "/docs/guides/archive" },
       { icon: "hashing", label: "Hashing", to: "/docs/guides/hashing" },
       { icon: "cookies", label: "Cookies", to: "/docs/http/basics#cookies" },
       { icon: "csrf", label: "CSRF", to: "/docs/http/basics#csrf" },

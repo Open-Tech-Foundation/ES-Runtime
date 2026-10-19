@@ -37,6 +37,7 @@ namespace) is unstable and may change between minor releases until the API freez
   uncompressed) are enforced on declared and actual bytes. Unsafe paths, links,
   special entries, encrypted zips, unsupported zip methods, duplicates and
   file/directory collisions are refused with stable `ERR_ARCHIVE_*` codes.
+  The homepage lists Archives under Built-in Utils.
   Extraction verifies entry contents (including zip CRCs), checks destination
   paths for existing symlinks, and stages files before copying them into the
   destination. ZIP entry counts are checked from the end record before the
