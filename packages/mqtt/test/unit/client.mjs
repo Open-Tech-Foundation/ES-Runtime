@@ -356,6 +356,73 @@ for (const [name, call] of [
   ok(late !== "packet", "the broker receives nothing after the connection was failed");
 }
 
+// --- an explicit close during a pending write ------------------------------
+
+// close() is deliberate, not a failure. It rejects the in-flight operation with
+// Closed, but must not fail the connection: a failed connection skips the
+// DISCONNECT and reports an error the caller never asked for.
+{
+  const broker = fakeBroker(5);
+  let held = null;
+  let holdNext = false;
+  let aborted = false;
+  const transport = {
+    read: () => broker.transport.read(),
+    write: (bytes) => {
+      // Hold exactly the next write — the publish — so the close's DISCONNECT,
+      // queued behind it, still goes out once the write drains.
+      if (!holdNext) return broker.transport.write(bytes);
+      holdNext = false;
+      return new Promise((resolve) => {
+        held = () => {
+          broker.transport.write(bytes);
+          resolve();
+        };
+      });
+    },
+    close: (options) => {
+      if (options?.abort === true) aborted = true;
+      return broker.transport.close();
+    },
+  };
+  const pending = MqttClient.over(transport, { clientId: "c", keepAlive: 0 }, 5);
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  const client = await pending;
+
+  holdNext = true;
+  let error = null;
+  const publishing = client.publish("a/b", "x", { qos: 1, timeout: 5000 }).catch((e) => {
+    error = e;
+  });
+  await tick(0);
+  ok(held !== null, "the publish write is held");
+
+  const closing = client.close();
+  await publishing;
+  ok(
+    error !== null && error.code === MqttErrorCode.Closed,
+    "a close during a pending write rejects the publish as Closed",
+  );
+  ok(client.failure === null, "and is not turned into a connection failure");
+
+  // The pending write drains, then the close takes its documented path: a
+  // DISCONNECT and the socket, not an abort.
+  held();
+  await closing;
+  ok(aborted === false, "the transport is not aborted");
+  const packets = [];
+  for (;;) {
+    const packet = await broker.next();
+    if (packet === null) break;
+    packets.push(packet);
+  }
+  ok(
+    packets.some((packet) => packet.type === PacketType.Disconnect),
+    "and a DISCONNECT is sent",
+  );
+}
+
 // --- request / reply -------------------------------------------------------
 
 {

@@ -596,6 +596,12 @@ export class MqttClient {
    * yet reach the broker, and the stuck write — held in the connection's
    * serialised chain — would block every later packet, the final DISCONNECT
    * among them. Failing closes the socket and releases the chain.
+   *
+   * A deliberate close is not that case. It rejects the waiter itself, before the
+   * write stops being written, and it tears the connection down on its own — by
+   * sending the DISCONNECT and closing the socket, not by failing. Aborting here
+   * would race that path, turn the close into a connection failure and skip the
+   * DISCONNECT, so it is left to the close.
    */
   async #awaitAck<T>(write: Promise<void>, waiter: Promise<T>, onFailure: () => void): Promise<T> {
     let written = false;
@@ -608,7 +614,7 @@ export class MqttClient {
       return value;
     } catch (e) {
       onFailure();
-      if (!written) {
+      if (!written && !this.#closed) {
         this.#connection.abort(
           new MqttError("the acknowledgement timed out while the packet was still being written", {
             code: MqttErrorCode.Connection,

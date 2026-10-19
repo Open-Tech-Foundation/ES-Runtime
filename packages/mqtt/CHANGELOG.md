@@ -100,3 +100,9 @@ package written entirely in JavaScript over `runtime:net`. See the root
   close that would interrupt it was never reached and the connection reported
   itself closed over a still-open socket. The failure path now closes the socket
   directly, which interrupts a pending write instead of waiting on it.
+- A deliberate `close()` during a pending write is no longer turned into a
+  connection failure. The close rejects the in-flight operation with `Closed`, and
+  the shared acknowledgement handler treated that like the write-timeout case and
+  aborted the connection with a `Connection` error — reporting a failure the
+  caller never asked for and bypassing the DISCONNECT. The abort now applies only
+  while the client is still open, so a close takes its documented path.
