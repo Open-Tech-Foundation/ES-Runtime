@@ -81,7 +81,7 @@ without dialling: `hostname`, `port`, `tls`, and optionally `username`/`password
 | `publish(subject, payload, options?)` | See below. |
 | `subscribe(subject, options?)` | Returns a `Subscription` synchronously. |
 | `request(subject, payload, options?)` | One `await` for a reply. |
-| `flush(timeout?)` | A `PING`, resolved by its `PONG` — a round trip to the server. |
+| `flush(timeout?)` | A `PING`, resolved by its `PONG` — a round trip to the server. Defaults 30 000 ms; rejects `ERR_NATS_TIMEOUT`. |
 | `close()` | Closes the connection, ending every subscription. |
 | `connection` | The `Connection` underneath, for a caller that wants the protocol itself. |
 | `over(transport, options?)` | Connects over an already-open transport — the seam a test stands on. |
