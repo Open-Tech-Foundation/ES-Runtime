@@ -253,6 +253,55 @@ async function connect(settings = {}, broker = fakeBroker(), info = {}) {
   ok(connection.closed, "and reports closed");
 }
 
+// -- unsubscribe carries the max-messages count -----------------------------
+
+{
+  const { connection, broker } = await connect();
+  const sid = connection.subscribe("a.b");
+  await broker.next();
+  connection.unsubscribe(sid, 3);
+  const command = await broker.next();
+  is(command.kind, "unsub", "an unsubscribe reaches the server");
+  is(command.sid, sid, "for the subscription");
+  is(command.max, 3, "carrying the max-messages count");
+  await connection.close();
+}
+
+// -- a reconnect that exhausts its attempts fails the connection ------------
+
+{
+  const broker = fakeBroker();
+  let dials = 0;
+  const dial = async () => {
+    if (dials++ === 0) {
+      void broker.accept();
+      return broker.transport;
+    }
+    throw new Error("the server is gone");
+  };
+  const closed = deferred();
+  const connection = await openWithDial(
+    "nats://h:4222",
+    { reconnect: { maxAttempts: 2, wait: 1 } },
+    { onClosed: (error) => closed.resolve(error) },
+    dial,
+  );
+
+  broker.close();
+  const error = await closed.promise;
+  is(
+    error?.code,
+    NatsErrorCode.Connection,
+    "giving up on a reconnect fails the connection with a Connection error",
+  );
+  ok(connection.closed, "and the connection reports itself closed");
+  is(
+    connection.failure?.code,
+    NatsErrorCode.Connection,
+    "with the cause latched for later callers",
+  );
+}
+
 // -- a timed-out flush keeps its place in the PONG queue ---------------------
 
 {
