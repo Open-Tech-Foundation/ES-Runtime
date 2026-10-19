@@ -1,0 +1,36 @@
+{
+  "name": "@opentf/esrun-nats",
+  "version": "0.1.0",
+  "description": "NATS client for esrun: core NATS over runtime:net — publish/subscribe, queue groups, subject wildcards, headers, request/reply, TLS.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "esrun": ">=0.41.0"
+  },
+  "scripts": {
+    "build": "esdev build --lib src"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "workspace:*",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["esrun", "es-runtime", "opentf", "nats", "messaging", "pubsub", "broker", "request-reply"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/nats"
+  },
+  "homepage": "https://esrun.opentechf.org/docs/guides/nats",
+  "publishConfig": {
+    "access": "public"
+  }
+}

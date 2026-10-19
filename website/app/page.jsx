@@ -91,10 +91,11 @@ const groups = [
   },
   {
     name: "Message",
-    desc: "AMQP 0-9-1 and MQTT messaging.",
+    desc: "AMQP 0-9-1, MQTT and NATS messaging.",
     tiles: [
       { icon: "rabbitmq", label: "RabbitMQ", to: "/docs/guides/rabbitmq" },
       { icon: "mqtt", label: "MQTT", to: "/docs/guides/mqtt" },
+      { icon: "nats", label: "NATS", to: "/docs/guides/nats" },
     ],
   },
   {

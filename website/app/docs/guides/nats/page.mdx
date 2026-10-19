@@ -1,0 +1,196 @@
+---
+title: NATS
+description: Publish, subscribe and request/reply over core NATS using @opentf/esrun-nats — connecting, subject wildcards, queue groups, headers and reconnection.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# NATS
+
+[`@opentf/esrun-nats`](https://www.npmjs.com/package/@opentf/esrun-nats) is a
+client speaking core NATS. It is written in JavaScript over
+[`runtime:net`](/api/net), so it needs no grant beyond reaching the server.
+
+```sh
+npm install @opentf/esrun-nats
+```
+
+```sh
+esrun --allow-net=nats.example.com:4222 app.js
+```
+
+## Connect
+
+`NatsClient.connect` takes a `nats://` or `tls://` URL, dials it and finishes the
+handshake. Everything below happens beneath it.
+
+```js
+import { NatsClient } from "@opentf/esrun-nats";
+
+const client = await NatsClient.connect("nats://nats.example.com:4222", {
+  name: "worker-1",
+});
+
+console.log(client.serverVersion, client.maxPayload);
+```
+
+The URL carries the host and credentials; the second argument holds the
+connection name, the server pool, keepalive and the reconnect policy. The
+[package reference](https://www.npmjs.com/package/@opentf/esrun-nats#connecting)
+lists them all.
+
+## Publish and subscribe
+
+A subject is a `.`-separated path, and two wildcards match within it: `*` matches
+one token, `>` matches the rest, and only `>` may appear last. The server does
+the matching, so a subscriber only has to read its messages.
+
+```js
+const subscription = client.subscribe("sensors.*.temperature");
+
+for await (const message of subscription) {
+  console.log(message.subject, message.text());
+}
+
+await client.publish("sensors.kitchen.temperature", "21.5");
+```
+
+`subscribe` returns a `Subscription` synchronously. A `NatsMessage` carries
+`subject`, `payload` (bytes), `reply` and `headers`, plus `text()` and `json()`
+for the payload. `subscription.unsubscribe()` leaves the server, or breaking out
+of the `for await` does it for you.
+
+Core NATS `publish` is **fire-and-forget**: it resolves once the bytes are
+written and there is no acknowledgement to await. If you need to know the server
+has processed what came before, `flush()` sends a `PING` and resolves on its
+`PONG`:
+
+```js
+await client.publish("events.order-paid", payload);
+await client.flush(); // the server has received everything above
+```
+
+## Balance a queue group
+
+Give several subscribers the same subject and the same `queue` and the server
+delivers each message to exactly one of them — the way to spread work across
+workers without a load balancer.
+
+```js
+const workers = client.subscribe("jobs.email", { queue: "email-senders" });
+
+for await (const job of workers) {
+  await send(job.json());
+}
+```
+
+Run this in several processes; each message goes to one of them.
+
+## Request/reply
+
+Core NATS defines request/reply as a convention: subscribe to an inbox, publish
+with it as the reply subject, and read the first message back. `request` does all
+three and returns the reply.
+
+```js
+import { NatsClient } from "@opentf/esrun-nats";
+
+const client = await NatsClient.connect("nats://nats.example.com:4222");
+const reply = await client.request("service.fib", "10", { timeout: 5_000 });
+console.log(reply.text());
+```
+
+The responder is an ordinary subscriber. It reads the request's `reply` subject
+and publishes its answer there:
+
+```js
+const service = client.subscribe("service.fib");
+for await (const request of service) {
+  await client.publish(request.reply, String(fib(Number(request.text()))));
+}
+```
+
+When the server speaks headers and no one is listening, it answers with a `503`
+status instead of leaving you waiting, and the request rejects with
+`ERR_NATS_NO_RESPONDERS` — a clear answer rather than a timeout.
+
+## Attach headers
+
+A server that advertises header support carries a `NATS/1.0` block with each
+message. A value may be repeated.
+
+```js
+await client.publish("events.user", JSON.stringify(user), {
+  headers: { "Nats-Msg-Id": crypto.randomUUID(), "Content-Type": "application/json" },
+});
+```
+
+On the way in, `message.header(name)` reads one case-insensitively, and
+`message.headers` holds every value of every name:
+
+```js
+for await (const message of client.subscribe("events.>")) {
+  console.log(message.header("content-type"), message.json());
+}
+```
+
+## Recover a lost connection
+
+A lost socket is not fatal. The connection redials the next server in its pool,
+re-runs the handshake, and re-establishes every subscription under its original
+id, so subscribers keep reading the same iterable across the gap. A `publish`
+issued while the connection is down waits for it to come back and is sent
+**after** the resubscriptions.
+
+```js
+const client = await NatsClient.connect("nats://nats.example.com:4222", {
+  servers: ["nats://nats-2.example.com:4222"],
+  reconnect: { maxAttempts: 20, wait: 1_000 },
+});
+```
+
+TLS is negotiated **after `INFO`**, because that is how NATS does it — the server
+opens in the clear, then the handshake begins. Use `tls://`, or `tls: true` with
+`ca` and `servername` for a private authority.
+
+## Handle failures
+
+Every failure is a `NatsError` carrying a `code`, and the server's own `-ERR`
+text on `serverError`.
+
+```js
+import { NatsError, NatsErrorCode } from "@opentf/esrun-nats";
+
+try {
+  await client.request("service.fib", "10");
+} catch (e) {
+  if (e instanceof NatsError && e.code === NatsErrorCode.NoResponders) await fallback();
+  else throw e;
+}
+```
+
+Bytes that are not NATS are fatal and latched — a stream at an unknown boundary
+cannot be resynchronised. A lost socket, by contrast, is recovered by
+reconnecting.
+
+## Test locally
+
+The harness starts a NATS for you — a plain one on 4222, and a TLS one on 4223
+with a private certificate authority:
+
+```sh
+eval "$(test/nats-server.sh)"   # nats:2, plain and TLS
+```
+
+```js
+const client = await NatsClient.connect("nats://127.0.0.1:4222");
+```
+
+<Callout type="note" title="Every option and error code">
+  The [package README](https://www.npmjs.com/package/@opentf/esrun-nats) lists
+  every connection setting, publish and subscribe option, and error code.
+</Callout>
+
+How the client is put together — the command boundary, why a lost socket is
+recovered but a malformed stream is not, and how a write waits for a reconnect:
+[Internals: NATS](/docs/internals/nats).

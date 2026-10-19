@@ -1,0 +1,165 @@
+---
+title: "Internals: NATS"
+description: Why the NATS client is a package, how it frames the line protocol, why a lost socket is recovered but a malformed stream is not, and how TLS and reconnection are sequenced.
+---
+
+# Internals: NATS
+
+How [`@opentf/esrun-nats`](/docs/guides/nats) is put together, and why each rule
+it enforces is there. The decision and what was rejected are in
+`docs/DECISIONS.md` (D173).
+
+## A package, not a runtime module
+
+Everything the client needs is already in the runtime: `runtime:net` opens a TCP
+socket — with an in-band TLS upgrade — and hands back web streams. So the client
+is JavaScript over that API, as the other clients and the [database
+drivers](/docs/db) are — no new code in `esrun`, and no new capability: reaching
+the server is `--allow-net`, scoped to its host like any other socket.
+
+That also decides what it cannot do. It reaches only hosts the run was granted,
+and TLS is verified by the runtime's own verifier, with no option here to switch
+it off. It speaks **core NATS**; JetStream, the key-value and object stores, and
+the services framework are protocols layered on top of it and are out of scope.
+
+## The layers
+
+| Layer | Does |
+| --- | --- |
+| Protocol | The wire codec: `INFO`/`CONNECT`/`PUB`/`HPUB`/`SUB`/`UNSUB`/`PING`/`PONG`/`-ERR`, the streaming `drain`, subject validation, and the `NATS/1.0` header block. |
+| Transport | The byte pipe over `runtime:net`, including the in-band TLS upgrade, behind an interface a test can stand in for. |
+| Connection | The handshake, the command pump, the protocol's own `PING`/`PONG`, keepalive, reconnection and the deliberate close. |
+| Client | Publish, subscribe, queue groups, headers, and request/reply. |
+
+Each layer is usable alone; the ones below it decide what the ones above can
+assume. The client never touches a socket — it is handed a `Transport` — which is
+why the handshake, the routing and the reconnect can be tested against a scripted
+server in memory, with no port and no capability granted.
+
+## The command boundary
+
+NATS is a line protocol with a byte-counted body: `INFO {...}`, `MSG <subject>
+<sid> [reply] <bytes>`, `PUB <subject> [reply] <bytes>`, `PING`, `PONG`, `-ERR`.
+A socket delivers it in whatever chunks it likes — a command split across two
+reads, a `MSG` whose payload has not arrived, several commands in one chunk are
+all possible.
+
+So the connection accumulates bytes and is what decides a command is complete. A
+buffer too short to say is not an error, just a command not yet arrived; only a
+byte count that is malformed — a negative length, a body the buffer can never
+hold — is raised. This is solved once, in the `drain` the connection calls,
+rather than by every command.
+
+## Why a lost socket is recovered but a malformed stream is not
+
+The two failures look alike and are not. If the **socket is lost** — the peer
+closed, the read failed — the boundary the connection tracks is still sound up to
+the last whole command, so there is nothing to distrust and the connection
+redials. If the **bytes are not NATS** — a length that cannot be a length, a line
+that is not a command — the stream is at an unknown boundary and every later
+command would be misread, so that failure is **latched once**: every caller, now
+and later, gets that one cause rather than a new symptom of the same dead
+connection.
+
+Recovery is therefore a reconnection, not a resynchronisation. There is no
+attempt to find the next command in a stream whose framing has already been
+disbelieved.
+
+## The handshake, and where TLS goes
+
+The server speaks first: it sends `INFO` with its version, its payload ceiling,
+whether it takes headers, and any other servers it knows. The client answers
+`CONNECT`, then `PING`, and the connection is considered up when the matching
+`PONG` comes back — the first moment both sides agree the session is real.
+
+TLS sits **between `INFO` and `CONNECT`**, which is where NATS puts it. The
+server opens in the clear and its `INFO` says whether TLS is required; the client
+then upgrades the socket in place (`runtime:net`'s `secureTransport: "starttls"`
+and `Socket.startTls`), and only afterwards writes `CONNECT`. So an upgrade the
+client was asked for but the transport cannot perform is a handshake failure, and
+a server that requires TLS refuses a connection that did not ask for it — `CONNECT`
+is never written in the clear.
+
+## The protocol's own chatter
+
+Some traffic needs no application decision, so the connection answers it itself:
+a server `PING` is answered with `PONG`, and keepalive sends its own `PING` after
+a period of silence. A `PONG` carries no identifier, so the client matches them
+**in order** — a `PONG` settles the oldest outstanding `PING`. `flush` uses the
+same exchange: it queues a `PING` and resolves when the matching `PONG` returns,
+which is a genuine round trip and the only way core NATS offers to know the server
+has taken what came before.
+
+Because the matching is positional, a caller that gives up must not leave its
+place open. A `flush` that times out is settled, but its slot stays in the queue:
+the `PONG` it is owed is consumed there rather than settling the next flush, which
+would otherwise report success a round trip early.
+
+The keepalive timer is **unreferenced**: it does not keep a script alive that has
+otherwise finished, so a program exits when its work is done rather than waiting
+out the interval.
+
+## Writing is serialised, and a write can wait for a reconnect
+
+A command may be several writes — a header, then a body — and two publishes
+issued at once must not interleave halfway. So a connection's writes go through
+**one chain**: each write waits for the last to finish.
+
+The subtlety is a write issued while the connection is **down**. It waits for the
+reconnect — but it waits *outside* the chain, and joins it only once the
+connection is up. If it waited inside, it would take a place ahead of the
+resubscriptions the reconnect sends when it comes back, and a publish could reach
+a subject before its subscription was re-established. Waiting outside means the
+resubscriptions go first, always, and a caller's late publish follows them. A
+write waiting there is also released when the connection is **closed**, not only
+when it reconnects: a `close` stops the reconnect loop, so the gate has to be
+failed as well, or that write would wait forever for a reconnect that is no longer
+coming.
+
+## Reconnection
+
+A lost socket redials the next server in the pool — the URL's server, any named in
+`settings.servers`, and any discovered in `INFO`'s `connect_urls` — re-runs the
+handshake, and re-registers every subscription under the **original id**, so the
+`MSG`s that follow route exactly as before and the client layer never learned the
+connection moved. The number of attempts and the wait between them are the
+reconnect policy's, expressed in settings; `reconnect: false` turns recovery off
+and makes the loss fatal.
+
+## Request/reply, without a reply queue
+
+Core NATS has no reply queue. It defines request/reply as a convention: the caller
+subscribes to a fresh inbox (`_INBOX.` and a random token), publishes with it as
+the `reply` subject, and reads the first message back; the responder publishes its
+answer to that subject. `request` does all three and drops the inbox subscription
+once it has an answer.
+
+When the server speaks headers, a request that finds no listener is answered
+explicitly: the server sends a `503` on the inbox. `request` turns that into
+`ERR_NATS_NO_RESPONDERS` — a definite answer rather than a timeout, which is the
+difference between "no one is there" and "no one has answered yet".
+
+## Testing without a port
+
+`esrun` grants nothing by default, and a unit test should not be the reason to
+start a server. So the `Transport` is an interface, and the connection and client
+sit on top of it: the unit suites drive a scripted server in memory — it speaks
+the same commands, grants subscriptions and routes messages — with no socket and
+no `--allow-net`. The end-to-end suite then runs the same client against a real
+NATS, where the framing either matches or nothing passes.
+
+## What it costs
+
+The client is JavaScript, so the wire codec — the connection's buffer, each
+command, each message — lives on the JavaScript heap. That is the same line
+[`runtime:db`](/docs/internals/database) draws: Rust owns transport, and
+JavaScript owns every network protocol, so a networked backend adds no runtime
+code. The cost is memory and the collector's time over it, not a capability —
+nothing here needs a grant beyond the socket it already had. Moving the codec into
+Rust later would not change what this package exports.
+
+## Not here
+
+JetStream (streams, consumers, acknowledgements), the key-value and object stores,
+the services framework, and nkey/JWT/`.creds` authentication. This release is core
+NATS with user/password and token credentials.
