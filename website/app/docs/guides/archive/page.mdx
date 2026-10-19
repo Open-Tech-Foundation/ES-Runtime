@@ -1,0 +1,134 @@
+---
+title: Archives
+description: Bundle downloads into a zip or tar.gz, and unpack uploads without trusting their paths.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Archives
+
+[`runtime:archive`](/api/archive) reads and writes tar, tar.gz and zip. Bytes in
+and bytes out need no capability; extraction needs `FileWrite`.
+
+## A downloadable bundle
+
+Build the archive in memory and send it. Output is deterministic, so the same
+entries produce the same bytes — a cache key or an ETag can be computed from
+them.
+
+```js
+import { Archive } from "runtime:archive";
+
+const entries = {
+  "manifest.json": JSON.stringify(manifest),
+  "readme.txt": "Generated at " + new Date().toISOString(),
+  "images/": null,
+  "images/logo.png": logo,
+};
+
+const tar = await new Archive(entries).bytes();
+const zip = await new Archive(entries, { format: "zip" }).bytes();
+const compressed = await new Archive(entries, { compress: "gzip" }).bytes();
+```
+
+`bytes()` returns a copy; the archive keeps its own. `blob()` returns a `Blob`
+already typed `application/zip`, `application/gzip` or `application/x-tar`.
+
+## Unpacking an upload
+
+Never join an uploaded name to a directory yourself; extracting validates every
+path first.
+
+```js
+import { Archive } from "runtime:archive";
+
+const upload = await request.bytes();
+try {
+  const result = await new Archive(upload).extract("uploads");
+  return Response.json(result);          // { files, directories }
+} catch (error) {
+  if (error.code === "ERR_ARCHIVE_UNSAFE_PATH") {
+    return new Response("archive contains an unsafe path", { status: 400 });
+  }
+  if (error.code === "ERR_ARCHIVE_TOO_LARGE") {
+    return new Response("archive is too large", { status: 413 });
+  }
+  if (error.code === "ERR_ARCHIVE_FORMAT_UNSUPPORTED") {
+    return new Response("unsupported archive", { status: 415 });
+  }
+  if (error.code === "ERR_ARCHIVE_DECODE_FAILED") {
+    return new Response("not a valid archive", { status: 400 });
+  }
+  throw error;
+}
+```
+
+The whole archive is checked before the first file is written, so a refused
+upload leaves nothing behind. That check reads every entry's data, including
+zip CRCs, so extraction decompresses the archive twice: first to verify, then
+to stream the files to disk. Links, special entries, encrypted zips and
+unsupported compression methods are refused rather than followed or skipped.
+
+### Lower the limits for uploads
+
+The defaults are 100 000 entries and 1 GiB uncompressed. For a public upload
+endpoint, lower both:
+
+```js
+const archive = new Archive(upload, {
+  maxEntries: 10_000,
+  maxBytes: 64 * 1024 * 1024,
+});
+await archive.extract("uploads");
+```
+
+`maxBytes` is checked against what the archive declares before anything is
+allocated and against what the decompressor actually produces, so a small file
+that expands enormously is stopped.
+
+## Read without writing
+
+`entries()` and `files()` do not extract. Use them to inspect an archive, pick
+one file, or serve it without touching disk:
+
+```js
+const opened = new Archive(upload);
+
+// Metadata only; entry bytes are read lazily.
+for (const entry of await opened.entries()) {
+  console.log(entry.path, entry.size, entry.lastModified);
+}
+
+const readme = (await opened.entries()).find((entry) => entry.path === "README.md");
+if (readme) console.log(await readme.text());
+
+// A Map<string, File>, Bun.Archive's shape.
+const files = await opened.files((path) => path.endsWith(".json"));
+```
+
+## From a file
+
+A `file()` source is read through the filesystem provider, so `FileRead`, the
+root jail and `--allow-read` apply exactly as they do to `file().bytes()`:
+
+```js
+import { Archive } from "runtime:archive";
+import { file } from "runtime:fs";
+
+const opened = new Archive(file("release.tar.gz"));
+await opened.extract("release");
+
+await Archive.write(file("release.zip"), { "app.js": source }, { format: "zip" });
+```
+
+The file is not read into memory first. Metadata, `files(filter)` and
+`extract()` scan it through the jailed filesystem, and `stream()` yields
+decompressed chunks, so a tarball much larger than the agent's memory budget
+can be inspected or unpacked. `bytes()` is the exception: it returns the whole
+archive, as its name says.
+
+<Callout type="warn" title="No path strings">
+  `new Archive("bundle.zip")` is a `TypeError`. Pass `file("bundle.zip")`, or
+  the bytes. A path argument would read a file without the provider, its jail
+  or the `FileRead` grant.
+</Callout>

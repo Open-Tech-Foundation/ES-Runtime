@@ -1448,6 +1448,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3",
  "subtle",
+ "tar",
  "thiserror",
  "toml",
  "tracing",
@@ -1455,6 +1456,7 @@ dependencies = [
  "url",
  "urlpattern",
  "x25519-dalek",
+ "zip",
 ]
 
 [[package]]

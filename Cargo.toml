@@ -245,6 +245,14 @@ subtle = "2.6.1"
 globset = "0.4.16"
 ignore = "0.4.23"
 walkdir = "2.5.0"
+# Archive reading and writing for `runtime:archive` (DECISIONS D174). Both are
+# already in the tree via self_update; named here so the dependency is
+# deliberate. `tar` needs no default features (xattr is for extraction to a
+# real filesystem, which the provider does), and `zip` only deflate — the
+# compression method a ZIP in the wild actually uses. Every other method is
+# refused at the boundary rather than silently unsupported.
+tar = { version = "0.4.46", default-features = false }
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 # Self-update for `esrun upgrade`: finds the latest GitHub release for the
 # target, downloads + extracts it, and replaces the running binary in place
 # (rustls TLS, no OpenSSL). Used only by runtime-cli.

@@ -28,6 +28,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:serialization`](#runtimeserialization)
 - [`runtime:hashing`](#runtimehashing)
 - [`runtime:images`](#runtimeimages)
+- [`runtime:archive`](#runtimearchive)
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
 - [`runtime:workers`](#runtimeworkers)
@@ -891,6 +892,7 @@ the required capability has been granted.
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 | `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
 | `runtime:images`  | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimeimages) |
+| `runtime:archive` | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimearchive) |
 | `runtime:workers` | Available   | `FileRead` / `FileWrite` — the same grants its state files need | [↓](#runtimeworkers) |
 | `runtime:build`   | Available — **`esdev` only** | `FileRead` (+ `FileWrite` to `write()`) | [↓](#runtimebuild) |
 | `runtime:test`    | Available — **`esdev` only** | none | [↓](#runtimetest) |
@@ -3393,6 +3395,123 @@ from uploads.
 
 Moving from `Bun.Image`: see the site's *Migrating from Bun* page.
 
+## `runtime:archive`
+
+Read and write tar, tar.gz and zip (DECISIONS D174). `Bun.Archive`'s shape:
+`new Archive(input)` either builds from a plain object of entries or opens
+bytes, a `Blob` or a `runtime:fs` `file()`; `bytes()`/`blob()` return the
+archive, `entries()` exposes metadata with lazy entry reads, `files()` returns
+`Map<string, File>`, and `extract()` writes it out.
+
+- **Capability:** None for bytes in and bytes out, and for opening a `Blob`.
+  A `file()` source needs `FileRead`. `extract()` and `Archive.write()` need
+  `FileWrite`, with the destination as the capability target, checked and
+  jailed exactly as writing that path would be.
+- **Status:** Available
+
+```js
+import { Archive } from "runtime:archive";
+import { file } from "runtime:fs";
+
+// Build a tar by default, or a zip / tar.gz.
+const entries = {
+  "hello.txt": "Hello, world!",
+  "assets/logo.png": png,          // Uint8Array, ArrayBuffer or view
+  "README.md": new File([md], "README.md"),
+  "empty/": null,
+};
+const tar = await new Archive(entries).bytes();
+const zip = await new Archive(entries, { format: "zip" }).bytes();
+const gz = await new Archive(entries, { compress: "gzip" }).bytes();
+
+// Open one, from bytes or a file().
+const opened = new Archive(file("bundle.tar.gz"));
+const { path, size, lastModified } = (await opened.entries())[0];
+const text = await (await opened.entries())[0].text();
+const files = await opened.files(/^assets\//);   // Map<string, File>
+await opened.extract("out");                       // needs FileWrite
+
+// Write an archive to disk without holding it in a variable first.
+await Archive.write(file("bundle.zip"), entries, { format: "zip" });
+```
+
+### `new Archive(input, options?)`
+
+`input` is one of:
+
+- a **plain object** whose keys are entry paths and whose values are a string
+  (UTF-8), a `Uint8Array`/`ArrayBuffer`/view, a `Blob` or `File`, `null` for a
+  directory (the key must end with `/`), or `{ data, lastModified }` where
+  `data` is any of the former and `lastModified` is epoch milliseconds or a
+  `Date`;
+- a `Uint8Array`, `ArrayBuffer`, view or `Blob` holding an archive;
+- a `runtime:fs` `file()`.
+
+A path string is a `TypeError`: pass `file(path)`. A `SharedArrayBuffer` is
+refused. Opening detects the format from the leading bytes — gzip, zip or
+tar — and never from a name or extension.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `format` | `"tar"` | `"tar"` or `"zip"` when building. Ignored when opening. |
+| `compress` | `"none"` | `"gzip"` for tar, `"deflate"` for zip, or `"none"`. A combination the format cannot carry is a `TypeError`. |
+| `maxEntries` | `100000` | Entry-count cap, on build and read. For zip the count is read from the end record before the central directory is parsed. Over it is `RangeError` with `ERR_ARCHIVE_TOO_LARGE`. |
+| `maxBytes` | `1073741824` (1 GiB) | Cap on uncompressed bytes, on build and read, checked against declared sizes before allocation and against bytes actually decompressed. Over it is `RangeError` with `ERR_ARCHIVE_TOO_LARGE`. |
+
+Builds are deterministic: entries are sorted by path, ownership is `0:0`,
+modes are `0644` for files and `0755` for directories, and the timestamp is
+`0` unless an entry supplied `lastModified` (zip clamps to 1980–2107). The same
+input produces the same bytes.
+
+### Methods
+
+| Method | Resolves to |
+| --- | --- |
+| `bytes()` | A copy of the archive's bytes (`Uint8Array`). An opened archive returns its source bytes unchanged. |
+| `blob()` | A `Blob` whose `type` is `application/x-tar`, `application/gzip` or `application/zip`, from the format in the bytes. |
+| `entries()` | An array of `ArchiveEntry`, in archive order. |
+| `files(filter?)` | A `Map<string, File>` of the file entries (directories skipped). `filter` is a predicate on the path, a path prefix string, or a `RegExp`. |
+| `extract(directory)` | Writes every entry under `directory` (a path string or `file()`) and resolves to `{ files, directories }`. Needs `FileWrite`. |
+| `Archive.write(destination, input, options?)` | Builds `input` as above and writes it to `destination` (a path string or `file()`), resolving to the byte count. Needs `FileWrite`. |
+
+An `ArchiveEntry` has `path`, `size`, `directory` and `lastModified` (epoch
+milliseconds, or `null`), plus lazy `bytes()`, `text()`, `blob()` and
+`stream()`. Reading an entry does not materialize the other entries: `stream()`
+yields bounded chunks, `files(filter)` reads only the entries the filter
+selected, and a `file()` source is scanned through the filesystem rather than
+loaded whole. (A tar.gz entry still has to decompress through its predecessors
+to reach its data; those bytes are discarded as they are skipped.)
+
+### Safety
+
+Every entry path is validated before a listing is returned or a file is
+written: it must be relative, slash-separated, valid UTF-8, with no empty,
+`.` or `..` component, no backslash and no drive letter. Tar symlinks and hard
+links, zip symlinks, special tar types (character/block/FIFO/sparse/global
+PAX) and encrypted zip entries are refused, as is zip compression other than
+Stored and Deflated. Duplicate entries, file/directory collisions, and names
+that would collide on a case-insensitive filesystem (Windows, macOS) are
+refused. An archive is never sanitized into a different one. `extract()`
+validates the whole archive before writing the first file: it reads every
+entry's data (so a bad zip CRC or decompressor stream is found), and refuses an
+existing symlink at the destination, in any parent directory, or at an output
+file path. A refused archive therefore leaves nothing behind. Validation reads
+the archive once and discards the bytes; extraction then streams it a second
+time, entry by entry, creating the destination and any implicit parents.
+
+### Errors
+
+| Failure | Thrown |
+| --- | --- |
+| Not a well-formed archive of its detected format | `Error` with `code` `ERR_ARCHIVE_DECODE_FAILED` |
+| A format or compression method the runtime does not read | `Error` with `code` `ERR_ARCHIVE_FORMAT_UNSUPPORTED` |
+| An encrypted zip | `Error` with `code` `ERR_ARCHIVE_ENCRYPTED` |
+| An unsafe path, a link, a special entry, a duplicate or a collision | `Error` with `code` `ERR_ARCHIVE_UNSAFE_PATH` |
+| Over `maxEntries` or `maxBytes` | `RangeError` with `code` `ERR_ARCHIVE_TOO_LARGE` |
+| `entry.bytes()` for a name not in the archive | `Error` with `code` `ERR_NOT_FOUND` |
+| A bad argument or option | `TypeError` |
+| Reading or writing a `file()`, or extracting | The `runtime:fs` error (`NotAllowedError`, `ERR_NOT_FOUND`, …) |
+
 ## `runtime:wasi`
 
 WASI preview 1 (`wasi_snapshot_preview1`) — enough of the ABI to run what the
@@ -5156,6 +5275,11 @@ try {
 | `ERR_IMAGE_DECODE_FAILED` | `runtime:images`: the bytes are not a valid image of their format. |
 | `ERR_IMAGE_FORMAT_UNSUPPORTED` | `runtime:images`: an unknown format, or a valid file using something not implemented. |
 | `ERR_IMAGE_TOO_MANY_PIXELS` | `runtime:images`: the image is over `maxPixels`. |
+| `ERR_ARCHIVE_DECODE_FAILED` | `runtime:archive`: the bytes are not a well-formed archive of their detected format. |
+| `ERR_ARCHIVE_FORMAT_UNSUPPORTED` | `runtime:archive`: a format, entry type or compression method the runtime does not read. |
+| `ERR_ARCHIVE_ENCRYPTED` | `runtime:archive`: a zip is encrypted; passwords are not supported. |
+| `ERR_ARCHIVE_UNSAFE_PATH` | `runtime:archive`: an entry path is unsafe, a link or special entry was found, or two entries collide. |
+| `ERR_ARCHIVE_TOO_LARGE` | `runtime:archive`: the archive is over `maxEntries` or `maxBytes`. |
 
 `runtime:db` adds a portable classification on top, so an application can branch
 on what a database did without knowing which one said so. These sit on the same

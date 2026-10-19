@@ -134,6 +134,18 @@ pub enum ErrorCode {
     Tls,
     /// A redirect chain exceeded the Fetch specification's cap of 20.
     TooManyRedirects,
+    /// Archive bytes are not a well-formed archive of the detected format.
+    ArchiveDecodeFailed,
+    /// The archive uses a format or a compression method this runtime does not
+    /// read (an archive that is otherwise well-formed).
+    ArchiveFormatUnsupported,
+    /// The archive is encrypted, and no password was supplied.
+    ArchiveEncrypted,
+    /// An archive entry names a path that is absolute, escapes the archive
+    /// root, or is otherwise unsafe to extract (D174).
+    ArchiveUnsafePath,
+    /// The archive exceeds an entry-count or uncompressed-size limit.
+    ArchiveTooLarge,
     /// An I/O failure with no finer stable classification.
     Io,
 }
@@ -164,6 +176,11 @@ impl ErrorCode {
             ErrorCode::Dns => "ERR_DNS",
             ErrorCode::Tls => "ERR_TLS",
             ErrorCode::TooManyRedirects => "ERR_TOO_MANY_REDIRECTS",
+            ErrorCode::ArchiveDecodeFailed => "ERR_ARCHIVE_DECODE_FAILED",
+            ErrorCode::ArchiveFormatUnsupported => "ERR_ARCHIVE_FORMAT_UNSUPPORTED",
+            ErrorCode::ArchiveEncrypted => "ERR_ARCHIVE_ENCRYPTED",
+            ErrorCode::ArchiveUnsafePath => "ERR_ARCHIVE_UNSAFE_PATH",
+            ErrorCode::ArchiveTooLarge => "ERR_ARCHIVE_TOO_LARGE",
             ErrorCode::Io => "ERR_IO",
         }
     }

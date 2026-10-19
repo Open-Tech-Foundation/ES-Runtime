@@ -223,3 +223,52 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
 - `gif()` and `tiff()` output.
 - AVIF and TIFF on Linux, where Bun has neither.
 - The `toSrgb` and `animated` options.
+
+### 8. Archives (`Bun.Archive`)
+
+[`runtime:archive`](/api/archive) has `Bun.Archive`'s shape: the same
+constructor split between entries and bytes, and the same `bytes()`, `blob()`,
+`files()` and `extract()`.
+
+```js
+// ❌ Bun
+const archive = new Bun.Archive({ "hello.txt": "Hello" }, { compress: "gzip" });
+await Bun.write("bundle.tar.gz", await archive.bytes());
+await new Bun.Archive(await Bun.file("bundle.zip").bytes()).extract("out");
+
+// ✅ esrun
+import { Archive } from "runtime:archive";
+import { file } from "runtime:fs";
+
+const archive = new Archive({ "hello.txt": "Hello" }, { compress: "gzip" });
+await Archive.write(file("bundle.tar.gz"), archive);
+await new Archive(file("bundle.zip")).extract("out");   // needs --allow-write
+```
+
+#### What carries over unchanged
+
+`new Archive(entries)`, `{ format: "tar" | "zip" }`, `{ compress: "gzip" }`
+for tar, `bytes()`, `blob()`, `files()` returning `Map<string, File>`, and
+`extract(directory)`. Builds are deterministic.
+
+#### What changes
+
+| Bun | esrun | Why |
+| --- | --- | --- |
+| `new Bun.Archive("bundle.zip")` | `new Archive(file("bundle.zip"))` | A path string is a `TypeError`; a `file()` goes through `runtime:fs`, so `--allow-read` and the jail apply. |
+| `new Bun.Archive(bytes).extract("out")` | the same, with `--allow-write` | Extraction is `FileWrite`, with the destination as the target. |
+| `reverse`/`order` and arbitrary metadata | none | Entries are sorted by path, ownership is `0:0`, modes are `0644`/`0755`, and timestamps are epoch unless supplied. |
+
+#### Added
+
+- `entries()`, returning metadata with lazy `bytes()`, `text()`, `blob()` and
+  `stream()` per entry.
+- `files(filter?)` with a predicate, prefix string or `RegExp`.
+- `maxEntries` and `maxBytes` limits, enforced on declared and actual bytes.
+- Stable `ERR_ARCHIVE_*` codes, and refusal of unsafe paths, links, special
+  entries, encrypted zips, duplicates and file/directory collisions.
+
+#### Not available
+
+7z and rar; passwords; extraction to a stream or arbitrary sink; appending;
+and preserving an input archive's ownership, modes or timestamps.

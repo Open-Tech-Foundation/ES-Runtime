@@ -21,6 +21,7 @@
 /// <reference path="./runtime-serialization.d.ts" />
 /// <reference path="./runtime-hashing.d.ts" />
 /// <reference path="./runtime-images.d.ts" />
+/// <reference path="./runtime-archive.d.ts" />
 /// <reference path="./runtime-wasi.d.ts" />
 /// <reference path="./runtime-system.d.ts" />
 /// <reference path="./runtime-workers.d.ts" />

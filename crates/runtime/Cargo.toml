@@ -52,6 +52,9 @@ scrypt.workspace = true
 subtle.workspace = true
 base64.workspace = true
 flate2 = "1.1"
+# runtime:archive (DECISIONS D174): tar/tar.gz in and out, zip in and out.
+tar.workspace = true
+zip.workspace = true
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 serde_json.workspace = true
 toml = "0.8"

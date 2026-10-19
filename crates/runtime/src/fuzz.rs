@@ -91,3 +91,30 @@ pub fn atob(input: &str) {
 pub fn curve25519_der(curve: &str, der: &[u8]) {
     crate::curve25519_ops::fuzz_import(curve, der);
 }
+
+/// Lists and reads arbitrary archive bytes under a small budget, then rebuilds
+/// whatever was accepted. The reader validates untrusted paths and sizes before
+/// use; the writer must never produce an archive the reader refuses.
+pub fn archive(bytes: &[u8]) {
+    let limits = crate::archive::Limits {
+        max_entries: 256,
+        max_bytes: 1 << 20,
+    };
+    let _ = crate::archive::list(bytes, &limits);
+    if let Ok((format, entries)) = crate::archive::read_all(bytes, &limits) {
+        let inputs = entries
+            .into_iter()
+            .map(|entry| crate::archive::InputEntry {
+                path: entry.meta.path,
+                data: (!entry.meta.directory).then_some(entry.data),
+                modified_ms: entry.meta.modified_ms,
+            })
+            .collect();
+        let compress = if format == crate::archive::Format::TarGz {
+            crate::archive::Compression::Gzip
+        } else {
+            crate::archive::Compression::None
+        };
+        let _ = crate::archive::build(inputs, format, compress, &limits);
+    }
+}

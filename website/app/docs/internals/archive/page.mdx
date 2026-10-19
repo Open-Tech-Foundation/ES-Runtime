@@ -1,0 +1,128 @@
+---
+title: "Internals: archives"
+description: How runtime:archive validates paths, streams file sources, bounds decompression, and keeps builds deterministic.
+---
+
+# Internals: archives
+
+What `runtime:archive` does below the API: what it refuses, what it holds in
+memory, and how a file source is read without buffering the archive.
+
+## The codecs
+
+Tar and zip are read and written by the `tar` and `zip` crates. Both are safe
+Rust, and the zip build enables only the deflate decoder, not the encoders a
+program could reach. Gzip is flate2, which the runtime already carried for
+`CompressionStream`.
+
+The layers above the codecs are ours: the format sniff, path validation,
+layout checks, the decompression budget, and the deterministic writers. That is
+where an archive stops being bytes and becomes a set of names the filesystem
+may receive.
+
+## Format detection
+
+The format is read from the leading bytes: gzip's `1f 8b`, zip's local, empty
+or spanned signature, and everything else is tar. A name or extension is never
+consulted. An input that claims to be a zip but starts like a tar is handled as
+a tar, and if it is not one it fails as a tar.
+
+## Validation before use
+
+Every read builds a list of entries and validates each path:
+
+- relative, slash-separated, valid UTF-8;
+- no empty component, no `.` and no `..`;
+- no backslash and no drive letter;
+- no duplicate path and no file/directory collision;
+- on Windows and macOS, no two paths that differ only by ASCII case, because
+  the filesystem would merge entries the archive treats as distinct.
+
+Tar links and special types, zip symlinks, encrypted zip entries, and zip
+compression other than Stored and Deflated are refused. A directory entry that
+carries data is malformed and refused.
+
+Refusal is the design: an archive is never rewritten into a safe-looking one.
+Dropping a `..` component or skipping a link would silently change what the
+caller unpacks, and code that relies on the difference would be wrong in a way
+nothing reports.
+
+## Bounds
+
+Two limits apply, `maxEntries` and `maxBytes` (the uncompressed total). They are
+checked twice:
+
+1. from the declared sizes in tar headers and the zip central directory, before
+   any entry data is allocated — and, for zip, from the end record before the
+   central directory is parsed, because that parse allocates its index;
+2. from the bytes a decompressor actually yields, so a header that understates
+   its size cannot walk past the budget.
+
+A gzip stream has no declared total to trust, so its decompression is bounded
+by `maxBytes` plus a per-entry allowance for tar headers. Over either limit is a
+`RangeError` with `ERR_ARCHIVE_TOO_LARGE`.
+
+Listing and single-entry reads do not materialize entries they do not return:
+zip metadata comes from the central directory and tar headers are read in order.
+`entries()` therefore costs a pass over headers, not a pass over contents. A
+tar.gz entry is reached by decompressing through its predecessors, but those
+bytes are discarded as they are skipped rather than retained.
+
+## File sources are streamed
+
+`file()` is opened through the jailed `SyncFileSystem`, which can seek and read
+on demand. The source is never read into a single buffer: `entries()` reads
+headers, `files(filter)` reads only the entries the filter selected,
+`ArchiveEntry.stream()` pulls decompressed chunks through a bounded channel, and
+`extract()` writes each chunk before the producer is allowed to read the next
+after its verification pass. Memory is bounded by the channel's few chunks, not
+by the archive's size.
+
+A provider with no synchronous filesystem falls back to reading the file once
+through `FileSystem`; that is the best its whole-file seam can do. `bytes()`
+also allocates the whole archive, because returning it is the operation.
+
+## Why extraction validates before it writes
+
+`extract()` makes two passes. The first re-scans and validates every entry,
+reads each entry to its end and discards the bytes, and checks every destination
+path — the destination itself, each parent directory and each output file — for
+an existing symlink. Reading the data is what catches a corrupt zip CRC or a
+bad decompressor stream, not just a malformed header. Only after that pass
+completes does extraction create directories and write, streaming the data a
+second time.
+
+That is what makes a refused archive leave nothing behind: were entries written
+as they were parsed, an unsafe path or a corrupt entry near the end would fail
+after the earlier files had landed. The cost is that extraction reads and
+decompresses the archive twice. The alternative is a spool file, which keeps
+the all-or-nothing property only by adding a second place where half-written
+state lives. An I/O error on the destination during the second pass can still
+leave partial output; what is guaranteed is that nothing is written until the
+archive itself has been validated.
+
+## Determinism
+
+A build sorts entries by path, writes `0:0` ownership, `0644` files and `0755`
+directories, and uses timestamp `0` unless an entry supplied `lastModified`.
+Zip's default options depend on whether its time feature is enabled in the
+dependency graph — `self_update` enables it — so the writer sets the timestamp
+and the system explicitly rather than inheriting a default that could change
+between builds. The same entries therefore produce the same bytes, which is what
+lets an archive be hashed or cached.
+
+Gzip's header mtime is likewise not the clock: flate2 writes a zero mtime.
+
+## Where the work runs
+
+Metadata scans run on the embedder's `TaskSpawner` (tokio's blocking pool in
+`esrun` and `esdev`), inline when there is none. File reads and gzip
+decompression run on a dedicated archive worker thread; the writer side awaits
+the bounded channel, and extraction writes through the `FileSystem` provider
+one chunk at a time.
+
+## Not here
+
+7z, rar, brotli and zstd; passwords; selective extraction (read an entry and
+write it yourself); preserving ownership, modes or arbitrary timestamps from an
+input archive; and appending.

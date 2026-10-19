@@ -131,6 +131,16 @@ pub(crate) fn install(
     // CSRF tokens for runtime:http (D162). Pure; the nonce and the clock
     // reading come from JS.
     crate::csrf_ops::install(engine)?;
+    // runtime:archive ops (D174): bytes in and out need nothing; extraction
+    // writes under FileWrite, through the provider. A file source is read
+    // through the synchronous filesystem so it can be streamed in bounded
+    // chunks; the TaskSpawner only carries the metadata scans.
+    crate::archive_ops::install(
+        engine,
+        providers.file_system(),
+        providers.sync_file_system(),
+        providers.task_spawner(),
+    )?;
     // runtime:images ops (D159): bytes in and out need nothing; a file() source
     // is FileRead and a file() destination FileWrite, through the provider. The
     // work runs on the TaskSpawner, inline without one.
