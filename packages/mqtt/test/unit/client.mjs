@@ -298,6 +298,7 @@ for (const [name, call] of [
   let held = null;
   let stalled = false;
   let writes = 0;
+  let closedWith = null;
   const transport = {
     read: () => broker.transport.read(),
     write: (bytes) => {
@@ -312,7 +313,10 @@ for (const [name, call] of [
         };
       });
     },
-    close: () => broker.transport.close(),
+    close: (options) => {
+      closedWith = options ?? null;
+      return broker.transport.close();
+    },
   };
   const pending = MqttClient.over(transport, { clientId: "c", keepAlive: 0 }, 5);
   await broker.next();
@@ -327,6 +331,9 @@ for (const [name, call] of [
   ok(error !== null && error.code === MqttErrorCode.Timeout, "a stalled publish still times out");
   const written = writes;
   ok(written === 2, "only the CONNECT and the stalled publish were written");
+  // A write left in flight is aborted, not gracefully closed: on a real socket a
+  // graceful close would wait on the stuck write and never tear the socket down.
+  ok(closedWith?.abort === true, "a timed-out write aborts the transport");
 
   // The stuck write must not hold the serialised queue: closing must not wait on
   // a write that may never finish.

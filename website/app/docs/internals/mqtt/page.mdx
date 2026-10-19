@@ -138,6 +138,15 @@ means the failure the caller was told about cannot still be delivered behind it.
 There is no way to un-send bytes already handed to a transport, so the honest
 answer is to stop trusting the connection.
 
+That close has to reach the socket, not the writer. On the socket transport the
+writer is closed before the socket, so the peer sees a tidy half-close — but a
+writer's close waits for a pending write, and a write the peer has stopped reading
+never finishes. Closing the writer would therefore hang, and the socket close that
+interrupts the write would never be reached. The failure path closes the socket
+directly instead: that tears the connection down and settles the write underneath
+it. A close that has nothing pending still goes through the writer, so the tidy
+half-close is kept where it is safe.
+
 ## Request/reply, without a reply queue
 
 The usual RPC shape costs a queue per caller. MQTT 5.0's convention removes it:

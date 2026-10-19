@@ -176,7 +176,10 @@ handlers?)` opens one and reports packets through `ConnectionHandlers`
 (`onMessage`, `onAck`, `onSuback`, `onUnsuback`, `onPingresp`, `onDisconnect`,
 `onClosed`). `Connection.over(transport, settings?, handlers?, level?)` takes an
 already-open `Transport` instead of dialling; `netTransport(options)` is the one
-over `runtime:net`. The packet codec (`encodePacket`, `decodePacket`,
+over `runtime:net`. A stand-in transport implements `read`, `write` and `close`;
+`close` is called with `{ abort: true }` when the connection is being torn down
+after a failure, so the implementation can drop a write still pending rather than
+wait on it. The packet codec (`encodePacket`, `decodePacket`,
 `PacketType`), the reason names (`reasonName`, `isErrorReason`) and the topic
 rules (`topicMatches`, `validateTopicName`, `validateTopicFilter`) are exported
 alongside them.

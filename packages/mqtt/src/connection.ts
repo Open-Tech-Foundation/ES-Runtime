@@ -819,7 +819,7 @@ export class Connection {
       this.#closed = true;
       this.#settlePing(error);
       this.#stopKeepAlive();
-      void this.#transport.close().catch(() => {});
+      void this.#transport.close({ abort: true }).catch(() => {});
       this.#handlers.onClosed(error);
     }
     return this.#failure;
@@ -893,7 +893,10 @@ export async function openWithDial(
     try {
       return await Connection.over(transport, effective, handlers, level);
     } catch (e) {
-      await transport.close().catch(() => {});
+      // Abandoning this socket, not closing it politely: the handshake may have
+      // timed out with a write still pending, and a graceful close would wait on
+      // that write rather than tear the socket down.
+      await transport.close({ abort: true }).catch(() => {});
       const error =
         e instanceof MqttError
           ? e

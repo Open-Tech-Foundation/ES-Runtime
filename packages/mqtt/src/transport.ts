@@ -25,8 +25,15 @@ export interface Transport {
   read(): Promise<Uint8Array | null>;
   /** Sends bytes, resolving once the stream has accepted them. */
   write(bytes: Uint8Array): Promise<void>;
-  /** Closes both directions. */
-  close(): Promise<void>;
+  /**
+   * Closes both directions.
+   *
+   * With `abort`, a write still pending is dropped rather than waited for. The
+   * failure path needs that: a write stuck on a peer that has stopped reading
+   * makes a graceful close wait on it forever, so the socket close that would
+   * interrupt it is never reached and the socket is left open.
+   */
+  close(options?: { abort?: boolean }): Promise<void>;
 }
 
 /** What `runtime:net`'s `connect()` hands back. */
@@ -44,7 +51,7 @@ export interface NetTransportOptions {
   servername?: string;
 }
 
-class NetTransport implements Transport {
+export class NetTransport implements Transport {
   readonly #socket: Socket;
   readonly #reader: ReadableStreamDefaultReader<Uint8Array>;
   readonly #writer: WritableStreamDefaultWriter<Uint8Array>;
@@ -72,8 +79,18 @@ class NetTransport implements Transport {
     await this.#writer.write(bytes);
   }
 
-  async close(): Promise<void> {
+  async close(options: { abort?: boolean } = {}): Promise<void> {
     this.#ended = true;
+    if (options.abort === true) {
+      // The socket, and only the socket. It tears the connection down, which
+      // settles a write the peer has stopped reading. Do not wait on the writer:
+      // `writer.close()` waits for that write, and `writer.abort()` does too once
+      // the write is in flight — each is the hang this path exists to avoid. The
+      // connection serialises writes, so at most the one in-flight write is left
+      // outstanding, and the socket teardown rejects it.
+      await this.#socket.close().catch(() => {});
+      return;
+    }
     // The writer first, so the peer sees a tidy half-close when it is still
     // listening; a socket closed under a pending write is an error nobody reads.
     await this.#writer.close().catch(() => {});

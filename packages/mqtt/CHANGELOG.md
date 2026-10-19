@@ -94,3 +94,9 @@ package written entirely in JavaScript over `runtime:net`. See the root
   leaves the subscription registered, where it would buffer matching messages
   with no one left to read them. The same cleanup applies to `unsubscribe`.
 - `Connection.closed` now reports a deliberate `close()`, not only a failure.
+- A failure that tears the connection down no longer leaves the socket open. The
+  socket transport closes the writer before the socket — a tidy half-close — but
+  the writer's close waits for a write the peer has stopped reading, so the socket
+  close that would interrupt it was never reached and the connection reported
+  itself closed over a still-open socket. The failure path now closes the socket
+  directly, which interrupts a pending write instead of waiting on it.
