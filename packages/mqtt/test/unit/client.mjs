@@ -288,6 +288,67 @@ for (const [name, call] of [
   );
 }
 
+// --- a timed-out write is failed, not left blocked or sent -----------------
+
+// When the timeout wins a write that is still in flight, the connection has to
+// be failed: the write, stuck in the serialised chain, must not block the close,
+// and the packet must not reach the broker once the write resumes.
+{
+  const broker = fakeBroker(5);
+  let held = null;
+  let stalled = false;
+  let writes = 0;
+  const transport = {
+    read: () => broker.transport.read(),
+    write: (bytes) => {
+      writes++;
+      if (!stalled) return broker.transport.write(bytes);
+      // Hold this write; the test releases it later, standing in for a socket
+      // that resumes after the client has already given up.
+      return new Promise((resolve) => {
+        held = () => {
+          broker.transport.write(bytes);
+          resolve();
+        };
+      });
+    },
+    close: () => broker.transport.close(),
+  };
+  const pending = MqttClient.over(transport, { clientId: "c", keepAlive: 0 }, 5);
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  const client = await pending;
+
+  stalled = true;
+  let error = null;
+  await client.publish("a/b", "x", { qos: 1, timeout: 60 }).catch((e) => {
+    error = e;
+  });
+  ok(error !== null && error.code === MqttErrorCode.Timeout, "a stalled publish still times out");
+  const written = writes;
+  ok(written === 2, "only the CONNECT and the stalled publish were written");
+
+  // The stuck write must not hold the serialised queue: closing must not wait on
+  // a write that may never finish.
+  const outcome = await Promise.race([
+    client.close().then(() => "closed"),
+    tick(200).then(() => "hung"),
+  ]);
+  ok(outcome === "closed", "close is not blocked by the stalled write");
+
+  // The connection was failed, so releasing the write sends nothing further and
+  // the packet never reaches the broker.
+  ok(held !== null, "the stalled write was held");
+  held();
+  await tick(50);
+  ok(writes === written, "no packet is written after the connection was failed");
+  const late = await Promise.race([
+    broker.next().then((packet) => (packet === null ? "ended" : "packet")),
+    tick(50).then(() => "none"),
+  ]);
+  ok(late !== "packet", "the broker receives nothing after the connection was failed");
+}
+
 // --- request / reply -------------------------------------------------------
 
 {

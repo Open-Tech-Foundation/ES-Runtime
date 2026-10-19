@@ -129,6 +129,15 @@ rejection, which this runtime treats as fatal. A local failure that never reache
 the socket — an unencodable packet — is the same shape: the waiter is withdrawn
 immediately, since the connection, never having seen the bytes, will not clear it.
 
+When the timeout wins a write that is **still in flight**, the connection is
+failed rather than left alive. The bytes are already with the transport, so the
+packet may yet reach the broker, and the stuck write still holds the serialised
+chain — every later packet, the closing DISCONNECT among them, would queue behind
+one that may never finish. Failing closes the socket, releases the chain, and
+means the failure the caller was told about cannot still be delivered behind it.
+There is no way to un-send bytes already handed to a transport, so the honest
+answer is to stop trusting the connection.
+
 ## Request/reply, without a reply queue
 
 The usual RPC shape costs a queue per caller. MQTT 5.0's convention removes it:

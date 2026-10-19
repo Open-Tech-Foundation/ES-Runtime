@@ -73,6 +73,11 @@ package written entirely in JavaScript over `runtime:net`. See the root
   now rejects at the timeout, rather than waiting for a write that may never
   finish. The write and the acknowledgement are awaited together, so whichever
   fails first settles the call.
+- A write that outlives the acknowledgement timeout now fails the connection. The
+  packet may already be with the transport, and the stuck write still held the
+  serialised chain — blocking every later packet, the final DISCONNECT among
+  them. Failing closes the socket, releases the queue and keeps the reported
+  failure from being sent out behind it.
 - A `Subscription.nextMessage` timeout no longer leaves its waiter queued. The
   waiter is now withdrawn, so a later delivery resolves the next read rather than
   the abandoned one — which had quietly dropped that message.

@@ -327,6 +327,19 @@ export class Connection {
   }
 
   /**
+   * Fails the connection from outside the read loop.
+   *
+   * Used when a caller gives up on a packet the connection may still be writing:
+   * the packet could yet reach the broker, and the stuck write — held in the
+   * serialised chain — would block every later packet, the final DISCONNECT
+   * among them. Failing latches the cause, closes the socket and releases the
+   * chain.
+   */
+  abort(error: MqttError): void {
+    this.#fail(error);
+  }
+
+  /**
    * Sends a PINGREQ and resolves when the PINGRESP arrives.
    *
    * A PINGRESP carries no identifier, so two PINGREQs in flight are
@@ -733,6 +746,15 @@ export class Connection {
   // -- writing --------------------------------------------------------------
 
   #write(bytes: Uint8Array): Promise<void> {
+    // A failed connection takes no more packets. Rejecting here rather than
+    // joining the chain matters because a write that never finishes would
+    // otherwise hold every later writer behind it.
+    if (this.#failure !== null) return Promise.reject(this.#failure);
+    if (this.#closed) {
+      return Promise.reject(
+        new MqttError("the connection is closed", { code: MqttErrorCode.Closed }),
+      );
+    }
     const next = this.#writeChain.then(() => {
       if (this.#failure !== null) throw this.#failure;
       if (this.#closed) {
