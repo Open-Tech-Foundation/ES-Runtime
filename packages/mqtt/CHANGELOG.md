@@ -75,9 +75,8 @@ package written entirely in JavaScript over `runtime:net`. See the root
   fails first settles the call.
 - A write that outlives the acknowledgement timeout now fails the connection. The
   packet may already be with the transport, and the stuck write still held the
-  serialised chain — blocking every later packet, the final DISCONNECT among
-  them. Failing closes the socket, releases the queue and keeps the reported
-  failure from being sent out behind it.
+  serialised chain — blocking every later packet. Failing closes the socket,
+  releases the queue and prevents later packets from being sent behind it.
 - A `Subscription.nextMessage` timeout no longer leaves its waiter queued. The
   waiter is now withdrawn, so a later delivery resolves the next read rather than
   the abandoned one — which had quietly dropped that message.
@@ -100,9 +99,7 @@ package written entirely in JavaScript over `runtime:net`. See the root
   close that would interrupt it was never reached and the connection reported
   itself closed over a still-open socket. The failure path now closes the socket
   directly, which interrupts a pending write instead of waiting on it.
-- A deliberate `close()` during a pending write is no longer turned into a
-  connection failure. The close rejects the in-flight operation with `Closed`, and
-  the shared acknowledgement handler treated that like the write-timeout case and
-  aborted the connection with a `Connection` error — reporting a failure the
-  caller never asked for and bypassing the DISCONNECT. The abort now applies only
-  while the client is still open, so a close takes its documented path.
+- A deliberate `close()` during a pending write no longer waits for that write to
+  finish. Since a DISCONNECT would be queued behind it, the connection aborts the
+  transport directly, settles the operation with `Closed`, and leaves `failure`
+  null. When no write is pending, close still sends DISCONNECT before closing.

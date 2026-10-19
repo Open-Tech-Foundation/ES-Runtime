@@ -261,6 +261,7 @@ export class Connection {
   #keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
   #lastRead = Date.now();
   #writeChain: Promise<void> = Promise.resolve();
+  #pendingWrites = 0;
   #nextPacketId = 1;
   #ping: PingCycle | null = null;
   #pendingQos2 = new Map<number, PublishPacket>();
@@ -403,8 +404,9 @@ export class Connection {
   }
 
   /**
-   * Closes the connection: a DISCONNECT, then the socket, then waits for the
-   * read loop to end.
+   * Closes the connection, then waits for the read loop to end. If a write is
+   * pending, the transport is aborted because DISCONNECT would queue behind a
+   * write that may never complete.
    */
   async close(options: { reasonCode?: number; properties?: Properties } = {}): Promise<void> {
     if (this.#closing || this.#failure !== null) {
@@ -416,6 +418,16 @@ export class Connection {
     this.#closing = true;
     // Settled before the DISCONNECT so the ping timer cannot fire mid-close.
     this.#settlePing(new MqttError("the connection was closed", { code: MqttErrorCode.Closed }));
+    if (this.#pendingWrites > 0) {
+      // DISCONNECT would be queued behind a write that may never complete. Tear
+      // down the transport deliberately instead: the caller requested closure,
+      // so this is not a connection failure and must not latch `failure`.
+      this.#closed = true;
+      await this.#transport.close({ abort: true }).catch(() => {});
+      await this.#settle();
+      this.#stopKeepAlive();
+      return;
+    }
     try {
       await this.send({
         type: PacketType.Disconnect,
@@ -755,6 +767,7 @@ export class Connection {
         new MqttError("the connection is closed", { code: MqttErrorCode.Closed }),
       );
     }
+    this.#pendingWrites++;
     const next = this.#writeChain.then(() => {
       if (this.#failure !== null) throw this.#failure;
       if (this.#closed) {
@@ -764,9 +777,22 @@ export class Connection {
     });
     // Keep the chain alive after a failure so later writes see the latch, not an
     // unhandled rejection.
-    this.#writeChain = next.catch(() => {});
+    this.#writeChain = next.then(
+      () => {
+        this.#pendingWrites--;
+      },
+      () => {
+        this.#pendingWrites--;
+      },
+    );
     return next.catch((e) => {
       if (this.#failure !== null) throw this.#failure;
+      if (this.#closing) {
+        throw new MqttError("the connection was closed during a write", {
+          code: MqttErrorCode.Closed,
+          cause: e,
+        });
+      }
       throw this.#fail(
         e instanceof MqttError
           ? e

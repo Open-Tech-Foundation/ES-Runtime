@@ -597,11 +597,9 @@ export class MqttClient {
    * serialised chain — would block every later packet, the final DISCONNECT
    * among them. Failing closes the socket and releases the chain.
    *
-   * A deliberate close is not that case. It rejects the waiter itself, before the
-   * write stops being written, and it tears the connection down on its own — by
-   * sending the DISCONNECT and closing the socket, not by failing. Aborting here
-   * would race that path, turn the close into a connection failure and skip the
-   * DISCONNECT, so it is left to the close.
+   * A deliberate close is not that case. It rejects the waiter itself; the
+   * connection owns teardown and aborts the transport if the write is still
+   * pending, without latching a connection failure.
    */
   async #awaitAck<T>(write: Promise<void>, waiter: Promise<T>, onFailure: () => void): Promise<T> {
     let written = false;

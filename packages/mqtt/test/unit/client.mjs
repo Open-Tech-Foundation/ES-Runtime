@@ -358,30 +358,32 @@ for (const [name, call] of [
 
 // --- an explicit close during a pending write ------------------------------
 
-// close() is deliberate, not a failure. It rejects the in-flight operation with
-// Closed, but must not fail the connection: a failed connection skips the
-// DISCONNECT and reports an error the caller never asked for.
+// A deliberate close must settle even if the current write never drains. With
+// a write pending, DISCONNECT cannot be sent safely behind it, so close aborts
+// the transport but does not report a connection failure.
 {
   const broker = fakeBroker(5);
-  let held = null;
+  let held = false;
+  let rejectHeld = null;
   let holdNext = false;
   let aborted = false;
   const transport = {
     read: () => broker.transport.read(),
     write: (bytes) => {
-      // Hold exactly the next write — the publish — so the close's DISCONNECT,
-      // queued behind it, still goes out once the write drains.
+      // Hold exactly the next write — the publish — so close has to abort rather
+      // than queue a DISCONNECT behind it.
       if (!holdNext) return broker.transport.write(bytes);
       holdNext = false;
-      return new Promise((resolve) => {
-        held = () => {
-          broker.transport.write(bytes);
-          resolve();
-        };
+      held = true;
+      return new Promise((_resolve, reject) => {
+        rejectHeld = reject;
       });
     },
     close: (options) => {
-      if (options?.abort === true) aborted = true;
+      if (options?.abort === true) {
+        aborted = true;
+        rejectHeld?.(new Error("the transport was deliberately aborted"));
+      }
       return broker.transport.close();
     },
   };
@@ -396,7 +398,7 @@ for (const [name, call] of [
     error = e;
   });
   await tick(0);
-  ok(held !== null, "the publish write is held");
+  ok(held, "the publish write is held");
 
   const closing = client.close();
   await publishing;
@@ -405,22 +407,11 @@ for (const [name, call] of [
     "a close during a pending write rejects the publish as Closed",
   );
   ok(client.failure === null, "and is not turned into a connection failure");
-
-  // The pending write drains, then the close takes its documented path: a
-  // DISCONNECT and the socket, not an abort.
-  held();
-  await closing;
-  ok(aborted === false, "the transport is not aborted");
-  const packets = [];
-  for (;;) {
-    const packet = await broker.next();
-    if (packet === null) break;
-    packets.push(packet);
-  }
-  ok(
-    packets.some((packet) => packet.type === PacketType.Disconnect),
-    "and a DISCONNECT is sent",
-  );
+  ok(held, "the publish write remains pending during close");
+  const outcome = await Promise.race([closing.then(() => "closed"), tick(200).then(() => "hung")]);
+  ok(outcome === "closed", "explicit close does not wait for the pending write");
+  ok(aborted, "the pending write is aborted without latching a failure");
+  ok((await broker.next()) === null, "no DISCONNECT is queued behind the abandoned write");
 }
 
 // --- request / reply -------------------------------------------------------
