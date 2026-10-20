@@ -425,4 +425,113 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
   );
 }
 
+// -- publishing while the broker blocks the connection -------------------------
+
+{
+  // During an alarm the broker stops reading the socket. A publish waits at
+  // the client rather than queueing behind it, and goes out once unblocked.
+  const { broker, connection, channel, number } = await openChannel();
+  await broker.send("connection.blocked", { reason: "low on memory" });
+  await settle();
+  is(connection.blocked, "low on memory", "the connection says why it is blocked");
+  let done = false;
+  const publishing = channel.publish("", "q", "held").then(() => {
+    done = true;
+  });
+  let early = null;
+  await broker.expect("basic.publish", 30).then(
+    (m) => {
+      early = m;
+    },
+    () => {},
+  );
+  is(early, null, "nothing is written while blocked");
+  ok(!done, "and the publish has not resolved");
+  await broker.send("connection.unblocked");
+  await takePublish(broker, number);
+  await publishing;
+  ok(done, "it goes out, and resolves, once unblocked");
+  is(connection.blocked, null, "and the connection is no longer blocked");
+}
+
+{
+  // The wait is bounded: a publish still blocked at its deadline rejects, and
+  // is never written later.
+  const { broker, channel } = await openChannel();
+  await broker.send("connection.blocked", { reason: "low on disk" });
+  await settle();
+  let failure = null;
+  await channel.publish("", "q", "x", { timeout: 40 }).catch((e) => {
+    failure = e;
+  });
+  is(failure?.code, "ERR_RABBITMQ_TIMEOUT", "a publish blocked past its timeout rejects");
+  await broker.send("connection.unblocked");
+  let late = null;
+  await broker.expect("basic.publish", 30).then(
+    (m) => {
+      late = m;
+    },
+    () => {},
+  );
+  is(late, null, "and is not written when the block lifts");
+}
+
+{
+  // A connection that dies while blocked releases its publishers with the
+  // failure, rather than leaving them waiting for an unblock that cannot come.
+  const { broker, channel } = await openChannel();
+  await broker.send("connection.blocked", { reason: "low on memory" });
+  await settle();
+  let failure = null;
+  const publishing = channel.publish("", "q", "x", { timeout: 0 }).catch((e) => {
+    failure = e;
+  });
+  await broker.send("connection.close", {
+    replyCode: 320,
+    replyText: "CONNECTION_FORCED",
+    classId: 0,
+    methodId: 0,
+  });
+  await publishing;
+  is(failure?.replyCode, 320, "the blocked publish fails with the connection's reason");
+}
+
+// -- confirm deadlines ---------------------------------------------------------
+
+{
+  const { broker, channel, number } = await openChannel();
+  const selecting = channel.confirmSelect();
+  await broker.expect("confirm.select");
+  await broker.send("confirm.select-ok", {}, number);
+  await selecting;
+
+  let failure = null;
+  const first = channel.publish("", "q", "one", { timeout: 40 }).catch((e) => {
+    failure = e;
+  });
+  await takePublish(broker, number);
+  await first;
+  is(failure?.code, "ERR_RABBITMQ_TIMEOUT", "an unconfirmed publish rejects at its deadline");
+
+  // Its late confirm settles nothing, and the next publish is still tag 2.
+  await broker.send("basic.ack", { deliveryTag: 1n, multiple: false }, number);
+  const second = channel.publish("", "q", "two");
+  await takePublish(broker, number);
+  await broker.send("basic.ack", { deliveryTag: 2n, multiple: false }, number);
+  await second;
+  ok(true, "the next publish is confirmed by tag 2");
+
+  const third = channel.publish("", "q", "three", { timeout: 0 });
+  await takePublish(broker, number);
+  let waited = null;
+  await channel.waitForConfirms(40).catch((e) => {
+    waited = e;
+  });
+  is(waited?.code, "ERR_RABBITMQ_TIMEOUT", "waitForConfirms takes a deadline too");
+  await broker.send("basic.ack", { deliveryTag: 3n, multiple: false }, number);
+  await third;
+  await channel.waitForConfirms(40);
+  ok(true, "and resolves once everything is confirmed");
+}
+
 if (report("channel") > 0) exit(1);

@@ -82,7 +82,10 @@ By default `publish` resolves once the frames are written, which is all the
 protocol promises. `confirmSelect()` makes the broker acknowledge every publish,
 and then `publish` resolves only once it has — so awaiting the publish awaits
 the message's fate. A message the broker cannot take rejects with
-`ERR_RABBITMQ_NACK`.
+`ERR_RABBITMQ_NACK`, and one it has not confirmed within the publish's `timeout`
+(30 seconds unless set) rejects with `ERR_RABBITMQ_TIMEOUT`. While the broker
+blocks publishing during a resource alarm, publishes wait for it to lift, within
+the same timeout.
 
 ```js
 await channel.confirmSelect();

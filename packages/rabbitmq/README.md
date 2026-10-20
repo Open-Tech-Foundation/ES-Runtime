@@ -80,6 +80,7 @@ const connection = await openConnection("amqps://app:secret@rabbit.internal:5671
 | `server` | What the broker said about itself: `version`, `properties`, `mechanisms`, `locales`. |
 | `channelMax`, `frameMax`, `heartbeat` | What the two sides agreed to. |
 | `onBlocked`, `onUnblocked` | The broker asked a publisher to slow down, and lifted it. |
+| `blocked`, `whenUnblocked()` | The broker's alarm reason while it blocks publishing (`null` otherwise), and a promise for the end of it. |
 | `onClosed` | It ended, for any reason (`null` when closed on purpose). |
 | `openChannel(handler)`, `closeChannel(n)`, `hasChannel(n)` | The low-level channel bookkeeping, for a caller driving its own handler. |
 
@@ -146,6 +147,11 @@ await channel.publish("", "jobs", JSON.stringify(job), {
 | `timestamp` | Seconds since the epoch, a `bigint`. |
 | `type`, `userId`, `appId`, `clusterId` | |
 | `mandatory` | Return the message — via `onReturn` — rather than drop it when nothing is bound to accept it. |
+| `timeout` | Milliseconds the whole publish may take — waiting out a blocked connection, writing, and the confirm. Defaults to the channel's `timeout`; `0` waits forever. A timed-out publish rejects with `ERR_RABBITMQ_TIMEOUT`, and may still have reached the broker. |
+
+While the broker blocks the connection (a memory or disk alarm; it stops reading
+the socket), a publish waits at the client instead of queueing behind it, and
+goes out when the broker unblocks — or fails at its `timeout`.
 
 ### Publisher confirms
 
@@ -153,8 +159,9 @@ await channel.publish("", "jobs", JSON.stringify(job), {
 acknowledges every publish, and `publish` does not resolve until it has — so
 awaiting the publish awaits the message's fate. A publish the broker refuses (a
 queue gone, a full queue it is configured to reject) rejects with
-`ERR_RABBITMQ_NACK`. `waitForConfirms()` awaits every publish so far at once,
-without holding one at a time.
+`ERR_RABBITMQ_NACK`, and one left unconfirmed past its `timeout` rejects with
+`ERR_RABBITMQ_TIMEOUT`. `waitForConfirms(timeout?)` awaits every publish so far
+at once, without holding one at a time.
 
 ## Consuming
 

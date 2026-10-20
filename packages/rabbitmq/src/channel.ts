@@ -408,27 +408,55 @@ export class Channel implements ChannelHandler {
   ): Promise<void> {
     this.#requireOpen();
     const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
-    const { mandatory = false, ...properties } = options;
-    const sequence = this.#confirmMode ? this.#nextSeq++ : 0n;
-    const confirmation = this.#confirmMode ? this.#track(sequence) : null;
+    const { mandatory = false, timeout = this.#timeout, ...properties } = options;
+    const deadline = new Deadline(timeout);
     try {
-      await this.#connection.sendContent(
-        this.#number,
-        "basic.publish",
-        { exchange, routingKey, mandatory },
-        properties,
-        bytes,
-      );
-    } catch (e) {
-      // The message never left, so no confirm will ever settle it; drop the
-      // promise rather than leave a rejection nobody is holding.
-      if (confirmation !== null) {
-        this.#outstanding.delete(sequence);
-        confirmation.catch(() => {});
+      // While the broker has blocked the connection it is not reading the
+      // socket, and a publish written now would only queue behind it in
+      // memory. It waits here instead — bounded by the same deadline.
+      if (this.#connection.blocked !== null) {
+        await deadline.race(
+          this.#connection.whenUnblocked(),
+          () => `the broker kept publishing blocked (${this.#connection.blocked}) for ${timeout}ms`,
+        );
+        this.#requireOpen();
       }
-      throw e;
+      // The sequence is taken only now, in the same turn the frames are
+      // queued, so the numbering follows the order on the wire.
+      const sequence = this.#confirmMode ? this.#nextSeq++ : 0n;
+      const confirmation = this.#confirmMode ? this.#track(sequence) : null;
+      confirmation?.catch(() => {});
+      try {
+        await deadline.race(
+          this.#connection.sendContent(
+            this.#number,
+            "basic.publish",
+            { exchange, routingKey, mandatory },
+            properties,
+            bytes,
+          ),
+          () => `the message could not be written within ${timeout}ms`,
+        );
+      } catch (e) {
+        // Not confirmed by anything now: stop tracking it, so a confirm that
+        // still arrives for the sequence settles nothing.
+        if (confirmation !== null) this.#outstanding.delete(sequence);
+        throw e;
+      }
+      if (confirmation !== null) {
+        try {
+          await deadline.race(
+            confirmation,
+            () => `the broker did not confirm the message within ${timeout}ms`,
+          );
+        } catch (e) {
+          this.#outstanding.delete(sequence);
+          throw e;
+        }
+      }
+    } finally {
+      deadline.clear();
     }
-    if (confirmation !== null) await confirmation;
   }
 
   /**
@@ -448,14 +476,22 @@ export class Channel implements ChannelHandler {
   }
 
   /** Whether every publish so far has been confirmed; rejects on the first nack. */
-  async waitForConfirms(): Promise<void> {
+  async waitForConfirms(timeout: number = this.#timeout): Promise<void> {
     if (!this.#confirmMode) {
       throw new RabbitError("publisher confirms are not enabled on this channel", {
         code: RabbitErrorCode.Channel,
       });
     }
-    while (this.#outstanding.size > 0) {
-      await Promise.all([...this.#outstanding.values()].map((one) => one.promise));
+    const deadline = new Deadline(timeout);
+    try {
+      while (this.#outstanding.size > 0) {
+        await deadline.race(
+          Promise.all([...this.#outstanding.values()].map((one) => one.promise)),
+          () => `${this.#outstanding.size} publish(es) still unconfirmed after ${timeout}ms`,
+        );
+      }
+    } finally {
+      deadline.clear();
     }
   }
 
@@ -826,6 +862,42 @@ export interface PublishOptions extends BasicProperties {
    * rather than silently drop it when no queue is bound to accept it.
    */
   mandatory?: boolean;
+  /**
+   * How long the whole publish may take, in ms: waiting out a broker that has
+   * blocked the connection, writing, and — in confirm mode — the confirm.
+   * Defaults to the channel's `timeout` (30 000); `0` waits forever. A publish
+   * that times out rejects with `ERR_RABBITMQ_TIMEOUT`, and its fate at the
+   * broker is then unknown: it may still have been taken.
+   */
+  timeout?: number;
+}
+
+/** One deadline over several awaited steps; `0` or less means none. */
+class Deadline {
+  readonly #at: number;
+  #timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(ms: number) {
+    this.#at = ms > 0 ? Date.now() + ms : Number.POSITIVE_INFINITY;
+  }
+
+  /** `promise`, or a timeout error once the deadline passes. */
+  race<T>(promise: Promise<T>, describe: () => string): Promise<T> {
+    if (this.#at === Number.POSITIVE_INFINITY) return promise;
+    return new Promise<T>((resolve, reject) => {
+      this.clear();
+      this.#timer = setTimeout(
+        () => reject(new RabbitError(describe(), { code: RabbitErrorCode.Timeout })),
+        Math.max(0, this.#at - Date.now()),
+      );
+      promise.then(resolve, reject);
+    });
+  }
+
+  clear(): void {
+    if (this.#timer !== null) clearTimeout(this.#timer);
+    this.#timer = null;
+  }
 }
 
 export interface GetOptions {

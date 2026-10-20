@@ -22,6 +22,12 @@ package written entirely in JavaScript over `runtime:net`. See the root
   neither the subscription (`prefetch`) nor the channel (`qos()`) names one, so
   a consumer on a deep queue no longer buffers the whole queue in memory.
   `prefetch: 0` still asks for no limit; `noAck` subscriptions are unaffected.
+- Publishing waits while the broker blocks the connection (`connection.blocked`)
+  instead of queueing into a socket the broker is not reading, and
+  `connection.blocked` / `connection.whenUnblocked()` expose the state. Every
+  `publish` takes a `timeout` (default: the channel's) over the wait, the write
+  and the confirm, and `waitForConfirms(timeout?)` takes one too; an
+  unconfirmed publish used to wait forever.
 - The `@opentf/esrun-rabbitmq` package, a RabbitMQ client speaking AMQP 0-9-1 in
   JavaScript over `runtime:net` (DECISIONS D171). No native code, and no
   capability beyond the `Net` grant `runtime:net`'s `connect` already needs.

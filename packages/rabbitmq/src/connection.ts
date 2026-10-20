@@ -151,6 +151,10 @@ export class Connection {
   #fatal: RabbitError | null = null;
   #closing = false;
   #lastRead = 0;
+  // Set between `connection.blocked` and `connection.unblocked`: the broker has
+  // stopped reading this socket (a memory or disk alarm), so a publish written
+  // now only queues behind it. Publishers wait on `released` instead.
+  #blockedBy: { reason: string; released: Promise<void>; release: () => void } | null = null;
   #heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   // Serialises writes. Frames on a channel may not overtake one another, and a
   // content message's method, header and body frames must go out as one unit —
@@ -190,6 +194,29 @@ export class Connection {
   /** The heartbeat interval in force, in seconds; `0` when disabled. */
   get heartbeat(): number {
     return this.#heartbeat;
+  }
+
+  /**
+   * Why the broker has blocked publishing on this connection (its alarm reason,
+   * such as `low on memory`), or `null` while it is not blocked.
+   */
+  get blocked(): string | null {
+    return this.#blockedBy?.reason ?? null;
+  }
+
+  /**
+   * Resolves once the broker is not blocking this connection — at once if it
+   * is not now. A failed connection releases its waiters too, so they see the
+   * failure rather than wait forever.
+   */
+  whenUnblocked(): Promise<void> {
+    return this.#blockedBy?.released ?? Promise.resolve();
+  }
+
+  #unblock(): void {
+    const blocked = this.#blockedBy;
+    this.#blockedBy = null;
+    blocked?.release();
   }
 
   /** Whether this connection is still fit to use. */
@@ -601,10 +628,20 @@ export class Connection {
       }
       case "connection.close-ok":
         return;
-      case "connection.blocked":
-        this.onBlocked?.(String(method.args.reason));
+      case "connection.blocked": {
+        const reason = String(method.args.reason);
+        if (this.#blockedBy === null) {
+          let release!: () => void;
+          const released = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          this.#blockedBy = { reason, released, release };
+        }
+        this.onBlocked?.(reason);
         return;
+      }
       case "connection.unblocked":
+        this.#unblock();
         this.onUnblocked?.();
         return;
       default:
@@ -754,6 +791,7 @@ export class Connection {
     if (this.#fatal === null) {
       this.#fatal = error;
       this.#stopHeartbeat();
+      this.#unblock();
       for (const waiter of [...this.#waiters]) {
         this.#settle(waiter);
         waiter.reject(error);

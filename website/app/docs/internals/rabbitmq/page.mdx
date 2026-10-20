@@ -108,6 +108,25 @@ publish issued between the two is already the broker's number 1. So confirm
 mode begins when the request is sent; begun at the answer, that publish went
 untracked and every later confirm settled the wrong message.
 
+## A blocked broker is waited out, not written into
+
+During a memory or disk alarm RabbitMQ sends `connection.blocked` and stops
+reading the publishing socket, so "publish operations will eventually time out
+or fail outright" (RabbitMQ's alarms documentation). Writing into it anyway only
+grows the connection's write queue in this process. So a publish that starts
+while the connection is blocked waits at the client until `connection.unblocked`
+— the hook is still there, but the waiting no longer depends on the
+application wiring it up. The sequence number a confirm will use is taken only
+when the frames are queued, so a publish that waited cannot shift the
+numbering.
+
+Every publish has one deadline over the whole of it — the wait, the write, and
+in confirm mode the confirm — defaulting to the channel's timeout. Nothing in
+AMQP bounds a confirm, and a publish awaiting one that never came waited
+forever. A timed-out publish's fate at the broker is unknown, as RabbitMQ's
+confirm documentation says of any unconfirmed message; it is reported as a
+timeout, not retried, because a retry could duplicate it.
+
 Awaited confirms change what `publish` means: in confirm mode it resolves once
 the broker has taken the message and rejects when it cannot, so awaiting the
 publish awaits the message's fate — the alternative is a publish that resolved
