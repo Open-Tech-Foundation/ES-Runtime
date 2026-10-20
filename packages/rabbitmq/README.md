@@ -159,13 +159,13 @@ without holding one at a time.
 ## Consuming
 
 `subscribe(channel, queue, options?)` starts a consumer and returns a
-`Subscription`, an async iterable of deliveries. Set the prefetch with
-`channel.qos(...)` first if the work should not all arrive at once.
+`Subscription`, an async iterable of deliveries. It holds at most `prefetch`
+unacknowledged deliveries at once — 250 (`DEFAULT_PREFETCH`, within RabbitMQ's
+recommended 100–300) unless the channel already has a prefetch from
+`channel.qos()` or the subscription names one.
 
 ```js
-await channel.qos({ prefetchCount: 16 });
-
-const subscription = await subscribe(channel, "jobs");
+const subscription = await subscribe(channel, "jobs", { prefetch: 16 });
 for await (const delivery of subscription) {
   await handle(JSON.parse(new TextDecoder().decode(delivery.body)));
   await delivery.ack();
@@ -176,6 +176,7 @@ for await (const delivery of subscription) {
 | --- | --- |
 | `consumerTag` | A tag of your choosing; one (`esrun-<n>`) is generated otherwise. Unique per channel. |
 | `noAck` | Handle the message as acknowledged the moment it is delivered. Off by default, which is what makes a crash lose nothing. On such a subscription `ack`/`nack`/`reject` refuse rather than send a frame the broker would treat as a protocol violation. |
+| `prefetch` | Deliveries unacknowledged at once, for this consumer. Defaults to the channel's `qos()` prefetch, else 250. `0` asks for no limit. Ignored with `noAck`. |
 | `exclusive` | Only this consumer may use the queue, and it is deleted when it ends. |
 | `arguments` | Consumer arguments, such as `x-priority`. |
 

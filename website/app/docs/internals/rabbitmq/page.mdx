@@ -113,6 +113,19 @@ the broker has taken the message and rejects when it cannot, so awaiting the
 publish awaits the message's fate — the alternative is a publish that resolved
 before anything had happened to it.
 
+## A subscription is never unbounded by default
+
+RabbitMQ's prefetch defaults to no limit, and a subscription buffers every
+delivery its iterator has not read yet, so a consumer that subscribed to a deep
+queue without calling `qos()` first received the whole queue into memory. Most
+clients inherit that default; this one does not. A subscription sets a prefetch
+of 250 when neither it nor its channel names one — inside RabbitMQ's
+recommended 100–300, and Spring AMQP's own default. A prefetch the application
+set with `channel.qos()` is left alone, and `prefetch: 0` still asks for
+unlimited. Each subscription's `basic.qos` and `basic.consume` go out as a pair,
+in turn, because RabbitMQ applies the prefetch in force when the consume
+arrives.
+
 ## Cancelling hands back what was never read
 
 `basic.cancel` "does not affect already delivered messages" (AMQP 0-9-1): a

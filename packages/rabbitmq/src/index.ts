@@ -73,7 +73,13 @@ export {
   DEFAULT_HEARTBEAT,
   type ServerInfo,
 } from "./connection.js";
-export { type Cancellation, type ConsumeOptions, Subscription, subscribe } from "./consumer.js";
+export {
+  type Cancellation,
+  type ConsumeOptions,
+  DEFAULT_PREFETCH,
+  Subscription,
+  subscribe,
+} from "./consumer.js";
 export { ProtocolError, RabbitError, RabbitErrorCode, type RabbitErrorOptions } from "./errors.js";
 export {
   type BrokerAddress,

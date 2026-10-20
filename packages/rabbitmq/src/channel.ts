@@ -173,6 +173,8 @@ export class Channel implements ChannelHandler {
   #nextSeq = 1n;
   #outstanding = new Map<bigint, Confirmation>();
 
+  #consumerPrefetch: number | null = null;
+
   #closed = false;
   #closeError: RabbitError | null = null;
   #closedSignal: Promise<RabbitError | null>;
@@ -369,15 +371,23 @@ export class Channel implements ChannelHandler {
 
   /** Limits how much the broker will send before an acknowledgement. */
   async qos(options: QosOptions = {}): Promise<void> {
+    const prefetchCount = options.prefetchCount ?? 0;
+    const global = options.global ?? false;
     await this.#request(
       "basic.qos",
-      {
-        prefetchSize: options.prefetchSize ?? 0,
-        prefetchCount: options.prefetchCount ?? 0,
-        global: options.global ?? false,
-      },
+      { prefetchSize: options.prefetchSize ?? 0, prefetchCount, global },
       ["basic.qos-ok"],
     );
+    if (!global) this.#consumerPrefetch = prefetchCount;
+  }
+
+  /**
+   * The per-consumer prefetch in force for consumers started from now on — the
+   * last `qos({ global: false })` the broker accepted — or `null` if none was
+   * ever set, which RabbitMQ treats as unlimited.
+   */
+  get consumerPrefetch(): number | null {
+    return this.#consumerPrefetch;
   }
 
   // -- publishing -----------------------------------------------------------

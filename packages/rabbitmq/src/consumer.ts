@@ -7,8 +7,7 @@
  * the broker cancels it, or when the channel dies.
  *
  * ```js
- * await channel.qos({ prefetchCount: 10 });      // how much to keep in flight
- * const work = await subscribe(channel, "jobs");
+ * const work = await subscribe(channel, "jobs", { prefetch: 10 }); // in flight at once
  * for await (const delivery of work) {
  *   await handle(delivery.body);
  *   await delivery.ack();
@@ -27,9 +26,11 @@
  *   and waits; `ack`, `nack`, and `reject` on the delivery are how it is
  *   settled. A consumer that acknowledges before the work succeeds is a
  *   decision for the application, not a default here.
- * - **Flow control is `basic.qos`.** Nothing in this layer bounds the broker on
- *   its own: `prefetchCount` is what holds unacknowledged messages in check, and
- *   it is set on the channel before subscribing.
+ * - **Flow control is `basic.qos`, and it is never left unlimited by
+ *   default.** The prefetch is what bounds unacknowledged deliveries — and so
+ *   this layer's buffer — and RabbitMQ's own default is no limit, which pulls a
+ *   whole queue into memory. A subscription therefore sets
+ *   {@link DEFAULT_PREFETCH} when neither it nor the channel names one.
  *
  * Ending the iteration — a `break`, or {@link Subscription.cancel} — cancels
  * the consumer with the broker. A broken connection ends it too, with the error
@@ -40,9 +41,24 @@ import type { Channel, Delivery, Message } from "./channel.js";
 import { RabbitError, RabbitErrorCode } from "./errors.js";
 import type { FieldTable } from "./protocol/fields.js";
 
+/**
+ * The prefetch a subscription takes when its channel has none. RabbitMQ's own
+ * guidance is that "values in the 100 through 300 range usually offer optimal
+ * throughput", and Spring AMQP defaults to 250. Unlimited — the broker's default
+ * — pulls a whole queue into the subscription's buffer.
+ */
+export const DEFAULT_PREFETCH = 250;
+
 export interface ConsumeOptions {
   /** A tag of your choosing; one is generated otherwise. Unique per channel. */
   consumerTag?: string;
+  /**
+   * How many deliveries may be unacknowledged at once, for this consumer. When
+   * absent, the prefetch already set on the channel with `channel.qos()` is
+   * used, or {@link DEFAULT_PREFETCH} if none was. `0` asks for no limit.
+   * Ignored with `noAck`, where nothing is held for acknowledgement.
+   */
+  prefetch?: number;
   /**
    * Handle the message as acknowledged the moment it is delivered. Off by
    * default, which is what makes a crash lose nothing: the broker keeps the
@@ -70,6 +86,11 @@ let nextTag = 1;
 interface Registry {
   consumers: Map<string, Subscription>;
   installed: boolean;
+  // Subscribing is `basic.qos` then `basic.consume`, and RabbitMQ applies the
+  // prefetch in force when the consume arrives. Two subscriptions started at
+  // once on one channel would interleave the pairs and swap limits, so each
+  // takes its turn on this chain.
+  starting: Promise<void>;
 }
 
 const REGISTRIES = new WeakMap<Channel, Registry>();
@@ -77,7 +98,7 @@ const REGISTRIES = new WeakMap<Channel, Registry>();
 function registryFor(channel: Channel): Registry {
   let registry = REGISTRIES.get(channel);
   if (registry === undefined) {
-    registry = { consumers: new Map(), installed: false };
+    registry = { consumers: new Map(), installed: false, starting: Promise.resolve() };
     REGISTRIES.set(channel, registry);
   }
   return registry;
@@ -86,9 +107,10 @@ function registryFor(channel: Channel): Registry {
 /**
  * Subscribes to `queue` and answers with the subscription.
  *
- * Set the prefetch with `channel.qos(...)` first if the work should not all
- * arrive at once; that is what bounds how many unacknowledged messages the
- * broker will send.
+ * The prefetch is `options.prefetch`, else the channel's own from
+ * `channel.qos()`, else {@link DEFAULT_PREFETCH}; it is what bounds how many
+ * unacknowledged messages the broker sends, and so how many this subscription
+ * buffers.
  */
 export async function subscribe(
   channel: Channel,
@@ -104,13 +126,25 @@ export async function subscribe(
   // A broken channel ends every subscription on it; the reason is the channel's.
   void channel.whenClosed().then((error) => subscription.finish(error, false));
 
-  try {
+  const start = async (): Promise<void> => {
+    if (!noAck) {
+      const prefetch = options.prefetch ?? channel.consumerPrefetch ?? DEFAULT_PREFETCH;
+      if (prefetch !== channel.consumerPrefetch) await channel.qos({ prefetchCount: prefetch });
+    }
     await channel.consume(queue, {
       consumerTag,
       noAck,
       exclusive: options.exclusive ?? false,
       ...(options.arguments === undefined ? {} : { arguments: options.arguments }),
     });
+  };
+  const started = registry.starting.then(start, start);
+  registry.starting = started.then(
+    () => {},
+    () => {},
+  );
+  try {
+    await started;
   } catch (e) {
     await subscription.cancel().catch(() => {});
     throw e;

@@ -18,6 +18,10 @@ package written entirely in JavaScript over `runtime:net`. See the root
   refused with `ERR_RABBITMQ_UNSUPPORTED` rather than ignored.
 - `openConnection` and `Pool` settings `ca` and `servername` for `amqps:`, and
   `connectTimeout`, which bounds opening the socket (default: `timeout`).
+- `subscribe` sets a per-consumer prefetch of 250 (`DEFAULT_PREFETCH`) when
+  neither the subscription (`prefetch`) nor the channel (`qos()`) names one, so
+  a consumer on a deep queue no longer buffers the whole queue in memory.
+  `prefetch: 0` still asks for no limit; `noAck` subscriptions are unaffected.
 - The `@opentf/esrun-rabbitmq` package, a RabbitMQ client speaking AMQP 0-9-1 in
   JavaScript over `runtime:net` (DECISIONS D171). No native code, and no
   capability beyond the `Net` grant `runtime:net`'s `connect` already needs.

@@ -14,6 +14,7 @@ const VALUES = [
   "Channel",
   "Connection",
   "DEFAULT_HEARTBEAT",
+  "DEFAULT_PREFETCH",
   "DIRECT_REPLY_TO",
   "Pool",
   "ProtocolError",

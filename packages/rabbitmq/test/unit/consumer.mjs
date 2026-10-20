@@ -4,7 +4,7 @@
 // reader is waiting, the two ways a subscription ends — a cancel of ours, a
 // cancel of the broker's — and that a broken channel ends it with the reason.
 import { exit } from "runtime:process";
-import { subscribe } from "../../dist/consumer.js";
+import { DEFAULT_PREFETCH, subscribe } from "../../dist/consumer.js";
 import { is, ok, report } from "./assert.mjs";
 import { openChannel, sendContent } from "./broker.mjs";
 
@@ -27,6 +27,15 @@ function deliver(broker, number, tag, consumerTag, body, properties = {}) {
 /** Subscribes and answers the broker's half, returning the live subscription. */
 async function start(broker, channel, number, queue, options) {
   const subscribing = subscribe(channel, queue, options);
+  // A manual-ack subscription on a channel with no prefetch sets one first.
+  if (
+    options?.noAck !== true &&
+    options?.prefetch === undefined &&
+    channel.consumerPrefetch === null
+  ) {
+    await broker.expect("basic.qos");
+    await broker.send("basic.qos-ok", {}, number);
+  }
   const consume = await broker.expect("basic.consume");
   await broker.send("basic.consume-ok", { consumerTag: consume.args.consumerTag }, number);
   return { subscription: await subscribing, consume };
@@ -282,6 +291,90 @@ async function start(broker, channel, number, queue, options) {
     () => {},
   );
   is(sent, null, "a noAck subscription rejects nothing");
+}
+
+// -- the default prefetch -----------------------------------------------------
+
+{
+  // With no prefetch on the channel, a subscription sets one before it
+  // consumes, so a large queue is not pulled into memory whole.
+  const { broker, channel, number } = await openChannel();
+  const subscribing = subscribe(channel, "jobs");
+  const qos = await broker.expect("basic.qos");
+  is(qos.args.prefetchCount, DEFAULT_PREFETCH, "the default prefetch is set");
+  is(qos.args.global, false, "per consumer, as RabbitMQ reads global=false");
+  await broker.send("basic.qos-ok", {}, number);
+  const consume = await broker.expect("basic.consume");
+  await broker.send("basic.consume-ok", { consumerTag: consume.args.consumerTag }, number);
+  await subscribing;
+  is(channel.consumerPrefetch, DEFAULT_PREFETCH, "and the channel records it");
+  is(DEFAULT_PREFETCH, 250, "the default is RabbitMQ's 100-300 guidance, as Spring AMQP picks it");
+}
+
+{
+  // A prefetch the application set is left alone.
+  const { broker, channel, number } = await openChannel();
+  const setting = channel.qos({ prefetchCount: 16 });
+  await broker.expect("basic.qos");
+  await broker.send("basic.qos-ok", {}, number);
+  await setting;
+  const subscribing = subscribe(channel, "jobs");
+  const consume = await broker.expect("basic.consume");
+  await broker.send("basic.consume-ok", { consumerTag: consume.args.consumerTag }, number);
+  await subscribing;
+  is(channel.consumerPrefetch, 16, "channel.qos() wins over the default");
+}
+
+{
+  // An explicit prefetch, including 0 for unlimited, is sent as asked.
+  const { broker, channel, number } = await openChannel();
+  const subscribing = subscribe(channel, "jobs", { prefetch: 0 });
+  const qos = await broker.expect("basic.qos");
+  is(qos.args.prefetchCount, 0, "prefetch: 0 asks for no limit");
+  await broker.send("basic.qos-ok", {}, number);
+  const consume = await broker.expect("basic.consume");
+  await broker.send("basic.consume-ok", { consumerTag: consume.args.consumerTag }, number);
+  await subscribing;
+}
+
+{
+  // A noAck subscription holds nothing for acknowledgement: no qos.
+  const { broker, channel, number } = await openChannel();
+  const subscribing = subscribe(channel, "jobs", { noAck: true });
+  const consume = await broker.expect("basic.consume");
+  await broker.send("basic.consume-ok", { consumerTag: consume.args.consumerTag }, number);
+  await subscribing;
+  let qos = null;
+  await broker.expect("basic.qos", 30).then(
+    (m) => {
+      qos = m;
+    },
+    () => {},
+  );
+  is(qos, null, "noAck sends no basic.qos");
+}
+
+{
+  // Two subscriptions started at once each get their own limit: the qos and
+  // consume pairs do not interleave.
+  const { broker, channel, number } = await openChannel();
+  const a = subscribe(channel, "a", { prefetch: 5 });
+  const b = subscribe(channel, "b", { prefetch: 9 });
+  const order = [];
+  for (let i = 0; i < 4; i++) {
+    const m = await broker.any();
+    if (m.name === "basic.qos") {
+      order.push(`qos ${m.args.prefetchCount}`);
+      await broker.send("basic.qos-ok", {}, number);
+    } else if (m.name === "basic.consume") {
+      order.push(`consume ${m.args.queue}`);
+      await broker.send("basic.consume-ok", { consumerTag: m.args.consumerTag }, number);
+    } else {
+      i--;
+    }
+  }
+  await Promise.all([a, b]);
+  is(order, ["qos 5", "consume a", "qos 9", "consume b"], "each qos precedes its own consume");
 }
 
 if (report("consumer") > 0) exit(1);

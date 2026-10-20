@@ -92,15 +92,13 @@ await channel.publish("events", "user.created", payload); // resolves once Rabbi
 ## Consume a queue
 
 `subscribe` returns an async iterable of deliveries; each carries its own
-`ack`, `nack` and `reject`. Set the prefetch first, or the broker will push the
-whole queue at once.
+`ack`, `nack` and `reject`. `prefetch` bounds how many are unacknowledged at
+once; without it a subscription takes 250.
 
 ```js
 import { subscribe } from "@opentf/esrun-rabbitmq";
 
-await channel.qos({ prefetchCount: 16 });
-
-const subscription = await subscribe(channel, "jobs");
+const subscription = await subscribe(channel, "jobs", { prefetch: 16 });
 for await (const delivery of subscription) {
   try {
     await handle(JSON.parse(new TextDecoder().decode(delivery.body)));
