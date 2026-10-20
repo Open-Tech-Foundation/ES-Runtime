@@ -43,10 +43,11 @@ pub fn decompress(format: &str, chunks: &[&[u8]]) {
     crate::compression_ops::fuzz_decompress(format, chunks);
 }
 
-/// Parses XML into the runtime's value tree — recursive descent over untrusted
-/// input, so depth and malformed nesting are the interesting cases.
+/// Parses XML into the runtime's value tree and, when that succeeds, writes it
+/// back and reads it again. The input is untrusted, so depth, references and
+/// malformed nesting are the interesting cases.
 pub fn parse_xml(input: &str) {
-    crate::serialization_ops::fuzz_parse_xml(input);
+    crate::xml::fuzz_round_trip(input);
 }
 
 /// Parses YAML with the runtime's own reader and, when that succeeds, writes

@@ -170,6 +170,48 @@ reader raised and a truncated document raises none. It now tracks depth itself.
 Nesting is bounded at 256 levels, matching libxml2's default, for the same
 reason MessagePack's is.
 
+**One reader, used by everything.** quick-xml is only the tokenizer; what a
+document means is decided in `crates/runtime/src/xml.rs`, and `parse`,
+`validate`, the streaming decoder and the fuzz target all go through it. They
+used to walk quick-xml's events separately, and each lost something: since
+quick-xml reports a reference (`&amp;`) as its own event, text silently dropped
+every escaped character (`t&lt;` parsed to `t`), CDATA vanished, attribute
+values kept their raw `&amp;`, and the stream skipped a malformed record instead
+of failing. One walk means one set of rules — the full list of what is refused
+is on the reference page.
+
+**A DTD is skipped, not processed.** Only the five predefined entities and
+character references resolve; an entity a DTD declares is an error rather than
+nothing. Expanding DTD entities is how a document turns a few bytes into
+gigabytes (the "billion laughs"), and a document with no DTD loses nothing.
+
+**Trimming stops at what the author spelled out.** Indentation is not content,
+so whitespace written as plain text at either edge of an element's text is
+trimmed. CDATA and character references are deliberate, so trimming stops at
+them: `<a><![CDATA[ x ]]></a>` keeps its spaces. The writer relies on the same
+rule in reverse and writes edge whitespace as `&#32;`, so `build` then `parse`
+gives the text back.
+
+**The writer is the runtime's own**, built straight from the value tree like
+TOML's, rather than through `serde_json::Value` and quick-xml's serde
+serializer. That pivot is where `XML.build({ r: { a: 0.1 } })` failed: under
+serde_json's `arbitrary_precision` feature, which Cargo can switch on from
+anywhere in the build, every non-integer number becomes a private one-key map,
+and its key is not an XML name. Owning the writer also lets it be the reader's
+exact inverse: it escapes `\r` (the reader normalizes line ends) and attribute
+whitespace (attribute-value normalization would turn it into spaces), and it
+refuses a name, a character or an array it cannot spell instead of writing a
+document the reader would reject.
+
+**The stream finds records; the reader reads them.** The decoder keeps only the
+record in progress and the structure around it (inside the root or not, the
+root's name). When a direct child of the root closes, its bytes go through the
+same reader as `parse`. A scan error that only means the chunk stopped
+mid-construct (an unclosed tag, comment, attribute value or reference) waits for
+more bytes; any other error ends the stream, and `close` checks that the root
+was closed. Bytes go through one streaming `TextDecoder`, so a character split
+across chunks decodes once.
+
 ### YAML
 
 **The reader and writer are the runtime's own**, in safe Rust

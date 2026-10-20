@@ -25,7 +25,8 @@ console.log(parsed.user["@id"]);     // "1"
 
 The root element is a key like any other — `parse` returns the document, not the
 root's contents. An attribute is prefixed `@`, and an element's own text is
-`$text`.
+`$text`. Escaped characters (`&amp;`, `&#169;`) and CDATA sections come back as
+plain text.
 
 ## Validating XML
 

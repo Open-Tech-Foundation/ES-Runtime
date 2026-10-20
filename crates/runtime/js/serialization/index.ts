@@ -330,19 +330,36 @@ class JSONLEncoderStream extends TransformStream {
 
 export const JSONL = { DecoderStream: JSONLDecoderStream, EncoderStream: JSONLEncoderStream };
 
+// One record per direct child of the root. The scan and the record parser live
+// in the host (xml.rs `StreamDecoder`), the same reader `parse` uses; `close`
+// checks the end of the document, so a truncated one errors the stream.
 class XMLDecoderStream extends TransformStream {
   constructor() {
+    // One decoder for the whole stream: a new one per chunk turned a character
+    // split across chunks into two U+FFFDs.
+    const decoder = new TextDecoder();
     let streamId: number | null = null;
     super({
       start() {
         streamId = xml_stream_new();
       },
       transform(chunk, controller) {
-        const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+        const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
         for (const obj of xml_stream_push(streamId, text)) controller.enqueue(obj);
       },
-      flush() {
+      flush(controller) {
+        const tail = decoder.decode();
+        if (tail) for (const obj of xml_stream_push(streamId, tail)) controller.enqueue(obj);
         xml_stream_close(streamId);
+      },
+      // A canceled readable or aborted writable never reaches `flush`; release
+      // the host state here, ignoring the truncation nobody is reading.
+      cancel() {
+        try {
+          xml_stream_close(streamId);
+        } catch {
+          // the stream ended early on purpose
+        }
       },
     });
   }

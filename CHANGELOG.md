@@ -74,6 +74,19 @@ namespace) is unstable and may change between minor releases until the API freez
   decoded `[0xa1, 0xff]` as `[255]`), and nesting past 256 levels on every path.
   One structural check runs in front of both decode paths and is `validate`,
   so the three can no longer disagree.
+- `runtime:serialization` XML no longer loses data or accepts malformed input
+  (DECISIONS D175). `parse` dropped every escaped character in text
+  (`<x>t&lt;</x>` read as `"t"`) and every CDATA section, and left attribute
+  values unescaped; it now resolves references and keeps CDATA. `<a></a>` reads
+  as `""` like `<a/>`. More than one root element, text outside the root, a
+  repeated attribute, `<` in an attribute value, an invalid name and an unknown
+  entity are now a `SyntaxError` (and `validate` says `false`). `build` threw on
+  any non-integer number and wrote `NaN`, `undefined` and bytes as empty
+  elements; it now writes numbers as `String(n)`, keeps edge whitespace, and
+  refuses what XML cannot spell with a `TypeError`. `XML.DecoderStream` skipped
+  a malformed record and ended a truncated document silently; both now error
+  the stream, a character split across byte chunks decodes once, and a canceled
+  stream releases its host state.
 
 ## [0.41.0] - 2026-10-17
 

@@ -2921,9 +2921,35 @@ For each string format (XML, YAML, TOML), the module provides a namespace with t
 | `<Format>.build(obj)` | Serializes a JavaScript object into the given format. |
 | `<Format>.validate(data, opts?)` | Validates the given data without full allocation. `opts.detailed` provides `{ valid: boolean, error: string }`. |
 
-`XML` requires a **well-formed** document: every element closed, and no input
-left over inside an open one. A truncated document (`"<r>"`, `"<r><a>1"`) is a
-`SyntaxError` from `parse` and `false` from `validate` — the two always agree.
+`XML` requires a **well-formed** document: one root element, every element
+closed, nothing but whitespace, comments and processing instructions outside the
+root, element and attribute names that are XML names, each attribute once and
+free of `<`, and every reference resolvable. A DTD is skipped, not processed, so
+only the five predefined entities and character references resolve; any other
+`&name;` is an error. A violation is a `SyntaxError` from `parse` and `false`
+from `validate` — the two always agree. Nesting deeper than 256 levels is a
+`SyntaxError`.
+
+`XML.parse` returns an object with the root element as its one key. An attribute
+is `@name`, an element's own text is `$text`, and a name that repeats becomes an
+array. An element with no attributes, children or text is `""` (`<a/>` and
+`<a></a>` alike). References and CDATA are text; line ends are normalized to
+`\n`; whitespace written as plain text at either edge of an element's text is
+trimmed, while CDATA and references keep theirs.
+
+`XML.build` is the inverse: an object with one element key writes that element,
+anything else is wrapped in `<root>`. `@name` keys are attributes, `$text` is
+text, an array repeats its element, and `null`/`undefined` is an empty element
+(or an absent attribute). A number is written as `String(n)` and a `BigInt`
+exactly. Text is escaped so `parse` reads it back unchanged, edge whitespace as
+character references. A name that is not an XML name, `NaN`/`±Infinity`, bytes,
+a character XML 1.0 cannot contain, an array of arrays, or an array at the top
+(which would write several roots) is a `TypeError`.
+
+`XML.DecoderStream` emits one value per direct child of the root —
+`{ name: value }`, shaped as `parse` shapes it — and reads each with the same
+reader, so a malformed record errors the stream and a document that ends early
+errors it at close. A record that grows past 64 MiB unclosed is a `RangeError`.
 
 `YAML` reads **YAML 1.2** and passes the full yaml-test-suite. `parse` reads
 exactly one document: a stream of several is a `SyntaxError`, and an empty

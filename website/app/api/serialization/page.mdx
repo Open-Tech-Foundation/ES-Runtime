@@ -49,6 +49,25 @@ support for massive documents.
 | `XML.validate(xml, options?)` | `(string, object) => boolean \| object` | Validates an XML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean, with the exact syntax error on failure. | `XML.validate("<root>", { detailed: true })` |
 | `new XML.DecoderStream()` | `TransformStream` | Parses streaming XML byte chunks into JavaScript objects incrementally. | `stream.pipeThrough(new XML.DecoderStream())` |
 
+`parse` returns an object with the root element as its one key: attributes are
+`@name`, an element's text is `$text`, a repeated name is an array, and an empty
+element (`<a/>` or `<a></a>`) is `""`. References and CDATA are text.
+
+| Input | Result |
+| --- | --- |
+| More than one root, or text outside it | `SyntaxError` |
+| An unclosed element, or no element at all | `SyntaxError` |
+| A reference other than the five predefined entities and `&#…;` (a DTD is not processed) | `SyntaxError` |
+| A repeated attribute, `<` in an attribute value, a name that is not an XML name | `SyntaxError` |
+| Nesting past 256 levels | `SyntaxError` |
+
+`build` writes `@name` keys as attributes, `$text` as text, an array as a
+repeated element and `null`/`undefined` as an empty element. Numbers are written
+as `String(n)`, a `BigInt` exactly. An invalid name, `NaN`/`±Infinity`, bytes, a
+character XML 1.0 cannot contain, or an array at the top level is a `TypeError`.
+`DecoderStream` emits one `{ name: value }` per direct child of the root, read by
+the same reader: a malformed record or a truncated document errors the stream.
+
 ## YAML
 
 Synchronous parsing, building, and validation of YAML 1.2.

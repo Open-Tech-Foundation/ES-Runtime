@@ -527,6 +527,59 @@ test("XML requires a root element", async () => {
   assertEquals(JSON.stringify(XML.parse("<r/>")), '{"r":""}');
 });
 
+test("XML keeps references, CDATA and empty elements, and refuses what is not well formed", async () => {
+  const { XML } = await import("runtime:serialization");
+  // References used to vanish (`t&lt;` parsed to `t`) and CDATA was dropped.
+  assertEquals(
+    JSON.stringify(XML.parse('<a x="&amp;&#65;">t&lt;<![CDATA[ & ]]></a>')),
+    '{"a":{"@x":"&A","$text":"t< & "}}',
+  );
+  // `<a></a>` and `<a/>` are the same element.
+  assertEquals(JSON.stringify(XML.parse("<r><a></a><b/></r>")), '{"r":{"a":"","b":""}}');
+  for (const src of ["<a/><b/>", "<a/>junk", "<a>&foo;</a>", '<a x="1" x="2"/>', "<1a/>"]) {
+    assertThrows(() => XML.parse(src), "SyntaxError");
+    assertEquals(XML.validate(src), false, `validate ${src}`);
+  }
+});
+
+test("XML build writes any number and refuses what XML cannot spell", async () => {
+  const { XML } = await import("runtime:serialization");
+  // A non-integer number threw (the JSON pivot's private number map).
+  assertEquals(XML.build({ r: { a: 0.1, b: 1e21 } }), "<r><a>0.1</a><b>1e+21</b></r>");
+  const value = { r: { "@a": "1&2", x: ["t<", " u "] } };
+  assertEquals(JSON.stringify(XML.parse(XML.build(value))),
+    '{"r":{"@a":"1&2","x":[{"$text":"t<"},{"$text":" u "}]}}');
+  assertThrows(() => XML.build({ r: { n: NaN } }), "TypeError");
+  assertThrows(() => XML.build({ r: { b: new Uint8Array([1]) } }), "TypeError");
+  assertThrows(() => XML.build({ items: [1, 2] }), "TypeError");
+});
+
+test("XML DecoderStream errors on a malformed or truncated document", async () => {
+  const { XML } = await import("runtime:serialization");
+  const decode = async (chunks) => {
+    const dec = new XML.DecoderStream();
+    const writer = dec.writable.getWriter();
+    const reader = dec.readable.getReader();
+    const out = [];
+    const drain = (async () => {
+      for (;;) { const { done, value } = await reader.read(); if (done) break; out.push(value); }
+    })();
+    try {
+      for (const chunk of chunks) await writer.write(chunk);
+      await writer.close();
+    } finally {
+      await drain;
+    }
+    return out;
+  };
+  // A character split across byte chunks decodes once, not as two U+FFFDs.
+  const bytes = new TextEncoder().encode("<r><i>café</i></r>");
+  assertEquals(JSON.stringify(await decode([bytes.slice(0, 10), bytes.slice(10)])), '[{"i":{"$text":"café"}}]');
+  // A malformed record was skipped and a truncated document ended quietly.
+  await assertRejects(() => decode(["<r><i>a</j><i>b</i></r>"]), "SyntaxError");
+  await assertRejects(() => decode(["<r><i>a</i><i>b"]), "SyntaxError");
+});
+
 test("CSV parses as arrays by default and objects with header", async () => {
   const { CSV } = await import("runtime:serialization");
 

@@ -3603,3 +3603,23 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 **Consequences:** `tar` and `zip` become runtime dependencies (with `zip`'s deflate decoder only; `self_update` already enables its `time` feature in the build graph, so the codec sets timestamps explicitly rather than relying on the default). An `archive` fuzz target decodes arbitrary bytes under a small limit and rebuilds whatever it accepts. The module is not behind a cargo feature.
 
 **Not here:** 7z, rar, brotli and zstd; passwords; selective extraction (read an entry, then write it yourself); preserving ownership, modes or arbitrary timestamps from an input archive; and appending to an existing archive.
+
+### D175 — XML has one reader and its own writer, and refuses what is not well formed · *Accepted (2026-10-20)*
+
+**Context:** `XML.parse`, `XML.validate` and `XML.DecoderStream` each walked quick-xml's events on their own, and `XML.build` went through `serde_json::Value` into quick-xml's serde serializer. A review found each path losing data the others kept. quick-xml 0.41 reports a reference (`&amp;`, `&#65;`) as its own `GeneralRef` event, which the walker ignored, so every escaped character in text vanished (`<x>t&lt;</x>` read as `"t"`). CDATA was dropped the same way, attribute values were left escaped, two roots, text after the root and a repeated attribute were accepted, and `<a></a>` read as `{}` while `<a/>` read as `""`. The builder threw on every non-integer number, because serde_json's `arbitrary_precision` feature (switched on elsewhere in the build) turns such a number into a private one-key map whose key is not an XML name. It also wrote `NaN`, `undefined` and bytes as empty elements. The stream skipped a malformed record and ended a truncated document without an error.
+
+**Decision (maintainer, 2026-10-20):**
+
+- **One module, `crates/runtime/src/xml.rs`, decides what a document means.** quick-xml stays as the tokenizer. `parse`, `validate` (which is `parse` without keeping the value), the stream's record parser and the fuzz target all use the same walk.
+- **Well-formedness short of a DTD.** One root; nothing but whitespace, comments and processing instructions outside it; names that are XML 1.0 names; attributes unique and free of `<`; references limited to the five predefined entities and character references to legal characters. A DTD is skipped, not processed, so an entity it declares is a `SyntaxError`, not an empty string.
+- **The value shape is unchanged where it was consistent:** the root is the one key, `@name` for attributes, `$text` for text, arrays for repeated names, `""` for an element with nothing in it. That now includes `<a></a>`. References and CDATA are text; line ends are normalized; plain-text whitespace at an element's edges is trimmed, but trimming stops at CDATA and references.
+- **The writer is the runtime's own,** built from the value tree like TOML's, as the reader's inverse: `String(n)` for numbers, exact digits for `BigInt`, `\r` and attribute whitespace escaped so normalization does not change them, and edge whitespace as character references. It refuses an invalid name, `NaN`/`±Infinity`, bytes, a character XML 1.0 cannot contain, an array of arrays, and a top-level array (which would write several roots).
+- **The stream only finds record boundaries.** Each direct child of the root goes through the shared reader, so its errors are the stream's errors. A scan error that only means the chunk stopped mid-construct waits for more bytes; `close` checks the root was closed. One streaming `TextDecoder` per stream, and cancel releases host state.
+
+**Rejected:**
+- **Patching each event arm in the three walkers.** Every fix would have had to land three times, and the bugs came from exactly that drift.
+- **Processing the DTD's internal subset.** Entity expansion is the classic amplification attack, and no caller in this runtime needs it. Refusing an undeclared reference keeps data from vanishing silently.
+- **Keeping quick-xml's serde serializer.** A Cargo feature that any other crate can enable decides its output, and its naming conventions are its own, not the reader's inverse.
+- **Writing `NaN` as text, or bytes as base64.** The reader would give back a string, not the value, so the round trip would quietly change type. Refusing says so, as CSV and TOML refuse what they cannot carry.
+
+**Consequences:** quick-xml loses its `serialize` feature. Input the old reader accepted and the new one refuses (two roots, an unknown entity, a repeated attribute) now throws, and so does build input it used to flatten (`NaN`, bytes). The parse-speed benchmark should be re-run from the committed scripts, since the reader now resolves references and checks names.

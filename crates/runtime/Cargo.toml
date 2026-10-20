@@ -55,7 +55,7 @@ flate2 = "1.1"
 # runtime:archive (DECISIONS D174): tar/tar.gz in and out, zip in and out.
 tar.workspace = true
 zip.workspace = true
-quick-xml = { version = "0.41.0", features = ["serialize"] }
+quick-xml = "0.41.0"
 serde_json.workspace = true
 toml = "0.8"
 rmp-serde = "1.3.0"

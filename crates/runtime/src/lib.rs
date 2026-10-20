@@ -60,6 +60,7 @@ mod url_ops;
 mod urlpattern_ops;
 mod worker_ops;
 mod ws_ops;
+mod xml;
 mod yaml;
 
 use std::cell::{Cell, RefCell};
@@ -6214,7 +6215,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 423;
+        const BASELINE: u32 = 426;
 
         assert!(
             pass >= BASELINE,

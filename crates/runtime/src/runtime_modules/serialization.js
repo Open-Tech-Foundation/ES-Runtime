@@ -2792,17 +2792,25 @@ const JSONL = {
 };
 var XMLDecoderStream = class extends TransformStream {
 	constructor() {
+		const decoder = new TextDecoder();
 		let streamId = null;
 		super({
 			start() {
 				streamId = xml_stream_new();
 			},
 			transform(chunk, controller) {
-				const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+				const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
 				for (const obj of xml_stream_push(streamId, text)) controller.enqueue(obj);
 			},
-			flush() {
+			flush(controller) {
+				const tail = decoder.decode();
+				if (tail) for (const obj of xml_stream_push(streamId, tail)) controller.enqueue(obj);
 				xml_stream_close(streamId);
+			},
+			cancel() {
+				try {
+					xml_stream_close(streamId);
+				} catch {}
 			}
 		});
 	}
