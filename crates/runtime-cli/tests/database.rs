@@ -1354,3 +1354,69 @@ fn the_mysql_driver_connects_only_with_what_net_grants() {
         assert_eq!(stdout(&out).trim(), expected, "{name}");
     }
 }
+
+/// A database file is held by one process at a time. The engine's lock is a
+/// POSIX `fcntl` lock, which the OS drops when a process closes *any*
+/// descriptor for the file — so the jail's anchoring descriptor must be closed
+/// before the lock is taken, not after, or the lock is gone the moment the
+/// open returns and a second process gets in.
+#[test]
+fn a_second_process_cannot_open_a_database_another_holds() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let base = dir("held");
+    std::fs::write(
+        base.join("hold.mjs"),
+        r#"import { connect, sqlite } from "runtime:db";
+           const db = await connect("sqlite:./app.db", { driver: sqlite });
+           await db.execute("CREATE TABLE t (x)");
+           console.log("HOLDING");
+           await new Promise(() => {});"#,
+    )
+    .expect("write holder");
+    std::fs::write(
+        base.join("second.mjs"),
+        r#"import { connect, sqlite } from "runtime:db";
+           try {
+             const db = await connect("sqlite:./app.db", { driver: sqlite });
+             await db.execute("INSERT INTO t VALUES (1)");
+             console.log("ALLOWED");
+           } catch (e) {
+             console.log(/lock/i.test(e.message) ? "LOCKED" : e.message);
+           }"#,
+    )
+    .expect("write second");
+
+    let mut holder = Kill(
+        esrun()
+            .current_dir(&base)
+            .args(["--allow-read", "--allow-write", "hold.mjs"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn holder"),
+    );
+    let out = holder.0.stdout.take().expect("piped stdout");
+    let first = BufReader::new(out)
+        .lines()
+        .next()
+        .expect("a line")
+        .expect("read");
+    assert_eq!(first, "HOLDING");
+
+    let second = esrun()
+        .current_dir(&base)
+        .args(["--allow-read", "--allow-write", "second.mjs"])
+        .output()
+        .unwrap();
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    assert_eq!(stdout(&second).trim(), "LOCKED");
+}

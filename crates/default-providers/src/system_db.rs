@@ -110,6 +110,14 @@ impl JailedVfs {
             create_new: false,
         }
     }
+
+    /// Whether [`PlatformIO::open_file`] takes its exclusive lock for these
+    /// flags — the engine's own condition, including its opt-out variable.
+    #[cfg(unix)]
+    fn engine_would_lock(flags: OpenFlags) -> bool {
+        std::env::var("LIMBO_DISABLE_FILE_LOCK").is_err()
+            && !flags.intersects(OpenFlags::ReadOnly | OpenFlags::NoLock)
+    }
 }
 
 /// Where an open descriptor can be named by number rather than by a path the
@@ -159,8 +167,20 @@ impl IO for JailedVfs {
                 .open_anchored(path, self.access, Self::open_mode(flags))
                 .map_err(|e| engine_io_error(&e, "open"))?;
             let via = format!("{}/{fd}", fd_dir(), fd = file.as_raw_fd());
-            let opened = self.inner.open_file(&via, flags, direct)?;
+            // The engine's lock is a POSIX `fcntl` lock, and POSIX releases
+            // every such lock a process holds on a file when the process
+            // closes *any* descriptor for it — here, the anchor. Letting the
+            // engine lock on open and then closing the anchor would leave the
+            // database unlocked, and a second process could open it. So the
+            // engine opens without locking, the anchor closes, and the lock
+            // the engine would have taken is taken after that.
+            let opened = self
+                .inner
+                .open_file(&via, flags | OpenFlags::NoLock, direct)?;
             drop(file);
+            if Self::engine_would_lock(flags) {
+                opened.lock_file(true)?;
+            }
             Ok(opened)
         }
         #[cfg(not(unix))]
