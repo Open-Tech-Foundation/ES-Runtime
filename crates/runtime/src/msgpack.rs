@@ -47,6 +47,8 @@ pub(crate) enum DecodeError {
     InvalidUtf8,
     /// Nesting beyond [`MAX_DEPTH`].
     TooDeep,
+    /// Bytes remained after the top-level value.
+    TrailingData,
 }
 
 impl std::fmt::Display for DecodeError {
@@ -58,6 +60,7 @@ impl std::fmt::Display for DecodeError {
             DecodeError::TooDeep => {
                 write!(f, "nesting deeper than {MAX_DEPTH} levels")
             }
+            DecodeError::TrailingData => f.write_str("bytes remain after the top-level value"),
         }
     }
 }
@@ -174,17 +177,32 @@ fn shape(cur: &mut &[u8]) -> Result<Shape, DecodeError> {
 
 // ---- scanning --------------------------------------------------------------
 
-/// Whether the encoded value contains any `bin` or `ext`, or a map key that is
-/// not a string — the documents the JSON pivot cannot carry faithfully.
+/// Checks that `bytes` is exactly one well-formed MessagePack value, and reports
+/// whether it contains any `bin` or `ext`, or a map key that is not a string —
+/// the documents the JSON pivot cannot carry faithfully.
+///
+/// This is the one well-formedness check: both decode paths run behind it and
+/// [`validate`] is it, so the JSON pivot (whose reader would turn an invalid
+/// `str` into an array of numbers, ignore trailing bytes and allow deeper
+/// nesting) cannot accept what the value tree refuses.
 ///
 /// Exact rather than a byte search: a `0xc4` inside a string payload is not a
 /// `bin` marker, and treating it as one would push every document carrying
-/// arbitrary text onto the slow path. Allocates nothing and reads no payload.
+/// arbitrary text onto the slow path. Allocates nothing; a `str` payload is read
+/// only to check its UTF-8.
 pub(crate) fn needs_value_tree(bytes: &[u8]) -> Result<bool, DecodeError> {
     let mut cur = bytes;
     let mut found = false;
     scan_one(&mut cur, 0, &mut found)?;
+    if !cur.is_empty() {
+        return Err(DecodeError::TrailingData);
+    }
     Ok(found)
+}
+
+/// Checks that `bytes` would decode, building nothing.
+pub(crate) fn validate(bytes: &[u8]) -> Result<(), DecodeError> {
+    needs_value_tree(bytes).map(|_| ())
 }
 
 fn scan_one(cur: &mut &[u8], depth: usize, found: &mut bool) -> Result<(), DecodeError> {
@@ -193,7 +211,10 @@ fn scan_one(cur: &mut &[u8], depth: usize, found: &mut bool) -> Result<(), Decod
     }
     match shape(cur)? {
         Shape::Atom(_) => {}
-        Shape::Str(n) | Shape::Uint(n) | Shape::Int(n) | Shape::Float(n) => {
+        Shape::Str(n) => {
+            std::str::from_utf8(take(cur, n)?).map_err(|_| DecodeError::InvalidUtf8)?;
+        }
+        Shape::Uint(n) | Shape::Int(n) | Shape::Float(n) => {
             take(cur, n)?;
         }
         Shape::Bin(n) | Shape::Ext(n) => {
@@ -228,7 +249,11 @@ fn is_str_marker(m: u8) -> bool {
 /// Decodes one MessagePack value into a [`Value`].
 pub(crate) fn read_value(bytes: &[u8]) -> Result<Value, DecodeError> {
     let mut cur = bytes;
-    read_one(&mut cur, 0)
+    let v = read_one(&mut cur, 0)?;
+    if !cur.is_empty() {
+        return Err(DecodeError::TrailingData);
+    }
+    Ok(v)
 }
 
 fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
@@ -618,6 +643,22 @@ mod tests {
             needs_value_tree(&[0xc4, 0x05, 1]),
             Err(DecodeError::Truncated)
         );
+    }
+
+    #[test]
+    fn the_scan_refuses_what_the_value_tree_refuses() {
+        // The JSON pivot's reader accepted all three; the scan in front of it
+        // now refuses them, as `read_value` does, and `validate` agrees.
+        let deep = [vec![0x91; MAX_DEPTH + 8], vec![0x01]].concat();
+        for (input, err) in [
+            (&[0x01, 0x02][..], DecodeError::TrailingData),
+            (&[0xa1, 0xff][..], DecodeError::InvalidUtf8),
+            (&deep[..], DecodeError::TooDeep),
+        ] {
+            assert_eq!(needs_value_tree(input), Err(err), "{input:?}");
+            assert_eq!(read_value(input).map(|_| ()), validate(input), "{input:?}");
+        }
+        assert_eq!(validate(&[0x81, 0xc0, 0x01]), Ok(()));
     }
 
     #[test]

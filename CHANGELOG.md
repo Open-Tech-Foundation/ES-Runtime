@@ -69,6 +69,11 @@ namespace) is unstable and may change between minor releases until the API freez
   threw on a `nil`, `NaN` or array key. Such documents now take the value tree,
   which keeps integer keys' exact digits and coerces the rest as a property
   access would.
+- `runtime:serialization` `MessagePack.decode` and `MessagePack.validate` refuse
+  bytes after the top-level value, a `str` that is not UTF-8 (the JSON path
+  decoded `[0xa1, 0xff]` as `[255]`), and nesting past 256 levels on every path.
+  One structural check runs in front of both decode paths and is `validate`,
+  so the three can no longer disagree.
 
 ## [0.41.0] - 2026-10-17
 

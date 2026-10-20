@@ -637,9 +637,15 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
                 });
             }
             Ok(false) => {}
-            // Malformed input: let the JSON path below produce the error, so the
-            // message stays the one callers already match on.
-            Err(_) => {}
+            // The scan is the one well-formedness check, so its error is the
+            // error: the JSON reader below would accept an invalid `str` (as an
+            // array of numbers), trailing bytes and deeper nesting.
+            Err(e) => {
+                return Err(OpError::new(
+                    ExceptionClass::SyntaxError,
+                    format!("Parse failed: {e}"),
+                ));
+            }
         }
 
         let mut deserializer = rmp_serde::Deserializer::new(msgpack_bytes);
@@ -668,9 +674,10 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             None => return Ok(Value::String("Expected a Uint8Array".into())),
         };
 
-        match rmp_serde::from_slice::<serde::de::IgnoredAny>(msgpack_bytes) {
-            Ok(_) => Ok(Value::Bool(true)),
-            Err(e) => Ok(Value::String(format!("Validation failed: {}", e))),
+        // The same check `decode` runs first, so the two cannot disagree.
+        match crate::msgpack::validate(msgpack_bytes) {
+            Ok(()) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {e}"))),
         }
     }))?;
 

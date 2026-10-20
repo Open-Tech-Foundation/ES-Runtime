@@ -3028,7 +3028,9 @@ payload bytes; there is no JS type that corresponds to one, and inventing a
 wrapper would make it indistinguishable from real data. A non-string map key
 becomes a property name by the same rule as CBOR's (below): an integer key by its
 exact digits, a float by `String(n)`, `nil`/`true` by their literals, an array as
-its comma-joined elements.
+its comma-joined elements. A reserved marker (`0xc1`), a truncated value, a `str`
+that is not UTF-8, nesting past 256 levels, or a byte after the top-level value
+is a `SyntaxError`, and `validate` agrees with `decode`.
 
 Values with no own enumerable properties are converted rather than flattened to
 `{}`: a `Map` encodes as a map (keys stringified), a `Set` as an array, and a

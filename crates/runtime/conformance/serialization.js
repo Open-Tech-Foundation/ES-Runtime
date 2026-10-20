@@ -280,6 +280,20 @@ test("MessagePack spells a non-string map key the same with or without a bin", a
   assertEquals(Object.keys(cbor).sort().join(","), "1,18446744073709551615");
 });
 
+test("MessagePack decode and validate refuse trailing bytes, bad UTF-8 and deep nesting", async () => {
+  const { MessagePack } = await import("runtime:serialization");
+  const bad = [
+    [0x01, 0x02], // a byte after the top-level value
+    [0xa1, 0xff], // a str that is not UTF-8 (was decoded as [255])
+    [...new Array(300).fill(0x91), 0x01], // past the 256-level bound
+  ];
+  for (const bytes of bad) {
+    const input = new Uint8Array(bytes);
+    assertThrows(() => MessagePack.decode(input), "SyntaxError");
+    assertEquals(MessagePack.validate(input), false);
+  }
+});
+
 test("CBOR round-trips the JSON-shaped documents and prefers integer forms", async () => {
   const { CBOR } = await import("runtime:serialization");
   // Canonical encoding sorts map keys, so an object comes back with its keys

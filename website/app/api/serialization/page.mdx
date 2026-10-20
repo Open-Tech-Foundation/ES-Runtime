@@ -148,6 +148,11 @@ Synchronous parsing, building, and validation of binary MessagePack data.
 | function, symbol, `BigInt` | — | throws `TypeError` |
 | — | `ext` | `Uint8Array` (payload) |
 
+A non-string map key becomes a property name by the CBOR rule below. A reserved
+marker (`0xc1`), a truncated value, a `str` that is not UTF-8, nesting past 256
+levels, or a byte after the top-level value is a `SyntaxError`; `validate` agrees
+with `decode`.
+
 ## CBOR
 
 Synchronous decoding, encoding, and validation of CBOR (RFC 8949, Concise Binary
