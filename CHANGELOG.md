@@ -43,7 +43,16 @@ namespace) is unstable and may change between minor releases until the API freez
   Extraction verifies entry contents (including zip CRCs), checks destination
   paths for existing symlinks, and stages files before copying them into the
   destination. ZIP entry counts are checked from the end record before the
-  central directory is parsed.
+  central directory is parsed. Every full pass over a tar.gz checks the gzip
+  CRC and length trailer, reads concatenated gzip members as one stream and
+  refuses bytes after the last; a decompressed stream past the size cap is
+  `ERR_ARCHIVE_TOO_LARGE` rather than a silently truncated listing. Source and
+  entry bytes are copied at construction. `extract(directory, options)`
+  overrides only the limits it names. A directory entry's `stream()` is empty.
+  On Windows, device names, `:` and other forbidden characters, and names
+  ending in a dot or space are refused, and case collisions are found with
+  Unicode case folding. Zip timestamps after 2107 clamp to 2107 instead of
+  becoming 1980, and a cancelled `stream()` stops its reader thread.
 
 ### Fixed
 

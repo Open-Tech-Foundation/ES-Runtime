@@ -10,7 +10,7 @@
 //!
 //! Writes are deterministic: entries are sorted by path, ownership is `0:0`,
 //! modes are `0644` for files and `0755` for directories, and a timestamp is
-//! `0` unless the caller supplied one (zip clamps to its 1980 epoch). A build
+//! `0` unless the caller supplied one (zip clamps to its 1980–2107 range). A build
 //! of the same entries therefore produces the same archive.
 //!
 //! Limits are enforced twice: declared sizes are checked before anything is
@@ -126,6 +126,8 @@ impl Error {
         }
     }
 }
+
+impl std::error::Error for Error {}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -628,7 +630,12 @@ pub(crate) fn list_source(
     let metas = match format {
         Format::Zip => zip_metas(source.reader()?, limits)?,
         Format::Tar => tar_metas(source.reader()?, limits)?,
-        Format::TarGz => tar_metas(gzip_reader(source.reader()?, limits), limits)?,
+        Format::TarGz => {
+            let mut gzip = gzip_reader(source.reader()?, limits);
+            let metas = tar_metas(&mut gzip, limits)?;
+            gzip.finish()?;
+            metas
+        }
     };
     check_layout(&metas)?;
     Ok((format, metas))
@@ -648,7 +655,12 @@ pub(crate) fn read_selected_source(
     match format {
         Format::Zip => zip_selected(source.reader()?, paths, limits),
         Format::Tar => tar_selected(source.reader()?, paths, limits),
-        Format::TarGz => tar_selected(gzip_reader(source.reader()?, limits), paths, limits),
+        Format::TarGz => {
+            let mut gzip = gzip_reader(source.reader()?, limits);
+            let entries = tar_selected(&mut gzip, paths, limits)?;
+            gzip.finish()?;
+            Ok(entries)
+        }
     }
 }
 
@@ -755,7 +767,11 @@ fn stream_metas(
     match format {
         Format::Zip => stream_zip_metas(source.reader()?, limits, tx),
         Format::Tar => stream_tar_metas(source.reader()?, limits, tx),
-        Format::TarGz => stream_tar_metas(gzip_reader(source.reader()?, limits), limits, tx),
+        Format::TarGz => {
+            let mut gzip = gzip_reader(source.reader()?, limits);
+            stream_tar_metas(&mut gzip, limits, tx)?;
+            finish_unless_closed(gzip, tx)
+        }
     }
 }
 
@@ -800,9 +816,68 @@ fn stream_zip_metas<R: Read + Seek>(
     Ok(())
 }
 
-fn gzip_reader(reader: SourceReader, limits: &Limits) -> impl Read {
-    let cap = decompressed_cap(limits);
-    flate2::read::GzDecoder::new(reader).take(cap)
+fn gzip_reader(reader: SourceReader, limits: &Limits) -> GzipBody {
+    GzipBody {
+        decoder: flate2::read::MultiGzDecoder::new(reader),
+        remaining: decompressed_cap(limits),
+        cap: decompressed_cap(limits),
+    }
+}
+
+/// The decompressed body of a tar.gz, bounded by the limits. Going past the cap
+/// is an error rather than an early end of input: an early end would let the
+/// tar reader stop cleanly at a block boundary and list a truncated archive.
+/// Every gzip member is read (`gzip -c a b` concatenates them legally), and
+/// bytes after the last member are an error rather than ignored.
+struct GzipBody {
+    decoder: flate2::read::MultiGzDecoder<SourceReader>,
+    remaining: u64,
+    cap: u64,
+}
+
+impl GzipBody {
+    /// Reads what the tar reader left behind: the tar stops at its end marker,
+    /// and the gzip CRC and length trailer are checked only when the decoder
+    /// reaches the end of its input. Without this a corrupted or truncated
+    /// trailer would be accepted.
+    fn finish(mut self) -> Result<(), Error> {
+        std::io::copy(&mut self, &mut std::io::sink())
+            .map(|_| ())
+            .map_err(gzip_decode)
+    }
+}
+
+impl Read for GzipBody {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            let mut probe = [0_u8; 1];
+            return match self.decoder.read(&mut probe)? {
+                0 => Ok(0),
+                _ => Err(std::io::Error::other(too_large(format!(
+                    "the decompressed tar exceeds {} bytes",
+                    self.cap
+                )))),
+            };
+        }
+        let len = buf
+            .len()
+            .min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
+        let n = self.decoder.read(&mut buf[..len])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+/// Verifies the gzip trailer once a stream has delivered everything, unless
+/// the consumer has gone: draining the rest is then work nobody will see.
+fn finish_unless_closed<T>(gzip: GzipBody, tx: &mpsc::Sender<T>) -> Result<(), Error> {
+    if tx.is_closed() {
+        return Ok(());
+    }
+    gzip.finish()
 }
 
 fn decompressed_cap(limits: &Limits) -> u64 {
@@ -983,9 +1058,9 @@ fn zip_selected<R: Read + Seek>(
             let mut file = archive.by_index(index).map_err(zip_decode)?;
             let mut data = Vec::new();
             let mut limited = file.by_ref().take(meta.size.saturating_add(1));
-            limited.read_to_end(&mut data).map_err(|error| {
-                Error::Decode(format!("could not read {:?}: {error}", meta.path))
-            })?;
+            limited
+                .read_to_end(&mut data)
+                .map_err(|error| entry_read_error(&meta.path, error))?;
             if data.len() as u64 != meta.size {
                 return Err(Error::Decode(format!(
                     "entry {:?} does not match its declared size",
@@ -1014,7 +1089,11 @@ fn stream_entry(
     match format {
         Format::Zip => stream_zip(source.reader()?, path, limits, tx),
         Format::Tar => stream_tar(source.reader()?, path, limits, tx),
-        Format::TarGz => stream_tar(gzip_reader(source.reader()?, limits), path, limits, tx),
+        Format::TarGz => {
+            let mut gzip = gzip_reader(source.reader()?, limits);
+            stream_tar(&mut gzip, path, limits, tx)?;
+            finish_unless_closed(gzip, tx)
+        }
     }
 }
 
@@ -1079,7 +1158,7 @@ fn stream_reader<R: Read>(
     loop {
         let n = reader
             .read(&mut buf)
-            .map_err(|error| Error::Decode(format!("could not read {:?}: {error}", meta.path)))?;
+            .map_err(|error| entry_read_error(&meta.path, error))?;
         if n == 0 {
             break;
         }
@@ -1114,7 +1193,11 @@ fn extract_entries(
     match format {
         Format::Zip => extract_zip(source.reader()?, limits, tx),
         Format::Tar => extract_tar(source.reader()?, limits, tx),
-        Format::TarGz => extract_tar(gzip_reader(source.reader()?, limits), limits, tx),
+        Format::TarGz => {
+            let mut gzip = gzip_reader(source.reader()?, limits);
+            extract_tar(&mut gzip, limits, tx)?;
+            finish_unless_closed(gzip, tx)
+        }
     }
 }
 
@@ -1182,7 +1265,7 @@ fn stream_extract_data<R: Read>(
     loop {
         let n = reader
             .read(&mut buf)
-            .map_err(|error| Error::Decode(format!("could not read {:?}: {error}", meta.path)))?;
+            .map_err(|error| entry_read_error(&meta.path, error))?;
         if n == 0 {
             break;
         }
@@ -1314,7 +1397,7 @@ fn read_tar_data<R: Read>(
     let mut limited = entry.take(meta.size.saturating_add(1));
     limited
         .read_to_end(&mut data)
-        .map_err(|error| Error::Decode(format!("could not read {:?}: {error}", meta.path)))?;
+        .map_err(|error| entry_read_error(&meta.path, error))?;
     if data.len() as u64 != meta.size {
         return Err(Error::Decode(format!(
             "entry {:?} is shorter than its header says",
@@ -1391,9 +1474,9 @@ fn read_zip(bytes: &[u8], limits: &Limits, read_data: bool) -> Result<Vec<Entry>
             let mut file = archive.by_index(index).map_err(zip_decode)?;
             let mut data = Vec::new();
             let mut limited = file.by_ref().take(meta.size.saturating_add(1));
-            limited.read_to_end(&mut data).map_err(|error| {
-                Error::Decode(format!("could not read {:?}: {error}", meta.path))
-            })?;
+            limited
+                .read_to_end(&mut data)
+                .map_err(|error| entry_read_error(&meta.path, error))?;
             if data.len() as u64 != meta.size {
                 return Err(Error::Decode(format!(
                     "entry {:?} does not match its declared size",
@@ -1471,7 +1554,7 @@ fn zip_entry<R: Read + Seek>(
         let mut limited = file.by_ref().take(meta.size.saturating_add(1));
         limited
             .read_to_end(&mut data)
-            .map_err(|error| Error::Decode(format!("could not read {:?}: {error}", meta.path)))?;
+            .map_err(|error| entry_read_error(&meta.path, error))?;
         if data.len() as u64 != meta.size {
             return Err(Error::Decode(format!(
                 "entry {:?} does not match its declared size",
@@ -1491,7 +1574,7 @@ fn decompress(bytes: &[u8], limits: &Limits) -> Result<Vec<u8>, Error> {
         .saturating_mul(1_024)
         .saturating_add(1 << 20);
     let cap = limits.max_bytes.saturating_add(overhead);
-    let mut decoder = flate2::read::GzDecoder::new(Cursor::new(bytes));
+    let mut decoder = flate2::read::MultiGzDecoder::new(Cursor::new(bytes));
     let mut out = Vec::new();
     let mut limited = decoder.by_ref().take(cap.saturating_add(1));
     limited
@@ -1552,13 +1635,53 @@ fn validate_path(raw: &str) -> Result<(String, bool), Error> {
                 "entry path {body:?} contains a {component:?} component"
             )));
         }
+        if cfg!(windows)
+            && let Some(reason) = windows_unsafe(component)
+        {
+            return Err(Error::UnsafePath(format!("entry path {body:?} {reason}")));
+        }
     }
     Ok((body.to_string(), trailing))
+}
+
+/// Why `component` cannot be written as a name on Windows, if it cannot. A
+/// device name (`NUL`, `COM1.txt`) opens the device rather than a file under
+/// the destination, a `:` names an alternate data stream of another file, and
+/// Win32 drops a trailing dot or space, so `a.` would land on `a`. Go's
+/// `filepath.IsLocal` refuses the same names for the same reason.
+fn windows_unsafe(component: &str) -> Option<&'static str> {
+    if component
+        .chars()
+        .any(|c| c.is_control() || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return Some("contains a character Windows does not allow in a name");
+    }
+    if component.ends_with('.') || component.ends_with(' ') {
+        return Some("ends with a dot or a space, which Windows drops");
+    }
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or(component)
+        .trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+    let device = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() > 3
+        && matches!(
+            &stem[3..],
+            "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+        ));
+    device.then_some("is a Windows device name")
 }
 
 /// Refuses duplicate paths and file/directory collisions as entries arrive.
 /// Names are compared case-insensitively on Windows and macOS, where the
 /// filesystem would otherwise merge two entries the archive treats as distinct.
+/// The fold is Unicode lowercase, not ASCII: both filesystems fold `Ä` and `ä`
+/// together too.
 /// It keeps only the seen paths, so a streamed listing can validate without
 /// holding every entry's metadata.
 struct LayoutChecker {
@@ -1585,7 +1708,7 @@ impl LayoutChecker {
                 entry.path
             )));
         }
-        if self.fold && !self.folded.insert(entry.path.to_ascii_lowercase()) {
+        if self.fold && !self.folded.insert(entry.path.to_lowercase()) {
             return Err(Error::UnsafePath(format!(
                 "entry path {:?} collides with another name on a case-insensitive filesystem",
                 entry.path
@@ -1634,7 +1757,27 @@ fn too_large(message: impl Into<String>) -> Error {
 }
 
 fn tar_decode(error: std::io::Error) -> Error {
-    Error::Decode(format!("invalid tar: {error}"))
+    codec_error(error).unwrap_or_else(|error| Error::Decode(format!("invalid tar: {error}")))
+}
+
+fn entry_read_error(path: &str, error: std::io::Error) -> Error {
+    codec_error(error)
+        .unwrap_or_else(|error| Error::Decode(format!("could not read {path:?}: {error}")))
+}
+
+fn gzip_decode(error: std::io::Error) -> Error {
+    codec_error(error)
+        .unwrap_or_else(|error| Error::Decode(format!("invalid gzip stream: {error}")))
+}
+
+/// An [`Error`] raised inside a reader travels through `std::io` as the inner
+/// error; this recovers it so a limit stays a limit rather than a decode error.
+fn codec_error(error: std::io::Error) -> std::result::Result<Error, std::io::Error> {
+    if error.get_ref().is_some_and(|inner| inner.is::<Error>()) {
+        let inner = error.into_inner().expect("checked above");
+        return Ok(*inner.downcast::<Error>().expect("checked above"));
+    }
+    Err(error)
 }
 
 fn zip_decode(error: zip::result::ZipError) -> Error {
@@ -1686,8 +1829,12 @@ fn zip_datetime(ms: Option<u64>) -> zip::DateTime {
     let days = seconds.div_euclid(86_400);
     let of_day = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
-    if !(1980..=2107).contains(&year) {
+    if year < 1980 {
         return zip::DateTime::default();
+    }
+    if year > 2107 {
+        // The last instant a zip timestamp can hold, at its 2-second resolution.
+        return zip::DateTime::from_date_and_time(2107, 12, 31, 23, 59, 58).unwrap_or_default();
     }
     zip::DateTime::from_date_and_time(
         year as u16,
@@ -2197,5 +2344,143 @@ mod tests {
         }
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(10_957), (2000, 1, 1));
+    }
+
+    #[test]
+    fn zip_timestamps_clamp_to_the_representable_range() {
+        let early = zip_datetime(Some(0));
+        assert_eq!((early.year(), early.month(), early.day()), (1980, 1, 1));
+        // 2200-01-01T00:00:00Z
+        let late = zip_datetime(Some(7_258_118_400_000));
+        assert_eq!(
+            (
+                late.year(),
+                late.month(),
+                late.day(),
+                late.hour(),
+                late.minute()
+            ),
+            (2107, 12, 31, 23, 59)
+        );
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn plain_tar() -> Vec<u8> {
+        build(sample(), Format::Tar, Compression::None, &Limits::default()).unwrap()
+    }
+
+    /// Every full pass over a tar.gz: listing, the metadata stream, selected
+    /// reads, a streamed entry and extraction.
+    fn every_gzip_pass(bytes: Vec<u8>, limits: Limits) -> Vec<Result<(), Error>> {
+        use futures_util::StreamExt;
+        let source = Source::bytes(bytes);
+        let mut results = vec![
+            list_source(&source, &limits).map(drop),
+            read_selected_source(
+                &source,
+                Format::TarGz,
+                &BTreeSet::from(["a.txt".to_string()]),
+                &limits,
+            )
+            .map(drop),
+        ];
+        let (tx, mut rx) = mpsc::channel(1_024);
+        spawn_meta_stream(source.clone(), Format::TarGz, limits, tx);
+        results.push(loop {
+            match block_on(rx.next()) {
+                Some(MetaEvent::Entry(_)) => {}
+                Some(MetaEvent::Done) => break Ok(()),
+                Some(MetaEvent::Error(error)) => break Err(error),
+                None => panic!("the metadata stream ended without an outcome"),
+            }
+        });
+        let (tx, mut rx) = mpsc::channel(1_024);
+        spawn_entry_stream(source.clone(), Format::TarGz, "a.txt".into(), limits, tx);
+        results.push(loop {
+            match block_on(rx.next()) {
+                Some(StreamEvent::Data(_)) => {}
+                Some(StreamEvent::Done) => break Ok(()),
+                Some(StreamEvent::Error(error)) => break Err(error),
+                None => panic!("the entry stream ended without an outcome"),
+            }
+        });
+        let (tx, mut rx) = mpsc::channel(1_024);
+        spawn_extract(source, Format::TarGz, limits, tx);
+        results.push(loop {
+            match block_on(rx.next()) {
+                Some(ExtractEvent::Done) => break Ok(()),
+                Some(ExtractEvent::Error(error)) => break Err(error),
+                Some(_) => {}
+                None => panic!("the extraction ended without an outcome"),
+            }
+        });
+        results
+    }
+
+    #[test]
+    fn gzip_trailers_are_verified() {
+        let good = gzip(&plain_tar());
+        for result in every_gzip_pass(good.clone(), Limits::default()) {
+            result.unwrap();
+        }
+
+        let mut crc = good.clone();
+        let at = crc.len() - 8;
+        crc[at] ^= 0xff;
+        let truncated = good[..good.len() - 4].to_vec();
+        let mut garbage = good.clone();
+        garbage.extend_from_slice(b"not gzip");
+        for (name, bytes) in [("crc", crc), ("truncated", truncated), ("garbage", garbage)] {
+            for result in every_gzip_pass(bytes, Limits::default()) {
+                assert!(
+                    matches!(result, Err(Error::Decode(_))),
+                    "{name}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn concatenated_gzip_members_are_one_stream() {
+        let tar = plain_tar();
+        let (head, tail) = tar.split_at(512);
+        let mut bytes = gzip(head);
+        bytes.extend(gzip(tail));
+        for result in every_gzip_pass(bytes, Limits::default()) {
+            result.unwrap();
+        }
+    }
+
+    #[test]
+    fn gzip_past_the_cap_is_too_large_not_truncated() {
+        // The tar's entries fit, but the decompressed stream goes on: a cap
+        // that ended the input early would let the tar reader stop cleanly.
+        let mut tar = plain_tar();
+        tar.extend(std::iter::repeat_n(0_u8, 3 << 20));
+        let limits = Limits {
+            max_entries: 10,
+            max_bytes: 1_024,
+        };
+        for result in every_gzip_pass(gzip(&tar), limits) {
+            assert!(matches!(result, Err(Error::TooLarge(_))), "{result:?}");
+        }
+    }
+
+    #[test]
+    fn windows_unsafe_names() {
+        for name in [
+            "NUL", "nul.txt", "COM1", "lpt9.log", "COM¹", "CON .txt", "a:b", "a.", "a ", "a?b",
+            "a\u{1}b",
+        ] {
+            assert!(windows_unsafe(name).is_some(), "{name:?} was accepted");
+        }
+        for name in ["null", "COM", "COM10", "console.txt", "a.b", "nul_", ".a"] {
+            assert!(windows_unsafe(name).is_none(), "{name:?} was refused");
+        }
     }
 }

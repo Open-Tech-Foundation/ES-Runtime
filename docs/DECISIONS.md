@@ -3604,6 +3604,15 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 
 **Not here:** 7z, rar, brotli and zstd; passwords; selective extraction (read an entry, then write it yourself); preserving ownership, modes or arbitrary timestamps from an input archive; and appending to an existing archive.
 
+**Amendment (review against `Bun.Archive`, 2026-10-21).** Three rules this decision implied were not being kept, and one was missing:
+
+- **"Decompression is bounded" means an error at the bound, not an end of input.** A `take(cap)` reader ended the stream early, and a tar reader that hits end of input at a block boundary stops cleanly, so a tar.gz larger than the cap listed fewer entries with no error. Passing the cap is now `ERR_ARCHIVE_TOO_LARGE`.
+- **Validation includes the gzip trailer.** The tar reader stops at its end marker, before the CRC-32 and length, so a corrupted or truncated trailer was accepted by every read and by `extract()`. Each full pass now reads on to the end. Concatenated members are one stream, as `gzip` reads them, and bytes after the last member are refused rather than ignored: the same "refuse, don't sanitize" rule as the paths.
+- **Bytes are the caller's at construction.** The JS layer kept views and built or opened lazily, so writing to the caller's buffer afterwards changed the archive. They are copied, as a `Blob` copies its parts.
+- **Windows names are validated like Windows paths.** Device names (`NUL`, `COM1.txt`) open the device, `:` names an alternate data stream, and a trailing dot or space is dropped, so `a.` lands on `a`. These are refused on Windows, where the case fold also becomes Unicode rather than ASCII. Go's `filepath.IsLocal` refuses the same names. Like the case fold, this is applied where the filesystem has the problem, so the same archive can be accepted on Linux and refused on Windows.
+
+Bun's `..` normalization and symlink extraction remain rejected, as above.
+
 ### D175 — XML has one reader and its own writer, and refuses what is not well formed · *Accepted (2026-10-20)*
 
 **Context:** `XML.parse`, `XML.validate` and `XML.DecoderStream` each walked quick-xml's events on their own, and `XML.build` went through `serde_json::Value` into quick-xml's serde serializer. A review found each path losing data the others kept. quick-xml 0.41 reports a reference (`&amp;`, `&#65;`) as its own `GeneralRef` event, which the walker ignored, so every escaped character in text vanished (`<x>t&lt;</x>` read as `"t"`). CDATA was dropped the same way, attribute values were left escaped, two roots, text after the root and a repeated attribute were accepted, and `<a></a>` read as `{}` while `<a/>` read as `""`. The builder threw on every non-integer number, because serde_json's `arbitrary_precision` feature (switched on elsewhere in the build) turns such a number into a private one-key map whose key is not an XML name. It also wrote `NaN`, `undefined` and bytes as empty elements. The stream skipped a malformed record and ended a truncated document without an error.

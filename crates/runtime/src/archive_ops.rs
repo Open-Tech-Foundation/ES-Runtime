@@ -39,12 +39,38 @@ struct ArchiveHandle {
     limits: Limits,
 }
 
-struct StreamHandle {
-    rx: mpsc::Receiver<StreamEvent>,
+/// A stream's receiver, or `None` while a `*_next` call holds it. The entry
+/// stays in the registry until the stream ends or is closed, so a close that
+/// lands while a read is pending removes it, and the pending read then drops
+/// the receiver instead of putting it back. Dropping it is what stops the
+/// worker thread, which is otherwise parked on a full channel forever.
+type StreamHandle = Option<mpsc::Receiver<StreamEvent>>;
+type MetaHandle = Option<mpsc::Receiver<MetaEvent>>;
+
+/// Takes the receiver of stream `id` for one read.
+fn take_receiver<T>(
+    registry: &Rc<RefCell<HashMap<u64, Option<T>>>>,
+    id: u64,
+    what: &str,
+) -> std::result::Result<T, OpError> {
+    registry
+        .borrow_mut()
+        .get_mut(&id)
+        .and_then(Option::take)
+        .ok_or_else(|| {
+            OpError::new(
+                ExceptionClass::TypeError,
+                format!("this archive {what} has already ended or is being read"),
+            )
+        })
 }
 
-struct MetaHandle {
-    rx: mpsc::Receiver<MetaEvent>,
+/// Hands the receiver back after a read, unless the stream was closed while
+/// the read was pending.
+fn return_receiver<T>(registry: &Rc<RefCell<HashMap<u64, Option<T>>>>, id: u64, rx: T) {
+    if let Some(slot) = registry.borrow_mut().get_mut(&id) {
+        *slot = Some(rx);
+    }
 }
 
 /// Registers the `runtime:archive` ops.
@@ -201,34 +227,26 @@ pub(crate) fn install(
             handle.limits,
             tx,
         );
-        stream_registry
-            .borrow_mut()
-            .insert(stream_id, StreamHandle { rx });
+        stream_registry.borrow_mut().insert(stream_id, Some(rx));
         Ok(Value::Number(stream_id as f64))
     }))?;
 
     let stream_next_registry = streams.clone();
     engine.register_op(OpDecl::r#async("archive_stream_next", move |args| {
-        let parsed: std::result::Result<(u64, StreamHandle), OpError> = (|| {
+        let parsed: std::result::Result<(u64, mpsc::Receiver<StreamEvent>), OpError> = (|| {
             let id = number_arg(&args, 0, "stream")?;
-            let state = stream_next_registry
-                .borrow_mut()
-                .remove(&id)
-                .ok_or_else(|| {
-                    OpError::new(
-                        ExceptionClass::TypeError,
-                        "this archive stream has already ended",
-                    )
-                })?;
-            Ok((id, state))
+            Ok((id, take_receiver(&stream_next_registry, id, "stream")?))
         })();
         let stream_next_registry = stream_next_registry.clone();
         Box::pin(async move {
-            let (id, mut state) = parsed?;
-            let event = state.rx.next().await;
+            let (id, mut rx) = parsed?;
+            let event = rx.next().await;
+            if !matches!(event, Some(StreamEvent::Data(_))) {
+                stream_next_registry.borrow_mut().remove(&id);
+            }
             match event {
                 Some(StreamEvent::Data(data)) => {
-                    stream_next_registry.borrow_mut().insert(id, state);
+                    return_receiver(&stream_next_registry, id, rx);
                     Ok(Value::Object(vec![
                         ("data".to_string(), Value::Bytes(data)),
                         ("done".to_string(), Value::Bool(false)),
@@ -278,30 +296,26 @@ pub(crate) fn install(
         let stream_id = mint(&ids);
         let (tx, rx) = mpsc::channel(2);
         archive::spawn_meta_stream(handle.source.clone(), handle.format, handle.limits, tx);
-        meta_registry
-            .borrow_mut()
-            .insert(stream_id, MetaHandle { rx });
+        meta_registry.borrow_mut().insert(stream_id, Some(rx));
         Ok(Value::Number(stream_id as f64))
     }))?;
 
     let meta_next_registry = metas.clone();
     engine.register_op(OpDecl::r#async("archive_entries_next", move |args| {
-        let parsed: std::result::Result<(u64, MetaHandle), OpError> = (|| {
+        let parsed: std::result::Result<(u64, mpsc::Receiver<MetaEvent>), OpError> = (|| {
             let id = number_arg(&args, 0, "stream")?;
-            let state = meta_next_registry.borrow_mut().remove(&id).ok_or_else(|| {
-                OpError::new(
-                    ExceptionClass::TypeError,
-                    "this archive listing has already ended",
-                )
-            })?;
-            Ok((id, state))
+            Ok((id, take_receiver(&meta_next_registry, id, "listing")?))
         })();
         let meta_next_registry = meta_next_registry.clone();
         Box::pin(async move {
-            let (id, mut state) = parsed?;
-            match state.rx.next().await {
+            let (id, mut rx) = parsed?;
+            let event = rx.next().await;
+            if !matches!(event, Some(MetaEvent::Entry(_))) {
+                meta_next_registry.borrow_mut().remove(&id);
+            }
+            match event {
                 Some(MetaEvent::Entry(meta)) => {
-                    meta_next_registry.borrow_mut().insert(id, state);
+                    return_receiver(&meta_next_registry, id, rx);
                     Ok(Value::Object(vec![
                         ("entry".to_string(), meta_value(&meta)),
                         ("done".to_string(), Value::Bool(false)),
@@ -820,6 +834,39 @@ mod tests {
 
     fn s(value: &str) -> Value {
         Value::String(value.to_string())
+    }
+
+    #[test]
+    fn a_close_during_a_pending_read_drops_the_receiver() {
+        let registry: Rc<RefCell<HashMap<u64, Option<mpsc::Receiver<u8>>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let (mut tx, rx) = mpsc::channel(0);
+        registry.borrow_mut().insert(1, Some(rx));
+
+        let rx = take_receiver(&registry, 1, "stream").unwrap();
+        assert!(
+            take_receiver(&registry, 1, "stream").is_err(),
+            "one reader at a time"
+        );
+        registry.borrow_mut().remove(&1); // the close, while the read is pending
+        return_receiver(&registry, 1, rx);
+
+        assert!(registry.borrow().is_empty());
+        assert!(
+            tx.try_send(0).is_err(),
+            "the producer sees the stream closed"
+        );
+    }
+
+    #[test]
+    fn a_read_returns_the_receiver_while_open() {
+        let registry: Rc<RefCell<HashMap<u64, Option<mpsc::Receiver<u8>>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let (_tx, rx) = mpsc::channel(0);
+        registry.borrow_mut().insert(1, Some(rx));
+        let rx = take_receiver(&registry, 1, "stream").unwrap();
+        return_receiver(&registry, 1, rx);
+        assert!(take_receiver(&registry, 1, "stream").is_ok());
     }
 
     #[test]

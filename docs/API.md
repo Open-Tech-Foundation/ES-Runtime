@@ -3511,7 +3511,9 @@ await Archive.write(file("bundle.zip"), entries, { format: "zip" });
 - a `runtime:fs` `file()`.
 
 A path string is a `TypeError`: pass `file(path)`. A `SharedArrayBuffer` is
-refused. Opening detects the format from the leading bytes — gzip, zip or
+refused. Bytes — a source, or an entry's data — are copied when the `Archive`
+is constructed, so changing the buffer afterwards does not change the archive.
+Opening detects the format from the leading bytes — gzip, zip or
 tar — and never from a name or extension.
 
 For build entries, `Blob` and `File` mean the web APIs. A `runtime:fs` `file()`
@@ -3539,7 +3541,7 @@ input produces the same bytes.
 | `entries()` | An array of `ArchiveEntry`, in archive order. A snapshot: use the async iterator to stream it. |
 | `[Symbol.asyncIterator]` | An `AsyncIterable<ArchiveEntry>` over the same metadata, parsed one entry at a time. |
 | `files(filter?)` | A `Map<string, File>` of the file entries (directories skipped). `filter` is a predicate on the path, a path prefix string, or a `RegExp`. |
-| `extract(directory)` | Writes every entry under `directory` (a path string or `file()`) and resolves to `{ files, directories }`. Needs `FileWrite`. |
+| `extract(directory, options?)` | Writes every entry under `directory` (a path string or `file()`) and resolves to `{ files, directories }`. `options` may set `maxEntries` / `maxBytes` for this extraction; a limit it leaves out keeps the Archive's. Needs `FileWrite`. |
 | `Archive.write(destination, input, options?)` | Builds `input` as above and writes it to `destination` (a path string or `file()`), resolving to the byte count. Needs `FileWrite`. |
 
 `for await (const entry of archive)` streams metadata instead of collecting an
@@ -3567,7 +3569,9 @@ links, zip symlinks, special tar types (character/block/FIFO/sparse/global
 PAX) and encrypted zip entries are refused, as is zip compression other than
 Stored and Deflated. Duplicate entries, file/directory collisions, and names
 that would collide on a case-insensitive filesystem (Windows, macOS) are
-refused. An archive is never sanitized into a different one. `extract()` checks
+refused. On Windows, device names (`NUL`, `COM1.txt`), names with `:` or
+another character Windows forbids, and names ending in a dot or space are
+refused too. An archive is never sanitized into a different one. `extract()` checks
 the destination, parents and output paths for existing symlinks, then decodes
 and validates the whole archive into a temporary directory before copying
 staged files into the destination. A corrupt or unsafe archive therefore does

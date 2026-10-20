@@ -493,3 +493,101 @@ try {
         "ERR_NOT_FOUND"
     );
 }
+
+/// A corrupted gzip trailer is a decode error on every path that reads the
+/// whole archive, including extraction, which writes nothing.
+#[test]
+fn gzip_trailers_are_verified_end_to_end() {
+    let source = r#"
+import { Archive } from "runtime:archive";
+import { exists } from "runtime:fs";
+
+const good = await new Archive({ "a.txt": "hello" }, { compress: "gzip" }).bytes();
+const bad = good.slice();
+bad[bad.length - 8] ^= 0xff; // the CRC-32
+const outcome = async (work) => {
+  try { await work(); return "ok"; } catch (error) { return error.code; }
+};
+console.log(await outcome(() => new Archive(bad).entries()));
+console.log(await outcome(() => new Archive(bad).files()));
+console.log(await outcome(() => new Archive(bad).extract("archive_gz_out")));
+console.log(await exists("archive_gz_out"));
+console.log(await outcome(() => new Archive(good).extract("archive_gz_good")));
+"#;
+    let dir = temp("archive_gz_out");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(temp("archive_gz_good"));
+    let out = run(
+        "archive_gz_trailer.mjs",
+        source,
+        &["--deny-all", "--allow-read", "--allow-write"],
+    );
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        [
+            "ERR_ARCHIVE_DECODE_FAILED",
+            "ERR_ARCHIVE_DECODE_FAILED",
+            "ERR_ARCHIVE_DECODE_FAILED",
+            "false",
+            "ok"
+        ]
+    );
+}
+
+/// An Archive holds the bytes it was given at construction; writing to the
+/// caller's buffer afterwards changes nothing, for a source or for an entry.
+#[test]
+fn input_bytes_are_copied_at_construction() {
+    let source = r#"
+import { Archive } from "runtime:archive";
+
+const tar = await new Archive({ "a.txt": "hello" }).bytes();
+const opened = new Archive(tar);
+tar.fill(0);
+eq((await opened.entries()).map((entry) => entry.path), ["a.txt"], "source");
+
+const data = new TextEncoder().encode("hello");
+const built = new Archive({ "a.txt": data });
+data.fill(65);
+eq(await (await built.files()).get("a.txt").text(), "hello", "entry");
+console.log("ok");
+"#;
+    assert_eq!(
+        run("archive_copy.mjs", source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// A limit passed to extract() overrides that limit only; the Archive's other
+/// limits still apply. A directory entry streams as empty, as bytes() is.
+#[test]
+fn extract_limits_merge_and_directories_stream_empty() {
+    let source = r#"
+import { Archive } from "runtime:archive";
+
+const tar = await new Archive({ "a.txt": "x".repeat(100) }).bytes();
+try {
+  await new Archive(tar, { maxBytes: 50 }).extract("archive_merge_out", { maxEntries: 10 });
+  console.log("extracted");
+} catch (error) {
+  console.log(error.code);
+}
+
+const zip = new Archive(await new Archive({ "d/": null, "d/x": "1" }, { format: "zip" }).bytes());
+const directory = (await zip.entries()).find((entry) => entry.directory);
+const read = await directory.stream().getReader().read();
+eq(read.done, true, "directory stream");
+console.log("ok");
+"#;
+    let _ = std::fs::remove_dir_all(temp("archive_merge_out"));
+    assert_eq!(
+        run(
+            "archive_merge.mjs",
+            source,
+            &["--deny-all", "--allow-write"]
+        )
+        .lines()
+        .collect::<Vec<_>>(),
+        ["ERR_ARCHIVE_TOO_LARGE", "ok"]
+    );
+}

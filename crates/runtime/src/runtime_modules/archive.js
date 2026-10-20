@@ -63,8 +63,8 @@ function isShared(buffer) {
   return typeof SharedArrayBuffer === "function" && buffer instanceof SharedArrayBuffer;
 }
 
-// A view is kept, not copied: the op call copies it, so the bytes used are the
-// ones there at the call.
+// Copied, as a Blob copies its parts: an Archive is built or opened lazily, so
+// a view would let a later write to the caller's buffer change what it holds.
 function bytesOf(value, what) {
   let buffer;
   if (value instanceof ArrayBuffer) buffer = value;
@@ -73,8 +73,8 @@ function bytesOf(value, what) {
   if (isShared(buffer)) {
     throw new TypeError(`${what} cannot be a SharedArrayBuffer, which may change while it is read`);
   }
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
 }
 
 function optionsObject(options, what) {
@@ -245,6 +245,7 @@ class ArchiveEntry {
   }
 
   stream() {
+    if (this.directory) return new ReadableStream({ start: (controller) => controller.close() });
     const archive = this.#archive;
     const path = this.path;
     const token = {};
@@ -434,8 +435,11 @@ class Archive {
       throw new TypeError("extract() takes a directory path or a file()");
     }
     const opts = optionsObject(options, "extract");
+    // A limit passed here overrides that one limit; the others stay the ones
+    // the Archive was opened with.
+    const limits = { ...this.#limits, ...limitsOf(opts) };
     const { handle } = await this[OPEN]();
-    return ops.archive_extract(handle, path, limitsOf(opts));
+    return ops.archive_extract(handle, path, limits);
   }
 
   // Writes an archive built from `input` to `destination` (a path string or a

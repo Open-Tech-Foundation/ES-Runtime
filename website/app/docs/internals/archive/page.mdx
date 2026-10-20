@@ -36,8 +36,15 @@ check before returning. Each path must be:
 - no empty component, no `.` and no `..`;
 - no backslash and no drive letter;
 - free of duplicates and file/directory collisions, tracked as entries arrive;
-- on Windows and macOS, not differing only by ASCII case from an earlier path,
-  because the filesystem would merge entries the archive treats as distinct.
+- on Windows and macOS, not differing only by case from an earlier path
+  (Unicode lowercase, not just ASCII), because the filesystem would merge
+  entries the archive treats as distinct;
+- on Windows, not a device name (`NUL`, `COM1.txt`), not containing `:` or a
+  character Windows forbids, and not ending in a dot or space. A device name
+  opens the device instead of a file under the destination, `:` names an
+  alternate data stream of another file, and Win32 drops a trailing dot or
+  space so `a.` would land on `a`. Go's `filepath.IsLocal` refuses the same
+  names.
 
 Tar links and special types, zip symlinks, encrypted zip entries, and zip
 compression other than Stored and Deflated are refused. A directory entry that
@@ -60,15 +67,27 @@ checked twice:
    its size cannot walk past the budget.
 
 A gzip stream has no declared total to trust, so its decompression is bounded
-by `maxBytes` plus a per-entry allowance for tar headers. Over either limit is a
-`RangeError` with `ERR_ARCHIVE_TOO_LARGE`.
+by `maxBytes` plus a per-entry allowance for tar headers. Reaching that bound is
+an error, not an early end of input: an early end could stop the tar reader
+cleanly at a block boundary and list a truncated archive as if it were whole.
+Over either limit is a `RangeError` with `ERR_ARCHIVE_TOO_LARGE`.
+
+The tar reader stops at its end-of-archive marker, but gzip's CRC-32 and length
+are in a trailer after it, and are checked only when the decoder reaches the
+end of its input. Every pass that reads the whole archive — listing, the async
+iterator, `files()`, an entry's `bytes()` or `stream()`, and `extract()` —
+therefore reads on to the end, so a corrupted or truncated trailer is
+`ERR_ARCHIVE_DECODE_FAILED` rather than accepted. Concatenated gzip members are
+one stream, as `gzip` reads them; bytes after the last member are refused.
 
 Listing and single-entry reads do not materialize entries they do not return:
 zip metadata comes from the central directory and tar headers are read in order.
 `entries()` therefore costs a pass over headers, not a pass over contents, and
 the async iterator yields those headers one at a time instead of collecting an
 array. A tar.gz entry is reached by decompressing through its predecessors, but
-those bytes are discarded as they are skipped rather than retained.
+those bytes are discarded as they are skipped rather than retained. Its
+`stream()` then decompresses the rest of the archive before it closes, which is
+what checks the trailer above; a stream cancelled early skips that work.
 
 ## File sources are streamed
 
