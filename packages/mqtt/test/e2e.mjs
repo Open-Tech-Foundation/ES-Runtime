@@ -135,7 +135,7 @@ async function collect(subscription, count, timeout = 5000) {
   const serving = (async () => {
     const [request] = await collect(service, 1);
     is(typeof request?.responseTopic, "string", "the request carries a response topic");
-    is(request?.correlationData.length, 8, "and correlation data");
+    is(request?.correlationData.length, 16, "and 16 random bytes of correlation data");
     await responder.publish(request.responseTopic, `echo:${request.text()}`, {
       qos: 0,
       correlationData: request.correlationData,

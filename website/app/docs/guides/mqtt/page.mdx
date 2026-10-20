@@ -128,6 +128,9 @@ const client = await MqttClient.connect(url, {
   clientId: "worker-1",
   cleanStart: false,
   sessionExpiryInterval: 300, // keep the session for five minutes after a drop
+  // The broker sends what queued during the gap right after connecting,
+  // before you have subscribed again; it arrives here.
+  onUnmatchedMessage: (message) => handle(message),
 });
 
 if (client.sessionPresent) {

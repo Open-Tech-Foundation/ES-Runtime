@@ -53,6 +53,33 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Fixed
 
+- A 3.1.1 CONNACK refusal (return codes 1–5) was read by the 5.0 rule (refusal
+  from 0x80) and accepted as a successful connection; a bad password surfaced
+  only as a later "broker closed the connection". Codes 4 and 5 are now
+  `ERR_MQTT_AUTH`, 1 `ERR_MQTT_HANDSHAKE`, the rest `ERR_MQTT_REFUSED`.
+- The broker's CONNACK limits (5.0) are kept: a QoS 1/2 publish beyond its
+  Receive Maximum waits for a slot within its timeout, and a publish above its
+  Maximum QoS, a retained one without Retain Available, a packet over its
+  Maximum Packet Size, and a wildcard, shared or identified subscription it
+  lacks reject with `ERR_MQTT_UNSUPPORTED` instead of getting the client
+  disconnected.
+- Messages that arrived before the client existed — a resumed session's backlog,
+  sent right after the CONNACK and already acknowledged — were dropped. They
+  are held, and messages no subscription matches go to the new
+  `onUnmatchedMessage` option.
+- `request` used a `$`-prefixed reply topic, which the specification reserves
+  for the broker, and `Math.random` for its token and correlation data. It now
+  uses `esrun/reply/<token>` and `crypto.getRandomValues` (16 bytes).
+- A packet identifier still awaiting its acknowledgement could be reused when
+  the counter wrapped.
+- Unsubscribing one of two subscriptions to the same filter ended both; the
+  UNSUBSCRIBE is now sent only for the last.
+- Integer fields (`keepAlive`, intervals, identifiers) out of range wrapped
+  silently; they are refused.
+- Receiving a large packet in many chunks copied the whole buffer per chunk.
+- Inbound Topic Aliases (5.0) are resolved when `topicAliasMaximum` is
+  advertised, instead of failing on the empty topic.
+
 - Concurrent `ping` calls no longer share one outstanding flag. A PINGRESP
   carries no identifier, so two exchanges could not be told apart — one reply
   answered every caller, and a reply to a ping already given up on answered the

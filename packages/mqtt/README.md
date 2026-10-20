@@ -62,6 +62,7 @@ const client = await MqttClient.connect("mqtts://app:secret@broker.internal:8883
 | `username`, `password` | The credentials; override what the URL carries. `password` may be bytes. |
 | `keepAlive` | Seconds to ask for. Defaults to 60; `0` disables it. A broker's `serverKeepAlive` overrides it (5.0). |
 | `cleanStart` | Whether to start a fresh session. Defaults to `true`. |
+| `onUnmatchedMessage` | Receives every message no subscription matches — notably a resumed session's backlog, which the broker sends straight after the CONNACK, before anything has subscribed again. Also settable later as `client.onUnmatchedMessage`. |
 | `will` | The last will: `{ topic, payload, qos, retain, properties? }`, published by the broker if this client vanishes. |
 | `sessionExpiryInterval` | Seconds the session survives a disconnect (5.0). |
 | `properties` | Extra CONNECT properties, merged over the ones derived from the fields above. |
@@ -111,7 +112,14 @@ await client.publish("events/user", JSON.stringify(user), {
 | `responseTopic`, `correlationData` | The reply plumbing `request` sets for you (5.0). |
 | `userProperties` | An array of `[name, value]` pairs, in order (5.0). |
 | `properties` | Any further 5.0 property, merged over the ones above. |
-| `timeout` | Milliseconds to wait for the acknowledgement. Defaults to the client's `timeout`. |
+| `timeout` | Milliseconds to wait for the acknowledgement — and for room under the broker's Receive Maximum. Defaults to the client's `timeout`. |
+
+On 5.0 the client keeps to what the broker's CONNACK allows. A QoS 1 or 2
+publish beyond its **Receive Maximum** waits for an earlier one to be
+acknowledged; a publish above its **Maximum QoS**, a retained one when **Retain
+Available** is 0, or a packet over its **Maximum Packet Size** rejects with
+`ERR_MQTT_UNSUPPORTED` before anything is sent — the broker would disconnect
+the client for any of them.
 
 ## Subscribing
 
@@ -138,13 +146,18 @@ for await (const message of subscription) {
 | `properties` | Any further 5.0 property. |
 | `timeout` | Milliseconds to wait for the SUBACK. Defaults to the client's `timeout`. |
 
+A wildcard filter, a `$share/` filter or a subscription identifier is refused
+with `ERR_MQTT_UNSUPPORTED` when the broker's CONNACK says it lacks that feature.
+An inbound Topic Alias is resolved when `properties.topicAliasMaximum` was set on
+connect; without it the broker may not use one.
+
 | Subscription member | |
 | --- | --- |
 | `filter` | The filter it was made with. |
 | `grantedQos` | The QoS the broker granted. |
 | `closed` | Whether it has ended. |
 | `nextMessage(timeout?)` | The next message, rejecting with `ERR_MQTT_TIMEOUT` if none arrives. |
-| `unsubscribe()` | Unsubscribes at the broker and ends the iterable. |
+| `unsubscribe()` | Ends the iterable; unsubscribes at the broker when it was the last local subscription to its filter (the broker holds one per filter). |
 | `matches(topic)` | Whether a topic matches this filter. |
 
 A `Message` is `topic`, `payload` (`Uint8Array`), `qos`, `retain`, `dup`, and the
@@ -155,8 +168,10 @@ and the `correlationData`, `responseTopic` and `userProperties` shortcuts.
 
 MQTT 5.0 defines the convention and nothing more: publish with a response topic
 and correlation data, and read the reply that carries the same data back.
-`request` sets up the reply subscription, publishes, and resolves the first reply
-whose correlation data matches. It needs 5.0 and refuses on 3.1.1 rather than
+`request` sets up the reply subscription (`esrun/reply/<token>`, outside the
+broker's reserved `$` space; the token and 16 bytes of correlation data are from
+`crypto.getRandomValues`), publishes, and resolves the first reply whose
+correlation data matches. It needs 5.0 and refuses on 3.1.1 rather than
 downgrading to a fire-and-forget publish.
 
 ```js

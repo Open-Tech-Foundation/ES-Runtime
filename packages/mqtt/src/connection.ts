@@ -203,13 +203,6 @@ export interface ConnectionHandlers {
   onClosed(error: MqttError | null): void;
 }
 
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-}
-
 /** One in-flight PINGREQ/PINGRESP exchange, and everyone waiting on it. */
 interface PingCycle {
   promise: Promise<void>;
@@ -252,7 +245,15 @@ export class Connection {
   readonly #handlers: ConnectionHandlers;
   #level: ProtocolLevel;
   #keepAlive: number;
+  // Received bytes not yet consumed by a packet: `#buffer[#head, #tail)`. It
+  // grows by doubling and is compacted in place, so a large packet arriving in
+  // many chunks costs its own size rather than a copy of everything buffered
+  // per chunk.
   #buffer: Uint8Array = new Uint8Array(0);
+  #head = 0;
+  #tail = 0;
+  // Inbound Topic Aliases (5.0), when the application advertised a maximum.
+  #aliases = new Map<number, string>();
 
   #closing = false;
   #closed = false;
@@ -324,7 +325,18 @@ export class Connection {
 
   /** Sends one packet, serialised so a packet is never interleaved with another. */
   async send(packet: Packet): Promise<void> {
-    await this.#write(encodePacket(packet, this.#level));
+    const bytes = encodePacket(packet, this.#level);
+    // A 5.0 broker that names a Maximum Packet Size disconnects a client that
+    // exceeds it (MQTT-3.1.2-24). Refused here, so one oversized publish fails
+    // on its own instead of taking the connection with it.
+    const max = this.#level === 5 ? this.#connack.properties?.maximumPacketSize : undefined;
+    if (max !== undefined && bytes.length > max) {
+      throw new MqttError(
+        `a ${packetName(packet.type)} of ${bytes.length} bytes exceeds the broker's ${max}-byte maximum`,
+        { code: MqttErrorCode.Unsupported },
+      );
+    }
+    await this.#write(bytes);
   }
 
   /**
@@ -466,20 +478,21 @@ export class Connection {
       reasonCode: 0,
     });
     const connack = await connection.#handshake(level);
-    if (isErrorReason(connack.reasonCode)) {
-      const name =
-        level === 5 ? reasonName(connack.reasonCode) : connack311Name(connack.reasonCode);
-      throw new MqttError(
-        `the broker refused the connection: ${name ?? `reason ${connack.reasonCode}`}`,
-        {
-          code:
-            connack.reasonCode === 0x87 || connack.reasonCode === 0x86
-              ? MqttErrorCode.Auth
-              : MqttErrorCode.Refused,
-          reasonCode: connack.reasonCode,
-          ...(name === null ? {} : { reasonName: name }),
-        },
-      );
+    // The two levels judge a CONNACK differently. A 5.0 reason code refuses
+    // from 0x80 up; a 3.1.1 return code refuses with anything but 0, and its
+    // refusals are 1–5 — read by the 5.0 rule they all looked like success, so
+    // a broker rejecting the password appeared to accept the connection.
+    const code = connack.reasonCode;
+    const refused = level === 5 ? isErrorReason(code) : code !== 0;
+    if (refused) {
+      const name = level === 5 ? reasonName(code) : connack311Name(code);
+      const auth = level === 5 ? code === 0x86 || code === 0x87 : code === 4 || code === 5;
+      const version = level === 5 ? code === 0x84 : code === 1;
+      throw new MqttError(`the broker refused the connection: ${name ?? `reason ${code}`}`, {
+        code: auth ? MqttErrorCode.Auth : version ? MqttErrorCode.Handshake : MqttErrorCode.Refused,
+        reasonCode: code,
+        ...(name === null ? {} : { reasonName: name }),
+      });
     }
     // A non-zero code below 0x80 is not a valid 5.0 CONNACK success code — it is
     // an older broker's return code read as one — so it is a version mismatch.
@@ -583,10 +596,13 @@ export class Connection {
   async #readPacket(level: ProtocolLevel, timeout: number): Promise<Packet | null> {
     const deadline = Number.isFinite(timeout) ? Date.now() + timeout : Number.POSITIVE_INFINITY;
     for (;;) {
-      const frame = readFrame(this.#buffer);
+      const frame = readFrame(this.#buffer.subarray(this.#head, this.#tail));
       if (frame !== null) {
-        this.#buffer = this.#buffer.subarray(frame.total);
-        return decodePacketBody(frame.firstByte, frame.body, level);
+        // Copied out: the buffer is reused, and a payload must outlive it.
+        const body = frame.body.slice();
+        this.#head += frame.total;
+        if (this.#head === this.#tail) this.#head = this.#tail = 0;
+        return decodePacketBody(frame.firstByte, body, level);
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
@@ -594,8 +610,26 @@ export class Connection {
       }
       const chunk = await this.#readWithDeadline(remaining);
       if (chunk === null) return null;
-      this.#buffer = concat(this.#buffer, chunk);
+      this.#append(chunk);
     }
+  }
+
+  #append(chunk: Uint8Array): void {
+    if (chunk.length === 0) return;
+    if (this.#head > 0) {
+      this.#buffer.copyWithin(0, this.#head, this.#tail);
+      this.#tail -= this.#head;
+      this.#head = 0;
+    }
+    if (this.#tail + chunk.length > this.#buffer.length) {
+      let size = Math.max(1024, this.#buffer.length * 2);
+      while (size < this.#tail + chunk.length) size *= 2;
+      const grown = new Uint8Array(size);
+      grown.set(this.#buffer.subarray(0, this.#tail));
+      this.#buffer = grown;
+    }
+    this.#buffer.set(chunk, this.#tail);
+    this.#tail += chunk.length;
   }
 
   /**
@@ -728,6 +762,7 @@ export class Connection {
   }
 
   #onPublish(packet: PublishPacket): void {
+    this.#resolveAlias(packet);
     if (packet.qos === 0) {
       this.#handlers.onMessage(packet);
       return;
@@ -746,6 +781,38 @@ export class Connection {
     void this.send({ type: PacketType.Pubrec, packetId: packet.packetId!, reasonCode: 0 }).catch(
       () => {},
     );
+  }
+
+  /**
+   * Applies an inbound Topic Alias (5.0). A broker may only use them when this
+   * client advertised a Topic Alias Maximum; a PUBLISH that names one sets the
+   * mapping when it carries a topic, and uses it when its topic is empty. An
+   * alias out of range, or an empty topic with no known alias, is the broker's
+   * protocol error (0x94 Topic Alias invalid).
+   */
+  #resolveAlias(packet: PublishPacket): void {
+    const alias = packet.properties?.topicAlias;
+    if (alias === undefined) {
+      if (packet.topic === "") {
+        throw new ProtocolError("a PUBLISH had an empty topic and no Topic Alias");
+      }
+      return;
+    }
+    const maximum = this.#settings.properties?.topicAliasMaximum ?? 0;
+    if (alias === 0 || alias > maximum) {
+      throw new ProtocolError(
+        `the broker used Topic Alias ${alias}, outside the advertised 1..${maximum}`,
+      );
+    }
+    if (packet.topic !== "") {
+      this.#aliases.set(alias, packet.topic);
+      return;
+    }
+    const topic = this.#aliases.get(alias);
+    if (topic === undefined) {
+      throw new ProtocolError(`the broker used Topic Alias ${alias} before defining it`);
+    }
+    packet.topic = topic;
   }
 
   #completeInboundQos2(packetId: number): void {

@@ -118,6 +118,15 @@ export class ByteReader {
   }
 }
 
+// `DataView`'s setters reduce a value modulo the field's width, so a keep-alive
+// of 70 000 seconds would go out as 4 464 and a negative expiry as a huge one.
+// Every integer field is checked here, once, rather than at each caller.
+function checkRange(value: number, max: number, what: string): void {
+  if (!Number.isInteger(value) || value < 0 || value > max) {
+    throw new ProtocolError(`${what} is 0 to ${max}; got ${value}`);
+  }
+}
+
 /**
  * A growable buffer being built up.
  *
@@ -151,6 +160,7 @@ export class ByteWriter {
   }
 
   u8(v: number): this {
+    checkRange(v, 0xff, "a byte");
     this.#room(1);
     this.#view.setUint8(this.#at, v);
     this.#at += 1;
@@ -158,6 +168,7 @@ export class ByteWriter {
   }
 
   u16(v: number): this {
+    checkRange(v, 0xffff, "a two-byte integer");
     this.#room(2);
     this.#view.setUint16(this.#at, v);
     this.#at += 2;
@@ -165,6 +176,7 @@ export class ByteWriter {
   }
 
   u32(v: number): this {
+    checkRange(v, 0xffffffff, "a four-byte integer");
     this.#room(4);
     this.#view.setUint32(this.#at, v);
     this.#at += 4;

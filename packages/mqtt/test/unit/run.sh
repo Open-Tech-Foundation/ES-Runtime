@@ -13,7 +13,7 @@ esrun="${ESRUN:-$here/../../../../target/release/esrun}"
 [ -f "$here/../../dist/index.js" ] || { echo "not built — esdev build --lib src" >&2; exit 1; }
 
 status=0
-for test in varint wire reason topic properties packets connection client transport unhandled; do
+for test in varint wire reason topic properties packets connection client compliance transport unhandled; do
   # --allow-imports: esrun grants nothing by default (DECISIONS D65) and these
   # load the built package out of dist/. Nothing else is needed — a wire codec
   # touches no network and no disk.

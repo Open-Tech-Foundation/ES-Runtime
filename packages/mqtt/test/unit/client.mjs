@@ -431,7 +431,8 @@ for (const [name, call] of [
     "then publishes the request",
   );
   ok(request.properties.responseTopic === responseTopic, "carrying its response topic");
-  ok(request.properties.correlationData.length === 8, "and correlation data");
+  ok(request.properties.correlationData.length === 16, "and 16 random bytes of correlation data");
+  ok(!responseTopic.startsWith("$"), "on a reply topic outside the broker's reserved $ space");
 
   broker.send({
     type: PacketType.Publish,

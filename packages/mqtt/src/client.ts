@@ -130,6 +130,14 @@ export interface SubscribeOptions {
 export interface MqttClientOptions extends ConnectionSettings {
   /** The default timeout for a publish/subscribe, in ms. Defaults 30 000. */
   timeout?: number;
+  /**
+   * Receives every message no subscription on this client matches. A
+   * persistent session (`cleanStart: false`) delivers what queued while the
+   * client was away straight after the CONNACK — before the application has
+   * subscribed again — and those land here instead of being dropped. Set it
+   * here, not later, to see them.
+   */
+  onUnmatchedMessage?: (message: Message) => void;
 }
 
 /** A live subscription: an async iterable of messages, until unsubscribed. */
@@ -230,16 +238,26 @@ export class Subscription implements AsyncIterable<Message> {
     return true;
   }
 
-  /** Unsubscribes from the broker and ends the iterable. */
+  /**
+   * Ends this subscription. The broker holds one subscription per filter for a
+   * client, so the UNSUBSCRIBE is sent only when this was the last local
+   * subscription to its filter; any other keeps receiving.
+   */
   async unsubscribe(): Promise<void> {
     if (this.#closed) return;
-    await this.#client.unsubscribe(this.filter);
+    await this.#client.release(this);
     this.finish();
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Message> {
     return this;
   }
+}
+
+/** Where messages wait while the client that will route them is being built. */
+interface Holder {
+  client: MqttClient | null;
+  early: PublishPacket[];
 }
 
 type Waiter<T> = {
@@ -252,6 +270,13 @@ export class MqttClient {
   #connection: Connection;
   #options: MqttClientOptions;
   #subscriptions: Subscription[] = [];
+  // QoS 1 and 2 publishes awaiting their final acknowledgement, and those
+  // waiting for room under the broker's Receive Maximum.
+  #inFlight = 0;
+  #slotWaiters: Array<() => void> = [];
+
+  /** Messages no subscription matches. See {@link MqttClientOptions.onUnmatchedMessage}. */
+  onUnmatchedMessage: ((message: Message) => void) | null = null;
   #ackWaiters = new Map<number, Waiter<AckPacket>>();
   #subackWaiters = new Map<number, Waiter<SubackPacket>>();
   #unsubackWaiters = new Map<number, Waiter<UnsubackPacket>>();
@@ -260,15 +285,14 @@ export class MqttClient {
   private constructor(connection: Connection, options: MqttClientOptions) {
     this.#connection = connection;
     this.#options = options;
+    this.onUnmatchedMessage = options.onUnmatchedMessage ?? null;
   }
 
   /** Connects to `url` and completes the handshake. */
   static async connect(url: string, options: MqttClientOptions = {}): Promise<MqttClient> {
-    const holder: { client: MqttClient | null } = { client: null };
+    const holder: Holder = { client: null, early: [] };
     const connection = await Connection.open(url, options, MqttClient.#handlers(holder));
-    const client = new MqttClient(connection, options);
-    holder.client = client;
-    return client;
+    return MqttClient.#adopt(holder, connection, options);
   }
 
   /**
@@ -283,22 +307,31 @@ export class MqttClient {
     options: MqttClientOptions = {},
     level: 4 | 5 = 5,
   ): Promise<MqttClient> {
-    const holder: { client: MqttClient | null } = { client: null };
+    const holder: Holder = { client: null, early: [] };
     const connection = await Connection.over(
       transport,
       options,
       MqttClient.#handlers(holder),
       level,
     );
+    return MqttClient.#adopt(holder, connection, options);
+  }
+
+  // The read loop starts with the CONNACK, before the client object exists, and
+  // a persistent session's backlog arrives right then — already acknowledged.
+  // Those are held and handed over once the client does exist, not dropped.
+  static #adopt(holder: Holder, connection: Connection, options: MqttClientOptions): MqttClient {
     const client = new MqttClient(connection, options);
     holder.client = client;
+    for (const packet of holder.early.splice(0)) client.#onMessage(packet);
     return client;
   }
 
-  static #handlers(holder: { client: MqttClient | null }): ConnectionHandlers {
+  static #handlers(holder: Holder): ConnectionHandlers {
     return {
       onMessage: (packet) => {
         if (holder.client !== null) holder.client.#onMessage(packet);
+        else holder.early.push(packet);
       },
       onAck: (packet) => {
         if (holder.client !== null) holder.client.#onAck(packet);
@@ -354,6 +387,7 @@ export class MqttClient {
     const bytes = typeof payload === "string" ? ENCODER.encode(payload) : payload;
     const properties = this.#publishProperties(options);
     const retain = options.retain ?? false;
+    this.#checkPublishAllowed(qos, retain);
 
     if (qos === 0) {
       await this.#connection.send({
@@ -368,26 +402,35 @@ export class MqttClient {
       return;
     }
 
-    const packetId = this.#connection.allocatePacketId();
-    // QoS 1 waits for PUBACK; QoS 2 waits for PUBCOMP, the connection having
-    // answered the PUBREC in between.
-    const waiter = this.#waitFor(this.#ackWaiters, packetId, options.timeout ?? this.#timeout());
-    const ack = await this.#awaitAck(
-      this.#connection.send({
-        type: PacketType.Publish,
-        topic,
-        payload: bytes,
-        qos,
-        retain,
-        dup: false,
-        packetId,
-        ...(properties === undefined ? {} : { properties }),
-      }),
-      waiter,
-      // A write that never left — an unencodable packet, or one the connection
-      // refused — cannot leave its timer to reject alone.
-      () => this.#forget(this.#ackWaiters, packetId),
-    );
+    const timeout = options.timeout ?? this.#timeout();
+    const started = Date.now();
+    await this.#acquireSlot(timeout);
+    let ack: AckPacket;
+    try {
+      const packetId = this.#allocatePacketId();
+      // QoS 1 waits for PUBACK; QoS 2 waits for PUBCOMP, the connection having
+      // answered the PUBREC in between.
+      const left = Math.max(1, timeout - (Date.now() - started));
+      const waiter = this.#waitFor(this.#ackWaiters, packetId, left);
+      ack = await this.#awaitAck(
+        this.#connection.send({
+          type: PacketType.Publish,
+          topic,
+          payload: bytes,
+          qos,
+          retain,
+          dup: false,
+          packetId,
+          ...(properties === undefined ? {} : { properties }),
+        }),
+        waiter,
+        // A write that never left — an unencodable packet, or one the connection
+        // refused — cannot leave its timer to reject alone.
+        () => this.#forget(this.#ackWaiters, packetId),
+      );
+    } finally {
+      this.#releaseSlot();
+    }
     if (isErrorReason(ack.reasonCode)) {
       throw new MqttError(
         `the broker refused the publish: ${reasonName(ack.reasonCode) ?? `reason ${ack.reasonCode}`}`,
@@ -405,8 +448,9 @@ export class MqttClient {
   /** Subscribes to a topic filter and returns the messages it matches. */
   async subscribe(filter: string, options: SubscribeOptions = {}): Promise<Subscription> {
     this.#assertOpen();
+    this.#checkSubscribeAllowed(filter, options);
     const qos = options.qos ?? 0;
-    const packetId = this.#connection.allocatePacketId();
+    const packetId = this.#allocatePacketId();
     const subscription = new Subscription(this, filter);
     // Register before the SUBACK, so a message that arrives with the grant is
     // routed rather than dropped.
@@ -458,7 +502,7 @@ export class MqttClient {
   async unsubscribe(filters: string | string[], timeout?: number): Promise<void> {
     this.#assertOpen();
     const list = Array.isArray(filters) ? filters : [filters];
-    const packetId = this.#connection.allocatePacketId();
+    const packetId = this.#allocatePacketId();
     const waiter = this.#waitFor(this.#unsubackWaiters, packetId, timeout ?? this.#timeout());
     await this.#awaitAck(
       this.#connection.send({ type: PacketType.Unsubscribe, packetId, filters: list }),
@@ -484,8 +528,12 @@ export class MqttClient {
     if (this.#connection.protocolLevel !== 5) {
       throw new MqttError("request/reply needs MQTT 5.0", { code: MqttErrorCode.Unsupported });
     }
-    const responseTopic = options.responseTopic ?? `$esrun/reply/${randomToken()}`;
-    const correlationData = options.correlationData ?? randomBytes(8);
+    // Not under `$`: that space is the broker's own, and the specification says
+    // a broker SHOULD stop clients exchanging messages on it (4.7.2). The token
+    // is from the CSPRNG, since another client that guessed the topic could
+    // answer in the responder's place.
+    const responseTopic = options.responseTopic ?? `esrun/reply/${randomToken()}`;
+    const correlationData = options.correlationData ?? randomBytes(16);
     const subscription = await this.subscribe(responseTopic, { qos: 0 });
     try {
       await this.publish(topic, payload, { ...options, responseTopic, correlationData });
@@ -510,9 +558,14 @@ export class MqttClient {
 
   #onMessage(packet: PublishPacket): void {
     const message = new Message(packet);
+    let matched = false;
     for (const subscription of this.#subscriptions) {
-      if (subscription.matches(message.topic)) subscription.offer(message);
+      if (subscription.matches(message.topic)) {
+        subscription.offer(message);
+        matched = true;
+      }
     }
+    if (!matched) this.onUnmatchedMessage?.(message);
   }
 
   #onAck(packet: AckPacket): void {
@@ -545,6 +598,126 @@ export class MqttClient {
   }
 
   // -- helpers --------------------------------------------------------------
+
+  /** @internal Ends one local subscription; unsubscribes its filter if it was the last. */
+  async release(subscription: Subscription): Promise<void> {
+    const others = this.#subscriptions.some(
+      (one) => one !== subscription && one.filter === subscription.filter,
+    );
+    if (others) {
+      this.#dropSubscription(subscription);
+      return;
+    }
+    await this.unsubscribe(subscription.filter);
+  }
+
+  /**
+   * What the broker's CONNACK forbids a PUBLISH (5.0): a QoS above its Maximum
+   * QoS (AWS IoT Core allows 1) and a retained message when Retain Available is
+   * 0. The broker would disconnect the client for either; refusing here fails
+   * only the one publish.
+   */
+  #checkPublishAllowed(qos: number, retain: boolean): void {
+    const limits = this.#limits();
+    if (limits === undefined) return;
+    const maxQos = limits.maximumQoS ?? 2;
+    if (qos > maxQos) {
+      throw new MqttError(
+        `the broker accepts QoS ${maxQos} at most; this publish asked for ${qos}`,
+        { code: MqttErrorCode.Unsupported },
+      );
+    }
+    if (retain && limits.retainAvailable === 0) {
+      throw new MqttError("the broker does not support retained messages", {
+        code: MqttErrorCode.Unsupported,
+      });
+    }
+  }
+
+  /** The SUBSCRIBE features a 5.0 broker said it lacks. */
+  #checkSubscribeAllowed(filter: string, options: SubscribeOptions): void {
+    const limits = this.#limits();
+    if (limits === undefined) return;
+    const shared = filter.startsWith("$share/");
+    if (shared && limits.sharedSubscriptionAvailable === 0) {
+      throw new MqttError("the broker does not support shared subscriptions", {
+        code: MqttErrorCode.Unsupported,
+      });
+    }
+    const target = shared ? filter.slice(filter.indexOf("/", 7) + 1) : filter;
+    if (limits.wildcardSubscriptionAvailable === 0 && /[+#]/.test(target)) {
+      throw new MqttError("the broker does not support wildcard subscriptions", {
+        code: MqttErrorCode.Unsupported,
+      });
+    }
+    if (
+      limits.subscriptionIdentifierAvailable === 0 &&
+      (options.subscriptionIdentifier !== undefined ||
+        options.properties?.subscriptionIdentifiers !== undefined)
+    ) {
+      throw new MqttError("the broker does not support subscription identifiers", {
+        code: MqttErrorCode.Unsupported,
+      });
+    }
+  }
+
+  #limits(): Properties | undefined {
+    return this.#connection.protocolLevel === 5 ? this.#connection.connack.properties : undefined;
+  }
+
+  /**
+   * Waits for room under the broker's Receive Maximum (5.0): the most QoS 1
+   * and 2 publishes it accepts unacknowledged at once (default 65 535). Sending
+   * more is a protocol violation it disconnects for (0x93), so a publish past
+   * the window waits for one to finish — within its own timeout.
+   */
+  async #acquireSlot(timeout: number): Promise<void> {
+    const maximum = this.#limits()?.receiveMaximum ?? 65535;
+    if (this.#inFlight < maximum) {
+      this.#inFlight++;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        clearTimeout(timer);
+        this.#inFlight++;
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        const at = this.#slotWaiters.indexOf(grant);
+        if (at >= 0) this.#slotWaiters.splice(at, 1);
+        reject(
+          new MqttError(
+            `no room under the broker's Receive Maximum of ${maximum} within ${timeout}ms`,
+            { code: MqttErrorCode.Timeout },
+          ),
+        );
+      }, timeout);
+      unrefTimer(timer as unknown as number);
+      this.#slotWaiters.push(grant);
+    });
+  }
+
+  #releaseSlot(): void {
+    this.#inFlight--;
+    const next = this.#slotWaiters.shift();
+    next?.();
+  }
+
+  /**
+   * The next packet identifier not already waiting on an acknowledgement. The
+   * counter wraps at 65 535, and an identifier reused while still in flight
+   * would let one acknowledgement settle the wrong request.
+   */
+  #allocatePacketId(): number {
+    for (let tries = 0; tries < 65535; tries++) {
+      const id = this.#connection.allocatePacketId();
+      const busy =
+        this.#ackWaiters.has(id) || this.#subackWaiters.has(id) || this.#unsubackWaiters.has(id);
+      if (!busy) return id;
+    }
+    throw new MqttError("every packet identifier is in use", { code: MqttErrorCode.Unsupported });
+  }
 
   #timeout(): number {
     return this.#options.timeout ?? DEFAULT_TIMEOUT;
@@ -703,9 +876,7 @@ function matches(a: Uint8Array | null, b: Uint8Array): boolean {
 }
 
 function randomBytes(length: number): Uint8Array {
-  const out = new Uint8Array(length);
-  for (let i = 0; i < length; i++) out[i] = Math.floor(Math.random() * 256);
-  return out;
+  return crypto.getRandomValues(new Uint8Array(length));
 }
 
 function randomToken(): string {

@@ -212,7 +212,10 @@ function encodeBody(w: ByteWriter, packet: Packet, level: ProtocolLevel): number
       return PacketType.Connack << 4;
     }
     case PacketType.Publish: {
-      validateTopicName(packet.topic);
+      // An empty topic is only legal on 5.0 with a Topic Alias standing in.
+      const aliased =
+        level === 5 && packet.topic === "" && packet.properties?.topicAlias !== undefined;
+      if (!aliased) validateTopicName(packet.topic);
       if (packet.qos === 0 && packet.dup) {
         throw new ProtocolError("DUP must be 0 on a QoS 0 PUBLISH");
       }
@@ -407,7 +410,9 @@ function decodeBody(r: ByteReader, type: PacketType, flags: number, level: Proto
       const retain = (flags & 0x01) !== 0;
       if (qos === 3) throw new ProtocolError("a PUBLISH QoS of 3 is malformed");
       const topic = r.utf8();
-      validateTopicName(topic);
+      // On 5.0 an empty topic means "use the Topic Alias property", which the
+      // connection resolves; anywhere else it is malformed.
+      if (!(level === 5 && topic === "")) validateTopicName(topic);
       let packetId: number | undefined;
       if (qos > 0) {
         packetId = r.u16();

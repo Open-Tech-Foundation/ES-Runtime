@@ -49,6 +49,14 @@ So the connection accumulates bytes and is what decides a packet is complete. A
 buffer too short to say is not an error, just a packet not yet arrived; only a
 length that is malformed — a fifth octet, which no amount of waiting fixes — is
 raised. This is solved once, in the connection, rather than by every packet.
+The accumulation buffer grows by doubling and is compacted in place: copying
+everything buffered on every chunk made a large message cost the square of its
+size.
+
+A CONNACK is judged by its own level's rule. A 5.0 reason code refuses from
+0x80 up; a 3.1.1 return code refuses with anything but 0, and its refusals are
+1–5. Judged by the 5.0 rule, a 3.1.1 broker refusing the password looked like one
+accepting the connection, and the client found out only when the socket closed.
 
 ## Why a lost socket is latched
 
@@ -161,11 +169,37 @@ still goes through the writer, so the tidy half-close is kept where it is safe.
 The usual RPC shape costs a queue per caller. MQTT 5.0's convention removes it:
 the request carries a **response topic** and **correlation data**, the responder
 publishes its answer to that topic carrying the same data, and the caller matches
-on it. `request` subscribes to a private response topic (`$esrun/reply/<token>`),
+on it. `request` subscribes to a private response topic (`esrun/reply/<token>`),
 publishes, and resolves the first reply whose correlation data matches — so a
 stray or duplicated reply is dropped rather than mistaken for the answer. It is
 5.0-only, and refuses on 3.1.1 rather than silently turning into a fire-and-forget
-publish.
+publish. The topic is deliberately not under `$`: that space belongs to the
+broker, and the specification says a broker SHOULD stop clients exchanging
+messages on it (4.7.2), so a `$` reply topic is one a compliant broker may
+silently starve. Its token and the correlation data come from
+`crypto.getRandomValues`, because a client that could guess the topic could
+answer in the responder's place.
+
+## The broker's limits are kept, not discovered
+
+A 5.0 CONNACK says what the broker will accept: a **Receive Maximum** of QoS 1
+and 2 publishes in flight, a **Maximum QoS** (AWS IoT Core allows 1), whether
+retained messages and wildcard, shared or identified subscriptions exist, and a
+**Maximum Packet Size**. The specification makes each a MUST for the client, and
+the broker's answer to a violation is to disconnect — so one bad publish took
+every other operation on the connection with it. They are checked before
+anything is written: a publish past the Receive Maximum waits for a slot, within
+its timeout, and everything else is refused with `ERR_MQTT_UNSUPPORTED`.
+
+## Nothing is dropped before a subscription exists
+
+The read loop starts with the CONNACK, and a resumed session's backlog follows
+it at once — before `connect()` has returned, let alone before the application
+subscribed again. Those messages are acknowledged as they arrive, so a client
+that dropped them lost them for good. They are now held until the client exists,
+and anything no subscription matches goes to `onUnmatchedMessage`, which can be
+given at connect time for exactly this reason. It plays the part of mqtt.js's
+client-wide `message` event, without giving up per-subscription iteration.
 
 ## Testing without a port
 

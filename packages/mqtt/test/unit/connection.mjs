@@ -444,4 +444,163 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
   ok(failures[0].code === MqttErrorCode.Connection, "reported as a connection error");
 }
 
+// --- a 3.1.1 refusal is a refusal --------------------------------------------
+
+// A 3.1.1 CONNACK refuses with return codes 1–5, not with the 5.0 codes from
+// 0x80. Read by the 5.0 rule, a broker rejecting the password looked like one
+// accepting the connection.
+for (const [returnCode, expected] of [
+  [1, MqttErrorCode.Handshake],
+  [2, MqttErrorCode.Refused],
+  [3, MqttErrorCode.Refused],
+  [4, MqttErrorCode.Auth],
+  [5, MqttErrorCode.Auth],
+]) {
+  const broker = fakeBroker(4);
+  const pending = Connection.over(broker.transport, { clientId: "c", keepAlive: 0 }, {}, 4);
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: returnCode });
+  let failure = null;
+  await pending.catch((e) => {
+    failure = e;
+  });
+  ok(failure?.code === expected, `a 3.1.1 return code ${returnCode} rejects as ${expected}`);
+  ok(failure?.reasonCode === returnCode, "carrying the return code");
+}
+
+// --- integer fields are range-checked, not wrapped -----------------------------
+
+{
+  const broker = fakeBroker(5);
+  let failure = null;
+  await Connection.over(broker.transport, { clientId: "c", keepAlive: 70000 }, {}, 5).catch((e) => {
+    failure = e;
+  });
+  ok(failure?.code === MqttErrorCode.Protocol, "a keep-alive past 65535 is refused, not wrapped");
+}
+
+// --- a large packet in many chunks ------------------------------------------
+
+{
+  const broker = fakeBroker(5);
+  const got = [];
+  const pending = Connection.over(
+    broker.transport,
+    { clientId: "c", keepAlive: 0 },
+    { onMessage: (packet) => got.push(packet) },
+    5,
+  );
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  const conn = await pending;
+  // 2 MB of payload, delivered 1 KB at a time, then a second packet in the
+  // same chunk as the first one's tail.
+  const payload = new Uint8Array(2 * 1024 * 1024).map((_, i) => i & 0xff);
+  const { encodePacket } = await import("../../dist/protocol/packets.js");
+  const big = encodePacket(
+    { type: PacketType.Publish, topic: "big", payload, qos: 0, retain: false, dup: false },
+    5,
+  );
+  const small = encodePacket(
+    {
+      type: PacketType.Publish,
+      topic: "small",
+      payload: ENCODER.encode("x"),
+      qos: 0,
+      retain: false,
+      dup: false,
+    },
+    5,
+  );
+  const started = Date.now();
+  for (let at = 0; at < big.length; at += 1024) {
+    const end = Math.min(big.length, at + 1024);
+    if (end === big.length) {
+      const tail = new Uint8Array(end - at + small.length);
+      tail.set(big.subarray(at, end));
+      tail.set(small, end - at);
+      broker.sendRaw(tail);
+    } else {
+      broker.sendRaw(big.slice(at, end));
+    }
+  }
+  for (let i = 0; i < 200 && got.length < 2; i++) await tick(10);
+  ok(
+    got.length === 2,
+    "a packet split into 2 048 chunks, and one sharing its last chunk, both arrive",
+  );
+  ok(got[0]?.payload.length === payload.length, "the large payload is whole");
+  ok(got[0]?.payload[123456] === (123456 & 0xff), "and intact");
+  ok(got[1]?.topic === "small", "and the packet after it is read too");
+  ok(Date.now() - started < 3000, "in linear time");
+  await conn.close();
+}
+
+// --- inbound topic aliases ------------------------------------------------------
+
+{
+  const broker = fakeBroker(5);
+  const got = [];
+  const failures = [];
+  const pending = Connection.over(
+    broker.transport,
+    { clientId: "c", keepAlive: 0, properties: { topicAliasMaximum: 4 } },
+    { onMessage: (packet) => got.push(packet.topic), onClosed: (e) => failures.push(e) },
+    5,
+  );
+  const connect = await broker.next();
+  ok(connect.properties?.topicAliasMaximum === 4, "the client advertises its alias maximum");
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  await pending;
+  const publish = (topic, alias) =>
+    broker.send({
+      type: PacketType.Publish,
+      topic,
+      payload: ENCODER.encode("x"),
+      qos: 0,
+      retain: false,
+      dup: false,
+      properties: { topicAlias: alias },
+    });
+  publish("sensors/a", 2);
+  publish("", 2);
+  await tick(20);
+  ok(
+    got.join(",") === "sensors/a,sensors/a",
+    "an alias is set by one PUBLISH and used by the next",
+  );
+  publish("", 3);
+  await tick(20);
+  ok(
+    failures[0]?.code === MqttErrorCode.Protocol,
+    "an alias used before it was set is a protocol error",
+  );
+}
+
+{
+  // Without an advertised maximum the broker may not use aliases at all.
+  const broker = fakeBroker(5);
+  const failures = [];
+  const pending = Connection.over(
+    broker.transport,
+    { clientId: "c", keepAlive: 0 },
+    { onClosed: (e) => failures.push(e) },
+    5,
+  );
+  await broker.next();
+  broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
+  await pending;
+  broker.send({
+    type: PacketType.Publish,
+    topic: "t",
+    payload: ENCODER.encode("x"),
+    qos: 0,
+    retain: false,
+    dup: false,
+    properties: { topicAlias: 1 },
+  });
+  await tick(20);
+  ok(failures[0]?.code === MqttErrorCode.Protocol, "an alias the client never allowed is refused");
+}
+
 exit(report("connection") > 0 ? 1 : 0);
