@@ -1,7 +1,12 @@
 // A type test for `runtime:archive`. Compiled by `tsc -p .`, never run.
 
+import {
+  Archive,
+  type ArchiveEntry,
+  type ArchiveEntryMetadata,
+  type ExtractResult,
+} from "runtime:archive";
 import { file } from "runtime:fs";
-import { Archive, ArchiveEntry, type ArchiveEntryMetadata, type ExtractResult } from "runtime:archive";
 
 const built = new Archive(
   {
