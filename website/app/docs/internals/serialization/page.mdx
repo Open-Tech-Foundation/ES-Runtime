@@ -122,8 +122,11 @@ payoff is that the same value always produces the same bytes — which is what
 makes CBOR usable for a signature or a content address over the encoding — and
 the cost is that a decode/encode round trip returns an object whose keys are in
 canonical order, not the order they were written in. An integer-valued number
-takes an integer form, so a float that happens to be whole re-encodes as an
-integer.
+in the safe range takes an integer form, so a float that happens to be whole
+re-encodes as an integer. Past the safe range a `number` stays a float: an
+integer that large decodes to a `BigInt`, so writing a `number` as one would
+change its type on the round trip. cbor-x draws the same line, writing a large
+`number` as a float and reserving 64-bit integers for `BigInt` (D176).
 
 **An integer past JavaScript's safe range is a `BigInt`.** A double cannot hold
 an integer past 2<sup>53</sup> exactly, so `decode` yields a `number` inside that

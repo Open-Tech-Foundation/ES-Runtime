@@ -2969,9 +2969,11 @@ the mapping wins over a merged one, and an earlier merge source wins over a
 later one. A quoted `"<<"` is an ordinary key. Nesting deeper than 256 levels,
 or aliases that expand to more than 1,000,000 nodes, is a `RangeError`.
 
-`YAML.build` writes block style with two-space indentation. A string is quoted
-when, written plain, it would read back as something else, including the YAML
-1.1 booleans `yes`, `no`, `on`, `off`, `y`, `n`. A number is written as
+`YAML.build` writes block style with two-space indentation. A string is quoted when, written plain, it would read back as something else —
+under the core schema, or under the wider schema js-yaml applies by default and
+YAML 1.1 readers (PyYAML, SnakeYAML) use: the 1.1 booleans (`yes`, `off`, `y`),
+timestamps (`2001-12-14`), base-60 numbers (`1:20`), `0b` integers and
+`_`-separated numbers. js-yaml's dumper quotes the same set. A number is written as
 `String(n)` (`1e+21`), a `BigInt` as its exact digits, `NaN` and `±Infinity` as
 `.nan` and `±.inf`, and `undefined` as `null`. Bytes, a function or a symbol is
 a `TypeError`.
@@ -2989,7 +2991,10 @@ are a `TypeError`: TOML has no form for them.
 Every `build`/`encode` converts the values that carry no enumerable properties
 before writing: a `Date` becomes its ISO-8601 string, a `Map` an object (keys
 stringified), a `Set` an array, and a typed array or `ArrayBuffer` bytes (which
-only MessagePack and CBOR can write).
+only MessagePack and CBOR can write). A boxed primitive is its value. Any other
+built-in whose state lives in internal slots — a `RegExp`, `Error`, `URL`,
+`WeakMap`, `Promise` — is a `TypeError`, as js-yaml refuses it, rather than
+`{}`. A class instance is written as a map of its own enumerable properties.
 
 ### CSV
 
@@ -3112,9 +3117,10 @@ its exact digits, arrays and byte strings as comma-joined elements, a nested map
 as `[object Object]` — so keys that coerce alike share a property name. A nested
 map always spells `[object Object]`: the decoder does not run a nested value's own
 `toString`, the one place this coercion is a fixed simplification rather than
-`String`'s exact behaviour. An integer-valued number encodes as an integer, so a
-float that happens to be whole (a decoded `100000.0`) re-encodes as the integer
-`100000`. `undefined` and `null` are distinct on the wire (`0xf7`/`0xf6`). A value
+`String`'s exact behaviour. An integer-valued number inside the safe range (±(2<sup>53</sup>−1)) encodes as
+an integer, so a decoded `100000.0` re-encodes as `100000`; past it a number is
+the shortest exact float and decodes back as a `number`, while a `BigInt` takes
+the integer form. `undefined` and `null` are distinct on the wire (`0xf7`/`0xf6`). A value
 with no CBOR form (a function, a symbol) **throws** a `TypeError`.
 
 **Tags (major type 6) are refused.** No JavaScript type corresponds to a CBOR

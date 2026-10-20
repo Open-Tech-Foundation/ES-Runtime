@@ -225,6 +225,15 @@ function toEncodable(value: unknown, format: string, depth = 0, seen: object[] =
   }
   if (value instanceof Set) return [...value].map((v) => toEncodable(v, format, depth + 1, seen));
   if (Array.isArray(value)) return value.map((v) => toEncodable(v, format, depth + 1, seen));
+  // Anything else whose brand is not a plain object — a RegExp, an Error, a
+  // URL, a WeakMap, a Promise — keeps its state in internal slots and would be
+  // written as `{}`. js-yaml refuses these the same way (by the same
+  // `Object.prototype.toString` test); cbor-x keeps some through tags, which
+  // these codecs do not write. A class instance brands as `[object Object]` and
+  // is written as a map of its own enumerable properties, as both do.
+  const brand = Object.prototype.toString.call(value);
+  if (brand !== "[object Object]")
+    throw new TypeError(`${format}: cannot encode ${brand.slice(8, -1)}; it has no ${format} form`);
   const out: Record<string, unknown> = Object.create(null);
   for (const k of Object.keys(value))
     out[k] = toEncodable((value as Record<string, unknown>)[k], format, depth + 1, seen);

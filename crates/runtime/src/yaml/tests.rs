@@ -508,7 +508,9 @@ fn emit_quotes_what_would_not_read_back() {
         ("...", "'...'"),
         ("a#b", "a#b"),
         ("é", "é"),
-        ("2001-01-01", "2001-01-01"),
+        // A timestamp is a string in the core schema, but js-yaml's default
+        // schema reads it as a `Date`, so it is quoted (as js-yaml quotes it).
+        ("2001-01-01", "'2001-01-01'"),
         ("\t", "\"\\t\""),
         ("\u{7}", "\"\\a\""),
         ("\r", "\"\\r\""),
@@ -581,6 +583,47 @@ fn emit_numbers() {
         );
     }
     assert_eq!(emit(&n(f64::NAN)), ".nan\n");
+}
+
+#[test]
+fn emit_quotes_what_js_yaml_and_yaml_1_1_readers_resolve() {
+    for quoted in [
+        "2001-12-14",
+        "2001-12-14T21:59:43.10Z",
+        "2001-12-14t21:59:43.10-05:00",
+        "2001-12-14 21:59:43.10 -5",
+        "2001-1-4T1:02:03",
+        "1970-01-01T00:00:00.000Z",
+        "1:20",
+        "-190:20:30.15",
+        "0b101",
+        "-0b1_0",
+        "1_000",
+        "1_0.5e3",
+        "0x_ff",
+    ] {
+        let text = round_trip(&obj(&[("a", s(quoted))]));
+        assert_eq!(text, format!("a: '{quoted}'\n"), "{quoted:?}");
+    }
+    // Look-alikes that neither js-yaml nor a 1.1 reader resolves stay plain.
+    for plain in [
+        "2001-12",
+        "2001-1-4",
+        "2001-12-14x",
+        "2001-12-14T21:59",
+        "0b",
+        "0b2",
+        "a_b",
+        "_",
+        "a:b",
+        "v1.2_3",
+    ] {
+        assert_eq!(
+            round_trip(&obj(&[("a", s(plain))])),
+            format!("a: {plain}\n"),
+            "{plain:?}"
+        );
+    }
 }
 
 #[test]

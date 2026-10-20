@@ -166,10 +166,15 @@ fn number(n: f64) -> String {
 }
 
 /// Whether `s`, written plain, would read back as something other than this
-/// string under the core schema — or under YAML 1.1, which many readers still
-/// implement and which reads `yes`/`no`/`on`/`off` as booleans.
+/// string under the core schema — or under the wider schema most readers still
+/// apply. js-yaml (in its default compatibility mode), PyYAML and SnakeYAML
+/// read the YAML 1.1 booleans (`yes`, `off`), timestamps, sexagesimal numbers,
+/// `0b` integers and `_`-separated numbers as values, so a plain `2001-12-14`
+/// would reach a js-yaml reader as a `Date`. js-yaml's own dumper quotes all of
+/// these; so does this one.
 fn plain_resolves_elsewhere(s: &str) -> bool {
     !matches!(resolve_plain(s), Value::String(_))
+        || compat_value(s)
         || matches!(
             s,
             "y" | "Y"
@@ -188,6 +193,125 @@ fn plain_resolves_elsewhere(s: &str) -> bool {
                 | "Off"
                 | "OFF"
         )
+}
+
+/// The non-core forms of [`plain_resolves_elsewhere`]: what js-yaml's default
+/// schema and YAML 1.1 readers resolve that the core schema does not. The
+/// patterns are js-yaml's (`DEPRECATED_BASE60_SYNTAX`, `YAML_DATE_REGEXP`,
+/// `YAML_TIMESTAMP_REGEXP`, and its integer and float types, which allow `_`
+/// and `0b`).
+fn compat_value(s: &str) -> bool {
+    is_timestamp(s) || is_base60(s) || is_binary_int(s) || is_underscored_number(s)
+}
+
+/// `[0-9]{4}-[0-9]{2}-[0-9]{2}`, or with one- or two-digit month and day
+/// followed by a time: `([Tt]|[ \t]+)H?H:MM:SS(.f*)?([ \t]*(Z|[-+]H?H(:MM)?))?`.
+fn is_timestamp(s: &str) -> bool {
+    let mut p = Scan(s.as_bytes());
+    if !(p.digits(4, 4) && p.eat(b'-')) {
+        return false;
+    }
+    let date_only = {
+        let mut q = Scan(p.0);
+        q.digits(2, 2) && q.eat(b'-') && q.digits(2, 2) && q.0.is_empty()
+    };
+    if date_only {
+        return true;
+    }
+    if !(p.digits(1, 2) && p.eat(b'-') && p.digits(1, 2)) {
+        return false;
+    }
+    if !(p.eat(b'T') || p.eat(b't') || p.blanks(1)) {
+        return false;
+    }
+    if !(p.digits(1, 2) && p.eat(b':') && p.digits(2, 2) && p.eat(b':') && p.digits(2, 2)) {
+        return false;
+    }
+    if p.eat(b'.') {
+        p.digits(0, usize::MAX);
+    }
+    p.blanks(0);
+    if p.eat(b'Z') {
+        return p.0.is_empty();
+    }
+    if p.eat(b'-') || p.eat(b'+') {
+        if !p.digits(1, 2) {
+            return false;
+        }
+        if p.eat(b':') && !p.digits(2, 2) {
+            return false;
+        }
+    }
+    p.0.is_empty()
+}
+
+/// `[-+]?[0-9_]+(:[0-9_]+)+(\.[0-9_]*)?` — YAML 1.1's base 60 (`1:20`).
+fn is_base60(s: &str) -> bool {
+    let body = s.strip_prefix(['-', '+']).unwrap_or(s);
+    let (groups, frac) = match body.split_once('.') {
+        Some((g, f)) => (g, Some(f)),
+        None => (body, None),
+    };
+    let digitish = |t: &str| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit() || c == b'_');
+    let mut parts = groups.split(':');
+    let first = parts.next().unwrap_or_default();
+    let mut rest = parts.peekable();
+    rest.peek().is_some()
+        && digitish(first)
+        && rest.all(digitish)
+        && frac.is_none_or(|f| f.bytes().all(|c| c.is_ascii_digit() || c == b'_'))
+}
+
+/// `[-+]?0b[01_]+`.
+fn is_binary_int(s: &str) -> bool {
+    let body = s.strip_prefix(['-', '+']).unwrap_or(s);
+    body.strip_prefix("0b")
+        .is_some_and(|b| !b.is_empty() && b.bytes().all(|c| matches!(c, b'0' | b'1' | b'_')))
+}
+
+/// A number with `_` separators (`1_000`, `0x_ff`, `1_0.5e3`): it reads as a
+/// number once the underscores are dropped.
+fn is_underscored_number(s: &str) -> bool {
+    s.contains('_')
+        && s.bytes().any(|c| c.is_ascii_digit())
+        && matches!(resolve_plain(&s.replace('_', "")), Value::Number(_))
+}
+
+/// A tiny cursor for [`is_timestamp`].
+struct Scan<'a>(&'a [u8]);
+
+impl Scan<'_> {
+    fn eat(&mut self, b: u8) -> bool {
+        if self.0.first() == Some(&b) {
+            self.0 = &self.0[1..];
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Consumes between `min` and `max` ASCII digits; false if fewer than `min`.
+    fn digits(&mut self, min: usize, max: usize) -> bool {
+        let n = self
+            .0
+            .iter()
+            .take(max)
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        self.0 = &self.0[n..];
+        n >= min
+    }
+
+    /// Consumes spaces and tabs; false if fewer than `min`.
+    fn blanks(&mut self, min: usize) -> bool {
+        let n = self
+            .0
+            .iter()
+            .take_while(|&&c| c == b' ' || c == b'\t')
+            .count();
+        self.0 = &self.0[n..];
+        n >= min
+    }
 }
 
 /// Characters that only a double-quoted escape can carry. Tab and line feed

@@ -2702,6 +2702,8 @@ function toEncodable(value, format, depth = 0, seen = []) {
 	}
 	if (value instanceof Set) return [...value].map((v) => toEncodable(v, format, depth + 1, seen));
 	if (Array.isArray(value)) return value.map((v) => toEncodable(v, format, depth + 1, seen));
+	const brand = Object.prototype.toString.call(value);
+	if (brand !== "[object Object]") throw new TypeError(`${format}: cannot encode ${brand.slice(8, -1)}; it has no ${format} form`);
 	const out = Object.create(null);
 	for (const k of Object.keys(value)) out[k] = toEncodable(value[k], format, depth + 1, seen);
 	return out;

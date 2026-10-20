@@ -429,15 +429,17 @@ test("CBOR uses BigInt past the safe integer range", async () => {
   assertThrows(() => CBOR.encode(2n ** 200n), "RangeError");
 });
 
-test("CBOR keeps negative integers in integer form down to -2^64", async () => {
+test("CBOR keeps integer form for BigInt down to -2^64 and a large number as a number", async () => {
   const { CBOR } = await import("runtime:serialization");
-  // Major type 1 reaches -2^64 (0x3b then eight 0xff); the encoder used to
-  // stop at i64::MIN and write a float. Decoding yields a bigint at this
-  // magnitude, which is where the format's own floor is.
-  assertEquals([...CBOR.encode(-18446744073709551616)].join(), "59,255,255,255,255,255,255,255,255");
-  assertEquals(CBOR.decode(CBOR.encode(-18446744073709551616)), -18446744073709551616n);
-  // One `f64` lower has no integer form, so it stays a float (0xfb).
-  assertEquals(CBOR.encode(-(18446744073709551616 + 4096))[0], 0xfb);
+  // Major type 1 reaches -2^64 (0x3b then eight 0xff) for a BigInt.
+  assertEquals([...CBOR.encode(-18446744073709551616n)].join(), "59,255,255,255,255,255,255,255,255");
+  assertEquals(CBOR.decode(CBOR.encode(-18446744073709551616n)), -18446744073709551616n);
+  // A `number` past the safe range is the shortest exact float, so it comes
+  // back a `number` — as cbor-x writes a large number as a float — rather than
+  // the BigInt an integer that size decodes to.
+  assertEquals([...CBOR.encode(-18446744073709551616)].join(), "250,223,128,0,0");
+  assertEquals(CBOR.decode(CBOR.encode(2 ** 60)), 2 ** 60);
+  assertEquals(typeof CBOR.decode(CBOR.encode(2 ** 60)), "number");
 });
 
 test("CBOR refuses a two-byte simple value below 32 and unwraps boxed primitives", async () => {
@@ -585,7 +587,8 @@ test("YAML build spells numbers and BigInts exactly and refuses what it would dr
   assertEquals(YAML.build({ a: 2 ** 63, b: 1e21 }), "a: 9223372036854776000\nb: 1e+21\n");
   assertEquals(YAML.build({ big: 12345678901234567890n }), "big: 12345678901234567890\n");
   // These became `null` or `{}`.
-  assertEquals(YAML.build({ d: new Date(0) }), "d: 1970-01-01T00:00:00.000Z\n");
+  // Quoted, as js-yaml quotes a timestamp: its reader would return a Date.
+  assertEquals(YAML.build({ d: new Date(0) }), "d: '1970-01-01T00:00:00.000Z'\n");
   assertEquals(YAML.build({ m: new Map([["k", 1]]) }), "m:\n  k: 1\n");
   assertThrows(() => YAML.build({ b: new Uint8Array([1]) }), "TypeError");
   assertThrows(() => YAML.build({ f() {} }), "TypeError");
@@ -604,6 +607,32 @@ test("TOML keeps key order and integers exact, and carries nan, inf and BigInt",
   // A Date was written as an empty table.
   assertEquals(TOML.build({ d: new Date(0) }), 'd = "1970-01-01T00:00:00.000Z"\n');
   assertThrows(() => TOML.build({ b: new Uint8Array([1]) }), "TypeError");
+});
+
+test("every builder refuses a built-in it would write as {} and keeps class instances", async () => {
+  const ser = await import("runtime:serialization");
+  const builders = [
+    (v) => ser.CBOR.encode(v),
+    (v) => ser.MessagePack.encode(v),
+    (v) => ser.YAML.build(v),
+    (v) => ser.TOML.build(v),
+    (v) => ser.XML.build(v),
+  ];
+  for (const build of builders) {
+    for (const v of [/x/, new Error("e"), new URL("http://a/"), new WeakMap()]) {
+      assertThrows(() => build({ v }), "TypeError");
+    }
+  }
+  class Point { constructor() { this.x = 1; } }
+  assertEquals(JSON.stringify(ser.CBOR.decode(ser.CBOR.encode({ p: new Point() }))), '{"p":{"x":1}}');
+  assertEquals(ser.YAML.build({ p: new Point() }), "p:\n  x: 1\n");
+});
+
+test("YAML quotes the strings js-yaml and YAML 1.1 readers would turn into values", async () => {
+  const { YAML } = await import("runtime:serialization");
+  assertEquals(YAML.build({ a: "2001-12-14", b: "1:20", c: "0b101", d: "1_000" }),
+    "a: '2001-12-14'\nb: '1:20'\nc: '0b101'\nd: '1_000'\n");
+  assertEquals(YAML.build({ a: "2001-12" }), "a: 2001-12\n");
 });
 
 test("CSV parses as arrays by default and objects with header", async () => {

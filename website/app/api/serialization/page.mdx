@@ -92,8 +92,11 @@ Merge keys (`<<`) are applied, and a key written in the mapping wins over a merg
 | Nesting deeper than 256 levels | `RangeError` |
 | Aliases expanding to more than 1,000,000 nodes | `RangeError` |
 
-`build` writes block style with two-space indentation. A string is quoted when
-it would read back as something else, including YAML 1.1's `yes`/`no`/`on`/`off`/`y`/`n`.
+`build` writes block style with two-space indentation. A string is quoted when, written plain, it would read back as something else —
+under the core schema, or under the wider schema js-yaml applies by default and
+YAML 1.1 readers (PyYAML, SnakeYAML) use: the 1.1 booleans (`yes`, `off`, `y`),
+timestamps (`2001-12-14`), base-60 numbers (`1:20`), `0b` integers and
+`_`-separated numbers. js-yaml's dumper quotes the same set.
 A number is written as `String(n)`, a `BigInt` exactly, `NaN` and `±Infinity` as
 `.nan` and `±.inf`, a `Date` as its ISO-8601 string, and `undefined` as `null`.
 Bytes, a function or a symbol is a `TypeError`.
@@ -212,8 +215,10 @@ bytewise-sorted map keys.
 | function, symbol, `BigInt` outside that range | — | throws `TypeError` |
 | — | tag (major 6) | throws `SyntaxError` |
 
-An integer-valued number encodes as an integer (the shortest form), so a decoded
-float that happens to be whole re-encodes as an integer. A reserved initial byte,
+An integer-valued number inside the safe range (±(2<sup>53</sup>−1)) encodes as
+an integer, so a decoded `100000.0` re-encodes as `100000`; past it a number is
+the shortest exact float and decodes back as a `number`, while a `BigInt` takes
+the integer form. A reserved initial byte,
 a stray `break`, a trailing byte, a malformed or oversized length, an unassigned
 simple value (or one below 32 in the two-byte form), a tag, or nesting past 256 levels is a `SyntaxError`.
 

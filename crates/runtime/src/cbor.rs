@@ -644,24 +644,22 @@ fn write_number(n: f64, out: &mut Vec<u8>) {
         out.extend_from_slice(&[0xf9, 0x7e, 0x00]);
         return;
     }
-    // An integer-valued number takes an integer form, the shortest that holds
-    // it. Negative zero is excluded so its sign survives as a float.
-    if n.fract() == 0.0 && !(n == 0.0 && n.is_sign_negative()) {
-        // `i128` holds every integral `f64` either integer major type can
-        // carry, so this cast is exact where a `u64`/`i64` cast would saturate.
-        let i = n as i128;
-        if i as f64 == n {
-            if (0..=u64::MAX as i128).contains(&i) {
-                write_head(out, 0, i as u64);
-                return;
-            }
-            // Major type 1 carries `-1 - value`, so it reaches -2^64 — one past
-            // `i64::MIN`, where the old `i64` cast gave up and wrote a float.
-            if (-(u64::MAX as i128) - 1..0).contains(&i) {
-                write_head(out, 1, (-(i + 1)) as u64);
-                return;
-            }
+    // An integer-valued number inside JavaScript's safe range takes an integer
+    // form, the shortest that holds it; it decodes back to the same `number`.
+    // Past the safe range it stays a float: an integer that large decodes to a
+    // `BigInt`, so writing a `number` as one would change its type on the round
+    // trip — cbor-x likewise writes a large `number` as a float and keeps
+    // integers past 2^53 for `BigInt`. Negative zero is excluded so its sign
+    // survives as a float.
+    if n.fract() == 0.0 && n.abs() <= MAX_SAFE_INTEGER as f64 && !(n == 0.0 && n.is_sign_negative())
+    {
+        let i = n as i64;
+        if i >= 0 {
+            write_head(out, 0, i as u64);
+        } else {
+            write_head(out, 1, (-(i + 1)) as u64);
         }
+        return;
     }
     // Otherwise the shortest float that preserves the value exactly.
     if let Some(half) = half_exact(n) {
@@ -784,12 +782,11 @@ mod tests {
         // A `BigInt` inside the safe range has no BigInt form on the wire: it
         // encodes as an integer and decodes back as a `number`.
         assert_eq!(round(Value::BigInt(5)), Value::Number(5.0));
-        // A `number` holding an exactly-representable integer past the safe
-        // range encodes as an integer and decodes to the matching `BigInt`.
-        assert_eq!(
-            round(Value::Number(-18_446_744_073_709_551_616.0)),
-            Value::BigInt(-18_446_744_073_709_551_616)
-        );
+        // A `number` past the safe range is written as a float, so it comes
+        // back a `number`, not the `BigInt` an integer that size decodes to.
+        for n in [2f64.powi(60), -18_446_744_073_709_551_616.0, 2f64.powi(53)] {
+            assert_eq!(round(Value::Number(n)), Value::Number(n), "{n}");
+        }
     }
 
     #[test]
@@ -803,20 +800,26 @@ mod tests {
     }
 
     #[test]
-    fn negative_integers_keep_integer_form_down_to_the_cbor_floor() {
-        // Major type 1 carries `-1 - value`, so it reaches -2^64, one past
-        // `i64::MIN` — where the encoder used to give up and write a float.
+    fn a_number_past_the_safe_range_is_the_shortest_exact_float() {
+        // 2^53 and -2^64 are exact halves of no smaller width but fit a single.
+        assert_eq!(
+            enc(Value::Number(2f64.powi(53))),
+            vec![0xfa, 0x5a, 0x00, 0x00, 0x00]
+        );
         assert_eq!(
             enc(Value::Number(-18_446_744_073_709_551_616.0)),
+            vec![0xfa, 0xdf, 0x80, 0x00, 0x00]
+        );
+        // The largest safe integer is still an integer.
+        assert_eq!(
+            enc(Value::Number(9_007_199_254_740_991.0)),
+            vec![0x1b, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        // A `BigInt` keeps the integer form down to the CBOR floor.
+        assert_eq!(
+            enc(Value::BigInt(-18_446_744_073_709_551_616)),
             vec![0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
         );
-        assert_eq!(
-            enc(Value::Number(-9_223_372_036_854_775_808.0)),
-            vec![0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
-        );
-        // The `f64` below -2^64 has no integer form and stays a float.
-        let below = -(18_446_744_073_709_551_616.0 + 4096.0);
-        assert_eq!(enc(Value::Number(below))[0], 0xfb);
     }
 
     #[test]

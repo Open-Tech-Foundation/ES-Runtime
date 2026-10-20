@@ -101,6 +101,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `Date`, `Map` or `Set` as an empty object, map or table. They now convert
   these as MessagePack and CBOR already did: a `Date` to its ISO-8601 string,
   a `Map` to an object, a `Set` to an array.
+- `runtime:serialization` follows the established codecs on three points
+  (DECISIONS D176). `CBOR.encode` writes a `number` past 2^53 as a float, as
+  cbor-x does, so it decodes back as a `number` instead of a `BigInt`.
+  `YAML.build` quotes strings that js-yaml and YAML 1.1 readers turn into values
+  (timestamps such as `2001-12-14`, `1:20`, `0b101`, `1_000`), as js-yaml's
+  dumper does. Every `build`/`encode` throws a `TypeError` for a `RegExp`,
+  `Error`, `URL`, `WeakMap` or other built-in it used to write as `{}`; class
+  instances are still written as maps of their own properties.
 
 ## [0.41.0] - 2026-10-17
 

@@ -85,9 +85,10 @@ bignum tag, which is refused, so it throws.
 conversion every entry would be silently dropped. A non-string CBOR map key is
 coerced the way a JavaScript property access coerces it — numbers with
 `String(n)`, arrays and byte strings as comma-joined elements, a nested map as
-`[object Object]` — so keys that coerce alike share a name. An integer-valued
-number encodes as an integer, so a float that happens to be whole (a decoded
-`100000.0`) re-encodes as the integer `100000`. A value with no CBOR form
+`[object Object]` — so keys that coerce alike share a name. An integer-valued number inside the safe range (±(2<sup>53</sup>−1)) encodes as
+an integer, so a decoded `100000.0` re-encodes as `100000`; past it a number is
+the shortest exact float and decodes back as a `number`, while a `BigInt` takes
+the integer form. A value with no CBOR form
 **throws** rather than being written as `null`, since a silent substitution is
 exactly the data loss a format chosen for fidelity exists to avoid.
 

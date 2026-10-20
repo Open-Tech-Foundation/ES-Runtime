@@ -3623,3 +3623,22 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 - **Writing `NaN` as text, or bytes as base64.** The reader would give back a string, not the value, so the round trip would quietly change type. Refusing says so, as CSV and TOML refuse what they cannot carry.
 
 **Consequences:** quick-xml loses its `serialize` feature. Input the old reader accepted and the new one refuses (two roots, an unknown entity, a repeated attribute) now throws, and so does build input it used to flatten (`NaN`, bytes). The parse-speed benchmark should be re-run from the committed scripts, since the reader now resolves references and checks names.
+
+### D176 — The codecs follow their ecosystems on large numbers, YAML quoting and unencodable objects · *Accepted (2026-10-20)* · *amends D170*
+
+**Context:** A review of `runtime:serialization` left three behaviours with no principle behind them. `CBOR.decode(CBOR.encode(2 ** 60))` came back a `BigInt`, because D170 wrote every integral `number` the integer major types could hold as an integer, and an integer past 2<sup>53</sup> decodes to a `BigInt`. `YAML.build` wrote `2001-12-14` plain: correct for the 1.2 core schema, but js-yaml — the most-used YAML reader in JavaScript — reads it as a `Date`. And every builder wrote a `RegExp`, an `Error` or a `URL` as `{}`, because they carry their state in internal slots. The question was what developers who use the established codecs for these formats expect.
+
+**Decision (maintainer, 2026-10-20):** follow the established libraries, checked against their source and documentation.
+
+- **A `number` keeps its type through CBOR.** An integral `number` inside the safe range is a CBOR integer; past it, the shortest exact float. cbor-x writes any `number` that needs more than 32 bits as a float64 and keeps 64-bit integers for `BigInt` (decoding them as `BigInt` by default). A `BigInt` still takes the integer form down to −2<sup>64</sup>. TOML's writer follows the same rule.
+- **YAML quotes what js-yaml and 1.1 readers resolve.** On top of the core schema and the 1.1 booleans (already quoted, D160), a string is quoted when it matches js-yaml's timestamp, base-60, `0b` or `_`-separated number forms. js-yaml's dumper does exactly this in its default compatibility mode (`DEPRECATED_BOOLEANS_SYNTAX`, `DEPRECATED_BASE60_SYNTAX`, and every implicit type in its default schema).
+- **A built-in with no form is refused.** After the conversions every builder shares (`Date`, `Map`, `Set`, typed arrays, boxed primitives), an object whose `Object.prototype.toString` brand is not `[object Object]` is a `TypeError` naming the brand. js-yaml makes the same test and throws `unacceptable kind of an object to dump`; cbor-x keeps `Error` and `RegExp` through tag 27, which these codecs do not write (D170). A class instance brands as `[object Object]` and is written as a map of its own enumerable properties, as both libraries write it.
+
+**Rejected:**
+- **Keeping D170's integer form for large `number`s.** It is canonical in a sense RFC 8949 §4.2 does not require, and its cost is a type change on the round trip that no mainstream CBOR library imposes.
+- **eemeli/yaml's plain output.** It is right for a 1.2-only reader, but output read by js-yaml, PyYAML or SnakeYAML would come back with dates and numbers in place of strings. Quoting costs two characters and is read correctly everywhere.
+- **Calling `toJSON` (so a `URL` becomes its `href`).** Neither js-yaml nor cbor-x does it by default, and it would make a `Date` (which also has `toJSON`) depend on method lookup rather than the fixed conversion.
+- **Tagging `Error`/`RegExp` in CBOR.** D170 refuses tags; a tag the decoder then refuses would make the codec unable to read its own output.
+
+**Consequences:** encoded CBOR for a large `number` changes from an integer to a float, and decodes as a `number`. Some YAML output gains quotes. A builder that used to write `{}` for a `RegExp`, `Error`, `URL` or similar now throws.
+
