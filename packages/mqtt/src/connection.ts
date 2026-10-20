@@ -56,6 +56,22 @@ export const DEFAULT_MQTTS_PORT = 8883;
 export const DEFAULT_KEEP_ALIVE = 60;
 /** How long the handshake and any one request may take, in ms. */
 const DEFAULT_TIMEOUT = 30_000;
+/**
+ * The Receive Maximum this client advertises (5.0): how many QoS 1 and 2
+ * messages the broker may send ahead of the application taking them. The same
+ * order as RabbitMQ's 100–300 prefetch guidance, which the AMQP client uses.
+ */
+export const DEFAULT_RECEIVE_MAXIMUM = 250;
+
+/**
+ * The receiving half of a session's state that outlives one network
+ * connection: the QoS 2 messages this client has taken ownership of (PUBREC
+ * sent) and is waiting to see released (PUBREL). A resumed session's broker
+ * resends PUBREL for exactly these.
+ */
+export interface InboundSession {
+  awaitingRelease: Set<number>;
+}
 
 /** A reached broker, parsed out of a URL. */
 export interface MqttAddress {
@@ -178,6 +194,12 @@ export interface ConnectionSettings {
   protocolVersion?: ProtocolLevel;
   /** How long the handshake may take, in ms. Defaults 30 000. */
   timeout?: number;
+  /**
+   * The Receive Maximum to advertise (5.0): QoS 1 and 2 messages the broker may
+   * send before the application has taken earlier ones. Defaults to
+   * {@link DEFAULT_RECEIVE_MAXIMUM}.
+   */
+  receiveMaximum?: number;
   /** Trust anchors for `mqtts://`, as PEM. */
   ca?: string | Uint8Array;
   /** The name the TLS certificate must carry, when it is not the host. */
@@ -194,7 +216,13 @@ export interface ConnectionSettings {
  * one news that the connection is over.
  */
 export interface ConnectionHandlers {
-  onMessage(packet: PublishPacket): void;
+  /**
+   * A message. For QoS 1 and 2, `accept` sends the acknowledgement that takes
+   * ownership of it (PUBACK, or PUBREC) — call it once the application has the
+   * message, which is what holds the broker to the advertised Receive Maximum.
+   * `null` for QoS 0, which has nothing to acknowledge.
+   */
+  onMessage(packet: PublishPacket, accept: (() => void) | null): void;
   onAck(packet: AckPacket): void;
   onSuback(packet: SubackPacket): void;
   onUnsuback(packet: UnsubackPacket): void;
@@ -265,7 +293,10 @@ export class Connection {
   #pendingWrites = 0;
   #nextPacketId = 1;
   #ping: PingCycle | null = null;
-  #pendingQos2 = new Map<number, PublishPacket>();
+  // QoS 2 messages delivered on this connection and not yet accepted: a DUP
+  // retransmission of one is the same message, not a second delivery.
+  #undecidedQos2 = new Set<number>();
+  #inbound: InboundSession;
   #connack: ConnackPacket;
 
   private constructor(
@@ -274,10 +305,12 @@ export class Connection {
     handlers: ConnectionHandlers,
     level: ProtocolLevel,
     connack: ConnackPacket,
+    inbound: InboundSession,
   ) {
     this.#transport = transport;
     this.#settings = settings;
     this.#handlers = handlers;
+    this.#inbound = inbound;
     this.#level = level;
     this.#connack = connack;
     this.#keepAlive =
@@ -470,13 +503,17 @@ export class Connection {
     settings: ConnectionSettings = {},
     handlers: Partial<ConnectionHandlers> = {},
     level: ProtocolLevel = 5,
+    inbound: InboundSession = { awaitingRelease: new Set() },
   ): Promise<Connection> {
     const full = Connection.#handlersOf(handlers);
-    const connection = new Connection(transport, settings, full, level, {
-      type: PacketType.Connack,
-      sessionPresent: false,
-      reasonCode: 0,
-    });
+    const connection = new Connection(
+      transport,
+      settings,
+      full,
+      level,
+      { type: PacketType.Connack, sessionPresent: false, reasonCode: 0 },
+      inbound,
+    );
     const connack = await connection.#handshake(level);
     // The two levels judge a CONNACK differently. A 5.0 reason code refuses
     // from 0x80 up; a 3.1.1 return code refuses with anything but 0, and its
@@ -584,8 +621,8 @@ export class Connection {
   #connectProperties(): Properties | undefined {
     const extra = this.#settings.properties;
     const sessionExpiry = this.#settings.sessionExpiryInterval;
-    if (sessionExpiry === undefined && extra === undefined) return undefined;
     return {
+      receiveMaximum: this.#settings.receiveMaximum ?? DEFAULT_RECEIVE_MAXIMUM,
       ...(extra ?? {}),
       ...(sessionExpiry === undefined ? {} : { sessionExpiryInterval: sessionExpiry }),
     };
@@ -718,8 +755,13 @@ export class Connection {
         break;
       case PacketType.Pubrel:
         // Step three of an inbound QoS 2 exchange: the broker has our PUBREC and
-        // is releasing the message — this is where it is delivered, once.
-        this.#completeInboundQos2(packet.packetId);
+        // releases the identifier. The message was delivered on its PUBLISH.
+        this.#inbound.awaitingRelease.delete(packet.packetId);
+        void this.send({
+          type: PacketType.Pubcomp,
+          packetId: packet.packetId,
+          reasonCode: 0,
+        }).catch(() => {});
         break;
       case PacketType.Pubcomp:
         this.#handlers.onAck(packet);
@@ -764,23 +806,44 @@ export class Connection {
   #onPublish(packet: PublishPacket): void {
     this.#resolveAlias(packet);
     if (packet.qos === 0) {
-      this.#handlers.onMessage(packet);
+      this.#handlers.onMessage(packet, null);
       return;
     }
+    const packetId = packet.packetId!;
+    // The acknowledgement is not sent here. It takes ownership of the message
+    // (4.3.2: PUBACK is sent "having accepted ownership"), and only the
+    // application taking it is that; the broker's send quota is replenished by
+    // it (4.9), which is what bounds how far ahead the broker sends.
     if (packet.qos === 1) {
-      void this.send({ type: PacketType.Puback, packetId: packet.packetId!, reasonCode: 0 }).catch(
-        () => {},
+      this.#handlers.onMessage(
+        packet,
+        once(() => this.#acknowledge(PacketType.Puback, packetId)),
       );
-      this.#handlers.onMessage(packet);
       return;
     }
-    // QoS 2: remember the message against its identifier and acknowledge the
-    // receipt; it is delivered when the broker releases it with PUBREL, so a
-    // retransmitted PUBLISH is stored, not delivered twice.
-    this.#pendingQos2.set(packet.packetId!, packet);
-    void this.send({ type: PacketType.Pubrec, packetId: packet.packetId!, reasonCode: 0 }).catch(
-      () => {},
+    // QoS 2 is delivered on its PUBLISH and de-duplicated by identifier until
+    // PUBREL. Accepted already (PUBREC sent, maybe on an earlier connection of
+    // the same session): only the PUBREC is owed again. Delivered but not yet
+    // accepted: a DUP retransmission is the same message.
+    if (this.#inbound.awaitingRelease.has(packetId)) {
+      this.#acknowledge(PacketType.Pubrec, packetId);
+      return;
+    }
+    if (this.#undecidedQos2.has(packetId)) return;
+    this.#undecidedQos2.add(packetId);
+    this.#handlers.onMessage(
+      packet,
+      once(() => {
+        this.#undecidedQos2.delete(packetId);
+        this.#inbound.awaitingRelease.add(packetId);
+        this.#acknowledge(PacketType.Pubrec, packetId);
+      }),
     );
+  }
+
+  #acknowledge(type: typeof PacketType.Puback | typeof PacketType.Pubrec, packetId: number): void {
+    if (this.#closed) return;
+    void this.send({ type, packetId, reasonCode: 0 }).catch(() => {});
   }
 
   /**
@@ -813,13 +876,6 @@ export class Connection {
       throw new ProtocolError(`the broker used Topic Alias ${alias} before defining it`);
     }
     packet.topic = topic;
-  }
-
-  #completeInboundQos2(packetId: number): void {
-    const packet = this.#pendingQos2.get(packetId);
-    this.#pendingQos2.delete(packetId);
-    void this.send({ type: PacketType.Pubcomp, packetId, reasonCode: 0 }).catch(() => {});
-    if (packet !== undefined) this.#handlers.onMessage(packet);
   }
 
   // -- writing --------------------------------------------------------------
@@ -923,6 +979,16 @@ export class Connection {
   }
 }
 
+/** `fn`, callable once; later calls do nothing. */
+function once(fn: () => void): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    fn();
+  };
+}
+
 /** Opens a connection to `url` and completes the handshake. */
 export function openConnection(
   url: string,
@@ -951,6 +1017,7 @@ export async function openWithDial(
   settings: ConnectionSettings = {},
   handlers: Partial<ConnectionHandlers> = {},
   dial: Dialer = netTransport,
+  inbound?: InboundSession,
 ): Promise<Connection> {
   const address = parseMqttUrl(url);
   const effective: ConnectionSettings = {
@@ -984,7 +1051,7 @@ export async function openWithDial(
     }
 
     try {
-      return await Connection.over(transport, effective, handlers, level);
+      return await Connection.over(transport, effective, handlers, level, inbound);
     } catch (e) {
       // Abandoning this socket, not closing it politely: the handshake may have
       // timed out with a write still pending, and a graceful close would wait on

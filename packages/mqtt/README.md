@@ -68,6 +68,9 @@ const client = await MqttClient.connect("mqtts://app:secret@broker.internal:8883
 | `properties` | Extra CONNECT properties, merged over the ones derived from the fields above. |
 | `protocolVersion` | `5` or `4` to pin a level. Omitted means negotiate: try 5.0, fall back to 3.1.1 when the broker will not speak it. |
 | `timeout` | Milliseconds the handshake, and the default for a publish/subscribe, may take. Defaults to 30 000. |
+| `reconnect` | `{ initialDelay, maxDelay }` (ms) — backoff bounds for reconnecting after a lost connection. On by default (500 / 30 000); `false` ends the client on the first failure. See [Reconnecting](#reconnecting). |
+| `receiveMaximum` | QoS 1 and 2 messages the broker may send before the application has taken earlier ones (5.0). Defaults to 250. |
+| `dial` | How to open the socket. Defaults to `netTransport`; a test passes a scripted one. |
 | `ca`, `servername` | Trust anchors, as PEM, for a private authority; and the name the certificate must carry when it is not the host. |
 
 `parseMqttUrl(url)` returns the same host and credentials as a plain object,
@@ -77,7 +80,9 @@ without dialling: `hostname`, `port`, `tls`, and optionally `username`/`password
 | --- | --- |
 | `protocolLevel` | `5` for MQTT 5.0, `4` for 3.1.1 — what was negotiated. |
 | `sessionPresent` | Whether the broker resumed a session for this client id. |
-| `closed`, `failure` | Whether it is over, and the error that ended it (`null` while it stands). |
+| `connected` | Whether a connection is open right now (`false` while reconnecting). |
+| `closed`, `failure` | Whether it has ended for good, and the error that ended it (`null` while it stands, reconnecting included). |
+| `onDisconnect`, `onReconnect`, `onError` | A connection was lost; one is open again; a reconnect attempt failed and will be retried. |
 | `publish(topic, payload, options?)` | See below. |
 | `subscribe(filter, options?)` | See below. |
 | `unsubscribe(filters, timeout?)` | One filter or a list. |
@@ -144,6 +149,7 @@ for await (const message of subscription) {
 | `retainHandling` | `0` send retained now, `1` send if the subscription is new, `2` never (5.0). |
 | `subscriptionIdentifier` | An identifier the broker echoes on matching messages (5.0). |
 | `properties` | Any further 5.0 property. |
+| `maxBuffered` | QoS 0 messages held unread; past it the oldest is dropped and counted in `dropped`. Default 10 000. QoS 1 and 2 are never dropped. |
 | `timeout` | Milliseconds to wait for the SUBACK. Defaults to the client's `timeout`. |
 
 A wildcard filter, a `$share/` filter or a subscription identifier is refused
@@ -159,6 +165,15 @@ connect; without it the broker may not use one.
 | `nextMessage(timeout?)` | The next message, rejecting with `ERR_MQTT_TIMEOUT` if none arrives. |
 | `unsubscribe()` | Ends the iterable; unsubscribes at the broker when it was the last local subscription to its filter (the broker holds one per filter). |
 | `matches(topic)` | Whether a topic matches this filter. |
+| `dropped` | QoS 0 messages dropped past `maxBuffered`. |
+
+An inbound QoS 1 or 2 message is acknowledged when the application takes it —
+when the iterator yields it — not when it arrives: the PUBACK (or PUBREC) is how
+a client says it "accepted ownership" (MQTT 5.0 §4.3.2), and with the Receive
+Maximum it advertises it is what stops the broker sending further ahead than the
+application reads. A message several subscriptions match is acknowledged once
+all have taken it; one an ending subscription never read is acknowledged as it
+ends.
 
 A `Message` is `topic`, `payload` (`Uint8Array`), `qos`, `retain`, `dup`, and the
 5.0 `properties` (`{}` on a 3.1.1 connection), plus `text(encoding?)`, `json()`,
@@ -230,9 +245,24 @@ try {
 | `ERR_MQTT_SERVER` | The broker sent a DISCONNECT carrying an error, or violated the protocol. |
 | `ERR_MQTT_UNSUPPORTED` | Something this client does not implement was asked for. |
 
-A lost socket or bytes that are not MQTT are fatal and latched: the stream is at
-an unknown boundary, so the connection does not try to resynchronise. Reconnecting
-is the application's decision — this client does not redial on its own.
+A lost socket or bytes that are not MQTT end that connection — the stream is at
+an unknown boundary and is not resynchronised — and the client reconnects (see
+below). `closed` and `failure` describe the client ending for good.
+
+## Reconnecting
+
+A lost connection is reconnected by default (DECISIONS D178), with exponential
+backoff and jitter. Subscriptions stay open across it; a call made while
+disconnected waits for the reconnect within its own `timeout`.
+
+| | |
+| --- | --- |
+| What reconnects | A lost socket, a keep-alive timeout, unreadable bytes, a broker DISCONNECT. |
+| What does not | `close()`, and a DISCONNECT for *Session taken over* (another client holds the id), *Banned*, *Not authorized*, *Use another server* or *Server moved* — the client ends with that reason. (A takeover by one of this client's own abandoned attempts, which a proxy in front of the broker can deliver late, reconnects.) |
+| The first connection | Retried for transient failures until `timeout`; a refusal, a TLS failure or a host outside `--allow-net` rejects at once. |
+| The session | Resumed with Clean Start 0 and the same (or broker-assigned) client id when one can survive: a 5.0 `sessionExpiryInterval`, or `cleanStart: false` on 3.1.1. |
+| Session resumed | In-flight QoS 1/2 publishes are resent with DUP and their identifiers, PUBRELs too (§4.4); nothing is resubscribed; unread QoS 1/2 copies are dropped because the broker resends them. |
+| Session not resumed | In-flight QoS 1/2 publishes reject — §4.4 forbids resending them, and a republish could arrive twice — and every subscription is sent again with its options. |
 
 ## Testing locally
 
@@ -248,7 +278,6 @@ broker of your own through `MQTT_URL` and it runs the end-to-end suite against i
 
 ## Not yet
 
-MQTT over WebSockets, MQTT 3.1 (the older wire format below 3.1.1), automatic
-reconnection, and broker-side persistence management. Messages on a persistent
-session are redelivered by the broker; deciding to redial and resubscribe is the
-application's.
+MQTT over WebSockets, MQTT 3.1 (the older wire format below 3.1.1), enhanced
+authentication (the AUTH packet), and client-side persistence of in-flight
+messages across a process restart.

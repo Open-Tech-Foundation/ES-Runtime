@@ -1,6 +1,6 @@
 ---
 title: "Internals: MQTT"
-description: Why the MQTT client is a package, how it frames the stream, why a lost socket is latched, and how QoS 2 is delivered exactly once.
+description: Why the MQTT client is a package, how it frames the stream, how it reconnects and resumes a session, and how acknowledgements bound what the broker sends.
 ---
 
 # Internals: MQTT
@@ -66,9 +66,7 @@ once**, and every caller — now and later — gets that one cause rather than a
 symptom of the same dead connection. There is no resynchronisation: a stream that
 lost a byte cannot be repaired, only replaced.
 
-The client does not redial. A retry loop that guessed at what was in flight would
-either duplicate a message or drop one, silently; a `MqttError` that says what
-happened lets the application reconnect where it knows what it was doing.
+The connection does not repair itself; the client replaces it (below).
 
 ## Version negotiation
 
@@ -84,18 +82,50 @@ The two levels share a codec but not every rule: 5.0 properties exist only on a
 packet the broker would reject. The same is true of request/reply, which is the
 5.0 response-topic convention and nothing else.
 
-## The protocol's own acknowledgements
+## Acknowledging on ownership
 
-Some answers need no application decision, so the connection sends them itself: a
-PUBACK for an inbound QoS 1 message, and the PUBREC/PUBREL/PUBCOMP exchange for
-QoS 2, whichever side sent the message. What reaches the client is only what an
-application asked for or must decide on.
+An inbound QoS 1 message is acknowledged when the application takes it, not when
+it arrives. The specification says the receiver sends PUBACK "having accepted
+ownership of the Application Message" (4.3.2), and the broker's send quota is
+replenished only by PUBACK and PUBCOMP (4.9) — so acknowledging on arrival, as
+mqtt.js does, claims ownership the application does not have yet and leaves
+memory as the only bound on a fast publisher. With the Receive Maximum the client
+advertises (250 by default), acknowledging on ownership is what holds the broker
+to the application's pace; on 3.1.1, the broker's own in-flight window does the
+same.
 
-QoS 2 delivery to the application happens **on PUBREL, not on PUBLISH**. The
-message is held against its identifier when the PUBLISH arrives, acknowledged with
-PUBREC, and released to the application when the broker's PUBREL comes back. That
-is what makes it exactly-once: a retransmitted PUBLISH — the broker resending
-because it saw no PUBREC — is stored again, not delivered a second time.
+QoS 2 is delivered on its PUBLISH and de-duplicated by packet identifier: a DUP
+retransmission before the application has taken it is the same message, and one
+after (PUBREC sent, PUBREL not yet seen) only draws the PUBREC again. The
+identifiers awaiting PUBREL are session state, kept across reconnects, because a
+resumed session's broker resends PUBREL for exactly those. The rest of the
+exchange — PUBREL for our own QoS 2 publishes, PUBCOMP for theirs — needs no
+decision, and the connection sends it.
+
+QoS 0 has no acknowledgement and cannot be flow-controlled, so each
+subscription holds at most `maxBuffered` of them and drops the oldest past that.
+
+## Reconnecting, and what a session allows
+
+mqtt.js reconnects by default, and so does this client — but where it would
+guess, the specification decides (DECISIONS D178). On a reconnect with Clean
+Start 0 and a session present, both sides "MUST resend any unacknowledged
+PUBLISH packets (where QoS > 0) and PUBREL packets using their original Packet
+Identifiers… [and] MUST NOT resend messages at any other time" (4.4). So a
+resumed session resends what was in flight, with DUP set; a fresh one rejects
+it, since republishing it as a new message is exactly what 4.4 forbids and the
+receiver could not tell the copy from the original. A fresh session has every
+subscription sent again; a resumed one keeps the broker's.
+
+Retries back off exponentially with jitter, so a restarted broker's clients do
+not return in lockstep. *Session taken over* normally ends the client — another
+client now holds the id, and reconnecting would make the two evict each other
+forever — with one exception found in testing: behind Docker's port proxy, an
+attempt made while the broker restarted saw its handshake fail and was
+abandoned, but the proxy delivered its CONNECT once the broker was back, after
+a later attempt had connected, and the broker handed the session to that ghost.
+Attempts whose socket opened and whose handshake failed are counted, and a
+takeover while one is outstanding reconnects instead of ending the client.
 
 ## Keep-alive
 
@@ -195,8 +225,8 @@ its timeout, and everything else is refused with `ERR_MQTT_UNSUPPORTED`.
 
 The read loop starts with the CONNACK, and a resumed session's backlog follows
 it at once — before `connect()` has returned, let alone before the application
-subscribed again. Those messages are acknowledged as they arrive, so a client
-that dropped them lost them for good. They are now held until the client exists,
+subscribed again. Those messages were owed an acknowledgement on arrival, so a
+client that dropped them lost them for good. They are now held until the client exists,
 and anything no subscription matches goes to `onUnmatchedMessage`, which can be
 given at connect time for exactly this reason. It plays the part of mqtt.js's
 client-wide `message` event, without giving up per-subscription iteration.
@@ -222,6 +252,7 @@ Moving the codec into Rust later would not change what this package exports.
 
 ## Not here
 
-MQTT over WebSockets, the 3.1 wire format below 3.1.1, automatic reconnection, and
-broker-side persistence management. Messages on a persistent session are
-redelivered by the broker; deciding to redial and resubscribe is the application's.
+MQTT over WebSockets, the 3.1 wire format below 3.1.1, enhanced authentication
+(the AUTH packet), and persisting in-flight messages across a process restart:
+the session state the client keeps lives in memory, so a resumed session after
+a restart of the process itself relies on the broker alone.

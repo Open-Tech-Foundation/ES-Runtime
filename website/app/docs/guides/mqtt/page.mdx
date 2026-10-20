@@ -138,8 +138,9 @@ if (client.sessionPresent) {
 }
 ```
 
-Redelivery after a reconnect is the broker's; deciding to reconnect at all is
-yours — this client does not redial on its own.
+The client reconnects on its own after a lost connection and resumes the
+session, so what the broker kept during the gap arrives, and anything you had
+in flight is resent.
 
 ## Request/reply
 
@@ -189,10 +190,17 @@ try {
 }
 ```
 
-A lost socket is fatal and latched: a stream missing a byte cannot be
-resynchronised, so the connection is replaced rather than repaired. The client
-does not dial again on its own — that is the application's decision, made where
-it knows what was in flight.
+A lost connection is replaced, not repaired: the client reconnects with
+backoff, and your subscriptions keep going. A publish that was waiting for its
+acknowledgement when the connection dropped is resent if the session was
+resumed and rejects if it was not — publish it again if it must get through.
+
+```js
+client.onDisconnect = (error) => console.warn("lost the broker:", error.message);
+client.onReconnect = () => console.info("back");
+```
+
+Pass `reconnect: false` to end the client on the first failure instead.
 
 ## Test locally
 

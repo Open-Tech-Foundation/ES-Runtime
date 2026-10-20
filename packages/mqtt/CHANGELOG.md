@@ -12,6 +12,19 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Added
 
+- Reconnecting (DECISIONS D178), on by default: exponential backoff with jitter,
+  the session resumed where one can survive, in-flight QoS 1/2 publishes and
+  PUBRELs resent with their identifiers on a resumed session (§4.4) and
+  rejected on a fresh one, subscriptions sent again on a fresh session, and
+  calls made while disconnected waiting within their timeout. `reconnect`,
+  `connected`, `onDisconnect`, `onReconnect` and `onError`. *Session taken over*
+  and other final DISCONNECTs end the client, unless the takeover came from
+  one of its own abandoned attempts.
+- Inbound flow control: QoS 1 and 2 messages are acknowledged when the
+  application takes them, under a Receive Maximum the client advertises
+  (`receiveMaximum`, default 250); QoS 2 is delivered on PUBLISH and
+  de-duplicated until PUBREL; each subscription holds at most `maxBuffered`
+  QoS 0 messages (default 10 000) and counts what it drops in `dropped`.
 - The `@opentf/esrun-mqtt` package, an MQTT client speaking MQTT 5.0 with a
   fallback to 3.1.1, in JavaScript over `runtime:net` (DECISIONS D172). No native
   code, and no capability beyond the `Net` grant `runtime:net`'s `connect`

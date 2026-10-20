@@ -1,34 +1,43 @@
 /**
- * The client: publish, subscribe, and request/reply over one connection.
+ * The client: publish, subscribe, and request/reply over a session that
+ * outlives its connections.
  *
- * Everything the connection answered on the protocol's behalf — PUBACK for an
- * inbound QoS 1 message, the PUBREC/PUBREL/PUBCOMP exchange in either direction,
- * PINGREQ — has already happened by the time a {@link Message} arrives here. What
- * is left is what an application asked for:
+ * Everything the connection answers on the protocol's behalf — PUBREL and
+ * PUBCOMP, PINGREQ — has already happened by the time a {@link Message}
+ * arrives here. What is left is what an application asked for:
  *
  * - **Publish** at QoS 0, 1 or 2, where the QoS 1 and 2 calls resolve only when
  *   the broker has acknowledged (or refuse, with the broker's reason code, when
  *   it would not take the message).
  * - **Subscribe**, which registers a topic filter and hands back an async
  *   iterable of {@link Message}; the connection's messages are routed to it by
- *   the filter, and the two wildcards are matched here, not guessed at.
+ *   the filter, and the two wildcards are matched here, not guessed at. An
+ *   inbound QoS 1 or 2 message is acknowledged when a subscription hands it to
+ *   the application — "having accepted ownership" (MQTT 5.0, 4.3.2) — so the
+ *   advertised Receive Maximum is what bounds how far ahead the broker sends.
  * - **Request/reply**, which is the 5.0 convention and nothing more: publish
  *   with a response topic and correlation data, and read the first reply that
  *   carries the same correlation data back.
  *
- * QoS 1 and 2 delivery to the broker is at-least-once and exactly-once as far as
- * the protocol is concerned; the acknowledgement is what this layer waits on, and
- * a publish that never draws one fails with a timeout rather than hanging.
- * Redelivery of a QoS 1 or 2 message after a reconnect is the application's
- * decision — this client does not redial on its own — and `dup` is set on a
- * message the broker says is a retransmission.
+ * A lost connection is reconnected (DECISIONS D178): with backoff, resuming
+ * the session where one can survive. A resumed session resends what was in
+ * flight with its original identifiers (4.4); a fresh one rejects it — never
+ * republished as a new message — and has every subscription sent again.
  */
 
 import { unrefTimer } from "runtime:process";
-import { Connection, type ConnectionHandlers, type ConnectionSettings } from "./connection.js";
+import {
+  Connection,
+  type ConnectionHandlers,
+  type ConnectionSettings,
+  type Dialer,
+  type InboundSession,
+  openWithDial,
+} from "./connection.js";
 import { MqttError, MqttErrorCode } from "./errors.js";
 import {
   type AckPacket,
+  type Packet,
   PacketType,
   type PublishPacket,
   type SubackPacket,
@@ -38,7 +47,7 @@ import {
 import type { Properties } from "./protocol/properties.js";
 import { isErrorReason, reasonName } from "./protocol/reason.js";
 import { topicMatches, validateTopicName } from "./protocol/topic.js";
-import type { Transport } from "./transport.js";
+import { netTransport, type Transport } from "./transport.js";
 
 const DEFAULT_TIMEOUT = 30_000;
 
@@ -107,7 +116,10 @@ export interface PublishOptions {
   userProperties?: Array<[string, string]>;
   /** Any further 5.0 properties. */
   properties?: Properties;
-  /** How long to wait for the acknowledgement, in ms. Defaults 30 000. */
+  /**
+   * How long the publish may take, in ms — waiting out a reconnect, room under
+   * the broker's Receive Maximum, and the acknowledgement. Defaults 30 000.
+   */
   timeout?: number;
 }
 
@@ -122,13 +134,27 @@ export interface SubscribeOptions {
   subscriptionIdentifier?: number;
   /** Any further 5.0 properties. */
   properties?: Properties;
-  /** How long to wait for the SUBACK, in ms. Defaults 30 000. */
+  /**
+   * The most QoS 0 messages held unread; past it the oldest QoS 0 message is
+   * dropped and counted in {@link Subscription.dropped}. QoS 1 and 2 are never
+   * dropped — the Receive Maximum bounds them. Default 10 000.
+   */
+  maxBuffered?: number;
+  /** How long to wait for the SUBACK (and any reconnect), in ms. Defaults 30 000. */
   timeout?: number;
+}
+
+/** Reconnect timing: exponential backoff with jitter between these bounds. */
+export interface ReconnectOptions {
+  /** The first retry's delay, in ms. Default 500. */
+  initialDelay?: number;
+  /** The longest delay between retries, in ms. Default 30 000. */
+  maxDelay?: number;
 }
 
 /** Any extra connection settings, plus a default operation timeout. */
 export interface MqttClientOptions extends ConnectionSettings {
-  /** The default timeout for a publish/subscribe, in ms. Defaults 30 000. */
+  /** The default timeout for an operation, in ms. Defaults 30 000. */
   timeout?: number;
   /**
    * Receives every message no subscription on this client matches. A
@@ -138,21 +164,65 @@ export interface MqttClientOptions extends ConnectionSettings {
    * here, not later, to see them.
    */
   onUnmatchedMessage?: (message: Message) => void;
+  /**
+   * Reconnecting after a lost connection (DECISIONS D178). On by default;
+   * `false` ends the client with the first failure instead.
+   */
+  reconnect?: false | ReconnectOptions;
+  /** How a connection reaches the broker's socket; a test scripts one. */
+  dial?: Dialer;
+}
+
+const DEFAULT_MAX_BUFFERED = 10_000;
+const DEFAULT_INITIAL_DELAY = 500;
+const DEFAULT_MAX_DELAY = 30_000;
+
+/**
+ * The acknowledgement owed for one delivery. A message matching several
+ * subscriptions is acknowledged once every one of them has taken it — or ended
+ * without reading it.
+ */
+class Ticket {
+  #remaining: number;
+  readonly #accept: (() => void) | null;
+
+  constructor(remaining: number, accept: (() => void) | null) {
+    this.#remaining = remaining;
+    this.#accept = accept;
+    if (remaining === 0) accept?.();
+  }
+
+  take(): void {
+    if (this.#remaining === 0) return;
+    this.#remaining--;
+    if (this.#remaining === 0) this.#accept?.();
+  }
+}
+
+interface Entry {
+  message: Message;
+  ticket: Ticket;
 }
 
 /** A live subscription: an async iterable of messages, until unsubscribed. */
 export class Subscription implements AsyncIterable<Message> {
   readonly filter: string;
   #client: MqttClient;
-  #queue: Message[] = [];
+  #queue: Entry[] = [];
   #waiters: Array<(result: IteratorResult<Message>) => void> = [];
   #closed = false;
   #grantedQos: 0 | 1 | 2 = 0;
+  #granted = false;
+  #dropped = 0;
+  readonly #maxBuffered: number;
+  readonly #options: SubscribeOptions;
 
   /** @internal */
-  constructor(client: MqttClient, filter: string) {
+  constructor(client: MqttClient, filter: string, options: SubscribeOptions) {
     this.#client = client;
     this.filter = filter;
+    this.#options = options;
+    this.#maxBuffered = options.maxBuffered ?? DEFAULT_MAX_BUFFERED;
   }
 
   /** The QoS the broker granted for this filter. */
@@ -165,23 +235,67 @@ export class Subscription implements AsyncIterable<Message> {
     return this.#closed;
   }
 
-  /** @internal */
-  setGrantedQos(qos: 0 | 1 | 2): void {
-    this.#grantedQos = qos;
+  /** QoS 0 messages dropped because `maxBuffered` were already waiting unread. */
+  get dropped(): number {
+    return this.#dropped;
+  }
+
+  /** @internal The options it was made with, for a resubscribe. */
+  get options(): SubscribeOptions {
+    return this.#options;
+  }
+
+  /** @internal Whether the broker has granted it (a pending one resends itself). */
+  get granted(): boolean {
+    return this.#granted;
   }
 
   /** @internal */
-  offer(message: Message): void {
-    if (this.#closed) return;
+  setGrantedQos(qos: 0 | 1 | 2): void {
+    this.#grantedQos = qos;
+    this.#granted = true;
+  }
+
+  /** @internal */
+  offer(message: Message, ticket: Ticket): void {
+    if (this.#closed) {
+      ticket.take();
+      return;
+    }
     const waiter = this.#waiters.shift();
-    if (waiter !== undefined) waiter({ value: message, done: false });
-    else this.#queue.push(message);
+    if (waiter !== undefined) {
+      ticket.take();
+      waiter({ value: message, done: false });
+      return;
+    }
+    if (message.qos === 0 && this.#queue.length >= this.#maxBuffered) {
+      // QoS 0 is at-most-once and cannot be flow-controlled; past the bound
+      // the oldest one goes, so memory stays bounded under a flood.
+      const oldest = this.#queue.findIndex((entry) => entry.message.qos === 0);
+      if (oldest >= 0) this.#queue.splice(oldest, 1);
+      this.#dropped++;
+      if (oldest < 0) return;
+    }
+    this.#queue.push({ message, ticket });
+  }
+
+  /**
+   * @internal After a resumed session: the broker resends every QoS 1 and 2
+   * message it had not had acknowledged, so the copies buffered here — whose
+   * acknowledgement belonged to the dead connection — are dropped.
+   */
+  discardReliable(): void {
+    this.#queue = this.#queue.filter((entry) => entry.message.qos === 0);
   }
 
   /** @internal */
   finish(): void {
     if (this.#closed) return;
     this.#closed = true;
+    // Unread messages are acknowledged as they are discarded: MQTT has no way
+    // to hand one back, and an unacknowledged one would hold a slot of the
+    // broker's send quota for good.
+    for (const entry of this.#queue.splice(0)) entry.ticket.take();
     for (const waiter of this.#waiters.splice(0)) waiter({ value: undefined, done: true });
   }
 
@@ -192,16 +306,22 @@ export class Subscription implements AsyncIterable<Message> {
 
   /** The next message, or `done` once the subscription ends. */
   next(): Promise<IteratorResult<Message>> {
-    const message = this.#queue.shift();
-    if (message !== undefined) return Promise.resolve({ value: message, done: false });
+    const entry = this.#queue.shift();
+    if (entry !== undefined) {
+      entry.ticket.take();
+      return Promise.resolve({ value: entry.message, done: false });
+    }
     if (this.#closed) return Promise.resolve({ value: undefined, done: true });
     return new Promise((resolve) => this.#waiters.push(resolve));
   }
 
   /** The next message, rejecting if none arrives within `timeout` ms. */
   nextMessage(timeout: number = DEFAULT_TIMEOUT): Promise<Message> {
-    const message = this.#queue.shift();
-    if (message !== undefined) return Promise.resolve(message);
+    const entry = this.#queue.shift();
+    if (entry !== undefined) {
+      entry.ticket.take();
+      return Promise.resolve(entry.message);
+    }
     if (this.#closed) {
       return Promise.reject(
         new MqttError("the subscription is closed", { code: MqttErrorCode.Closed }),
@@ -230,7 +350,6 @@ export class Subscription implements AsyncIterable<Message> {
     });
   }
 
-  /** @internal */
   #removeWaiter(waiter: (result: IteratorResult<Message>) => void): boolean {
     const at = this.#waiters.indexOf(waiter);
     if (at < 0) return false;
@@ -254,10 +373,10 @@ export class Subscription implements AsyncIterable<Message> {
   }
 }
 
-/** Where messages wait while the client that will route them is being built. */
-interface Holder {
-  client: MqttClient | null;
-  early: PublishPacket[];
+/** Where one dial's messages wait until its connection is the client's. */
+interface Slot {
+  connection: Connection | null;
+  early: Array<[PublishPacket, (() => void) | null]>;
 }
 
 type Waiter<T> = {
@@ -266,33 +385,123 @@ type Waiter<T> = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+/** An outbound QoS 1 or 2 publish not yet finished, for a resumed session to resend. */
+interface Outbound {
+  packet: PublishPacket;
+  /** `publish` until a successful PUBREC; then `pubrel` (QoS 2). */
+  stage: "publish" | "pubrel";
+}
+
+/** A broker DISCONNECT after which reconnecting is the wrong thing to do. */
+const FINAL_DISCONNECTS: ReadonlySet<number> = new Set([
+  0x87, // Not authorized
+  0x8a, // Banned
+  0x8e, // Session taken over — another client holds this id now
+  0x9c, // Use another server
+  0x9d, // Server moved
+]);
+
+/**
+ * A refusal no retry will change: the broker refusing the CONNECT, and a
+ * socket that `runtime:net` would not open for a reason of its own — a TLS
+ * failure such as an untrusted certificate (`ERR_TLS`), or a host the
+ * `--allow-net` grant does not name (`ERR_CAPABILITY_DENIED`). Retrying those
+ * only delays the same answer until the timeout.
+ */
+function refusal(error: unknown): boolean {
+  if (!(error instanceof MqttError)) return false;
+  if (
+    error.code === MqttErrorCode.Auth ||
+    error.code === MqttErrorCode.Refused ||
+    error.code === MqttErrorCode.Handshake ||
+    error.code === MqttErrorCode.Unsupported ||
+    error.code === MqttErrorCode.Protocol
+  ) {
+    return true;
+  }
+  const cause = (error as { cause?: { code?: unknown } }).cause?.code;
+  return cause === "ERR_TLS" || cause === "ERR_CAPABILITY_DENIED";
+}
+
+/** What a SUBSCRIBE or UNSUBSCRIBE in flight gets when its connection is lost. */
+class Interrupted extends MqttError {
+  constructor() {
+    super("the connection was lost before the broker answered", {
+      code: MqttErrorCode.Connection,
+    });
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export class MqttClient {
-  #connection: Connection;
-  #options: MqttClientOptions;
+  readonly #url: string | null;
+  readonly #options: MqttClientOptions;
+  readonly #dial: Dialer;
+  readonly #reconnect: Required<ReconnectOptions> | null;
+  readonly #inbound: InboundSession = { awaitingRelease: new Set() };
+
+  #connection: Connection | null = null;
+  #level: 4 | 5 | null = null;
+  #clientId: string | undefined;
+  #ready = new Signal<Connection>();
+  #attempt = 0;
+  #timer: ReturnType<typeof setTimeout> | null = null;
+  // Attempts whose socket opened and whose handshake then failed. A proxy in
+  // front of the broker (Docker's port proxy, a load balancer) can accept such
+  // a socket while the broker is down and deliver its CONNECT once the broker
+  // is back — after a later attempt has already connected. The broker then
+  // hands the session to that ghost and evicts the live connection with
+  // "Session taken over". Seen against Mosquitto behind `docker run -p`.
+  #ghosts = 0;
+
   #subscriptions: Subscription[] = [];
-  // QoS 1 and 2 publishes awaiting their final acknowledgement, and those
-  // waiting for room under the broker's Receive Maximum.
+  #outbound = new Map<number, Outbound>();
+  // QoS 1 and 2 publishes holding a slot of the broker's Receive Maximum, and
+  // those waiting for one.
   #inFlight = 0;
   #slotWaiters: Array<() => void> = [];
-
-  /** Messages no subscription matches. See {@link MqttClientOptions.onUnmatchedMessage}. */
-  onUnmatchedMessage: ((message: Message) => void) | null = null;
   #ackWaiters = new Map<number, Waiter<AckPacket>>();
   #subackWaiters = new Map<number, Waiter<SubackPacket>>();
   #unsubackWaiters = new Map<number, Waiter<UnsubackPacket>>();
   #closed = false;
+  #failure: MqttError | null = null;
 
-  private constructor(connection: Connection, options: MqttClientOptions) {
-    this.#connection = connection;
+  /** Messages no subscription matches. See {@link MqttClientOptions.onUnmatchedMessage}. */
+  onUnmatchedMessage: ((message: Message) => void) | null = null;
+  /** The connection was lost; reconnecting has begun. */
+  onDisconnect: ((error: MqttError) => void) | null = null;
+  /** A connection is open again, and the session resumed or rebuilt. */
+  onReconnect: (() => void) | null = null;
+  /** A reconnect attempt failed; it will be retried. */
+  onError: ((error: MqttError) => void) | null = null;
+
+  private constructor(url: string | null, options: MqttClientOptions) {
+    this.#url = url;
     this.#options = options;
+    this.#dial = options.dial ?? netTransport;
+    this.#clientId = options.clientId;
+    this.#reconnect =
+      url === null || options.reconnect === false
+        ? null
+        : {
+            initialDelay: options.reconnect?.initialDelay ?? DEFAULT_INITIAL_DELAY,
+            maxDelay: options.reconnect?.maxDelay ?? DEFAULT_MAX_DELAY,
+          };
     this.onUnmatchedMessage = options.onUnmatchedMessage ?? null;
   }
 
-  /** Connects to `url` and completes the handshake. */
+  /**
+   * Connects to `url` and completes the handshake. A transient failure — a
+   * refused or lost socket, a timeout — is retried with backoff until
+   * `options.timeout`; a refused connection (credentials, identifier, version)
+   * rejects at once. Once open, a lost connection is reconnected unless
+   * `reconnect: false`.
+   */
   static async connect(url: string, options: MqttClientOptions = {}): Promise<MqttClient> {
-    const holder: Holder = { client: null, early: [] };
-    const connection = await Connection.open(url, options, MqttClient.#handlers(holder));
-    return MqttClient.#adopt(holder, connection, options);
+    const client = new MqttClient(url, options);
+    await client.#first();
+    return client;
   }
 
   /**
@@ -300,82 +509,65 @@ export class MqttClient {
    *
    * The seam a test stands on: the client's routing, acknowledgement handling
    * and request/reply run the same whether the bytes come from a socket or a
-   * scripted broker in memory.
+   * scripted broker in memory. With no URL to dial again, such a client does
+   * not reconnect.
    */
   static async over(
     transport: Transport,
     options: MqttClientOptions = {},
     level: 4 | 5 = 5,
   ): Promise<MqttClient> {
-    const holder: Holder = { client: null, early: [] };
+    const client = new MqttClient(null, options);
+    const slot: Slot = { connection: null, early: [] };
     const connection = await Connection.over(
       transport,
       options,
-      MqttClient.#handlers(holder),
+      client.#handlers(slot),
       level,
+      client.#inbound,
     );
-    return MqttClient.#adopt(holder, connection, options);
-  }
-
-  // The read loop starts with the CONNACK, before the client object exists, and
-  // a persistent session's backlog arrives right then — already acknowledged.
-  // Those are held and handed over once the client does exist, not dropped.
-  static #adopt(holder: Holder, connection: Connection, options: MqttClientOptions): MqttClient {
-    const client = new MqttClient(connection, options);
-    holder.client = client;
-    for (const packet of holder.early.splice(0)) client.#onMessage(packet);
+    client.#adopt(connection, slot, true);
     return client;
-  }
-
-  static #handlers(holder: Holder): ConnectionHandlers {
-    return {
-      onMessage: (packet) => {
-        if (holder.client !== null) holder.client.#onMessage(packet);
-        else holder.early.push(packet);
-      },
-      onAck: (packet) => {
-        if (holder.client !== null) holder.client.#onAck(packet);
-      },
-      onSuback: (packet) => {
-        if (holder.client !== null) holder.client.#onSuback(packet);
-      },
-      onUnsuback: (packet) => {
-        if (holder.client !== null) holder.client.#onUnsuback(packet);
-      },
-      onPingresp: () => {},
-      onDisconnect: () => {},
-      onClosed: (error) => {
-        if (holder.client !== null) holder.client.#onClosed(error);
-      },
-    };
   }
 
   /** The negotiated protocol level: 5 for MQTT 5.0, 4 for 3.1.1. */
   get protocolLevel(): 4 | 5 {
-    return this.#connection.protocolLevel;
+    return this.#connection?.protocolLevel ?? this.#level ?? 5;
   }
 
-  /** Whether the broker kept a session for this client. */
+  /** Whether the broker kept a session for this client, on the latest connection. */
   get sessionPresent(): boolean {
-    return this.#connection.sessionPresent;
+    return this.#connection?.sessionPresent ?? false;
   }
 
-  /** Whether the client is closed. */
+  /** Whether a connection is open right now. */
+  get connected(): boolean {
+    return this.#connection !== null;
+  }
+
+  /** Whether the client has ended — closed, or failed for good. */
   get closed(): boolean {
     return this.#closed;
   }
 
-  /** The failure that ended the connection, or `null` while it stands. */
+  /** What ended the client for good, or `null` while it stands (reconnecting included). */
   get failure(): MqttError | null {
-    return this.#connection.failure;
+    return this.#failure;
   }
 
   /** Sends a PINGREQ and resolves when the PINGRESP arrives. */
-  ping(timeout?: number): Promise<void> {
-    return this.#connection.ping(timeout);
+  async ping(timeout?: number): Promise<void> {
+    const connection = await this.#live(Date.now() + (timeout ?? this.#timeout()));
+    return connection.ping(timeout);
   }
 
-  /** Publishes a message, resolving once the broker has acknowledged it. */
+  /**
+   * Publishes a message, resolving once the broker has acknowledged it (QoS 1
+   * and 2) or once it is written (QoS 0). While disconnected it waits for the
+   * reconnect, within its timeout. A QoS 1 or 2 publish in flight when the
+   * connection drops is resent if the session is resumed and rejected if it is
+   * not — it is never republished as a new message.
+   */
   async publish(
     topic: string,
     payload: string | Uint8Array,
@@ -387,48 +579,46 @@ export class MqttClient {
     const bytes = typeof payload === "string" ? ENCODER.encode(payload) : payload;
     const properties = this.#publishProperties(options);
     const retain = options.retain ?? false;
+    const timeout = options.timeout ?? this.#timeout();
+    const deadline = Date.now() + timeout;
+
+    const connection = await this.#live(deadline);
     this.#checkPublishAllowed(qos, retain);
+    const base = {
+      type: PacketType.Publish,
+      topic,
+      payload: bytes,
+      retain,
+      dup: false,
+      ...(properties === undefined ? {} : { properties }),
+    } as const;
 
     if (qos === 0) {
-      await this.#connection.send({
-        type: PacketType.Publish,
-        topic,
-        payload: bytes,
-        qos: 0,
-        retain,
-        dup: false,
-        ...(properties === undefined ? {} : { properties }),
-      });
+      await connection.send({ ...base, qos: 0 });
       return;
     }
 
-    const timeout = options.timeout ?? this.#timeout();
-    const started = Date.now();
-    await this.#acquireSlot(timeout);
+    await this.#acquireSlot(Math.max(1, deadline - Date.now()));
     let ack: AckPacket;
+    let packetId = 0;
     try {
-      const packetId = this.#allocatePacketId();
+      packetId = this.#allocatePacketId();
+      const packet: PublishPacket = { ...base, qos, packetId };
       // QoS 1 waits for PUBACK; QoS 2 waits for PUBCOMP, the connection having
       // answered the PUBREC in between.
-      const left = Math.max(1, timeout - (Date.now() - started));
-      const waiter = this.#waitFor(this.#ackWaiters, packetId, left);
+      const waiter = this.#waitFor(this.#ackWaiters, packetId, Math.max(1, deadline - Date.now()));
+      this.#outbound.set(packetId, { packet, stage: "publish" });
       ack = await this.#awaitAck(
-        this.#connection.send({
-          type: PacketType.Publish,
-          topic,
-          payload: bytes,
-          qos,
-          retain,
-          dup: false,
-          packetId,
-          ...(properties === undefined ? {} : { properties }),
-        }),
+        connection,
+        connection.send(packet),
         waiter,
         // A write that never left — an unencodable packet, or one the connection
         // refused — cannot leave its timer to reject alone.
         () => this.#forget(this.#ackWaiters, packetId),
+        true,
       );
     } finally {
+      this.#outbound.delete(packetId);
       this.#releaseSlot();
     }
     if (isErrorReason(ack.reasonCode)) {
@@ -445,70 +635,77 @@ export class MqttClient {
     }
   }
 
-  /** Subscribes to a topic filter and returns the messages it matches. */
+  /**
+   * Subscribes to a topic filter and returns the messages it matches. It is
+   * re-sent after a reconnect whose session the broker did not keep.
+   */
   async subscribe(filter: string, options: SubscribeOptions = {}): Promise<Subscription> {
     this.#assertOpen();
-    this.#checkSubscribeAllowed(filter, options);
-    const qos = options.qos ?? 0;
-    const packetId = this.#allocatePacketId();
-    const subscription = new Subscription(this, filter);
+    const deadline = Date.now() + (options.timeout ?? this.#timeout());
+    const subscription = new Subscription(this, filter, options);
     // Register before the SUBACK, so a message that arrives with the grant is
     // routed rather than dropped.
     this.#subscriptions.push(subscription);
-
-    const entry: SubscribeEntry = { filter, qos };
-    if (options.noLocal !== undefined) entry.noLocal = options.noLocal;
-    if (options.retainAsPublished !== undefined)
-      entry.retainAsPublished = options.retainAsPublished;
-    if (options.retainHandling !== undefined) entry.retainHandling = options.retainHandling;
-    const properties = this.#subscribeProperties(options);
-
-    const waiter = this.#waitFor(this.#subackWaiters, packetId, options.timeout ?? this.#timeout());
-    const ack = await this.#awaitAck(
-      this.#connection.send({
-        type: PacketType.Subscribe,
-        packetId,
-        subscriptions: [entry],
-        ...(properties === undefined ? {} : { properties }),
-      }),
-      waiter,
-      // A send failure or a SUBACK that never came: drop the waiter and the
-      // subscription together, or the abandoned subscription keeps buffering
-      // every matching message with no one left to read them.
-      () => {
-        this.#forget(this.#subackWaiters, packetId);
-        this.#dropSubscription(subscription);
-      },
-    );
-    const reason = ack.reasons[0];
-    if (reason === undefined || isErrorReason(reason)) {
+    try {
+      for (;;) {
+        const connection = await this.#live(deadline);
+        this.#checkSubscribeAllowed(filter, options);
+        try {
+          const ack = await this.#subscribeOn(connection, filter, options, deadline);
+          const reason = ack.reasons[0];
+          if (reason === undefined || isErrorReason(reason)) {
+            throw new MqttError(
+              `the broker refused the subscription to ${JSON.stringify(filter)}: ${reasonName(reason ?? 0) ?? `reason ${reason}`}`,
+              {
+                code: MqttErrorCode.Subscription,
+                ...(reason === undefined ? {} : { reasonCode: reason }),
+                ...(reason === undefined || reasonName(reason) === null
+                  ? {}
+                  : { reasonName: reasonName(reason)! }),
+              },
+            );
+          }
+          subscription.setGrantedQos(reason as 0 | 1 | 2);
+          return subscription;
+        } catch (e) {
+          // Lost before the SUBACK: send it again on the next connection.
+          if (e instanceof Interrupted) continue;
+          throw e;
+        }
+      }
+    } catch (e) {
       this.#dropSubscription(subscription);
-      throw new MqttError(
-        `the broker refused the subscription to ${JSON.stringify(filter)}: ${reasonName(reason ?? 0) ?? `reason ${reason}`}`,
-        {
-          code: MqttErrorCode.Subscription,
-          ...(reason === undefined ? {} : { reasonCode: reason }),
-          ...(reason === undefined || reasonName(reason) === null
-            ? {}
-            : { reasonName: reasonName(reason)! }),
-        },
-      );
+      throw e;
     }
-    subscription.setGrantedQos(reason as 0 | 1 | 2);
-    return subscription;
   }
 
   /** Unsubscribes from one or more topic filters. */
   async unsubscribe(filters: string | string[], timeout?: number): Promise<void> {
     this.#assertOpen();
     const list = Array.isArray(filters) ? filters : [filters];
-    const packetId = this.#allocatePacketId();
-    const waiter = this.#waitFor(this.#unsubackWaiters, packetId, timeout ?? this.#timeout());
-    await this.#awaitAck(
-      this.#connection.send({ type: PacketType.Unsubscribe, packetId, filters: list }),
-      waiter,
-      () => this.#forget(this.#unsubackWaiters, packetId),
-    );
+    const deadline = Date.now() + (timeout ?? this.#timeout());
+    for (;;) {
+      const connection = await this.#live(deadline);
+      const packetId = this.#allocatePacketId();
+      const waiter = this.#waitFor(
+        this.#unsubackWaiters,
+        packetId,
+        Math.max(1, deadline - Date.now()),
+      );
+      try {
+        await this.#awaitAck(
+          connection,
+          connection.send({ type: PacketType.Unsubscribe, packetId, filters: list }),
+          waiter,
+          () => this.#forget(this.#unsubackWaiters, packetId),
+          false,
+        );
+        break;
+      } catch (e) {
+        if (e instanceof Interrupted) continue;
+        throw e;
+      }
+    }
     for (const filter of list) this.#removeSubscriptions(filter);
   }
 
@@ -525,7 +722,7 @@ export class MqttClient {
     payload: string | Uint8Array,
     options: PublishOptions = {},
   ): Promise<Message> {
-    if (this.#connection.protocolLevel !== 5) {
+    if (this.protocolLevel !== 5) {
       throw new MqttError("request/reply needs MQTT 5.0", { code: MqttErrorCode.Unsupported });
     }
     // Not under `$`: that space is the broker's own, and the specification says
@@ -547,68 +744,360 @@ export class MqttClient {
     }
   }
 
-  /** Closes the connection, ending every subscription. */
+  /** Closes the connection, ending every subscription, and stops reconnecting. */
   async close(options?: { reasonCode?: number; properties?: Properties }): Promise<void> {
     if (this.#closed) return;
-    this.#finish(new MqttError("the client was closed", { code: MqttErrorCode.Closed }));
-    await this.#connection.close(options ?? {});
+    const connection = this.#connection;
+    this.#end(new MqttError("the client was closed", { code: MqttErrorCode.Closed }), false);
+    await connection?.close(options ?? {});
   }
-
-  // -- handlers -------------------------------------------------------------
-
-  #onMessage(packet: PublishPacket): void {
-    const message = new Message(packet);
-    let matched = false;
-    for (const subscription of this.#subscriptions) {
-      if (subscription.matches(message.topic)) {
-        subscription.offer(message);
-        matched = true;
-      }
-    }
-    if (!matched) this.onUnmatchedMessage?.(message);
-  }
-
-  #onAck(packet: AckPacket): void {
-    // PUBACK ends a QoS 1 publish and PUBCOMP ends a successful QoS 2 one. A
-    // PUBREC is only news when it is negative: the connection sends no PUBREL
-    // then, so the publish fails here rather than waiting out a PUBCOMP that
-    // will never come.
-    if (packet.type === PacketType.Pubrec) {
-      if (!isErrorReason(packet.reasonCode)) return;
-    } else if (packet.type !== PacketType.Puback && packet.type !== PacketType.Pubcomp) {
-      return;
-    }
-    const waiter = this.#ackWaiters.get(packet.packetId);
-    if (waiter === undefined) return;
-    this.#settle(this.#ackWaiters, packet.packetId, packet);
-  }
-
-  #onSuback(packet: SubackPacket): void {
-    this.#settle(this.#subackWaiters, packet.packetId, packet);
-  }
-
-  #onUnsuback(packet: UnsubackPacket): void {
-    this.#settle(this.#unsubackWaiters, packet.packetId, packet);
-  }
-
-  #onClosed(error: MqttError | null): void {
-    this.#finish(
-      error ?? new MqttError("the connection was closed", { code: MqttErrorCode.Closed }),
-    );
-  }
-
-  // -- helpers --------------------------------------------------------------
 
   /** @internal Ends one local subscription; unsubscribes its filter if it was the last. */
   async release(subscription: Subscription): Promise<void> {
     const others = this.#subscriptions.some(
       (one) => one !== subscription && one.filter === subscription.filter,
     );
-    if (others) {
+    if (others || this.#closed) {
       this.#dropSubscription(subscription);
       return;
     }
     await this.unsubscribe(subscription.filter);
+  }
+
+  // -- connecting and reconnecting --------------------------------------------
+
+  async #first(): Promise<void> {
+    const timeout = this.#timeout();
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      try {
+        const { connection, slot } = await this.#dialOnce();
+        this.#adopt(connection, slot, true);
+        return;
+      } catch (e) {
+        const error = asError(e);
+        if (refusal(error) || this.#reconnect === null || Date.now() + this.#delay() > deadline) {
+          this.#closed = true;
+          this.#failure = error;
+          throw error;
+        }
+        this.onError?.(error);
+        await sleep(this.#delay());
+        this.#attempt++;
+      }
+    }
+  }
+
+  async #dialOnce(): Promise<{ connection: Connection; slot: Slot }> {
+    if (this.#url === null) {
+      throw new MqttError("a client opened over a transport cannot dial again", {
+        code: MqttErrorCode.Connection,
+      });
+    }
+    const slot: Slot = { connection: null, early: [] };
+    const settings: ConnectionSettings = {
+      ...this.#options,
+      ...(this.#clientId === undefined ? {} : { clientId: this.#clientId }),
+    };
+    if (this.#level !== null) {
+      // A reconnect: the level is the one already negotiated, and Clean Start 0
+      // when a session can have survived — so the broker can resume it.
+      settings.protocolVersion = this.#level;
+      if (this.#resumable()) settings.cleanStart = false;
+    }
+    let opened = false;
+    const dial: Dialer = async (target) => {
+      const transport = await this.#dial(target);
+      opened = true;
+      return transport;
+    };
+    try {
+      const connection = await openWithDial(
+        this.#url,
+        settings,
+        this.#handlers(slot),
+        dial,
+        this.#inbound,
+      );
+      return { connection, slot };
+    } catch (e) {
+      if (opened) this.#ghosts++;
+      throw e;
+    }
+  }
+
+  /** Whether the broker can have kept a session across a disconnect. */
+  #resumable(): boolean {
+    if (this.#level === 5) return (this.#options.sessionExpiryInterval ?? 0) > 0;
+    return this.#options.cleanStart === false;
+  }
+
+  #adopt(connection: Connection, slot: Slot, first: boolean): void {
+    if (this.#closed) {
+      void connection.close().catch(() => {});
+      return;
+    }
+    slot.connection = connection;
+    this.#connection = connection;
+    this.#level = connection.protocolLevel;
+    this.#attempt = 0;
+    // A broker-assigned identifier is the session's name from now on.
+    const assigned = connection.connack.properties?.assignedClientIdentifier;
+    if (assigned !== undefined) this.#clientId = assigned;
+
+    if (!first) {
+      if (connection.sessionPresent) this.#resume(connection);
+      else this.#rebuild(connection);
+    }
+    for (const [packet, accept] of slot.early.splice(0)) this.#onMessage(packet, accept);
+    this.#ready.resolve(connection);
+    if (!first) this.onReconnect?.();
+  }
+
+  /**
+   * The broker kept the session. 4.4: resend every unacknowledged PUBLISH
+   * (DUP set, original identifier) and PUBREL. The subscriptions are still
+   * there; unread QoS 1/2 copies are dropped because the broker resends them.
+   */
+  #resume(connection: Connection): void {
+    for (const subscription of this.#subscriptions) subscription.discardReliable();
+    for (const [packetId, outbound] of this.#outbound) {
+      const packet: Packet =
+        outbound.stage === "publish"
+          ? { ...outbound.packet, dup: true }
+          : { type: PacketType.Pubrel, packetId, reasonCode: 0 };
+      void connection.send(packet).catch(() => {});
+    }
+  }
+
+  /**
+   * The broker has no session for us. A publish in flight has an unknown fate,
+   * and 4.4 forbids resending it outside a resumed session, so it rejects. The
+   * QoS 2 messages we were waiting to see released belong to the old session.
+   * Every granted subscription is sent again; a pending one resends itself.
+   */
+  #rebuild(connection: Connection): void {
+    const lost = new MqttError(
+      "the broker did not resume the session, so the message's fate is unknown",
+      { code: MqttErrorCode.Closed },
+    );
+    for (const [packetId, waiter] of [...this.#ackWaiters]) {
+      if (!this.#outbound.has(packetId)) continue;
+      this.#ackWaiters.delete(packetId);
+      clearTimeout(waiter.timer);
+      waiter.reject(lost);
+    }
+    this.#inbound.awaitingRelease.clear();
+    const seen = new Set<string>();
+    for (const subscription of this.#subscriptions) {
+      if (!subscription.granted || seen.has(subscription.filter)) continue;
+      seen.add(subscription.filter);
+      void this.#subscribeOn(
+        connection,
+        subscription.filter,
+        subscription.options,
+        Date.now() + this.#timeout(),
+      ).catch((e) => this.onError?.(asError(e)));
+    }
+  }
+
+  #lost(connection: Connection, error: MqttError): void {
+    if (this.#connection !== connection) return;
+    this.#connection = null;
+    this.#ready.reset();
+    if (this.#closed) return;
+    let final =
+      error.code === MqttErrorCode.Server &&
+      error.reasonCode !== null &&
+      FINAL_DISCONNECTS.has(error.reasonCode);
+    // Taken over by one of our own abandoned attempts, not by another client:
+    // reconnect, once per such attempt.
+    if (final && error.reasonCode === 0x8e && this.#ghosts > 0) {
+      this.#ghosts--;
+      final = false;
+    }
+    if (this.#reconnect === null || final) {
+      this.#end(error, true);
+      return;
+    }
+    // A SUBSCRIBE or UNSUBSCRIBE in flight will not be answered on a new
+    // connection; its own loop sends it again. Publishes wait: whether they are
+    // resent or rejected depends on whether the session survives.
+    for (const map of [this.#subackWaiters, this.#unsubackWaiters] as Map<
+      number,
+      Waiter<unknown>
+    >[]) {
+      for (const waiter of map.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Interrupted());
+      }
+      map.clear();
+    }
+    this.onDisconnect?.(error);
+    this.#schedule();
+  }
+
+  #schedule(): void {
+    if (this.#closed || this.#timer !== null) return;
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      void this.#dialOnce().then(
+        ({ connection, slot }) => this.#adopt(connection, slot, false),
+        (e: unknown) => {
+          this.onError?.(asError(e));
+          this.#attempt++;
+          this.#schedule();
+        },
+      );
+    }, this.#delay());
+  }
+
+  // Exponential backoff with "equal jitter": half the delay fixed, half random.
+  #delay(): number {
+    const initial = this.#reconnect?.initialDelay ?? DEFAULT_INITIAL_DELAY;
+    const max = this.#reconnect?.maxDelay ?? DEFAULT_MAX_DELAY;
+    const ceiling = Math.min(max, initial * 2 ** Math.min(this.#attempt, 30));
+    return ceiling / 2 + Math.random() * (ceiling / 2);
+  }
+
+  /** The live connection, waiting out a reconnect until `deadline`. */
+  async #live(deadline: number): Promise<Connection> {
+    for (;;) {
+      if (this.#closed) throw this.#failure ?? this.#closedError();
+      if (this.#connection !== null) return this.#connection;
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        throw new MqttError("not connected within the timeout", { code: MqttErrorCode.Timeout });
+      }
+      await within(this.#ready.promise, left).catch(() => {});
+    }
+  }
+
+  #handlers(slot: Slot): ConnectionHandlers {
+    const current = () => slot.connection !== null && slot.connection === this.#connection;
+    return {
+      // The read loop starts with the CONNACK, before this connection is the
+      // client's, and a resumed session's backlog arrives right then — already
+      // owed an acknowledgement. Held, and handed over on adoption.
+      onMessage: (packet, accept) => {
+        if (slot.connection === null) slot.early.push([packet, accept]);
+        else if (current()) this.#onMessage(packet, accept);
+      },
+      onAck: (packet) => {
+        if (current()) this.#onAck(packet);
+      },
+      onSuback: (packet) => {
+        if (current()) this.#settle(this.#subackWaiters, packet.packetId, packet);
+      },
+      onUnsuback: (packet) => {
+        if (current()) this.#settle(this.#unsubackWaiters, packet.packetId, packet);
+      },
+      onPingresp: () => {},
+      onDisconnect: () => {},
+      onClosed: (error) => {
+        if (slot.connection !== null && error !== null) this.#lost(slot.connection, error);
+      },
+    };
+  }
+
+  // -- handlers ---------------------------------------------------------------
+
+  #onMessage(packet: PublishPacket, accept: (() => void) | null): void {
+    const message = new Message(packet);
+    const matching = this.#subscriptions.filter((one) => one.matches(message.topic));
+    const ticket = new Ticket(matching.length, accept);
+    for (const subscription of matching) subscription.offer(message, ticket);
+    if (matching.length === 0) this.onUnmatchedMessage?.(message);
+  }
+
+  #onAck(packet: AckPacket): void {
+    // PUBACK ends a QoS 1 publish and PUBCOMP ends a successful QoS 2 one. A
+    // successful PUBREC moves a QoS 2 exchange to its PUBREL stage — which a
+    // resumed session resends instead of the PUBLISH. A negative PUBREC ends it.
+    if (packet.type === PacketType.Pubrec) {
+      if (!isErrorReason(packet.reasonCode)) {
+        const outbound = this.#outbound.get(packet.packetId);
+        if (outbound !== undefined) outbound.stage = "pubrel";
+        return;
+      }
+    } else if (packet.type !== PacketType.Puback && packet.type !== PacketType.Pubcomp) {
+      return;
+    }
+    this.#settle(this.#ackWaiters, packet.packetId, packet);
+  }
+
+  // -- helpers ----------------------------------------------------------------
+
+  #timeout(): number {
+    return this.#options.timeout ?? DEFAULT_TIMEOUT;
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) throw this.#failure ?? this.#closedError();
+  }
+
+  #closedError(): MqttError {
+    return new MqttError("the client is closed", { code: MqttErrorCode.Closed });
+  }
+
+  async #subscribeOn(
+    connection: Connection,
+    filter: string,
+    options: SubscribeOptions,
+    deadline: number,
+  ): Promise<SubackPacket> {
+    const qos = options.qos ?? 0;
+    const packetId = this.#allocatePacketId();
+    const entry: SubscribeEntry = { filter, qos };
+    if (options.noLocal !== undefined) entry.noLocal = options.noLocal;
+    if (options.retainAsPublished !== undefined)
+      entry.retainAsPublished = options.retainAsPublished;
+    if (options.retainHandling !== undefined) entry.retainHandling = options.retainHandling;
+    const properties = this.#subscribeProperties(options);
+    const waiter = this.#waitFor(this.#subackWaiters, packetId, Math.max(1, deadline - Date.now()));
+    return this.#awaitAck(
+      connection,
+      connection.send({
+        type: PacketType.Subscribe,
+        packetId,
+        subscriptions: [entry],
+        ...(properties === undefined ? {} : { properties }),
+      }),
+      waiter,
+      () => this.#forget(this.#subackWaiters, packetId),
+      false,
+    );
+  }
+
+  #publishProperties(options: PublishOptions): Properties | undefined {
+    const merged: Properties = { ...(options.properties ?? {}) };
+    if (options.messageExpiryInterval !== undefined)
+      merged.messageExpiryInterval = options.messageExpiryInterval;
+    if (options.contentType !== undefined) merged.contentType = options.contentType;
+    if (options.responseTopic !== undefined) merged.responseTopic = options.responseTopic;
+    if (options.correlationData !== undefined) merged.correlationData = options.correlationData;
+    if (options.userProperties !== undefined) merged.userProperties = options.userProperties;
+    if (Object.keys(merged).length === 0) return undefined;
+    this.#assertModern(merged);
+    return merged;
+  }
+
+  #subscribeProperties(options: SubscribeOptions): Properties | undefined {
+    const merged: Properties = { ...(options.properties ?? {}) };
+    if (options.subscriptionIdentifier !== undefined) {
+      merged.subscriptionIdentifiers = [options.subscriptionIdentifier];
+    }
+    if (Object.keys(merged).length === 0) return undefined;
+    this.#assertModern(merged);
+    return merged;
+  }
+
+  #assertModern(properties: Properties): void {
+    if (this.protocolLevel !== 5 && Object.keys(properties).length > 0) {
+      throw new MqttError("5.0 properties need an MQTT 5.0 connection", {
+        code: MqttErrorCode.Unsupported,
+      });
+    }
   }
 
   /**
@@ -662,7 +1151,10 @@ export class MqttClient {
   }
 
   #limits(): Properties | undefined {
-    return this.#connection.protocolLevel === 5 ? this.#connection.connack.properties : undefined;
+    const connection = this.#connection;
+    return connection !== null && connection.protocolLevel === 5
+      ? connection.connack.properties
+      : undefined;
   }
 
   /**
@@ -707,56 +1199,22 @@ export class MqttClient {
   /**
    * The next packet identifier not already waiting on an acknowledgement. The
    * counter wraps at 65 535, and an identifier reused while still in flight
-   * would let one acknowledgement settle the wrong request.
+   * would let one acknowledgement settle the wrong request — across a
+   * reconnect too, since a resumed session keeps its identifiers.
    */
+  #nextPacketId = 1;
   #allocatePacketId(): number {
     for (let tries = 0; tries < 65535; tries++) {
-      const id = this.#connection.allocatePacketId();
+      const id = this.#nextPacketId;
+      this.#nextPacketId = id >= 65535 ? 1 : id + 1;
       const busy =
-        this.#ackWaiters.has(id) || this.#subackWaiters.has(id) || this.#unsubackWaiters.has(id);
+        this.#ackWaiters.has(id) ||
+        this.#subackWaiters.has(id) ||
+        this.#unsubackWaiters.has(id) ||
+        this.#outbound.has(id);
       if (!busy) return id;
     }
     throw new MqttError("every packet identifier is in use", { code: MqttErrorCode.Unsupported });
-  }
-
-  #timeout(): number {
-    return this.#options.timeout ?? DEFAULT_TIMEOUT;
-  }
-
-  #assertOpen(): void {
-    if (this.#closed) throw new MqttError("the client is closed", { code: MqttErrorCode.Closed });
-    if (this.#connection.failure !== null) throw this.#connection.failure;
-  }
-
-  #publishProperties(options: PublishOptions): Properties | undefined {
-    const merged: Properties = { ...(options.properties ?? {}) };
-    if (options.messageExpiryInterval !== undefined)
-      merged.messageExpiryInterval = options.messageExpiryInterval;
-    if (options.contentType !== undefined) merged.contentType = options.contentType;
-    if (options.responseTopic !== undefined) merged.responseTopic = options.responseTopic;
-    if (options.correlationData !== undefined) merged.correlationData = options.correlationData;
-    if (options.userProperties !== undefined) merged.userProperties = options.userProperties;
-    if (Object.keys(merged).length === 0) return undefined;
-    this.#assertModern(merged);
-    return merged;
-  }
-
-  #subscribeProperties(options: SubscribeOptions): Properties | undefined {
-    const merged: Properties = { ...(options.properties ?? {}) };
-    if (options.subscriptionIdentifier !== undefined) {
-      merged.subscriptionIdentifiers = [options.subscriptionIdentifier];
-    }
-    if (Object.keys(merged).length === 0) return undefined;
-    this.#assertModern(merged);
-    return merged;
-  }
-
-  #assertModern(properties: Properties): void {
-    if (this.#connection.protocolLevel !== 5 && Object.keys(properties).length > 0) {
-      throw new MqttError("5.0 properties need an MQTT 5.0 connection", {
-        code: MqttErrorCode.Unsupported,
-      });
-    }
   }
 
   /**
@@ -770,23 +1228,32 @@ export class MqttClient {
    * serialised chain — would block every later packet, the final DISCONNECT
    * among them. Failing closes the socket and releases the chain.
    *
-   * A deliberate close is not that case. It rejects the waiter itself; the
-   * connection owns teardown and aborts the transport if the write is still
-   * pending, without latching a connection failure.
+   * A publish whose write failed because the connection was lost waits on: a
+   * resumed session resends it, a fresh one rejects it (see `#rebuild`).
    */
-  async #awaitAck<T>(write: Promise<void>, waiter: Promise<T>, onFailure: () => void): Promise<T> {
+  async #awaitAck<T>(
+    connection: Connection,
+    write: Promise<void>,
+    waiter: Promise<T>,
+    onFailure: () => void,
+    survivesLoss: boolean,
+  ): Promise<T> {
     let written = false;
     const settled = () => {
       written = true;
     };
     void write.then(settled, settled);
+    const guarded = write.catch((e: unknown) => {
+      if (survivesLoss && this.#reconnect !== null && !this.#closed && connection.closed) return;
+      throw e;
+    });
     try {
-      const [value] = await Promise.all([waiter, write]);
+      const [value] = await Promise.all([waiter, guarded]);
       return value;
     } catch (e) {
       onFailure();
-      if (!written && !this.#closed) {
-        this.#connection.abort(
+      if (!written && !this.#closed && !connection.closed) {
+        connection.abort(
           new MqttError("the acknowledgement timed out while the packet was still being written", {
             code: MqttErrorCode.Connection,
           }),
@@ -805,11 +1272,8 @@ export class MqttClient {
       unrefTimer(timer as unknown as number);
       map.set(packetId, { resolve, reject, timer });
     });
-    // The timer starts here, but every caller awaits this only after its `send`
-    // has resolved. A write slower than the timeout therefore rejects the waiter
-    // while the caller is still awaiting the socket, with nobody yet awaiting
-    // it. Kept handled, so the rejection waits for the caller's `await` instead
-    // of tripping the runtime's unhandled-rejection guard.
+    // Kept handled, so a rejection waits for the caller's `await` instead of
+    // tripping the runtime's unhandled-rejection guard.
     void promise.catch(() => {});
     return promise;
   }
@@ -846,27 +1310,86 @@ export class MqttClient {
     });
   }
 
-  #finish(error: MqttError): void {
+  /** Ends the client for good: rejects everything waiting, ends every subscription. */
+  #end(error: MqttError, failed: boolean): void {
     if (this.#closed) return;
     this.#closed = true;
-    for (const waiter of this.#ackWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
+    if (failed) this.#failure = error;
+    if (this.#timer !== null) clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#ready.reject(error);
+    for (const map of [this.#ackWaiters, this.#subackWaiters, this.#unsubackWaiters] as Map<
+      number,
+      Waiter<unknown>
+    >[]) {
+      for (const waiter of map.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(error);
+      }
+      map.clear();
     }
-    this.#ackWaiters.clear();
-    for (const waiter of this.#subackWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
-    }
-    this.#subackWaiters.clear();
-    for (const waiter of this.#unsubackWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
-    }
-    this.#unsubackWaiters.clear();
     for (const subscription of this.#subscriptions) subscription.finish();
     this.#subscriptions = [];
   }
+}
+
+/** A promise with its settlers, re-armed when the thing it waits for goes away. */
+class Signal<T> {
+  promise!: Promise<T>;
+  #resolve!: (value: T) => void;
+  #reject!: (error: Error) => void;
+  #settled = true;
+
+  constructor() {
+    this.reset();
+  }
+
+  reset(): void {
+    if (!this.#settled) return;
+    this.#settled = false;
+    this.promise = new Promise<T>((resolve, reject) => {
+      this.#resolve = resolve;
+      this.#reject = reject;
+    });
+    this.promise.catch(() => {});
+  }
+
+  resolve(value: T): void {
+    this.#settled = true;
+    this.#resolve(value);
+  }
+
+  reject(error: Error): void {
+    this.#settled = true;
+    this.#reject(error);
+  }
+}
+
+/** Settles when `promise` does or `ms` passes, whichever is first. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise<T | undefined>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    unrefTimer(timer as unknown as number);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function asError(e: unknown): MqttError {
+  return e instanceof MqttError
+    ? e
+    : new MqttError(e instanceof Error ? e.message : String(e), {
+        code: MqttErrorCode.Connection,
+        cause: e,
+      });
 }
 
 function matches(a: Uint8Array | null, b: Uint8Array): boolean {

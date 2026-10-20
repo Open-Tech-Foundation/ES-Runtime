@@ -216,19 +216,43 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
 
 {
   const messages = [];
+  const accepts = [];
   const acks = [];
   const broker = fakeBroker(5);
+  // Counts writes, so "nothing was acknowledged yet" is checked without a
+  // second reader racing the broker's.
+  let writes = 0;
+  const transport = {
+    read: () => broker.transport.read(),
+    write: (bytes) => {
+      writes++;
+      return broker.transport.write(bytes);
+    },
+    close: () => broker.transport.close(),
+  };
   const pending = Connection.over(
-    broker.transport,
+    transport,
     { clientId: "c", keepAlive: 0 },
-    { onMessage: (packet) => messages.push(packet), onAck: (packet) => acks.push(packet) },
+    {
+      onMessage: (packet, accept) => {
+        messages.push(packet);
+        accepts.push(accept);
+      },
+      onAck: (packet) => acks.push(packet),
+    },
     5,
   );
-  await broker.next();
+  const connect = await broker.next();
+  ok(
+    connect.properties?.receiveMaximum === 250,
+    "the client advertises its Receive Maximum (250 by default)",
+  );
   broker.send({ type: PacketType.Connack, sessionPresent: false, reasonCode: 0 });
   const conn = await pending;
 
-  // Inbound QoS 1: acknowledged at once, delivered at once.
+  // Inbound QoS 1: delivered at once, acknowledged only when accepted — PUBACK
+  // is sent "having accepted ownership" (4.3.2).
+  const quiet = writes;
   broker.send({
     type: PacketType.Publish,
     topic: "a/b",
@@ -238,16 +262,22 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
     dup: false,
     packetId: 42,
   });
-  const puback = await broker.next();
-  ok(
-    puback.type === PacketType.Puback && puback.packetId === 42,
-    "an inbound QoS 1 publish is acknowledged",
-  );
   await tick();
-  ok(messages.length === 1 && DECODER.decode(messages[0].payload) === "hello", "and delivered");
+  ok(
+    messages.length === 1 && DECODER.decode(messages[0].payload) === "hello",
+    "a QoS 1 message is delivered",
+  );
+  ok(writes === quiet, "but not acknowledged before it is accepted");
+  accepts[0]();
+  accepts[0]();
+  const puback = await broker.next();
+  ok(puback.type === PacketType.Puback && puback.packetId === 42, "accepting it sends the PUBACK");
+  await tick();
+  ok(writes === quiet + 1, "once, however often accept is called");
 
-  // Inbound QoS 2: acknowledged with PUBREC, delivered only on PUBREL.
-  broker.send({
+  // Inbound QoS 2: delivered on its PUBLISH, a DUP before acceptance is the same
+  // message, PUBREC on acceptance, PUBCOMP on PUBREL.
+  const qos2 = {
     type: PacketType.Publish,
     topic: "a/b",
     payload: ENCODER.encode("once"),
@@ -255,22 +285,29 @@ ok(DEFAULT_KEEP_ALIVE === 60, "the default keep-alive is 60s");
     retain: false,
     dup: false,
     packetId: 7,
-  });
-  const pubrec = await broker.next();
-  ok(
-    pubrec.type === PacketType.Pubrec && pubrec.packetId === 7,
-    "an inbound QoS 2 publish draws a PUBREC",
-  );
-  await tick();
-  ok(messages.length === 1, "but is not delivered yet");
-  broker.send({ type: PacketType.Pubrel, packetId: 7, reasonCode: 0 });
-  const pubcomp = await broker.next();
-  ok(pubcomp.type === PacketType.Pubcomp && pubcomp.packetId === 7, "PUBREL draws a PUBCOMP");
+  };
+  broker.send(qos2);
+  broker.send({ ...qos2, dup: true });
   await tick();
   ok(
     messages.length === 2 && DECODER.decode(messages[1].payload) === "once",
-    "and the message is delivered once",
+    "a QoS 2 message is delivered once",
   );
+  accepts[1]();
+  const pubrec = await broker.next();
+  ok(pubrec.type === PacketType.Pubrec && pubrec.packetId === 7, "accepting it sends the PUBREC");
+  // Retransmitted after acceptance: only the PUBREC is owed again.
+  broker.send({ ...qos2, dup: true });
+  const again = await broker.next();
+  ok(
+    again.type === PacketType.Pubrec && again.packetId === 7,
+    "a later DUP draws the PUBREC again",
+  );
+  await tick();
+  ok(messages.length === 2, "and is not delivered again");
+  broker.send({ type: PacketType.Pubrel, packetId: 7, reasonCode: 0 });
+  const pubcomp = await broker.next();
+  ok(pubcomp.type === PacketType.Pubcomp && pubcomp.packetId === 7, "PUBREL draws a PUBCOMP");
 
   // Outbound QoS 2 step: a PUBREC from the broker draws a PUBREL, and the PUBCOMP is reported.
   broker.send({ type: PacketType.Pubrec, packetId: 9, reasonCode: 0 });
