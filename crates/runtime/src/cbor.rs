@@ -69,6 +69,10 @@ pub(crate) enum DecodeError {
     Tag(u64),
     /// A simple value (major type 7) with no JavaScript counterpart.
     UnsupportedSimple(u8),
+    /// A simple value below 32 in the two-byte form (`0xf8 0x00`–`0xf8 0x1f`),
+    /// which RFC 8949 §3.3 makes not well-formed: those values have a one-byte
+    /// form, so the second spelling would give `false` two encodings.
+    TwoByteSimple(u8),
     /// A chunk inside an indefinite-length string was not a definite string of
     /// the same major type.
     BadIndefiniteChunk,
@@ -93,6 +97,9 @@ impl std::fmt::Display for DecodeError {
             }
             DecodeError::UnsupportedSimple(n) => {
                 write!(f, "unsupported simple value {n}")
+            }
+            DecodeError::TwoByteSimple(n) => {
+                write!(f, "simple value {n} in the two-byte form (not well-formed)")
             }
             DecodeError::BadIndefiniteChunk => {
                 f.write_str("an indefinite-length string held a chunk of the wrong type")
@@ -288,7 +295,7 @@ fn skip_one(cur: &mut &[u8], depth: usize) -> Result<(), DecodeError> {
         7 => match ai {
             20..=23 => {}
             24 => match byte(cur)? {
-                20..=23 => {}
+                n @ 0..=31 => return Err(DecodeError::TwoByteSimple(n)),
                 other => return Err(DecodeError::UnsupportedSimple(other)),
             },
             25 => {
@@ -426,13 +433,10 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
             21 => Value::Bool(true),
             22 => Value::Null,
             23 => Value::Undefined,
-            // The one-byte simple form; the assigned values are accepted, the
-            // unassigned ones refused.
+            // The two-byte simple form carries only 32–255, none of which is
+            // assigned; 0–31 here is not well-formed (RFC 8949 §3.3).
             24 => match byte(cur)? {
-                20 => Value::Bool(false),
-                21 => Value::Bool(true),
-                22 => Value::Null,
-                23 => Value::Undefined,
+                n @ 0..=31 => return Err(DecodeError::TwoByteSimple(n)),
                 other => return Err(DecodeError::UnsupportedSimple(other)),
             },
             25 => Value::Number(half_to_f64(be(cur, 2)? as u16)),
@@ -1123,6 +1127,25 @@ mod tests {
     }
 
     #[test]
+    fn a_simple_value_below_32_in_the_two_byte_form_is_not_well_formed() {
+        // RFC 8949 §3.3: `0xf8` followed by a byte under 0x20 is not
+        // well-formed, so `false` cannot sneak in under a second spelling.
+        for n in [0u8, 20, 21, 22, 23, 31] {
+            assert_eq!(
+                read_value(&[0xf8, n]),
+                Err(DecodeError::TwoByteSimple(n)),
+                "{n}"
+            );
+            assert_eq!(validate(&[0xf8, n]), Err(DecodeError::TwoByteSimple(n)));
+        }
+        // 32 is the first value the two-byte form may carry; it is unassigned.
+        assert_eq!(
+            read_value(&[0xf8, 0x20]),
+            Err(DecodeError::UnsupportedSimple(32))
+        );
+    }
+
+    #[test]
     fn malformed_input_is_an_error_not_a_panic() {
         assert_eq!(read_value(&[]), Err(DecodeError::Truncated));
         assert_eq!(read_value(&[0x18]), Err(DecodeError::Truncated));
@@ -1164,6 +1187,7 @@ mod tests {
             &[0x7f, 0x41, 0x01, 0xff],
             &[0x1c],
             &[0xf0],
+            &[0xf8, 0x14],
         ];
         for input in inputs {
             assert_eq!(validate(input), read_value(input).map(|_| ()), "{input:?}");

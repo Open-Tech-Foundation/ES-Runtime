@@ -193,6 +193,16 @@ export const YAML = {
 function toEncodable(value: unknown, format: string, depth = 0, seen: object[] = []): unknown {
   if (depth > 256) throw new RangeError(`${format}: value nests too deeply to encode`);
   if (value === null || typeof value !== "object") return value;
+  // A boxed primitive keeps its value in an internal slot, so it would cross as
+  // `{}` (`new Number(1)`) or as its indexed characters (`new String("x")` →
+  // `{ "0": "x" }`). It is the primitive it wraps, as structuredClone treats it.
+  if (
+    value instanceof String ||
+    value instanceof Number ||
+    value instanceof Boolean ||
+    value instanceof BigInt
+  )
+    return value.valueOf();
   if (value instanceof Uint8Array) return value;
   // Any other view, and a bare buffer, become bytes — this is a binary format.
   if (ArrayBuffer.isView(value)) {

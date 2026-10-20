@@ -2685,6 +2685,7 @@ const YAML = {
 function toEncodable(value, format, depth = 0, seen = []) {
 	if (depth > 256) throw new RangeError(`${format}: value nests too deeply to encode`);
 	if (value === null || typeof value !== "object") return value;
+	if (value instanceof String || value instanceof Number || value instanceof Boolean || value instanceof BigInt) return value.valueOf();
 	if (value instanceof Uint8Array) return value;
 	if (ArrayBuffer.isView(value)) {
 		const v = value;

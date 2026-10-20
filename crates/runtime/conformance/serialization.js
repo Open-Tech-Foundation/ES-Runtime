@@ -405,6 +405,22 @@ test("CBOR keeps negative integers in integer form down to -2^64", async () => {
   assertEquals(CBOR.encode(-(18446744073709551616 + 4096))[0], 0xfb);
 });
 
+test("CBOR refuses a two-byte simple value below 32 and unwraps boxed primitives", async () => {
+  const { CBOR, MessagePack } = await import("runtime:serialization");
+
+  // RFC 8949 §3.3: 0xf8 0x14 is not well-formed — `false` has one spelling.
+  assertThrows(() => CBOR.decode(new Uint8Array([0xf8, 0x14])), "SyntaxError");
+  assertEquals(CBOR.validate(new Uint8Array([0xf8, 0x14])), false);
+
+  // A boxed primitive is the value it wraps, not `{}` or its indexed chars.
+  const boxed = [new String("x"), new Number(1), new Boolean(false), Object(5n)];
+  assertEquals(JSON.stringify(CBOR.decode(CBOR.encode(boxed))), '["x",1,false,5]');
+  assertEquals(
+    JSON.stringify(MessagePack.decode(MessagePack.encode(boxed.slice(0, 3)))),
+    '["x",1,false]',
+  );
+});
+
 test("CBOR keeps byte strings and reads indefinite-length input", async () => {
   const { CBOR } = await import("runtime:serialization");
   const back = CBOR.decode(CBOR.encode({ data: new Uint8Array([0, 1, 254, 255]) }));

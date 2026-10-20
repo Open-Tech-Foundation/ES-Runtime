@@ -170,13 +170,15 @@ bytewise-sorted map keys.
 | `Set` | array | `Array` |
 | `Date` | ISO-8601 text string | `string` |
 | `undefined` / `null` | `0xf7` / `0xf6` | `undefined` / `null` |
-| function, symbol, `BigInt` | — | throws `TypeError` |
+| `BigInt` in [−2<sup>64</sup>, 2<sup>64</sup>−1] | integer (major 0/1) | `number` in the safe range, else `BigInt` |
+| `String`/`Number`/`Boolean`/`BigInt` object | its primitive | the primitive |
+| function, symbol, `BigInt` outside that range | — | throws `TypeError` |
 | — | tag (major 6) | throws `SyntaxError` |
 
 An integer-valued number encodes as an integer (the shortest form), so a decoded
 float that happens to be whole re-encodes as an integer. A reserved initial byte,
 a stray `break`, a trailing byte, a malformed or oversized length, an unassigned
-simple value, a tag, or nesting past 256 levels is a `SyntaxError`.
+simple value (or one below 32 in the two-byte form), a tag, or nesting past 256 levels is a `SyntaxError`.
 
 ## Protobuf
 

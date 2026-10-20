@@ -56,6 +56,12 @@ namespace) is unstable and may change between minor releases until the API freez
   numbers as `String(n)` does (`1e+300`, not 301 digits) and accepts `BigInt`.
   `CSV.DecoderStream` honours `bom: false` for byte chunks, and both CSV streams
   release their host state when canceled or aborted.
+- `runtime:serialization` CBOR rejects a simple value below 32 in the two-byte
+  form (`0xf8 0x14`), which RFC 8949 §3.3 makes not well-formed; `decode` read
+  it as `false`. `CBOR.encode` and `MessagePack.encode` write a boxed primitive
+  (`new String("x")`, `new Number(1)`, `Object(1n)`) as the value it wraps
+  instead of `{}` or its indexed characters. The CBOR reference no longer says
+  a `BigInt` throws: one in [-2^64, 2^64-1] encodes as an integer.
 
 ## [0.41.0] - 2026-10-17
 
