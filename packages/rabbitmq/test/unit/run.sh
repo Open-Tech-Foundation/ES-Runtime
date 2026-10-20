@@ -14,7 +14,7 @@ esrun="${ESRUN:-$here/../../../../target/release/esrun}"
 [ -f "$here/../../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
 
 status=0
-for test in frame methods fields properties connection channel consumer rpc pool surface; do
+for test in frame methods fields properties connection channel consumer rpc pool session surface; do
   # --allow-imports: esrun grants nothing by default (DECISIONS D65) and
   # these load the built package out of dist/. Nothing else is needed —
   # a wire codec touches no network and no disk.

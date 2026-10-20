@@ -28,6 +28,15 @@ package written entirely in JavaScript over `runtime:net`. See the root
   `publish` takes a `timeout` (default: the channel's) over the wait, the write
   and the confirm, and `waitForConfirms(timeout?)` takes one too; an
   unconfirmed publish used to wait forever.
+- Recovery (DECISIONS D177): `openSession(url | urls, options)` returns a
+  `Session` that dials again after a lost connection — round-robin, with
+  exponential backoff and jitter — and reopens each `RecoveringChannel`,
+  re-selects confirms, re-runs its `setup` and re-consumes each
+  `RecoveringSubscription` with its options. The first connection is retried for
+  transient failures; refused credentials fail at once. Publishes made while
+  disconnected wait within their timeout; ones unconfirmed at the drop reject
+  and are never republished; deliveries from before the drop settle without
+  sending.
 - The `@opentf/esrun-rabbitmq` package, a RabbitMQ client speaking AMQP 0-9-1 in
   JavaScript over `runtime:net` (DECISIONS D171). No native code, and no
   capability beyond the `Net` grant `runtime:net`'s `connect` already needs.

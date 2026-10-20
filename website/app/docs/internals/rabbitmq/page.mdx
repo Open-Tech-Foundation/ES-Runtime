@@ -203,6 +203,37 @@ The one thing the pool must get right is the count: a dead connection is dropped
 before a replacement is dialled, so `size` bounds how many sockets are open even
 under concurrent borrows.
 
+## A session re-runs setup; it does not replay
+
+The pool lends connections for a scoped piece of work. A long-lived consumer
+needs more: something that outlives the socket. A `Session` is that, and it
+recovers the way Node's amqp-connection-manager does rather than the way the
+Java client does. The Java client replays a topology cache it kept as the
+application declared things; its own guide notes the cache cannot see a queue
+that expired or auto-deleted, and replay cannot restore an exclusive queue
+honestly. A session instead re-runs the `setup` function each recovering
+channel was given, so what is declared after a reconnect is exactly what the
+application says, every time.
+
+Where both of those clients carry legacy compromises, the session does not.
+Retries back off exponentially with jitter instead of on a fixed interval, so a
+restarted cluster's clients do not all return in the same instant. The first
+connection is retried too while its failures are transient (the Java client
+does not retry it), but refused credentials fail at once. A publish made while
+disconnected waits, within its timeout, instead of being lost (Java) or queued
+in memory without bound (amqp-connection-manager). And a publish whose confirm
+was outstanding at the drop rejects instead of being republished, since its fate
+at the broker is unknown and a republish could deliver it twice.
+
+Deliveries are where recovery meets the protocol. A delivery tag belongs to its
+channel, tags restart on a new one, and the broker requeued whatever was
+unacknowledged when the old channel died. So settling a delivery from before
+the drop sends nothing — a stale tag on the new channel would be a protocol
+error, or worse, acknowledge a different message — and one that was buffered
+but never read is not handed over, because the broker delivers it again.
+Processing is therefore at-least-once, as it is for any recovering consumer.
+(DECISIONS D177.)
+
 ## What it costs
 
 The client is JavaScript, so the wire codec — the decoder's buffer, each frame,

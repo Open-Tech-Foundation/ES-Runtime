@@ -3644,3 +3644,26 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 
 **Consequences:** encoded CBOR for a large `number` changes from an integer to a float, and decodes as a `number`. Some YAML output gains quotes. A builder that used to write `{}` for a `RegExp`, `Error`, `URL` or similar now throws.
 
+
+### D177 — `@opentf/esrun-rabbitmq` recovers a lost connection by re-running the application's setup, never by replay · *Accepted (2026-10-20)* · *amends D171*
+
+**Context:** D171's pool recovers by dialling again and leaves topology and consumers to the application's `onConnect`, because a broker cannot restore an exclusive or auto-delete resource and a silent replay hides that. The pool lends connections for a scoped borrow, though, and a long-lived consumer or publisher had no recovery at all: a lost socket, a missed heartbeat or a broker restart ended every `Subscription` and failed every later publish, so each application wrote its own reconnect loop. The ecosystem answers this two ways. The Java and .NET clients' *automatic recovery* reconnects on a fixed 5 s interval and replays a per-connection topology cache (exchanges, queues, bindings, consumers); the first connection is never retried, publishes during recovery "will be lost", and the cache cannot see TTL or auto-delete expiries. Node's amqp-connection-manager re-runs `setup` functions the application registers on every reconnect, round-robins several URLs, and buffers publishes in memory while disconnected.
+
+**Decision (maintainer, 2026-10-20):**
+
+- **A `Session`, opened with `openSession(url | urls, options)`, is the recovering surface.** It holds one connection at a time, and `session.channel({ setup, confirm })` returns a `RecoveringChannel` whose `publish` and `subscribe` survive reconnects. The pool stays the scoped-borrow surface; `Connection` and `Channel` stay as they are.
+- **Recovery re-runs the application's own setup, in order:** reconnect, reopen each recovering channel, re-select confirms if asked, run its `setup(channel)`, then re-consume each of its subscriptions with the options it was created with (so its prefetch is re-applied). Nothing is replayed from a cache. This is amqp-connection-manager's model, and it keeps D171's rule.
+- **What triggers it** follows the Java client: a lost socket, missed heartbeats, an unreadable frame, and a broker-initiated `connection.close` (a node restart's `320 CONNECTION_FORCED`). The application's own `close()` never does. A channel the broker closes is reopened on the same connection; a consumer the broker cancels (its queue deleted) ends its subscription, as it does without recovery.
+- **Retry timing is exponential backoff with jitter** (from 500 ms, doubling, capped at 30 s by default), so a cluster restart does not bring every client back at the same instant. Several URLs are tried round-robin.
+- **The first connection is retried too**, for transient failures (a refused or lost socket, a timeout), until the session's `timeout`; credentials refused, a version mismatch or an unsupported URL fail at once. The Java client does not retry the first connection, which makes "the broker is still starting" a crash.
+- **A publish made while disconnected waits for the channel to return, within its own `timeout`**, rather than being lost (Java) or buffered in memory without bound (amqp-connection-manager). A publish whose confirm was outstanding when the connection dropped **rejects**: its fate at the broker is unknown, and republishing it could deliver it twice.
+- **Deliveries from before the drop are not acknowledged on the new channel.** Delivery tags restart with every channel (the Java client says the same), and the broker requeues what was unacknowledged when the old channel died. So `ack`/`nack`/`reject` of a delivery whose channel is gone resolve without sending — the Java client also drops them — and deliveries that were buffered but not yet read are discarded, since the broker will redeliver them (`redelivered: true`). Processing is at-least-once, as with any recovering consumer.
+
+**Rejected:**
+- **Topology replay from a cache (the Java client).** It cannot restore exclusive or auto-delete resources, cannot see TTL or auto-delete expiry (the Java guide's own caveat), and makes recovery depend on state the application never sees. D171 rejected it for the same reasons.
+- **A fixed retry interval.** Every client of a restarted cluster retries in lockstep.
+- **Buffering publishes in memory while disconnected.** Unbounded memory under an outage, and the caller's `await` resolves for a message that has not been sent. A publish that waits, with a deadline, gives the caller the same ordering without the hidden queue.
+- **Republishing unconfirmed messages after a reconnect.** It turns an unknown outcome into a possible duplicate without telling anyone.
+- **Recovering inside `Connection`.** A connection is a socket, latched when it fails (D171); recovery is a policy over many connections and belongs a layer up.
+
+**Consequences:** `openSession`, `Session`, `RecoveringChannel` and `RecoveringSubscription` join the package's exports. An application that used the pool's `onConnect` for long-lived consumers can move them to a session. Recovery is opt-in: nothing about `openConnection`, `Channel` or `subscribe` changes.

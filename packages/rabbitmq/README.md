@@ -231,6 +231,62 @@ same way. `rpc.pending` says how many calls are waiting and `rpc.closed` whether
 it is done; `await rpc.close()` cancels the reply consumer and fails whatever is
 still pending.
 
+## Recovery
+
+`openSession(url | urls, options?)` opens a `Session`: a connection that is
+dialled again when it is lost, with channels and subscriptions that carry on
+across it (DECISIONS D177). It resolves once the first connection is open.
+
+```js
+import { openSession } from "@opentf/esrun-rabbitmq";
+
+const session = await openSession(["amqp://rabbit-1/", "amqp://rabbit-2/"]);
+const jobs = await session.channel({
+  confirm: true,
+  setup: (channel) => channel.queueDeclare("jobs", { durable: true }),
+});
+
+await jobs.publish("", "jobs", "hello");
+for await (const delivery of jobs.subscribe("jobs", { prefetch: 16 })) {
+  await handle(delivery);
+  await delivery.ack();
+}
+```
+
+After a lost connection the session dials again — round-robin over the URLs,
+with exponential backoff and jitter — then reopens each channel, re-selects
+confirms, runs its `setup`, and re-consumes each subscription with its original
+options. Nothing else is restored: topology is whatever `setup` declares, so
+`setup` must be safe to run again, as a declaration is.
+
+| Session option | |
+| --- | --- |
+| every connection setting | As for `openConnection`. `timeout` (30 000) also bounds how long the first connection is retried. |
+| `reconnect` | `{ initialDelay, maxDelay }` in ms — the backoff bounds. Default 500 and 30 000. |
+| `dial` | How to open the socket, as for the pool. |
+
+| Session member | |
+| --- | --- |
+| `channel({ setup, confirm, timeout })` | A `RecoveringChannel`, open and set up when it resolves. |
+| `connection`, `connected`, `whenConnected(timeout?)` | The live connection (`null` while reconnecting), and a promise for it. |
+| `onConnect`, `onDisconnect`, `onError` | A connection opened; one was lost; a retry or a channel's setup failed and will be retried. |
+| `close()` | Stops recovering and closes everything. |
+
+A `RecoveringChannel` has `publish(exchange, routingKey, body, options?)`,
+`subscribe(queue, options?)` (returning a `RecoveringSubscription`, an async
+iterable of deliveries), `current` (the live `Channel`, or `null`),
+`whenReady(timeout?)` and `close()`. `subscribe`'s `queue` may be a function,
+read on every re-consume, for a queue `setup` declares afresh.
+
+| | |
+| --- | --- |
+| What recovers | A lost socket, missed heartbeats, an unreadable frame, a broker-forced `connection.close` (a node restart's `320`). A channel the broker closes is reopened on the same connection. |
+| What does not | The application's own `close()`. A consumer the broker cancels (its queue deleted) ends its subscription. |
+| The first connection | Retried for transient failures until `timeout`; refused credentials, a version mismatch or an unsupported URL reject at once. |
+| A publish while disconnected | Waits for the channel to return, within its `timeout`. |
+| A publish unconfirmed at the drop | Rejects — its fate is unknown — and is **not** sent again. |
+| Deliveries from before the drop | `ack`/`nack`/`reject` resolve without sending (their tags died with the channel), and ones buffered but not read are dropped; the broker redelivers both with `redelivered: true`. Processing is at-least-once. |
+
 ## The pool
 
 `Pool` holds several connections to one broker, lends them one at a time, and
@@ -261,7 +317,9 @@ Recovery is exactly the dial: an idle connection that has died is dropped when
 it is next reached for, and a borrowed one that died is dropped on release, so
 the next borrow dials a replacement. The pool does **not** replay topology or
 re-subscribe — a broker cannot restore an exclusive or auto-delete resource, and
-a silent replay would hide the gap rather than close it.
+a silent replay would hide the gap rather than close it. For a long-lived
+consumer or publisher that should carry on across a lost connection, use a
+session (above).
 
 ## Errors
 

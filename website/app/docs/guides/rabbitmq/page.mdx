@@ -139,6 +139,35 @@ The responder consumes its queue as usual, and publishes its answer to the
 Concurrent calls on one channel are told apart by id. A call nobody answers
 rejects with `ERR_RABBITMQ_TIMEOUT`.
 
+## Survive a broker restart
+
+A long-running consumer or publisher should not end when its connection does.
+`openSession` gives you channels that are reopened — and set up again — after a
+lost connection, and subscriptions that keep yielding across it.
+
+```js
+import { openSession } from "@opentf/esrun-rabbitmq";
+
+const session = await openSession("amqp://app:secret@rabbit.internal/");
+session.onDisconnect = (error) => console.warn("lost the broker:", error.message);
+
+const jobs = await session.channel({
+  confirm: true,
+  setup: (channel) => channel.queueDeclare("jobs", { durable: true }),
+});
+
+for await (const delivery of jobs.subscribe("jobs", { prefetch: 16 })) {
+  await handle(delivery);
+  await delivery.ack();
+}
+```
+
+Put everything the channel needs in `setup`: it runs again after every
+reconnect. A message you were handling when the connection dropped is delivered
+again (`delivery.redelivered` is `true`), so make the handler safe to repeat. A
+publish whose confirm had not arrived when the connection dropped rejects rather
+than being sent twice; publish it again if it must get through.
+
 ## Pool connections
 
 A connection is one socket, so a burst of publishing shares it. A `Pool` spreads

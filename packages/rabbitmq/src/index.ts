@@ -93,4 +93,13 @@ export type { FieldTable, FieldValue } from "./protocol/fields.js";
 export type { DecodedMethod } from "./protocol/methods.js";
 export type { BasicProperties, ContentHeader } from "./protocol/properties.js";
 export { DIRECT_REPLY_TO, type RpcCallOptions, RpcClient, type RpcOptions } from "./rpc.js";
+export {
+  openSession,
+  type ReconnectOptions,
+  RecoveringChannel,
+  type RecoveringChannelOptions,
+  RecoveringSubscription,
+  Session,
+  type SessionOptions,
+} from "./session.js";
 export { type NetTransportOptions, netTransport, type Transport } from "./transport.js";
