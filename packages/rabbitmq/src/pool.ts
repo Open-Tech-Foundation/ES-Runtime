@@ -35,6 +35,32 @@ export interface BrokerAddress {
   username: string;
   password: string;
   vhost: string;
+  /** `?heartbeat=` — seconds to ask for. */
+  heartbeat?: number;
+  /** `?channel_max=` — channels to ask for. */
+  channelMax?: number;
+  /** `?frame_max=` — the largest frame to accept, in bytes. */
+  frameMax?: number;
+  /** `?connection_timeout=` — how long the socket may take to open, in ms. */
+  connectTimeout?: number;
+  /** `?server_name_indication=` — the name the certificate must carry. */
+  servername?: string;
+}
+
+/**
+ * What {@link openConnection} and a {@link Pool} take: the connection settings,
+ * plus how the socket is opened.
+ */
+export interface OpenSettings extends ConnectionSettings {
+  /**
+   * How long the socket may take to open, in ms; `0` waits as long as the
+   * operating system does. Defaults to `timeout` (30 000).
+   */
+  connectTimeout?: number;
+  /** Extra trust anchors for `amqps:`, as PEM — a private certificate authority. */
+  ca?: string | Uint8Array;
+  /** The name the broker's certificate must carry, when it is not the URL's host. */
+  servername?: string;
 }
 
 /** The connections the pool holds when nothing says otherwise. */
@@ -46,6 +72,8 @@ const DEFAULT_TLS_PORT = 5671;
 const DEFAULT_USERNAME = "guest";
 const DEFAULT_PASSWORD = "guest";
 const DEFAULT_VHOST = "/";
+/** How long the socket may take to open when nothing else says, in ms. */
+const DEFAULT_TIMEOUT = 30_000;
 
 /**
  * Reads a broker URL.
@@ -64,8 +92,9 @@ export function parseAmqpUrl(url: string): BrokerAddress {
     });
   }
   const tls = parsed.protocol === "amqps:";
-  return {
-    hostname: parsed.hostname,
+  const address: BrokerAddress = {
+    // `URL` keeps an IPv6 literal's brackets; the socket wants the address.
+    hostname: parsed.hostname.replace(/^\[(.*)\]$/, "$1"),
     port: parsed.port === "" ? (tls ? DEFAULT_TLS_PORT : DEFAULT_PORT) : Number(parsed.port),
     tls,
     username: parsed.username === "" ? DEFAULT_USERNAME : decodeURIComponent(parsed.username),
@@ -73,6 +102,75 @@ export function parseAmqpUrl(url: string): BrokerAddress {
     vhost:
       parsed.pathname.length > 1 ? decodeURIComponent(parsed.pathname.slice(1)) : DEFAULT_VHOST,
   };
+  readQuery(parsed.searchParams, address);
+  return address;
+}
+
+/**
+ * The query parameters RabbitMQ's own clients read (rabbitmq.com/docs/
+ * uri-query-parameters), plus `frame_max`, which the other clients accept.
+ *
+ * One that cannot be honoured is an error rather than ignored. The TLS file
+ * parameters name paths on disk, which a URL must not be able to make this
+ * process read (the `ca` setting takes the PEM itself); `verify=verify_none`
+ * asks to skip certificate checks, which `runtime:net` does not do; and a typo
+ * silently dropped is a setting the caller believes is in force.
+ */
+function readQuery(query: URLSearchParams, address: BrokerAddress): void {
+  const mechanisms: string[] = [];
+  for (const [name, value] of query) {
+    switch (name) {
+      case "heartbeat":
+        address.heartbeat = integer(name, value, 0xffff);
+        break;
+      case "channel_max":
+        address.channelMax = integer(name, value, 0xffff);
+        break;
+      case "frame_max":
+        address.frameMax = integer(name, value, 0xffffffff);
+        break;
+      case "connection_timeout":
+        address.connectTimeout = integer(name, value, Number.MAX_SAFE_INTEGER);
+        break;
+      case "auth_mechanism":
+        mechanisms.push(value.toLowerCase());
+        break;
+      case "server_name_indication":
+        if (!address.tls) throw unsupported(`${name} applies only to an amqps: URL`);
+        address.servername = value;
+        break;
+      case "verify":
+        if (value !== "verify_peer") {
+          throw unsupported(`verify=${value}: the broker's certificate is always verified`);
+        }
+        break;
+      case "cacertfile":
+        throw unsupported(`${name}: pass the certificate's PEM as the \`ca\` setting instead`);
+      case "certfile":
+      case "keyfile":
+      case "password":
+        throw unsupported(`${name}: client certificates are not supported`);
+      default:
+        throw unsupported(`the URL query parameter ${name} is not one this client knows`);
+    }
+  }
+  if (mechanisms.length > 0 && !mechanisms.includes("plain")) {
+    throw unsupported(`auth_mechanism=${mechanisms.join(",")}: only PLAIN is supported`);
+  }
+}
+
+function integer(name: string, value: string, max: number): number {
+  const n = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n > max) {
+    throw new RabbitError(`the URL query parameter ${name} must be an integer in 0..${max}`, {
+      code: RabbitErrorCode.Connection,
+    });
+  }
+  return n;
+}
+
+function unsupported(message: string): RabbitError {
+  return new RabbitError(message, { code: RabbitErrorCode.Unsupported });
 }
 
 /**
@@ -84,22 +182,30 @@ export function parseAmqpUrl(url: string): BrokerAddress {
  */
 export async function openConnection(
   url: string,
-  settings: ConnectionSettings = {},
+  settings: OpenSettings = {},
   dial: (options: NetTransportOptions) => Promise<Transport> = netTransport,
 ): Promise<Connection> {
   const address = parseAmqpUrl(url);
+  const servername = settings.servername ?? address.servername;
   const transport = await dial({
     hostname: address.hostname,
     port: address.port,
     tls: address.tls,
+    connectTimeout:
+      settings.connectTimeout ?? address.connectTimeout ?? settings.timeout ?? DEFAULT_TIMEOUT,
+    ...(settings.ca === undefined ? {} : { ca: settings.ca }),
+    ...(servername === undefined ? {} : { servername }),
   });
+  const heartbeat = settings.heartbeat ?? address.heartbeat;
+  const channelMax = settings.channelMax ?? address.channelMax;
+  const frameMax = settings.frameMax ?? address.frameMax;
   const connection = new Connection(transport, {
     username: settings.username ?? address.username,
     password: settings.password ?? address.password,
     vhost: settings.vhost ?? address.vhost,
-    ...(settings.heartbeat === undefined ? {} : { heartbeat: settings.heartbeat }),
-    ...(settings.channelMax === undefined ? {} : { channelMax: settings.channelMax }),
-    ...(settings.frameMax === undefined ? {} : { frameMax: settings.frameMax }),
+    ...(heartbeat === undefined ? {} : { heartbeat }),
+    ...(channelMax === undefined ? {} : { channelMax }),
+    ...(frameMax === undefined ? {} : { frameMax }),
     ...(settings.locale === undefined ? {} : { locale: settings.locale }),
     ...(settings.clientProperties === undefined
       ? {}
@@ -114,7 +220,7 @@ export async function openConnection(
 }
 
 /** Connection settings, plus how big the pool is and how it dials. */
-export interface PoolOptions extends ConnectionSettings {
+export interface PoolOptions extends OpenSettings {
   /** The most connections held open at once. Default 4. */
   size?: number;
   /**
@@ -290,13 +396,20 @@ export class Pool {
    */
   async #spawn(): Promise<Connection> {
     this.#opening++;
+    let connection: Connection;
     try {
-      const connection = await this.#connect();
-      this.#busy.add(connection);
-      return connection;
-    } finally {
+      connection = await this.#connect();
+    } catch (e) {
       this.#opening--;
+      // The slot this dial held is free again. A borrow that queued because
+      // the pool looked full is waiting for exactly that, and with no release
+      // coming (a pool of one, say) nothing else would ever wake it.
+      this.#serve();
+      throw e;
     }
+    this.#opening--;
+    this.#busy.add(connection);
+    return connection;
   }
 
   /** Dials, registers, and announces one connection. */

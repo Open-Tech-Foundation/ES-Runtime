@@ -42,6 +42,12 @@ export interface NetTransportOptions {
   ca?: string | Uint8Array;
   /** The name the certificate must carry, when it is not `hostname`. */
   servername?: string;
+  /**
+   * How long the socket may take to open, in ms; `0` (or absent) waits as long
+   * as the operating system does — which, for a host that drops packets, is
+   * minutes.
+   */
+  connectTimeout?: number;
 }
 
 class NetTransport implements Transport {
@@ -102,7 +108,7 @@ export async function netTransport(options: NetTransportOptions): Promise<Transp
           }
         : {},
     );
-    await socket.opened;
+    await opened(socket, options.connectTimeout ?? 0);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
     throw new RabbitError(
@@ -111,4 +117,25 @@ export async function netTransport(options: NetTransportOptions): Promise<Transp
     );
   }
   return new NetTransport(socket);
+}
+
+// `socket.opened`, bounded. A socket that has not opened by the deadline is
+// closed, so the attempt does not linger after the caller has been told.
+async function opened(socket: Socket, timeout: number): Promise<void> {
+  if (timeout <= 0) {
+    await socket.opened;
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void socket.close().catch(() => {});
+      reject(new Error(`it did not open within ${timeout}ms`));
+    }, timeout);
+  });
+  try {
+    await Promise.race([socket.opened, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

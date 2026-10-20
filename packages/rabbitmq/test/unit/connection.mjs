@@ -429,4 +429,141 @@ for (const [settings, tune, expected, what] of TUNING) {
   await shut(connection, broker);
 }
 
+// -- an answer that overtakes its write -------------------------------------
+
+// A socket under backpressure settles a write after the peer has already read
+// it and answered. The waiter for that answer has to exist before the send, or
+// the answer is dropped and the handshake waits out its timeout for a reply
+// that came. Here every client write settles 30ms late.
+{
+  const pair = loopback();
+  const broker = new Broker(pair.server);
+  const slow = {
+    read: () => pair.client.read(),
+    write: async (bytes) => {
+      await pair.client.write(bytes);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    },
+    close: () => pair.client.close(),
+  };
+  const connection = new Connection(slow, { heartbeat: 0, handshakeTimeout: 500, timeout: 500 });
+  const opening = connection.open();
+  await handshake(broker);
+  let failure = null;
+  await opening.catch((e) => {
+    failure = e;
+  });
+  is(failure?.message ?? null, null, "an answer read before its write settled is not lost");
+
+  const channelOpening = connection.openChannel({
+    onMethod() {},
+    onHeader() {},
+    onBody() {},
+    onClosed() {},
+  });
+  const open = await broker.expect("channel.open");
+  await broker.send("channel.open-ok", {}, open.channel);
+  is(await channelOpening, open.channel, "nor is a channel.open-ok");
+  await shut(connection, broker);
+}
+
+// -- the agreed frame size reaches the decoder ------------------------------
+
+// The decoder starts at 128 KiB. A broker that agrees a larger frame-max may
+// send frames that large, and they must be read rather than refused.
+{
+  const pair = loopback();
+  const broker = new Broker(pair.server);
+  const connection = new Connection(pair.client, { heartbeat: 0 });
+  const opening = connection.open();
+  await handshake(broker, { channelMax: 0, frameMax: 1 << 20, heartbeat: 0 });
+  await opening;
+  is(connection.frameMax, 1 << 20, "the broker's larger frame-max is agreed");
+  const bodies = [];
+  const channelOpening = connection.openChannel({
+    onMethod() {},
+    onHeader() {},
+    onBody(_n, bytes) {
+      bodies.push(bytes.length);
+    },
+    onClosed() {},
+  });
+  const open = await broker.expect("channel.open");
+  await broker.send("channel.open-ok", {}, open.channel);
+  await channelOpening;
+  await broker.sendBody(new Uint8Array(300_000), open.channel);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  is(bodies, [300_000], "a 300 KB frame under the agreed maximum is read");
+  ok(connection.usable, "and the connection survives it");
+  await shut(connection, broker);
+}
+
+// -- a broker's close is answered before the socket goes ---------------------
+
+{
+  const pair = loopback();
+  const broker = new Broker(pair.server);
+  let closed = false;
+  const transport = {
+    read: () => pair.client.read(),
+    write: (bytes) => pair.client.write(bytes),
+    close: async () => {
+      closed = true;
+      await pair.client.close();
+    },
+  };
+  const connection = new Connection(transport, { heartbeat: 0 });
+  const opening = connection.open();
+  await handshake(broker);
+  await opening;
+  const sentBefore = [];
+  const realWrite = transport.write;
+  transport.write = async (bytes) => {
+    sentBefore.push(closed);
+    return realWrite(bytes);
+  };
+  await broker.send("connection.close", {
+    replyCode: 320,
+    replyText: "CONNECTION_FORCED",
+    classId: 0,
+    methodId: 0,
+  });
+  await broker.expect("connection.close-ok");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  is(sentBefore, [false], "close-ok is written before the socket is closed");
+  ok(closed, "and the socket is closed after it");
+  is(connection.failure?.replyCode, 320, "the broker's reason is kept");
+}
+
+// -- a channel.open that times out keeps its number until it is closed -------
+
+{
+  const pair = loopback();
+  const broker = new Broker(pair.server);
+  const connection = new Connection(pair.client, { heartbeat: 0, timeout: 40 });
+  const opening = connection.open();
+  await handshake(broker);
+  await opening;
+  const handler = { onMethod() {}, onHeader() {}, onBody() {}, onClosed() {} };
+  let failure = null;
+  const first = connection.openChannel(handler).catch((e) => {
+    failure = e;
+  });
+  const open = await broker.expect("channel.open");
+  await first;
+  is(failure?.code, "ERR_RABBITMQ_TIMEOUT", "an unanswered channel.open times out");
+  const close = await broker.expect("channel.close");
+  is(close.channel, open.channel, "and the channel is closed, in case the broker opened it late");
+  ok(connection.hasChannel(open.channel), "its number stays taken until the broker agrees");
+  const second = connection.openChannel(handler);
+  const open2 = await broker.expect("channel.open");
+  ok(open2.channel !== open.channel, "so the next channel gets another number");
+  await broker.send("channel.open-ok", {}, open2.channel);
+  await second;
+  await broker.send("channel.close-ok", {}, open.channel);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  ok(!connection.hasChannel(open.channel), "close-ok frees the number");
+  await shut(connection, broker);
+}
+
 if (report("connection") > 0) exit(1);

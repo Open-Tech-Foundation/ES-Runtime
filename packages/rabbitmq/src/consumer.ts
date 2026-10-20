@@ -152,6 +152,9 @@ export class Subscription implements AsyncIterable<Delivery> {
     reject: (error: Error) => void;
   }> = [];
   #done = false;
+  // Set when this side cancelled, as opposed to the broker or a dead channel:
+  // only then are deliveries still on their way ours to hand back.
+  #cancelled = false;
   #error: Error | null = null;
   #cancellation: Cancellation | null = null;
 
@@ -185,7 +188,12 @@ export class Subscription implements AsyncIterable<Delivery> {
 
   /** Routes a delivery to the iterator, or buffers it if nobody is waiting. */
   offer(message: Message): void {
-    if (this.#done) return;
+    if (this.#done) {
+      // A delivery that raced our `basic.cancel`. Nobody will read it, and
+      // the broker does not take it back on cancel, so it is handed back now.
+      if (this.#cancelled) this.#requeue([message]);
+      return;
+    }
     const delivery = deliveryOf(this.#channel, message, this.#manual);
     const waiter = this.#waiting.shift();
     if (waiter !== undefined) waiter.resolve({ value: delivery, done: false });
@@ -198,7 +206,10 @@ export class Subscription implements AsyncIterable<Delivery> {
     this.#done = true;
     this.#error = error;
     this.#cancellation = { byBroker, error };
-    this.#registry.consumers.delete(this.#tag);
+    // A cancel of our own keeps the tag routed until the broker confirms it,
+    // so a delivery racing `basic.cancel` still reaches `offer` and is handed
+    // back instead of vanishing (see `cancel`).
+    if (!this.#cancelled) this.#registry.consumers.delete(this.#tag);
     for (const waiter of this.#waiting.splice(0)) {
       if (error !== null) waiter.reject(error);
       else waiter.resolve({ value: undefined, done: true });
@@ -208,14 +219,34 @@ export class Subscription implements AsyncIterable<Delivery> {
   /** Cancels the consumer with the broker and ends the iteration. */
   async cancel(): Promise<void> {
     if (this.#done) return;
-    // Marked done first, so a delivery already buffered is dropped and a racing
-    // `basic.deliver` finds nothing to route to.
-    this.#buffer.length = 0;
+    // Marked done first, so nothing more is yielded and a racing
+    // `basic.deliver` is handed straight back (see `offer`).
+    this.#cancelled = true;
+    const unread = this.#buffer.splice(0);
     this.finish(null, false);
     try {
       await this.#channel.cancelConsumer(this.#tag);
     } catch {
       // The channel is gone, which is the end the caller asked for anyway.
+    }
+    // After `cancel-ok` nothing more is delivered under this tag.
+    if (this.#registry.consumers.get(this.#tag) === this) {
+      this.#registry.consumers.delete(this.#tag);
+    }
+    // `basic.cancel` "does not affect already delivered messages" (AMQP 0-9-1):
+    // a delivery that arrived but was never read stays unacknowledged, held
+    // for this channel until it closes. On a long-lived channel that is
+    // forever, so each is returned to its queue rather than dropped.
+    this.#requeue(unread);
+  }
+
+  // Hands deliveries back to the broker for redelivery. Only a manual-ack
+  // subscription has anything to hand back; with `noAck` the broker already
+  // forgot them. A channel that died meanwhile requeues them itself.
+  #requeue(messages: readonly Message[]): void {
+    if (!this.#manual) return;
+    for (const message of messages) {
+      void this.#channel.reject(message.deliveryTag, { requeue: true }).catch(() => {});
     }
   }
 

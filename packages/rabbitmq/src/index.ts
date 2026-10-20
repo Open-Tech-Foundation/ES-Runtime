@@ -77,6 +77,7 @@ export { type Cancellation, type ConsumeOptions, Subscription, subscribe } from 
 export { ProtocolError, RabbitError, RabbitErrorCode, type RabbitErrorOptions } from "./errors.js";
 export {
   type BrokerAddress,
+  type OpenSettings,
   openConnection,
   Pool,
   type PoolOptions,

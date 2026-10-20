@@ -222,4 +222,66 @@ async function start(broker, channel, number, queue, options) {
   is(dec((await secondNext).value.body), "to two", "and the other to its own");
 }
 
+// -- cancelling hands back what was never read --------------------------------
+
+// `basic.cancel` does not affect deliveries already made: one that arrived and
+// was not read stays unacknowledged for the life of the channel. Cancelling
+// rejects each back to its queue — and one that races the cancel too.
+{
+  const { broker, channel, number } = await openChannel();
+  const { subscription, consume } = await start(broker, channel, number, "jobs");
+  const tag = consume.args.consumerTag;
+  await deliver(broker, number, 1n, tag, enc("read"));
+  await deliver(broker, number, 2n, tag, enc("unread a"));
+  await deliver(broker, number, 3n, tag, enc("unread b"));
+  await settle();
+  const iterator = subscription[Symbol.asyncIterator]();
+  is(dec((await iterator.next()).value.body), "read", "the first delivery is read");
+
+  const cancelling = subscription.cancel();
+  const cancel = await broker.expect("basic.cancel");
+  is(cancel.args.consumerTag, tag, "the consumer is cancelled");
+  // One more raced the cancel on its way.
+  await deliver(broker, number, 4n, tag, enc("late"));
+  await settle();
+  await broker.send("basic.cancel-ok", { consumerTag: tag }, number);
+  await cancelling;
+  await settle();
+  const rejected = [];
+  for (let i = 0; i < 3; i++) {
+    const reject = await broker.expect("basic.reject");
+    rejected.push([Number(reject.args.deliveryTag), reject.args.requeue]);
+  }
+  rejected.sort((a, b) => a[0] - b[0]);
+  is(
+    rejected,
+    [
+      [2, true],
+      [3, true],
+      [4, true],
+    ],
+    "unread and late deliveries are requeued",
+  );
+}
+
+{
+  // With noAck the broker already let go, so there is nothing to hand back.
+  const { broker, channel, number } = await openChannel();
+  const { subscription, consume } = await start(broker, channel, number, "jobs", { noAck: true });
+  await deliver(broker, number, 1n, consume.args.consumerTag, enc("x"));
+  await settle();
+  const cancelling = subscription.cancel();
+  await broker.expect("basic.cancel");
+  await broker.send("basic.cancel-ok", { consumerTag: consume.args.consumerTag }, number);
+  await cancelling;
+  let sent = null;
+  await broker.expect("basic.reject", 50).then(
+    (m) => {
+      sent = m;
+    },
+    () => {},
+  );
+  is(sent, null, "a noAck subscription rejects nothing");
+}
+
 if (report("consumer") > 0) exit(1);

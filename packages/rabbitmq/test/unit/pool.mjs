@@ -290,4 +290,78 @@ async function rejection(promise) {
   is(pool.size, 0, "the closed pool retains no connection");
 }
 
+// -- a failed dial wakes the borrow queued behind it --------------------------
+
+{
+  let attempts = 0;
+  const { dial: realDial, brokers } = dialer();
+  const dial = async (address) => {
+    attempts++;
+    if (attempts === 1) throw new Error("refused");
+    return realDial(address);
+  };
+  const pool = new Pool("amqp://broker.test/", { size: 1, dial, heartbeat: 0 });
+  const first = rejection(pool.acquire());
+  const second = pool.acquire();
+  ok((await first) !== null, "the first borrow's failed dial is reported");
+  const connection = await Promise.race([second, settle(500).then(() => null)]);
+  ok(connection !== null, "and the borrow queued behind it dials instead of hanging");
+  if (connection !== null) pool.release(connection);
+  await closePool(pool, brokers);
+}
+
+// -- URL query parameters --------------------------------------------------
+
+{
+  const address = parseAmqpUrl(
+    "amqps://h/v?heartbeat=10&channel_max=8&frame_max=65536&connection_timeout=2500&server_name_indication=broker.internal&auth_mechanism=plain&verify=verify_peer",
+  );
+  is(address.heartbeat, 10, "heartbeat is read from the query");
+  is(address.channelMax, 8, "and channel_max");
+  is(address.frameMax, 65536, "and frame_max");
+  is(address.connectTimeout, 2500, "and connection_timeout");
+  is(address.servername, "broker.internal", "and server_name_indication");
+  is(parseAmqpUrl("amqp://[::1]:5672/").hostname, "::1", "an IPv6 literal loses its brackets");
+
+  for (const [url, code] of [
+    ["amqp://h/?hearbeat=10", "ERR_RABBITMQ_UNSUPPORTED"],
+    ["amqps://h/?cacertfile=/etc/ca.pem", "ERR_RABBITMQ_UNSUPPORTED"],
+    ["amqps://h/?certfile=c.pem", "ERR_RABBITMQ_UNSUPPORTED"],
+    ["amqps://h/?verify=verify_none", "ERR_RABBITMQ_UNSUPPORTED"],
+    ["amqp://h/?auth_mechanism=external", "ERR_RABBITMQ_UNSUPPORTED"],
+    ["amqp://h/?server_name_indication=x", "ERR_RABBITMQ_UNSUPPORTED"],
+    ["amqp://h/?heartbeat=abc", "ERR_RABBITMQ_CONNECTION"],
+    ["amqp://h/?channel_max=70000", "ERR_RABBITMQ_CONNECTION"],
+  ]) {
+    let failure = null;
+    try {
+      parseAmqpUrl(url);
+    } catch (e) {
+      failure = e;
+    }
+    is(failure?.code ?? null, code, `${url} is refused, not ignored`);
+  }
+
+  // The query reaches the connection and the dial; settings still win.
+  const { dial, brokers, addresses } = dialer();
+  const connection = await openConnection(
+    "amqps://broker.test/?heartbeat=0&frame_max=8192&connection_timeout=1234",
+    { ca: "PEM", servername: "named.test", channelMax: 4 },
+    dial,
+  );
+  is(connection.frameMax, 8192, "frame_max from the URL is what is proposed");
+  is(addresses[0].connectTimeout, 1234, "connection_timeout bounds the dial");
+  is(addresses[0].ca, "PEM", "the ca setting reaches the transport");
+  is(addresses[0].servername, "named.test", "and so does servername");
+  const defaults = dialer();
+  const plain = await openConnection("amqp://broker.test/", { heartbeat: 0 }, defaults.dial);
+  is(defaults.addresses[0].connectTimeout, 30000, "the dial is bounded by default");
+  const closing = [connection.close(), plain.close()];
+  for (const broker of [brokers[0], defaults.brokers[0]]) {
+    await broker.expect("connection.close");
+    await broker.send("connection.close-ok", {}, 0);
+  }
+  await Promise.all(closing);
+}
+
 if (report("pool") > 0) exit(1);

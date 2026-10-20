@@ -214,12 +214,19 @@ export class Connection {
     const timeout = this.#settings.handshakeTimeout ?? this.#timeout();
 
     try {
-      await this.#transport.write(encodeProtocolHeader());
       // A broker that will not speak this protocol answers with its own
       // protocol header rather than a frame, which the decoder reports as an
       // unknown frame type. That is a version refusal, so it is caught here and
-      // said in those words.
-      const start = await this.#expect(0, ["connection.start"], timeout);
+      // said in those words. The waiter is registered before the header goes
+      // out, like every other request here (see `#call`).
+      const starting = this.#expect(0, ["connection.start"], timeout);
+      starting.catch(() => {});
+      try {
+        await this.#transport.write(encodeProtocolHeader());
+      } catch (e) {
+        throw this.#wrap(e);
+      }
+      const start = await starting;
       this.#checkVersion(start.args);
       this.#server = {
         version: { major: number(start.args.versionMajor), minor: number(start.args.versionMinor) },
@@ -238,16 +245,20 @@ export class Connection {
         );
       }
 
-      await this.#send(0, "connection.start-ok", {
-        clientProperties: clientProperties(this.#settings.clientProperties),
-        mechanism: "PLAIN",
-        response: `\u0000${this.#settings.username ?? "guest"}\u0000${this.#settings.password ?? "guest"}`,
-        locale: this.#settings.locale ?? this.#server.locales[0] ?? "en_US",
-      });
-
       // PLAIN authenticates in one shot, so a challenge cannot arrive: the
       // broker has nothing to challenge with.
-      const tune = await this.#expect(0, ["connection.tune", "connection.secure"], timeout);
+      const tune = await this.#call(
+        0,
+        "connection.start-ok",
+        {
+          clientProperties: clientProperties(this.#settings.clientProperties),
+          mechanism: "PLAIN",
+          response: `\u0000${this.#settings.username ?? "guest"}\u0000${this.#settings.password ?? "guest"}`,
+          locale: this.#settings.locale ?? this.#server.locales[0] ?? "en_US",
+        },
+        ["connection.tune", "connection.secure"],
+        timeout,
+      );
       if (tune.name === "connection.secure") {
         throw new RabbitError("the broker asked for a SASL challenge, which PLAIN never sends", {
           code: RabbitErrorCode.Handshake,
@@ -259,8 +270,13 @@ export class Connection {
         frameMax: this.#frameMax,
         heartbeat: this.#heartbeat,
       });
-      await this.#send(0, "connection.open", { virtualHost: this.#settings.vhost ?? "/" });
-      await this.#expect(0, ["connection.open-ok"], timeout);
+      await this.#call(
+        0,
+        "connection.open",
+        { virtualHost: this.#settings.vhost ?? "/" },
+        ["connection.open-ok"],
+        timeout,
+      );
     } catch (e) {
       // A refusal during the handshake is about credentials: a bad password
       // arrives as a `connection.close` in place of `connection.tune`, a vhost
@@ -306,6 +322,10 @@ export class Connection {
       agree(this.#settings.frameMax ?? 0, brokerFrames) || DEFAULT_FRAME_MAX,
     );
     this.#heartbeat = agree(this.#settings.heartbeat ?? DEFAULT_HEARTBEAT, brokerHeartbeat);
+    // The decoder was built before anyone knew; from here it accepts what was
+    // agreed. A broker configured above 128 KiB would otherwise send frames the
+    // decoder refused, and the connection would die on its first large message.
+    this.#decoder.frameMax = this.#frameMax;
   }
 
   /** A handshake failure the broker provoked is about credentials or vhost. */
@@ -343,11 +363,18 @@ export class Connection {
     const channel = this.#freeChannel();
     this.#handlers.set(channel, handler);
     try {
-      await this.#send(channel, "channel.open", {});
-      await this.#expect(channel, ["channel.open-ok"], this.#timeout());
+      await this.#call(channel, "channel.open", {}, ["channel.open-ok"], this.#timeout());
       return channel;
     } catch (e) {
-      this.#handlers.delete(channel);
+      // A broker that only answered late may still have opened the channel.
+      // Its number stays taken until a `channel.close` settles that, so a
+      // second `channel.open` on it cannot become a 504 CHANNEL_ERROR that
+      // kills the connection.
+      if (e instanceof RabbitError && e.code === RabbitErrorCode.Timeout && this.#fatal === null) {
+        void this.closeChannel(channel);
+      } else {
+        this.#handlers.delete(channel);
+      }
       throw e;
     }
   }
@@ -359,13 +386,13 @@ export class Connection {
       return;
     }
     try {
-      await this.#send(channel, "channel.close", {
-        replyCode: 200,
-        replyText: "Goodbye",
-        classId: 0,
-        methodId: 0,
-      });
-      await this.#expect(channel, ["channel.close-ok"], this.#timeout());
+      await this.#call(
+        channel,
+        "channel.close",
+        { replyCode: 200, replyText: "Goodbye", classId: 0, methodId: 0 },
+        ["channel.close-ok"],
+        this.#timeout(),
+      );
     } catch {
       // A channel the broker already closed, or a connection going down: the
       // caller asked for it to be gone, and it is.
@@ -550,8 +577,26 @@ export class Connection {
     switch (method.name) {
       case "connection.close": {
         const error = serverError(method);
-        if (!this.#closing) void this.#send(0, "connection.close-ok", {}).catch(() => {});
-        this.#fail(error);
+        // The broker waits for `close-ok` before it closes the socket; tearing
+        // the socket down first loses the reply and the broker logs an abrupt
+        // client close. So the reply is queued first and the teardown waits
+        // for it (briefly — a write that never finishes must not keep a dead
+        // connection's socket open).
+        // Written raw: `#fail` below latches the connection before the queued
+        // send runs, and a send that checks for that refuses the frame — the
+        // reply was never actually going out.
+        const replied = this.#closing
+          ? Promise.resolve()
+          : this.#atomic(() =>
+              this.#writeRaw(
+                encodeFrame({
+                  type: FrameType.method,
+                  channel: 0,
+                  payload: encodeMethod("connection.close-ok", {}),
+                }),
+              ),
+            ).catch(() => {});
+        this.#fail(error, replied);
         return;
       }
       case "connection.close-ok":
@@ -578,6 +623,31 @@ export class Connection {
       return waiter.resolve;
     }
     return null;
+  }
+
+  /**
+   * Sends a method and waits for its answer, with the waiter registered
+   * **before** the send. The answer can be read and routed before the write's
+   * own promise settles — a socket under backpressure resolves a write late —
+   * and an answer that finds no waiter is dropped, which left the caller to
+   * time out on a reply that had already come.
+   */
+  async #call(
+    channel: number,
+    name: string,
+    args: Record<string, MethodArg>,
+    answers: readonly string[],
+    timeout: number,
+  ): Promise<DecodedMethod> {
+    const answer = this.#expect(channel, answers, timeout);
+    try {
+      await this.#send(channel, name, args);
+    } catch (e) {
+      // Nothing will answer a method that never left.
+      answer.catch(() => {});
+      throw e;
+    }
+    return answer;
   }
 
   async #expect(
@@ -651,13 +721,13 @@ export class Connection {
     if (this.#closing) return;
     this.#closing = true;
     try {
-      await this.#send(0, "connection.close", {
-        replyCode: 200,
-        replyText: "Goodbye",
-        classId: 0,
-        methodId: 0,
-      });
-      await this.#expect(0, ["connection.close-ok"], this.#timeout());
+      await this.#call(
+        0,
+        "connection.close",
+        { replyCode: 200, replyText: "Goodbye", classId: 0, methodId: 0 },
+        ["connection.close-ok"],
+        this.#timeout(),
+      );
     } catch {
       // The broker may have closed first, or not answer at all. Either way the
       // socket goes next, and that is what actually ends the session.
@@ -680,7 +750,7 @@ export class Connection {
     handler.onClosed(channel, error);
   }
 
-  #fail(error: RabbitError): RabbitError {
+  #fail(error: RabbitError, beforeTeardown: Promise<void> = Promise.resolve()): RabbitError {
     if (this.#fatal === null) {
       this.#fatal = error;
       this.#stopHeartbeat();
@@ -690,7 +760,7 @@ export class Connection {
       }
       for (const channel of [...this.#handlers.keys()]) this.#forget(channel, error);
       this.onClosed?.(error);
-      void this.#teardown();
+      void within(beforeTeardown, CLOSE_REPLY_GRACE).then(() => this.#teardown());
     }
     return this.#fatal;
   }
@@ -718,6 +788,27 @@ export class Connection {
 }
 
 // -- helpers -----------------------------------------------------------------
+
+/** How long a teardown waits for a last reply (`close-ok`) to be written, in ms. */
+const CLOSE_REPLY_GRACE = 1000;
+
+/** Settles when `promise` does or `ms` passes, whichever is first. */
+function within(promise: Promise<void>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    unrefTimer(timer as unknown as number);
+    void promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
 
 /** The specification's tuning rule: zero proposes nothing, otherwise take less. */
 function agree(ours: number, theirs: number): number {

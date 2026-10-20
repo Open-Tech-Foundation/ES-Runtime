@@ -107,7 +107,12 @@ export interface QosOptions {
   prefetchSize?: number;
   /** Messages unacknowledged at once; 0 means no limit. */
   prefetchCount?: number;
-  /** Per-channel (default) rather than per-connection. */
+  /**
+   * As RabbitMQ reinterprets the flag: `false` (the default) limits each new
+   * consumer on the channel on its own; `true` limits the channel as a whole,
+   * shared by its consumers. (The AMQP specification's per-channel versus
+   * per-connection meaning is not what RabbitMQ implements.)
+   */
   global?: boolean;
 }
 
@@ -421,8 +426,15 @@ export class Channel implements ChannelHandler {
    * publish, and {@link publish} does not resolve until it has.
    */
   async confirmSelect(): Promise<void> {
-    await this.#request("confirm.select", {}, ["confirm.select-ok"]);
+    // The broker numbers publishes from the `confirm.select` itself, not from
+    // its `select-ok`: a publish sent in between is already its number 1. So
+    // confirm mode starts when the request is sent, or that publish would go
+    // untracked and every later confirm would settle the wrong message.
+    // Selecting twice is allowed and does not restart the count.
+    const first = !this.#confirmMode;
     this.#confirmMode = true;
+    if (first) this.#nextSeq = 1n;
+    await this.#request("confirm.select", {}, ["confirm.select-ok"]);
   }
 
   /** Whether every publish so far has been confirmed; rejects on the first nack. */
@@ -539,6 +551,15 @@ export class Channel implements ChannelHandler {
   // -- what the connection calls --------------------------------------------
 
   onMethod(_channel: number, method: DecodedMethod): void {
+    // A message's method, header and body frames are contiguous on a channel
+    // (AMQP 0-9-1 §4.2.6); any method arriving inside one is the broker's
+    // framing and ours disagreeing, which the spec makes 505 UNEXPECTED_FRAME.
+    // Throwing here fails the connection, as a framing error must.
+    if (this.#method !== null) {
+      throw new ProtocolError(
+        `${method.name} arrived while ${this.#method.name}'s content was incomplete`,
+      );
+    }
     if (method.hasContent) {
       this.#method = method;
       this.#header = null;
@@ -553,6 +574,9 @@ export class Channel implements ChannelHandler {
   onHeader(_channel: number, header: ContentHeader): void {
     if (this.#method === null) {
       throw new ProtocolError("a content header arrived without a method to announce it");
+    }
+    if (this.#header !== null) {
+      throw new ProtocolError("a second content header arrived for one message");
     }
     this.#header = header;
     this.#bodySize = asNumber(header.bodySize);
@@ -573,7 +597,10 @@ export class Channel implements ChannelHandler {
 
   onClosed(_channel: number, error: RabbitError | null): void {
     this.#closed = true;
-    this.#closeError = error;
+    // A channel this side abandoned (a request that timed out) already holds
+    // its reason; the `close-ok` that follows must not replace it with `null`.
+    if (this.#closeError === null) this.#closeError = error;
+    error = this.#closeError;
     const reason =
       error ?? new RabbitError("the channel was closed", { code: RabbitErrorCode.Closed });
     for (const waiter of this.#waiters.splice(0)) {
@@ -616,15 +643,35 @@ export class Channel implements ChannelHandler {
         waiter.timer = setTimeout(() => {
           const at = this.#waiters.indexOf(waiter);
           if (at !== -1) this.#waiters.splice(at, 1);
-          reject(
-            new RabbitError(`no ${names.join(" or ")} from the broker within ${this.#timeout}ms`, {
-              code: RabbitErrorCode.Timeout,
-            }),
+          const error = new RabbitError(
+            `no ${names.join(" or ")} from the broker within ${this.#timeout}ms`,
+            { code: RabbitErrorCode.Timeout },
           );
+          reject(error);
+          this.#abandon(error);
         }, this.#timeout);
       }
       this.#waiters.push(waiter);
     });
+  }
+
+  /**
+   * Gives up on the channel after a request went unanswered. Answers are paired
+   * with requests by order, so once one is missing a late answer would settle
+   * the *next* request of the same kind — a second `queueDeclare` resolving
+   * with the first one's queue. The channel is closed instead, with the
+   * timeout as its reason, and every other call on it fails with that.
+   */
+  #abandon(error: RabbitError): void {
+    if (this.#closeError !== null || this.#closed) return;
+    this.#closeError = error;
+    for (const waiter of this.#waiters.splice(0)) {
+      if (waiter.timer !== null) clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    for (const [, confirmation] of this.#outstanding) confirmation.reject(error);
+    this.#outstanding.clear();
+    void this.#connection.closeChannel(this.#number);
   }
 
   #take(name: string): ((fulfilment: Fulfilment) => void) | null {
@@ -745,8 +792,14 @@ export class Channel implements ChannelHandler {
     const tag = asTag(method.args.deliveryTag ?? 0n);
     const multiple = method.args.multiple === true;
     const ack = method.name === "basic.ack";
-    for (const [sequence, confirmation] of [...this.#outstanding]) {
-      if (sequence !== tag && !(multiple && sequence <= tag)) continue;
+    // `#outstanding` is in sequence order (a Map keeps insertion order and
+    // sequences only grow), so nothing past `tag` can match: stopping there
+    // keeps a steady stream of single acks from scanning every message still
+    // in flight. Deleting the entry being visited is safe in a Map iteration,
+    // so the map is walked in place rather than copied first.
+    for (const [sequence, confirmation] of this.#outstanding) {
+      if (sequence > tag) break;
+      if (sequence !== tag && !multiple) continue;
       this.#outstanding.delete(sequence);
       if (ack) confirmation.resolve();
       else confirmation.reject(nacked(tag, method.args.requeue === true));

@@ -52,6 +52,7 @@ const connection = await openConnection("amqps://app:secret@rabbit.internal:5671
 | user, password | The SASL PLAIN credentials. Both default to `guest`. |
 | path | The virtual host. One segment, so a `/` in a vhost is `%2F`. Defaults to `/`. |
 | `amqps:` | TLS on connect. |
+| query | `heartbeat`, `channel_max`, `frame_max`, `connection_timeout` (ms), `auth_mechanism` (`plain` only) and, on `amqps:`, `server_name_indication` and `verify=verify_peer` — the parameters RabbitMQ's own clients read. Any other parameter is refused with `ERR_RABBITMQ_UNSUPPORTED` rather than ignored; `cacertfile` names a file, so pass the PEM as `ca` instead. |
 
 | Setting | |
 | --- | --- |
@@ -61,8 +62,10 @@ const connection = await openConnection("amqps://app:secret@rabbit.internal:5671
 | `frameMax` | Largest frame to accept. `0` (the default) accepts the broker's, never below the protocol's 4096. |
 | `locale` | The message locale. RabbitMQ offers only `en_US`. |
 | `clientProperties` | Extra client properties, merged over this client's own. |
+| `connectTimeout` | Milliseconds the socket may take to open. Defaults to `timeout`; `0` waits as long as the operating system does. |
 | `handshakeTimeout` | Milliseconds the opening handshake may take. Defaults to `timeout`. |
-| `timeout` | Milliseconds any one method waits for its answer. Defaults to 30 000. |
+| `timeout` | Milliseconds any one method waits for its answer. Defaults to 30 000. A channel whose request goes unanswered is closed, since a late answer would otherwise settle the next request. |
+| `ca`, `servername` | For `amqps:`: extra trust anchors as PEM (a private certificate authority), and the name the certificate must carry when it is not the URL's host. |
 
 `parseAmqpUrl(url)` returns the same parts as a plain object, without dialling.
 
@@ -114,7 +117,7 @@ nothing.
 | `close()` | Closes it and waits for the broker to agree. |
 | `whenClosed()` | A promise for the end, with the reason (`null` when deliberate) — a promise rather than a hook so a subscriber can wait without taking `onClose`. |
 | `onDelivery`, `onCancel`, `onReturn`, `onClose` | The raw hooks the consumer layer builds on. |
-| `qos(options?)` | `prefetchCount` messages unacknowledged at once; `prefetchSize` (RabbitMQ accepts only 0); `global` for per-connection rather than per-channel. |
+| `qos(options?)` | `prefetchCount` messages unacknowledged at once; `prefetchSize` (RabbitMQ accepts only 0); `global`: `false` (default) limits each consumer on the channel on its own, `true` the channel as a whole — RabbitMQ's meaning of the flag, not the specification's. |
 | `get(queue, options?)` | Fetches one message, or `null` when the queue is empty. `noAck` settles it on delivery. |
 | `recover(requeue?)` | Asks the broker to redeliver everything unacknowledged. |
 
@@ -185,7 +188,10 @@ A `Delivery` is a `Message` — `consumerTag`, `deliveryTag`, `redelivered`,
 Around the loop: `subscription.consumerTag`, `subscription.queue`,
 `subscription.closed`, `subscription.cancellation` (`{ byBroker, error }`) and
 `await subscription.cancel()`. Breaking out of a `for await` cancels the
-consumer, and cancelling drops deliveries that arrived but were not read. A
+consumer, and cancelling hands deliveries that arrived but were not read back
+to the queue (`basic.reject` with requeue) — the broker does not take them back
+on a cancel, so dropping them would leave them unacknowledged until the channel
+closes. A
 broker-initiated cancellation ends the iterator with a `Cancellation` naming the
 broker.
 

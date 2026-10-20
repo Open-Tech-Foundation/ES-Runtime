@@ -12,6 +12,12 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Added
 
+- RabbitMQ's URL query parameters: `heartbeat`, `channel_max`, `frame_max`,
+  `connection_timeout`, `auth_mechanism`, and on `amqps:` `server_name_indication`
+  and `verify=verify_peer`. Any other parameter, and the TLS file parameters, is
+  refused with `ERR_RABBITMQ_UNSUPPORTED` rather than ignored.
+- `openConnection` and `Pool` settings `ca` and `servername` for `amqps:`, and
+  `connectTimeout`, which bounds opening the socket (default: `timeout`).
 - The `@opentf/esrun-rabbitmq` package, a RabbitMQ client speaking AMQP 0-9-1 in
   JavaScript over `runtime:net` (DECISIONS D171). No native code, and no
   capability beyond the `Net` grant `runtime:net`'s `connect` already needs.
@@ -87,8 +93,7 @@ package written entirely in JavaScript over `runtime:net`. See the root
 - A broker-initiated cancellation of the RPC reply consumer now closes the RPC
   client and rejects calls in flight instead of leaving them to time out. A pool
   closed while asynchronous `onConnect` setup is running now refuses the borrow
-  after setup completes, and explicit subscription cancellation drops buffered
-  deliveries as documented.
+  after setup completes.
 - The end-to-end suite can also verify an AMQPS listener when
   `RABBITMQ_TLS_URL` and its trusted `RABBITMQ_CA` are set, including the 5671
   default port and the TLS handshake.
@@ -104,3 +109,28 @@ package written entirely in JavaScript over `runtime:net`. See the root
   content frames, which RabbitMQ refuses with a 505 `UNEXPECTED_FRAME`. A
   connection's writes — the protocol header excepted — now share one queue, so a
   content frame-set is written whole.
+- A broker's answer read before its request's write had settled was dropped,
+  so the handshake, `channel.open` and the closes timed out on replies that had
+  arrived. Every request now registers its waiter before it sends.
+- The frame size agreed in `connection.tune` was never given to the frame
+  decoder, so a broker configured above 128 KiB killed the connection on its
+  first large frame.
+- A publish issued between `confirm.select` and its `select-ok` went untracked
+  and every later confirm settled the wrong message; confirm mode now starts
+  when `confirm.select` is sent.
+- A request that timed out left its channel usable, so a late answer settled
+  the next request of the same kind. The channel is now closed with the timeout
+  as its reason; a timed-out `channel.open` keeps its number until the broker
+  agrees to the close.
+- `Subscription.cancel()` dropped deliveries that had arrived but were not read,
+  and any that raced the cancel, leaving them unacknowledged until the channel
+  closed. They are now rejected back to their queue.
+- `connection.close-ok` was never sent when the broker closed the connection,
+  so the broker logged an abrupt client close.
+- A method arriving inside a message's content frames is now a protocol error,
+  as AMQP requires, instead of silently discarding the half-built message.
+- A pool borrow queued behind a dial that failed waited forever.
+- `QosOptions.global` was documented with the specification's meaning; it has
+  RabbitMQ's (`false` per consumer, `true` per channel).
+- Publisher-confirm settlement no longer scans every message in flight.
+- An IPv6 broker URL (`amqp://[::1]/`) dials the address without brackets.

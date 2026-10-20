@@ -38,7 +38,19 @@ await channel.publish("", "jobs", "hello");
 
 `amqps:` is TLS from the first byte. The URL carries the credentials and the
 virtual host; any of them can be overridden in the second argument, which also
-holds the heartbeat, timeouts and limits. The [package
+holds the heartbeat, timeouts and limits. RabbitMQ's URL query parameters
+(`?heartbeat=30&connection_timeout=5000`) are read too. For a broker behind a
+private certificate authority, pass its PEM as `ca`:
+
+```js
+import { file } from "runtime:fs";
+
+const connection = await openConnection("amqps://app:secret@rabbit.internal/prod", {
+  ca: await file("certs/ca.pem").text(),
+});
+```
+
+The [package
 reference](https://www.npmjs.com/package/@opentf/esrun-rabbitmq#connecting)
 lists them all.
 
@@ -100,7 +112,8 @@ for await (const delivery of subscription) {
 ```
 
 Breaking out of the `for await` cancels the consumer; so does
-`await subscription.cancel()`. If the broker cancels it — a queue deleted under
+`await subscription.cancel()`. Deliveries that had arrived but were not read
+go back to the queue for another consumer. If the broker cancels it — a queue deleted under
 the consumer — the loop ends and `subscription.cancellation` says the broker did
 it and why.
 

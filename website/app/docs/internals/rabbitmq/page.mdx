@@ -51,6 +51,24 @@ once**, and every caller — now and later — gets that one cause rather than a
 symptom of the same dead connection. There is no resynchronisation: a stream
 that lost a byte cannot be repaired, only replaced.
 
+## A request's answer is awaited before it is asked for
+
+A method and its answer are separate frames, and the answer can be read and
+routed before the write that carried the request has even settled — a socket
+under backpressure resolves a write late. An answer that finds nobody waiting
+is dropped. So every request registers its waiter **first** and sends second,
+in the handshake, in channel open and close, and on every channel method.
+
+Answers are paired with requests by order, per channel. That makes a timeout
+more than a slow call: once one answer is missing, a late arrival would settle
+the *next* request of its kind — a second `queueDeclare` resolving with the
+first one's queue. So a request that times out **closes its channel**, with the
+timeout as the reason, rather than leaving it usable and quietly mispaired. A
+`channel.open` that times out keeps its number until the broker answers the
+`channel.close` that follows, because a broker that opened it late would refuse
+a second `channel.open` on the same number with `504 CHANNEL_ERROR`, a
+connection error.
+
 ## Why writes are serialised
 
 AMQP lets a connection carry many channels over one socket. A channel's frames
@@ -85,10 +103,25 @@ channel telling the broker that a delivery is handled; the broker numbers those
 from 1 per channel. One message can be both, and the two numbers have nothing to
 do with each other.
 
+Confirm numbering starts at the `confirm.select` itself, not at its answer: a
+publish issued between the two is already the broker's number 1. So confirm
+mode begins when the request is sent; begun at the answer, that publish went
+untracked and every later confirm settled the wrong message.
+
 Awaited confirms change what `publish` means: in confirm mode it resolves once
 the broker has taken the message and rejects when it cannot, so awaiting the
 publish awaits the message's fate — the alternative is a publish that resolved
 before anything had happened to it.
+
+## Cancelling hands back what was never read
+
+`basic.cancel` "does not affect already delivered messages" (AMQP 0-9-1): a
+delivery that reached the client but was not read when the consumer was
+cancelled stays unacknowledged, held for that channel until it closes — on a
+long-lived channel, indefinitely. So a cancel rejects each unread delivery back
+to its queue, and one that raced the cancel too; the consumer's tag stays routed
+until `cancel-ok` so a racing delivery is seen. A `noAck` subscription has
+nothing to hand back.
 
 ## Request/reply, without a reply queue
 
@@ -107,6 +140,21 @@ fail, rather than waiting out a timeout for an answer that can no longer come.
 Replies are matched by the correlation id the client generates, not by order, so
 concurrent calls on one channel are told apart and a stray or duplicated reply
 is dropped rather than mistaken for the wrong answer.
+
+## A URL parameter is honoured or refused
+
+RabbitMQ's own clients read `heartbeat`, `connection_timeout`, `channel_max`,
+`auth_mechanism` and a set of TLS parameters from the URL query, and this client
+reads the ones it can honour (plus `frame_max`). The rest are refused rather
+than ignored. `cacertfile`, `certfile` and `keyfile` name files on disk, and a
+URL is not allowed to make the process read one — the `ca` setting takes the
+PEM itself, read under the caller's own grant. `verify=verify_none` asks for no
+certificate check, which `runtime:net` does not offer. And a misspelt parameter
+that is silently dropped is a setting the caller believes is in force.
+
+Opening the socket is bounded too (`connectTimeout`, by default the method
+`timeout`): a host that drops packets would otherwise hold `openConnection` for
+as long as the operating system retries.
 
 ## Recovery is a dial, not a replay
 

@@ -347,4 +347,82 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
   is(closed?.code, "ERR_RABBITMQ_PROTOCOL", "a header without a method is a protocol failure");
 }
 
+// -- confirm numbering starts at confirm.select ------------------------------
+
+// The broker counts a publish sent after `confirm.select` and before its
+// `select-ok` as number 1. Starting the count at the answer misnumbered it and
+// every confirm after it.
+{
+  const { broker, channel, number } = await openChannel();
+  const selecting = channel.confirmSelect();
+  await broker.expect("confirm.select");
+  let published = false;
+  const publishing = channel.publish("", "q", "early").then(() => {
+    published = true;
+  });
+  await takePublish(broker, number);
+  await broker.send("confirm.select-ok", {}, number);
+  await selecting;
+  await broker.send("basic.ack", { deliveryTag: 1n, multiple: false }, number);
+  await publishing;
+  ok(published, "a publish racing select-ok is confirmed by the broker's tag 1");
+  const second = channel.publish("", "q", "next");
+  await takePublish(broker, number);
+  await broker.send("basic.ack", { deliveryTag: 2n, multiple: false }, number);
+  await second;
+  ok(true, "and the next publish is tag 2");
+}
+
+// -- a timed-out request closes the channel ---------------------------------
+
+// Answers pair with requests by order; once one is missing, a late answer
+// would settle the next request of its kind. So the channel is given up.
+{
+  const { broker, connection } = await openChannel();
+  const opening = connection.channel({ timeout: 40 });
+  const open = await broker.expect("channel.open");
+  await broker.send("channel.open-ok", {}, open.channel);
+  const channel = await opening;
+  let failure = null;
+  await channel.queueDeclare("a").catch((e) => {
+    failure = e;
+  });
+  is(failure?.code, "ERR_RABBITMQ_TIMEOUT", "the unanswered declare times out");
+  const close = await broker.expect("channel.close");
+  is(close.channel, open.channel, "and the channel is closed");
+  ok(!channel.usable, "it is no longer usable");
+  is(channel.failure?.code, "ERR_RABBITMQ_TIMEOUT", "with the timeout as its reason");
+  let refused = null;
+  await channel.queueDeclare("b").catch((e) => {
+    refused = e;
+  });
+  is(refused?.code, "ERR_RABBITMQ_TIMEOUT", "a later call is refused with that reason");
+  await broker.send("channel.close-ok", {}, open.channel);
+  await settle();
+  is(channel.failure?.code, "ERR_RABBITMQ_TIMEOUT", "close-ok does not replace the reason");
+  ok(connection.usable, "the connection itself is untouched");
+}
+
+// -- a method inside a message is a framing error -----------------------------
+
+{
+  const { broker, connection, number } = await openChannel();
+  await broker.send(
+    "basic.deliver",
+    { consumerTag: "c", deliveryTag: 1n, redelivered: false, exchange: "", routingKey: "q" },
+    number,
+  );
+  await broker.send(
+    "basic.deliver",
+    { consumerTag: "c", deliveryTag: 2n, redelivered: false, exchange: "", routingKey: "q" },
+    number,
+  );
+  await settle();
+  is(
+    connection.failure?.code,
+    "ERR_RABBITMQ_PROTOCOL",
+    "a second method before the first message's header fails the connection",
+  );
+}
+
 if (report("channel") > 0) exit(1);
