@@ -259,6 +259,27 @@ test("MessagePack still round-trips the JSON-shaped documents on the fast path",
 // byte-for-byte concerns but adds the format's own decisions: the deterministic
 // encoding (shortest forms, canonical float width, sorted keys) on the way out,
 // and tags refused on the way in.
+test("MessagePack spells a non-string map key the same with or without a bin", async () => {
+  const { MessagePack, CBOR } = await import("runtime:serialization");
+  // Each key alone (JSON-shaped) and beside a `bin` (value tree) must agree,
+  // and agree with CBOR, which uses the same key rule.
+  const keys = [
+    [[0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], "18446744073709551615"],
+    [[0xcb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0], "1"],
+    [[0xcb, 0x44, 0x4b, 0x1a, 0xe4, 0xd6, 0xe2, 0xef, 0x50], "1e+21"],
+    [[0xc0], "null"],
+  ];
+  for (const [key, name] of keys) {
+    const plain = MessagePack.decode(new Uint8Array([0x81, ...key, 0x01]));
+    const withBin = MessagePack.decode(new Uint8Array([0x82, ...key, 0x01, 0xa1, 0x62, 0xc4, 0x00]));
+    assertEquals(Object.keys(plain)[0], name, `plain ${name}`);
+    assertEquals(Object.keys(withBin).find((k) => k !== "b"), name, `with bin ${name}`);
+  }
+  // CBOR: uint64 max and the float 1.0 as keys.
+  const cbor = CBOR.decode(new Uint8Array([0xa2, 0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xf9, 0x3c, 0x00, 0x02]));
+  assertEquals(Object.keys(cbor).sort().join(","), "1,18446744073709551615");
+});
+
 test("CBOR round-trips the JSON-shaped documents and prefers integer forms", async () => {
   const { CBOR } = await import("runtime:serialization");
   // Canonical encoding sorts map keys, so an object comes back with its keys

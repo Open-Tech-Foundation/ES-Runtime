@@ -10,9 +10,13 @@
 //! So the JSON pivot is kept for documents that *are* JSON-shaped — the common
 //! case, and the fast one — and this module handles the rest:
 //!
-//! * [`scan_binary`] walks the encoded form structurally, allocating nothing,
-//!   and reports whether any `bin` or `ext` value is present. Only when one is
-//!   does decoding pay for a `Value` tree.
+//! * [`needs_value_tree`] walks the encoded form structurally, allocating
+//!   nothing, and reports whether any `bin` or `ext` value, or any non-string
+//!   map key, is present. Only when one is does decoding pay for a `Value`
+//!   tree. A non-string key goes the same way because the JSON pivot cannot
+//!   spell it as the guest would (`1.0` for the float `1`, a throw for a `nil`
+//!   key), and two paths that spell one key differently would make the result
+//!   depend on whether a `bin` sat elsewhere in the document.
 //! * [`read_value`] decodes to a `Value`, so `bin` arrives in JS as a
 //!   `Uint8Array` rather than a list of integers.
 //! * [`write_value`] encodes from a `Value`, emitting `bin` for
@@ -170,12 +174,13 @@ fn shape(cur: &mut &[u8]) -> Result<Shape, DecodeError> {
 
 // ---- scanning --------------------------------------------------------------
 
-/// Whether the encoded value contains any `bin` or `ext`.
+/// Whether the encoded value contains any `bin` or `ext`, or a map key that is
+/// not a string — the documents the JSON pivot cannot carry faithfully.
 ///
 /// Exact rather than a byte search: a `0xc4` inside a string payload is not a
 /// `bin` marker, and treating it as one would push every document carrying
 /// arbitrary text onto the slow path. Allocates nothing and reads no payload.
-pub(crate) fn scan_binary(bytes: &[u8]) -> Result<bool, DecodeError> {
+pub(crate) fn needs_value_tree(bytes: &[u8]) -> Result<bool, DecodeError> {
     let mut cur = bytes;
     let mut found = false;
     scan_one(&mut cur, 0, &mut found)?;
@@ -202,12 +207,20 @@ fn scan_one(cur: &mut &[u8], depth: usize, found: &mut bool) -> Result<(), Decod
         }
         Shape::Map(n) => {
             for _ in 0..n {
+                if !cur.first().is_some_and(|&m| is_str_marker(m)) {
+                    *found = true;
+                }
                 scan_one(cur, depth + 1, found)?;
                 scan_one(cur, depth + 1, found)?;
             }
         }
     }
     Ok(())
+}
+
+/// Whether `m` opens a `str` (fixstr, str8, str16, str32).
+fn is_str_marker(m: u8) -> bool {
+    matches!(m, 0xa0..=0xbf | 0xd9..=0xdb)
 }
 
 // ---- decoding --------------------------------------------------------------
@@ -235,16 +248,8 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
         Shape::Bin(n) => Value::Bytes(take(cur, n)?.to_vec()),
         Shape::Uint(n) => Value::Number(be(cur, n)? as f64),
         Shape::Int(n) => {
-            let raw = be(cur, n)?;
             // Sign-extend from the width actually on the wire.
-            let bits = n * 8;
-            let signed = if bits == 64 {
-                raw as i64
-            } else {
-                let shift = 64 - bits;
-                ((raw << shift) as i64) >> shift
-            };
-            Value::Number(signed as f64)
+            Value::Number(sign_extend(be(cur, n)?, n) as f64)
         }
         Shape::Float(4) => Value::Number(f64::from(f32::from_bits(be(cur, 4)? as u32))),
         Shape::Float(_) => Value::Number(f64::from_bits(be(cur, 8)?)),
@@ -264,15 +269,7 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
         Shape::Map(n) => {
             let mut out = Vec::with_capacity(n.min(1024));
             for _ in 0..n {
-                // A non-string key has no object-property equivalent, so it is
-                // stringified the way a JS property access would.
-                let key = match read_one(cur, depth + 1)? {
-                    Value::String(s) => s,
-                    Value::Number(n) => format_number(n),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    _ => "[object]".to_string(),
-                };
+                let key = read_key(cur, depth + 1)?;
                 out.push((key, read_one(cur, depth + 1)?));
             }
             Value::Object(out)
@@ -280,13 +277,39 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
     })
 }
 
-/// `String(n)` for a JS number, so a numeric map key round-trips as JS spells
-/// it (`1`, not `1.0`).
-fn format_number(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i64)
+/// Reads a map key as the property name it becomes.
+///
+/// An integer key is spelled from its exact wire value — `uint64` max is
+/// `"18446744073709551615"`, not the `f64` it would round to — as CBOR spells
+/// an integer key past 2^53 (where it decodes to a `BigInt`). Every other key
+/// is coerced the way a property access coerces it
+/// ([`crate::js_number::to_property_key`]), the rule CBOR uses too.
+fn read_key(cur: &mut &[u8], depth: usize) -> Result<String, DecodeError> {
+    if depth > MAX_DEPTH {
+        return Err(DecodeError::TooDeep);
+    }
+    let mut peek = *cur;
+    match shape(&mut peek)? {
+        Shape::Uint(n) => {
+            *cur = peek;
+            Ok(be(cur, n)?.to_string())
+        }
+        Shape::Int(n) => {
+            *cur = peek;
+            Ok(sign_extend(be(cur, n)?, n).to_string())
+        }
+        _ => Ok(crate::js_number::to_property_key(&read_one(cur, depth)?)),
+    }
+}
+
+/// Sign-extends an `n`-byte two's-complement value read big-endian.
+fn sign_extend(raw: u64, n: usize) -> i64 {
+    let bits = n * 8;
+    if bits == 64 {
+        raw as i64
     } else {
-        format!("{n}")
+        let shift = 64 - bits;
+        ((raw << shift) as i64) >> shift
     }
 }
 
@@ -558,7 +581,7 @@ mod tests {
             ("b".into(), Value::Array(vec![Value::String("x".into())])),
         ]))
         .expect("encode");
-        assert!(!scan_binary(&plain).expect("scan"));
+        assert!(!needs_value_tree(&plain).expect("scan"));
 
         // A 0xc4 byte *inside a string* is not a bin marker; treating it as one
         // would push ordinary text documents onto the slow path.
@@ -567,7 +590,7 @@ mod tests {
             text.contains(&0xc4),
             "the fixture needs a 0xc4 payload byte"
         );
-        assert!(!scan_binary(&text).expect("scan"));
+        assert!(!needs_value_tree(&text).expect("scan"));
 
         // …and a real bin, however deeply nested, is found.
         let nested = write_value(&Value::Array(vec![Value::Object(vec![(
@@ -575,7 +598,7 @@ mod tests {
             Value::Bytes(vec![1]),
         )])]))
         .expect("encode");
-        assert!(scan_binary(&nested).expect("scan"));
+        assert!(needs_value_tree(&nested).expect("scan"));
     }
 
     #[test]
@@ -591,7 +614,10 @@ mod tests {
             read_value(&[0xdd, 0xff, 0xff, 0xff, 0xff]),
             Err(DecodeError::Truncated)
         );
-        assert_eq!(scan_binary(&[0xc4, 0x05, 1]), Err(DecodeError::Truncated));
+        assert_eq!(
+            needs_value_tree(&[0xc4, 0x05, 1]),
+            Err(DecodeError::Truncated)
+        );
     }
 
     #[test]
@@ -599,7 +625,7 @@ mod tests {
         // 0x91 is a one-element array: a chain of them nests without bound.
         let bomb = vec![0x91u8; MAX_DEPTH + 8];
         assert_eq!(read_value(&bomb), Err(DecodeError::TooDeep));
-        assert_eq!(scan_binary(&bomb), Err(DecodeError::TooDeep));
+        assert_eq!(needs_value_tree(&bomb), Err(DecodeError::TooDeep));
     }
 
     #[test]
@@ -609,7 +635,7 @@ mod tests {
             read_value(&[0xd4, 0x05, 0x42]),
             Ok(Value::Bytes(vec![0x42]))
         );
-        assert!(scan_binary(&[0xd4, 0x05, 0x42]).expect("scan"));
+        assert!(needs_value_tree(&[0xd4, 0x05, 0x42]).expect("scan"));
     }
 
     #[test]
@@ -620,5 +646,64 @@ mod tests {
             read_value(&[0x81, 0x01, 0x02]).expect("decode"),
             Value::Object(vec![("1".into(), Value::Number(2.0))]),
         );
+    }
+
+    fn key_of(key: &[u8]) -> String {
+        let mut doc = vec![0x81];
+        doc.extend_from_slice(key);
+        doc.push(0x00);
+        match read_value(&doc).expect("decode") {
+            Value::Object(pairs) => pairs[0].0.clone(),
+            other => panic!("expected an object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn integer_keys_keep_their_exact_digits() {
+        // An `f64` detour saturated at i64::MAX and rounded past 2^53.
+        assert_eq!(
+            key_of(&[0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+            "18446744073709551615"
+        );
+        assert_eq!(
+            key_of(&[0xcf, 0x80, 0, 0, 0, 0, 0, 0, 0]),
+            "9223372036854775808"
+        );
+        assert_eq!(
+            key_of(&[0xcf, 0, 0x20, 0, 0, 0, 0, 0, 1]),
+            "9007199254740993"
+        );
+        assert_eq!(
+            key_of(&[0xd3, 0x80, 0, 0, 0, 0, 0, 0, 0]),
+            "-9223372036854775808"
+        );
+        assert_eq!(key_of(&[0xd0, 0xff]), "-1");
+    }
+
+    #[test]
+    fn other_keys_are_coerced_like_a_property_access() {
+        assert_eq!(key_of(&[0xcb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0]), "1");
+        assert_eq!(
+            key_of(&[0xcb, 0x44, 0x4b, 0x1a, 0xe4, 0xd6, 0xe2, 0xef, 0x50]),
+            "1e+21"
+        );
+        assert_eq!(
+            key_of(&[0xcb, 0x43, 0xf0, 0, 0, 0, 0, 0, 0]),
+            "18446744073709552000"
+        );
+        assert_eq!(key_of(&[0xcb, 0x7f, 0xf8, 0, 0, 0, 0, 0, 0]), "NaN");
+        assert_eq!(key_of(&[0xc0]), "null");
+        assert_eq!(key_of(&[0xc3]), "true");
+        assert_eq!(key_of(&[0x92, 0x01, 0xc0]), "1,");
+        assert_eq!(key_of(&[0x80]), "[object Object]");
+    }
+
+    #[test]
+    fn a_non_string_key_takes_the_value_tree_path() {
+        // The JSON pivot cannot spell these as the guest would, so the scan
+        // routes them to `read_value` exactly as it routes a `bin`.
+        assert!(!needs_value_tree(&[0x81, 0xa1, b'a', 0x01]).unwrap());
+        assert!(needs_value_tree(&[0x81, 0x01, 0x01]).unwrap());
+        assert!(needs_value_tree(&[0x91, 0x81, 0xc0, 0x01]).unwrap());
     }
 }

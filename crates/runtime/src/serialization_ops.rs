@@ -625,10 +625,12 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         // JSON is the fast pivot (a string the guest's `JSON.parse` builds from,
         // which beats marshaling a value tree across the boundary) but it has no
         // byte string: routing `bin` through it turned every binary payload into
-        // an array of numbers. So the pivot is kept for documents that are
-        // JSON-shaped, and only a document that actually carries `bin`/`ext`
-        // pays for the value tree.
-        match crate::msgpack::scan_binary(msgpack_bytes) {
+        // an array of numbers. Nor can it spell a non-string map key the way the
+        // guest would. So the pivot is kept for documents that are JSON-shaped,
+        // and only a document that carries `bin`/`ext` or a non-string key pays
+        // for the value tree — one path per key, so the spelling cannot depend on
+        // what else the document holds.
+        match crate::msgpack::needs_value_tree(msgpack_bytes) {
             Ok(true) => {
                 return crate::msgpack::read_value(msgpack_bytes).map_err(|e| {
                     OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {e}"))

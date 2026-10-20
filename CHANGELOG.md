@@ -62,6 +62,13 @@ namespace) is unstable and may change between minor releases until the API freez
   (`new String("x")`, `new Number(1)`, `Object(1n)`) as the value it wraps
   instead of `{}` or its indexed characters. The CBOR reference no longer says
   a `BigInt` throws: one in [-2^64, 2^64-1] encodes as an integer.
+- `runtime:serialization` `MessagePack.decode` spells a non-string map key the
+  same whether or not the document carries a `bin`/`ext`, and the same way CBOR
+  does. The value-tree path saturated large integer keys at `i64::MAX` and
+  rounded them past 2^53; the JSON path spelled the float `1` as `"1.0"` and
+  threw on a `nil`, `NaN` or array key. Such documents now take the value tree,
+  which keeps integer keys' exact digits and coerces the rest as a property
+  access would.
 
 ## [0.41.0] - 2026-10-17
 

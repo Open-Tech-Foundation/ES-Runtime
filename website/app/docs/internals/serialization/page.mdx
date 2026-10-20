@@ -40,6 +40,15 @@ tree. The scan is structural rather than a byte search on purpose: a `0xc4` byte
 *inside a string payload* is not a `bin` marker, and treating it as one would
 push every document containing arbitrary text onto the slow path.
 
+A **non-string map key** takes the value tree too. The pivot spells one its own
+way — the float `1` as `"1.0"`, and a `nil` or array key not at all (it throws)
+— while the tree spells it as a property access would, the rule CBOR uses. Two
+paths with two spellings would make a key's name depend on whether a `bin` sat
+elsewhere in the document, so the scan sends every such key down the one path
+that gets it right. An integer key keeps its exact wire digits (`uint64` max is
+`"18446744073709551615"`, not the `f64` it rounds to), as a CBOR integer key past
+2<sup>53</sup> does.
+
 ## What each format keeps
 
 Numbers are IEEE-754 doubles once they are in the isolate, so an integer past

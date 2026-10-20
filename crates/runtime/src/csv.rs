@@ -920,51 +920,9 @@ fn number_to_string(n: f64) -> Result<String, Error> {
             "CSV has no representation for NaN or Infinity",
         ));
     }
-    Ok(js_number_string(n))
-}
-
-/// `String(n)` for a finite `n` (ECMA-262 Number::toString, radix 10), so a
-/// field reads the way the same number prints in JavaScript: `1` not `1.0`,
-/// `1e+300` not three hundred zeros, `1e-7` not `0.0000001`.
-fn js_number_string(n: f64) -> String {
-    if n == 0.0 {
-        // Covers -0, which `String` also spells "0".
-        return "0".to_string();
-    }
-    // `{:e}` yields the shortest round-trip digits as `d[.ddd]e[-]x`; Number::
-    // toString lays out those same digits by the decimal exponent.
-    let sci = format!("{:e}", n.abs());
-    let (mantissa, exp) = sci.split_once('e').expect("`{:e}` always has an exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let k = digits.len() as i32;
-    // The decimal point sits after `point` digits: value = 0.digits × 10^point.
-    let point = exp.parse::<i32>().expect("`{:e}` exponent is an integer") + 1;
-    let mut out = String::new();
-    if n < 0.0 {
-        out.push('-');
-    }
-    if k <= point && point <= 21 {
-        out.push_str(&digits);
-        out.extend(std::iter::repeat_n('0', (point - k) as usize));
-    } else if 0 < point && point <= 21 {
-        out.push_str(&digits[..point as usize]);
-        out.push('.');
-        out.push_str(&digits[point as usize..]);
-    } else if -6 < point && point <= 0 {
-        out.push_str("0.");
-        out.extend(std::iter::repeat_n('0', (-point) as usize));
-        out.push_str(&digits);
-    } else {
-        out.push_str(&digits[..1]);
-        if k > 1 {
-            out.push('.');
-            out.push_str(&digits[1..]);
-        }
-        out.push('e');
-        out.push(if point - 1 < 0 { '-' } else { '+' });
-        out.push_str(&(point - 1).abs().to_string());
-    }
-    out
+    // `String(n)`, so a field reads the way the number prints in JavaScript:
+    // `1` not `1.0`, `1e+300` not three hundred zeros.
+    Ok(crate::js_number::to_js_string(n))
 }
 
 fn cell_to_string(value: &Value) -> Result<String, Error> {
@@ -1836,7 +1794,7 @@ mod tests {
             (f64::MAX, "1.7976931348623157e+308"),
             (5e-324, "5e-324"),
         ] {
-            assert_eq!(js_number_string(n), text, "{n:e}");
+            assert_eq!(number_to_string(n).unwrap(), text, "{n:e}");
         }
     }
 

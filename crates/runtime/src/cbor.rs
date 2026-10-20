@@ -454,68 +454,9 @@ fn read_one(cur: &mut &[u8], depth: usize) -> Result<Value, DecodeError> {
 
 /// Reads one key/value pair of a map.
 fn read_pair(cur: &mut &[u8], depth: usize) -> Result<(String, Value), DecodeError> {
-    let key = to_property_key(&read_one(cur, depth + 1)?);
+    let key = crate::js_number::to_property_key(&read_one(cur, depth + 1)?);
     let value = read_one(cur, depth + 1)?;
     Ok((key, value))
-}
-
-/// Coerces a CBOR map key to the property name a JavaScript access would use.
-///
-/// CBOR allows *any* item as a key, but a JavaScript object's keys are strings,
-/// so a non-string key is coerced exactly as `String(key)` would (and a property
-/// access coerces its key the same way): numbers by `String(n)` (see
-/// [`crate::js_number`]), booleans and `null`/`undefined` by their literals,
-/// arrays and byte strings as their elements joined with commas, and a nested
-/// map as `"[object Object]"`. The coercions can collide (`[1, 2]` and
-/// `["1", "2"]` share a name) — that is JavaScript's behaviour, not a choice
-/// here.
-///
-/// A nested map is the one deliberate simplification: it always spells
-/// `"[object Object]"`. `String(plainObject)` is the same, but a nested map that
-/// carries its own `toString` is not — `String` would call it, and throw on a
-/// non-callable one — and running a decoded value's accessors during a structural
-/// walk is not something a codec should do. The spelling here is fixed instead.
-fn to_property_key(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => crate::js_number::to_js_string(*n),
-        // `String(bigint)` is its exact decimal digits, with no exponent form.
-        Value::BigInt(i) => i.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Undefined => "undefined".to_string(),
-        // `Uint8Array`'s `toString` is `Array.prototype.join`, so it spells as
-        // its bytes, not as text.
-        Value::Bytes(bytes) => join_elements(bytes.iter().map(|b| b.to_string())),
-        Value::Array(items) => join_elements(items.iter().map(element_to_string)),
-        Value::Object(_) => "[object Object]".to_string(),
-        // Never produced by the decoder, but `Other` already carries the
-        // guest's own `String(value)`.
-        Value::Other(s) => s.clone(),
-        // `Value` is `#[non_exhaustive]`; a future variant has no defined
-        // string form here.
-        _ => "[object Object]".to_string(),
-    }
-}
-
-/// One element of an array key: `Array.prototype.join` spells `null` and
-/// `undefined` as the empty string and every other value by `String`.
-fn element_to_string(v: &Value) -> String {
-    match v {
-        Value::Null | Value::Undefined => String::new(),
-        other => to_property_key(other),
-    }
-}
-
-fn join_elements(parts: impl Iterator<Item = String>) -> String {
-    let mut out = String::new();
-    for (i, part) in parts.enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str(&part);
-    }
-    out
 }
 
 // ---- half-precision floats -------------------------------------------------

@@ -3025,7 +3025,10 @@ and an `ArrayBuffer`) encodes as the **`bin`** family and decodes back to a
 `Uint8Array` — binary is the reason to reach for the format, so it round-trips
 rather than degrading to an array of numbers. An `ext` value decodes to its
 payload bytes; there is no JS type that corresponds to one, and inventing a
-wrapper would make it indistinguishable from real data.
+wrapper would make it indistinguishable from real data. A non-string map key
+becomes a property name by the same rule as CBOR's (below): an integer key by its
+exact digits, a float by `String(n)`, `nil`/`true` by their literals, an array as
+its comma-joined elements.
 
 Values with no own enumerable properties are converted rather than flattened to
 `{}`: a `Map` encodes as a map (keys stringified), a `Set` as an array, and a
