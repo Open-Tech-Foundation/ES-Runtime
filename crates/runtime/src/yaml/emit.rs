@@ -119,8 +119,29 @@ fn inline(v: &Value) -> String {
         Value::String(s) => string(s, false),
         Value::Array(_) => "[]".into(),
         Value::Object(_) => "{}".into(),
-        // Null, and values YAML has no form for, as before.
+        // A `BigInt` is a core-schema integer, exactly as written.
+        Value::BigInt(i) => i.to_string(),
+        // `undefined` is written as `null`, its nearest YAML value. Anything
+        // else was refused by `check` before the walk began.
         _ => "null".into(),
+    }
+}
+
+/// Refuses a value YAML has no form for — bytes, a function or symbol — instead
+/// of writing it as `null` and losing it. Run before [`emit`], which then has
+/// nothing left to refuse.
+pub(crate) fn check(v: &Value) -> Result<(), String> {
+    match v {
+        Value::Null
+        | Value::Undefined
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::BigInt(_)
+        | Value::String(_) => Ok(()),
+        Value::Array(items) => items.iter().try_for_each(check),
+        Value::Object(entries) => entries.iter().try_for_each(|(_, v)| check(v)),
+        Value::Bytes(_) => Err("YAML has no form for bytes (encode them as a string first)".into()),
+        _ => Err("a function, symbol or similar value has no YAML form".into()),
     }
 }
 
@@ -133,13 +154,12 @@ fn number(n: f64) -> String {
         } else {
             "-.inf".into()
         }
-    } else if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
-        // Integral: no `.0`, and no `-0`.
-        format!("{}", n as i64)
     } else {
-        // Shortest round-trip form; `Debug` switches to exponent notation for
-        // very large and very small magnitudes, which the core schema reads.
-        let s = format!("{n:?}");
+        // `String(n)`: integral values without `.0` or `-0`, the shortest
+        // round-trip digits, exponent form past 1e21 and below 1e-6 — all of
+        // which the core schema reads back. An `i64` cast here used to saturate,
+        // writing 2^63 as `9223372036854775807`.
+        let s = crate::js_number::to_js_string(n);
         debug_assert!(parse_float(&s).is_some() || parse_int(&s).is_some(), "{s}");
         s
     }

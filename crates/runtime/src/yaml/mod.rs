@@ -85,8 +85,16 @@ pub(crate) fn validate(input: &str) -> Result<(), Error> {
 }
 
 /// Writes `value` as a YAML document ending in a line break.
+#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn emit(value: &Value) -> String {
     emit::emit(value)
+}
+
+/// [`emit`] for a value from the guest: refuses what YAML cannot carry (bytes,
+/// a function) rather than writing it as `null`.
+pub(crate) fn build(value: &Value) -> Result<String, String> {
+    emit::check(value)?;
+    Ok(emit::emit(value))
 }
 
 /// Fuzzing entry point (see [`crate::fuzz`]): any input must produce a value or

@@ -2605,7 +2605,7 @@ function validateWith(fn, input, options = {}) {
 const TOML = {
 	validate: (toml, options) => validateWith(toml_validate, toml, options),
 	parse: (toml) => toml_parse(toml),
-	build: (obj) => toml_build(obj)
+	build: (obj) => toml_build(toEncodable(obj, "TOML"))
 };
 var CSVDecoderStream = class extends TransformStream {
 	constructor(options = {}) {
@@ -2680,7 +2680,7 @@ const CSV = {
 const YAML = {
 	validate: (yaml, options) => validateWith(yaml_validate, yaml, options),
 	parse: (yaml) => yaml_parse(yaml),
-	build: (obj) => yaml_build(obj)
+	build: (obj) => yaml_build(toEncodable(obj, "YAML"))
 };
 function toEncodable(value, format, depth = 0, seen = []) {
 	if (depth > 256) throw new RangeError(`${format}: value nests too deeply to encode`);
@@ -2818,7 +2818,7 @@ var XMLDecoderStream = class extends TransformStream {
 const XML = {
 	validate: (xml, options) => validateWith(xml_validate, xml, options),
 	parse: (xml) => xml_parse(xml),
-	build: (obj) => xml_build(obj),
+	build: (obj) => xml_build(toEncodable(obj, "XML")),
 	DecoderStream: XMLDecoderStream
 };
 var serialization_default = {

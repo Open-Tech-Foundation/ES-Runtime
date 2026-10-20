@@ -2971,8 +2971,25 @@ or aliases that expand to more than 1,000,000 nodes, is a `RangeError`.
 
 `YAML.build` writes block style with two-space indentation. A string is quoted
 when, written plain, it would read back as something else, including the YAML
-1.1 booleans `yes`, `no`, `on`, `off`, `y`, `n`. `NaN` and `±Infinity` are
-written `.nan` and `±.inf`.
+1.1 booleans `yes`, `no`, `on`, `off`, `y`, `n`. A number is written as
+`String(n)` (`1e+21`), a `BigInt` as its exact digits, `NaN` and `±Infinity` as
+`.nan` and `±.inf`, and `undefined` as `null`. Bytes, a function or a symbol is
+a `TypeError`.
+
+`TOML.parse` reads TOML 1.0 and keeps keys in document order. An integer inside
+JavaScript's safe range is a `number`; one past 2<sup>53</sup> is a `BigInt`,
+since TOML requires integers to be read losslessly. Datetimes are their RFC 3339
+strings, and `nan`/`inf` are `NaN`/`Infinity`. `TOML.build` needs an object at
+the root and keeps its key order (plain keys before tables, as TOML requires).
+An integral number in the safe range is written as an integer and any other
+number as a float (including `nan` and `±inf`), so it reads back as a `number`;
+a `BigInt` is an integer and must fit in 64 bits. `null`, `undefined` and bytes
+are a `TypeError`: TOML has no form for them.
+
+Every `build`/`encode` converts the values that carry no enumerable properties
+before writing: a `Date` becomes its ISO-8601 string, a `Map` an object (keys
+stringified), a `Set` an array, and a typed array or `ArrayBuffer` bytes (which
+only MessagePack and CBOR can write).
 
 ### CSV
 

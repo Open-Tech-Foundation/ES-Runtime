@@ -87,6 +87,20 @@ namespace) is unstable and may change between minor releases until the API freez
   a malformed record and ended a truncated document silently; both now error
   the stream, a character split across byte chunks decodes once, and a canceled
   stream releases its host state.
+- `runtime:serialization` `YAML.build` wrote 2^63 as `9223372036854775807`,
+  and a `BigInt`, bytes and functions as `null`. It now writes numbers as
+  `String(n)` and a `BigInt` exactly, and refuses bytes and functions with a
+  `TypeError`.
+- `runtime:serialization` `TOML.parse` and `TOML.build` sorted keys
+  alphabetically; both now keep document order. `TOML.parse` rounded integers
+  past 2^53, which TOML 1.0 forbids; they are now `BigInt`. `TOML.build` wrote
+  2^63 as `9223372036854775807` and refused `NaN`, `Infinity` and `BigInt`,
+  all of which TOML carries; it now writes them, and a large `number` as a
+  float so it reads back as a `number`.
+- `runtime:serialization` `YAML.build`, `TOML.build` and `XML.build` wrote a
+  `Date`, `Map` or `Set` as an empty object, map or table. They now convert
+  these as MessagePack and CBOR already did: a `Date` to its ISO-8601 string,
+  a `Map` to an object, a `Set` to an array.
 
 ## [0.41.0] - 2026-10-17
 

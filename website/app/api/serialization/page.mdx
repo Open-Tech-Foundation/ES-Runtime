@@ -94,7 +94,9 @@ Merge keys (`<<`) are applied, and a key written in the mapping wins over a merg
 
 `build` writes block style with two-space indentation. A string is quoted when
 it would read back as something else, including YAML 1.1's `yes`/`no`/`on`/`off`/`y`/`n`.
-`NaN` and `±Infinity` become `.nan` and `±.inf`.
+A number is written as `String(n)`, a `BigInt` exactly, `NaN` and `±Infinity` as
+`.nan` and `±.inf`, a `Date` as its ISO-8601 string, and `undefined` as `null`.
+Bytes, a function or a symbol is a `TypeError`.
 
 ## TOML
 
@@ -105,6 +107,17 @@ Synchronous parsing, building, and validation of TOML data.
 | `TOML.parse(toml)` | `(string) => object` | Parses a TOML string into a JavaScript object. | `TOML.parse("key = 'value'")` |
 | `TOML.build(obj)` | `(object) => string` | Serializes a JavaScript object into a TOML string. The root must be an object/table. | `TOML.build({ key: "value" })` |
 | `TOML.validate(toml, options?)` | `(string, object) => boolean \| object` | Validates a TOML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `TOML.validate("key = 'value'", { detailed: true })` |
+
+Keys keep their document order. An integer past 2<sup>53</sup> parses to a
+`BigInt` (TOML integers are lossless); datetimes parse to RFC 3339 strings.
+
+| `build` input | Written as |
+| --- | --- |
+| integral `number` in the safe range | integer |
+| any other `number`, `NaN`, `±Infinity` | float (`nan`, `inf`, `-inf`) |
+| `BigInt` within 64 bits | integer |
+| `Date` | ISO-8601 string |
+| `null`, `undefined`, bytes, a `BigInt` past 64 bits | throws `TypeError` |
 
 ## CSV
 

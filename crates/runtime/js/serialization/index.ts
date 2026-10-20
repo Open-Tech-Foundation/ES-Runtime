@@ -50,7 +50,7 @@ function validateWith(fn: (s: any) => true | string, input: any, options: Valida
 export const TOML = {
   validate: (toml: string, options?: ValidateOptions) => validateWith(toml_validate, toml, options),
   parse: (toml: string) => toml_parse(toml),
-  build: (obj: unknown) => toml_build(obj),
+  build: (obj: unknown) => toml_build(toEncodable(obj, "TOML")),
 };
 
 export interface CSVOptions {
@@ -172,14 +172,15 @@ export const CSV = {
 export const YAML = {
   validate: (yaml: string, options?: ValidateOptions) => validateWith(yaml_validate, yaml, options),
   parse: (yaml: string) => yaml_parse(yaml),
-  build: (obj: unknown) => yaml_build(obj),
+  build: (obj: unknown) => yaml_build(toEncodable(obj, "YAML")),
 };
 
 // Values that cross to the host as an *empty object* because they carry no own
-// enumerable properties — a `Map`, a `Set`, an `ArrayBuffer`. Encoding those as
-// `{}` is silent data loss, so the ones the binary formats can carry faithfully
-// are converted to a shape that survives, and the rest are refused by the
-// encoder.
+// enumerable properties — a `Map`, a `Set`, a `Date`, an `ArrayBuffer`. Encoding
+// those as `{}` is silent data loss, so every builder (the text formats too: a
+// `Date` used to become an empty TOML table) converts the ones it can carry to a
+// shape that survives, and the encoder refuses the rest — the text formats
+// refuse bytes.
 //
 // Only containers are walked, and only on the encode path.
 //
@@ -188,8 +189,8 @@ export const YAML = {
 // cycle is refused. Without the check a cycle bottomed out on the depth cap
 // instead, reporting "nests too deeply" for a document that is not deep at all.
 //
-// `format` names the caller in the messages, since MessagePack and CBOR share
-// this conversion.
+// `format` names the caller in the messages, since every builder shares this
+// conversion.
 function toEncodable(value: unknown, format: string, depth = 0, seen: object[] = []): unknown {
   if (depth > 256) throw new RangeError(`${format}: value nests too deeply to encode`);
   if (value === null || typeof value !== "object") return value;
@@ -368,7 +369,7 @@ class XMLDecoderStream extends TransformStream {
 export const XML = {
   validate: (xml: string, options?: ValidateOptions) => validateWith(xml_validate, xml, options),
   parse: (xml: string) => xml_parse(xml),
-  build: (obj: unknown) => xml_build(obj),
+  build: (obj: unknown) => xml_build(toEncodable(obj, "XML")),
   DecoderStream: XMLDecoderStream,
 };
 

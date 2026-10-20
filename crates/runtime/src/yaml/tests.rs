@@ -565,9 +565,12 @@ fn emit_numbers() {
         (1.0, "1"),
         (-0.0, "0"),
         (0.1, "0.1"),
-        (1e21, "1e21"),
+        (1e21, "1e+21"),
         (1.5e-7, "1.5e-7"),
         (9007199254740993.0, "9007199254740992"),
+        // Past i64::MAX an `i64` cast saturated to 9223372036854775807.
+        (2f64.powi(63), "9223372036854776000"),
+        (1e300, "1e+300"),
         (f64::INFINITY, ".inf"),
         (f64::NEG_INFINITY, "-.inf"),
     ] {
@@ -578,6 +581,20 @@ fn emit_numbers() {
         );
     }
     assert_eq!(emit(&n(f64::NAN)), ".nan\n");
+}
+
+#[test]
+fn build_writes_a_bigint_and_refuses_bytes() {
+    assert_eq!(
+        build(&obj(&[("n", Value::BigInt(12_345_678_901_234_567_890))])).unwrap(),
+        "'n': 12345678901234567890\n"
+    );
+    assert!(build(&obj(&[("b", Value::Bytes(vec![1]))])).is_err());
+    assert!(build(&Value::Array(vec![Value::Bytes(vec![])])).is_err());
+    assert_eq!(
+        build(&obj(&[("u", Value::Undefined)])).unwrap(),
+        "u: null\n"
+    );
 }
 
 #[test]

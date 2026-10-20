@@ -76,13 +76,21 @@ impl<'de> DeserializeSeed<'de> for ValueSeed {
     }
 }
 
-/// Whether an engine number should be written as an integer.
+/// `Number.MAX_SAFE_INTEGER`, the bound inside which an integer survives as a
+/// JavaScript `number`.
+const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+/// Whether an engine number is written as a TOML integer.
 ///
-/// Engine numbers are always `f64`, so `1` and `1.0` are the same value. Every
-/// builder here emits the integer form for an integral one, so a round trip does
-/// not turn `1` into `1.0` (YAML/TOML) or spend nine bytes on it (MessagePack).
+/// Engine numbers are always `f64`, so `1` and `1.0` are the same value, and an
+/// integral one is written without the `.0`. Only inside the safe range,
+/// though: `parse` reads an integer past it as a `BigInt` (TOML integers must be
+/// lossless), so writing a large `number` as an integer would bring it back as
+/// a different type. It is written as a float instead and reads back as the same
+/// `number`. (An `i64` cast here also saturated, writing 2^63 as
+/// `9223372036854775807`.)
 fn as_integer(n: f64) -> Option<i64> {
-    (n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64).then_some(n as i64)
+    (n.fract() == 0.0 && n.abs() <= MAX_SAFE_INTEGER as f64).then_some(n as i64)
 }
 
 /// Converts an engine `Value` into a `toml::Value`, or reports what TOML cannot
@@ -102,13 +110,16 @@ fn as_integer(n: f64) -> Option<i64> {
 fn value_to_toml(v: Value) -> Result<toml::Value, OpError> {
     match v {
         Value::Bool(b) => Ok(toml::Value::Boolean(b)),
-        Value::Number(n) => match as_integer(n) {
-            Some(i) => Ok(toml::Value::Integer(i)),
-            None if n.is_finite() => Ok(toml::Value::Float(n)),
-            None => Err(OpError::type_error(
-                "TOML has no representation for NaN or Infinity",
-            )),
-        },
+        // TOML floats include `nan`, `inf` and `-inf`, so every number fits.
+        Value::Number(n) => Ok(match as_integer(n) {
+            Some(i) => toml::Value::Integer(i),
+            None => toml::Value::Float(n),
+        }),
+        // A `BigInt` is a TOML integer while it fits the 64 bits TOML integers
+        // have.
+        Value::BigInt(i) => i64::try_from(i)
+            .map(toml::Value::Integer)
+            .map_err(|_| OpError::type_error("TOML integers are 64-bit; this BigInt does not fit")),
         Value::String(s) => Ok(toml::Value::String(s)),
         Value::Array(arr) => Ok(toml::Value::Array(
             arr.into_iter()
@@ -125,6 +136,12 @@ fn value_to_toml(v: Value) -> Result<toml::Value, OpError> {
         // TOML has no null, and nothing sensible to put in its place: dropping
         // the key would silently change the document.
         Value::Null => Err(OpError::type_error("TOML has no null")),
+        Value::Undefined => Err(OpError::type_error(
+            "TOML has no undefined (omit the key instead)",
+        )),
+        Value::Bytes(_) => Err(OpError::type_error(
+            "TOML has no form for bytes (encode them as a string first)",
+        )),
         _ => Err(OpError::type_error("value cannot be represented in TOML")),
     }
 }
@@ -136,7 +153,13 @@ fn value_to_toml(v: Value) -> Result<toml::Value, OpError> {
 fn toml_to_value(v: toml::Value) -> Value {
     match v {
         toml::Value::String(s) => Value::String(s),
-        toml::Value::Integer(i) => Value::Number(i as f64),
+        // TOML 1.0: an integer must be read losslessly or refused. Past
+        // 2^53 a `number` would round it, so it becomes a `BigInt` — the rule
+        // CBOR follows (D170).
+        toml::Value::Integer(i) if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&i) => {
+            Value::Number(i as f64)
+        }
+        toml::Value::Integer(i) => Value::BigInt(i128::from(i)),
         toml::Value::Float(f) => Value::Number(f),
         toml::Value::Boolean(b) => Value::Bool(b),
         toml::Value::Datetime(dt) => Value::String(dt.to_string()),
@@ -274,7 +297,9 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
     engine.register_op(OpDecl::sync("yaml_build", |mut args| {
         let val = args.drain(..).next().unwrap_or(Value::Null);
-        Ok(Value::String(crate::yaml::emit(&val)))
+        crate::yaml::build(&val)
+            .map(Value::String)
+            .map_err(|e| OpError::type_error(format!("Build failed: {e}")))
     }))?;
 
     engine.register_op(OpDecl::sync("toml_parse", |args| {
@@ -616,6 +641,58 @@ fn xml_class(kind: crate::xml::ErrorKind) -> ExceptionClass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn toml(src: &str) -> Value {
+        toml_to_value(toml::from_str::<toml::Value>(src).expect("parse"))
+    }
+
+    #[test]
+    fn toml_keeps_document_order() {
+        let Value::Object(entries) = toml("zeta = 1\nalpha = 2\nmid = 3") else {
+            panic!("expected a table")
+        };
+        let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["zeta", "alpha", "mid"]);
+    }
+
+    #[test]
+    fn toml_integers_past_the_safe_range_are_bigints() {
+        // TOML 1.0: integers are lossless or an error; an `f64` rounded these.
+        assert_eq!(
+            toml("a = 9007199254740993\nb = -9223372036854775808\nc = 9007199254740991"),
+            Value::Object(vec![
+                ("a".into(), Value::BigInt(9_007_199_254_740_993)),
+                ("b".into(), Value::BigInt(i128::from(i64::MIN))),
+                ("c".into(), Value::Number(9_007_199_254_740_991.0)),
+            ])
+        );
+    }
+
+    #[test]
+    fn toml_build_writes_every_number_without_saturating() {
+        let doc = |v: Value| {
+            let t = value_to_toml(Value::Object(vec![("n".into(), v)])).expect("convert");
+            toml::to_string(&t).expect("write")
+        };
+        assert_eq!(doc(Value::Number(42.0)), "n = 42\n");
+        assert_eq!(doc(Value::Number(f64::NAN)), "n = nan\n");
+        assert_eq!(doc(Value::Number(f64::NEG_INFINITY)), "n = -inf\n");
+        assert_eq!(
+            doc(Value::BigInt(i128::from(i64::MAX))),
+            "n = 9223372036854775807\n"
+        );
+        // A large `number` is a float, so it reads back as a `number`, not as
+        // the `BigInt` an integer that size would become — and not as
+        // i64::MAX, which the old cast saturated to.
+        let big = doc(Value::Number(2f64.powi(63)));
+        assert!(big.ends_with(".0\n"), "{big}");
+        assert_eq!(
+            toml(&big),
+            Value::Object(vec![("n".into(), Value::Number(2f64.powi(63)))])
+        );
+        assert!(value_to_toml(Value::BigInt(i128::from(i64::MAX) + 1)).is_err());
+        assert!(value_to_toml(Value::Bytes(vec![1])).is_err());
+    }
 
     #[test]
     fn toml_parses() {

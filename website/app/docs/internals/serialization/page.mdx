@@ -31,6 +31,20 @@ construct the runtime's values themselves and non-finite floats survive as real
 numbers. TOML also gains from this: its datetimes become RFC 3339 strings rather
 than leaking the `toml` crate's internal round-trip sentinel.
 
+**A TOML integer past 2<sup>53</sup> is a `BigInt`.** TOML 1.0 requires a
+reader to handle 64-bit integers losslessly or refuse them, and a `number`
+would round `9007199254740993` to `…992` without a word. CBOR made the same
+choice for the same reason (D170). The writer is the mirror image: a `number`
+past the safe range is written as a float, so it comes back a `number` rather
+than turning into a `BigInt` on the round trip.
+
+**Every builder converts the same awkward values first.** A `Date`, a `Map`
+and a `Set` reach the host as empty objects, since they carry no enumerable
+properties. MessagePack and CBOR already converted them; the text builders did
+not, so a `Date` became an empty TOML table and `{}` in YAML. All builders now
+share the conversion, and the text formats refuse bytes instead of writing them
+as `null`.
+
 **MessagePack cannot use the pivot at all for binary.** JSON has no byte string,
 so the `bin` family — the reason to reach for a binary format — has nowhere to
 go. Rather than give up the fast path for every document, the encoded form is

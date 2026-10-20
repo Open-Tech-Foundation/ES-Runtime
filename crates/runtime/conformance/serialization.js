@@ -580,6 +580,32 @@ test("XML DecoderStream errors on a malformed or truncated document", async () =
   await assertRejects(() => decode(["<r><i>a</i><i>b"]), "SyntaxError");
 });
 
+test("YAML build spells numbers and BigInts exactly and refuses what it would drop", async () => {
+  const { YAML } = await import("runtime:serialization");
+  assertEquals(YAML.build({ a: 2 ** 63, b: 1e21 }), "a: 9223372036854776000\nb: 1e+21\n");
+  assertEquals(YAML.build({ big: 12345678901234567890n }), "big: 12345678901234567890\n");
+  // These became `null` or `{}`.
+  assertEquals(YAML.build({ d: new Date(0) }), "d: 1970-01-01T00:00:00.000Z\n");
+  assertEquals(YAML.build({ m: new Map([["k", 1]]) }), "m:\n  k: 1\n");
+  assertThrows(() => YAML.build({ b: new Uint8Array([1]) }), "TypeError");
+  assertThrows(() => YAML.build({ f() {} }), "TypeError");
+});
+
+test("TOML keeps key order and integers exact, and carries nan, inf and BigInt", async () => {
+  const { TOML } = await import("runtime:serialization");
+  assertEquals(Object.keys(TOML.parse("zeta = 1\nalpha = 2")).join(","), "zeta,alpha");
+  assertEquals(TOML.build({ zeta: 1, alpha: 2 }), "zeta = 1\nalpha = 2\n");
+  // An integer past 2^53 is a BigInt rather than a rounded number.
+  assertEquals(TOML.parse("n = 9007199254740993").n, 9007199254740993n);
+  assertEquals(typeof TOML.parse("n = 42").n, "number");
+  assertEquals(TOML.build({ a: NaN, b: -Infinity, c: 5n }), "a = nan\nb = -inf\nc = 5\n");
+  // A large number stays a number on the way back, not i64::MAX.
+  assertEquals(TOML.parse(TOML.build({ n: 2 ** 63 })).n, 2 ** 63);
+  // A Date was written as an empty table.
+  assertEquals(TOML.build({ d: new Date(0) }), 'd = "1970-01-01T00:00:00.000Z"\n');
+  assertThrows(() => TOML.build({ b: new Uint8Array([1]) }), "TypeError");
+});
+
 test("CSV parses as arrays by default and objects with header", async () => {
   const { CSV } = await import("runtime:serialization");
 

@@ -57,7 +57,9 @@ tar.workspace = true
 zip.workspace = true
 quick-xml = "0.41.0"
 serde_json.workspace = true
-toml = "0.8"
+# `preserve_order`: a table keeps its keys in document order (an `IndexMap`)
+# instead of sorting them, so `parse` and `build` do not reorder a document.
+toml = { version = "0.8", features = ["preserve_order"] }
 rmp-serde = "1.3.0"
 serde = "1.0.228"
 serde-transcode = "1.1.1"
