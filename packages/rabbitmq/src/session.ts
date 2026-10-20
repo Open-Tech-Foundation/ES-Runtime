@@ -76,14 +76,23 @@ export interface RecoveringChannelOptions {
   timeout?: number;
 }
 
-/** Errors that will not get better by dialling again. */
+/**
+ * Errors that will not get better by dialling again: the broker refusing the
+ * handshake, and a socket `runtime:net` would not open for a reason of its own
+ * — a TLS failure such as an untrusted certificate (`ERR_TLS`), or a host the
+ * `--allow-net` grant does not name (`ERR_CAPABILITY_DENIED`).
+ */
 function permanent(error: unknown): boolean {
-  return (
-    error instanceof RabbitError &&
-    (error.code === RabbitErrorCode.Auth ||
-      error.code === RabbitErrorCode.Handshake ||
-      error.code === RabbitErrorCode.Unsupported)
-  );
+  if (!(error instanceof RabbitError)) return false;
+  if (
+    error.code === RabbitErrorCode.Auth ||
+    error.code === RabbitErrorCode.Handshake ||
+    error.code === RabbitErrorCode.Unsupported
+  ) {
+    return true;
+  }
+  const cause = (error as { cause?: { code?: unknown } }).cause?.code;
+  return cause === "ERR_TLS" || cause === "ERR_CAPABILITY_DENIED";
 }
 
 /** A promise with its settlers, re-armed whenever the thing it waits for goes. */

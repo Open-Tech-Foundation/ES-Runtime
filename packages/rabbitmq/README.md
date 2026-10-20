@@ -282,7 +282,7 @@ read on every re-consume, for a queue `setup` declares afresh.
 | --- | --- |
 | What recovers | A lost socket, missed heartbeats, an unreadable frame, a broker-forced `connection.close` (a node restart's `320`). A channel the broker closes is reopened on the same connection. |
 | What does not | The application's own `close()`. A consumer the broker cancels (its queue deleted) ends its subscription. |
-| The first connection | Retried for transient failures until `timeout`; refused credentials, a version mismatch or an unsupported URL reject at once. |
+| The first connection | Retried for transient failures until `timeout`; refused credentials, a version mismatch, an unsupported URL, a TLS failure (an untrusted certificate) or a host outside `--allow-net` reject at once. |
 | A publish while disconnected | Waits for the channel to return, within its `timeout`. |
 | A publish unconfirmed at the drop | Rejects — its fate is unknown — and is **not** sent again. |
 | Deliveries from before the drop | `ack`/`nack`/`reject` resolve without sending (their tags died with the channel), and ones buffered but not read are dropped; the broker redelivers both with `redelivered: true`. Processing is at-least-once. |

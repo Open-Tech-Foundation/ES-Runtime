@@ -33,7 +33,8 @@ package written entirely in JavaScript over `runtime:net`. See the root
   exponential backoff and jitter — and reopens each `RecoveringChannel`,
   re-selects confirms, re-runs its `setup` and re-consumes each
   `RecoveringSubscription` with its options. The first connection is retried for
-  transient failures; refused credentials fail at once. Publishes made while
+  transient failures; refused credentials, a TLS failure and a host outside
+  `--allow-net` fail at once. Publishes made while
   disconnected wait within their timeout; ones unconfirmed at the drop reject
   and are never republished; deliveries from before the drop settle without
   sending.

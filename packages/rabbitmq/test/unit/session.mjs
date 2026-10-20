@@ -2,6 +2,7 @@
 // subscriptions across a lost connection (DECISIONS D177), against scripted
 // brokers that can be dropped and refused at will.
 import { exit } from "runtime:process";
+import { RabbitError } from "../../dist/errors.js";
 import { openSession } from "../../dist/session.js";
 import { is, ok, report } from "./assert.mjs";
 import { Broker, handshake, loopback, sendContent } from "./broker.mjs";
@@ -170,6 +171,30 @@ const base = (c, extra = {}) => ({ dial: c.dial, heartbeat: 0, reconnect: FAST, 
   is(failure?.code, "ERR_RABBITMQ_AUTH", "an auth failure is not retried");
   is(c.state.dials, 1, "after a single dial");
   ok(Date.now() - started < 1000, "and without waiting out the timeout");
+}
+
+{
+  // Nor does a socket runtime:net refused for a reason of its own — an
+  // untrusted certificate, a host outside --allow-net.
+  for (const code of ["ERR_TLS", "ERR_CAPABILITY_DENIED"]) {
+    let dials = 0;
+    const dial = async () => {
+      dials++;
+      throw new RabbitError("the connection could not be opened", {
+        code: "ERR_RABBITMQ_CONNECTION",
+        cause: Object.assign(new TypeError("refused"), { code }),
+      });
+    };
+    const started = Date.now();
+    let failure = null;
+    await openSession("amqp://a/", { dial, heartbeat: 0, reconnect: FAST, timeout: 5000 }).catch(
+      (e) => {
+        failure = e;
+      },
+    );
+    ok(failure !== null && Date.now() - started < 1000, `${code} fails the session at once`);
+    is(dials, 1, `after one dial (${code})`);
+  }
 }
 
 {
