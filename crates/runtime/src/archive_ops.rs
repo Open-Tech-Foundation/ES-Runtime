@@ -385,7 +385,7 @@ pub(crate) fn install(
                 let staged = stage_extract(&fs, source, format, limits, &stage).await;
                 let result = match staged {
                     Ok(metas) => {
-                        let committed = async {
+                        async {
                             // Check the paths from the bytes actually staged,
                             // since a file source can be changed in place.
                             for path in extraction_paths(&directory, &metas) {
@@ -393,8 +393,7 @@ pub(crate) fn install(
                             }
                             commit_stage(&fs, &stage, &directory, &metas).await
                         }
-                        .await;
-                        committed
+                        .await
                     }
                     Err(error) => Err(error),
                 };
