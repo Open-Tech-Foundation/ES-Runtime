@@ -84,7 +84,10 @@ class CSVDecoderStream extends TransformStream<string | Uint8Array, unknown> {
   constructor(options: CSVOptions = {}) {
     // One decoder for the whole stream: `{ stream: true }` only buffers a
     // partial multi-byte sequence if the *same* decoder sees the next chunk.
-    const decoder = new TextDecoder();
+    // `ignoreBOM` passes a leading BOM through so the host's `bom` option
+    // decides, as it does for `parse`; by default TextDecoder would strip it
+    // and `bom: false` would mean nothing for byte input.
+    const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
     let streamId: number | null = null;
     super({
       start() {
@@ -100,6 +103,16 @@ class CSVDecoderStream extends TransformStream<string | Uint8Array, unknown> {
         const tail = decoder.decode();
         if (tail) for (const row of csv_stream_push(streamId, tail)) controller.enqueue(row);
         for (const row of csv_stream_close(streamId)) controller.enqueue(row);
+      },
+      // A canceled readable or aborted writable never reaches `flush`, so the
+      // host state (and any partial field it holds) is released here. Its rows
+      // and errors are unwanted: the consumer has already walked away.
+      cancel() {
+        try {
+          csv_stream_close(streamId);
+        } catch {
+          // an unterminated quote at cancel is not an error anyone can see
+        }
       },
     });
   }
@@ -121,6 +134,9 @@ class CSVEncoderStream extends TransformStream<unknown, string> {
         if (text) controller.enqueue(text);
       },
       flush() {
+        csv_encode_close(streamId);
+      },
+      cancel() {
         csv_encode_close(streamId);
       },
     });

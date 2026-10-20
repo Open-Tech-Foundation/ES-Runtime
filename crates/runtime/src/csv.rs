@@ -21,6 +21,9 @@ use std::fmt;
 
 /// Default cap on one field's length, in bytes.
 pub(crate) const DEFAULT_MAX_FIELD_BYTES: usize = 16 * 1024 * 1024;
+/// `Number.MAX_SAFE_INTEGER`: the largest integer every smaller one of which an
+/// `f64` holds exactly.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// Default cap on the number of fields in one record.
 pub(crate) const DEFAULT_MAX_COLUMNS: usize = 1 << 20;
 
@@ -207,6 +210,16 @@ impl Options {
         options.max_columns = get_usize(obj, "maxColumns", options.max_columns)?;
         options.bom = get_bool(obj, "bom", options.bom)?;
         if let Some(b) = get_byte(obj, "comment")? {
+            // A comment byte that is also the delimiter or the quote makes an
+            // ordinary record look like a comment: `build` writes `,x` (an empty
+            // first field) or `"a,b"` and `parse` drops the line. A line break
+            // would turn every blank line into a comment. Refused like the
+            // delimiter/quote clashes above.
+            if b == options.delimiter || b == options.quote || b == b'\n' || b == b'\r' {
+                return Err(Error::type_(
+                    "CSV comment cannot be the delimiter, the quote or a line break",
+                ));
+            }
             options.comment = Some(b);
         }
 
@@ -359,8 +372,13 @@ fn parse_records(input: &str, options: &Options) -> Result<Vec<Vec<String>>, Err
             continue;
         }
 
-        // A closing quote must be followed by a delimiter, a line break or EOF.
+        // A closing quote must be followed by a delimiter, a line break or EOF
+        // (or, under `trim`, blanks before one).
         if after_quote && b != options.delimiter && b != b'\n' && b != b'\r' {
+            if is_trimmed_blank(b, options) {
+                i += 1;
+                continue;
+            }
             return Err(Error::syntax(
                 "unexpected character after closing quote".to_string(),
             ));
@@ -385,6 +403,15 @@ fn parse_records(input: &str, options: &Options) -> Result<Vec<Vec<String>>, Err
             at_field_start = true;
             at_record_start = true;
             pending = false;
+            continue;
+        }
+
+        // Under `trim`, blanks before a field's first byte are skipped rather
+        // than collected, so `a, "b, c"` still opens a quoted field.
+        if at_field_start && is_trimmed_blank(b, options) {
+            at_record_start = false;
+            pending = true;
+            i += 1;
             continue;
         }
 
@@ -706,6 +733,9 @@ impl StreamDecoder {
         }
 
         if self.after_quote && b != delimiter && b != b'\n' && b != b'\r' {
+            if is_trimmed_blank(b, &self.options) {
+                return Ok(());
+            }
             return Err(Error::syntax(
                 "unexpected character after closing quote".to_string(),
             ));
@@ -714,6 +744,12 @@ impl StreamDecoder {
         if self.at_record_start && comment == Some(b) {
             self.in_comment = true;
             self.reset_record();
+            return Ok(());
+        }
+
+        if self.at_field_start && is_trimmed_blank(b, &self.options) {
+            self.at_record_start = false;
+            self.pending = true;
             return Ok(());
         }
 
@@ -767,6 +803,12 @@ impl StreamDecoder {
         self.pending = true;
         Ok(())
     }
+}
+
+/// Whether `b` is a blank `trim` skips around a field: a space or a tab, unless
+/// it is the delimiter (a TSV's tab separates fields; it is never trimmed away).
+fn is_trimmed_blank(b: u8, options: &Options) -> bool {
+    options.trim && (b == b' ' || b == b'\t') && b != options.delimiter && b != options.quote
 }
 
 fn check_duplicates(header: &[String]) -> Result<(), Error> {
@@ -857,6 +899,15 @@ fn parse_decimal(s: &str) -> Option<f64> {
     if i != bytes.len() {
         return None;
     }
+    // An integer literal past 2^53 - 1 does not survive as an `f64`:
+    // `12345678901234567890` would come back as `12345678901234567000`, an ID
+    // silently changed. It stays the string it was (Papa Parse's
+    // `dynamicTyping` draws the same line). A fraction or exponent was already
+    // a decimal approximation, so only the integer form is held back.
+    let integral = !s.bytes().any(|b| matches!(b, b'.' | b'e' | b'E'));
+    if integral && s.parse::<f64>().is_ok_and(|n| n.abs() > MAX_SAFE_INTEGER) {
+        return None;
+    }
     // A plain decimal that overflows `f64` (`1e500`) parses to `Infinity`, which
     // is a value the source did not spell out and which `build` then refuses —
     // so keep it the string it was, as `inf`/`nan` already are.
@@ -869,15 +920,51 @@ fn number_to_string(n: f64) -> Result<String, Error> {
             "CSV has no representation for NaN or Infinity",
         ));
     }
-    // Engine numbers are always `f64`; an integral one is written without a
-    // fractional part so `1` does not become `1.0` on the way out. The upper
-    // bound is strict because `i64::MAX as f64` rounds up to 2^63, which is one
-    // past `i64::MAX`: as `i64` it would saturate and write a different number.
-    if n.fract() == 0.0 && n >= i64::MIN as f64 && n < i64::MAX as f64 {
-        Ok((n as i64).to_string())
-    } else {
-        Ok(n.to_string())
+    Ok(js_number_string(n))
+}
+
+/// `String(n)` for a finite `n` (ECMA-262 Number::toString, radix 10), so a
+/// field reads the way the same number prints in JavaScript: `1` not `1.0`,
+/// `1e+300` not three hundred zeros, `1e-7` not `0.0000001`.
+fn js_number_string(n: f64) -> String {
+    if n == 0.0 {
+        // Covers -0, which `String` also spells "0".
+        return "0".to_string();
     }
+    // `{:e}` yields the shortest round-trip digits as `d[.ddd]e[-]x`; Number::
+    // toString lays out those same digits by the decimal exponent.
+    let sci = format!("{:e}", n.abs());
+    let (mantissa, exp) = sci.split_once('e').expect("`{:e}` always has an exponent");
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    // The decimal point sits after `point` digits: value = 0.digits × 10^point.
+    let point = exp.parse::<i32>().expect("`{:e}` exponent is an integer") + 1;
+    let mut out = String::new();
+    if n < 0.0 {
+        out.push('-');
+    }
+    if k <= point && point <= 21 {
+        out.push_str(&digits);
+        out.extend(std::iter::repeat_n('0', (point - k) as usize));
+    } else if 0 < point && point <= 21 {
+        out.push_str(&digits[..point as usize]);
+        out.push('.');
+        out.push_str(&digits[point as usize..]);
+    } else if -6 < point && point <= 0 {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-point) as usize));
+        out.push_str(&digits);
+    } else {
+        out.push_str(&digits[..1]);
+        if k > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        out.push('e');
+        out.push(if point - 1 < 0 { '-' } else { '+' });
+        out.push_str(&(point - 1).abs().to_string());
+    }
+    out
 }
 
 fn cell_to_string(value: &Value) -> Result<String, Error> {
@@ -887,6 +974,9 @@ fn cell_to_string(value: &Value) -> Result<String, Error> {
         Value::Null | Value::Undefined => Ok(String::new()),
         Value::Bool(b) => Ok(b.to_string()),
         Value::Number(n) => number_to_string(*n),
+        // A `BigInt` has an exact decimal spelling, which is what `String`
+        // writes; it is how an integer past 2^53 reaches `build` intact.
+        Value::BigInt(n) => Ok(n.to_string()),
         Value::String(s) => Ok(s.clone()),
         _ => Err(Error::type_("CSV cannot represent this value as a field")),
     }
@@ -1517,21 +1607,17 @@ mod tests {
     }
 
     #[test]
-    fn number_to_string_does_not_saturate_at_i64_bounds() {
-        // `i64::MAX as f64` rounds up to 2^63; written as `i64` it would clamp
-        // to i64::MAX and change the number by one. Past the bound it is written
-        // as a float instead, whose shortest round-trip form reads back to 2^63.
-        let two_pow_63 = 2f64.powi(63);
-        let written = number_to_string(two_pow_63).unwrap();
-        assert_ne!(written, "9223372036854775807");
-        assert_eq!(written.parse::<f64>().unwrap(), two_pow_63);
-        // i64::MIN is exactly -2^63, in range, so it is written exactly.
-        assert_eq!(
-            number_to_string(i64::MIN as f64).unwrap(),
-            "-9223372036854775808"
+    fn number_to_string_reads_back_exactly_at_i64_bounds() {
+        // Past ±2^63 an `i64` cast would saturate and change the number; the
+        // JavaScript spelling has no such bound and parses back to the same f64.
+        for n in [2f64.powi(63), i64::MIN as f64, 42.0, -0.5] {
+            let written = number_to_string(n).unwrap();
+            assert_eq!(written.parse::<f64>().unwrap(), n, "{written}");
+        }
+        assert_ne!(
+            number_to_string(2f64.powi(63)).unwrap(),
+            "9223372036854775807"
         );
-        assert_eq!(number_to_string(42.0).unwrap(), "42");
-        assert_eq!(number_to_string(-0.5).unwrap(), "-0.5");
     }
 
     #[test]
@@ -1655,6 +1741,115 @@ mod tests {
             out.push_str(&encoder.push(row).unwrap());
         }
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn comment_cannot_clash_with_delimiter_quote_or_line_break() {
+        // Each of these would make `build` write a record `parse` reads as a
+        // comment and drops.
+        for (delimiter, comment) in [
+            (",", ","),
+            (",", "\""),
+            (",", "\n"),
+            (",", "\r"),
+            ("#", "#"),
+        ] {
+            let err = Options::from_value(Some(&obj(&[
+                ("delimiter", Value::String(delimiter.into())),
+                ("comment", Value::String(comment.into())),
+            ])))
+            .expect_err("must fail");
+            assert_eq!(err.kind, ErrorKind::Type, "comment {comment:?}");
+        }
+    }
+
+    #[test]
+    fn trim_skips_blanks_around_a_quoted_field() {
+        let options = opts(obj(&[("trim", Value::Bool(true))]));
+        let input = "a, \"b, c\" ,\t\"d\"\t\n";
+        let expected = Value::Array(vec![strings(&["a", "b, c", "d"])]);
+        assert_eq!(parse(input, &options).unwrap(), expected);
+        for split in 0..=input.len() {
+            let got =
+                Value::Array(decode_chunks(&[&input[..split], &input[split..]], &options).unwrap());
+            assert_eq!(got, expected, "split at {split}");
+        }
+        // Without `trim` the blank is data, and a quote after it is a literal.
+        assert_eq!(
+            parse_default("a, \"b\"\n"),
+            Value::Array(vec![strings(&["a", " \"b\""])])
+        );
+        // A stray non-blank after the closing quote is still an error.
+        assert_eq!(
+            parse("\"a\" x\n", &options).unwrap_err().kind,
+            ErrorKind::Syntax
+        );
+    }
+
+    #[test]
+    fn trim_never_eats_a_tab_delimiter() {
+        let options = opts(obj(&[
+            ("trim", Value::Bool(true)),
+            ("delimiter", Value::String("\t".into())),
+        ]));
+        assert_eq!(
+            parse("\t \"x\" \ty\n", &options).unwrap(),
+            Value::Array(vec![strings(&["", "x", "y"])])
+        );
+    }
+
+    #[test]
+    fn cast_keeps_an_integer_past_the_safe_range_as_a_string() {
+        let options = opts(obj(&[("cast", Value::Bool(true))]));
+        assert_eq!(
+            parse(
+                "12345678901234567890,9007199254740992,9007199254740991,-9007199254740993,1e20\n",
+                &options
+            )
+            .unwrap(),
+            Value::Array(vec![Value::Array(vec![
+                Value::String("12345678901234567890".into()),
+                Value::String("9007199254740992".into()),
+                Value::Number(9_007_199_254_740_991.0),
+                Value::String("-9007199254740993".into()),
+                // An exponent form was never exact digits; it still casts.
+                Value::Number(1e20),
+            ])])
+        );
+    }
+
+    #[test]
+    fn build_writes_numbers_as_javascript_prints_them() {
+        for (n, text) in [
+            (1.0, "1"),
+            (-0.0, "0"),
+            (0.1, "0.1"),
+            (-1.5, "-1.5"),
+            (123456.789, "123456.789"),
+            (1e21, "1e+21"),
+            (1e20, "100000000000000000000"),
+            (1e300, "1e+300"),
+            (1.5e-7, "1.5e-7"),
+            (1e-6, "0.000001"),
+            (0.000123, "0.000123"),
+            (2f64.powi(64), "18446744073709552000"),
+            (f64::MAX, "1.7976931348623157e+308"),
+            (5e-324, "5e-324"),
+        ] {
+            assert_eq!(js_number_string(n), text, "{n:e}");
+        }
+    }
+
+    #[test]
+    fn build_writes_a_bigint_exactly() {
+        let out = emit(
+            &Value::Array(vec![Value::Array(vec![Value::BigInt(
+                12_345_678_901_234_567_890,
+            )])]),
+            &Options::default(),
+        )
+        .unwrap();
+        assert_eq!(out, "12345678901234567890\n");
     }
 
     #[test]

@@ -626,6 +626,69 @@ test("CSV EncoderStream writes rows like build", async () => {
   await assertRejects(() => encode([["a"], { x: 1 }]), "TypeError");
 });
 
+test("CSV options keep a round trip lossless", async () => {
+  const { CSV } = await import("runtime:serialization");
+
+  // A comment byte equal to the delimiter or quote makes an ordinary record
+  // read as a comment, so the combination is refused.
+  assertThrows(() => CSV.build([["", "x"]], { delimiter: "#", comment: "#" }), "TypeError");
+  assertThrows(() => CSV.parse('"a"\n', { comment: '"' }), "TypeError");
+
+  // `trim` skips blanks around a quoted field instead of splitting it.
+  assertEquals(
+    JSON.stringify(CSV.parse('a, "b, c" \n', { trim: true })),
+    JSON.stringify([["a", "b, c"]]),
+  );
+
+  // `cast` keeps an integer it cannot hold exactly as the string it was.
+  assertEquals(
+    JSON.stringify(CSV.parse("12345678901234567890,42\n", { cast: true })),
+    JSON.stringify([["12345678901234567890", 42]]),
+  );
+
+  // `build` spells numbers as `String(n)` does, and a BigInt exactly.
+  assertEquals(CSV.build([[1e300, 1e-7, 0.1, -0]]), "1e+300,1e-7,0.1,0\n");
+  assertEquals(CSV.build([[12345678901234567890n]]), "12345678901234567890\n");
+});
+
+test("CSV DecoderStream honours bom for byte input and releases on cancel", async () => {
+  const { CSV } = await import("runtime:serialization");
+
+  const decode = async (chunks, options) => {
+    const dec = new CSV.DecoderStream(options);
+    const writer = dec.writable.getWriter();
+    const reader = dec.readable.getReader();
+    const out = [];
+    const drain = (async () => {
+      for (;;) { const { done, value } = await reader.read(); if (done) break; out.push(value); }
+    })();
+    for (const chunk of chunks) await writer.write(chunk);
+    await writer.close();
+    await drain;
+    return out;
+  };
+
+  // The host's `bom` option decides for bytes exactly as it does for `parse`;
+  // TextDecoder no longer strips the BOM first.
+  const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x2c, 0x62, 0x0a]);
+  assertEquals(
+    JSON.stringify(await decode([bytes], { bom: false })),
+    JSON.stringify(CSV.parse("\ufeffa,b\n", { bom: false })),
+  );
+  assertEquals(
+    JSON.stringify(await decode([bytes.slice(0, 2), bytes.slice(2)])),
+    JSON.stringify([["a", "b"]]),
+  );
+
+  // Canceling mid-field (an open quote) releases the stream quietly rather
+  // than surfacing the unterminated quote nobody is reading any more.
+  const dec = new CSV.DecoderStream();
+  const writer = dec.writable.getWriter();
+  writer.write('"open').catch(() => {});
+  await dec.readable.cancel("done");
+  await writer.closed.catch(() => {});
+});
+
 test("runtime:serialization has a default export like every other runtime: module", async () => {
   // It was the only one of the nine without one, so
   // `import serialization from "runtime:serialization"` was a SyntaxError for

@@ -97,19 +97,23 @@ declare module "runtime:serialization" {
      * data.
      */
     header?: boolean | string[];
-    /** Trim surrounding whitespace from unquoted fields. Default false. */
+    /**
+     * Trim surrounding whitespace from unquoted fields, and skip spaces and tabs
+     * around a quoted one. A tab delimiter is never trimmed. Default false.
+     */
     trim?: boolean;
     /** Drop records that are a single empty field. Default false. */
     skipEmptyLines?: boolean;
     /**
-     * A single byte; lines beginning with it are skipped whole. `build` quotes a
+     * A single byte, other than the delimiter, the quote or a line break; lines
+     * beginning with it are skipped whole. `build` quotes a
      * field that starts with it, so the row is not lost on a round trip.
      */
     comment?: string;
     /**
      * Convert plain decimal fields to numbers and `true`/`false` to booleans.
      * Default false — every field is a string unless asked. `inf`, `nan`, hex,
-     * and a decimal that overflows `f64` stay strings.
+     * a decimal that overflows `f64`, and an integer past 2^53 - 1 stay strings.
      */
     cast?: boolean;
     /**

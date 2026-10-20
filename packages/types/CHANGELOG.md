@@ -19,6 +19,12 @@ itself.
   options types, `ArchiveFilter`, `ExtractResult`, the entry metadata shape,
   and `Archive`'s async metadata iterator (DECISIONS D174).
 
+### Changed
+
+- `CSVOptions` docs: `trim` also skips blanks around a quoted field, `comment`
+  cannot be the delimiter, the quote or a line break, and `cast` keeps an
+  integer past 2^53 - 1 as a string.
+
 ## [0.17.0] - 2026-10-17
 
 ### Added

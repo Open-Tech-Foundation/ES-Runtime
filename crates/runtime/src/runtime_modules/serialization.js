@@ -2609,7 +2609,7 @@ const TOML = {
 };
 var CSVDecoderStream = class extends TransformStream {
 	constructor(options = {}) {
-		const decoder = new TextDecoder();
+		const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 		let streamId = null;
 		super({
 			start() {
@@ -2623,6 +2623,11 @@ var CSVDecoderStream = class extends TransformStream {
 				const tail = decoder.decode();
 				if (tail) for (const row of csv_stream_push(streamId, tail)) controller.enqueue(row);
 				for (const row of csv_stream_close(streamId)) controller.enqueue(row);
+			},
+			cancel() {
+				try {
+					csv_stream_close(streamId);
+				} catch {}
 			}
 		});
 	}
@@ -2640,6 +2645,9 @@ var CSVEncoderStream = class extends TransformStream {
 				if (text) controller.enqueue(text);
 			},
 			flush() {
+				csv_encode_close(streamId);
+			},
+			cancel() {
 				csv_encode_close(streamId);
 			}
 		});

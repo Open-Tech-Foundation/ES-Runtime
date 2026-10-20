@@ -245,11 +245,16 @@ memory.
 **A round trip is preserved or refused, never silently lossy.** `comment` drops a
 whole line, so `build` quotes any field that starts with the comment byte —
 otherwise writing then reading would lose the row. `cast` accepts only a plain
-decimal `f64` holds exactly, so `1e500` stays the string it was rather than
-becoming `Infinity`, which `build` would then refuse. And an option set whose
-`delimiter` or `quote` is a line break, or where the two are equal, is refused up
-front: such input has no unambiguous reading, so accepting it would emit rows the
-writer could not rebuild.
+decimal `f64` can hold: `1e500` stays the string it was rather than becoming
+`Infinity`, which `build` would then refuse, and an integer past 2<sup>53</sup> − 1
+— an ID, an account number — stays a string rather than coming back with its
+last digits changed (Papa Parse's `dynamicTyping` draws the same line). `build`
+writes a number as `String(n)` spells it and a `BigInt` exactly, so the text is
+what JavaScript would print. And an option set whose `delimiter` or `quote` is a
+line break, where the two are equal, or whose `comment` is either of them or a
+line break, is refused up front: such input has no unambiguous reading — a
+record starting with an empty field would read as a comment — so accepting it
+would emit rows the writer could not rebuild.
 
 **Streaming is a hybrid: the scan in Rust, the stream in JavaScript.** A CSV field
 cannot be isolated by splitting on `\n` the way JSONL can — a quoted field may
@@ -259,8 +264,10 @@ prefixes. So the byte scanner stays in Rust (`csv.rs` `StreamDecoder`) and is
 made *resumable*: it defers the few decisions that need the next byte and keeps
 the current field and record, so a chunk is consumed once and any split of an
 input yields the rows one `parse` would. `CSV.DecoderStream` is then a thin
-`TransformStream` that decodes bytes with a single, streaming `TextDecoder` and
-forwards each completed row. The encoder is the mirror image: the first row fixes
+`TransformStream` that decodes bytes with a single, streaming `TextDecoder` (with
+`ignoreBOM`, so the `bom` option decides for bytes as it does for text) and
+forwards each completed row; a canceled or aborted stream releases the host
+state that `flush` would otherwise have freed. The encoder is the mirror image: the first row fixes
 the shape and the header (`csv.rs` `StreamEncoder`), and both reuse exactly the
 writer `build` uses, so a streamed document and a built one cannot drift. The
 decoder's `flush` returns the last record *and* reports an unterminated quote —

@@ -107,10 +107,10 @@ every field is a **string** unless `cast` is set.
 | `quote` | `"\""` | Quote character (a single byte). |
 | `escape` | doubling | Escape inside a quoted field; the default is RFC 4180 `""`. |
 | `header` | `false` | `false` → arrays; `true` → keys objects by the first row (consumed); a `string[]` → names every row and treats the first row as data. |
-| `trim` | `false` | Trim whitespace from **unquoted** fields. |
+| `trim` | `false` | Trim whitespace from **unquoted** fields, and skip spaces and tabs around a quoted one (`a, "b, c"`). A tab delimiter is never trimmed. |
 | `skipEmptyLines` | `false` | Drop records that are a single empty field. |
-| `comment` | — | A single byte; lines beginning with it are skipped whole. `build` quotes a field that starts with it so the row survives a round trip. |
-| `cast` | `false` | Convert plain decimal fields to numbers and `true`/`false` to booleans. `inf`, `nan`, hex, and an overflowing decimal stay strings. |
+| `comment` | — | A single byte, other than the delimiter, the quote or a line break; lines beginning with it are skipped whole. `build` quotes a field that starts with it so the row survives a round trip. |
+| `cast` | `false` | Convert plain decimal fields to numbers and `true`/`false` to booleans. `inf`, `nan`, hex, an overflowing decimal, and an integer past 2<sup>53</sup> − 1 stay strings. |
 | `relaxColumnCount` | `false` | Allow rows whose field count differs from the header. |
 | `maxFieldBytes` | 16 MiB | Per-field byte cap. |
 | `maxColumns` | 1,048,576 | Per-record field cap. |
@@ -121,9 +121,10 @@ A quoted field keeps delimiters and newlines, and `""` reads back as one `"`. Wi
 `header` set, every row must match the header's field count unless
 `relaxColumnCount` is on. A duplicate column name (inferred or explicit), a
 stray character after a closing quote, and a `delimiter` or `quote` that is a
-line break (or a `delimiter` equal to the `quote`) are errors. `build` writes an
-absent (`null`/`undefined`) field empty and quotes a field that starts with the
-`comment` byte. Unlike XML/YAML/TOML, `CSV.validate` forwards the options,
+line break (or a `delimiter` equal to the `quote`, or a `comment` equal to
+either) are errors. `build` writes an absent (`null`/`undefined`) field empty,
+a number as `String(n)` spells it and a `BigInt` exactly, and quotes a field
+that starts with the `comment` byte. Unlike XML/YAML/TOML, `CSV.validate` forwards the options,
 because a ragged row is valid without a header and invalid with one.
 
 ## MessagePack

@@ -2969,10 +2969,10 @@ objects when asked. Every field is a **string**; nothing is type-cast unless
 | `quote` | `"\""` | Quote character (a single byte). |
 | `escape` | doubling | Escape inside a quoted field; the default is RFC 4180 `""`. |
 | `header` | `false` | `false` → arrays; `true` → keys objects by the first row (consumed); a `string[]` → names every row and treats the first row as data. |
-| `trim` | `false` | Trim whitespace from **unquoted** fields. |
+| `trim` | `false` | Trim whitespace from **unquoted** fields, and skip spaces and tabs around a quoted one (`a, "b, c"`). A tab delimiter is never trimmed. |
 | `skipEmptyLines` | `false` | Drop records that are a single empty field. |
-| `comment` | — | A single byte; lines beginning with it are skipped whole. `build` quotes a field that starts with it so the row is not lost on a round trip. |
-| `cast` | `false` | Convert plain decimal fields to numbers and `true`/`false` to booleans. `inf`, `nan`, hex, and a decimal that overflows `f64` stay strings. |
+| `comment` | — | A single byte, other than the delimiter, the quote or a line break; lines beginning with it are skipped whole. `build` quotes a field that starts with it so the row is not lost on a round trip. |
+| `cast` | `false` | Convert plain decimal fields to numbers and `true`/`false` to booleans. `inf`, `nan`, hex, a decimal that overflows `f64`, and an integer past 2<sup>53</sup> − 1 stay strings. |
 | `relaxColumnCount` | `false` | Allow rows whose field count differs from the header. |
 | `maxFieldBytes` | 16 MiB | Per-field byte cap. |
 | `maxColumns` | 1,048,576 | Per-record field cap. |
@@ -2992,12 +2992,15 @@ XML/YAML/TOML, whose validity does not depend on any).
 `build` quotes a field only when it contains the delimiter, the quote, a line
 break, or the leading `comment` byte, and writes a trailing newline. An array of
 objects infers its header from the first object's keys; an array of arrays writes
-fields verbatim; an absent (`null` or `undefined`) field is written empty. `NaN`
+fields verbatim; an absent (`null` or `undefined`) field is written empty. A
+number is written as `String(n)` spells it (`1e+300`, `1e-7`) and a `BigInt`
+exactly. `NaN`
 and `±Infinity` have no CSV representation and are a `TypeError`, as is a nested
 array or object used as a field value.
 
-An option set whose `delimiter` or `quote` is a line break, or whose `delimiter`
-equals its `quote`, cannot be read back unambiguously and is a `TypeError`.
+An option set whose `delimiter` or `quote` is a line break, whose `delimiter`
+equals its `quote`, or whose `comment` is the delimiter, the quote or a line
+break, cannot be read back unambiguously and is a `TypeError`.
 
 `CSV.DecoderStream` and `CSV.EncoderStream` are Web `TransformStream`s for input
 too large to hold at once. The decoder takes text or byte chunks and emits rows

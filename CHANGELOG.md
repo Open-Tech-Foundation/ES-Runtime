@@ -45,6 +45,18 @@ namespace) is unstable and may change between minor releases until the API freez
   destination. ZIP entry counts are checked from the end record before the
   central directory is parsed.
 
+### Fixed
+
+- `runtime:serialization` CSV no longer loses or changes data on a round trip.
+  A `comment` byte equal to the delimiter, the quote or a line break is now a
+  `TypeError` (`build` wrote rows `parse` then dropped as comments). `trim`
+  skips spaces and tabs around a quoted field, so `a, "b, c"` reads as
+  `["a", "b, c"]` instead of splitting the quoted field. `cast` keeps an integer
+  past 2<sup>53</sup> − 1 as a string instead of rounding it. `build` writes
+  numbers as `String(n)` does (`1e+300`, not 301 digits) and accepts `BigInt`.
+  `CSV.DecoderStream` honours `bom: false` for byte chunks, and both CSV streams
+  release their host state when canceled or aborted.
+
 ## [0.41.0] - 2026-10-17
 
 ### Added
