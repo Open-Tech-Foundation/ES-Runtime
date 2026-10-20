@@ -153,6 +153,11 @@ TLS is negotiated **after `INFO`**, because that is how NATS does it — the ser
 opens in the clear, then the handshake begins. Use `tls://`, or `tls: true` with
 `ca` and `servername` for a private authority.
 
+```js
+client.onDisconnect = (error) => console.warn("lost NATS:", error.message);
+client.onReconnect = () => console.info("back");
+```
+
 ## Handle failures
 
 Every failure is a `NatsError` carrying a `code`, and the server's own `-ERR`
@@ -172,6 +177,15 @@ try {
 Bytes that are not NATS are fatal and latched — a stream at an unknown boundary
 cannot be resynchronised. A lost socket, by contrast, is recovered by
 reconnecting.
+
+Some problems do not end the client and arrive on `onError` instead: a
+permissions violation (the refused subscription ends, the rest carry on), or a
+subscription that falls so far behind its messages are dropped
+(`ERR_NATS_SLOW_CONSUMER`; see `subscription.dropped`).
+
+```js
+client.onError = (error) => console.warn(error.code, error.message);
+```
 
 ## Test locally
 

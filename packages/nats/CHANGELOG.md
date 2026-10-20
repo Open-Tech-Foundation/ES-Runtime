@@ -12,6 +12,9 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Added
 
+- `onDisconnect`, `onReconnect` and `onError` on the client; the `max` and
+  `pendingLimits` subscribe options and `Subscription.dropped`;
+  `ERR_NATS_SLOW_CONSUMER`; reconnect jitter (DECISIONS D179).
 - The `@opentf/esrun-nats` package, a client speaking core NATS, in JavaScript
   over `runtime:net` (DECISIONS D173). No native code, and no capability beyond
   the `Net` grant `runtime:net`'s `connect` already needs.
@@ -55,6 +58,21 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ### Fixed
 
+- Every server `-ERR` ended the client for good. Recoverable ones (an invalid
+  subject, a permissions violation) are now reported through `onError` and the
+  client carries on; the rest (*Stale Connection*, *Slow Consumer*…) are
+  recovered by reconnecting, as the protocol's table says.
+- A `tls://` client could reconnect in the clear to a server learned from
+  `connect_urls`. Discovered servers now inherit TLS, and a server that requires
+  TLS is upgraded to instead of refused.
+- `close()` aborted queued writes, so publishes that were not awaited were never
+  sent (0 of 2 000 against a real server). It now flushes, for up to 5 s.
+- Each subscription buffered without bound; it now has the Go client's pending
+  limits.
+- Receiving a large message in many chunks copied the whole buffer per chunk.
+- An IPv6 entry in `connect_urls` kept its brackets and could not be dialled.
+- An auto-unsubscribe limit was lost on a reconnect.
+- Inbox tokens came from `Math.random`; they come from the CSPRNG.
 - A `flush` that times out no longer lets its late `PONG` settle a later flush.
   A `PONG` carries no identifier and the server answers in order, so a timed-out
   caller now keeps its place in the queue — the `PONG` it is owed is consumed by

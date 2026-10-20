@@ -119,9 +119,11 @@ export function subjectMatches(filter: string, subject: string): boolean {
  * without coordination; the prefix is the convention every client uses.
  */
 export function createInbox(prefix: string = "_INBOX"): string {
+  // From the CSPRNG: an inbox is where a reply lands, and a guessable one lets
+  // another client answer in the responder's place. 62 symbols × 22 is about
+  // 131 bits; the slight modulo bias of 256 % 62 costs well under one of them.
+  const bytes = crypto.getRandomValues(new Uint8Array(22));
   let token = "";
-  for (let i = 0; i < 22; i++) {
-    token += INBOX_ALPHABET[Math.floor(Math.random() * INBOX_ALPHABET.length)];
-  }
+  for (const byte of bytes) token += INBOX_ALPHABET[byte % INBOX_ALPHABET.length];
   return `${prefix}.${token}`;
 }

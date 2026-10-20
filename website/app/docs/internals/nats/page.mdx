@@ -75,10 +75,15 @@ whether it takes headers, and any other servers it knows. The client answers
 TLS sits **between `INFO` and `CONNECT`**, which is where NATS puts it. The
 server opens in the clear and its `INFO` says whether TLS is required; the client
 then upgrades the socket in place (`runtime:net`'s `secureTransport: "starttls"`
-and `Socket.startTls`), and only afterwards writes `CONNECT`. So an upgrade the
-client was asked for but the transport cannot perform is a handshake failure, and
-a server that requires TLS refuses a connection that did not ask for it — `CONNECT`
-is never written in the clear.
+and `Socket.startTls`), and only afterwards writes `CONNECT`. An upgrade the transport cannot perform is
+a handshake failure. A server that requires TLS the client did not ask for is
+upgraded to, as nats.js does — the more secure of the two outcomes — so `CONNECT`
+is never written in the clear to a server that wants TLS.
+
+TLS is also never *lost* on a reconnect. `connect_urls` entries are "an IP and
+port" (the protocol's words), with nothing about TLS, so a client that asked for
+TLS dials every discovered server with it; treating them as plain let a `tls://`
+client reconnect to a peer in the clear.
 
 ## The protocol's own chatter
 
@@ -116,6 +121,33 @@ when it reconnects: a `close` stops the reconnect loop, so the gate has to be
 failed as well, or that write would wait forever for a reconnect that is no longer
 coming.
 
+## The server's -ERR, as its table says
+
+Core NATS has one refusal, `-ERR`, and the protocol documents which are
+"Recoverable": *Invalid Subject* and the two *Permissions Violation*s leave the
+connection open, and every other one is followed by the server closing the
+socket. So the first kind is reported through `onError` — a refused subscription
+ending with the server's words, and unsubscribed so a reconnect does not ask
+again — and the client carries on. The second kind is a lost connection, and is
+recovered like one: a *Stale Connection* is the server's own keep-alive verdict,
+and the right answer to it is a fresh connection, not the end of the client.
+
+## Close flushes; a slow consumer is bounded
+
+Core NATS has no goodbye, so whatever is still queued when `close()` is called is
+everything the server will ever get. nats.js flushes before it closes, and code
+written against it publishes without awaiting and then closes; tearing the
+socket down first delivered none of it (0 of 2 000, measured against a real
+server). `close()` gives the queue up to 5 s, then aborts a write that is stuck
+behind a server that stopped reading.
+
+The client reads the socket eagerly, so the server never sees a slow reader and
+cannot apply its own slow-consumer limit; without one here, memory was the only
+bound. The Go, Java and C clients cap each subscription's pending messages at
+524 288 or 64 MiB and drop past that, and so does this one, counting the drops
+and reporting the run once. Core NATS is at-most-once; dropping is within its
+contract, and an out-of-memory crash is not.
+
 ## Reconnection
 
 A lost socket redials the next server in the pool — the URL's server, any named in
@@ -124,7 +156,9 @@ handshake, and re-registers every subscription under the **original id**, so the
 `MSG`s that follow route exactly as before and the client layer never learned the
 connection moved. The number of attempts and the wait between them are the
 reconnect policy's, expressed in settings; `reconnect: false` turns recovery off
-and makes the loss fatal.
+and makes the loss fatal. Each wait gets a random spread (nats.js's defaults:
+100 ms, 1 s with TLS) so a restarted cluster's clients do not return in
+lockstep, and an auto-unsubscribe limit is re-sent with what is left of it.
 
 ## Request/reply, without a reply queue
 

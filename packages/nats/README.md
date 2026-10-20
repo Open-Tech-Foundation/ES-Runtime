@@ -67,7 +67,7 @@ const client = await NatsClient.connect("nats://app:secret@nats.internal:4222", 
 | `ca`, `servername` | Trust anchors, as PEM, for a private authority; and the name the certificate must carry when it is not the host. |
 | `pingInterval` | Milliseconds of silence before a `PING`. Defaults 120 000. |
 | `timeout` | Milliseconds the handshake, and the default for a request, may take. Defaults 30 000. |
-| `reconnect` | How to redial after a loss: `false` to disable, or `{ maxAttempts, wait }`. Defaults on (10 attempts, 2 s apart). |
+| `reconnect` | How to redial after a loss: `false` to disable, or `{ maxAttempts, wait, jitter }`. Defaults on (10 attempts, 2 s apart, plus up to 100 ms of jitter — 1 s with TLS). |
 
 `parseNatsUrl(url)` returns the same host and credentials as a plain object,
 without dialling: `hostname`, `port`, `tls`, and optionally `username`/`password`/
@@ -77,12 +77,14 @@ without dialling: `hostname`, `port`, `tls`, and optionally `username`/`password
 | --- | --- |
 | `connected` | Whether the connection is up (and not mid-reconnect). |
 | `closed`, `failure` | Whether it is over, and the error that ended it (`null` while it stands). |
+| `onDisconnect`, `onReconnect` | The connection was lost; it is back, with every subscription re-sent. |
+| `onError` | News that did not end the client: a recoverable `-ERR` (an invalid subject, a permissions violation) or a slow consumer dropping messages. |
 | `serverVersion`, `maxPayload` | What `INFO` advertised: the server's version and its payload ceiling. |
 | `publish(subject, payload, options?)` | See below. |
 | `subscribe(subject, options?)` | Returns a `Subscription` synchronously. |
 | `request(subject, payload, options?)` | One `await` for a reply. |
 | `flush(timeout?)` | A `PING`, resolved by its `PONG` — a round trip to the server. Defaults 30 000 ms; rejects `ERR_NATS_TIMEOUT`. |
-| `close()` | Closes the connection, ending every subscription. |
+| `close()` | Sends what is still queued (up to 5 s), then closes the connection, ending every subscription. |
 | `connection` | The `Connection` underneath, for a caller that wants the protocol itself. |
 | `over(transport, options?)` | Connects over an already-open transport — the seam a test stands on. |
 
@@ -117,11 +119,14 @@ await client.publish("orders.eu.created", JSON.stringify(order));
 | Subscribe option | |
 | --- | --- |
 | `queue` | Join a queue group: one member of the group gets each message. |
+| `max` | End after this many messages; the server is told (`UNSUB <sid> <max>`), and a reconnect re-sends what is left of it. |
+| `pendingLimits` | `{ messages, bytes }` that may wait unread — the Go client's slow-consumer limits, 524 288 and 64 MiB by default. Past them messages are dropped, counted in `dropped`, and reported once through `onError` (`ERR_NATS_SLOW_CONSUMER`). |
 
 | Subscription member | |
 | --- | --- |
 | `subject`, `queue`, `sid` | What it was made with, and the id the server names. |
 | `closed` | Whether it has ended. |
+| `dropped` | Messages dropped past `pendingLimits`. |
 | `next()`, `nextMessage(timeout?)` | The next message; `nextMessage` rejects with `ERR_NATS_TIMEOUT` if none arrives. |
 | `unsubscribe()` | Unsubscribes at the server and ends the iterable. |
 
@@ -166,7 +171,9 @@ server opens in the clear, sends `INFO`, and only then does the client begin the
 handshake, which is why `tls://` and `tls: true` are not "TLS from the first
 byte". A certificate the client cannot verify fails the connection;
 `runtime:net`'s own verifier decides, and there is no option here to switch it
-off.
+off. A client that asked for TLS uses it with every server, including those
+learned from `connect_urls` (which carry no TLS information); a server that
+requires TLS the client did not ask for is upgraded to.
 
 ## The lower layers
 
@@ -212,11 +219,18 @@ try {
 | `ERR_NATS_SERVER` | The server sent a `-ERR`, or refused a command. |
 | `ERR_NATS_NO_RESPONDERS` | A request found no responder, and the server said so. |
 | `ERR_NATS_PAYLOAD` | A message is larger than the server's advertised maximum. |
+| `ERR_NATS_SLOW_CONSUMER` | A subscription's pending limits were full and messages were dropped (via `onError`). |
 | `ERR_NATS_UNSUPPORTED` | Something this client does not implement was asked for. |
 
 Bytes that are not NATS are fatal and latched: the stream is at an unknown
 boundary, so the connection does not try to resynchronise it. A lost *socket*, by
 contrast, is recovered by reconnecting, as above.
+
+A server `-ERR` is handled as the protocol's table says. *Invalid Subject* and a
+*Permissions Violation* leave the connection open: they reach `onError`, and a
+refused subscription ends with the server's words on `serverError`. Every other
+`-ERR` (*Stale Connection*, *Slow Consumer*, *Maximum Connections Exceeded*…) is
+followed by the server closing the socket, and is recovered by reconnecting.
 
 ## Testing locally
 

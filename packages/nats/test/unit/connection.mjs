@@ -65,8 +65,20 @@ async function connect(settings = {}, broker = fakeBroker(), info = {}) {
 }
 
 {
+  // A server that requires TLS the client did not ask for: upgraded, as
+  // nats.js does, rather than refused — the more secure of the two outcomes.
   const broker = fakeBroker();
-  const pending = Connection.over(broker.transport, { reconnect: false });
+  const { options, connection } = await connect({}, broker, { tls_required: true });
+  is(broker.tlsUpgrades, 1, "a server that requires TLS is upgraded to it");
+  is(options.tls_required, true, "and CONNECT goes out over TLS, saying so");
+  await connection.close();
+}
+
+{
+  // A transport that cannot be upgraded still fails, with the reason.
+  const broker = fakeBroker();
+  const transport = { ...broker.transport, startTls: undefined };
+  const pending = Connection.over(transport, { reconnect: false });
   broker.sendInfo({ tls_required: true });
   let error = null;
   try {
@@ -74,8 +86,7 @@ async function connect(settings = {}, broker = fakeBroker(), info = {}) {
   } catch (e) {
     error = e;
   }
-  is(error?.code, NatsErrorCode.Handshake, "a server that requires TLS refuses a clear connection");
-  is(broker.tlsUpgrades, 0, "and no upgrade is attempted");
+  is(error?.code, NatsErrorCode.Handshake, "a transport that cannot upgrade is refused");
 }
 
 // -- publish ----------------------------------------------------------------

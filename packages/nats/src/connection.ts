@@ -55,6 +55,15 @@ export const DEFAULT_TIMEOUT: number = 30_000;
 export const DEFAULT_MAX_RECONNECT_ATTEMPTS: number = 10;
 /** How long to wait between redials, in ms. */
 export const DEFAULT_RECONNECT_WAIT: number = 2_000;
+/**
+ * The random spread added to each wait, in ms — nats.js's defaults: 100 for a
+ * plain connection, 1 000 for TLS — so a restarted cluster's clients do not all
+ * come back in the same instant.
+ */
+export const DEFAULT_RECONNECT_JITTER: number = 100;
+export const DEFAULT_RECONNECT_JITTER_TLS: number = 1_000;
+/** How long `close()` waits for queued writes to reach the socket, in ms. */
+const CLOSE_FLUSH_GRACE = 5_000;
 
 /** A reached server, parsed out of a URL or an `INFO`. */
 export interface NatsAddress {
@@ -68,6 +77,7 @@ export interface ReconnectSettings {
   enabled: boolean;
   maxAttempts: number;
   wait: number;
+  jitter: number;
 }
 
 /** How to identify the client, what session to ask for, and how to recover it. */
@@ -101,7 +111,7 @@ export interface ConnectionSettings {
   /** How long the handshake may take, in ms. Defaults {@link DEFAULT_TIMEOUT}. */
   timeout?: number;
   /** How to redial after a loss. `false` disables it. Defaults on. */
-  reconnect?: boolean | { maxAttempts?: number; wait?: number };
+  reconnect?: boolean | { maxAttempts?: number; wait?: number; jitter?: number };
 }
 
 /**
@@ -116,6 +126,11 @@ export interface ConnectionHandlers {
   onDisconnect(error: NatsError): void;
   onReconnect(): void;
   onClosed(error: NatsError | null): void;
+  /**
+   * A `-ERR` the server sends without closing the connection — an invalid
+   * subject, or a permissions violation for a subscription or a publish.
+   */
+  onServerError(error: NatsError): void;
 }
 
 /** A message as it arrived, with its header block decoded. */
@@ -223,11 +238,21 @@ export function parseNatsServer(entry: NatsAddress | string, tls = false): NatsA
   if (typeof entry !== "string") return entry;
   if (entry.includes("://")) {
     const parsed = parseNatsUrl(entry);
-    return { hostname: parsed.hostname, port: parsed.port, tls: parsed.tls };
+    return { hostname: parsed.hostname, port: parsed.port, tls: parsed.tls || tls };
   }
-  const colon = entry.lastIndexOf(":");
-  const hostname = colon < 0 ? entry : entry.slice(0, colon);
-  const port = colon < 0 ? DEFAULT_NATS_PORT : Number(entry.slice(colon + 1));
+  let hostname: string;
+  let port: number;
+  if (entry.startsWith("[")) {
+    // An IPv6 literal, as `connect_urls` spells one: `[::1]:4222`.
+    const close = entry.indexOf("]");
+    hostname = close < 0 ? "" : entry.slice(1, close);
+    const after = close < 0 ? "" : entry.slice(close + 1);
+    port = after.startsWith(":") ? Number(after.slice(1)) : DEFAULT_NATS_PORT;
+  } else {
+    const colon = entry.lastIndexOf(":");
+    hostname = colon < 0 ? entry : entry.slice(0, colon);
+    port = colon < 0 ? DEFAULT_NATS_PORT : Number(entry.slice(colon + 1));
+  }
   if (hostname.length === 0 || !Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new NatsError(`not a server address: ${JSON.stringify(entry)}`, {
       code: NatsErrorCode.Protocol,
@@ -236,11 +261,13 @@ export function parseNatsServer(entry: NatsAddress | string, tls = false): NatsA
   return { hostname, port, tls };
 }
 
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
+/**
+ * The `-ERR`s after which the server keeps the connection open — the
+ * protocol's "Recoverable: Yes" rows. Every other `-ERR` is followed by the
+ * server closing the socket.
+ */
+function recoverableError(message: string): boolean {
+  return /^(invalid subject|permissions violation for (subscription|publish) to)/i.test(message);
 }
 
 function asNatsError(e: unknown, code: NatsErrorCode = NatsErrorCode.Connection): NatsError {
@@ -267,6 +294,9 @@ interface PingWaiter {
 interface Registered {
   subject: string;
   queue?: string;
+  /** An auto-unsubscribe limit, re-applied with what is left of it after a reconnect. */
+  max?: number;
+  received: number;
 }
 
 export class Connection {
@@ -277,8 +307,16 @@ export class Connection {
 
   #transport: Transport | null = null;
   #currentTls = false;
+  // Whether the application asked for TLS. A server discovered from
+  // `connect_urls` carries only a host and port (the protocol says so), so
+  // without this a reconnect to one would quietly go out in the clear.
+  #wantTls = false;
   #info: ServerInfo | null = null;
+  // Received bytes not yet consumed: `#buffer[#head, #tail)`, grown by doubling
+  // and compacted in place, so a large message costs its size, not its square.
   #buffer: Uint8Array = new Uint8Array(0);
+  #head = 0;
+  #tail = 0;
   #pending: ServerCommand[] = [];
 
   #connected = false;
@@ -309,6 +347,7 @@ export class Connection {
     this.#handlers = handlers;
     this.#dial = dial;
     this.#servers = servers;
+    this.#wantTls = settings.tls === true || servers.some((server) => server.tls);
   }
 
   /** What the server said in its `INFO`. */
@@ -362,6 +401,7 @@ export class Connection {
       onDisconnect: handlers.onDisconnect ?? (() => {}),
       onReconnect: handlers.onReconnect ?? (() => {}),
       onClosed: handlers.onClosed ?? (() => {}),
+      onServerError: handlers.onServerError ?? (() => {}),
     };
   }
 
@@ -434,8 +474,9 @@ export class Connection {
 
   async #attach(transport: Transport, address?: NatsAddress): Promise<void> {
     this.#transport = transport;
-    this.#currentTls = address?.tls ?? this.#settings.tls === true;
-    this.#buffer = new Uint8Array(0);
+    this.#currentTls = address?.tls === true || this.#wantTls;
+    this.#head = 0;
+    this.#tail = 0;
     this.#pending = [];
     this.#info = null;
     try {
@@ -482,9 +523,17 @@ export class Connection {
       }
       await transport.startTls();
     } else if (first.info.tlsRequired) {
-      throw new NatsError("the server requires TLS but the connection was opened without it", {
-        code: NatsErrorCode.Handshake,
-      });
+      // The server insists on TLS the application did not ask for. nats.js
+      // upgrades in that case, and so does this: it is the more secure of the
+      // two outcomes, and failing would only make the caller retry with TLS.
+      const transport = this.#transport;
+      if (transport === null || transport.startTls === undefined) {
+        throw new NatsError("the server requires TLS, and this transport cannot be upgraded", {
+          code: NatsErrorCode.Handshake,
+        });
+      }
+      await transport.startTls();
+      this.#currentTls = true;
     }
 
     await this.#writeRaw(encodeConnect(this.#connectOptions()));
@@ -535,7 +584,7 @@ export class Connection {
   #addServer(entry: string, tls: boolean): void {
     let address: NatsAddress;
     try {
-      address = parseNatsServer(entry, tls);
+      address = parseNatsServer(entry, tls || this.#wantTls);
     } catch {
       return;
     }
@@ -572,10 +621,38 @@ export class Connection {
       const chunk = await this.#readWithDeadline(remaining);
       if (chunk === null) return null;
       this.#lastRead = Date.now();
-      const { commands, rest } = drain(concat(this.#buffer, chunk));
-      this.#buffer = rest;
-      this.#pending.push(...commands);
+      this.#append(chunk);
+      const view = this.#buffer.subarray(this.#head, this.#tail);
+      const { commands, rest } = drain(view);
+      this.#head += view.length - rest.length;
+      if (this.#head === this.#tail) this.#head = this.#tail = 0;
+      for (const command of commands) {
+        // Copied out: the buffer is reused, and a message must outlive it.
+        if (command.kind === "msg") {
+          command.payload = command.payload.slice();
+          if (command.headers !== null) command.headers = command.headers.slice();
+        }
+        this.#pending.push(command);
+      }
     }
+  }
+
+  #append(chunk: Uint8Array): void {
+    if (chunk.length === 0) return;
+    if (this.#head > 0) {
+      this.#buffer.copyWithin(0, this.#head, this.#tail);
+      this.#tail -= this.#head;
+      this.#head = 0;
+    }
+    if (this.#tail + chunk.length > this.#buffer.length) {
+      let size = Math.max(1024, this.#buffer.length * 2);
+      while (size < this.#tail + chunk.length) size *= 2;
+      const grown = new Uint8Array(size);
+      grown.set(this.#buffer.subarray(0, this.#tail));
+      this.#buffer = grown;
+    }
+    this.#buffer.set(chunk, this.#tail);
+    this.#tail += chunk.length;
   }
 
   /**
@@ -636,9 +713,15 @@ export class Connection {
         this.#info = command.info;
         this.#absorbServers(command.info);
         break;
-      case "msg":
+      case "msg": {
+        const registered = this.#subscriptions.get(command.sid);
+        if (registered?.max !== undefined) {
+          registered.received++;
+          if (registered.received >= registered.max) this.#subscriptions.delete(command.sid);
+        }
         this.#handlers.onMessage(this.#toIncoming(command));
         break;
+      }
       case "ping":
         void this.#write(encodePong()).catch(() => {});
         break;
@@ -647,9 +730,17 @@ export class Connection {
         break;
       case "ok":
         break;
-      case "err":
-        this.#fail(this.#serverError(command.message, NatsErrorCode.Server));
+      case "err": {
+        const error = this.#serverError(command.message, NatsErrorCode.Server);
+        // The protocol table decides: an invalid subject or a permissions
+        // violation leaves the connection open, and is the caller's news, not
+        // a reason to die. Every other `-ERR` (Stale Connection, Slow
+        // Consumer, Maximum Connections Exceeded…) is followed by the server
+        // closing the socket — a lost connection, recovered like any other.
+        if (recoverableError(command.message)) this.#handlers.onServerError(error);
+        else this.#lost(error);
         break;
+      }
     }
   }
 
@@ -775,16 +866,29 @@ export class Connection {
     if (queue !== undefined) validateQueue(queue);
     const sid = this.#nextSid;
     this.#nextSid = this.#nextSid >= 2_147_483_647 ? 1 : this.#nextSid + 1;
-    this.#subscriptions.set(sid, queue === undefined ? { subject } : { subject, queue });
+    this.#subscriptions.set(
+      sid,
+      queue === undefined ? { subject, received: 0 } : { subject, queue, received: 0 },
+    );
     if (this.#connected) {
       void this.#write(encodeSub(subject, queue, sid)).catch(() => {});
     }
     return sid;
   }
 
-  /** Removes a subscription and sends `UNSUB`. */
+  /**
+   * Removes a subscription and sends `UNSUB` — or, with `max`, lets it run for
+   * that many messages more. A limited one stays registered, counting, so a
+   * reconnect re-sends it with what is left of the limit rather than dropping
+   * it (or resubscribing it without one).
+   */
   unsubscribe(sid: number, max?: number): void {
-    this.#subscriptions.delete(sid);
+    const registered = this.#subscriptions.get(sid);
+    if (max !== undefined && max > 0 && registered !== undefined) {
+      registered.max = registered.received + max;
+    } else {
+      this.#subscriptions.delete(sid);
+    }
     if (this.#connected) {
       void this.#write(encodeUnsub(sid, max)).catch(() => {});
     }
@@ -869,6 +973,12 @@ export class Connection {
     // the gate is rejected here — otherwise that write would hang forever behind
     // a reconnect that is never coming.
     this.#rejectReady(reason);
+    // Core NATS has no goodbye, so what is queued is all that will be sent: a
+    // publish the caller did not await is still owed to the server. nats.js
+    // flushes before it closes, and code ported from it relies on that. Wait
+    // for the queue — briefly, since a socket the server stopped reading would
+    // never drain — then tear down whatever is left.
+    if (this.#pendingWrites > 0) await settleWithin(this.#writeChain, CLOSE_FLUSH_GRACE);
     if (this.#pendingWrites > 0) {
       this.#closed = true;
       await this.#transport?.close({ abort: true }).catch(() => {});
@@ -921,18 +1031,21 @@ export class Connection {
 
   #reconnectSettings(): ReconnectSettings {
     const value = this.#settings.reconnect;
-    if (value === false) return { enabled: false, maxAttempts: 0, wait: 0 };
+    const jitter = this.#wantTls ? DEFAULT_RECONNECT_JITTER_TLS : DEFAULT_RECONNECT_JITTER;
+    if (value === false) return { enabled: false, maxAttempts: 0, wait: 0, jitter: 0 };
     if (value === true || value === undefined) {
       return {
         enabled: true,
         maxAttempts: DEFAULT_MAX_RECONNECT_ATTEMPTS,
         wait: DEFAULT_RECONNECT_WAIT,
+        jitter,
       };
     }
     return {
       enabled: true,
       maxAttempts: value.maxAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS,
       wait: value.wait ?? DEFAULT_RECONNECT_WAIT,
+      jitter: value.jitter ?? jitter,
     };
   }
 
@@ -955,11 +1068,12 @@ export class Connection {
   }
 
   async #reconnect(initial: NatsError): Promise<void> {
-    const { maxAttempts, wait } = this.#reconnectSettings();
+    const { maxAttempts, wait, jitter } = this.#reconnectSettings();
     let last = initial;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (this.#closing || this.#closed) return;
-      if (wait > 0) await delay(wait);
+      const pause = wait + Math.random() * jitter;
+      if (pause > 0) await delay(pause);
       if (this.#closing || this.#closed) return;
       const address = this.#nextServer();
       try {
@@ -997,6 +1111,10 @@ export class Connection {
   #resubscribe(): void {
     for (const [sid, subscription] of this.#subscriptions) {
       void this.#write(encodeSub(subscription.subject, subscription.queue, sid)).catch(() => {});
+      if (subscription.max !== undefined) {
+        const left = subscription.max - subscription.received;
+        void this.#write(encodeUnsub(sid, left)).catch(() => {});
+      }
     }
   }
 
@@ -1052,6 +1170,24 @@ export class Connection {
       );
     }
   }
+}
+
+/** Settles when `promise` does or `ms` passes, whichever is first. */
+function settleWithin(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    unrefTimer(timer as unknown as number);
+    void promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
 }
 
 /** A dialler: something that turns an address into a {@link Transport}. */

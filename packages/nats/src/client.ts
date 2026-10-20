@@ -102,7 +102,24 @@ export interface PublishOptions {
 export interface SubscribeOptions {
   /** Join a queue group: one member of the group gets each message. */
   queue?: string;
+  /**
+   * End the subscription after this many messages — the server is told too
+   * (`UNSUB <sid> <max>`), and a reconnect re-sends what is left of it.
+   */
+  max?: number;
+  /**
+   * How much may wait unread before further messages are dropped, counted in
+   * {@link Subscription.dropped} and reported once through `onError` — the
+   * Go, Java and C clients' slow-consumer limits, with their defaults
+   * (524 288 messages, 64 MiB). Core NATS is at-most-once; holding
+   * everything instead would make memory the only bound.
+   */
+  pendingLimits?: { messages?: number; bytes?: number };
 }
+
+/** The slow-consumer limits the Go, Java and C clients default to. */
+export const DEFAULT_PENDING_MESSAGES: number = 512 * 1024;
+export const DEFAULT_PENDING_BYTES: number = 64 * 1024 * 1024;
 
 /** What a request is sent with. */
 export interface RequestOptions {
@@ -129,9 +146,30 @@ export class Subscription implements AsyncIterable<NatsMessage> {
   #sid: number;
   #onRelease: () => void;
   #queue: NatsMessage[] = [];
+  #queuedBytes = 0;
   #waiters: Array<(result: IteratorResult<NatsMessage>) => void> = [];
   #closed = false;
   #error: NatsError | null = null;
+  #dropped = 0;
+  #slow = false;
+  #received = 0;
+  #max = Number.POSITIVE_INFINITY;
+  #maxMessages = DEFAULT_PENDING_MESSAGES;
+  #maxBytes = DEFAULT_PENDING_BYTES;
+  #onSlow: (error: NatsError) => void = () => {};
+
+  /** @internal */
+  configure(options: SubscribeOptions, onSlow: (error: NatsError) => void): void {
+    if (options.max !== undefined) this.#max = options.max;
+    this.#maxMessages = options.pendingLimits?.messages ?? DEFAULT_PENDING_MESSAGES;
+    this.#maxBytes = options.pendingLimits?.bytes ?? DEFAULT_PENDING_BYTES;
+    this.#onSlow = onSlow;
+  }
+
+  /** Messages dropped because the pending limits were full. */
+  get dropped(): number {
+    return this.#dropped;
+  }
 
   /** @internal */
   constructor(subject: string, queue: string | null, sid: number, onRelease: () => void) {
@@ -154,9 +192,52 @@ export class Subscription implements AsyncIterable<NatsMessage> {
   /** @internal */
   offer(message: NatsMessage): void {
     if (this.#closed) return;
+    this.#received++;
     const waiter = this.#waiters.shift();
-    if (waiter !== undefined) waiter({ value: message, done: false });
-    else this.#queue.push(message);
+    if (waiter !== undefined) {
+      waiter({ value: message, done: false });
+    } else if (
+      this.#queue.length >= this.#maxMessages ||
+      this.#queuedBytes + message.payload.length > this.#maxBytes
+    ) {
+      // A slow consumer: the newest is dropped, as the Go client drops it,
+      // and the first drop of a run is reported.
+      this.#dropped++;
+      if (!this.#slow) {
+        this.#slow = true;
+        this.#onSlow(
+          new NatsError(
+            `the subscription to ${this.subject} is a slow consumer: messages are being dropped`,
+            { code: NatsErrorCode.SlowConsumer },
+          ),
+        );
+      }
+    } else {
+      this.#queue.push(message);
+      this.#queuedBytes += message.payload.length;
+    }
+    // The server stops after `max` too; ending here lets the iterator finish
+    // once the last of them has been read.
+    if (this.#received >= this.#max) this.#release(false);
+  }
+
+  #take(): NatsMessage | undefined {
+    const message = this.#queue.shift();
+    if (message === undefined) return undefined;
+    this.#queuedBytes -= message.payload.length;
+    if (this.#queue.length === 0) this.#slow = false;
+    return message;
+  }
+
+  // Ends the subscription without discarding what is queued: a `max` that was
+  // reached still delivers the messages it counted.
+  #release(unsubscribe: boolean): void {
+    if (this.#closed) return;
+    if (unsubscribe) this.#onRelease();
+    this.#closed = true;
+    if (this.#queue.length === 0) {
+      for (const waiter of this.#waiters.splice(0)) waiter({ value: undefined, done: true });
+    }
   }
 
   /** @internal */
@@ -169,7 +250,7 @@ export class Subscription implements AsyncIterable<NatsMessage> {
 
   /** The next message, or `done` once the subscription ends. */
   next(): Promise<IteratorResult<NatsMessage>> {
-    const message = this.#queue.shift();
+    const message = this.#take();
     if (message !== undefined) return Promise.resolve({ value: message, done: false });
     if (this.#closed) return Promise.resolve({ value: undefined, done: true });
     return new Promise((resolve) => this.#waiters.push(resolve));
@@ -177,7 +258,7 @@ export class Subscription implements AsyncIterable<NatsMessage> {
 
   /** The next message, rejecting if none arrives within `timeout` ms. */
   nextMessage(timeout: number = DEFAULT_REQUEST_TIMEOUT): Promise<NatsMessage> {
-    const message = this.#queue.shift();
+    const message = this.#take();
     if (message !== undefined) return Promise.resolve(message);
     if (this.#closed) return Promise.reject(this.#closedError());
     return new Promise<NatsMessage>((resolve, reject) => {
@@ -230,6 +311,18 @@ export class NatsClient {
   #subscriptions = new Map<number, Subscription>();
   #closed = false;
 
+  /** The connection was lost; it is being re-established. */
+  onDisconnect: ((error: NatsError) => void) | null = null;
+  /** The connection is back, and every subscription re-sent. */
+  onReconnect: (() => void) | null = null;
+  /**
+   * Something the application should hear about that did not end the client:
+   * a `-ERR` the server sent without closing the connection (an invalid
+   * subject, a permissions violation), or a subscription dropping messages as
+   * a slow consumer.
+   */
+  onError: ((error: NatsError) => void) | null = null;
+
   private constructor(connection: Connection, options: NatsClientOptions) {
     this.#connection = connection;
     this.#options = options;
@@ -264,8 +357,12 @@ export class NatsClient {
         const client = holder.client;
         if (client !== null) client.#onMessage(message);
       },
-      onDisconnect: () => {},
-      onReconnect: () => {},
+      onDisconnect: (error) => holder.client?.onDisconnect?.(error),
+      onReconnect: () => holder.client?.onReconnect?.(),
+      onServerError: (error) => {
+        const client = holder.client;
+        if (client !== null) client.#onServerError(error);
+      },
       onClosed: (error) => {
         const client = holder.client;
         if (client !== null) client.#onClosed(error);
@@ -321,7 +418,9 @@ export class NatsClient {
       this.#connection.unsubscribe(sid);
       this.#subscriptions.delete(sid);
     });
+    subscription.configure(options, (error) => this.onError?.(error));
     this.#subscriptions.set(sid, subscription);
+    if (options.max !== undefined) this.#connection.unsubscribe(sid, options.max);
     return subscription;
   }
 
@@ -377,6 +476,25 @@ export class NatsClient {
     const subscription = this.#subscriptions.get(message.sid);
     if (subscription === undefined) return;
     subscription.offer(new NatsMessage(message));
+    if (subscription.closed) this.#subscriptions.delete(message.sid);
+  }
+
+  // A recoverable `-ERR`. A refused subscription names its subject, and the
+  // subscriptions to it end with the reason — and are unsubscribed, so a
+  // reconnect does not re-send what the server will refuse again.
+  #onServerError(error: NatsError): void {
+    const refused = /^permissions violation for subscription to "?([^"\s]+)"?/i.exec(
+      error.serverError ?? "",
+    );
+    if (refused !== null) {
+      for (const subscription of [...this.#subscriptions.values()]) {
+        if (subscription.subject !== refused[1]) continue;
+        this.#connection.unsubscribe(subscription.sid);
+        this.#subscriptions.delete(subscription.sid);
+        subscription.finish(error);
+      }
+    }
+    this.onError?.(error);
   }
 
   #onClosed(error: NatsError | null): void {

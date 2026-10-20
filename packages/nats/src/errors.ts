@@ -31,6 +31,8 @@ export const NatsErrorCode = {
   Server: "ERR_NATS_SERVER",
   /** A request found no responder, and the server said so. */
   NoResponders: "ERR_NATS_NO_RESPONDERS",
+  /** A subscription's pending limits were full, so messages were dropped. */
+  SlowConsumer: "ERR_NATS_SLOW_CONSUMER",
   /** A message is larger than the server's advertised maximum payload. */
   Payload: "ERR_NATS_PAYLOAD",
   /** Something this client does not implement was asked for. */

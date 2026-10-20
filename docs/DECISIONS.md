@@ -3691,3 +3691,22 @@ The specification settles what recovery may do. On a reconnect with Clean Start 
 - **A separate session class, as RabbitMQ has (D177).** AMQP clients do not recover by default, so recovery there is an opt-in surface; MQTT's ecosystem does, and the session is already a protocol concept the client carries.
 
 **Consequences:** `MqttClient` survives a lost connection; `connected`, `onDisconnect`, `onReconnect` and `onError` describe it. `closed` and `failure` mean the client ended for good. `Subscription` gains `dropped`. The low-level `Connection` no longer acknowledges inbound QoS 1/2 itself; it hands each message to its handler with the acknowledgement to send.
+
+### D179 — `@opentf/esrun-nats` follows the protocol's `-ERR` table, never downgrades TLS, flushes on close and bounds a slow consumer · *Accepted (2026-10-21)* · *amends D173*
+
+**Context:** A review found four places where the client made up a rule the protocol or the reference clients already settle. Every `-ERR` ended the client for good, although the protocol table marks *Invalid Subject* and both *Permissions Violation*s as "Recoverable: Yes" (the server keeps the connection) and the rest as followed by the server closing the socket — after which a reconnect is the expected answer (*Stale Connection*, *Slow Consumer*, *Maximum Connections Exceeded*). Servers learned from `connect_urls` were added as plain ones, but the protocol says those entries are "an IP and port" with no TLS information, so a `tls://` client could reconnect in the clear. `close()` tore down a socket with writes still queued, so `nc.publish(…); await nc.close()` — ordinary nats.js code, since its `close()` flushes — delivered nothing (0 of 2 000 against a real server). And each subscription buffered without bound, while the Go, Java and C clients cap pending messages (512 Ki messages, 64 MiB) and drop past them.
+
+**Decision (maintainer, 2026-10-21):**
+
+- **The `-ERR` table decides.** A recoverable `-ERR` is reported through `onError` and the client carries on; a refused subscription ends that subscription, with the server's words, and is unsubscribed so a reconnect does not re-send it. Any other `-ERR` is a lost connection and is reconnected by the usual policy. An `-ERR` during the handshake still fails it.
+- **TLS is never downgraded.** A client that asked for TLS (`tls://`, or `tls: true`) dials every server — named, or discovered from `connect_urls` — with TLS. A server whose `INFO` requires TLS the client did not ask for is upgraded to, as nats.js does, instead of refused.
+- **`close()` flushes.** Queued writes are given up to 5 s to reach the socket before it closes; past that a stuck write is aborted so `close()` cannot hang.
+- **A slow consumer is bounded,** with the Go client's defaults (`pendingLimits`: 524 288 messages, 64 MiB): past them the newest message is dropped, counted in `dropped`, and the run is reported once through `onError` as `ERR_NATS_SLOW_CONSUMER`. Core NATS is at-most-once, so this is within its contract; unbounded buffering is not.
+- **Reconnect waits get jitter,** nats.js's defaults: up to 100 ms, 1 s with TLS. `onDisconnect`, `onReconnect` and `onError` are exposed on the client, an auto-unsubscribe `max` (now a subscribe option) survives a reconnect with what is left of it, and inbox tokens come from the CSPRNG.
+
+**Rejected:**
+- **Treating every `-ERR` as fatal (the old rule).** A permissions violation on one subject took the whole client down, and a *Stale Connection* — the server's own keep-alive verdict — ended a client that should simply reconnect.
+- **Refusing a server that requires TLS.** It is the less secure answer to a server asking for more security, and only makes the caller retry with TLS.
+- **Aborting on close (the old rule) or waiting indefinitely.** The first loses messages a caller reasonably expects sent; the second hangs on a server that stopped reading.
+
+**Consequences:** `NatsErrorCode.SlowConsumer`, `DEFAULT_PENDING_MESSAGES`/`BYTES`, `DEFAULT_RECONNECT_JITTER`/`_TLS`, `Subscription.dropped`, the `max` and `pendingLimits` subscribe options, and `ConnectionHandlers.onServerError` are new. A client that used to die on a recoverable `-ERR` now keeps running and reports it.
