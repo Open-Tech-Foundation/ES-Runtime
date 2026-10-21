@@ -27,7 +27,7 @@ host="$(rustc -vV | awk '/^host: /{print $2}')"
 
 targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
-  targets=(url encoding urlpattern compression serialization yaml keys)
+  targets=(url encoding urlpattern compression serialization yaml keys cbor archive)
 fi
 
 for target in "${targets[@]}"; do

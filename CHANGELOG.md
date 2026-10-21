@@ -143,8 +143,10 @@ namespace) is unstable and may change between minor releases until the API freez
   (`<x>t&lt;</x>` read as `"t"`) and every CDATA section, and left attribute
   values unescaped; it now resolves references and keeps CDATA. `<a></a>` reads
   as `""` like `<a/>`. More than one root element, text outside the root, a
-  repeated attribute, `<` in an attribute value, an invalid name and an unknown
-  entity are now a `SyntaxError` (and `validate` says `false`). `build` threw on
+  repeated attribute, `<` in an attribute value, an invalid name, an unknown
+  entity and a character XML does not allow (a raw form feed or NUL, or
+  `&#12;` in an attribute — found by fuzzing) are now a `SyntaxError` (and
+  `validate` says `false`). `build` threw on
   any non-integer number and wrote `NaN`, `undefined` and bytes as empty
   elements; it now writes numbers as `String(n)`, keeps edge whitespace, and
   refuses what XML cannot spell with a `TypeError`. `XML.DecoderStream` skipped

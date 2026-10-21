@@ -127,6 +127,20 @@ fn is_xml_char(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..)
 }
 
+/// Refuses a character XML 1.0 does not allow anywhere in a document — in
+/// text, attributes, comments or processing instructions alike. quick-xml does
+/// not check, so a form feed or a NUL would otherwise be read into a value the
+/// writer then refuses to write back.
+fn check_chars(text: &str) -> Result<(), Error> {
+    match text.chars().find(|&c| !is_xml_char(c)) {
+        Some(c) => Err(Error::syntax(format!(
+            "U+{:04X} cannot appear in an XML document",
+            c as u32
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// XML's whitespace (`S`): space, tab, CR, LF — not Unicode's wider set.
 fn is_xml_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n')
@@ -248,6 +262,9 @@ fn read_attrs(e: &BytesStart<'_>) -> Result<Vec<(String, Value)>, Error> {
         // Resolves the predefined entities and character references and
         // applies attribute-value normalization; an unknown entity is an error.
         let value = attr.normalized_value(XmlVersion::Implicit1_0)?;
+        // The raw text was checked; a character reference (`&#12;`) resolves
+        // here, past that check.
+        check_chars(&value)?;
         attrs.push((format!("@{name}"), Value::String(value.into_owned())));
     }
     Ok(attrs)
@@ -290,6 +307,7 @@ pub(crate) fn validate(input: &str) -> Result<(), Error> {
 /// [`parse`] for a document that sits `base_depth` levels inside another — a
 /// streamed record is a child of the root, so it has one level less to spend.
 fn parse_at(input: &str, base_depth: usize) -> Result<Value, Error> {
+    check_chars(input)?;
     let mut reader = Reader::from_str(input);
     reader.config_mut().check_comments = true;
 
@@ -397,6 +415,7 @@ impl StreamDecoder {
     }
 
     pub(crate) fn push(&mut self, chunk: &str) -> Result<Vec<Value>, Error> {
+        check_chars(chunk)?;
         self.buffer.extend_from_slice(chunk.as_bytes());
         let out = self.scan()?;
         if self.buffer.len() > MAX_STREAM_BUFFER {
@@ -863,6 +882,19 @@ mod tests {
         assert!(err("<a>&foo;</a>").contains("unknown entity"));
         assert!(err("<a x=\"&foo;\"/>").contains("foo"));
         assert!(parse("<a>&#0;</a>").is_err());
+        // Found by fuzzing: a raw form feed in an attribute was read, and the
+        // writer then refused to write it back. Raw or referenced, in an
+        // attribute, text, a comment or a stream, it is not XML.
+        for bad in [
+            "<a x=\"\u{c}\"><b>t</b></a>",
+            "<a x=\"&#12;\"/>",
+            "<a>\u{1}</a>",
+            "<a><!-- \u{c} --></a>",
+        ] {
+            assert!(err(bad).contains("cannot"), "{bad:?} was accepted");
+        }
+        let mut stream = StreamDecoder::new();
+        assert!(stream.push("<r><i>\u{c}</i>").is_err());
         assert!(err("<a>&#xFFFE;</a>").contains("U+FFFE"));
         assert!(!err("<a x=\"1\" x=\"2\"/>").is_empty());
         assert!(err("<a x=\"<\"/>").contains('<'));
