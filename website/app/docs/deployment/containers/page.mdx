@@ -127,3 +127,44 @@ A service that starts programs with [`runtime:system`](/docs/guides/subprocess)
 should run under an init process — `docker run --init`, or `tini` in the image —
 so that processes orphaned by its children are reaped. esrun waits for the
 children it starts, not for theirs.
+
+## Podman
+
+The same Dockerfile builds unchanged with `podman build`, and the image runs
+rootless as its unprivileged user.
+
+To run it as a service, use a [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+file — systemd generates the unit from it. For a rootless service, put it in
+`~/.config/containers/systemd/app.container`; for a system one, in
+`/etc/containers/systemd/`:
+
+```ini
+[Unit]
+Description=Example esrun service
+
+[Container]
+Image=ghcr.io/example/app:1.0.0
+PublishPort=8080:8080
+Environment=PORT=8080
+Exec=--allow-listen=8080 --allow-env=PORT --shutdown-grace=8000 dist/server.js
+PodmanArgs=--memory=512m
+
+[Service]
+Restart=on-failure
+TimeoutStopSec=15
+SuccessExitStatus=143
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user start app
+```
+
+`Exec=` holds esrun's arguments, as `CMD` does. `SuccessExitStatus=143` matters
+here as it does for a [systemd service](/docs/deployment/systemd): esrun exits
+with 143 after `SIGTERM`, and without it a normal stop leaves the unit
+`failed`. A rootless service starts at boot only once lingering is enabled for
+its user: `loginctl enable-linger <user>`.

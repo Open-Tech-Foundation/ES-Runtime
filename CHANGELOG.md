@@ -25,7 +25,8 @@ namespace) is unstable and may change between minor releases until the API freez
   and a guide per target. *Containers*: a two-stage Dockerfile (`esdev build`,
   then `esrun` on a distroless image of about 43 MB plus the binary), base
   images that meet the glibc floor, grants on the `CMD` line, memory, shutdown
-  under `docker stop` and Kubernetes, and a health check without `curl`.
+  under `docker stop` and Kubernetes, a health check without `curl`, and Podman
+  with a Quadlet unit (`SuccessExitStatus=143` again).
   *Docker Compose*: the service beside PostgreSQL, with grants that name other
   services (`--allow-net=db:5432`), start order on the database's health,
   shutdown inside `stop_grace_period`, and a volume for the data.
