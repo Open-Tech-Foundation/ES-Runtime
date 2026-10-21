@@ -295,6 +295,11 @@ deps = ["test:postgres", "test:mysql", "test:redis"]
 [tasks."bench:publish"]
 run = "bash bench/publish.sh"
 
+# Long-running stability: memory, file descriptors and threads under sustained
+# load, per scenario (bench/soak/run.sh). Linux only; needs a release esrun.
+[tasks.soak]
+run = "bash bench/soak/run.sh"
+
 # The debug binary the driver suites run against (ESRUN points at it). Debug,
 # not release: these check behaviour rather than speed.
 [tasks."build:esrun"]

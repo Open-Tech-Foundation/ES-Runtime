@@ -166,6 +166,18 @@ Unlike `bench/run.sh`, these runs are not interleaved — each column is measure
 in turn — so small differences are noise and the order of magnitude is the
 finding.
 
+## The soak suite
+
+`bench/soak/run.sh` is not a speed benchmark. It keeps esrun busy for
+`SOAK_MINUTES` (default 10) per scenario — an HTTP and WebSocket server under
+`oha` load with a client churning fetch bodies and WebSocket connections, worker
+churn, `runtime:db` SQLite connections, and `runtime:images` encodes — and
+samples each process's resident memory, open file descriptors and threads. A
+scenario fails when any of them is still climbing after warm-up, when a process
+dies, or when it reports a wrong answer. Linux only, and it needs a release
+esrun: `cargo build --release -p es-runtime-cli`, then `tsr soak`, or
+`SOAK_MINUTES=120 bench/soak/run.sh http` for one long run.
+
 ## Running
 
 ```sh
