@@ -1,0 +1,139 @@
+---
+title: Docker Compose
+description: Run an esrun service beside its database with Docker Compose — grants that name other services, health checks, start order, secrets and data that survives.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Docker Compose
+
+Compose runs the service and what it depends on — here, PostgreSQL — as one
+stack. The app's image is the one from [Containers](/docs/deployment/containers);
+this page adds the wiring between services.
+
+## The app
+
+A visit counter. `runtime:db` speaks PostgreSQL itself, so no package is
+needed:
+
+```ts
+// src/server.ts
+import { serve } from "runtime:http";
+import { connect, postgres, sql } from "runtime:db";
+import { env } from "runtime:process";
+
+const db = await connect(env.DATABASE_URL, { driver: postgres, pool: true });
+await db.execute("CREATE TABLE IF NOT EXISTS visits (at timestamptz NOT NULL DEFAULT now())");
+
+serve({ port: Number(env.PORT ?? 8080) }, async (request) => {
+  if (new URL(request.url).pathname === "/health") return new Response("ok");
+  await db.execute(sql`INSERT INTO visits DEFAULT VALUES`);
+  const { n } = await (await db.query("SELECT count(*)::int AS n FROM visits")).first();
+  return Response.json({ visits: n });
+});
+```
+
+## compose.yaml
+
+```yaml
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD}@db:5432/app
+    command:
+      - --allow-listen=8080
+      - --allow-net=db:5432
+      - --allow-env=PORT,DATABASE_URL
+      - --shutdown-grace=8000
+      - dist/server.js
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "esrun", "--allow-net=127.0.0.1:8080", "-e=const r = await fetch('http://127.0.0.1:8080/health'); if (!r.ok) throw new Error('status ' + r.status);"]
+      interval: 10s
+      timeout: 3s
+    stop_grace_period: 10s
+    mem_limit: 512m
+    restart: unless-stopped
+
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app", "-d", "app"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+```
+
+And a `.env` beside it, kept out of version control:
+
+```sh
+POSTGRES_PASSWORD=change-me
+```
+
+```sh
+docker compose up -d --build --wait
+```
+
+## Grants name services
+
+Inside the stack, services reach each other by name. The grant names the
+service and port, and nothing else is reachable:
+
+```yaml
+command:
+  - --allow-net=db:5432
+```
+
+Leave it out and the app fails at startup, when it connects, with
+`NotAllowedError: capability denied: Net`. A call to anything other than
+`db:5432` fails the same way.
+
+## Start order
+
+`depends_on` with `condition: service_healthy` holds the app back until
+PostgreSQL answers `pg_isready`, so the app's first connection does not race
+the database's startup. `--wait` returns once both report healthy.
+
+<Callout type="warning" title="Compose interpolates ${…}">
+  Compose replaces `${NAME}` anywhere in `compose.yaml`, including inside an
+  inline script. Write `$${…}` for a literal one, or avoid template literals
+  in health-check code as above.
+</Callout>
+
+## Health checks
+
+The health check calls its own route, `/health`, so checks every ten seconds do
+not count as visits. It is esrun making the request, granted only that one
+address — the image has no `curl`.
+
+## Shutdown
+
+`docker compose stop` and `down` send `SIGTERM`. esrun drains in-flight requests
+for up to `--shutdown-grace` (8 seconds here) and exits with 143, inside
+`stop_grace_period` (10 seconds), after which Compose sends `SIGKILL`.
+
+## Memory
+
+`mem_limit` sets the container's limit, and esrun sizes its heap from it. See
+[Memory](/api/cli#memory).
+
+## Data
+
+PostgreSQL's data lives in the `pgdata` volume, so `docker compose down` and
+`up` keep it. `docker compose down -v` deletes it.

@@ -26,6 +26,9 @@ namespace) is unstable and may change between minor releases until the API freez
   then `esrun` on a distroless image of about 43 MB plus the binary), base
   images that meet the glibc floor, grants on the `CMD` line, memory, shutdown
   under `docker stop` and Kubernetes, and a health check without `curl`.
+  *Docker Compose*: the service beside PostgreSQL, with grants that name other
+  services (`--allow-net=db:5432`), start order on the database's health,
+  shutdown inside `stop_grace_period`, and a volume for the data.
   *Linux server (systemd)*: a sandboxed unit with a dynamic user,
   `SuccessExitStatus=143` so a stop is not a failure, ports below 1024, a state
   directory, secrets, logs, and why `MemoryDenyWriteExecute` cannot be set.
