@@ -98,6 +98,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- Dependencies with published advisories are updated: `zip` 9.0.5
+  (RUSTSEC-2026-0367, -0368, -0369; `runtime:archive` never called the affected
+  `extract()`, but `esrun upgrade`'s `self_update` did, and moves to 1.3.1 to
+  share it), `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382) and `webpki-roots` /
+  `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0381, -0383: distrusted emSign
+  intermediates). `cargo audit` and `cargo deny` pass again.
+
 - A `runtime:db` SQLite file is held by one process again, so a second process
   opening it (or a second process opening the same durable workers directory)
   is refused instead of let in. Since 0.41.0 the jailed VFS closed its

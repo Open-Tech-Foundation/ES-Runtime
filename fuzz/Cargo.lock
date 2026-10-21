@@ -252,6 +252,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bstr"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+dependencies = [
+ "memchr",
+ "serde_core",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,6 +312,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "cipher"
@@ -402,31 +418,6 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "crossbeam-deque"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
-dependencies = [
- "crossbeam-epoch",
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crypto-bigint"
@@ -682,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime"
-version = "0.38.0"
+version = "0.41.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -704,6 +695,7 @@ dependencies = [
  "flate2",
  "futures-channel",
  "futures-util",
+ "globset",
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "md-5",
@@ -726,6 +718,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3",
  "subtle",
+ "tar",
  "thiserror",
  "toml",
  "tracing",
@@ -733,11 +726,12 @@ dependencies = [
  "url",
  "urlpattern",
  "x25519-dalek",
+ "zip",
 ]
 
 [[package]]
 name = "es-runtime-common"
-version = "0.38.0"
+version = "0.41.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -746,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-engine"
-version = "0.38.0"
+version = "0.41.0"
 dependencies = [
  "es-runtime-common",
  "thiserror",
@@ -765,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-providers"
-version = "0.38.0"
+version = "0.41.0"
 dependencies = [
  "es-runtime-common",
  "futures-core",
@@ -788,6 +782,16 @@ name = "fiat-crypto"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -919,6 +923,19 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
+name = "globset"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
 
 [[package]]
 name = "group"
@@ -1210,12 +1227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jpeg-decoder"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
-
-[[package]]
 name = "keccak"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1326,6 +1337,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1403,13 +1426,14 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "otf-pixels"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bc536b481658076edac78d3de8046cf9bb7372c718a47f97246401bb019e4a5"
+checksum = "0f0c93c549abc93bd878441cdccb932a1fb3a9c2f3342dcc06403ba201234488"
 dependencies = [
  "otf-pixels-codec-avif",
  "otf-pixels-codec-gif",
  "otf-pixels-codec-jpeg",
+ "otf-pixels-codec-jxl",
  "otf-pixels-codec-png",
  "otf-pixels-codec-raw",
  "otf-pixels-codec-tiff",
@@ -1420,18 +1444,18 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-avif"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bdf9773a940478f983b5979a79997154cbba1036f8495666ce019402562a2c7"
+checksum = "0cf49ce8b00eedd15aba317c8c495b479d866882391083d429c3a2c3da5d748b"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-codec-gif"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0dbed12727d85b7d794320ad015a55c5b2fe9129851cecee2fc5b87ac60bfc8"
+checksum = "424ecee5ab126e2a359e1cefe0a9d64f9edd9fc0f5ccfe743462e1b2508902f5"
 dependencies = [
  "otf-pixels-compress",
  "otf-pixels-core",
@@ -1439,19 +1463,27 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-jpeg"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be07b2917d058a15e2eeff4c412c0ded87ebc4c3cb4c74a52427cf2a147064a"
+checksum = "76fea4add7f63065824eddbb01147c4a3964d9ea9bb21f3f9fe63f8426f6c67e"
 dependencies = [
- "jpeg-decoder",
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-jxl"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fd092c1e211bb034bca1361719d09fdc36b290579220d9f24e8bd250708d17c"
+dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-codec-png"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccb593b691d0755fe6288ed62edbe192f7b10c5b581ca3fb722796f81e6ae772"
+checksum = "565857abefff4677ecb63f25d0e991ae50911149a2102f3b570a4ae453338fd9"
 dependencies = [
  "otf-pixels-compress",
  "otf-pixels-core",
@@ -1459,18 +1491,18 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-raw"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32515ecfb376dd14c3ae2f55a6f65fd59c98dd8d7151941988f1b23b6d569c71"
+checksum = "5dd33653b703b9ee0fabb08614ed74a5a7cceab5956681445cab10a7013992dc"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-codec-tiff"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25bd7cc44fdd99aef89e7f6f9f8de4799c262d3854c1eedef144fedb356521c4"
+checksum = "7adda327d2ac219d3bf0fb2eae36f3108e214865a24de1f1e05746d8fb2038d4"
 dependencies = [
  "otf-pixels-compress",
  "otf-pixels-core",
@@ -1478,33 +1510,30 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-webp"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd07fce7e23e5c437589132480d35c43ef1a80622a91d7c5d84d990d6532487"
+checksum = "00eae0af4ad186efd38fcb9b248bc3ab69f0535a7451d10ea1d6aa16e6f88819"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-compress"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe1adc488846f66c6e1d193f0966f64da841d9d17b1d45329885c8b97f427200"
+checksum = "8f0537a5a91115d982c6fd4045edfdd4d195fc51a01ca43c6188f1a0d60a5f37"
 
 [[package]]
 name = "otf-pixels-core"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75ec379a36e81150981ef20477130b5c26e8d471d89de28ea56492a332ee73da"
-dependencies = [
- "crossbeam-deque",
-]
+checksum = "eae9fa2c5e863b80a4628c31d009c20596f565b86eb704e5b10084b442e7fd54"
 
 [[package]]
 name = "otf-pixels-ops"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c85f2e434570c86fddb3a90ed79693190cb1235971931de85bb2821d03556464"
+checksum = "855581df3716f1082f6620738b3bb94a96d5e5bb09c51e3c36d9752f053897af"
 dependencies = [
  "otf-pixels-core",
 ]
@@ -1683,7 +1712,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
- "serde",
 ]
 
 [[package]]
@@ -2144,6 +2172,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
+
+[[package]]
 name = "temporal_capi"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2235,6 +2273,7 @@ version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
 dependencies = [
+ "indexmap",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -2336,6 +2375,12 @@ name = "twox-hash"
 version = "2.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
+
+[[package]]
+name = "typed-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
 
 [[package]]
 name = "typenum"
@@ -2681,6 +2726,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "nix",
+ "typed-path",
 ]
 
 [[package]]
