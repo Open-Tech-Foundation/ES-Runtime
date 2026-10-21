@@ -1,0 +1,35 @@
+---
+title: Deployment
+description: Build with esdev, run with esrun — what a deployment holds, and a guide for each target.
+---
+
+# Deployment
+
+A deployment is two things: the `esrun` binary and the bundle `esdev build`
+produced from your source. `esdev` stays on the build machine — it is
+[not a deployment target](/esdev).
+
+```sh
+esdev build --minify                                # on the build machine
+esrun --allow-listen=8080 dist/server.js            # on the server
+```
+
+Every target follows the same steps:
+
+1. **Install `esrun`**, pinned to a version. See [Installation](/docs/install);
+   on Linux it needs glibc 2.39 or newer.
+2. **Copy the bundle** — the `dist/` directory — and nothing else.
+3. **Grant only what the service uses** on the command line: the port it
+   listens on, the hosts it calls, the variables it reads. Nothing is granted
+   by default. See [Permissions & capabilities](/docs/security/permissions).
+4. **Let the supervisor stop it with `SIGTERM`.** esrun drains in-flight
+   requests for up to `--shutdown-grace` milliseconds and exits with code 143.
+5. **Leave memory to the platform.** The heap ceiling is sized from the
+   memory limit esrun runs under. See [Memory](/api/cli#memory).
+
+## Targets
+
+- [Containers](/docs/deployment/containers) — a Docker image of about 43 MB
+  plus the binary.
+- [Linux server (systemd)](/docs/deployment/systemd) — a sandboxed systemd
+  service on a VM or bare metal.

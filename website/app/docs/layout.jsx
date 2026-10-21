@@ -58,7 +58,6 @@ const NAV = [
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Sending email", path: "/docs/guides/email" },
-      { title: "Containers", path: "/docs/guides/containers" },
       {
         title: "Messaging",
         items: [
@@ -168,6 +167,14 @@ const NAV = [
       { title: "WASI", path: "/docs/internals/wasi" },
       { title: "The bundler bridge", path: "/docs/internals/bundler" },
       { title: "Tailwind CSS", path: "/docs/internals/tailwind" },
+    ],
+  },
+  {
+    title: "Deployment",
+    items: [
+      { title: "Overview", path: "/docs/deployment" },
+      { title: "Containers", path: "/docs/deployment/containers" },
+      { title: "Linux server (systemd)", path: "/docs/deployment/systemd" },
     ],
   },
   {
