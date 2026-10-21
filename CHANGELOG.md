@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- A new `runtime:db` SQLite database opened by several connections at once no
+  longer panics the engine. Connections that raced to make the first write to
+  an empty database each tried to create its first page, which the engine
+  asserts against; the task failed with "! self.db_initialized()". Opens are
+  now serialized within the process, and a new database is given its first
+  page while the open still holds that lock, so every later connection finds
+  it whole.
+
 ## [0.42.0] - 2026-10-21
 
 ### Added

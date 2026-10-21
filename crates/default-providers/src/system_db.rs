@@ -112,6 +112,9 @@ impl JailedVfs {
     }
 }
 
+/// Held while a database is opened (see [`SystemEmbeddedDb`]'s `open`).
+static OPENING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The engine's file, with the jail's anchoring descriptor for the same file
 /// held beside it (see [`JailedVfs::open_file`]). Fields drop in order: the
 /// engine's file first, then the anchor, so neither close can strip a lock
@@ -550,6 +553,15 @@ impl EmbeddedDb for SystemEmbeddedDb {
                         .encryption(encryption)
                         .db_opts(DatabaseOpts::default().with_encryption(true));
                 }
+                // One open at a time in this process, and a new database is
+                // given its first page before the lock is released. The engine
+                // shares one database per file between connections only once
+                // the file exists, and connections that race to make the first
+                // write to an empty one each try to create page 1 — which it
+                // asserts against, panicking the task. Opening is rare and
+                // short; serializing it is what lets every later connection
+                // find a database that is already whole.
+                let _opening = OPENING.lock().unwrap_or_else(|e| e.into_inner());
                 let db = Database::open(io.clone(), &path, open).map_err(engine_error)?;
                 // The key is given twice on purpose. `OpenOptions::encryption`
                 // tells the *database* which cipher its pages use; the
@@ -567,6 +579,13 @@ impl EmbeddedDb for SystemEmbeddedDb {
                     None => db.connect().map_err(engine_error)?,
                 };
                 confine_temp_storage(&conn);
+                if !opts.read_only && !conn.is_db_initialized() {
+                    // A write that changes nothing visible: the header's
+                    // user version is already 0. It makes the engine create
+                    // page 1 now, while no other connection can be writing.
+                    conn.execute("PRAGMA user_version = 0")
+                        .map_err(engine_error)?;
+                }
                 Ok(ConnEntry::new(conn, db, io))
             })
             .await?;
