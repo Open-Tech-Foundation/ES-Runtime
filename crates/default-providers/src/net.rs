@@ -323,7 +323,12 @@ impl NetTransport for ReqwestTransport {
                 loop {
                     return match std::pin::Pin::new(&mut body_frames).poll_frame(cx) {
                         std::task::Poll::Pending => std::task::Poll::Pending,
-                        std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
+                        // The body is over, so no trailer block is coming:
+                        // settle "none" now rather than when the stream drops.
+                        std::task::Poll::Ready(None) => {
+                            trailer_tx.take();
+                            std::task::Poll::Ready(None)
+                        }
                         std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(
                             ProviderError::Other(format!("body: {e}")),
                         ))),

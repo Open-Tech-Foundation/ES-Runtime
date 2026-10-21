@@ -4,7 +4,9 @@
 //! **Response** bodies stream rather than buffer: `fetch` performs the request
 //! and stashes the body stream under an id, returning the response metadata;
 //! `fetch_body_read` pulls the next chunk for that id (the prelude's `Response`
-//! drives it from a `ReadableStream`).
+//! drives it from a `ReadableStream`). The read that finds the end returns the
+//! response's trailers instead of a chunk, so nothing about a response is kept
+//! here once its body is over — whether or not anyone asks for the trailers.
 //!
 //! **Request** bodies stream too. When the guest passes a `ReadableStream` body,
 //! the prelude:
@@ -50,9 +52,10 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     // Active response-body streams, keyed by id: `fetch` inserts, `fetch_body_read`
     // drains.
     let bodies: Rc<RefCell<HashMap<u64, ByteStream>>> = Rc::new(RefCell::new(HashMap::new()));
-    // Trailers per response id. They exist on the wire only after the body, so
-    // the future settles when the body ends — or when it is dropped, which
-    // yields none rather than waiting on a body nobody is reading.
+    // Trailers per response id, taken out by the read that ends the body (or by
+    // a cancel). They exist on the wire only after the body, so the future has
+    // settled by then. Never by a separate op: almost no program asks for
+    // trailers, and an entry kept until it is asked for is kept forever.
     let trailers: Rc<RefCell<HashMap<u64, PendingTrailers>>> =
         Rc::new(RefCell::new(HashMap::new()));
     let resp_id_gen = Rc::new(Cell::new(1u64));
@@ -206,12 +209,13 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     }
 
     // ---- __fetch_inflight (test-only diagnostic) ----------------------------
-    // Returns the live entry counts of the three body registries so soak/leak
+    // Returns the live entry counts of the body and trailer registries so soak/leak
     // tests can assert they drain to zero between requests. Not compiled into
     // release builds — purely an internal observability hook.
     #[cfg(test)]
     {
         let bodies_d = bodies.clone();
+        let trailers_d = trailers.clone();
         let senders_d = req_senders.clone();
         let receivers_d = req_receivers.clone();
         engine.register_op(OpDecl::sync("__fetch_inflight", move |_args| {
@@ -219,15 +223,20 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                 Value::Number(bodies_d.borrow().len() as f64),
                 Value::Number(senders_d.borrow().len() as f64),
                 Value::Number(receivers_d.borrow().len() as f64),
+                Value::Number(trailers_d.borrow().len() as f64),
             ]))
         }))?;
     }
 
     // ---- fetch_body_read ----------------------------------------------------
+    // The next chunk as bytes, or — once the body has ended — its trailers as a
+    // flat `[name, value, …]` array (usually empty), after which the id is gone.
     {
         let bodies = bodies.clone();
+        let trailers = trailers.clone();
         engine.register_op(OpDecl::r#async("fetch_body_read", move |args| {
             let bodies = bodies.clone();
+            let trailers = trailers.clone();
             let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
             Box::pin(async move {
                 // Take the stream out so no RefCell borrow is held across the await.
@@ -240,34 +249,29 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                         bodies.borrow_mut().insert(id, stream);
                         Ok(Value::Bytes(chunk))
                     }
-                    Some(Err(e)) => Err(OpError::new(e.exception_class(), e.exception_message())
-                        .with_code_opt(e.code())),
-                    None => Ok(Value::Null), // end of stream; not reinserted
+                    Some(Err(e)) => {
+                        trailers.borrow_mut().remove(&id);
+                        Err(OpError::new(e.exception_class(), e.exception_message())
+                            .with_code_opt(e.code()))
+                    }
+                    // End of stream; not reinserted. The trailers came after
+                    // the last chunk, so they have arrived (or never will).
+                    None => {
+                        // Dropped before waiting: a transport may keep the
+                        // trailer sender in the stream, and settle "none" only
+                        // when the stream goes.
+                        drop(stream);
+                        let pending = trailers.borrow_mut().remove(&id);
+                        let mut flat = Vec::new();
+                        if let Some(pending) = pending {
+                            for (name, value) in pending.await {
+                                flat.push(Value::String(name));
+                                flat.push(Value::String(value));
+                            }
+                        }
+                        Ok(Value::Array(flat))
+                    }
                 }
-            })
-        }))?;
-    }
-
-    // ---- fetch_trailers ------------------------------------------------------
-    // Header fields that arrived after response `id`'s body, as a flat
-    // `[name, value, …]` array. Resolves once the body has been read to its end
-    // — trailers are not on the wire before that — or empty if the body was
-    // dropped, so this always settles rather than holding the loop open.
-    {
-        let trailers = trailers.clone();
-        engine.register_op(OpDecl::r#async("fetch_trailers", move |args| {
-            let trailers = trailers.clone();
-            let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-            Box::pin(async move {
-                let Some(pending) = trailers.borrow_mut().remove(&id) else {
-                    return Ok(Value::Array(Vec::new())); // unknown id, or asked twice
-                };
-                let mut flat = Vec::new();
-                for (name, value) in pending.await {
-                    flat.push(Value::String(name));
-                    flat.push(Value::String(value));
-                }
-                Ok(Value::Array(flat))
             })
         }))?;
     }
@@ -278,10 +282,12 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     // registry from retaining an entry nobody will ever read.
     {
         let bodies = bodies.clone();
+        let trailers = trailers.clone();
         engine.register_op(
             OpDecl::sync("fetch_body_cancel", move |args| {
                 let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
                 bodies.borrow_mut().remove(&id);
+                trailers.borrow_mut().remove(&id);
                 Ok(Value::Null)
             })
             .requires(Capability::Net),

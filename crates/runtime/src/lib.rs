@@ -1596,6 +1596,9 @@ mod tests {
         headers: Vec<(String, String)>,
         chunks: Vec<Vec<u8>>,
         fail: bool,
+        /// Trailers every response carries, or `None` for a transport that has
+        /// no way to deliver any.
+        trailers: Option<Vec<(String, String)>>,
     }
     impl MockNet {
         fn ok(body: &str) -> Self {
@@ -1604,7 +1607,12 @@ mod tests {
                 headers: vec![("content-type".into(), "text/plain".into())],
                 chunks: vec![body.as_bytes().to_vec()],
                 fail: false,
+                trailers: None,
             }
+        }
+        fn with_trailers(mut self, trailers: Vec<(String, String)>) -> Self {
+            self.trailers = Some(trailers);
+            self
         }
         /// A transport that errors — for runtimes whose tests never fetch.
         fn stub() -> Self {
@@ -1613,6 +1621,7 @@ mod tests {
                 headers: Vec::new(),
                 chunks: Vec::new(),
                 fail: true,
+                trailers: None,
             }
         }
     }
@@ -1633,11 +1642,12 @@ mod tests {
                     ))
                 });
             }
-            let (status, headers, chunks, url) = (
+            let (status, headers, chunks, url, trailers) = (
                 self.status,
                 self.headers.clone(),
                 self.chunks.clone(),
                 request.url,
+                self.trailers.clone(),
             );
             Box::pin(async move {
                 let body: es_runtime_providers::ByteStream =
@@ -1649,7 +1659,10 @@ mod tests {
                     redirected: false,
                     headers,
                     body,
-                    trailers: None,
+                    trailers: trailers.map(|t| {
+                        Box::pin(async move { t })
+                            as es_runtime_providers::BoxFuture<Vec<(String, String)>>
+                    }),
                 })
             })
         }
@@ -4217,6 +4230,81 @@ mod tests {
         assert_eq!(out, Value::String("200|true|text/plain|hello world".into()));
     }
 
+    /// A response's trailers leave the host with the end of its body — read or
+    /// cancelled, asked for or not. Kept until `trailersOf` asked, they were one
+    /// entry per request for the life of the process, since almost nothing asks.
+    #[test]
+    fn fetch_keeps_no_trailers_once_the_body_ends() {
+        let _g = v8_guard();
+        let net = MockNet::ok("hello").with_trailers(vec![("grpc-status".into(), "0".into())]);
+        let mut rt = runtime_with_net(Arc::new(net));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const unasked = await fetch('https://x.test/'); await unasked.text(); \
+             const cancelled = await fetch('https://x.test/'); await cancelled.body.cancel(); \
+             const asked = await fetch('https://x.test/'); await asked.text(); \
+             const read = globalThis.__responseTrailers; \
+             return [(await read(asked)).get('grpc-status'), \
+                     (await read(asked)).get('grpc-status'), \
+                     [...(await read(cancelled)).keys()].length].join();",
+        );
+        // Asking twice gives the same answer; a cancelled body has none.
+        assert_eq!(out, Value::String("0,0,0".into()));
+        let inflight = rt.eval("globalThis.__ops.__fetch_inflight()").unwrap();
+        assert_eq!(inflight, Value::Array(vec![Value::Number(0.0); 4]));
+    }
+
+    /// A transport shaped like the real one: the trailer sender lives inside the
+    /// body stream, so "no trailers" settles only when that stream is dropped.
+    struct SenderInBodyNet;
+    impl es_runtime_providers::NetTransport for SenderInBodyNet {
+        fn fetch(
+            &self,
+            request: es_runtime_providers::HttpRequest,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                es_runtime_providers::HttpResponse,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            Box::pin(async move {
+                let (tx, rx) = futures_channel::oneshot::channel::<Vec<(String, String)>>();
+                let mut chunks = vec![b"plain".to_vec()].into_iter();
+                let body: es_runtime_providers::ByteStream =
+                    Box::pin(futures_util::stream::poll_fn(move |_| {
+                        let _sender = &tx;
+                        std::task::Poll::Ready(chunks.next().map(Ok))
+                    }));
+                Ok(es_runtime_providers::HttpResponse {
+                    status: 200,
+                    status_text: "OK".into(),
+                    url: request.url,
+                    redirected: false,
+                    headers: vec![],
+                    body,
+                    trailers: Some(Box::pin(async move { rx.await.unwrap_or_default() })),
+                })
+            })
+        }
+    }
+
+    /// The end of a body with no trailers must not wait on the trailers: here
+    /// they settle only when the body stream is dropped, so a read that held the
+    /// stream while waiting never finished.
+    #[test]
+    fn a_body_without_trailers_ends() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_net(Arc::new(SenderInBodyNet));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/'); const text = await r.text(); \
+             return text + ':' + [...(await globalThis.__responseTrailers(r)).keys()].length;",
+        );
+        assert_eq!(out, Value::String("plain:0".into()));
+    }
+
     #[test]
     fn fetch_streams_a_chunked_response_body() {
         let _g = v8_guard();
@@ -4225,6 +4313,7 @@ mod tests {
             headers: vec![],
             chunks: vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()],
             fail: false,
+            trailers: None,
         };
         let mut rt = runtime_with_net(Arc::new(net));
         rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
@@ -4880,13 +4969,14 @@ mod tests {
         for k in 0..ITERS {
             let out = eval_async(&mut rt, script);
             assert_eq!(out, Value::String("alpha-beta-gamma".into()), "iter {k}");
-            // The precise leak guard: the three body registries must be empty
-            // between requests — no leaked response body stream, request sender,
-            // or receiver. This holds regardless of V8 heap behavior.
+            // The precise leak guard: the registries must be empty between
+            // requests — no leaked response body stream, request sender,
+            // receiver or trailers. This holds regardless of V8 heap behavior.
             let inflight = rt.eval("globalThis.__ops.__fetch_inflight()").unwrap();
             assert_eq!(
                 inflight,
                 Value::Array(vec![
+                    Value::Number(0.0),
                     Value::Number(0.0),
                     Value::Number(0.0),
                     Value::Number(0.0)

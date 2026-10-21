@@ -24,6 +24,12 @@ namespace) is unstable and may change between minor releases until the API freez
   stops reading at the close event and the entry went only on a later read. A
   `runtime:websocket` server whose clients disconnect grew by about 4 KiB per
   connection, without bound; the soak suite measured 10 MB/s under churn.
+- `fetch` no longer keeps every response's trailers. Each network response
+  left an entry on the host until `trailersOf()` asked for it — which almost no
+  program does — so a long-running client grew with every request. The read
+  that ends a body now hands its trailers to the `Response` and the host keeps
+  nothing; `trailersOf()` reads them from there, and asking twice gives the same
+  trailers instead of none.
 - A new `runtime:db` SQLite database opened by several connections at once no
   longer panics the engine. Connections that raced to make the first write to
   an empty database each tried to create its first page, which the engine

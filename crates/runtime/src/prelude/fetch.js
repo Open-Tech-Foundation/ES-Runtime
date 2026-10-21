@@ -25,8 +25,12 @@
   // terms and are not subject to the constructor's status/body checks, which
   // only constrain what a script may construct.
   const INTERNAL_RESPONSE = Symbol("internalResponse");
-  // fetch response → host body id, for `trailersOf` (see __responseTrailers).
-  const responseBodyIds = new WeakMap();
+  // fetch response → a promise of its trailers, for `trailersOf` (see
+  // __responseTrailers). Held here, beside the Response, so they go when it
+  // does: the host hands them over with the end of the body and keeps nothing.
+  const responseTrailers = new WeakMap();
+  // A response with no trailers, as the flat `[name, value, …]` list the host uses.
+  const EMPTY_TRAILERS = Object.freeze([]);
   // Closure-private marker carrying a function that produces the request's
   // AbortSignal on first read (see Request#signalThunk). Only `__serverRequest`
   // can pass it, so guest code cannot install a thunk of its own.
@@ -937,12 +941,22 @@
     if (pumpError) throw pumpError;
 
     const bodyId = meta.bodyId;
+    // Settled with the end of the body: the trailers the host returned, or none
+    // when the body is cancelled, aborted or fails before it ends.
+    let settleTrailers;
+    const trailers = new Promise((resolve) => {
+      settleTrailers = resolve;
+    });
+    const cancelBody = () => {
+      ops.fetch_body_cancel(bodyId);
+      settleTrailers(EMPTY_TRAILERS);
+    };
 
     // redirect: "error" — the server answered with a redirect the guest asked
     // never to see. Drop the body host-side (closing the connection instead of
     // leaving it to drain) and reject, as Fetch's "network error" requires.
     if (request.redirect === "error" && REDIRECT_STATUS.has(meta.status)) {
-      ops.fetch_body_cancel(bodyId);
+      cancelBody();
       throw new TypeError(
         `Failed to fetch: ${shownUrl(request.url)} answered ${meta.status} and redirect mode is "error"`,
       );
@@ -953,14 +967,14 @@
     const stream = new ReadableStream({
       start(controller) {
         if (signal.aborted) {
-          ops.fetch_body_cancel(bodyId);
+          cancelBody();
           controller.error(signal.reason);
           return;
         }
         signal.addEventListener(
           "abort",
           () => {
-            ops.fetch_body_cancel(bodyId);
+            cancelBody();
             try {
               controller.error(signal.reason);
             } catch {
@@ -971,12 +985,24 @@
         );
       },
       async pull(controller) {
-        const chunk = await ops.fetch_body_read(bodyId);
-        if (chunk === null) controller.close();
-        else controller.enqueue(chunk);
+        let chunk;
+        try {
+          chunk = await ops.fetch_body_read(bodyId);
+        } catch (e) {
+          settleTrailers(EMPTY_TRAILERS);
+          throw e;
+        }
+        // An array is the end of the body, carrying its trailers; null is an
+        // id the host no longer has. Anything else is the next chunk.
+        if (chunk !== null && !Array.isArray(chunk)) {
+          controller.enqueue(chunk);
+          return;
+        }
+        settleTrailers(chunk ?? EMPTY_TRAILERS);
+        controller.close();
       },
       cancel() {
-        ops.fetch_body_cancel(bodyId);
+        cancelBody();
       },
     });
 
@@ -988,11 +1014,11 @@
       redirected: meta.redirected === true,
       [INTERNAL_RESPONSE]: true,
     });
-    // Remember which host-side response this is, so trailers can be asked for
-    // later. A WeakMap rather than a property: trailers are not part of the
+    // Remember this response's trailers, so they can be asked for later. A
+    // WeakMap rather than a property: trailers are not part of the
     // Fetch API in any runtime, and a non-standard property on a standard
     // object is how code stops being portable without anyone noticing.
-    responseBodyIds.set(response, bodyId);
+    responseTrailers.set(response, trailers);
     return response;
   }
 
@@ -1001,9 +1027,7 @@
   // to its end — trailers are not on the wire before that — and to an empty
   // Headers for a response that has none or was not produced by fetch.
   globalThis.__responseTrailers = async (response) => {
-    const bodyId = responseBodyIds.get(response);
-    if (bodyId === undefined) return new Headers();
-    const flat = await ops.fetch_trailers(bodyId);
+    const flat = (await responseTrailers.get(response)) ?? EMPTY_TRAILERS;
     const headers = new Headers();
     for (let i = 0; i + 1 < flat.length; i += 2) headers.append(flat[i], flat[i + 1]);
     return headers;
