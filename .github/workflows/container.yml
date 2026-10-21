@@ -1,0 +1,155 @@
+# Publishes the esrun container image to GHCR: ghcr.io/open-tech-foundation/esrun.
+#
+# Separate from release.yml, which the `release` tool generates and which has
+# no notion of images yet. The image is built from the release's own Linux
+# archives — checksum-verified against the release's checksums.txt — so it
+# carries exactly the binary the release shipped, not a second build of it.
+#
+# When it runs:
+#   - after every Release workflow on main. Releases there are created with
+#     GITHUB_TOKEN, and GitHub does not start other workflows from events that
+#     token causes, so `on: release` would never fire. Instead this checks the
+#     newest esrun release and publishes it if its image does not exist yet;
+#     a run that released only esdev or a package finds nothing to do.
+#   - by hand (workflow_dispatch), for one version — to backfill, or to rebuild
+#     an image after its distroless base has had a security update.
+#
+# Tags: `<version>` and `<major>.<minor>`, plus `latest` for the newest esrun
+# release. Platforms: linux/amd64 and linux/arm64. Each image carries signed
+# build provenance in the registry.
+name: Container image
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "esrun version to publish, e.g. 0.42.0 (default: the newest release)"
+        required: false
+      force:
+        description: "Publish even if the image already exists (to pick up a new base image)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/open-tech-foundation/esrun
+
+jobs:
+  resolve:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      latest: ${{ steps.version.outputs.latest }}
+      publish: ${{ steps.exists.outputs.publish }}
+    steps:
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          newest="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq '[.[].tagName | select(startswith("esrun@"))][0] // empty | ltrimstr("esrun@")')"
+          [ -n "$newest" ] || { echo "no esrun release found" >&2; exit 1; }
+          version="${REQUESTED:-$newest}"
+          version="${version#esrun@}"
+          gh release view "esrun@$version" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "latest=$([ "$version" = "$newest" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - id: exists
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" != "true" ] && docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "$IMAGE:$VERSION already exists; nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: resolve
+    if: needs.resolve.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+      id-token: write # sign the provenance
+      attestations: write
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify the release's Linux binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd docker/esrun
+          gh release download "esrun@$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'esrun-linux-*.tar.gz' --pattern checksums.txt
+          grep -E ' esrun-linux-(x86-64|arm64)\.tar\.gz$' checksums.txt | sha256sum -c -
+          # Docker names the architectures amd64/arm64; the release, x86-64/arm64.
+          mkdir -p bin/amd64 bin/arm64
+          tar -xzf esrun-linux-x86-64.tar.gz -C bin/amd64 esrun
+          tar -xzf esrun-linux-arm64.tar.gz -C bin/arm64 esrun
+
+      - name: Tags
+        id: tags
+        env:
+          LATEST: ${{ needs.resolve.outputs.latest }}
+        run: |
+          minor="${VERSION%.*}"
+          {
+            echo "list<<EOF"
+            echo "$IMAGE:$VERSION"
+            echo "$IMAGE:$minor"
+            [ "$LATEST" = "true" ] && echo "$IMAGE:latest"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # COPY only, no RUN: both platforms build on this runner without QEMU.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/esrun
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.title=esrun
+            org.opencontainers.image.description=ES-Runtime's server runtime: a secure, standards-based JavaScript runtime
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://esrun.opentechf.org
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Smoke test
+        run: |
+          docker run --rm --platform linux/amd64 "$IMAGE:$VERSION" --version
+          docker run --rm --platform linux/amd64 "$IMAGE:$VERSION" -e='console.log(6 * 7)' | grep -qx 42

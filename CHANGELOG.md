@@ -11,6 +11,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- An `esrun` container image, `ghcr.io/open-tech-foundation/esrun`, for
+  linux/amd64 and linux/arm64: the release's own binary on a distroless
+  `cc-debian13:nonroot` base, with `esrun` as the entrypoint and signed build
+  provenance. Tagged `<version>`, `<major>.<minor>` and `latest`; published by
+  `.github/workflows/container.yml` after each esrun release.
+
 ### Changed
 
 - A *Deployment* section on the site: an overview of what a deployment holds,
