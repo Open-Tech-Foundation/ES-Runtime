@@ -588,6 +588,17 @@ impl WebSocketProvider for SystemWebSocket {
                 None => return Ok(None), // closed or already ended
             };
             match rx.get_mut().recv().await {
+                // A close frame is the last thing a connection delivers: the
+                // actor sends it and ends. So the entry goes now, with the
+                // frame, rather than on a later `recv` that sees the channel
+                // closed — the guest's pump stops at the close event and never
+                // makes that call, which left one entry behind for every
+                // connection the peer closed.
+                Some(item @ WsIncoming::Close { .. }) => {
+                    rx.keep_out();
+                    conns.lock().unwrap().remove(&id);
+                    Ok(Some(item))
+                }
                 Some(item) => Ok(Some(item)),
                 // The actor ended (clean close already delivered, or abnormal):
                 // drop the registry entry and signal end-of-stream.
@@ -1099,6 +1110,39 @@ mod tests {
             }
             _ => panic!("server expected the close handshake"),
         }
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    // Delivering the peer's close frees the connection's entry, on both ends.
+    // The guest's pump stops at the close event and never calls `recv` again,
+    // so an entry left for that call is never freed — one per closed
+    // connection, for as long as the server runs.
+    #[tokio::test]
+    async fn delivering_a_close_frees_the_connection() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound(&sys).await;
+        let (cid, _) = sys
+            .connect(format!("ws://127.0.0.1:{}/", info.local_port), vec![])
+            .await
+            .unwrap();
+        let (conn_id, _) = sys.accept(server_id).await.unwrap().expect("a connection");
+
+        sys.close(cid, Some(1000), "bye".to_string()).await.unwrap();
+        assert!(matches!(
+            sys.recv(conn_id).await.unwrap(),
+            Some(WsIncoming::Close { code: 1000, .. })
+        ));
+        // The side that closed sees its handshake complete as the end of the
+        // stream, which frees its entry the way it always has.
+        assert!(matches!(
+            sys.recv(cid).await.unwrap(),
+            None | Some(WsIncoming::Close { .. })
+        ));
+        assert!(sys.conns.lock().unwrap().is_empty());
+
+        // Afterwards the id reads as ended, as it always did once freed.
+        assert!(sys.recv(conn_id).await.unwrap().is_none());
+        sys.close(conn_id, None, String::new()).await.unwrap();
         sys.close_server(server_id).await.unwrap();
     }
 

@@ -19,6 +19,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- A WebSocket connection closed by its peer is now freed. Delivering the peer's
+  close frame left the connection's host-side entry behind, because the guest
+  stops reading at the close event and the entry went only on a later read. A
+  `runtime:websocket` server whose clients disconnect grew by about 4 KiB per
+  connection, without bound; the soak suite measured 10 MB/s under churn.
 - A new `runtime:db` SQLite database opened by several connections at once no
   longer panics the engine. Connections that raced to make the first write to
   an empty database each tried to create its first page, which the engine
