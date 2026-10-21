@@ -58,6 +58,7 @@ const NAV = [
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Sending email", path: "/docs/guides/email" },
+      { title: "Containers", path: "/docs/guides/containers" },
       {
         title: "Messaging",
         items: [

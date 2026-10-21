@@ -1,0 +1,116 @@
+---
+title: Containers
+description: Build an esrun service into a small container image — a multi-stage Dockerfile, the base image, grants, memory, shutdown and health checks.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Containers
+
+A container image for an esrun service holds two things: the `esrun` binary and
+the bundle `esdev build` produced. Nothing else is needed at run time — no
+package manager, no `node_modules`, no shell.
+
+## The Dockerfile
+
+Two stages: one builds with `esdev`, the other runs with `esrun`.
+
+```dockerfile
+# Build: esdev compiles and bundles the app into one file.
+FROM debian:13-slim AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+ARG ESRUN_VERSION=0.42.0
+ARG ESDEV_VERSION=0.21.0
+RUN curl -fsSL https://esrun.opentechf.org/install.sh \
+  | ESRUN_VERSION=$ESRUN_VERSION ESDEV_VERSION=$ESDEV_VERSION bash
+WORKDIR /app
+COPY . .
+RUN /root/.es-runtime/bin/esdev build --minify
+
+# Run: esrun and the bundle, nothing else.
+FROM gcr.io/distroless/cc-debian13:nonroot
+COPY --from=build /root/.es-runtime/bin/esrun /usr/local/bin/esrun
+WORKDIR /app
+COPY --from=build /app/dist ./dist
+EXPOSE 8080
+CMD ["esrun", "--allow-listen=8080", "--allow-env=PORT", "--shutdown-grace=8000", "dist/server.js"]
+```
+
+With a `.dockerignore` that keeps local output out of the build context:
+
+```text
+node_modules
+dist
+.dev
+```
+
+Pin both versions. The same `ARG`s rebuild the same image, and an upgrade is a
+one-line change you can review.
+
+## The base image
+
+The run stage needs glibc 2.39 or newer and nothing more: `esrun` links only
+the C runtime, and it carries its own TLS trust roots, so `ca-certificates` is
+not required for outbound HTTPS.
+
+| Image | Size | Notes |
+| --- | --- | --- |
+| `gcr.io/distroless/cc-debian13:nonroot` | ~43 MB | No shell; runs as an unprivileged user |
+| `debian:13-slim` | ~120 MB | A shell for debugging |
+| `ubuntu:24.04` | ~120 MB | A shell for debugging |
+
+Alpine and other musl-based images are not supported; see
+[Platforms](/docs/install#platforms).
+
+## Grants
+
+The `CMD` line is the service's security policy. `esrun` reaches nothing it is
+not granted, so name exactly what the service needs: the port it listens on,
+the hosts it calls, the variables it reads.
+
+```dockerfile
+CMD ["esrun", "--allow-listen=8080", "--allow-net=api.example.com", "--allow-env=PORT,DATABASE_URL", "dist/server.js"]
+```
+
+[`esdev --trace-permissions`](/esdev/permissions) lists what a development run
+used. The flags are in [Permissions & capabilities](/docs/security/permissions).
+
+## Memory
+
+The default heap ceiling is sized from the container's memory limit, not the
+host's, so no flag is needed for the service to be stopped by its own heap
+guard rather than killed by the kernel. Pin it with `--max-heap` when you want a
+fixed number. See [Memory](/api/cli#memory).
+
+## Shutdown
+
+`docker stop` and Kubernetes send `SIGTERM`. esrun stops accepting connections,
+lets in-flight requests finish for up to `--shutdown-grace` milliseconds
+(default 10000), and exits with code 143.
+
+<Callout type="warning" title="Keep the grace below the platform's timeout">
+  The platform sends `SIGKILL` when its own timeout passes — 10 seconds for
+  `docker stop`, 30 for a Kubernetes pod. Set `--shutdown-grace` below it, as
+  the Dockerfile above does, so requests are drained rather than cut off.
+</Callout>
+
+## Health checks
+
+A distroless image has no `curl`. esrun can make the request itself, granted
+only the one address it checks:
+
+```dockerfile
+HEALTHCHECK --interval=10s --timeout=3s \
+  CMD ["esrun", "--allow-net=127.0.0.1:8080", "-e=const r = await fetch('http://127.0.0.1:8080/'); if (!r.ok) throw new Error(`status ${r.status}`);"]
+```
+
+A thrown error exits non-zero, which marks the container unhealthy.
+
+## Child processes
+
+A service that starts programs with [`runtime:system`](/docs/guides/subprocess)
+should run under an init process — `docker run --init`, or `tini` in the image —
+so that processes orphaned by its children are reaped. esrun waits for the
+children it starts, not for theirs.

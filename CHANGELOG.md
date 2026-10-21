@@ -13,6 +13,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- A *Containers* guide on the site: a two-stage Dockerfile (`esdev build`, then
+  `esrun` on a distroless image of about 43 MB plus the binary), the base
+  images that meet the glibc floor, grants on the `CMD` line, memory, shutdown
+  under `docker stop` and Kubernetes, and a health check without `curl`.
 - `install.sh` refuses a Linux system older than glibc 2.39, or a musl one
   such as Alpine, before downloading anything, and says what is needed. Such a
   system used to install and then fail at the first run with a loader error.
