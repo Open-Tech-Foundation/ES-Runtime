@@ -9,9 +9,9 @@ attack-surface enumeration, and residual-risk register is in
 
 ## Reporting
 
-Report suspected vulnerabilities privately to
-[security@opentechf.org](mailto:security@opentechf.org) rather than via public
-issues. Please include the affected version, a minimal reproduction, the impact,
+Report suspected vulnerabilities privately, never in a public issue:
+[open a private advisory on GitHub](https://github.com/Open-Tech-Foundation/ES-Runtime/security/advisories/new), or email
+[security@opentechf.org](mailto:security@opentechf.org). Please include the affected version, a minimal reproduction, the impact,
 and the runtime/platform details.
 
 ## Runtime safety status

@@ -11,6 +11,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- Security vulnerabilities can be reported through a GitHub private advisory as
+  well as by email; `SECURITY.md`, the README, the security docs and the issue
+  chooser link to it.
+
 ### Fixed
 
 - A new `runtime:db` SQLite database opened by several connections at once no

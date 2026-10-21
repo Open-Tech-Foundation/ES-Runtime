@@ -110,7 +110,8 @@ attenuated permissions, and remote modules are disabled. The development binary
 is intentionally permissive; deploy built artifacts with `esrun` and grant only
 what the service needs.
 
-- Report suspected vulnerabilities privately to
+- Report suspected vulnerabilities privately, through a
+  [private advisory](https://github.com/Open-Tech-Foundation/ES-Runtime/security/advisories/new) or
   [security@opentechf.org](mailto:security@opentechf.org), following
   [SECURITY.md](SECURITY.md).
 - Read the [Security documentation](https://esrun.opentechf.org/docs/security)
@@ -149,9 +150,9 @@ Build, test, and benchmark from source:
 
 Found a bug? [Open an issue](https://github.com/Open-Tech-Foundation/ES-Runtime/issues/new/choose)
 with the output of `esrun --version` (or `esdev --version`), your OS, and the
-smallest code that shows it. **Security vulnerabilities go to
-[security@opentechf.org](mailto:security@opentechf.org), never a public issue**
-(see [SECURITY.md](SECURITY.md)).
+smallest code that shows it. **Security vulnerabilities go to a
+[private advisory](https://github.com/Open-Tech-Foundation/ES-Runtime/security/advisories/new), never a public issue** (see
+[SECURITY.md](SECURITY.md)).
 
 ## License
 
