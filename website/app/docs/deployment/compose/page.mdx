@@ -8,8 +8,9 @@ import { Callout } from "@opentf/web-docs";
 # Docker Compose
 
 Compose runs the service and what it depends on — here, PostgreSQL — as one
-stack. The app's image is the one from [Containers](/docs/deployment/containers);
-this page adds the wiring between services.
+stack. The service runs on the esrun image,
+`ghcr.io/open-tech-foundation/esrun`: either built into an image of your own
+(`build: .`) or used as it is, with the bundle mounted in.
 
 ## The app
 
@@ -34,6 +35,14 @@ serve({ port: Number(env.PORT ?? 8080) }, async (request) => {
 ```
 
 ## compose.yaml
+
+`build: .` builds the app's own image from the two-stage Dockerfile in
+[Containers](/docs/deployment/containers), whose run stage is the esrun image:
+
+```dockerfile
+FROM ghcr.io/open-tech-foundation/esrun:0.42.0
+COPY --from=build /app/dist ./dist
+```
 
 ```yaml
 services:
@@ -89,6 +98,23 @@ POSTGRES_PASSWORD=change-me
 ```sh
 docker compose up -d --build --wait
 ```
+
+## Without a Dockerfile
+
+For a quick stack, skip the app image: build the bundle with
+`esdev build --minify`, then run the esrun image directly with `dist/` mounted
+read-only. In the `app` service, replace `build: .` with:
+
+```yaml
+    image: ghcr.io/open-tech-foundation/esrun:0.42.0
+    volumes:
+      - ./dist:/app/dist:ro
+```
+
+Everything else stays the same: the image's entrypoint is `esrun`, so `command:`
+holds its arguments, and its working directory is `/app`. A deployment that
+ships to other machines should prefer `build: .`, so the bundle travels inside
+an image with a version of its own.
 
 ## Grants name services
 
