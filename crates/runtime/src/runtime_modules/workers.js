@@ -331,6 +331,8 @@ const REGISTRY_SCHEMA = [
 ];
 
 let registry = null; // { db, dir }
+// The registry being opened, shared by every caller that arrives meanwhile.
+let registryOpening = null;
 
 // Every statement on the catalog goes through one queue, because a connection
 // is one conversation and the catalog is the one connection that many callers
@@ -433,8 +435,22 @@ async function workingDir() {
   return root;
 }
 
-async function registryDb() {
-  if (registry) return registry.db;
+// One open per process, however many calls arrive while it is in flight. Each
+// caller opening its own connection to a database that does not exist yet is
+// how a new registry lost its schema: the engine shares one database per file
+// only once the file exists, and a second connection that finds a database with
+// no pages beside a WAL with frames discards that WAL as an orphan — the first
+// connection's, still in use. It showed on macOS as a registry open failing
+// with "entity not found" once the WAL had been deleted under it.
+function registryDb() {
+  if (registry) return Promise.resolve(registry.db);
+  registryOpening ??= openRegistry().finally(() => {
+    registryOpening = null;
+  });
+  return registryOpening;
+}
+
+async function openRegistry() {
   started = true;
   const dir = (await stateDir(config.dir)).replace(/\/+$/, "");
   await mkdir(dir, { recursive: true });
@@ -4033,6 +4049,7 @@ async function shutdown() {
     stopWatching();
   } finally {
     registry = null;
+    registryOpening = null;
     catalogDb = null;
     shards = null;
     shuttingDown = false;

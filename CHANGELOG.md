@@ -113,10 +113,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 - A `runtime:db` SQLite file is held by one process again, so a second process
   opening it (or a second process opening the same durable workers directory)
-  is refused instead of let in. Since 0.41.0 the jailed VFS closed its
-  anchoring descriptor after the engine locked the file, and POSIX drops a
-  process's `fcntl` locks when it closes any descriptor for that file; the lock
-  is now taken after the anchor closes.
+  is refused instead of let in, and on macOS durable workers no longer lose
+  writes or fail with "entity not found". Since 0.41.0 the jailed VFS closed
+  its anchoring descriptor right after the engine opened a file, and POSIX
+  drops every `fcntl` lock a process holds on a file when it closes any
+  descriptor for it — the database's exclusive lock and, off Linux, the byte
+  locks coordinating a shared WAL. The descriptor is now held for as long as
+  the engine's file. Concurrent first calls into `runtime:workers` also share
+  one registry open instead of each creating the database.
 - `runtime:serialization` CSV no longer loses or changes data on a round trip.
   A `comment` byte equal to the delimiter, the quote or a line break is now a
   `TypeError` (`build` wrote rows `parse` then dropped as comments). `trim`

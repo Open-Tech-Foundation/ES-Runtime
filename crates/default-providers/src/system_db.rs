@@ -110,13 +110,115 @@ impl JailedVfs {
             create_new: false,
         }
     }
+}
 
-    /// Whether [`PlatformIO::open_file`] takes its exclusive lock for these
-    /// flags — the engine's own condition, including its opt-out variable.
-    #[cfg(unix)]
-    fn engine_would_lock(flags: OpenFlags) -> bool {
-        std::env::var("LIMBO_DISABLE_FILE_LOCK").is_err()
-            && !flags.intersects(OpenFlags::ReadOnly | OpenFlags::NoLock)
+/// The engine's file, with the jail's anchoring descriptor for the same file
+/// held beside it (see [`JailedVfs::open_file`]). Fields drop in order: the
+/// engine's file first, then the anchor, so neither close can strip a lock
+/// the other still relies on.
+///
+/// Every method delegates, defaulted ones included: the platform file
+/// overrides the shared-WAL methods, and a wrapper that let the trait's
+/// defaults answer would quietly turn WAL coordination off.
+#[cfg(unix)]
+struct AnchoredFile {
+    inner: Arc<dyn File>,
+    _anchor: std::fs::File,
+}
+
+#[cfg(unix)]
+impl File for AnchoredFile {
+    fn lock_file(&self, exclusive: bool) -> turso_core::Result<()> {
+        self.inner.lock_file(exclusive)
+    }
+    fn unlock_file(&self) -> turso_core::Result<()> {
+        self.inner.unlock_file()
+    }
+    fn pread(&self, pos: u64, c: Completion) -> turso_core::Result<Completion> {
+        self.inner.pread(pos, c)
+    }
+    fn pwrite(
+        &self,
+        pos: u64,
+        buffer: Arc<turso_core::Buffer>,
+        c: Completion,
+    ) -> turso_core::Result<Completion> {
+        self.inner.pwrite(pos, buffer, c)
+    }
+    fn sync(
+        &self,
+        c: Completion,
+        sync_type: turso_core::io::FileSyncType,
+    ) -> turso_core::Result<Completion> {
+        self.inner.sync(c, sync_type)
+    }
+    fn pwritev(
+        &self,
+        pos: u64,
+        buffers: Vec<Arc<turso_core::Buffer>>,
+        c: Completion,
+    ) -> turso_core::Result<Completion> {
+        self.inner.pwritev(pos, buffers, c)
+    }
+    fn size(&self) -> turso_core::Result<u64> {
+        self.inner.size()
+    }
+    fn truncate(&self, len: u64, c: Completion) -> turso_core::Result<Completion> {
+        self.inner.truncate(len, c)
+    }
+    fn has_hole(&self, pos: usize, len: usize) -> turso_core::Result<bool> {
+        self.inner.has_hole(pos, len)
+    }
+    fn punch_hole(&self, pos: usize, len: usize) -> turso_core::Result<()> {
+        self.inner.punch_hole(pos, len)
+    }
+    fn shared_wal_lock_byte(
+        &self,
+        offset: u64,
+        exclusive: bool,
+        kind: turso_core::io::SharedWalLockKind,
+    ) -> turso_core::Result<()> {
+        self.inner.shared_wal_lock_byte(offset, exclusive, kind)
+    }
+    fn shared_wal_try_lock_byte(
+        &self,
+        offset: u64,
+        exclusive: bool,
+        kind: turso_core::io::SharedWalLockKind,
+    ) -> turso_core::Result<bool> {
+        self.inner.shared_wal_try_lock_byte(offset, exclusive, kind)
+    }
+    fn shared_wal_probe_exclusive_byte(
+        &self,
+        offset: u64,
+        kind: turso_core::io::SharedWalLockKind,
+    ) -> turso_core::Result<bool> {
+        self.inner.shared_wal_probe_exclusive_byte(offset, kind)
+    }
+    fn shared_wal_probe_exclusive_while_shared_byte(
+        &self,
+        offset: u64,
+        kind: turso_core::io::SharedWalLockKind,
+    ) -> turso_core::Result<bool> {
+        self.inner
+            .shared_wal_probe_exclusive_while_shared_byte(offset, kind)
+    }
+    fn shared_wal_unlock_byte(
+        &self,
+        offset: u64,
+        kind: turso_core::io::SharedWalLockKind,
+    ) -> turso_core::Result<()> {
+        self.inner.shared_wal_unlock_byte(offset, kind)
+    }
+    fn shared_wal_set_len(&self, len: u64) -> turso_core::Result<()> {
+        self.inner.shared_wal_set_len(len)
+    }
+    fn shared_wal_map(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> turso_core::Result<Box<dyn turso_core::io::SharedWalMappedRegion>> {
+        self.inner.shared_wal_map(offset, len)
     }
 }
 
@@ -167,21 +269,22 @@ impl IO for JailedVfs {
                 .open_anchored(path, self.access, Self::open_mode(flags))
                 .map_err(|e| engine_io_error(&e, "open"))?;
             let via = format!("{}/{fd}", fd_dir(), fd = file.as_raw_fd());
-            // The engine's lock is a POSIX `fcntl` lock, and POSIX releases
-            // every such lock a process holds on a file when the process
-            // closes *any* descriptor for it — here, the anchor. Letting the
-            // engine lock on open and then closing the anchor would leave the
-            // database unlocked, and a second process could open it. So the
-            // engine opens without locking, the anchor closes, and the lock
-            // the engine would have taken is taken after that.
-            let opened = self
-                .inner
-                .open_file(&via, flags | OpenFlags::NoLock, direct)?;
-            drop(file);
-            if Self::engine_would_lock(flags) {
-                opened.lock_file(true)?;
-            }
-            Ok(opened)
+            let opened = self.inner.open_file(&via, flags, direct)?;
+            // The anchor stays open for exactly as long as the engine's file.
+            // POSIX releases every `fcntl` lock a process holds on a file when
+            // the process closes *any* descriptor for it, and the engine locks
+            // through `fcntl`: its exclusive lock on the database, and — on
+            // every Unix but Linux, which has per-descriptor OFD locks — the
+            // byte locks that coordinate a shared WAL between connections.
+            // Closing the anchor here dropped them all, for every connection
+            // to that file in the process: a second process could open the
+            // database, and on macOS connections lost track of each other's
+            // WAL. Closed together with the engine's file, it releases nothing
+            // the engine was not releasing anyway.
+            Ok(Arc::new(AnchoredFile {
+                inner: opened,
+                _anchor: file,
+            }))
         }
         #[cfg(not(unix))]
         {
@@ -1045,6 +1148,55 @@ mod tests {
             if batch.done {
                 return (bytes, rows);
             }
+        }
+    }
+
+    /// Many connections opening one new database at once. The engine shares a
+    /// database between connections only once its file exists, so two opens
+    /// racing to create it got a database each — and the second, finding a
+    /// file with no pages beside the first's WAL, deleted that WAL as an
+    /// orphan. What each connection wrote must still be there.
+    #[tokio::test]
+    async fn concurrent_opens_of_a_new_database_share_it() {
+        for round in 0..30 {
+            let (root, db) = engine(&format!("race-{round}"));
+            let db = Arc::new(db);
+            // Each connection writes as soon as it is open, while the others
+            // may still be opening: that is the order that lost a WAL.
+            let ids = futures_util::future::join_all((0..8).map(|n| {
+                let db = db.clone();
+                async move {
+                    let id = db.open("new.db".to_string(), opts()).await?;
+                    // One writer at a time is the engine's rule; a busy
+                    // database is retried, as `runtime:workers` does.
+                    for sql in [
+                        "CREATE TABLE IF NOT EXISTS t (n INTEGER)".to_string(),
+                        format!("INSERT INTO t VALUES ({n})"),
+                    ] {
+                        let mut tries = 0;
+                        loop {
+                            match db.execute(id, sql.clone(), DbParams::default()).await {
+                                Ok(_) => break,
+                                Err(e)
+                                    if e.code() == Some(ErrorCode::TimedOut) && tries < 2_000 =>
+                                {
+                                    tries += 1;
+                                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+                    }
+                    Ok::<u64, ProviderError>(id)
+                }
+            }))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<u64>, _>>()
+            .unwrap_or_else(|e| panic!("round {round}: {e:?}"));
+            let (_, rows) = collect(&db, ids[0], "SELECT n FROM t", 1 << 20).await;
+            assert_eq!(rows, 8, "round {round}: every connection's row is there");
+            std::fs::remove_dir_all(&root).ok();
         }
     }
 
