@@ -185,8 +185,12 @@ const MAX_YOUNG_GENERATION_BYTES: usize = 48 << 20;
 
 fn heap_sized_params(limits: &Limits, params: v8::CreateParams) -> (v8::CreateParams, usize) {
     let Some(bytes) = limits.heap_limit_bytes else {
-        let params = params.heap_limits_from_system_memory(crate::sysmem::available_bytes(), 0);
+        let available = crate::sysmem::available_bytes();
+        let params = params.heap_limits_from_system_memory(available, 0);
         let chosen = params.max_old_generation_size_in_bytes();
+        if let Some(half) = within_half(available, chosen) {
+            return (params.heap_limits(0, half), half);
+        }
         let ceiling = if chosen == 0 {
             Limits::DEFAULT_HEAP_LIMIT_BYTES
         } else {
@@ -195,6 +199,20 @@ fn heap_sized_params(limits: &Limits, params: v8::CreateParams) -> (v8::CreatePa
         return (params, ceiling);
     };
     (params.heap_limits(0, bytes), bytes)
+}
+
+/// Half of `available`, when V8's own choice would take more than that.
+///
+/// V8 gives the heap about half of the memory it is told about, but never less
+/// than its floor of roughly 256 MiB. On a host that floor is nothing; in a
+/// small container it is the whole container: a 256 MiB limit got a 262 MiB
+/// heap, so a program that grew its heap was killed by the kernel instead of
+/// stopped by the heap guard. Half keeps V8's ratio above the floor, and leaves
+/// the rest for everything that is not the JS heap — the runtime, its threads,
+/// buffers outside the heap.
+fn within_half(available: u64, chosen: usize) -> Option<usize> {
+    let half = usize::try_from(available / 2).ok()?;
+    (half > 0 && chosen > half).then_some(half)
 }
 
 /// Data for the near-heap-limit callback. Kept behind a stable (boxed) address
@@ -1399,6 +1417,21 @@ mod young_generation_tests {
 mod tests {
     use super::*;
     use es_runtime_common::ExceptionClass;
+
+    #[test]
+    fn a_small_container_gets_half_its_memory_for_the_heap() {
+        const MIB: u64 = 1 << 20;
+        // V8's floor would have given a 256 MiB container a 262 MiB heap.
+        assert_eq!(
+            within_half(256 * MIB, 262 << 20),
+            Some(128 << 20),
+            "capped to half"
+        );
+        // Above the floor V8 already keeps to about half; its choice stands.
+        assert_eq!(within_half(2048 * MIB, 1000 << 20), None);
+        // Nothing read: no cap, and the caller keeps its own fallback.
+        assert_eq!(within_half(0, 262 << 20), None);
+    }
 
     fn engine() -> V8Engine {
         V8Engine::new(Limits::default()).expect("engine construction")

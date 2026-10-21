@@ -24,6 +24,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- In a container of 256 MiB or less, a program that grew its heap is stopped by
+  the heap guard ("heap limit exceeded") instead of killed by the kernel. The
+  default ceiling took V8's floor of about 256 MiB even when the container was
+  smaller — a 256 MiB container got a 262 MiB heap — so the process ran out of
+  memory before the guard could act. The default is now never more than half
+  the container's memory; larger containers keep the ceiling they had.
 - `esrun upgrade` no longer asks "Do you want to continue?" after it was told
   to upgrade. Without a terminal — a container, a CI job, a provisioning
   script — the question could not be answered and the upgrade failed with
