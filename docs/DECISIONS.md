@@ -3796,3 +3796,15 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **Building a created canvas in JavaScript.** It would allocate the whole canvas on the JS heap and copy it across; the host fills it.
 
 **Not here:** the other sample types sharp names (`char`, `short`, `int`, `uint`, `double`, `complex`, `dpcomplex`), 16-bit grey with alpha, and `create`'s `noise`.
+
+### D183 — A worker's or WebSocket's id is released when its stream ends · *Proposed (2026-10-22)* · *amends D50* · *deferred until after the public alpha*
+
+**Context:** the soak suite (`bench/soak/`) runs workers and WebSocket connections through hundreds of thousands of lifetimes. After the provider-side leaks were fixed (a peer-closed WebSocket's slot, a fetch response's trailers), one growth remains in both: the runtime's per-agent ownership set (D50, `handles.rs`) keeps every worker and WebSocket id forever. `worker_terminate` and `ws_close` check an id but never release it, deliberately: the prelude may still be draining what arrived, and the specs make `postMessage()`, `send()`, `terminate()` and `close()` on a finished object a no-op, which a released id would turn into an `ERR_FOREIGN_HANDLE` thrown at the caller. `broadcast()` checks every id in its list, so one connection that closed mid-fan-out would reject the whole broadcast. Measured: about 31 bytes per worker under churn, the same order per WebSocket connection; roughly 30 MB per million.
+
+**Proposal:**
+
+- **Release on the end of the stream, not on the call.** The id goes when `worker_recv` or `ws_recv` reports the end (the worker's last message or exit, the WebSocket's close frame or abnormal end) — the one moment after which nothing more can arrive for it, so draining is already over.
+- **A finished object short-circuits in JavaScript before any op.** `postMessage`, `send`, `terminate`, `close` on a worker or socket the prelude has seen end return without calling the host, which is what the specs require anyway.
+- **`broadcast()` skips ended connections** rather than checking them, so a fan-out racing a close still reaches everyone else; a foreign id still rejects, as D50 requires.
+
+**Why deferred:** it changes D50's ownership rule for two handle kinds and every guest-facing method on them, and the remaining growth is small enough (tens of MB per million lifetimes) that no alpha workload should meet it. The soak suite is the check: with this in place, the workers scenario's slow climb should go flat.
