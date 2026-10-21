@@ -13,6 +13,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `install.sh` refuses a Linux system older than glibc 2.39, or a musl one
+  such as Alpine, before downloading anything, and says what is needed. Such a
+  system used to install and then fail at the first run with a loader error.
+  The install page states the requirement: ES-Runtime targets modern servers
+  (Ubuntu 24.04, Debian 13 and later).
 - Security vulnerabilities can be reported through a GitHub private advisory as
   well as by email; `SECURITY.md`, the README, the security docs and the issue
   chooser link to it.

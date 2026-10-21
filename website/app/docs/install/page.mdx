@@ -74,6 +74,10 @@ exercised differs:
 | Windows arm64 | Built in CI, not tested |
 | FreeBSD | Upcoming, no binary yet |
 
+ES-Runtime targets modern servers. On Linux it needs **glibc 2.39 or newer**:
+Ubuntu 24.04, Debian 13 and later. Older distributions, and musl-based ones
+such as Alpine, are not supported; the installer says so before downloading.
+
 A problem on any of them is worth [reporting](https://github.com/Open-Tech-Foundation/ES-Runtime#reporting-issues).
 
 ## Pinning a version

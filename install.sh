@@ -72,6 +72,21 @@ case "$arch" in
   arm64 | aarch64) arch_part="arm64" ;;
   *) err "unsupported architecture: $arch" ;;
 esac
+# The Linux binaries need glibc 2.39 or newer (they are built on Ubuntu 24.04;
+# modern servers only). Below that they would install and then fail at the
+# first run with a loader error, so say so before downloading anything. musl
+# systems (Alpine) report no glibc version at all.
+if [ "$os_part" = linux ]; then
+  min_glibc="2.39"
+  # `|| true`: under pipefail a failing getconf (musl) would otherwise end the
+  # script here, silently, before the message below.
+  glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
+  [ -n "$glibc" ] ||
+    err "ES-Runtime needs glibc $min_glibc or newer; this system has none (musl-based systems such as Alpine are not supported)"
+  [ "$(printf '%s\n%s\n' "$min_glibc" "$glibc" | sort -V | head -1)" = "$min_glibc" ] ||
+    err "ES-Runtime needs glibc $min_glibc or newer; this system has $glibc (Ubuntu 24.04, Debian 13 and later have it)"
+fi
+
 # Release assets are named `<bin>-<os>-<arch>` by the otf-release tool
 # (see release.toml), e.g. `esrun-linux-x86-64.tar.gz`.
 target="${os_part}-${arch_part}"
