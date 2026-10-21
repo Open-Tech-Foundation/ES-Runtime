@@ -23,28 +23,57 @@ pub(crate) fn available_bytes() -> u64 {
     cgroup_limit().unwrap_or_else(|| physical_memory().unwrap_or(0))
 }
 
-/// The container's memory ceiling, from cgroup v2 then v1.
-///
-/// Both spell "unlimited" as a value near the top of the address space rather
-/// than as an absent file — v2 writes the literal `max`, v1 a huge number — so
-/// an implausibly large answer is read as no limit at all.
+/// The memory ceiling on this process's cgroup, from cgroup v2 or v1.
 fn cgroup_limit() -> Option<u64> {
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    limit_under(std::path::Path::new("/sys/fs/cgroup"), &own)
+}
+
+/// The tightest memory limit on the cgroup `own` names (the text of
+/// `/proc/self/cgroup`) and on each of its ancestors, read from the tree at
+/// `root`.
+///
+/// The process's own cgroup, not the root of the tree. The two are the same
+/// only inside a container with a private cgroup namespace, Docker's default.
+/// Under systemd a service sits at `system.slice/app.service` and the root has
+/// no `memory.max` at all, so a unit's `MemoryMax=` went unseen and the heap
+/// was sized from the host — 1.9 GiB under a 256 MiB limit. Ancestors too,
+/// because a limit on a parent slice binds every service in it.
+///
+/// Both versions spell "unlimited" as a value near the top of the address space
+/// rather than as an absent file — v2 writes the literal `max`, v1 a huge
+/// number — so an implausibly large answer is read as no limit at all.
+fn limit_under(root: &std::path::Path, own: &str) -> Option<u64> {
     const IMPLAUSIBLE: u64 = 1 << 50; // 1 PiB: no container has this.
-    for path in [
-        "/sys/fs/cgroup/memory.max",                   // v2
-        "/sys/fs/cgroup/memory/memory.limit_in_bytes", // v1
-    ] {
-        let Ok(text) = std::fs::read_to_string(path) else {
+    let mut files = Vec::new();
+    for line in own.lines() {
+        // `hierarchy-id:controllers:path`; v2 is the line with no controllers.
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
             continue;
         };
-        let Ok(bytes) = text.trim().parse::<u64>() else {
-            continue; // "max"
+        let (base, file) = if controllers.is_empty() {
+            (root.to_path_buf(), "memory.max")
+        } else if controllers.split(',').any(|c| c == "memory") {
+            (root.join("memory"), "memory.limit_in_bytes")
+        } else {
+            continue;
         };
-        if bytes > 0 && bytes < IMPLAUSIBLE {
-            return Some(bytes);
+        let mut dir = base.join(path.trim_start_matches('/'));
+        loop {
+            files.push(dir.join(file));
+            if dir == base || !dir.pop() {
+                break;
+            }
         }
     }
-    None
+    files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .filter_map(|text| text.trim().parse::<u64>().ok()) // "max" is no limit
+        .filter(|&bytes| bytes > 0 && bytes < IMPLAUSIBLE)
+        .min()
 }
 
 /// Physical memory, three ways, because there is no portable answer.
@@ -158,6 +187,72 @@ fn physical_memory() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cgroup tree under a fresh directory: `(path, file, contents)` triples.
+    fn tree(name: &str, files: &[(&str, &str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("sysmem-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, file, contents) in files {
+            let dir = root.join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(file), contents).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn a_systemd_unit_s_limit_is_found_in_its_own_cgroup() {
+        // The root has no memory.max under systemd; the service's cgroup does.
+        let root = tree(
+            "unit",
+            &[
+                ("system.slice", "memory.max", "max\n"),
+                ("system.slice/app.service", "memory.max", "268435456\n"),
+            ],
+        );
+        let own = "0::/system.slice/app.service\n";
+        assert_eq!(limit_under(&root, own), Some(268_435_456));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_tightest_limit_on_the_way_up_wins() {
+        let root = tree(
+            "slice",
+            &[
+                ("work.slice", "memory.max", "134217728\n"),
+                ("work.slice/app.service", "memory.max", "max\n"),
+            ],
+        );
+        assert_eq!(
+            limit_under(&root, "0::/work.slice/app.service\n"),
+            Some(134_217_728)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_namespaced_container_reads_the_root_and_v1_reads_its_hierarchy() {
+        // Docker's default: the container's cgroup is the root of what it sees.
+        let v2 = tree("ns", &[("", "memory.max", "536870912\n")]);
+        assert_eq!(limit_under(&v2, "0::/\n"), Some(536_870_912));
+        std::fs::remove_dir_all(v2).unwrap();
+
+        let v1 = tree(
+            "v1",
+            &[("memory/docker/abc", "memory.limit_in_bytes", "1073741824\n")],
+        );
+        let own = "12:cpu,cpuacct:/docker/abc\n7:memory:/docker/abc\n0::/\n";
+        assert_eq!(limit_under(&v1, own), Some(1_073_741_824));
+        // v1's spelling of "unlimited" is a huge number, not a limit.
+        std::fs::write(
+            v1.join("memory/docker/abc/memory.limit_in_bytes"),
+            "9223372036854771712\n",
+        )
+        .unwrap();
+        assert_eq!(limit_under(&v1, own), None);
+        std::fs::remove_dir_all(v1).unwrap();
+    }
 
     /// Whatever this machine is, the answer has to be a usable number: the
     /// isolate's ceiling is derived from it.

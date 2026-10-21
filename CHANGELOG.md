@@ -28,6 +28,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- The default heap ceiling follows a systemd unit's `MemoryMax=` and any
+  limit on its slice. esrun read only the root of the cgroup tree, which is the
+  process's own cgroup inside a container with a private cgroup namespace and
+  nowhere else, so under systemd (or Docker with `--cgroupns=host`) a 256 MiB
+  limit got a 1.9 GiB heap. It now reads its own cgroup from
+  `/proc/self/cgroup` and takes the tightest limit on the way up, for cgroup v2
+  and v1.
 - In a container of 256 MiB or less, a program that grew its heap is stopped by
   the heap guard ("heap limit exceeded") instead of killed by the kernel. The
   default ceiling took V8's floor of about 256 MiB even when the container was
