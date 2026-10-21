@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-21
+
 ### Added
 
 - `runtime:archive`: `Archive`, `ArchiveEntry`, the build/read input and

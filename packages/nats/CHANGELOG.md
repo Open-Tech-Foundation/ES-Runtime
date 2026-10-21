@@ -10,6 +10,8 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-21
+
 ### Added
 
 - `onDisconnect`, `onReconnect` and `onError` on the client; the `max` and

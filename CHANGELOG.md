@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-21
+
 ### Added
 
 - `runtime:archive` reads and writes tar, tar.gz and zip (DECISIONS D174).

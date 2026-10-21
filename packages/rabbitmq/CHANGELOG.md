@@ -10,6 +10,8 @@ package written entirely in JavaScript over `runtime:net`. See the root
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-21
+
 ### Added
 
 - RabbitMQ's URL query parameters: `heartbeat`, `channel_max`, `frame_max`,
