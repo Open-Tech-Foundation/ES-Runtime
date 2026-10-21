@@ -52,7 +52,15 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 ///
 /// `CI` is honoured because build systems set it and pipe a terminal in anyway;
 /// it is the one signal that is about intent rather than about plumbing.
+///
+/// Never in a unit test. `cargo test` run from a terminal inherits it, and a
+/// test that reached a menu put that terminal into raw mode and waited for a
+/// key nobody would press — CI never saw it, because CI sets `CI`. A test of
+/// the questions drives them with a scripted answer instead.
 pub fn interactive() -> bool {
+    if cfg!(test) {
+        return false;
+    }
     std::io::stdin().is_terminal()
         && std::io::stderr().is_terminal()
         && std::env::var_os("CI").is_none()

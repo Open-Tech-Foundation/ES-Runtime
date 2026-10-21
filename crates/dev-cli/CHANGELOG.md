@@ -24,6 +24,14 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `cargo test` run from a terminal no longer hangs in the `create` tests. Tests
+  that resolve a template's questions asked the real terminal whether it was
+  one, so locally they opened a menu, put the terminal into raw mode and waited
+  for a key; CI never saw it because it sets `CI`. Under test the prompt is
+  never interactive.
+
 ## [0.20.0] - 2026-10-17
 
 ### Fixed
