@@ -35,6 +35,7 @@ mod fs_ops;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzz;
+pub mod glob;
 mod handles;
 mod hashing_ops;
 mod http_ops;

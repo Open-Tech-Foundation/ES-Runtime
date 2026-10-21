@@ -17,7 +17,9 @@ itself.
 
 - `runtime:archive`: `Archive`, `ArchiveEntry`, the build/read input and
   options types, `ArchiveFilter`, `ExtractResult`, the entry metadata shape,
-  and `Archive`'s async metadata iterator (DECISIONS D174).
+  and `Archive`'s async metadata iterator (DECISIONS D174). `ArchiveFilter` is a glob, a list of
+  globs, a `RegExp` or a predicate; `ExtractOptions` adds `filter` to the
+  limits `extract()` takes; `ArchiveOptions` adds `level`.
 
 ### Changed
 

@@ -13,7 +13,6 @@ use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
     BoxFuture, DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError, SymlinkKind,
 };
-use globset::GlobBuilder;
 use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
 
@@ -21,31 +20,9 @@ use crate::jail::Jail;
 use crate::path;
 use crate::path_allowlist::Access;
 
-/// Compiles a glob pattern into a matcher plus a "negated" flag, covering the
-/// full conventional set: `?`, `*` (not crossing `/`), `**` (crossing), `[ab]`,
-/// `[a-z]`, `[!abc]` **and** `[^abc]`, `{a,b}`, `\` escaping, and a leading `!`
-/// that negates the whole pattern.
-///
-/// `\` escaping is the one part that is platform-dependent: globset disables it
-/// on Windows, where `\` is the path separator, so `\!x.ts` is a path there
-/// rather than a literal `!x.ts`. Node's minimatch makes the same call
-/// (`windowsPathsNoEscape`). Forcing it on would make pattern semantics uniform
-/// but stop `\` separating components in the real Windows paths this matches
-/// against, which is the trade globset's default is choosing.
+/// The one glob implementation (`es_runtime::glob`), as a provider error.
 fn parse_glob(pattern: &str) -> Result<(globset::GlobMatcher, bool), ProviderError> {
-    // A leading `!` negates; `\!…` is a literal `!` (globset unescapes it).
-    let (negated, body) = match pattern.strip_prefix('!') {
-        Some(rest) => (true, rest.to_string()),
-        None => (false, pattern.to_string()),
-    };
-    // Accept the `[^…]` negated-class form (globset spells it `[!…]`).
-    let body = body.replace("[^", "[!");
-    let matcher = GlobBuilder::new(&body)
-        .literal_separator(true)
-        .build()
-        .map(|g| g.compile_matcher())
-        .map_err(|e| ProviderError::Other(format!("invalid glob pattern {pattern:?}: {e}")))?;
-    Ok((matcher, negated))
+    es_runtime::glob::compile(pattern).map_err(ProviderError::Other)
 }
 
 /// A [`FileSystem`] over the real OS, reaching only what its [`Jail`] admits.

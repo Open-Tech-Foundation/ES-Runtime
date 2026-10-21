@@ -1426,6 +1426,7 @@ dependencies = [
  "flate2",
  "futures-channel",
  "futures-util",
+ "globset",
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "md-5",

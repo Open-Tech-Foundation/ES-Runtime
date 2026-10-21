@@ -85,6 +85,28 @@ impl Default for Limits {
     }
 }
 
+/// Which entries a read or an extraction takes. The whole archive is still
+/// read and validated — limits, paths, layout, checksums — so a selection
+/// changes what is returned or written, never what is accepted.
+#[derive(Debug, Clone)]
+pub(crate) enum Selection {
+    All,
+    /// Exactly these paths; a read reports any that are missing.
+    Paths(BTreeSet<String>),
+    /// The paths a glob list takes (`crate::glob::GlobList`).
+    Glob(crate::glob::GlobList),
+}
+
+impl Selection {
+    pub(crate) fn takes(&self, path: &str) -> bool {
+        match self {
+            Selection::All => true,
+            Selection::Paths(paths) => paths.contains(path),
+            Selection::Glob(list) => list.matches(path),
+        }
+    }
+}
+
 /// A failure in the codec itself. Path/provider errors are the caller's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Error {
@@ -424,13 +446,43 @@ pub(crate) fn sniff(bytes: &[u8]) -> Format {
     }
 }
 
-/// Builds an archive deterministically. `gzip` is only meaningful for tar.
+/// Builds an archive deterministically at the default compression level.
+#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn build(
     entries: Vec<InputEntry>,
     format: Format,
     compress: Compression,
     limits: &Limits,
 ) -> Result<Vec<u8>, Error> {
+    build_with_level(entries, format, compress, None, limits)
+}
+
+/// The compression level when none is given: zlib's and gzip's own default.
+const DEFAULT_LEVEL: u32 = 6;
+
+/// Builds an archive deterministically. `level` is 1 (fastest) to 9
+/// (smallest), and only meaningful with gzip or deflate; the same entries at
+/// the same level produce the same bytes.
+pub(crate) fn build_with_level(
+    entries: Vec<InputEntry>,
+    format: Format,
+    compress: Compression,
+    level: Option<u32>,
+    limits: &Limits,
+) -> Result<Vec<u8>, Error> {
+    if let Some(level) = level {
+        if compress == Compression::None {
+            return Err(Error::Type(
+                "a compression level needs compress: \"gzip\" or \"deflate\"".to_string(),
+            ));
+        }
+        if !(1..=9).contains(&level) {
+            return Err(Error::Type(format!(
+                "the compression level must be from 1 to 9, not {level}"
+            )));
+        }
+    }
+    let level = level.unwrap_or(DEFAULT_LEVEL);
     match (format, compress) {
         (Format::Tar | Format::TarGz, Compression::Gzip | Compression::None) => {}
         (Format::Zip, Compression::Deflate | Compression::None) => {}
@@ -499,12 +551,13 @@ pub(crate) fn build(
         Format::Tar | Format::TarGz => build_tar(
             &normalized,
             compress == Compression::Gzip || format == Format::TarGz,
+            level,
         ),
-        Format::Zip => build_zip(&normalized, compress == Compression::Deflate),
+        Format::Zip => build_zip(&normalized, compress == Compression::Deflate, level),
     }
 }
 
-fn build_tar(entries: &[InputEntry], gzip: bool) -> Result<Vec<u8>, Error> {
+fn build_tar(entries: &[InputEntry], gzip: bool, level: u32) -> Result<Vec<u8>, Error> {
     let mut builder = tar::Builder::new(Vec::new());
     for entry in entries {
         let directory = entry.data.is_none();
@@ -535,14 +588,14 @@ fn build_tar(entries: &[InputEntry], gzip: bool) -> Result<Vec<u8>, Error> {
     if !gzip {
         return Ok(bytes);
     }
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(level));
     encoder
         .write_all(&bytes)
         .and_then(|()| encoder.finish())
         .map_err(|error| Error::Decode(format!("could not gzip the tar: {error}")))
 }
 
-fn build_zip(entries: &[InputEntry], deflate: bool) -> Result<Vec<u8>, Error> {
+fn build_zip(entries: &[InputEntry], deflate: bool, level: u32) -> Result<Vec<u8>, Error> {
     use zip::write::SimpleFileOptions;
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let method = if deflate {
@@ -555,6 +608,7 @@ fn build_zip(entries: &[InputEntry], deflate: bool) -> Result<Vec<u8>, Error> {
         let data = entry.data.as_deref().unwrap_or(&[]);
         let options = SimpleFileOptions::default()
             .compression_method(method)
+            .compression_level(deflate.then_some(i64::from(level)))
             .last_modified_time(zip_datetime(entry.modified_ms))
             .unix_permissions(if directory { 0o755 } else { 0o644 })
             .system(zip::System::Unix)
@@ -646,22 +700,32 @@ pub(crate) fn list_source(
 pub(crate) fn read_selected_source(
     source: &Source,
     format: Format,
-    paths: &BTreeSet<String>,
+    selection: &Selection,
     limits: &Limits,
 ) -> Result<Vec<Entry>, Error> {
-    if paths.is_empty() {
+    if let Selection::Paths(paths) = selection
+        && paths.is_empty()
+    {
         return Ok(Vec::new());
     }
-    match format {
-        Format::Zip => zip_selected(source.reader()?, paths, limits),
-        Format::Tar => tar_selected(source.reader()?, paths, limits),
+    let entries = match format {
+        Format::Zip => zip_selected(source.reader()?, selection, limits)?,
+        Format::Tar => tar_selected(source.reader()?, selection, limits)?,
         Format::TarGz => {
             let mut gzip = gzip_reader(source.reader()?, limits);
-            let entries = tar_selected(&mut gzip, paths, limits)?;
+            let entries = tar_selected(&mut gzip, selection, limits)?;
             gzip.finish()?;
-            Ok(entries)
+            entries
+        }
+    };
+    if let Selection::Paths(paths) = selection {
+        for path in paths {
+            if !entries.iter().any(|entry| &entry.meta.path == path) {
+                return Err(Error::NotFound(format!("no entry named {path:?}")));
+            }
         }
     }
+    Ok(entries)
 }
 
 /// Reads a whole source. Inherently allocates the archive, for `bytes()`.
@@ -705,13 +769,14 @@ pub(crate) fn spawn_extract(
     source: Source,
     format: Format,
     limits: Limits,
+    selection: Selection,
     mut tx: mpsc::Sender<ExtractEvent>,
 ) {
     let mut error_tx = tx.clone();
     let spawned = std::thread::Builder::new()
         .name("archive-extract".to_string())
         .spawn(move || {
-            let result = extract_entries(&source, format, &limits, &mut tx);
+            let result = extract_entries(&source, format, &limits, &selection, &mut tx);
             let event = match result {
                 Ok(()) => ExtractEvent::Done,
                 Err(error) => ExtractEvent::Error(error),
@@ -1007,19 +1072,23 @@ fn check_entry_limits(
     Ok(())
 }
 
+/// The selected entries, data included, in archive order. Every entry is
+/// checked against the limits and the layout, selected or not.
 fn tar_selected<R: Read>(
     reader: R,
-    paths: &BTreeSet<String>,
+    selection: &Selection,
     limits: &Limits,
 ) -> Result<Vec<Entry>, Error> {
     let mut archive = tar::Archive::new(reader);
     let mut entries = Vec::new();
     let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
     for (count, item) in archive.entries().map_err(tar_decode)?.enumerate() {
         let mut entry = item.map_err(tar_decode)?;
         let meta = tar_meta(&entry)?;
         check_entry_limits(&meta, count, &mut total, limits)?;
-        if paths.contains(&meta.path) {
+        layout.check(&meta)?;
+        if selection.takes(&meta.path) {
             let data = if meta.directory {
                 Vec::new()
             } else {
@@ -1028,17 +1097,13 @@ fn tar_selected<R: Read>(
             entries.push(Entry { meta, data });
         }
     }
-    for path in paths {
-        if !entries.iter().any(|entry| &entry.meta.path == path) {
-            return Err(Error::NotFound(format!("no entry named {path:?}")));
-        }
-    }
     Ok(entries)
 }
 
+/// [`tar_selected`] for zip.
 fn zip_selected<R: Read + Seek>(
     mut reader: R,
-    paths: &BTreeSet<String>,
+    selection: &Selection,
     limits: &Limits,
 ) -> Result<Vec<Entry>, Error> {
     zip_precheck(&mut reader, limits)?;
@@ -1046,10 +1111,12 @@ fn zip_selected<R: Read + Seek>(
     check_zip_count(archive.len(), limits)?;
     let mut entries = Vec::new();
     let mut total: u64 = 0;
+    let mut layout = LayoutChecker::new();
     for index in 0..archive.len() {
         let meta = zip_meta(&mut archive, index)?;
         check_entry_limits(&meta, index, &mut total, limits)?;
-        if !paths.contains(&meta.path) {
+        layout.check(&meta)?;
+        if !selection.takes(&meta.path) {
             continue;
         }
         let data = if meta.directory {
@@ -1070,11 +1137,6 @@ fn zip_selected<R: Read + Seek>(
             data
         };
         entries.push(Entry { meta, data });
-    }
-    for path in paths {
-        if !entries.iter().any(|entry| &entry.meta.path == path) {
-            return Err(Error::NotFound(format!("no entry named {path:?}")));
-        }
     }
     Ok(entries)
 }
@@ -1184,18 +1246,21 @@ fn stream_reader<R: Read>(
     Ok(())
 }
 
+/// Streams the selected entries for extraction. Unselected entries are
+/// validated like the rest and their data is skipped, not sent.
 fn extract_entries(
     source: &Source,
     format: Format,
     limits: &Limits,
+    selection: &Selection,
     tx: &mut mpsc::Sender<ExtractEvent>,
 ) -> Result<(), Error> {
     match format {
-        Format::Zip => extract_zip(source.reader()?, limits, tx),
-        Format::Tar => extract_tar(source.reader()?, limits, tx),
+        Format::Zip => extract_zip(source.reader()?, limits, selection, tx),
+        Format::Tar => extract_tar(source.reader()?, limits, selection, tx),
         Format::TarGz => {
             let mut gzip = gzip_reader(source.reader()?, limits);
-            extract_tar(&mut gzip, limits, tx)?;
+            extract_tar(&mut gzip, limits, selection, tx)?;
             finish_unless_closed(gzip, tx)
         }
     }
@@ -1204,6 +1269,7 @@ fn extract_entries(
 fn extract_tar<R: Read>(
     reader: R,
     limits: &Limits,
+    selection: &Selection,
     tx: &mut mpsc::Sender<ExtractEvent>,
 ) -> Result<(), Error> {
     let mut archive = tar::Archive::new(reader);
@@ -1214,6 +1280,9 @@ fn extract_tar<R: Read>(
         let meta = tar_meta(&entry)?;
         check_entry_limits(&meta, count, &mut total, limits)?;
         layout.check(&meta)?;
+        if !selection.takes(&meta.path) {
+            continue;
+        }
         if !send_event(tx, ExtractEvent::Entry(meta.clone())) {
             return Ok(());
         }
@@ -1230,6 +1299,7 @@ fn extract_tar<R: Read>(
 fn extract_zip<R: Read + Seek>(
     mut reader: R,
     limits: &Limits,
+    selection: &Selection,
     tx: &mut mpsc::Sender<ExtractEvent>,
 ) -> Result<(), Error> {
     zip_precheck(&mut reader, limits)?;
@@ -1241,6 +1311,9 @@ fn extract_zip<R: Read + Seek>(
         let meta = zip_meta(&mut archive, index)?;
         check_entry_limits(&meta, index, &mut total, limits)?;
         layout.check(&meta)?;
+        if !selection.takes(&meta.path) {
+            continue;
+        }
         if !send_event(tx, ExtractEvent::Entry(meta.clone())) {
             return Ok(());
         }
@@ -2109,7 +2182,12 @@ mod tests {
             let (mut tx, _rx) = mpsc::channel(16);
             assert!(
                 matches!(
-                    extract_tar(Cursor::new(bytes), &Limits::default(), &mut tx),
+                    extract_tar(
+                        Cursor::new(bytes),
+                        &Limits::default(),
+                        &Selection::All,
+                        &mut tx
+                    ),
                     Err(Error::UnsafePath(_))
                 ),
                 "{first_name:?} followed by {second_name:?} was accepted"
@@ -2384,7 +2462,7 @@ mod tests {
             read_selected_source(
                 &source,
                 Format::TarGz,
-                &BTreeSet::from(["a.txt".to_string()]),
+                &Selection::Paths(BTreeSet::from(["a.txt".to_string()])),
                 &limits,
             )
             .map(drop),
@@ -2410,7 +2488,7 @@ mod tests {
             }
         });
         let (tx, mut rx) = mpsc::channel(1_024);
-        spawn_extract(source, Format::TarGz, limits, tx);
+        spawn_extract(source, Format::TarGz, limits, Selection::All, tx);
         results.push(loop {
             match block_on(rx.next()) {
                 Some(ExtractEvent::Done) => break Ok(()),
@@ -2469,6 +2547,81 @@ mod tests {
         for result in every_gzip_pass(gzip(&tar), limits) {
             assert!(matches!(result, Err(Error::TooLarge(_))), "{result:?}");
         }
+    }
+
+    #[test]
+    fn levels_change_the_bytes_and_are_validated() {
+        let data = vec![file("a.txt", &b"abcabcabc".repeat(4_000))];
+        let at = |format, compress, level| {
+            build_with_level(data.clone(), format, compress, level, &Limits::default())
+        };
+        for (format, compress) in [
+            (Format::TarGz, Compression::Gzip),
+            (Format::Zip, Compression::Deflate),
+        ] {
+            let fast = at(format, compress, Some(1)).unwrap();
+            let small = at(format, compress, Some(9)).unwrap();
+            assert_eq!(
+                at(format, compress, Some(9)).unwrap(),
+                small,
+                "deterministic"
+            );
+            assert_eq!(
+                at(format, compress, None).unwrap(),
+                at(format, compress, Some(6)).unwrap()
+            );
+            assert_ne!(fast, small);
+            assert_eq!(
+                read_all(&small, &Limits::default()).unwrap().1[0]
+                    .data
+                    .len(),
+                36_000
+            );
+            assert!(matches!(at(format, compress, Some(0)), Err(Error::Type(_))));
+            assert!(matches!(
+                at(format, compress, Some(10)),
+                Err(Error::Type(_))
+            ));
+        }
+        assert!(matches!(
+            at(Format::Tar, Compression::None, Some(6)),
+            Err(Error::Type(_))
+        ));
+    }
+
+    #[test]
+    fn a_selection_reads_what_it_takes_and_validates_the_rest() {
+        let bytes = build(sample(), Format::Zip, Compression::None, &Limits::default()).unwrap();
+        let source = Source::bytes(bytes);
+        let glob = Selection::Glob(crate::glob::GlobList::new(&["**/*.txt", "!a/**"]).unwrap());
+        let taken: Vec<String> =
+            read_selected_source(&source, Format::Zip, &glob, &Limits::default())
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.meta.path)
+                .collect();
+        assert_eq!(taken, ["a.txt", "b.txt"]);
+
+        let missing = Selection::Paths(BTreeSet::from(["nope".to_string()]));
+        assert!(matches!(
+            read_selected_source(&source, Format::Zip, &missing, &Limits::default()),
+            Err(Error::NotFound(_))
+        ));
+
+        // A duplicate the selection does not take is still refused.
+        let mut tar = raw_tar("a.txt", b"one");
+        tar.truncate(tar.len() - 1024);
+        tar.extend(raw_tar("a.txt", b"two"));
+        let only_b = Selection::Glob(crate::glob::GlobList::new(&["b.txt"]).unwrap());
+        assert!(matches!(
+            read_selected_source(
+                &Source::bytes(tar),
+                Format::Tar,
+                &only_b,
+                &Limits::default()
+            ),
+            Err(Error::UnsafePath(_))
+        ));
     }
 
     #[test]

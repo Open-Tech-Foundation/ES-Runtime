@@ -3524,6 +3524,7 @@ add its contents. That reads the whole input file into memory.
 | --- | --- | --- |
 | `format` | `"tar"` | `"tar"` or `"zip"` when building. Ignored when opening. |
 | `compress` | `"none"` | `"gzip"` for tar, `"deflate"` for zip, or `"none"`. A combination the format cannot carry is a `TypeError`. |
+| `level` | `6` | Compression level with `"gzip"` or `"deflate"`: `1` is fastest, `9` smallest. Outside 1–9 is a `RangeError`; with `compress: "none"` it is a `TypeError`. |
 | `maxEntries` | `100000` | Entry-count cap, on build and read. For zip the count is read from the end record before the central directory is parsed. Over it is `RangeError` with `ERR_ARCHIVE_TOO_LARGE`. |
 | `maxBytes` | `1073741824` (1 GiB) | Cap on uncompressed bytes, on build and read, checked against declared sizes before allocation and against bytes actually decompressed. Over it is `RangeError` with `ERR_ARCHIVE_TOO_LARGE`. |
 
@@ -3540,8 +3541,8 @@ input produces the same bytes.
 | `blob()` | A `Blob` whose `type` is `application/x-tar`, `application/gzip` or `application/zip`, from the format in the bytes. |
 | `entries()` | An array of `ArchiveEntry`, in archive order. A snapshot: use the async iterator to stream it. |
 | `[Symbol.asyncIterator]` | An `AsyncIterable<ArchiveEntry>` over the same metadata, parsed one entry at a time. |
-| `files(filter?)` | A `Map<string, File>` of the file entries (directories skipped). `filter` is a predicate on the path, a path prefix string, or a `RegExp`. |
-| `extract(directory, options?)` | Writes every entry under `directory` (a path string or `file()`) and resolves to `{ files, directories }`. `options` may set `maxEntries` / `maxBytes` for this extraction; a limit it leaves out keeps the Archive's. Needs `FileWrite`. |
+| `files(filter?)` | A `Map<string, File>` of the file entries (directories skipped) that `filter` takes — see [Filters](#filters). |
+| `extract(directory, options?)` | Writes the entries under `directory` (a path string or `file()`) and resolves to `{ files, directories }` written. `options.filter` writes only the entries it takes ([Filters](#filters)); the whole archive is still validated. `options` may also set `maxEntries` / `maxBytes`; a limit it leaves out keeps the Archive's. Needs `FileWrite`. |
 | `Archive.write(destination, input, options?)` | Builds `input` as above and writes it to `destination` (a path string or `file()`), resolving to the byte count. Needs `FileWrite`. |
 
 `for await (const entry of archive)` streams metadata instead of collecting an
@@ -3558,6 +3559,20 @@ yields bounded chunks, `files(filter)` reads only the entries the filter
 selected, and a `file()` source is scanned through the filesystem rather than
 loaded whole. (A tar.gz entry still has to decompress through its predecessors
 to reach its data; those bytes are discarded as they are skipped.)
+
+### Filters
+
+`files()` and `extract({ filter })` take the same filter:
+
+- **A glob** (`"src/**"`) **or a list of globs** (`["**/*.ts", "!**/*.test.ts"]`),
+  matched against the entry path with the rules of `runtime:fs`'s `Glob`: `*`
+  does not cross `/`, `**` does. In a list, a pattern starting with `!`
+  excludes: an entry is taken when it matches a pattern without `!` and none
+  with it, and a list of only `!` patterns takes everything else.
+- **A `RegExp`**, tested against the path.
+- **A function** `(path) => boolean`.
+
+An invalid glob, or a list with a non-string in it, is a `TypeError`.
 
 ### Safety
 

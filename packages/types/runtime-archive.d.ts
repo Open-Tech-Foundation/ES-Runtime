@@ -27,6 +27,8 @@ declare module "runtime:archive" {
     format?: ArchiveFormat;
     /** `"gzip"` with tar, `"deflate"` with zip, or `"none"`. Default `"none"`. */
     compress?: "none" | "gzip" | "deflate";
+    /** Compression level, 1 (fastest) to 9 (smallest), with `"gzip"` or `"deflate"`. Default 6. */
+    level?: number;
     /** Entry-count cap. Default 100000. */
     maxEntries?: number;
     /** Cap on uncompressed bytes. Default 1 GiB. */
@@ -52,8 +54,22 @@ declare module "runtime:archive" {
     directories: number;
   }
 
-  /** A predicate on an entry path, a path prefix, or a pattern. */
-  export type ArchiveFilter = string | RegExp | ((path: string) => boolean);
+  /**
+   * Which entries to take: a glob or a list of globs (`"src/**", "!**\/*.test.ts"`),
+   * a RegExp, or a predicate on the entry path. In a list, `!` excludes; a list
+   * of only exclusions takes everything else.
+   */
+  export type ArchiveFilter =
+    | string
+    | readonly string[]
+    | RegExp
+    | ((path: string) => boolean);
+
+  /** What `extract()` takes: the read limits, and which entries to write. */
+  export interface ExtractOptions extends ArchiveLimits {
+    /** Only the entries that match are written; the whole archive is still validated. */
+    filter?: ArchiveFilter;
+  }
 
   /** One entry, with metadata up front and contents read on demand. */
   export class ArchiveEntry {
@@ -81,8 +97,8 @@ declare module "runtime:archive" {
     [Symbol.asyncIterator](): AsyncIterator<ArchiveEntry>;
     /** The file entries as Files (directories are skipped). */
     files(filter?: ArchiveFilter): Promise<Map<string, File>>;
-    /** Writes every entry under `directory`. Needs FileWrite. */
-    extract(directory: string | FsFile, options?: ArchiveLimits): Promise<ExtractResult>;
+    /** Writes the entries (or the ones `filter` takes) under `directory`. Needs FileWrite. */
+    extract(directory: string | FsFile, options?: ExtractOptions): Promise<ExtractResult>;
 
     /** Writes an archive built from `input` to `destination`. Needs FileWrite. */
     static write(

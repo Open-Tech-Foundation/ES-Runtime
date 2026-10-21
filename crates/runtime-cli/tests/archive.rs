@@ -73,7 +73,7 @@ const files = await tar.files();
 eq([...files.keys()], ["hello.txt", "nested/deep.bin"], "files skips directories");
 eq(files.get("hello.txt") instanceof File, true, "files makes Files");
 eq(await files.get("hello.txt").text(), "Hello", "file text");
-eq([...(await tar.files("nested/")).keys()], ["nested/deep.bin"], "string filter");
+eq([...(await tar.files("nested/**")).keys()], ["nested/deep.bin"], "glob filter");
 eq([...(await tar.files(/\.txt$/)).keys()], ["hello.txt"], "regexp filter");
 
 const zip = new Archive({ "a.txt": "A", "dir/": null }, { format: "zip" });
@@ -643,4 +643,127 @@ console.log(JSON.stringify(await archive.extract("archive_pinned_out")));
         })
         .collect();
     assert!(leftovers.is_empty(), "the stage was left behind");
+}
+
+/// A string or a list filter is a glob, read as Bun reads it: `!` excludes,
+/// and a list of only exclusions takes everything else. A RegExp and a
+/// function are applied to the path.
+#[test]
+fn files_filters_are_globs_regexps_or_functions() {
+    let source = r#"
+import { Archive } from "runtime:archive";
+
+const archive = new Archive(await new Archive({
+  "src/a.ts": "a",
+  "src/a.test.ts": "t",
+  "src/deep/b.ts": "b",
+  "docs/readme.md": "r",
+  "src/": null,
+}).bytes());
+const keys = async (filter) => [...(await archive.files(filter)).keys()];
+
+eq(await keys("src/**"), ["src/a.test.ts", "src/a.ts", "src/deep/b.ts"], "glob");
+eq(await keys("*.ts"), [], "* does not cross /");
+eq(await keys(["**/*.ts", "!**/*.test.ts"]), ["src/a.ts", "src/deep/b.ts"], "list");
+eq(await keys(["!src/**"]), ["docs/readme.md"], "only exclusions");
+eq(await keys(/\.md$/), ["docs/readme.md"], "regexp");
+eq(await keys((path) => path.includes("deep")), ["src/deep/b.ts"], "function");
+eq(await (await archive.files("docs/*")).get("docs/readme.md").text(), "r", "contents");
+try {
+  await archive.files([1]);
+} catch (error) {
+  console.log(error.constructor.name);
+}
+try {
+  await archive.files("a[");
+} catch (error) {
+  console.log(error.constructor.name);
+}
+"#;
+    assert_eq!(
+        run("archive_filters.mjs", source, &["--deny-all"])
+            .lines()
+            .collect::<Vec<_>>(),
+        ["TypeError", "TypeError"]
+    );
+}
+
+/// `extract({ filter })` writes only what the filter takes, and still refuses
+/// an archive whose untaken entries are unsafe.
+#[test]
+fn extract_writes_only_what_the_filter_takes() {
+    let out = temp("archive_selective_out");
+    let fn_out = temp("archive_selective_fn_out");
+    let refused = temp("archive_selective_refused");
+    for dir in [&out, &fn_out, &refused] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    let source = r#"
+import { Archive } from "runtime:archive";
+
+const archive = new Archive({
+  "src/a.ts": "a",
+  "src/a.test.ts": "t",
+  "docs/readme.md": "r",
+});
+console.log(JSON.stringify(
+  await archive.extract("archive_selective_out", { filter: ["src/**", "!**/*.test.ts"] }),
+));
+console.log(JSON.stringify(
+  await archive.extract("archive_selective_fn_out", { filter: (path) => path.startsWith("docs") }),
+));
+"#;
+    let output = run(
+        "archive_selective.mjs",
+        source,
+        &["--allow-write=.", "--allow-read=."],
+    );
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        [
+            r#"{"files":1,"directories":0}"#,
+            r#"{"files":1,"directories":0}"#
+        ]
+    );
+    assert_eq!(std::fs::read_to_string(out.join("src/a.ts")).unwrap(), "a");
+    assert!(!out.join("src/a.test.ts").exists() && !out.join("docs").exists());
+    assert_eq!(
+        std::fs::read_to_string(fn_out.join("docs/readme.md")).unwrap(),
+        "r"
+    );
+    assert!(!fn_out.join("src").exists());
+}
+
+/// `level` picks the compressor's trade-off, 1 to 9, and only with a
+/// compressor: out of range is a RangeError, without one a TypeError.
+#[test]
+fn compression_level_is_chosen_and_checked() {
+    let source = r#"
+import { Archive } from "runtime:archive";
+
+const entries = { "a.txt": "abcabcabc".repeat(5000) };
+for (const [format, compress] of [["tar", "gzip"], ["zip", "deflate"]]) {
+  const fast = await new Archive(entries, { format, compress, level: 1 }).bytes();
+  const small = await new Archive(entries, { format, compress, level: 9 }).bytes();
+  const again = await new Archive(entries, { format, compress, level: 9 }).bytes();
+  eq(bytes(small), bytes(again), `${format} is deterministic`);
+  if (bytes(fast).join() === bytes(small).join()) throw new Error(`${format}: level changed nothing`);
+  eq(await (await new Archive(small).files()).get("a.txt").text(), entries["a.txt"], "round trip");
+}
+for (const options of [{ compress: "gzip", level: 0 }, { compress: "gzip", level: 10 },
+                       { compress: "gzip", level: 1.5 }, { level: 6 }]) {
+  try {
+    new Archive(entries, options);
+    console.log("accepted");
+  } catch (error) {
+    console.log(error.constructor.name);
+  }
+}
+"#;
+    assert_eq!(
+        run("archive_level.mjs", source, &["--deny-all"])
+            .lines()
+            .collect::<Vec<_>>(),
+        ["RangeError", "RangeError", "TypeError", "TypeError"]
+    );
 }

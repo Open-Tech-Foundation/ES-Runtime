@@ -3602,7 +3602,7 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 
 **Consequences:** `tar` and `zip` become runtime dependencies (with `zip`'s deflate decoder only; `self_update` already enables its `time` feature in the build graph, so the codec sets timestamps explicitly rather than relying on the default). An `archive` fuzz target decodes arbitrary bytes under a small limit and rebuilds whatever it accepts. The module is not behind a cargo feature.
 
-**Not here:** 7z, rar, brotli and zstd; passwords; selective extraction (read an entry, then write it yourself); preserving ownership, modes or arbitrary timestamps from an input archive; and appending to an existing archive.
+**Not here:** 7z, rar, brotli and zstd; passwords; selective extraction (read an entry, then write it yourself — since added, see the amendment below); preserving ownership, modes or arbitrary timestamps from an input archive; and appending to an existing archive.
 
 **Amendment (review against `Bun.Archive`, 2026-10-21).** Three rules this decision implied were not being kept, and one was missing:
 
@@ -3612,6 +3612,14 @@ The mainstream agree on the first. Papa Parse, csv-parse, fast-csv, neat-csv and
 - **Windows names are validated like Windows paths.** Device names (`NUL`, `COM1.txt`) open the device, `:` names an alternate data stream, and a trailing dot or space is dropped, so `a.` lands on `a`. These are refused on Windows, where the case fold also becomes Unicode rather than ASCII. Go's `filepath.IsLocal` refuses the same names. Like the case fold, this is applied where the filesystem has the problem, so the same archive can be accepted on Linux and refused on Windows.
 
 Bun's `..` normalization and symlink extraction remain rejected, as above.
+
+**Amendment (Bun parity: globs, selective extraction, level — maintainer, 2026-10-21).** Three gaps against `Bun.Archive` are closed; the module is unreleased, so nothing breaks.
+
+- **A string filter is a glob, not a prefix.** `files("**/*.ts")` previously returned an empty `Map` — code moved from Bun got no answer and no error. A string, or a list of strings, is now a glob read as Bun reads it: `!` excludes, and a list of only exclusions takes everything else. Globs compile in `es_runtime::glob`, the implementation `runtime:fs`'s `Glob` and `glob_scan` now use too (D180), so a pattern means the same in both modules. A `RegExp` and a function stay, applied in JavaScript; globs are matched on the host in the same pass that reads the entries.
+- **Selective extraction is in, reversing this decision's "Not here".** `extract(directory, { filter })` takes the same filter. Every entry is still validated — limits, paths, layout, checksums — so a filter changes what is written, never what is accepted: an unsafe entry the filter does not take still refuses the archive. Bun calls the option `glob`; this uses `filter`, the name `files()` already had, since it also takes a `RegExp` or a function.
+- **`level`** sets the compressor's level for `gzip` and `deflate`, 1–9, default 6 (zlib's). Bun accepts up to 12 because it uses libdeflate; flate2 is zlib's range. Out of range is a `RangeError`, a level without a compressor a `TypeError`. The same entries at the same level produce the same bytes.
+
+`extract()` keeps resolving to `{ files, directories }` rather than Bun's single count. Bun's symlink extraction and `..` normalization remain rejected.
 
 ### D175 — XML has one reader and its own writer, and refuses what is not well formed · *Accepted (2026-10-20)*
 

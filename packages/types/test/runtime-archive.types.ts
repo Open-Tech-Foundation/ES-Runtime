@@ -39,12 +39,15 @@ async function use() {
   const stream: ReadableStream<Uint8Array> = entries[0].stream();
 
   const all: Map<string, File> = await fromBytes.files();
-  const prefixed: Map<string, File> = await built.files("nested/");
+  const globbed: Map<string, File> = await built.files("nested/**");
+  const listed: Map<string, File> = await built.files(["**/*.txt", "!nested/**"]);
   const matching: Map<string, File> = await built.files(/\.txt$/);
   const filtered: Map<string, File> = await built.files((path) => path.endsWith(".txt"));
 
   const extracted: ExtractResult = await opened.extract("out");
   const extractedToFile: ExtractResult = await opened.extract(file("out"), { maxBytes: 10 });
+  const extractedSome: ExtractResult = await opened.extract("out", { filter: ["src/**"] });
+  const leveled = new Archive({ "a.txt": "a" }, { compress: "gzip", level: 9 });
 
   const written: number = await Archive.write(file("out.zip"), built);
   const writtenAgain: number = await Archive.write("out.tar", {
@@ -60,9 +63,12 @@ async function use() {
     entryBlob,
     stream,
     all,
-    prefixed,
     matching,
     filtered,
+    globbed,
+    listed,
+    extractedSome.files,
+    leveled,
     extracted.files,
     extractedToFile.directories,
     written,

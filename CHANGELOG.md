@@ -20,7 +20,7 @@ namespace) is unstable and may change between minor releases until the API freez
   `bytes()`/`blob()` return the archive, `entries()` returns metadata with lazy
   `bytes()`/`text()`/`blob()`/`stream()`, `for await (const entry of archive)`
   streams that metadata instead of collecting it, `files(filter?)` returns a
-  `Map<string, File>`, `extract(directory)` writes it out, and
+  `Map<string, File>`, `extract(directory, options?)` writes it out, and
   `Archive.write(destination, input, options)` writes to a path or `file()`.
   Build entries accept web `Blob`/`File` values; a `runtime:fs` `file()` must
   be read to bytes first, which loads that entry into memory.
@@ -53,6 +53,12 @@ namespace) is unstable and may change between minor releases until the API freez
   ending in a dot or space are refused, and case collisions are found with
   Unicode case folding. Zip timestamps after 2107 clamp to 2107 instead of
   becoming 1980, and a cancelled `stream()` stops its reader thread.
+  Filters follow `Bun.Archive`: `files(filter)` and `extract(directory,
+  { filter })` take a glob or a list of globs (`!` excludes; a list of only
+  exclusions takes everything else), a `RegExp` or a function. `extract()`
+  with a filter writes only what it takes and still validates the whole
+  archive. `level` (1–9, default 6) sets the gzip or deflate level. Globs
+  compile in one place shared with `runtime:fs`'s `Glob`.
 
 ### Changed
 

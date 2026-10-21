@@ -20,6 +20,7 @@ url.workspace = true
 urlpattern.workspace = true
 encoding_rs.workspace = true
 regex.workspace = true
+globset.workspace = true
 # WebCrypto (DECISIONS.md D9): RustCrypto, vetted constant-time primitives.
 sha1.workspace = true
 sha2.workspace = true

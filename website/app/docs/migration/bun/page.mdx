@@ -247,9 +247,10 @@ await new Archive(file("bundle.zip")).extract("out");   // needs --allow-write
 
 #### What carries over unchanged
 
-`new Archive(entries)`, `{ format: "tar" | "zip" }`, `{ compress: "gzip" }`
-for tar, `bytes()`, `blob()`, `files()` returning `Map<string, File>`, and
-`extract(directory)`. Builds are deterministic.
+`new Archive(entries)`, `{ compress: "gzip" }` for tar, `bytes()`, `blob()`,
+`files(glob)` returning `Map<string, File>`, and `extract(directory)`. Globs
+read as Bun reads them: a string or a list, with `!` excluding, and a list of
+only exclusions taking everything else. Builds are deterministic.
 
 #### What changes
 
@@ -257,13 +258,18 @@ for tar, `bytes()`, `blob()`, `files()` returning `Map<string, File>`, and
 | --- | --- | --- |
 | `new Bun.Archive("bundle.zip")` | `new Archive(file("bundle.zip"))` | A path string is a `TypeError`; a `file()` goes through `runtime:fs`, so `--allow-read` and the jail apply. |
 | `new Bun.Archive(bytes).extract("out")` | the same, with `--allow-write` | Extraction is `FileWrite`, with the destination as the target. |
+| `extract("out", { glob })` | `extract("out", { filter })` | The same globs, under the name `files()` uses; a `RegExp` or a function also works. |
+| `{ compress: "gzip", level: 10–12 }` | `level: 1–9` | Bun's 10–12 are libdeflate's; zlib's range is 1–9. Outside it is a `RangeError`. |
+| Symlinks extracted (POSIX); `..` normalized | refused | An archive is never rewritten into a different one, and nothing is written through a link (D174, D180). |
+| `extract()` resolves to a count | `{ files, directories }` | The two kinds are counted separately. |
 | `reverse`/`order` and arbitrary metadata | none | Entries are sorted by path, ownership is `0:0`, modes are `0644`/`0755`, and timestamps are epoch unless supplied. |
 
 #### Added
 
 - `entries()`, returning metadata with lazy `bytes()`, `text()`, `blob()` and
   `stream()` per entry.
-- `files(filter?)` with a predicate, prefix string or `RegExp`.
+- `{ format: "zip" }` with `compress: "deflate"`.
+- `RegExp` and function filters, besides globs.
 - `maxEntries` and `maxBytes` limits, enforced on declared and actual bytes.
 - Stable `ERR_ARCHIVE_*` codes, and refusal of unsafe paths, links, special
   entries, encrypted zips, duplicates and file/directory collisions.

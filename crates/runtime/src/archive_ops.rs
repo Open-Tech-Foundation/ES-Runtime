@@ -17,7 +17,7 @@
 //! files into the destination after the complete pass succeeds.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -29,8 +29,8 @@ use futures_util::StreamExt;
 
 use crate::Result;
 use crate::archive::{
-    self, Compression, EntryMeta, ExtractEvent, Format, InputEntry, Limits, MetaEvent, Source,
-    StreamEvent,
+    self, Compression, EntryMeta, ExtractEvent, Format, InputEntry, Limits, MetaEvent, Selection,
+    Source, StreamEvent,
 };
 
 struct ArchiveHandle {
@@ -92,7 +92,19 @@ pub(crate) fn install(
         let format = parse_format(args.get(1))?;
         let compress = parse_compression(args.get(2))?;
         let limits = parse_limits(args.get(3))?;
-        let bytes = archive::build(entries, format, compress, &limits).map_err(op_error)?;
+        let level = match args.get(4) {
+            None | Some(Value::Undefined | Value::Null) => None,
+            Some(Value::Number(level)) if level.fract() == 0.0 && *level >= 0.0 => {
+                Some(level.min(f64::from(u32::MAX)) as u32)
+            }
+            Some(_) => {
+                return Err(OpError::type_error(
+                    "the compression level must be an integer from 1 to 9",
+                ));
+            }
+        };
+        let bytes = archive::build_with_level(entries, format, compress, level, &limits)
+            .map_err(op_error)?;
         Ok(Value::Bytes(bytes))
     }))?;
 
@@ -183,19 +195,19 @@ pub(crate) fn install(
 
     let (reg, s) = (archives.clone(), spawner.clone());
     engine.register_op(OpDecl::r#async("archive_read_selected", move |args| {
-        let parsed: std::result::Result<(Source, Format, Limits, BTreeSet<String>), OpError> =
-            (|| {
-                let id = number_arg(&args, 0, "handle")?;
-                let paths = paths_arg(&args, 1)?;
-                let handle = lookup(&reg, id)?;
-                Ok((handle.source, handle.format, handle.limits, paths))
-            })();
+        let parsed: std::result::Result<(Source, Format, Limits, Selection), OpError> = (|| {
+            let id = number_arg(&args, 0, "handle")?;
+            let selection = selection_arg(&args, 1)?;
+            let handle = lookup(&reg, id)?;
+            Ok((handle.source, handle.format, handle.limits, selection))
+        })(
+        );
         let spawner = s.clone();
         Box::pin(async move {
-            let (source, format, limits, paths) = parsed?;
+            let (source, format, limits, selection) = parsed?;
             let work = source.clone();
             let entries = offload(spawner, move || {
-                archive::read_selected_source(&work, format, &paths, &limits)
+                archive::read_selected_source(&work, format, &selection, &limits)
             })
             .await?
             .map_err(op_error)?;
@@ -205,6 +217,14 @@ pub(crate) fn install(
                     .map(|entry| {
                         Value::Object(vec![
                             ("path".to_string(), Value::String(entry.meta.path)),
+                            ("directory".to_string(), Value::Bool(entry.meta.directory)),
+                            (
+                                "lastModified".to_string(),
+                                entry
+                                    .meta
+                                    .modified_ms
+                                    .map_or(Value::Null, |ms| Value::Number(ms as f64)),
+                            ),
                             ("data".to_string(), Value::Bytes(entry.data)),
                         ])
                     })
@@ -351,25 +371,34 @@ pub(crate) fn install(
     let (reg, s, f) = (archives.clone(), spawner, fs);
     engine.register_op(
         OpDecl::r#async("archive_extract", move |args| {
-            let parsed: std::result::Result<(Source, String, Limits), OpError> = (|| {
-                let id = number_arg(&args, 0, "handle")?;
-                let directory = string_arg(&args, 1, "destination")?;
-                let handle = lookup(&reg, id)?;
-                let limits = match args.get(2) {
-                    None | Some(Value::Undefined) => handle.limits,
-                    Some(value) => parse_limits(Some(value))?,
-                };
-                Ok((handle.source, directory, limits))
-            })();
+            let parsed: std::result::Result<(Source, String, Limits, Selection), OpError> =
+                (|| {
+                    let id = number_arg(&args, 0, "handle")?;
+                    let directory = string_arg(&args, 1, "destination")?;
+                    let handle = lookup(&reg, id)?;
+                    let limits = match args.get(2) {
+                        None | Some(Value::Undefined) => handle.limits,
+                        Some(value) => parse_limits(Some(value))?,
+                    };
+                    let selection = match args.get(3) {
+                        None | Some(Value::Undefined | Value::Null) => Selection::All,
+                        Some(_) => selection_arg(&args, 3)?,
+                    };
+                    Ok((handle.source, directory, limits, selection))
+                })();
             let (spawner, fs) = (s.clone(), f.clone());
             Box::pin(async move {
-                let (source, directory, limits) = parsed?;
+                let (source, directory, limits, selection) = parsed?;
                 let work = source.clone();
                 let listed = offload(spawner.clone(), move || {
                     archive::list_source(&work, &limits)
                 })
                 .await?;
                 let (format, metas) = listed.map_err(op_error)?;
+                let metas: Vec<EntryMeta> = metas
+                    .into_iter()
+                    .filter(|meta| selection.takes(&meta.path))
+                    .collect();
 
                 let fs = require(&fs)?;
                 let destination_existed = directory.is_empty()
@@ -382,7 +411,7 @@ pub(crate) fn install(
                 };
                 let tree = fs.open_tree(pinned.to_string()).await.map_err(tree_err)?;
 
-                let result = extract_into(&tree, source, format, limits, &metas).await;
+                let result = extract_into(&tree, source, format, limits, selection, &metas).await;
                 if result.is_err() && !destination_existed {
                     let _ = fs.remove(directory, false).await;
                 }
@@ -409,6 +438,7 @@ async fn extract_into(
     source: Source,
     format: Format,
     limits: Limits,
+    selection: Selection,
     listed: &[EntryMeta],
 ) -> std::result::Result<Value, OpError> {
     check_paths(tree, listed).await?;
@@ -416,7 +446,7 @@ async fn extract_into(
         .make_temp_dir(".esrun-archive-".to_string())
         .await
         .map_err(tree_err)?;
-    let staged = stage_extract(tree, source, format, limits, &stage).await;
+    let staged = stage_extract(tree, source, format, limits, selection, &stage).await;
     let result = match staged {
         Ok(metas) => match check_paths(tree, &metas).await {
             Ok(()) => commit_stage(tree, &stage, &metas).await,
@@ -455,10 +485,11 @@ async fn stage_extract(
     source: Source,
     format: Format,
     limits: Limits,
+    selection: Selection,
     stage: &str,
 ) -> std::result::Result<Vec<EntryMeta>, OpError> {
     let (tx, mut rx) = mpsc::channel(2);
-    archive::spawn_extract(source, format, limits, tx);
+    archive::spawn_extract(source, format, limits, selection, tx);
 
     let mut metas = Vec::new();
     let mut current: Option<CurrentEntry> = None;
@@ -627,20 +658,38 @@ fn number_arg(args: &[Value], index: usize, what: &str) -> std::result::Result<u
     }
 }
 
-fn paths_arg(args: &[Value], index: usize) -> std::result::Result<BTreeSet<String>, OpError> {
-    let Some(Value::Array(items)) = args.get(index) else {
-        return Err(OpError::type_error(
-            "the selected archive entries must be an array",
-        ));
-    };
-    items
-        .iter()
-        .map(|item| {
-            item.as_str().map(str::to_string).ok_or_else(|| {
-                OpError::type_error("a selected archive entry must be a path string")
+/// Which entries an op takes: an array of exact paths, or `{ glob: [...] }`.
+fn selection_arg(args: &[Value], index: usize) -> std::result::Result<Selection, OpError> {
+    let strings = |items: &[Value], what: &str| {
+        items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| OpError::type_error(format!("{what} must be a string")))
             })
-        })
-        .collect()
+            .collect::<std::result::Result<Vec<String>, OpError>>()
+    };
+    match args.get(index) {
+        Some(Value::Array(items)) => Ok(Selection::Paths(
+            strings(items, "a selected archive entry")?
+                .into_iter()
+                .collect(),
+        )),
+        Some(Value::Object(fields)) => {
+            let Some((_, Value::Array(items))) = fields.iter().find(|(name, _)| name == "glob")
+            else {
+                return Err(OpError::type_error("an archive filter must name its globs"));
+            };
+            let patterns = strings(items, "an archive glob")?;
+            crate::glob::GlobList::new(&patterns)
+                .map(Selection::Glob)
+                .map_err(OpError::type_error)
+        }
+        _ => Err(OpError::type_error(
+            "the selected archive entries must be an array of paths or { glob }",
+        )),
+    }
 }
 
 fn parse_format(value: Option<&Value>) -> std::result::Result<Format, OpError> {

@@ -127,6 +127,23 @@ function compressionOf(format, options) {
   );
 }
 
+// `level` only means something to a compressor, and only 1-9 does (zlib's
+// range; Bun's 10-12 belong to libdeflate). The host checks again.
+function levelOf(compress, options) {
+  const level = options.level;
+  if (level === undefined) return undefined;
+  if (typeof level !== "number" || !Number.isInteger(level)) {
+    throw new TypeError("the compression level must be an integer from 1 to 9");
+  }
+  if (compress === "none") {
+    throw new TypeError('a compression level needs compress: "gzip" or "deflate"');
+  }
+  if (level < 1 || level > 9) {
+    throw new RangeError(`the compression level must be from 1 to 9, not ${level}`);
+  }
+  return level;
+}
+
 function lastModifiedOf(value, what) {
   if (value === undefined || value === null) return null;
   if (value instanceof Date) {
@@ -193,15 +210,28 @@ function readOptions(options) {
   return limitsOf(options);
 }
 
-function matches(filter, path) {
-  if (filter === undefined || filter === null) return true;
-  if (typeof filter === "function") return !!filter(path);
-  if (typeof filter === "string") return path.startsWith(filter);
-  if (filter instanceof RegExp) {
-    filter.lastIndex = 0;
-    return filter.test(path);
+// A filter as it is applied: globs go to the host, which matches them with the
+// same rules as runtime:fs's Glob (`{ glob }`); a RegExp or a function stays
+// here (`{ test }`). In a list, `!` excludes, as in Bun's `files()`/`extract()`.
+function filterOf(filter, what) {
+  if (filter === undefined || filter === null) return null;
+  if (typeof filter === "string") return { glob: [filter] };
+  if (Array.isArray(filter)) {
+    if (!filter.every((pattern) => typeof pattern === "string")) {
+      throw new TypeError(`${what} filter list must contain only glob strings`);
+    }
+    return { glob: [...filter] };
   }
-  throw new TypeError("a files() filter must be a function, a string prefix or a RegExp");
+  if (filter instanceof RegExp) {
+    return {
+      test: (path) => {
+        filter.lastIndex = 0;
+        return filter.test(path);
+      },
+    };
+  }
+  if (typeof filter === "function") return { test: (path) => !!filter(path) };
+  throw new TypeError(`${what} filter must be a glob, an array of globs, a RegExp or a function`);
 }
 
 class ArchiveEntry {
@@ -297,6 +327,7 @@ class Archive {
   #limits;
   #format = null;
   #compress = "none";
+  #level = undefined;
   #built = null;
   #opening = null;
 
@@ -320,6 +351,7 @@ class Archive {
     if (isPlainObject(input)) {
       this.#format = formatOf(opts);
       this.#compress = compressionOf(this.#format, opts);
+      this.#level = levelOf(this.#compress, opts);
       this.#limits = readOptions(opts);
       this.#source = { entries: buildEntries(input) };
       return;
@@ -361,6 +393,7 @@ class Archive {
         this.#format,
         this.#compress,
         this.#limits,
+        this.#level,
       );
     }
     return this.#built;
@@ -408,12 +441,22 @@ class Archive {
   }
 
   async files(filter) {
+    const chosen = filterOf(filter, "a files()");
     const { handle } = await this[OPEN]();
+    const files = new Map();
+    if (chosen?.glob) {
+      // One pass on the host: listed, matched and read together.
+      for (const entry of await ops.archive_read_selected(handle, { glob: chosen.glob })) {
+        if (entry.directory) continue;
+        const options = entry.lastModified === null ? {} : { lastModified: entry.lastModified };
+        files.set(entry.path, new File([entry.data], entry.path, options));
+      }
+      return files;
+    }
     const selected = [];
     for await (const entry of this) {
-      if (!entry.directory && matches(filter, entry.path)) selected.push(entry);
+      if (!entry.directory && (!chosen || chosen.test(entry.path))) selected.push(entry);
     }
-    const files = new Map();
     if (selected.length === 0) return files;
     const data = await ops.archive_read_selected(handle, selected.map((entry) => entry.path));
     const byPath = new Map(data.map((entry) => [entry.path, entry.data]));
@@ -426,20 +469,32 @@ class Archive {
     return files;
   }
 
-  // Writes the archive's contents under `directory`, which must be a path
-  // string or a file() handle. Needs FileWrite; the host validates every entry
-  // before it writes the first one.
+  // Writes the archive's contents — or the entries `filter` takes — under
+  // `directory`, which must be a path string or a file() handle. Needs
+  // FileWrite; the host validates every entry, taken or not, before it writes
+  // the first one.
   async extract(directory, options = {}) {
     const path = isFile(directory) ? directory[FILE_BODY]() : directory;
     if (typeof path !== "string") {
       throw new TypeError("extract() takes a directory path or a file()");
     }
     const opts = optionsObject(options, "extract");
+    const chosen = filterOf(opts.filter, "an extract()");
     // A limit passed here overrides that one limit; the others stay the ones
     // the Archive was opened with.
     const limits = { ...this.#limits, ...limitsOf(opts) };
     const { handle } = await this[OPEN]();
-    return ops.archive_extract(handle, path, limits);
+    let selection;
+    if (chosen?.glob) {
+      selection = { glob: chosen.glob };
+    } else if (chosen) {
+      // A predicate runs here, so the host is handed the paths it took.
+      selection = [];
+      for await (const entry of this) {
+        if (chosen.test(entry.path)) selection.push(entry.path);
+      }
+    }
+    return ops.archive_extract(handle, path, limits, selection);
   }
 
   // Writes an archive built from `input` to `destination` (a path string or a
