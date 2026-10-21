@@ -18,13 +18,13 @@ distroless base, for `linux/amd64` and `linux/arm64`:
 
 | | |
 | --- | --- |
-| Tags | `0.42.0` (exact), `0.42` (newest patch), `latest` |
+| Tags | `latest`, and each release as `<version>` (exact) and `<major>.<minor>` (newest patch) |
 | Base | `gcr.io/distroless/cc-debian13:nonroot` — no shell, an unprivileged user |
 | Entrypoint | `esrun`, so `CMD` holds its arguments |
 | Working directory | `/app` |
 
 Every image carries signed build provenance: `gh attestation verify
-oci://ghcr.io/open-tech-foundation/esrun:0.42.0 --owner open-tech-foundation`.
+oci://ghcr.io/open-tech-foundation/esrun:latest --owner open-tech-foundation`.
 
 ## The Dockerfile
 
@@ -36,15 +36,14 @@ FROM debian:13-slim AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-ARG ESDEV_VERSION=0.21.0
 RUN curl -fsSL https://esrun.opentechf.org/install.sh \
-  | ESDEV_VERSION=$ESDEV_VERSION bash -s -- --only=esdev
+  | bash -s -- --only=esdev
 WORKDIR /app
 COPY . .
 RUN /root/.es-runtime/bin/esdev build --minify
 
 # Run: the esrun image and the bundle.
-FROM ghcr.io/open-tech-foundation/esrun:0.42.0
+FROM ghcr.io/open-tech-foundation/esrun:latest
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
 CMD ["--allow-listen=8080", "--allow-env=PORT", "--shutdown-grace=8000", "dist/server.js"]
@@ -58,8 +57,10 @@ dist
 .dev
 ```
 
-Pin both versions: the esrun tag and `ESDEV_VERSION`. The same file then
-rebuilds the same image, and an upgrade is a one-line change you can review.
+The examples use the newest release. For builds that do not change under you,
+pin both: the image tag (`esrun:<version>`) and esdev
+(`ESDEV_VERSION=<version>` before `bash` in the install line). The current
+versions are on [Installation](/docs/install#pinning-a-version).
 
 ## Another base image
 
@@ -68,7 +69,7 @@ binary out of the esrun image:
 
 ```dockerfile
 FROM debian:13-slim
-COPY --from=ghcr.io/open-tech-foundation/esrun:0.42.0 /usr/local/bin/esrun /usr/local/bin/esrun
+COPY --from=ghcr.io/open-tech-foundation/esrun:latest /usr/local/bin/esrun /usr/local/bin/esrun
 ```
 
 The base needs glibc 2.39 or newer and nothing more: `esrun` links only the C

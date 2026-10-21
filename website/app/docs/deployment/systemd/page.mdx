@@ -12,12 +12,15 @@ logs and sandboxes it. esrun's own capability checks sit inside that sandbox.
 
 ## Install esrun
 
-As root, into `/usr/local/bin`, pinned:
+As root, into `/usr/local/bin`:
 
 ```sh
 curl -fsSL https://esrun.opentechf.org/install.sh \
-  | ESRUN_VERSION=0.42.0 ES_RUNTIME_INSTALL=/usr/local bash -s -- --only=esrun
+  | ES_RUNTIME_INSTALL=/usr/local bash -s -- --only=esrun
 ```
+
+This installs the newest release; put `ESRUN_VERSION=<version>` before `bash`
+to pin one ([Installation](/docs/install#pinning-a-version)).
 
 Then copy the bundle `esdev build` produced to the server, for example to
 `/opt/app/dist`.

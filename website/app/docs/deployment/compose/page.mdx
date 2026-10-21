@@ -40,7 +40,7 @@ serve({ port: Number(env.PORT ?? 8080) }, async (request) => {
 [Containers](/docs/deployment/containers), whose run stage is the esrun image:
 
 ```dockerfile
-FROM ghcr.io/open-tech-foundation/esrun:0.42.0
+FROM ghcr.io/open-tech-foundation/esrun:latest
 COPY --from=build /app/dist ./dist
 ```
 
@@ -106,7 +106,7 @@ For a quick stack, skip the app image: build the bundle with
 read-only. In the `app` service, replace `build: .` with:
 
 ```yaml
-    image: ghcr.io/open-tech-foundation/esrun:0.42.0
+    image: ghcr.io/open-tech-foundation/esrun:latest
     volumes:
       - ./dist:/app/dist:ro
 ```
