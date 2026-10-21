@@ -62,6 +62,14 @@ impl Terminal {
     #[cfg(unix)]
     fn take() -> Option<Terminal> {
         let stdin = std::io::stdin();
+        // Only the terminal's foreground group may change its modes: from a
+        // background group (`esdev test --watch &`, or a test harness that put
+        // esdev in a group of its own) the `tcsetattr` below makes the kernel
+        // stop the whole process with SIGTTOU, before the first run finishes.
+        // There are no keys to read there, so none are taken.
+        if rustix::termios::tcgetpgrp(&stdin).ok()? != rustix::process::getpgrp() {
+            return None;
+        }
         let saved = rustix::termios::tcgetattr(&stdin).ok()?;
         let terminal = Terminal { saved: Some(saved) };
         terminal.apply().ok()?;
@@ -155,6 +163,8 @@ impl Key {
 pub fn start(forced: bool) -> Option<Keys> {
     use std::io::IsTerminal;
     let terminal = if std::io::stdin().is_terminal() {
+        // A terminal this process may not take — it is in the background —
+        // is no source of keys either: reading it would stop the process too.
         Some(Terminal::take()?)
     } else if forced {
         None

@@ -34,6 +34,11 @@ fn esdev() -> Command {
     // The sandbox is the working directory (D79): run from the directory these
     // fixtures are written into, as a user runs a program from its own.
     command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    // Never the developer's terminal. `output()` already closes stdin, but a
+    // spawned esdev inherits it, and with `CI` removed (`esdev_in`) it then
+    // prompts, or takes keys — and in a process group of its own the kernel
+    // stops it for touching the terminal. A test that feeds input says so.
+    command.stdin(std::process::Stdio::null());
     let registry = test_registry();
     command
         .env("npm_config_registry", registry)

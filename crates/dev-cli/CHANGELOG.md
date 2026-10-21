@@ -31,6 +31,13 @@ is the point, since none of the three has any business in a deployment.
   one, so locally they opened a menu, put the terminal into raw mode and waited
   for a key; CI never saw it because it sets `CI`. Under test the prompt is
   never interactive.
+- `esdev test --watch` started in the background (`esdev test --watch &`, or
+  by a tool that gives it a process group of its own) no longer stops itself.
+  It put the terminal into key-reading mode, and the kernel stops a background
+  process that changes the terminal with SIGTTOU, so the first run never
+  finished. It now takes the terminal's keys only from the foreground; in the
+  background it runs and watches without them. The esdev test suite also
+  never hands a spawned esdev the developer's terminal.
 
 ## [0.20.0] - 2026-10-17
 
