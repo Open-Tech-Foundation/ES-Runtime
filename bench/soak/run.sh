@@ -47,7 +47,16 @@ sample() { # csv name pid...
   local header="t" pid
   for pid in "$@"; do header="$header,${pid}_rss_kib,${pid}_fds,${pid}_threads"; done
   echo "$header" >"$csv"
+  local previous=$SECONDS
   while [ $SECONDS -lt $end ]; do
+    # A gap far past the interval means the machine stopped — a suspend, most
+    # often — and the scenario stopped with it, while SECONDS kept counting
+    # toward the end. Judging what was sampled would pass a soak that barely ran.
+    if [ $((SECONDS - previous)) -gt $((SAMPLE * 3 + 10)) ]; then
+      echo "  ✗ $name: no sample for $((SECONDS - previous))s (machine suspended?) — rerun"
+      return 1
+    fi
+    previous=$SECONDS
     local row="$((SECONDS - start))"
     for pid in "$@"; do
       if [ ! -r "/proc/$pid/status" ]; then
