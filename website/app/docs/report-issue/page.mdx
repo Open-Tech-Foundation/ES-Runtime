@@ -1,0 +1,41 @@
+---
+title: Reporting issues
+description: Report a bug or ask for a feature in ES-Runtime.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Reporting issues
+
+ES-Runtime is in alpha, so reports are especially useful: a bug you hit is most
+likely one nobody else has reported yet.
+
+**[Open an issue on GitHub](https://github.com/Open-Tech-Foundation/ES-Runtime/issues/new/choose)**.
+Pick **Bug report** for something that does not work as documented, or open a
+blank issue for an idea or a question.
+
+<Callout type="warning" title="Security vulnerabilities are reported privately">
+  Do not open a public issue for a vulnerability. Email
+  [security@opentechf.org](mailto:security@opentechf.org); see
+  [Security](/docs/security) for what to include.
+</Callout>
+
+## What to include
+
+A bug report needs three things:
+
+1. **What happened**: what you ran, what you expected, and the error you got.
+2. **A reproduction**: the smallest code and command that shows it.
+3. **Version and platform**: the version line and your OS and CPU.
+
+This prints all of it:
+
+```sh
+# Linux / macOS
+esrun --version; esdev --version; uname -sm
+```
+
+```powershell
+# Windows (PowerShell)
+esrun --version; esdev --version; $env:PROCESSOR_ARCHITECTURE
+```

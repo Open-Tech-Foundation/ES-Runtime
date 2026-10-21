@@ -7,8 +7,9 @@ outstanding pre-`1.0` item — see §6). The user-facing posture and reporting
 channel live in the top-level [`SECURITY.md`](../SECURITY.md).
 
 Status: pre-`1.0`. The resource-limit / FFI-safety spine is implemented and
-tested (SPEC §4); fuzzing, sanitizer CI, and an external review are not yet
-done. **Do not run hostile or untrusted code in production yet.**
+tested (SPEC §4); fuzzing and Miri run in CI. ASAN over the V8 FFI boundary and
+an external review are not yet done. **Do not run hostile or untrusted code in
+production yet.**
 
 ## 1. Trust model & actors
 
@@ -95,10 +96,12 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
 
 ## 6. Residual risks & known gaps
 
-1. **No external security review or fuzzing yet.** `cargo-fuzz` (URL/encoding/
-   streams/marshaler) and sanitizer CI (Miri on the safe core, ASAN on the FFI)
-   require a nightly toolchain and are outstanding. **This is the single biggest
-   reason not to run untrusted code in production yet.**
+1. **No external security review or FFI sanitizer yet.** `cargo-fuzz` runs over
+   the untrusted-input parsers and Miri over the crates that do not link V8
+   (`hardening.yml`, `ci.yml`). ASAN over the V8 boundary needs a V8 built from
+   source with `-fsanitize=address` (SPEC §5) and is outstanding, as is an
+   external review. **This is the single biggest reason not to run untrusted
+   code in production yet.**
 2. **`rsa` Marvin timing sidechannel** (RUSTSEC-2023-0071) — accepted, no fix
    available (SECURITY.md / DECISIONS D9).
 3. **SES-style primordial hardening deferred.** A guest can pollute `Object`/
@@ -126,8 +129,8 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    So a granted capability's reach is the project root, not the whole filesystem.
    Residual nuances: (a) within that root, a capability that *was* granted has
    full reach unless it was also scoped (`--allow-read=./data`) — and `esrun` is
-   still not hardened for *hostile* code: the Phase 9 work (fuzzing, sanitizer
-   CI, an intrinsic-integrity audit, external review) is what that would need,
+   still not hardened for *hostile* code: ASAN over the FFI boundary and an
+   external review (§6.1) are what that would still need,
    and the deny-by-default flip of D65 does not substitute for it; (b) legitimate
    cross-root setups (workspaces, `pnpm link`, a symlinked external store) are
    handled by naming the path — D54 made a path outside the jail *add* that
@@ -161,5 +164,5 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
 - **Build with `panic = "unwind"`** to keep panic containment effective.
 - **Consider SES-style primordial hardening** in your own prelude layer if you
   run mutually-distrusting guest code in one realm.
-- **Until fuzzing + an external review land, treat this as not-yet-hardened for
-  hostile input.**
+- **Until FFI sanitizing and an external review land, treat this as
+  not-yet-hardened for hostile input.**

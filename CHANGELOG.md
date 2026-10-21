@@ -80,6 +80,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- Release documentation for the public alpha: the README states the alpha
+  status, the install page lists the platforms each release is tested on, a new
+  *Reporting issues* page and GitHub bug form make reporting a bug three fields,
+  and `SECURITY.md` now records the fuzzing and Miri runs CI already does, with
+  ASAN over the V8 boundary and an external review as what remains.
+
 - `runtime:images`: `jpeg({ progressive })` and `png({ compressionLevel,
   palette, colors, dither })`, previously a `TypeError`, now work.
   `png({ progressive, quality, effort })`, `jxl({ distance, effort })`,

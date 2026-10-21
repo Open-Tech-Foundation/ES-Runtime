@@ -24,6 +24,10 @@ export default function SiteFooter() {
             <span>© Open Tech Foundation</span>
           </a>
           <span className="otfw-footer-license text-zinc-500">— Apache-2.0</span>
+          <span className="otfw-footer-license">·</span>
+          <a href="/docs/report-issue" className="otfw-footer-org-link">
+            Report an issue
+          </a>
         </div>
         <BuiltWithBadge />
       </div>

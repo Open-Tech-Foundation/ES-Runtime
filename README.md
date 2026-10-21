@@ -9,6 +9,14 @@
 
 > ### A secure, standards-based JavaScript runtime for the server. V8-based, WinterTC-compliant, deny-by-default.
 
+> [!WARNING]
+> **Alpha.** The `runtime:` modules and the command lines of `esrun` and `esdev`
+> may change between minor releases, and the runtime has not had an external
+> security review: do not run untrusted code with it in production. See
+> [SECURITY.md](SECURITY.md) for what is hardened and what is not, and
+> [supported platforms](https://esrun.opentechf.org/docs/install#platforms) for
+> what each release is tested on.
+
 
 ## Two binaries
 
@@ -136,6 +144,14 @@ Build, test, and benchmark from source:
 | Supply-chain gates | `cargo deny check` · `cargo audit` |
 | Startup/throughput microbenchmark | `cargo run --release -p es-runtime-default-providers --example bench` |
 | Cross-runtime benchmark | `bench/run.sh` (see [`bench/README.md`](bench/README.md)) |
+
+## Reporting issues
+
+Found a bug? [Open an issue](https://github.com/Open-Tech-Foundation/ES-Runtime/issues/new/choose)
+with the output of `esrun --version` (or `esdev --version`), your OS, and the
+smallest code that shows it. **Security vulnerabilities go to
+[security@opentechf.org](mailto:security@opentechf.org), never a public issue**
+(see [SECURITY.md](SECURITY.md)).
 
 ## License
 

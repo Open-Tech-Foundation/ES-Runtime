@@ -28,12 +28,17 @@ The resource-limit / FFI-safety spine (SPEC.md §4) is in place as of Phase 9:
   `panic = "unwind"`).
 - **Deny-by-default capabilities**; deterministic providers for reproducibility.
 
-**Not yet hardened** (later Phase 9): `cargo-fuzz` (URL/streams/encoding/the
-marshaler), sanitizer CI (Miri/ASAN), a WPT/min-common conformance run, a
-systematic intrinsic-integrity (prototype-pollution) audit, and an external
-security review. **Until those land, do not run hostile/untrusted code** with
-`esrun`, sandboxed or not; the embeddable library lets an embedder restrict
-capabilities and inject its own providers.
+**Checked in CI:** `cargo-fuzz` over the parsers that read untrusted bytes
+(URL, URLPattern, `TextDecoder`, YAML, XML, CSV, CBOR, compression, archives,
+and DER key import), seeded from the committed corpus in `fuzz/seeds/`; Miri over
+the crates that do not link V8; the conformance suite; and the supply-chain
+gates below. Guest tampering with
+intrinsics cannot reach a capability (see
+[Intrinsic integrity](#intrinsic-integrity-prototype-pollution--global-tampering)).
+
+**Not yet done:** ASAN over the V8 FFI boundary (Miri cannot execute V8) and an
+external security review. **Until those land, do not run hostile/untrusted code
+in production** with `esrun`, sandboxed or not.
 
 ## Granting an `esrun` run (`--allow-<name>` / `--allow-all`)
 

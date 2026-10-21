@@ -16,6 +16,7 @@ const NAV = [
       { title: "Overview", path: "/docs" },
       { title: "Installation", path: "/docs/install" },
       { title: "Scope & non-goals", path: "/docs/scope" },
+      { title: "Reporting issues", path: "/docs/report-issue" },
       {
         title: "Migration guide",
         items: [

@@ -1,0 +1,7 @@
+# A free-form issue stays available for ideas and questions; the bug form is
+# only the shortcut for the common case.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://esrun.opentechf.org/docs/security
+    about: Report privately to security@opentechf.org, never in a public issue.

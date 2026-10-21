@@ -59,6 +59,22 @@ curl -fsSL https://esrun.opentechf.org/install.sh | bash -s -- --only=esdev
 $env:ES_RUNTIME_ONLY = 'esrun'; irm https://esrun.opentechf.org/install.ps1 | iex
 ```
 
+## Platforms
+
+Every release ships prebuilt binaries for six targets. How far each one has been
+exercised differs:
+
+| Target | Tested on |
+| --- | --- |
+| Linux x64 | Real machines and CI |
+| Windows x64 | Real machines and CI |
+| macOS arm64 (Apple silicon) | CI only, not yet on a real machine |
+| macOS x64 (Intel) | Built in CI, not tested |
+| Linux arm64 | Built in CI (cross-compiled), not tested |
+| Windows arm64 | Built in CI, not tested |
+
+A problem on any of them is worth [reporting](/docs/report-issue).
+
 ## Pinning a version
 
 Each binary is released under its own tag and is pinned independently. Latest:
