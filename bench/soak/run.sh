@@ -28,6 +28,7 @@ MINUTES="${SOAK_MINUTES:-10}"
 SAMPLE="${SOAK_SAMPLE:-5}"
 PORT="${SOAK_PORT:-24310}"
 OUT="${SOAK_OUT:-$(mktemp -d)}"
+mkdir -p "$OUT"
 
 [ -r /proc/self/status ] || { echo "soak: needs /proc (Linux)" >&2; exit 2; }
 [ -x "$ESRUN" ] || { echo "soak: no esrun at $ESRUN — cargo build --release -p es-runtime-cli" >&2; exit 2; }
