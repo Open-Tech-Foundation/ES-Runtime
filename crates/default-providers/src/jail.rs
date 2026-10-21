@@ -27,8 +27,10 @@ use crate::path_allowlist::{Access, PathAllowlist};
 use crate::refusal::Refusal;
 
 mod anchor;
+mod tree;
 
 pub(crate) use anchor::{Anchored, OpenMode};
+pub(crate) use tree::PinnedTree;
 
 /// The one answer to "may this path be reached, and where is it?" for every
 /// door onto the filesystem (DECISIONS D180): `runtime:fs`, `runtime:wasi`, the
@@ -258,6 +260,36 @@ impl Jail {
     ) -> Result<Anchored, ProviderError> {
         let real = self.jailed_nofollow_as(p, shown, access)?;
         anchor::anchor(&real, self.roots(access), shown)
+    }
+
+    /// Pins the directory `p` for writing beneath it (D180). Admitted like any
+    /// write — the jail, then the scope list — except that a root itself may be
+    /// pinned: the root-mutation guard is about removing or renaming a root,
+    /// and a tree cannot do either to the directory it is pinned to.
+    pub(crate) fn open_tree(&self, p: &str, access: Access) -> Result<PinnedTree, ProviderError> {
+        let raw = reject_empty(p)?;
+        let abs = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            self.base.join(raw)
+        };
+        // The directory's own name is not followed: a link there would pin
+        // wherever it points, and a tree is written without following links.
+        // Its parents are resolved as every jailed path is. A root is taken
+        // whole, since it has no parent the jail may look in.
+        let real = match path::canonicalize(&abs) {
+            Ok(real) if self.roots(access).contains(&real) => Ok(real),
+            _ => match (abs.parent(), abs.file_name()) {
+                (Some(parent), Some(name)) => {
+                    confine(parent, self.roots(access)).map(|parent| parent.join(name))
+                }
+                _ => confine(&abs, self.roots(access)),
+            },
+        }
+        .and_then(|real| self.scoped(real, access))
+        .map_err(|refused| refused.named(p))?;
+        let anchored = anchor::anchor(&real, self.roots(access), p)?;
+        PinnedTree::pin(&anchored)
     }
 
     /// Opens `p` through the jail and returns a handle **pinned to what the

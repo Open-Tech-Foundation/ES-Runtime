@@ -2338,6 +2338,20 @@ mod tests {
             )))
         }
 
+        fn open_tree(
+            &self,
+            _path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                Arc<dyn es_runtime_providers::Tree>,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            Self::ready(Err(es_runtime_providers::ProviderError::Other(
+                "the in-memory test filesystem does not implement trees".into(),
+            )))
+        }
+
         fn copy(
             &self,
             from: String,

@@ -17,13 +17,13 @@
 //! files into the destination after the complete pass succeeds.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{FileSystem, ProviderError, SyncFileSystem, TaskSpawner};
+use es_runtime_providers::{FileSystem, ProviderError, SyncFileSystem, TaskSpawner, Tree};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 
@@ -372,55 +372,20 @@ pub(crate) fn install(
                 let (format, metas) = listed.map_err(op_error)?;
 
                 let fs = require(&fs)?;
-
-                for path in extraction_paths(&directory, &metas) {
-                    ensure_no_symlink(&fs, &path).await?;
-                }
                 let destination_existed = directory.is_empty()
                     || directory == "."
                     || fs.exists(directory.clone()).await.map_err(map_err)?;
-                if !directory.is_empty() && directory != "." {
-                    fs.mkdir(directory.clone(), true).await.map_err(map_err)?;
-                }
-                let stage = match fs
-                    .make_temp_dir(directory.clone(), ".esrun-archive-".to_string())
-                    .await
-                    .map_err(map_err)
-                {
-                    Ok(stage) => stage,
-                    Err(error) => {
-                        if !destination_existed && !directory.is_empty() && directory != "." {
-                            let _ = fs.remove(directory, false).await;
-                        }
-                        return Err(error);
-                    }
+                let pinned = if directory.is_empty() {
+                    "."
+                } else {
+                    directory.as_str()
                 };
+                let tree = fs.open_tree(pinned.to_string()).await.map_err(tree_err)?;
 
-                let staged = stage_extract(&fs, source, format, limits, &stage).await;
-                let result = match staged {
-                    Ok(metas) => {
-                        async {
-                            // Check the paths from the bytes actually staged,
-                            // since a file source can be changed in place.
-                            for path in extraction_paths(&directory, &metas) {
-                                ensure_no_symlink(&fs, &path).await?;
-                            }
-                            commit_stage(&fs, &stage, &directory, &metas).await
-                        }
-                        .await
-                    }
-                    Err(error) => Err(error),
-                };
-
-                let cleanup = fs.remove(stage, true).await.map_err(map_err);
-                if result.is_err()
-                    && !destination_existed
-                    && !directory.is_empty()
-                    && directory != "."
-                {
+                let result = extract_into(&tree, source, format, limits, &metas).await;
+                if result.is_err() && !destination_existed {
                     let _ = fs.remove(directory, false).await;
                 }
-                cleanup?;
                 result
             })
         })
@@ -431,17 +396,62 @@ pub(crate) fn install(
     Ok(())
 }
 
+/// Extracts into `tree` (DECISIONS D180). Every destination path is checked
+/// for a link before anything is written, and again from the entries actually
+/// decoded before anything is committed, since a file source can change in
+/// place. The archive is decoded into a temporary directory beneath the
+/// destination, and only after the codec has consumed and validated every entry
+/// — ZIP checksums and the gzip trailer included — are the staged files renamed
+/// into place. The tree follows no link beneath the destination, so a link
+/// swapped in after a check is refused rather than written through.
+async fn extract_into(
+    tree: &Arc<dyn Tree>,
+    source: Source,
+    format: Format,
+    limits: Limits,
+    listed: &[EntryMeta],
+) -> std::result::Result<Value, OpError> {
+    check_paths(tree, listed).await?;
+    let stage = tree
+        .make_temp_dir(".esrun-archive-".to_string())
+        .await
+        .map_err(tree_err)?;
+    let staged = stage_extract(tree, source, format, limits, &stage).await;
+    let result = match staged {
+        Ok(metas) => match check_paths(tree, &metas).await {
+            Ok(()) => commit_stage(tree, &stage, &metas).await,
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    let cleanup = tree.remove(stage).await.map_err(tree_err);
+    let value = result?;
+    cleanup?;
+    Ok(value)
+}
+
+/// Refuses the batch if any destination path already passes through a link.
+async fn check_paths(
+    tree: &Arc<dyn Tree>,
+    metas: &[EntryMeta],
+) -> std::result::Result<(), OpError> {
+    for meta in metas {
+        tree.check(meta.path.clone()).await.map_err(tree_err)?;
+    }
+    Ok(())
+}
+
 struct CurrentEntry {
     path: String,
     directory: bool,
     wrote: bool,
 }
 
-/// Decodes an archive into a private directory. Nothing under the requested
-/// destination is changed until the codec has consumed and validated every
+/// Decodes an archive into `stage`, beneath the destination. Nothing outside
+/// the stage is changed until the codec has consumed and validated every
 /// entry, including ZIP checksums and the gzip trailer.
 async fn stage_extract(
-    fs: &Arc<dyn FileSystem>,
+    tree: &Arc<dyn Tree>,
     source: Source,
     format: Format,
     limits: Limits,
@@ -450,32 +460,25 @@ async fn stage_extract(
     let (tx, mut rx) = mpsc::channel(2);
     archive::spawn_extract(source, format, limits, tx);
 
-    let mut parents = HashSet::new();
     let mut metas = Vec::new();
     let mut current: Option<CurrentEntry> = None;
     while let Some(event) = rx.next().await {
         match event {
             ExtractEvent::Entry(meta) => {
-                let path = join(stage, &meta.path);
+                let path = format!("{stage}/{}", meta.path);
                 metas.push(meta.clone());
                 if meta.directory {
-                    fs.mkdir(path.clone(), true).await.map_err(map_err)?;
+                    tree.mkdir(path.clone()).await.map_err(tree_err)?;
                     current = Some(CurrentEntry {
                         path,
                         directory: true,
                         wrote: false,
                     });
                 } else {
-                    if let Some((parent, _)) = meta.path.rsplit_once('/') {
-                        let parent = join(stage, parent);
-                        if parents.insert(parent.clone()) {
-                            fs.mkdir(parent, true).await.map_err(map_err)?;
-                        }
-                    }
                     let wrote = if meta.size == 0 {
-                        fs.write(path.clone(), Vec::new(), false)
+                        tree.write(path.clone(), Vec::new(), false)
                             .await
-                            .map_err(map_err)?;
+                            .map_err(tree_err)?;
                         true
                     } else {
                         false
@@ -491,9 +494,9 @@ async fn stage_extract(
                 if let Some(entry) = &mut current
                     && !entry.directory
                 {
-                    fs.write(entry.path.clone(), data, entry.wrote)
+                    tree.write(entry.path.clone(), data, entry.wrote)
                         .await
-                        .map_err(map_err)?;
+                        .map_err(tree_err)?;
                     entry.wrote = true;
                 }
             }
@@ -513,31 +516,24 @@ async fn stage_extract(
     Ok(metas)
 }
 
-/// Copies staged files into the destination after decoding has completed.
+/// Moves staged files into place once decoding has completed. A rename within
+/// the destination, so a file is not written twice, and a file already there
+/// is replaced atomically.
 async fn commit_stage(
-    fs: &Arc<dyn FileSystem>,
+    tree: &Arc<dyn Tree>,
     stage: &str,
-    destination: &str,
     metas: &[EntryMeta],
 ) -> std::result::Result<Value, OpError> {
     let mut files = 0_u64;
     let mut directories = 0_u64;
-    let mut parents = HashSet::new();
     for meta in metas {
-        let target = join(destination, &meta.path);
         if meta.directory {
-            fs.mkdir(target, true).await.map_err(map_err)?;
+            tree.mkdir(meta.path.clone()).await.map_err(tree_err)?;
             directories += 1;
         } else {
-            if let Some((parent, _)) = meta.path.rsplit_once('/') {
-                let parent = join(destination, parent);
-                if parents.insert(parent.clone()) {
-                    fs.mkdir(parent, true).await.map_err(map_err)?;
-                }
-            }
-            fs.copy(join(stage, &meta.path), target)
+            tree.rename(format!("{stage}/{}", meta.path), meta.path.clone())
                 .await
-                .map_err(map_err)?;
+                .map_err(tree_err)?;
             files += 1;
         }
     }
@@ -545,6 +541,16 @@ async fn commit_stage(
         ("files".to_string(), Value::Number(files as f64)),
         ("directories".to_string(), Value::Number(directories as f64)),
     ]))
+}
+
+/// A tree's refusal of a link is the archive's unsafe path: D174 names an
+/// existing link under the destination as one.
+fn tree_err(error: ProviderError) -> OpError {
+    if error.code() == Some(es_runtime_common::ErrorCode::JailEscape) {
+        return OpError::new(ExceptionClass::Error, error.exception_message())
+            .with_code(es_runtime_common::ErrorCode::ArchiveUnsafePath);
+    }
+    map_err(error)
 }
 
 fn mint(ids: &Rc<RefCell<u64>>) -> u64 {
@@ -594,51 +600,6 @@ fn meta_value(meta: &EntryMeta) -> Value {
             },
         ),
     ])
-}
-
-/// Every path under `directory` that an extraction could write or write
-/// through, including the destination itself and each file. Reading through an
-/// existing symlink here is what the write would do later, so it is refused
-/// now; a symlink at a file's own path must not be followed either.
-fn extraction_paths(directory: &str, metas: &[EntryMeta]) -> Vec<String> {
-    let mut paths = BTreeSet::new();
-    if !directory.is_empty() && directory != "." {
-        paths.insert(directory.to_string());
-    }
-    for meta in metas {
-        let components: Vec<&str> = meta.path.split('/').collect();
-        for count in 1..=components.len() {
-            paths.insert(join(directory, &components[..count].join("/")));
-        }
-    }
-    paths.into_iter().collect()
-}
-
-async fn ensure_no_symlink(
-    fs: &Arc<dyn FileSystem>,
-    path: &str,
-) -> std::result::Result<(), OpError> {
-    if fs.read_link(path.to_string()).await.is_ok() {
-        return Err(OpError::new(
-            ExceptionClass::Error,
-            format!("the extraction destination {path:?} is a symbolic link"),
-        )
-        .with_code(es_runtime_common::ErrorCode::ArchiveUnsafePath));
-    }
-    Ok(())
-}
-
-/// Joins an archive-relative path onto the extraction folder without ever
-/// letting the result escape it. `path` is already validated by the codec, so
-/// it is relative and has no `..`; this only handles the folder's own form.
-fn join(directory: &str, path: &str) -> String {
-    if directory.is_empty() || directory == "." {
-        path.to_string()
-    } else if directory.ends_with('/') {
-        format!("{directory}{path}")
-    } else {
-        format!("{directory}/{path}")
-    }
 }
 
 // ---- arguments --------------------------------------------------------------
@@ -867,36 +828,6 @@ mod tests {
         let rx = take_receiver(&registry, 1, "stream").unwrap();
         return_receiver(&registry, 1, rx);
         assert!(take_receiver(&registry, 1, "stream").is_ok());
-    }
-
-    #[test]
-    fn joins_relative_paths() {
-        assert_eq!(join("out", "a/b"), "out/a/b");
-        assert_eq!(join("out/", "a/b"), "out/a/b");
-        assert_eq!(join(".", "a/b"), "a/b");
-        assert_eq!(join("", "a/b"), "a/b");
-    }
-
-    #[test]
-    fn extraction_paths_cover_every_parent() {
-        let metas = vec![
-            EntryMeta {
-                path: "a/b.txt".to_string(),
-                directory: false,
-                size: 1,
-                modified_ms: None,
-            },
-            EntryMeta {
-                path: "c/d".to_string(),
-                directory: true,
-                size: 0,
-                modified_ms: None,
-            },
-        ];
-        assert_eq!(
-            extraction_paths("out", &metas),
-            ["out", "out/a", "out/a/b.txt", "out/c", "out/c/d"]
-        );
     }
 
     #[test]

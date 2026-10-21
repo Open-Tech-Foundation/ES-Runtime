@@ -112,19 +112,31 @@ also allocates the whole archive, because returning it is the operation.
 
 ## Why extraction stages before it writes
 
-`extract()` first scans metadata to check the destination paths for existing
-symlinks. It then decodes the archive once into a temporary directory, checking
-entry paths, limits, data lengths, zip CRCs and the gzip trailer while it
-streams. It checks symlinks again using the paths from the staged archive, then
-copies staged files into the destination. The metadata scan and extraction use
-the same open file handle, but in-place changes made during extraction are
-visible to that read.
+`extract()` writes through a pinned tree (D180): the destination directory is
+admitted by the jail, opened by descriptor without following a link at its
+name, and every path beneath it is opened from that descriptor with
+`O_NOFOLLOW`. A link anywhere beneath the destination — there before, or
+swapped in during extraction — is refused rather than written through. That is
+a stronger promise than the jail's: the jail keeps a path inside the project,
+and a link that stays inside the project is allowed by it.
 
-If decoding or validation fails, no staged entry is copied to the destination.
-The temporary directory costs disk space proportional to uncompressed output.
-An I/O error while copying staged files into the destination can still leave
-partial output; the staging guarantee covers archive decoding and validation,
-not failures during the final filesystem writes.
+It first scans metadata and checks each destination path for an existing link,
+so a refused archive writes nothing. It then decodes the archive once into a
+temporary directory beneath the destination, checking entry paths, limits, data
+lengths, zip CRCs and the gzip trailer while it streams. It checks the paths
+again from the entries actually decoded, then renames each staged file into
+place. A rename within one directory tree moves a name, not bytes, so the
+commit does not write the archive a second time, and a file already at a path
+is replaced atomically. The metadata scan and extraction use the same open file
+handle, but in-place changes made during extraction are visible to that read.
+
+If decoding or validation fails, nothing is moved into the destination. The
+temporary directory costs disk space proportional to uncompressed output. An
+I/O error while moving staged files into place can still leave partial output;
+the staging guarantee covers archive decoding and validation, not failures
+during the final renames. On Windows the tree checks each component and then
+uses it by path, so the window between the two stays open there, as it does
+for the jail.
 
 ## Determinism
 

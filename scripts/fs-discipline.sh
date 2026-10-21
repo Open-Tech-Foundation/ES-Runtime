@@ -29,6 +29,7 @@ pattern='std::fs::|tokio::fs::|\bfs::(read|write|File|OpenOptions|create_dir|rem
 allowed='
 crates/default-providers/src/jail.rs|the jail: resolution and its checks
 crates/default-providers/src/jail/anchor.rs|the jail: acting by descriptor on what it admitted
+crates/default-providers/src/jail/tree.rs|the jail: a pinned directory written beneath (D180)
 crates/default-providers/src/system_fs.rs|a door: every operation resolves through its Jail first
 crates/default-providers/src/system_sync_fs.rs|a door: every operation resolves through its Jail first
 crates/default-providers/src/system_db.rs|a door: the database VFS opens through its Jail; the rest is tests

@@ -130,7 +130,7 @@ pub struct OpenMode {
 /// agree to, and the only reason it did not is that this walk refused to follow
 /// it.
 #[cfg(unix)]
-fn swapped(shown: &str) -> ProviderError {
+pub(super) fn swapped(shown: &str) -> ProviderError {
     ProviderError::Coded {
         code: ErrorCode::JailEscape,
         message: format!(
@@ -142,7 +142,7 @@ fn swapped(shown: &str) -> ProviderError {
 
 /// An ordinary I/O failure, mapped the way the rest of the provider maps them
 /// so a caller sees the same `ERR_*` whichever path reached the syscall.
-fn failed(shown: &str, err: std::io::Error) -> ProviderError {
+pub(super) fn failed(shown: &str, err: std::io::Error) -> ProviderError {
     ProviderError::from_io(shown, &err)
 }
 
@@ -350,6 +350,41 @@ impl Anchored {
         Ok(std::fs::File::from(fd))
     }
 
+    /// Opens it as a directory, without following a link at its name — what a
+    /// pinned tree holds (D180).
+    pub fn open_dir(&self) -> Result<std::os::fd::OwnedFd, ProviderError> {
+        use rustix::fs::{AtFlags, FileType, Mode, OFlags, openat, statat};
+        use rustix::io::Errno;
+        openat(
+            &self.parent,
+            self.name.as_os_str(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|e| {
+            // Linux answers `ENOTDIR` for a link opened with `O_DIRECTORY`,
+            // where the BSDs say `ELOOP`; either way, a link is the refusal.
+            let link = matches!(e, Errno::LOOP | Errno::MLINK | Errno::NOTDIR)
+                && statat(
+                    &self.parent,
+                    self.name.as_os_str(),
+                    AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .is_ok_and(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink);
+            if link {
+                ProviderError::Coded {
+                    code: ErrorCode::JailEscape,
+                    message: format!(
+                        "{}: is a symbolic link; a directory written to is not reached through one",
+                        self.shown
+                    ),
+                }
+            } else {
+                self.io(e)
+            }
+        })
+    }
+
     /// Opens it for writing **without** creating or truncating — what
     /// `truncate()` and `chmod()` need a descriptor for.
     fn open_write(&self) -> Result<std::fs::File, ProviderError> {
@@ -479,50 +514,7 @@ impl Anchored {
     /// recurses, and a tree deep enough to exhaust the stack would otherwise
     /// abort the process — which is a worse answer than refusing.
     fn empty(&self, dir: &std::os::fd::OwnedFd, depth: u32) -> Result<(), ProviderError> {
-        use rustix::fs::{AtFlags, FileType, Mode, OFlags, openat};
-
-        if depth > 256 {
-            return Err(failed(
-                &self.shown,
-                std::io::Error::other("directory tree is too deeply nested to remove"),
-            ));
-        }
-        let listing = rustix::fs::Dir::read_from(dir).map_err(|e| self.io(e))?;
-        for entry in listing {
-            let entry = entry.map_err(|e| self.io(e))?;
-            let name = entry.file_name();
-            if name.to_bytes() == b"." || name.to_bytes() == b".." {
-                continue;
-            }
-            // `d_type` is not filled in on every filesystem, and a wrong guess
-            // here would mean unlinking a directory as a file (or the reverse),
-            // so `Unknown` asks rather than assumes.
-            let kind = match entry.file_type() {
-                FileType::Unknown => {
-                    let stat = rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
-                        .map_err(|e| self.io(e))?;
-                    FileType::from_raw_mode(stat.st_mode)
-                }
-                known => known,
-            };
-            if kind == FileType::Directory {
-                let child = openat(
-                    dir,
-                    name,
-                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )
-                .map_err(|e| self.io(e))?;
-                self.empty(&child, depth + 1)?;
-                drop(child);
-                rustix::fs::unlinkat(dir, name, AtFlags::REMOVEDIR).map_err(|e| self.io(e))?;
-            } else {
-                // A symlink is unlinked, never followed: `unlinkat` removes the
-                // name, and the name is the link.
-                rustix::fs::unlinkat(dir, name, AtFlags::empty()).map_err(|e| self.io(e))?;
-            }
-        }
-        Ok(())
+        empty(dir, &self.shown, depth)
     }
 
     fn io(&self, err: rustix::io::Errno) -> ProviderError {
@@ -532,6 +524,70 @@ impl Anchored {
             rustix::io::Errno::LOOP | rustix::io::Errno::MLINK => swapped(&self.shown),
             other => failed(&self.shown, other.into()),
         }
+    }
+}
+
+/// Removes everything beneath `dir`, unlinking links rather than following
+/// them. Shared by [`Anchored::remove_tree`] and the pinned tree.
+#[cfg(unix)]
+pub(super) fn empty(
+    dir: &std::os::fd::OwnedFd,
+    shown: &str,
+    depth: u32,
+) -> Result<(), ProviderError> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags, openat};
+
+    if depth > 256 {
+        return Err(failed(
+            shown,
+            std::io::Error::other("directory tree is too deeply nested to remove"),
+        ));
+    }
+    let listing = rustix::fs::Dir::read_from(dir).map_err(|e| errno(shown, e))?;
+    for entry in listing {
+        let entry = entry.map_err(|e| errno(shown, e))?;
+        let name = entry.file_name();
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        // `d_type` is not filled in on every filesystem, and a wrong guess
+        // here would mean unlinking a directory as a file (or the reverse),
+        // so `Unknown` asks rather than assumes.
+        let kind = match entry.file_type() {
+            FileType::Unknown => {
+                let stat = rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(|e| errno(shown, e))?;
+                FileType::from_raw_mode(stat.st_mode)
+            }
+            known => known,
+        };
+        if kind == FileType::Directory {
+            let child = openat(
+                dir,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| errno(shown, e))?;
+            empty(&child, shown, depth + 1)?;
+            drop(child);
+            rustix::fs::unlinkat(dir, name, AtFlags::REMOVEDIR).map_err(|e| errno(shown, e))?;
+        } else {
+            // A symlink is unlinked, never followed: `unlinkat` removes the
+            // name, and the name is the link.
+            rustix::fs::unlinkat(dir, name, AtFlags::empty()).map_err(|e| errno(shown, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// An errno from a walk beneath a pinned directory: a link where a file or
+/// directory was expected is the refusal, anything else is the I/O error.
+#[cfg(unix)]
+pub(super) fn errno(shown: &str, err: rustix::io::Errno) -> ProviderError {
+    match err {
+        rustix::io::Errno::LOOP | rustix::io::Errno::MLINK => swapped(shown),
+        other => failed(shown, other.into()),
     }
 }
 
@@ -553,6 +609,11 @@ impl Anchored {
     /// split, and nothing here resolves further than that.
     fn target(&self) -> PathBuf {
         self.parent.join(&self.name)
+    }
+
+    /// The directory a pinned tree acts beneath — by path, on this arm.
+    pub fn dir_path(&self) -> PathBuf {
+        self.target()
     }
 
     /// Opens the final name for writing, creating it if it is not there.

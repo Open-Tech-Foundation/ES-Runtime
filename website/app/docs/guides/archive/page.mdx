@@ -73,11 +73,11 @@ async function handleUpload(request) {
 ```
 
 The archive is decoded and validated into a temporary directory before any
-staged file is copied into `uploads`. This catches bad zip CRCs and refuses
+staged file is moved into `uploads`. This catches bad zip CRCs and refuses
 unsafe paths, links, special entries, encrypted zips and unsupported
 compression methods before they can partially change destination files. The
 temporary directory uses disk space up to the uncompressed output size; an I/O
-failure during the final copy can still leave partial output. `request.bytes()`
+failure while moving files into place can still leave partial output. `request.bytes()`
 also buffers the compressed upload in memory; `maxBytes` limits the
 uncompressed contents, not the size of that incoming buffer.
 

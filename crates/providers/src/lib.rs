@@ -18,6 +18,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use es_runtime_common::{ErrorCode, ExceptionClass, IntoException, UncaughtError};
@@ -970,6 +971,57 @@ pub trait FileSystem: Send + Sync {
         pattern: String,
         opts: GlobScanOptions,
     ) -> BoxFuture<Result<Vec<String>, ProviderError>>;
+
+    /// Admits `path` for writing, creates it (and its parents) if needed, and
+    /// pins it: the [`Tree`] acts beneath that directory and nowhere else
+    /// (DECISIONS D180). The way to write many files under one directory —
+    /// extraction, unpacking, generation — without each caller re-deriving
+    /// what a symlink under it may do.
+    fn open_tree(&self, path: String) -> BoxFuture<Result<Arc<dyn Tree>, ProviderError>>;
+}
+
+/// A directory pinned by [`FileSystem::open_tree`], written to by relative
+/// path (DECISIONS D180).
+///
+/// Every path is relative to the pinned directory, `/`-separated, with no
+/// empty, `.` or `..` component; anything else is `ERR_INVALID_PATH`. No
+/// component beneath the directory is followed if it is a symbolic link —
+/// whether it was there before or swapped in during — so nothing a `Tree`
+/// does can land outside the directory or anywhere a link inside it points;
+/// such a path is refused with `ERR_JAIL_ESCAPE`. Directories a path needs are
+/// created.
+pub trait Tree: Send + Sync {
+    /// Refuses `path` if any part of it that exists beneath the directory is a
+    /// link; parts that do not exist yet are fine. A check before acting, so a
+    /// caller can refuse a whole batch before writing any of it — not a
+    /// guarantee, which the operations below give themselves.
+    fn check(&self, path: String) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Creates the directory `path` and any missing parents. An existing
+    /// directory is not an error.
+    fn mkdir(&self, path: String) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Writes `data` to the file `path`, replacing it, or adding to its end with
+    /// `append`. Creates the file if needed.
+    fn write(
+        &self,
+        path: String,
+        data: Vec<u8>,
+        append: bool,
+    ) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Moves `from` to `to`, both beneath the directory. Replaces a file at
+    /// `to` atomically; a link at `to` is replaced, never followed.
+    fn rename(&self, from: String, to: String) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Removes `path` and everything beneath it. Links are removed, not
+    /// followed.
+    fn remove(&self, path: String) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Creates a new, empty directory with an unpredictable name starting with
+    /// `prefix`, directly beneath the pinned directory, and resolves to its
+    /// name.
+    fn make_temp_dir(&self, prefix: String) -> BoxFuture<Result<String, ProviderError>>;
 }
 
 /// An open handle held by a [`SyncFileSystem`]. Opaque to the guest: it indexes

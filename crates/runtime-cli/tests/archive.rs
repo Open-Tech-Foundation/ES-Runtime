@@ -591,3 +591,56 @@ console.log("ok");
         ["ERR_ARCHIVE_TOO_LARGE", "ok"]
     );
 }
+
+/// The destination directory is pinned without following a link at its own
+/// name (D180), and a file already there is replaced by the extracted one.
+#[cfg(unix)]
+#[test]
+fn extraction_pins_the_destination_and_replaces_existing_files() {
+    let linked = temp("archive_pinned_link");
+    let real = temp("archive_pinned_real");
+    let out = temp("archive_pinned_out");
+    for dir in [&linked, &real, &out] {
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_file(dir);
+    }
+    std::fs::create_dir_all(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &linked).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("a.txt"), "old").unwrap();
+
+    let source = r#"
+import { Archive } from "runtime:archive";
+const archive = new Archive({ "a.txt": "new", "d/b.txt": "b" });
+try {
+  await archive.extract("archive_pinned_link");
+  console.log("wrote");
+} catch (error) {
+  console.log(error.code);
+}
+console.log(JSON.stringify(await archive.extract("archive_pinned_out")));
+"#;
+    let out_text = run(
+        "archive_pinned.mjs",
+        source,
+        &["--allow-write=.", "--allow-read=."],
+    );
+    assert_eq!(
+        out_text.lines().collect::<Vec<_>>(),
+        ["ERR_ARCHIVE_UNSAFE_PATH", r#"{"files":2,"directories":0}"#]
+    );
+    assert!(std::fs::read_dir(&real).unwrap().next().is_none());
+    assert_eq!(std::fs::read_to_string(out.join("a.txt")).unwrap(), "new");
+    assert_eq!(std::fs::read_to_string(out.join("d/b.txt")).unwrap(), "b");
+    let leftovers: Vec<_> = std::fs::read_dir(&out)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".esrun-archive-")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "the stage was left behind");
+}

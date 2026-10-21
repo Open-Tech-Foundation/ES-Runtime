@@ -143,7 +143,16 @@ reached by a route nothing judged. So its I/O resolves **every** open through
 the same filesystem view that backs [`runtime:fs`](/docs/internals/filesystem),
 and no filename has to be guessed, because the engine has to ask.
 
-Two consequences fell out of that, both found by tests rather than by reading:
+Three consequences fell out of that, all found by tests rather than by reading:
+
+- **The lock is taken after the jail lets go.** On Unix the VFS opens each file
+  through the jail by descriptor and hands the engine that descriptor to reopen,
+  so a directory swapped for a link cannot redirect it. The engine's lock on a
+  database file is a POSIX `fcntl` lock, and POSIX drops every such lock a
+  process holds on a file when it closes *any* descriptor for that file. So the
+  engine opens without locking, the jail's descriptor is closed, and only then
+  is the lock taken — the other order leaves the file unlocked the moment the
+  open returns, and a second process can open the same database.
 
 - **The engine's scratch space is memory.** Some statements ask for a temp file
   and take one from the OS temp directory, which is outside the jail by

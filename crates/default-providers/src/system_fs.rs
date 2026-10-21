@@ -576,6 +576,34 @@ impl FileSystem for SystemFileSystem {
         })
     }
 
+    fn open_tree(
+        &self,
+        path: String,
+    ) -> BoxFuture<Result<Arc<dyn es_runtime_providers::Tree>, ProviderError>> {
+        let jail = self.jail.clone();
+        let make = self.mkdir(path.clone(), true);
+        Box::pin(async move {
+            // Pin it if it is there; otherwise create it the way `mkdir` does,
+            // one jailed level at a time, and pin what was created.
+            let pinned = {
+                let (jail, path) = (jail.clone(), path.clone());
+                tokio::task::spawn_blocking(move || jail.open_tree(&path, Access::Write))
+                    .await
+                    .map_err(|e| ProviderError::Other(e.to_string()))?
+            };
+            let tree = match pinned {
+                Err(error) if error.code() == Some(ErrorCode::NotFound) => {
+                    make.await?;
+                    tokio::task::spawn_blocking(move || jail.open_tree(&path, Access::Write))
+                        .await
+                        .map_err(|e| ProviderError::Other(e.to_string()))??
+                }
+                other => other?,
+            };
+            Ok(Arc::new(tree) as Arc<dyn es_runtime_providers::Tree>)
+        })
+    }
+
     fn glob_match(&self, pattern: &str, path: &str) -> Result<bool, ProviderError> {
         let (matcher, negated) = parse_glob(pattern)?;
         Ok(negated ^ matcher.is_match(path))

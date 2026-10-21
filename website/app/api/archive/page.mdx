@@ -133,10 +133,12 @@ refused. On Windows, device names (`NUL`, `COM1.txt`), names with `:` or
 another character Windows forbids, and names ending in a dot or space are
 refused too. An archive is never sanitized into a different one. `extract()` checks
 the destination, parents and output paths for existing symlinks, then decodes
-and validates the whole archive into a temporary directory before copying
-staged files into the destination. A corrupt or unsafe archive therefore does
-not partially change destination files. Staging uses temporary disk space up
-to the uncompressed output size. An I/O error during the final copy can leave
+and validates the whole archive into a temporary directory beneath the
+destination before moving staged files into place. Nothing beneath the
+destination is followed if it is a link, including one that appears during
+extraction. A corrupt or unsafe archive therefore does not partially change
+destination files. Staging uses temporary disk space up to the uncompressed
+output size. An I/O error while moving staged files into place can leave
 partial output.
 
 ## Errors

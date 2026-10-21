@@ -136,10 +136,40 @@ Nothing is cleaned up automatically — what you create, you remove.
 ## Two doors, one filesystem
 
 `runtime:fs` is asynchronous; `runtime:wasi` is synchronous, because
-WASI's syscalls are. They are separate implementations of the same confinement:
-the same root jail, the same scope lists, the same refusals. A WASI guest is not
-a way around `--allow-read`, and a policy that differed between the two would be
-a bug wearing a feature's clothes.
+WASI's syscalls are. Neither carries its own confinement. Both — and the
+embedded database's files — hold the same `Jail` value, built once per run:
+one root, one set of scope lists, one set of refusals, one place that pins a
+path by descriptor. A WASI guest is not a way around `--allow-read`, because
+there is no second policy for it to be judged by.
+
+That is structural rather than a convention. The pinning code is reachable
+only through the jail, so nothing can hold a descriptor for a path the jail
+did not admit, and a CI check (`tsr fs-discipline`) refuses direct filesystem
+calls in the runtime's crates outside a reviewed list of files, each with its
+reason. A new feature that reads or writes files goes through the jail or
+explains, in that list, why the guest cannot steer the path.
+
+## Writing a tree
+
+The jail's promise is that a path stays inside the project. A symlink that
+stays inside the project is allowed by it — which is right for `readFile`, and
+wrong for something that writes many files under one directory from names it
+did not choose, such as an archive's entries. There, a link under the
+destination would redirect a write to somewhere the input did not name.
+
+So that kind of write uses a pinned tree. The destination is admitted by the
+jail, created if needed, and opened by descriptor without following a link at
+its own name; every path beneath it is relative, has no `.` or `..`, and is
+opened from that descriptor with `O_NOFOLLOW`, component by component. A link
+anywhere beneath it — there before, or swapped in during — is refused with
+`ERR_JAIL_ESCAPE` rather than followed. A rename moves a name within the tree
+and replaces whatever is at the destination name without following it.
+`runtime:archive`'s `extract()` is the first user; the next feature that
+writes a tree uses the same one rather than re-deriving its checks.
+
+On Windows there is no `*at` family, so both the jail's pinning and the tree
+check each component and then use it by path. The window between the two stays
+open there; it is written down rather than implied.
 
 ## Capabilities
 

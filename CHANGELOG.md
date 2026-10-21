@@ -67,6 +67,12 @@ namespace) is unstable and may change between minor releases until the API freez
   `SystemSyncFileSystem` to `Jail`; build one and pass it to
   `SystemFileSystem::with_jail`, `SystemSyncFileSystem::with_jail` and
   `SystemEmbeddedDb::new`.
+- `FileSystem::open_tree` pins a directory for writing many files beneath it
+  (D180): paths are relative, and no component beneath the directory is
+  followed if it is a link, whether it was there before or swapped in during.
+  `runtime:archive`'s `extract()` now writes through it, so a link under the
+  destination is refused at the syscall rather than by a check beforehand, and
+  staged files are renamed into place instead of copied.
 
 ### Fixed
 
