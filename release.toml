@@ -72,6 +72,30 @@ es-runtime-engine = []
     "**/tests/**",
 ]
 es-runtime-common = []
+"@opentf/esrun-mqtt" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
+"@opentf/esrun-nats" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
+"@opentf/esrun-rabbitmq" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 
 [[package]]
 name = "@opentf/esrun-mysql"
@@ -83,6 +107,15 @@ artifacts = ""
 manifest = "packages/mysql/package.json"
 
 [[package]]
+name = "@opentf/esrun-mqtt"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/mqtt/package.json"
+
+[[package]]
 name = "@opentf/esrun-postgres"
 adapter = "npm"
 mode = "publish"
@@ -92,6 +125,15 @@ artifacts = ""
 manifest = "packages/postgres/package.json"
 
 [[package]]
+name = "@opentf/esrun-nats"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/nats/package.json"
+
+[[package]]
 name = "@opentf/esrun-redis"
 adapter = "npm"
 mode = "publish"
@@ -99,6 +141,15 @@ matrix = false
 command = "tsr build"
 artifacts = ""
 manifest = "packages/redis/package.json"
+
+[[package]]
+name = "@opentf/esrun-rabbitmq"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/rabbitmq/package.json"
 
 [[package]]
 name = "@opentf/esrun-smtp"
