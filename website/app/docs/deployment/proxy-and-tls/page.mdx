@@ -1,0 +1,98 @@
+---
+title: Reverse proxy and TLS
+description: Put Caddy or nginx in front of an esrun service, or terminate TLS in esrun itself — the client's address, h2c to the backend, and certificates.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Reverse proxy and TLS
+
+HTTPS reaches an esrun service one of two ways: a reverse proxy terminates TLS
+and forwards plain HTTP, or esrun terminates TLS itself. A proxy is the usual
+choice — it obtains and renews certificates, and serves several services on
+one address.
+
+## Caddy
+
+Caddy obtains a certificate for the site's name and forwards to the service.
+`h2c://` makes it speak HTTP/2 to esrun over the internal connection, which
+esrun serves without configuration — see [HTTP/2](/docs/http/protocols#http-2):
+
+```text
+example.com {
+	reverse_proxy h2c://app:8080
+}
+```
+
+Here `app` is the service's name on a [Compose](/docs/deployment/compose)
+network; on a single server it is `127.0.0.1:8080`.
+
+## nginx
+
+```nginx
+server {
+    listen 80;
+    location / {
+        proxy_pass http://app:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Add TLS with nginx's own `listen 443 ssl` and certificate directives.
+
+## The client's address
+
+Behind a proxy, the connection esrun sees is the proxy's: the handler's
+`info.remoteAddr` is the proxy, and the client arrives in `X-Forwarded-For`,
+which both configurations above set. esrun never reads that header on its own —
+see [Identity, limits, and deployment](/docs/http/production) for why and how to
+read it.
+
+`request.url` also starts with `http://`, because the connection to esrun is
+plain HTTP. The scheme the client used is in `X-Forwarded-Proto`.
+
+<Callout type="warning" title="Do not publish the service's own port">
+  Only the proxy should be reachable. Bind the service to `127.0.0.1`, or in
+  Compose, leave its port out of `ports:`; otherwise a client can bypass the
+  proxy and send any `X-Forwarded-For` it likes.
+</Callout>
+
+## TLS in esrun
+
+`serve()` terminates TLS itself with `secureTransport: "on"` and a PEM
+certificate and key. Read them from files the service is granted, here
+[Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/) under
+`/run/secrets`:
+
+```ts
+import { serve } from "runtime:http";
+import { file } from "runtime:fs";
+
+serve({
+  port: 8443,
+  secureTransport: "on",
+  cert: await file("/run/secrets/cert.pem").text(),
+  key: await file("/run/secrets/key.pem").text(),
+}, handler);
+```
+
+```yaml
+services:
+  app:
+    build: .
+    command: ["--allow-listen=8443", "--allow-read=/run/secrets", "dist/server.js"]
+    ports: ["443:8443"]
+    secrets: [cert.pem, key.pem]
+
+secrets:
+  cert.pem: { file: ./cert.pem }
+  key.pem: { file: ./key.pem }
+```
+
+Clients negotiate HTTP/2 or HTTP/1.1 by ALPN. The certificate is read when the
+service starts, so a renewed one takes effect on the next restart; esrun does
+not obtain or renew certificates.

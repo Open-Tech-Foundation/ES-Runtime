@@ -176,6 +176,7 @@ const NAV = [
       { title: "Containers", path: "/docs/deployment/containers" },
       { title: "Docker Compose", path: "/docs/deployment/compose" },
       { title: "Linux server (systemd)", path: "/docs/deployment/systemd" },
+      { title: "Reverse proxy and TLS", path: "/docs/deployment/proxy-and-tls" },
     ],
   },
   {

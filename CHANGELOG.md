@@ -33,6 +33,9 @@ namespace) is unstable and may change between minor releases until the API freez
   *Linux server (systemd)*: a sandboxed unit with a dynamic user,
   `SuccessExitStatus=143` so a stop is not a failure, ports below 1024, a state
   directory, secrets, logs, and why `MemoryDenyWriteExecute` cannot be set.
+  *Reverse proxy and TLS*: Caddy (speaking h2c to esrun) and nginx in front,
+  where the client's address and scheme arrive, and TLS terminated by esrun
+  with a certificate from Compose secrets.
 - `install.sh` refuses a Linux system older than glibc 2.39, or a musl one
   such as Alpine, before downloading anything, and says what is needed. Such a
   system used to install and then fail at the first run with a loader error.
