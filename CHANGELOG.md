@@ -19,6 +19,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `esrun upgrade` no longer asks "Do you want to continue?" after it was told
+  to upgrade. Without a terminal — a container, a CI job, a provisioning
+  script — the question could not be answered and the upgrade failed with
+  "the update was not confirmed".
 - A WebSocket connection closed by its peer is now freed. Delivering the peer's
   close frame left the connection's host-side entry behind, because the guest
   stops reading at the close event and the entry went only on a later read. A

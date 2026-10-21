@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev upgrade` no longer asks "Do you want to continue?" after it was told
+  to upgrade. Without a terminal — a container, a CI job, a provisioning
+  script — the question could not be answered and the upgrade failed with
+  "the update was not confirmed".
+
 ## [0.21.0] - 2026-10-21
 
 ### Fixed

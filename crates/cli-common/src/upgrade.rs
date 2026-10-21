@@ -186,7 +186,22 @@ pub fn check(binary: &'static str, current_version: &str) -> Result<String, Stri
 /// this on: `self_update` drives its own blocking HTTP runtime, and dropping
 /// that from inside a `#[tokio::main]` context panics.
 pub fn run(binary: &'static str, current_version: &str) -> Result<String, String> {
-    let status = self_update::backends::custom::Update::configure()
+    let status = updater(binary, current_version)?
+        .update()
+        .map_err(|e| e.to_string())?;
+    Ok(if status.is_updated() {
+        format!("Upgraded {binary} to {}.", status.version())
+    } else {
+        format!("{binary} is already up to date ({}).", status.version())
+    })
+}
+
+/// The configured updater, built without touching the network.
+fn updater(
+    binary: &'static str,
+    current_version: &str,
+) -> Result<self_update::backends::custom::Update, String> {
+    self_update::backends::custom::Update::configure()
         .source(Releases { binary })
         .bin_name(binary)
         .target(target())
@@ -198,15 +213,12 @@ pub fn run(binary: &'static str, current_version: &str) -> Result<String, String
         .asset_identifier(if cfg!(windows) { ".zip" } else { ".tar.gz" })
         .current_version(current_version)
         .show_download_progress(true)
+        // Typing `upgrade` is the confirmation. self_update's default asks
+        // again on stdin, which a container, CI job or provisioning script
+        // cannot answer: there the upgrade failed as "not confirmed".
+        .no_confirm(true)
         .build()
-        .map_err(|e| e.to_string())?
-        .update()
-        .map_err(|e| e.to_string())?;
-    Ok(if status.is_updated() {
-        format!("Upgraded {binary} to {}.", status.version())
-    } else {
-        format!("{binary} is already up to date ({}).", status.version())
-    })
+        .map_err(|e| e.to_string())
 }
 
 /// Runs [`run`] on a thread of its own and prints the outcome, exiting the
@@ -254,7 +266,16 @@ pub fn check_and_exit(binary: &'static str, current_version: &'static str) -> ! 
 
 #[cfg(test)]
 mod tests {
-    use super::{Releases, describe};
+    use super::{Releases, describe, updater};
+    use self_update::UpdateConfig;
+
+    #[test]
+    fn upgrade_does_not_ask_again() {
+        // Without a terminal the second question cannot be answered, so an
+        // unattended `esrun upgrade` aborted rather than upgrading.
+        assert!(updater("esrun", "0.1.0").unwrap().no_confirm());
+        assert!(updater("esdev", "0.1.0").unwrap().no_confirm());
+    }
 
     #[test]
     fn a_tag_belongs_to_one_binary() {
