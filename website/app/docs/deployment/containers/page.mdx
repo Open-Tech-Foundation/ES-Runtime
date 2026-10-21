@@ -1,6 +1,6 @@
 ---
 title: Containers
-description: Build an esrun service into a small container image — a multi-stage Dockerfile, the base image, grants, memory, shutdown and health checks.
+description: Build an esrun service into a small container image — the esrun image, a multi-stage Dockerfile, grants, memory, shutdown, health checks and Podman.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -11,9 +11,24 @@ A container image for an esrun service holds two things: the `esrun` binary and
 the bundle `esdev build` produced. Nothing else is needed at run time — no
 package manager, no `node_modules`, no shell.
 
+## The esrun image
+
+`ghcr.io/open-tech-foundation/esrun` is the released `esrun` binary on a
+distroless base, for `linux/amd64` and `linux/arm64`:
+
+| | |
+| --- | --- |
+| Tags | `0.42.0` (exact), `0.42` (newest patch), `latest` |
+| Base | `gcr.io/distroless/cc-debian13:nonroot` — no shell, an unprivileged user |
+| Entrypoint | `esrun`, so `CMD` holds its arguments |
+| Working directory | `/app` |
+
+Every image carries signed build provenance: `gh attestation verify
+oci://ghcr.io/open-tech-foundation/esrun:0.42.0 --owner open-tech-foundation`.
+
 ## The Dockerfile
 
-Two stages: one builds with `esdev`, the other runs with `esrun`.
+Two stages: one builds with `esdev`, the other runs on the esrun image.
 
 ```dockerfile
 # Build: esdev compiles and bundles the app into one file.
@@ -21,21 +36,18 @@ FROM debian:13-slim AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-ARG ESRUN_VERSION=0.42.0
 ARG ESDEV_VERSION=0.21.0
 RUN curl -fsSL https://esrun.opentechf.org/install.sh \
-  | ESRUN_VERSION=$ESRUN_VERSION ESDEV_VERSION=$ESDEV_VERSION bash
+  | ESDEV_VERSION=$ESDEV_VERSION bash -s -- --only=esdev
 WORKDIR /app
 COPY . .
 RUN /root/.es-runtime/bin/esdev build --minify
 
-# Run: esrun and the bundle, nothing else.
-FROM gcr.io/distroless/cc-debian13:nonroot
-COPY --from=build /root/.es-runtime/bin/esrun /usr/local/bin/esrun
-WORKDIR /app
+# Run: the esrun image and the bundle.
+FROM ghcr.io/open-tech-foundation/esrun:0.42.0
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
-CMD ["esrun", "--allow-listen=8080", "--allow-env=PORT", "--shutdown-grace=8000", "dist/server.js"]
+CMD ["--allow-listen=8080", "--allow-env=PORT", "--shutdown-grace=8000", "dist/server.js"]
 ```
 
 With a `.dockerignore` that keeps local output out of the build context:
@@ -46,22 +58,23 @@ dist
 .dev
 ```
 
-Pin both versions. The same `ARG`s rebuild the same image, and an upgrade is a
-one-line change you can review.
+Pin both versions: the esrun tag and `ESDEV_VERSION`. The same file then
+rebuilds the same image, and an upgrade is a one-line change you can review.
 
-## The base image
+## Another base image
 
-The run stage needs glibc 2.39 or newer and nothing more: `esrun` links only
-the C runtime, and it carries its own TLS trust roots, so `ca-certificates` is
-not required for outbound HTTPS.
+To run on a base of your own — one with a shell for debugging, say — copy the
+binary out of the esrun image:
 
-| Image | Size | Notes |
-| --- | --- | --- |
-| `gcr.io/distroless/cc-debian13:nonroot` | ~43 MB | No shell; runs as an unprivileged user |
-| `debian:13-slim` | ~120 MB | A shell for debugging |
-| `ubuntu:24.04` | ~120 MB | A shell for debugging |
+```dockerfile
+FROM debian:13-slim
+COPY --from=ghcr.io/open-tech-foundation/esrun:0.42.0 /usr/local/bin/esrun /usr/local/bin/esrun
+```
 
-Alpine and other musl-based images are not supported; see
+The base needs glibc 2.39 or newer and nothing more: `esrun` links only the C
+runtime, and it carries its own TLS trust roots, so `ca-certificates` is not
+required for outbound HTTPS. `debian:13-slim` and `ubuntu:24.04` qualify;
+Alpine and other musl-based images do not. See
 [Platforms](/docs/install#platforms).
 
 ## Grants
@@ -71,7 +84,7 @@ not granted, so name exactly what the service needs: the port it listens on,
 the hosts it calls, the variables it reads.
 
 ```dockerfile
-CMD ["esrun", "--allow-listen=8080", "--allow-net=api.example.com", "--allow-env=PORT,DATABASE_URL", "dist/server.js"]
+CMD ["--allow-listen=8080", "--allow-net=api.example.com", "--allow-env=PORT,DATABASE_URL", "dist/server.js"]
 ```
 
 [`esdev --trace-permissions`](/esdev/permissions) lists what a development run
