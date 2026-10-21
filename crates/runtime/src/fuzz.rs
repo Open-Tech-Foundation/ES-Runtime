@@ -119,3 +119,9 @@ pub fn archive(bytes: &[u8]) {
         let _ = crate::archive::build(inputs, format, compress, &limits);
     }
 }
+
+/// Decodes arbitrary bytes as an image under a small pixel limit, reads its
+/// metadata and statistics, and encodes it again in the format it came in.
+pub fn image(bytes: &[u8]) {
+    crate::image_ops::fuzz_decode(bytes);
+}

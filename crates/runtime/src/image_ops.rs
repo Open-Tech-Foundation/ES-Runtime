@@ -1182,6 +1182,32 @@ fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
 }
 
+/// Fuzz entry: arbitrary bytes through the path `images(bytes)` takes — the
+/// format sniffed from the leading bytes, the decode, `metadata()`, `stats()`
+/// and a re-encode in the source's format (see [`crate::fuzz`]). Pixels fuzzes
+/// some of its decoders upstream; this reaches every one of them, and the
+/// runtime's own handling of what they return.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_decode(bytes: &[u8]) {
+    // Small enough that a header claiming a large canvas is refused before
+    // anything is allocated, which keeps every iteration cheap; the refusal at
+    // the header is itself what the limit exists for.
+    let limits = Limits::default().with_max_pixels(1 << 16);
+    let open = Open {
+        options: OpenOptions::default().with_limits(limits),
+        limits,
+        decode: Decode::Encoded,
+    };
+    let Ok(image) = pipeline(bytes.to_vec(), open, Vec::new()) else {
+        return;
+    };
+    let _ = metadata(&image);
+    let _ = stats(&image);
+    if let Ok(meta) = image.metadata() {
+        let _ = image.output(meta.format, EncodeOptions::default()).bytes();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-common"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-engine"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "es-runtime-common",
  "thiserror",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-providers"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "es-runtime-common",
  "futures-core",

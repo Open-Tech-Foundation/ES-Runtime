@@ -30,7 +30,7 @@ The resource-limit / FFI-safety spine (SPEC.md §4) is in place as of Phase 9:
 
 **Checked in CI:** `cargo-fuzz` over the parsers that read untrusted bytes
 (URL, URLPattern, `TextDecoder`, YAML, XML, CSV, CBOR, compression, archives,
-and DER key import), seeded from the committed corpus in `fuzz/seeds/`; Miri over
+images, and DER key import), seeded from the committed corpus in `fuzz/seeds/`; Miri over
 the crates that do not link V8; the conformance suite; and the supply-chain
 gates below. Guest tampering with
 intrinsics cannot reach a capability (see
