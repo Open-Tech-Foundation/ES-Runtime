@@ -71,6 +71,12 @@ namespace) is unstable and may change between minor releases until the API freez
   `density`, `isProgressive`, `isPalette`, `exif`, `xmp`, `icc`, …), each
   absent when the file does not state it, and `trimOffsetLeft`/`Top` after a
   trim.
+- `runtime:images` takes and gives raw pixels and makes canvases, with
+  sharp's shapes (DECISIONS D182): `new Image(bytes, { raw: { width,
+  height, channels, depth } })`, `new Image({ create: { width, height,
+  channels, background } })`, `.raw({ depth })` output and
+  `convolve({ width, height, kernel })`. A composite overlay takes `raw` too.
+  `maxPixels` applies to raw and created images.
 
 ### Changed
 

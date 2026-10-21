@@ -3778,3 +3778,21 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 **Consequences:** the binary carries the JPEG XL codec (Pixels' `jxl` feature, on by default). The comparison page's Composite and Progressive JPEG rows change for esrun; `bench/images/features/esrun.mjs` probes `composite` in sharp's array form.
 
 **Not here:** text overlay, rotation by other angles, multi-frame output, `withExif`, and HEIC, as before.
+
+### D182 — `runtime:images` takes and gives raw pixels, makes canvases, and convolves · *Accepted (2026-10-21)* · *extends D181*
+
+**Context:** after D181 the largest sharp features that otf-pixels already had and the module did not expose were raw pixel input and output (sharp's `raw` input option and `raw()` output), a blank canvas (`create`), and `convolve`. Raw pixels are how an image meets code that works on samples: a placeholder hash, a model's input, a canvas. Bun's `Image` has none of these. Pixels has `Image::from_raw`, a raw codec, and `Kernel`.
+
+**Decision (maintainer, 2026-10-21):**
+
+- **sharp's shapes.** `new Image(bytes, { raw: { width, height, channels, depth } })`, `new Image({ create: { width, height, channels, background } })`, `.raw({ depth })` and `convolve({ width, height, kernel })`. `depth` takes sharp's names for the three sample types Pixels has (`uchar`, `ushort`, `float`); `raw()` defaults to `uchar`, as sharp's does. A composite overlay takes `raw` beside `input`, as in sharp.
+- **`maxPixels` applies to raw and created images too,** checked when the pipeline runs against the image's own limit, so raising it works and a created canvas cannot allocate past it. The layout is validated at the call; the size against the limit at the terminal, as a file's header is.
+- **The format of raw and created input is `"raw"`.** With no format method the output is raw pixels again, as sharp's is.
+- **What Pixels lacks is refused by name:** `raw({ premultiplied })`, `create({ noise, pageHeight })`, `convolve({ scale, offset })`, and sharp's `sharpen({ sigma, m1, m2, ... })`.
+
+**Rejected:**
+- **`sharpen({ sigma })` as a Gaussian unsharp kernel through `convolve`.** sharp sharpens the L channel in LAB with a nonlinear response (`m1`, `m2`, `x1`, `y2`, `y3`); a linear kernel on RGB would share the name and differ in every result. It waits for Pixels.
+- **`convolve({ offset })` as a `linear` step after it.** The convolution clamps first, so the negative half of an edge detector, which `offset: 128` exists to keep, is already gone.
+- **Building a created canvas in JavaScript.** It would allocate the whole canvas on the JS heap and copy it across; the host fills it.
+
+**Not here:** the other sample types sharp names (`char`, `short`, `int`, `uint`, `double`, `complex`, `dpcomplex`), 16-bit grey with alpha, and `create`'s `noise`.

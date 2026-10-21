@@ -26,6 +26,10 @@ itself.
   `Blend`, `ExtendOptions`, `TrimOptions`, `CompositeOverlay`,
   `ChromaSubsampling`, `PaletteOptions`, `ChannelStats` and `ImageStats`.
   `ImageMetadata` gains `channels` and sharp's optional source fields.
+- `runtime:images` (DECISIONS D182): `ImageOptions.raw`, `{ create }` as an
+  `ImageInput`, `Image.raw()` and `Image.convolve()`, `"raw"` in
+  `ImageFormat`, `raw` on `CompositeOverlay`, and `RawOptions`,
+  `CreateOptions` and `RawDepth`.
 
 ### Changed
 

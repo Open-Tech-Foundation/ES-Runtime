@@ -3339,6 +3339,13 @@ change the result. The format is read from the bytes, never from a name.
 | `toSrgb` | `true` | An embedded matrix/TRC ICC profile is converted to sRGB and dropped. Off, the pixels are kept as stored and the profile is written to outputs that can hold one. |
 | `animated` | `false` | Ask for every frame. Not yet supported: an animated input with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
 | `page` | `0` | The page to open of a multi-page TIFF. Past the end, or past 0 for any other format, is a `RangeError` from the terminal. |
+| `raw` | — | Read `input` as raw pixels: `{ width, height, channels, depth? }`, packed rows with no header. `channels` is 1 (grey), 2 (grey and alpha), 3 (RGB) or 4 (RGBA); `depth` is `"uchar"` (default), `"ushort"` or `"float"`, and grey with alpha is 8-bit only. Bytes not exactly the layout's length are a `RangeError` from the terminal; `maxPixels` applies. `premultiplied` is a `TypeError`. |
+
+`new Image({ create: { width, height, channels, background } })` makes a
+canvas of one colour instead, as sharp's `create` does: `channels` is 3 or 4,
+`background` is required, and `maxPixels` applies. `noise` is a `TypeError`.
+A raw or created image's `format` is `"raw"`, so it needs a format method to
+encode as anything else.
 
 ### Transforms
 
@@ -3353,7 +3360,8 @@ sent to several sizes.
 | `flip()` / `flop()` | Mirror top to bottom / left to right. |
 | `modulate({ brightness?, saturation?, hue?, lightness? })` | Multipliers for brightness and saturation (`1` unchanged, saturation `0` is grey); `hue` rotates by degrees; `lightness` is added in sharp's units (`0` unchanged). |
 | `blur(sigma)` | Gaussian blur, `sigma` in pixels. |
-| `sharpen(amount = 1)` | A 3×3 sharpen scaled by `amount`. |
+| `sharpen(amount = 1)` | A 3×3 sharpen scaled by `amount`. sharp's `sharpen({ sigma, m1, m2, … })` is a `TypeError`. |
+| `convolve({ width, height, kernel })` | Convolve with `kernel`, `width` × `height` numbers in row order; each side odd, at most 63. The result is divided by the kernel's sum, unless that is 0 (an edge detector). Edges repeat the nearest pixel. sharp's `scale` and `offset` are a `TypeError`. |
 | `flatten({ background? })` | Draw over `background` (default black) and drop alpha. |
 | `grayscale()` | Convert to grey, keeping any alpha: a one-channel image. |
 | `greyscale()` | Greyscale by luma, keeping the channel count: RGB stays three equal channels. |
@@ -3380,7 +3388,8 @@ sharp's does. Each is an object:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `input` | — | An `Image` (with its own chain and open options), or anything `new Image` takes. A `file()` is read when the terminal is called, under **FileRead**. |
+| `input` | — | An `Image` (with its own chain and open options), or anything `new Image` takes, `{ create }` included. A `file()` is read when the terminal is called, under **FileRead**. |
+| `raw` | — | Read `input` as raw pixels in this layout, as the `raw` open option. |
 | `blend` | `"over"` | One of sharp's modes: `"clear"`, `"source"`, `"over"`, `"in"`, `"out"`, `"atop"`, `"dest"`, `"dest-over"`, `"dest-in"`, `"dest-out"`, `"dest-atop"`, `"xor"`, `"add"`, `"saturate"`, `"multiply"`, `"screen"`, `"overlay"`, `"darken"`, `"lighten"`, `"colour-dodge"`, `"colour-burn"`, `"hard-light"`, `"soft-light"`, `"difference"`, `"exclusion"` (`"color-dodge"` and `"color-burn"` too). |
 | `gravity` | `"center"` | Where the overlay sits: the same nine names as `position`. |
 | `left`, `top` | — | Its top-left corner, in pixels; may be negative. They take precedence over `gravity`. Give both or neither. |
@@ -3451,6 +3460,7 @@ the source's format. The format never comes from a destination's extension.
 | `avif(options?)` | `quality` 1–100 (80); `chromaSubsampling` (`"4:2:0"`); `effort` 0–9 (4) | 8-bit. Unlike sharp, 4:2:0 by default. `lossless` is a `TypeError`. |
 | `gif(options?)` | `colours` (or `colors`) 2–256; `dither` 0–1, or a boolean | One frame, palette-quantized. |
 | `tiff()` | — | |
+| `raw(options?)` | `depth` `"uchar"` (default), `"ushort"` or `"float"` | Packed pixels, no header, in the image's channels. `metadata()` of the same chain gives the width, height and channels. The `Blob` type is `application/octet-stream`. |
 | `jxl(options?)` | `quality` 1–100 (80); `lossless` | JPEG XL. Lossy (VarDCT) by default; an image with alpha is written lossless. `distance` and `effort` are a `TypeError`. |
 
 Every format decodes and encodes on every platform, JPEG XL included.
@@ -3487,7 +3497,7 @@ itself, under sharp's names, and a field the file does not state is absent.
 
 | Field | Description |
 | --- | --- |
-| `format` | The source's: `"jpeg"`, `"png"`, `"webp"`, `"avif"`, `"gif"`, `"tiff"` or `"jxl"`. |
+| `format` | The source's: `"jpeg"`, `"png"`, `"webp"`, `"avif"`, `"gif"`, `"tiff"`, `"jxl"`, or `"raw"` for raw and created input. |
 | `pixelFormat` | `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. |
 | `animation` | `{ frames, loop, durations }` (milliseconds per frame), or `null` for a still. |
 | `pages` | Pages in the source document; 1 except for TIFF. |

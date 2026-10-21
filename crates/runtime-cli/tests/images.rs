@@ -540,6 +540,65 @@ await new Image({png}).composite([{{ input: file("images_overlay.png") }}]).byte
     assert!(stderr(&denied).contains("FileRead"), "{}", stderr(&denied));
 }
 
+/// Raw pixels in and out, a created canvas, and `convolve`: raw output is
+/// the packed samples, so pixels round-trip exactly, and a canvas can be
+/// composited onto like any image.
+#[test]
+fn raw_create_and_convolve() {
+    let png = bytes_literal("alpha.png");
+    let source = format!(
+        r##"
+import {{ Image }} from "runtime:images";
+const png = {png};
+const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+// Raw out, raw back in, encoded again: the same pixels.
+const meta = await new Image(png).metadata();
+const pixels = await new Image(png).raw().bytes();
+eq(pixels.length, meta.width * meta.height * meta.channels, "packed");
+const back = new Image(pixels, {{ raw: {{ width: 32, height: 32, channels: 4 }} }});
+eq((await back.metadata()).format, "raw", "raw source");
+eq(same(await back.raw().bytes(), pixels), true, "round trip");
+eq(same(await back.png().bytes(), await new Image(png).png().bytes()), true, "same png");
+eq((await back.blob()).type, "application/octet-stream", "raw blob type");
+eq((await new Image(png).raw({{ depth: "ushort" }}).bytes()).length, pixels.length * 2, "ushort");
+eq((await new Image(png).raw({{ depth: "float" }}).bytes()).length, pixels.length * 4, "float");
+const grey = new Uint8Array([0, 64, 128, 255]);
+eq(same(await new Image(grey, {{ raw: {{ width: 2, height: 2, channels: 1 }} }}).raw().bytes(), grey), true, "grey");
+await rejects(new Image(grey, {{ raw: {{ width: 3, height: 2, channels: 1 }} }}).bytes(), (e) => eq(e.name, "RangeError", "short"), "short");
+await rejects(new Image(grey, {{ raw: {{ width: 2, height: 2, channels: 1 }}, maxPixels: 3 }}).bytes(), (e) => eq(e.code, "ERR_IMAGE_TOO_MANY_PIXELS", "limit"), "limit");
+throws(() => new Image(grey, {{ raw: {{ width: 2, height: 2, channels: 5 }} }}), (e) => eq(e.name, "RangeError", "channels"), "channels");
+throws(() => new Image(grey, {{ raw: {{ width: 2, height: 2, channels: 1, premultiplied: true }} }}), (e) => eq(e.name, "TypeError", "premultiplied"), "premultiplied");
+throws(() => new Image(png).raw({{ depth: "double" }}), (e) => eq(e.name, "TypeError", "depth"), "depth");
+
+// A canvas of one colour, composited onto and encoded.
+const canvas = new Image({{ create: {{ width: 3, height: 2, channels: 4, background: "#ff000080" }} }});
+eq(same(await canvas.raw().bytes(), Uint8Array.from({{ length: 24 }}, (_, i) => [255, 0, 0, 128][i % 4])), true, "filled");
+eq(same(await new Image({{ create: {{ width: 2, height: 1, channels: 3, background: {{ r: 1, g: 2, b: 3 }} }} }}).raw().bytes(), new Uint8Array([1, 2, 3, 1, 2, 3])), true, "rgb");
+const card = new Image({{ create: {{ width: 64, height: 64, channels: 3, background: "#ffffff" }} }})
+  .composite([{{ input: png, gravity: "center" }}, {{ input: grey, raw: {{ width: 2, height: 2, channels: 1 }}, left: 0, top: 0 }}]);
+eq((await new Image(await card.png().bytes()).metadata()).width, 64, "composited canvas");
+throws(() => new Image({{ create: {{ width: 2, height: 2, channels: 2, background: "#000" }} }}), (e) => eq(e.name, "RangeError", "create channels"), "create channels");
+throws(() => new Image({{ create: {{ width: 2, height: 2, channels: 3 }} }}), (e) => eq(e.name, "TypeError", "background"), "background");
+throws(() => new Image({{ create: {{ width: 2, height: 2, channels: 3, background: "#000", noise: {{}} }} }}), (e) => eq(e.name, "TypeError", "noise"), "noise");
+await rejects(new Image({{ create: {{ width: 30000, height: 30000, channels: 3, background: "#000" }} }}).bytes(), (e) => eq(e.code, "ERR_IMAGE_TOO_MANY_PIXELS", "create limit"), "create limit");
+
+// Convolve: the identity kernel changes nothing, an edge detector does.
+const base = new Image(png);
+const id = await base.png().bytes();
+eq(same(await base.convolve({{ width: 3, height: 3, kernel: [0, 0, 0, 0, 1, 0, 0, 0, 0] }}).png().bytes(), id), true, "identity");
+eq(same(await base.convolve({{ width: 3, height: 3, kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1] }}).png().bytes(), id), false, "edges");
+eq((await base.convolve({{ width: 5, height: 1, kernel: [1, 1, 1, 1, 1] }}).metadata()).width, 32, "rectangular");
+throws(() => base.convolve({{ width: 2, height: 3, kernel: [1, 1, 1, 1, 1, 1] }}), (e) => eq(e.name, "RangeError", "even"), "even");
+throws(() => base.convolve({{ width: 3, height: 3, kernel: [1, 1] }}), (e) => eq(e.name, "TypeError", "length"), "length");
+throws(() => base.convolve({{ width: 3, height: 3, kernel: Array(9).fill(1), offset: 128 }}), (e) => eq(e.name, "TypeError", "offset"), "offset");
+throws(() => base.sharpen({{ sigma: 2 }}), (e) => eq(e.name, "TypeError", "sharpen sigma"), "sharpen sigma");
+console.log("ok");
+"##
+    );
+    assert_eq!(run("images_raw.mjs", &source, &["--deny-all"]).trim(), "ok");
+}
+
 /// A worker has the module and the spawner too.
 #[test]
 fn a_worker_encodes_images() {

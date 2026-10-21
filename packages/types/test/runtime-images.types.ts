@@ -58,6 +58,16 @@ async function use() {
     .jxl({ lossless: true })
     .blob();
   await image.jpeg({ progressive: true, chromaSubsampling: "4:4:4" }).bytes();
+  const pixels: Uint8Array = await new Image(new Uint8Array(4), {
+    raw: { width: 2, height: 2, channels: 1 },
+  })
+    .convolve({ width: 3, height: 1, kernel: [1, 2, 1] })
+    .raw({ depth: "ushort" })
+    .bytes();
+  await new Image({ create: { width: 64, height: 64, channels: 4, background: "#fff0" } })
+    .composite([{ input: pixels, raw: { width: 2, height: 2, channels: 1, depth: "ushort" } }])
+    .png()
+    .bytes();
   await image.png({ palette: true, colors: 64, dither: false, compressionLevel: 9 }).bytes();
   await image.webp({ effort: 6, alphaQuality: 80, nearLossless: true }).bytes();
   await image.avif({ chromaSubsampling: "4:4:4", effort: 2 }).bytes();
@@ -76,6 +86,10 @@ image.resize(10, 10, { fit: "stretch" });
 image.resize(10, 10, { position: "attention" });
 // @ts-expect-error — not a blend mode.
 image.composite([{ input: fromBlob, blend: "burn" }]);
+// @ts-expect-error — create takes 3 or 4 channels.
+new Image({ create: { width: 1, height: 1, channels: 2, background: "#000" } });
+// @ts-expect-error — not a depth Pixels has.
+image.raw({ depth: "double" });
 // @ts-expect-error — not a chroma subsampling.
 image.jpeg({ chromaSubsampling: "4:2:2" });
 // @ts-expect-error — write takes a file().

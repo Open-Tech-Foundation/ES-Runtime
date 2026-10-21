@@ -152,6 +152,28 @@ own chain: `{ input: new Image(logo).resize(200) }`. `tile: true` repeats it
 across the image, and `blend` picks how it combines (`"multiply"`,
 `"screen"`, `"soft-light"`, …).
 
+## Raw pixels
+
+`raw()` gives the decoded pixels, packed with no header, for code that works
+on samples itself: a hash, a placeholder, a model's input. `metadata()` of the
+same chain gives the layout:
+
+```js
+const image = new Image(bytes).resize(32, 32, { fit: "cover" });
+const { width, height, channels } = await image.metadata();
+const pixels = await image.raw().bytes();   // width * height * channels bytes
+```
+
+Pixels go back in with the `raw` option, and a blank canvas is
+`{ create: { width, height, channels, background } }`:
+
+```js
+const edited = new Image(pixels, { raw: { width, height, channels } }).png();
+const card = new Image({ create: { width: 1200, height: 630, channels: 3, background: "#ffffff" } })
+  .composite([{ input: logo, gravity: "center" }])
+  .png();
+```
+
 ## Keeping camera data
 
 Outputs drop EXIF and XMP. To keep them, for a photo archive rather than a

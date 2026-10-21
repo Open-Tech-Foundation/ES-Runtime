@@ -99,6 +99,8 @@ const BLENDS = new Set([
   "exclusion",
 ]);
 const EXTEND_WITH = new Set(["background", "copy", "repeat", "mirror"]);
+// sharp's sample types that Pixels has: 8-bit, 16-bit and float.
+const DEPTHS = new Set(["uchar", "ushort", "float"]);
 const CHROMA = new Set(["4:2:0", "4:4:4"]);
 
 // sharp options Pixels has no support for. Refused by name rather than
@@ -106,6 +108,9 @@ const CHROMA = new Set(["4:2:0", "4:4:4"]);
 const UNSUPPORTED_OPTIONS = {
   png: ["progressive", "quality", "effort"],
   avif: ["lossless"],
+  raw: ["premultiplied"],
+  create: ["noise", "pageHeight"],
+  convolve: ["scale", "offset"],
   jxl: ["distance", "effort"],
   trim: ["margin"],
   withMetadata: ["orientation"],
@@ -179,6 +184,46 @@ function openOptions(options) {
     }
     open.page = o.page;
   }
+  if (o.raw !== undefined) open.raw = layout(o.raw, "raw", [1, 2, 3, 4]);
+  return open;
+}
+
+function depth(value) {
+  if (value === undefined) return "uchar";
+  if (!DEPTHS.has(value)) throw new TypeError("depth must be uchar, ushort or float");
+  return value;
+}
+
+// `{ width, height, channels, depth }` for raw pixels or a created canvas.
+function layout(value, what, channels) {
+  const o = optionsObject(value, what);
+  refuseUnsupported(what, o);
+  if (!channels.includes(o.channels)) {
+    throw new RangeError(`${what}.channels must be ${channels.join(", ").replace(/, (\d)$/, " or $1")}`);
+  }
+  return {
+    width: size(o.width, `${what}.width`) || missingOf(what, "width"),
+    height: size(o.height, `${what}.height`) || missingOf(what, "height"),
+    channels: o.channels,
+    depth: depth(o.depth),
+  };
+}
+
+function missingOf(what, key) {
+  throw new TypeError(`${what} needs a ${key}`);
+}
+
+// sharp's `{ create: { width, height, channels, background } }`: a canvas
+// of one colour, 8-bit RGB or RGBA.
+function isCreate(input) {
+  return input !== null && typeof input === "object" && Object.getPrototypeOf(input) === Object.prototype && "create" in input;
+}
+
+function createOptions(create) {
+  const o = optionsObject(create, "create");
+  const open = layout({ ...o, depth: undefined, background: undefined }, "create", [3, 4]);
+  if (o.background === undefined) throw new TypeError("create needs a background");
+  open.background = colour(o.background, "background");
   return open;
 }
 
@@ -299,7 +344,7 @@ function margin(value, what) {
 function overlayOf(entry) {
   const o = optionsObject(entry, "composite");
   if (!("input" in o)) throw new TypeError("a composite overlay needs an input");
-  const image = o.input instanceof Image ? o.input : new Image(o.input);
+  const image = o.input instanceof Image ? o.input : new Image(o.input, o.raw === undefined ? undefined : { raw: o.raw });
   const blend = o.blend ?? "over";
   if (!BLENDS.has(blend)) throw new TypeError(`blend must be one of ${[...BLENDS].join(", ")}`);
   const gravity = o.gravity ?? "center";
@@ -325,6 +370,7 @@ const MIME = {
   gif: "image/gif",
   tiff: "image/tiff",
   jxl: "image/jxl",
+  raw: "application/octet-stream",
 };
 
 /**
@@ -350,8 +396,14 @@ export class Image {
       [this.#source, this.#open, this.#steps, this.#output, this.#keep] = options;
       return;
     }
-    this.#source = sourceOf(input);
-    this.#open = openOptions(options);
+    if (isCreate(input)) {
+      this.#source = { bytes: new Uint8Array(0) };
+      this.#open = { ...openOptions(options), create: createOptions(input.create) };
+      if (this.#open.raw !== undefined) throw new TypeError("an Image is created or raw, not both");
+    } else {
+      this.#source = sourceOf(input);
+      this.#open = openOptions(options);
+    }
     this.#steps = [];
     this.#output = null;
     this.#keep = {};
@@ -505,9 +557,37 @@ export class Image {
     return this.#with(["blur", sigma]);
   }
 
-  /** Sharpen; `amount` scales the effect (default 1). */
+  /**
+   * Sharpen; `amount` scales the effect (default 1). sharp's
+   * `sharpen({ sigma, m1, m2, … })` is not supported.
+   */
   sharpen(amount = 1) {
+    if (amount !== null && typeof amount === "object") {
+      throw new TypeError("sharpen({ sigma, m1, m2, ... }) is not supported; pass an amount, or convolve a kernel");
+    }
     return this.#with(["sharpen", finite(amount, "amount")]);
+  }
+
+  /**
+   * Convolve with `kernel`, `width` × `height` finite numbers in row order
+   * (each side odd, at most 63). The result is divided by the kernel's sum,
+   * unless that sum is 0. sharp's `scale` and `offset` are not supported.
+   */
+  convolve(options) {
+    const o = optionsObject(options, "convolve");
+    refuseUnsupported("convolve", o);
+    const side = (value, what) => {
+      if (!Number.isInteger(value) || value < 1 || value > 63 || value % 2 === 0) {
+        throw new RangeError(`${what} must be an odd integer from 1 to 63`);
+      }
+      return value;
+    };
+    const width = side(o.width, "width");
+    const height = side(o.height, "height");
+    if (!Array.isArray(o.kernel) || o.kernel.length !== width * height) {
+      throw new TypeError("kernel must be an array of width × height numbers");
+    }
+    return this.#with(["convolve", width, height, o.kernel.map((v) => finite(v, "kernel"))]);
   }
 
   /** Drop transparency by drawing over `background` (default black). */
@@ -780,6 +860,16 @@ export class Image {
   /** Encode as TIFF. */
   tiff() {
     return this.#with(null, { format: "tiff" });
+  }
+
+  /**
+   * Raw pixels, packed, no header: 1 to 4 channels as the image has them,
+   * of `depth` "uchar" (default), "ushort" or "float". `metadata()` of the
+   * same chain gives the width, height and channels.
+   */
+  raw(options) {
+    const o = optionsObject(options, "raw");
+    return this.#with(null, { format: "raw", depth: depth(o.depth) });
   }
 
   /** Encode as JPEG XL: lossy at `quality` (default 80), or `lossless`. */

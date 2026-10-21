@@ -2,7 +2,28 @@ declare module "runtime:images" {
   import type { FsFile } from "runtime:fs";
 
   /** What an image is read from. A path string is refused: pass `file(path)`. */
-  export type ImageInput = ArrayBuffer | ArrayBufferView | Blob | FsFile;
+  export type ImageInput = ArrayBuffer | ArrayBufferView | Blob | FsFile | { create: CreateOptions };
+
+  /** sharp's sample types that Pixels has: 8-bit, 16-bit and float. */
+  export type RawDepth = "uchar" | "ushort" | "float";
+
+  /** How raw pixels are laid out: packed rows, no header. */
+  export interface RawOptions {
+    width: number;
+    height: number;
+    /** Grey, grey and alpha, RGB or RGBA. */
+    channels: 1 | 2 | 3 | 4;
+    /** Default `"uchar"`. */
+    depth?: RawDepth;
+  }
+
+  /** A canvas of one colour, 8-bit RGB or RGBA. */
+  export interface CreateOptions {
+    width: number;
+    height: number;
+    channels: 3 | 4;
+    background: Colour;
+  }
 
   /** How the image is opened. */
   export interface ImageOptions {
@@ -19,6 +40,8 @@ declare module "runtime:images" {
     animated?: boolean;
     /** The page to open of a multi-page TIFF. Default 0. */
     page?: number;
+    /** Read the input as raw pixels in this layout. */
+    raw?: RawOptions;
   }
 
   /** `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or channels with alpha from 0 to 1. */
@@ -72,7 +95,7 @@ declare module "runtime:images" {
     position?: Position;
   }
 
-  export type ImageFormat = "jpeg" | "png" | "webp" | "avif" | "gif" | "tiff" | "jxl";
+  export type ImageFormat = "jpeg" | "png" | "webp" | "avif" | "gif" | "tiff" | "jxl" | "raw";
 
   /** sharp's blend modes. */
   export type Blend =
@@ -128,6 +151,8 @@ declare module "runtime:images" {
   export interface CompositeOverlay {
     /** An Image, or what `new Image` takes. */
     input: Image | ImageInput;
+    /** Read `input` as raw pixels in this layout. */
+    raw?: RawOptions;
     /** Default `"over"`. */
     blend?: Blend;
     /** Where it sits unless `left` and `top` place it. Default `"center"`. */
@@ -254,6 +279,8 @@ declare module "runtime:images" {
     flop(): Image;
     /** Brightness and saturation multipliers, a hue rotation in degrees, and a lightness shift. */
     modulate(options: { brightness?: number; saturation?: number; hue?: number; lightness?: number }): Image;
+    /** Convolve with `width` × `height` taps (odd sides up to 63), divided by their sum. */
+    convolve(options: { width: number; height: number; kernel: number[] }): Image;
     /** Gaussian blur of `sigma` pixels. */
     blur(sigma: number): Image;
     /** A 3×3 sharpen scaled by `amount` (default 1). */
@@ -321,6 +348,8 @@ declare module "runtime:images" {
     gif(options?: PaletteOptions): Image;
     tiff(): Image;
     jxl(options?: { quality?: number; lossless?: boolean }): Image;
+    /** Packed pixels, no header; `metadata()` gives the layout. Default depth `"uchar"`. */
+    raw(options?: { depth?: RawDepth }): Image;
 
     /** The image at this point in the chain, from its header. */
     metadata(): Promise<ImageMetadata>;

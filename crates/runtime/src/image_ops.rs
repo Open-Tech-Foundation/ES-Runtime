@@ -26,9 +26,9 @@ use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{FileSystem, ProviderError, TaskSpawner};
 use otf_pixels::{
-    Background, Blend, Channel, ChromaSubsampling, Density, EncodeOptions, Extend, ExtendWith,
-    Filter, Fit, Format, Image, Limits, Modulate, OpenOptions, Overlay, PixelFormat, PixelsError,
-    Position, ResizeOptions, ResolutionUnit, Trim,
+    Background, Blend, Channel, ChannelLayout, ChromaSubsampling, Density, EncodeOptions, Extend,
+    ExtendWith, Filter, Fit, Format, Image, ImageDescriptor, Kernel, Limits, Modulate, OpenOptions,
+    Overlay, PixelFormat, PixelsError, Position, ResizeOptions, ResolutionUnit, SampleKind, Trim,
 };
 
 use crate::Result;
@@ -37,6 +37,50 @@ use crate::Result;
 enum Source {
     Bytes(Vec<u8>),
     File(String),
+}
+
+/// How the source's bytes become an image, and the pixel limit that applies
+/// to it however it is made.
+#[derive(Debug, Clone, PartialEq)]
+struct Open {
+    options: OpenOptions,
+    limits: Limits,
+    decode: Decode,
+}
+
+impl Default for Open {
+    fn default() -> Self {
+        Self {
+            options: OpenOptions::default(),
+            limits: Limits::default(),
+            decode: Decode::Encoded,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Decode {
+    /// A file in a format its leading bytes name.
+    Encoded,
+    /// Packed pixels laid out as given (sharp's `raw`).
+    Raw(Layout),
+    /// A canvas of one colour; the source bytes are empty (sharp's `create`).
+    Create { layout: Layout, fill: [u8; 4] },
+}
+
+/// A raw or created image's size and pixel format. It becomes a descriptor
+/// only when the pipeline runs, against the image's own `maxPixels`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Layout {
+    width: u32,
+    height: u32,
+    pixel: PixelFormat,
+}
+
+impl Layout {
+    fn descriptor(self, limits: &Limits) -> std::result::Result<ImageDescriptor, PixelsError> {
+        ImageDescriptor::with_limits(self.width, self.height, self.pixel, limits)
+    }
 }
 
 /// One transform, as `images.js` records it.
@@ -87,6 +131,7 @@ enum Step {
     Recomb4([[f32; 4]; 4]),
     EnsureAlpha(f32),
     RemoveAlpha,
+    Convolve(Kernel),
     Extend {
         /// Top, right, bottom, left.
         margins: [u32; 4],
@@ -108,7 +153,7 @@ enum Step {
 #[derive(Debug, Clone, PartialEq)]
 struct OverlayStep {
     bytes: Vec<u8>,
-    open: OpenOptions,
+    open: Open,
     steps: Vec<Step>,
     blend: Blend,
     gravity: Position,
@@ -121,6 +166,9 @@ struct OverlayStep {
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Output {
     format: Option<Format>,
+    /// For raw output: the sample type written. `None` is 8-bit, as sharp's
+    /// `raw()` defaults to `uchar`.
+    depth: Option<SampleKind>,
     options: EncodeOptions,
     xmp: Option<Vec<u8>>,
     density: Option<f64>,
@@ -251,10 +299,20 @@ async fn read_source(
 /// Pixels itself, so only opening can fail here.
 fn pipeline(
     bytes: Vec<u8>,
-    open: OpenOptions,
+    open: Open,
     steps: Vec<Step>,
 ) -> std::result::Result<Image, PixelsError> {
-    let mut image = Image::from_stream_with(Cursor::new(bytes), open)?;
+    let mut image = match open.decode {
+        Decode::Encoded => Image::from_stream_with(Cursor::new(bytes), open.options)?,
+        Decode::Raw(layout) => Image::from_raw(layout.descriptor(&open.limits)?, bytes)?,
+        Decode::Create { layout, fill } => {
+            let descriptor = layout.descriptor(&open.limits)?;
+            let channels = descriptor.pixel.channels();
+            let pixels =
+                fill[..channels].repeat(descriptor.width as usize * descriptor.height as usize);
+            Image::from_raw(descriptor, pixels)?
+        }
+    };
     for step in steps {
         image = apply(image, step)?;
     }
@@ -320,6 +378,7 @@ fn apply(image: Image, step: Step) -> std::result::Result<Image, PixelsError> {
         Step::Recomb4(matrix) => image.recomb_rgba(matrix),
         Step::EnsureAlpha(level) => image.ensure_alpha(level),
         Step::RemoveAlpha => image.remove_alpha(),
+        Step::Convolve(kernel) => image.convolve(kernel),
         Step::Extend {
             margins: [top, right, bottom, left],
             with,
@@ -378,7 +437,7 @@ fn keep_aspect(width: u32, height: u32, src_width: u32, src_height: u32) -> (u32
 
 fn encode(
     bytes: Vec<u8>,
-    open: OpenOptions,
+    open: Open,
     steps: Vec<Step>,
     output: Output,
 ) -> std::result::Result<(Vec<u8>, Format), PixelsError> {
@@ -392,6 +451,17 @@ fn encode(
     }
     if let Some(dpi) = output.density {
         image = image.with_density(Some(Density::dpi(dpi)));
+    }
+    if format == Format::Raw {
+        let layout = image.descriptor()?.pixel.layout();
+        let kind = output.depth.unwrap_or(SampleKind::U8);
+        let pixel = PixelFormat::from_parts(layout, kind).ok_or_else(|| {
+            PixelsError::invalid_argument(
+                "depth",
+                format!("no {kind:?} pixel format for a {layout:?} image"),
+            )
+        })?;
+        image = image.to_pixel_format(pixel);
     }
     Ok((image.output(format, output.options).bytes()?, format))
 }
@@ -578,7 +648,7 @@ fn failure(error: PixelsError) -> Value {
 fn parse_common(
     args: &mut [Value],
     from_file: bool,
-) -> std::result::Result<(Source, OpenOptions, Vec<Step>), OpError> {
+) -> std::result::Result<(Source, Open, Vec<Step>), OpError> {
     let source = if from_file {
         Source::File(string_arg(args, 0, "source")?)
     } else {
@@ -603,26 +673,90 @@ fn parse_common(
     Ok((source, open, steps))
 }
 
-fn parse_open(value: Option<&Value>) -> std::result::Result<OpenOptions, OpError> {
-    let mut open = OpenOptions::default();
+fn parse_open(value: Option<&Value>) -> std::result::Result<Open, OpError> {
+    let mut open = Open::default();
     let Some(Value::Object(fields)) = value else {
         return Ok(open);
     };
+    let options = &mut open.options;
     for (key, value) in fields {
         match (key.as_str(), value) {
             ("maxPixels", Value::Number(n)) => {
-                open = open.with_limits(Limits::default().with_max_pixels(*n as u64));
+                open.limits = Limits::default().with_max_pixels(*n as u64);
+                *options = options.with_limits(open.limits);
             }
-            ("autoOrient", Value::Bool(b)) => open = open.with_auto_orient(*b),
-            ("toSrgb", Value::Bool(b)) => open = open.with_to_srgb(*b),
-            ("animated", Value::Bool(b)) => open = open.with_animated(*b),
+            ("autoOrient", Value::Bool(b)) => *options = options.with_auto_orient(*b),
+            ("toSrgb", Value::Bool(b)) => *options = options.with_to_srgb(*b),
+            ("animated", Value::Bool(b)) => *options = options.with_animated(*b),
             ("page", Value::Number(n)) => {
-                open = open.with_page(n.max(0.0).clamp(0.0, f64::from(u32::MAX)) as u32);
+                *options = options.with_page(n.max(0.0).clamp(0.0, f64::from(u32::MAX)) as u32);
+            }
+            ("raw", Value::Object(raw)) => open.decode = Decode::Raw(parse_layout(raw, "raw")?),
+            ("create", Value::Object(create)) => {
+                let layout = parse_layout(create, "create")?;
+                let fill = create
+                    .iter()
+                    .find(|(k, _)| k == "background")
+                    .and_then(|(_, v)| rgba(Some(v)))
+                    .unwrap_or([0, 0, 0, 255]);
+                open.decode = Decode::Create { layout, fill };
             }
             _ => {}
         }
     }
     Ok(open)
+}
+
+/// `{ width, height, channels, depth }` as a layout: 1 to 4 channels
+/// (grey, grey and alpha, RGB, RGBA) of sharp's `uchar`, `ushort` or `float`.
+fn parse_layout(fields: &[(String, Value)], what: &str) -> std::result::Result<Layout, OpError> {
+    let get = |key: &str| fields.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+    let dim = |key: &str| -> std::result::Result<u32, OpError> {
+        match get(key).and_then(Value::as_number) {
+            Some(n) if n >= 1.0 && n <= f64::from(u32::MAX) && n.fract() == 0.0 => Ok(n as u32),
+            _ => Err(OpError::range_error(format!(
+                "{what}.{key} must be a positive integer"
+            ))),
+        }
+    };
+    let (width, height) = (dim("width")?, dim("height")?);
+    let layout = match get("channels").and_then(Value::as_number) {
+        Some(1.0) => ChannelLayout::Gray,
+        Some(2.0) => ChannelLayout::GrayAlpha,
+        Some(3.0) => ChannelLayout::Rgb,
+        Some(4.0) => ChannelLayout::Rgba,
+        _ => {
+            return Err(OpError::range_error(format!(
+                "{what}.channels must be 1, 2, 3 or 4"
+            )));
+        }
+    };
+    let kind = parse_depth(get("depth").and_then(Value::as_str).unwrap_or("uchar"))?;
+    let pixel = PixelFormat::from_parts(layout, kind).ok_or_else(|| {
+        OpError::range_error(format!(
+            "{what}: {} channels of {kind:?} is not a pixel format Pixels has",
+            layout.channels()
+        ))
+    })?;
+    Ok(Layout {
+        width,
+        height,
+        pixel,
+    })
+}
+
+/// sharp's names for the sample types Pixels has.
+fn parse_depth(name: &str) -> std::result::Result<SampleKind, OpError> {
+    Ok(match name {
+        "uchar" => SampleKind::U8,
+        "ushort" => SampleKind::U16,
+        "float" => SampleKind::F32,
+        other => {
+            return Err(OpError::type_error(format!(
+                "unknown depth {other:?}: uchar, ushort or float"
+            )));
+        }
+    })
 }
 
 fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
@@ -765,6 +899,20 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
             }
         }
         "ensureAlpha" => Step::EnsureAlpha(num(1) as f32),
+        "convolve" => {
+            let taps: Vec<f32> = match parts.get(3) {
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|v| v.as_number().map(|n| n as f32))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| OpError::type_error("a kernel holds numbers"))?,
+                _ => return Err(OpError::type_error("convolve takes a kernel")),
+            };
+            Step::Convolve(
+                Kernel::new(int(1), int(2), &taps)
+                    .map_err(|e| OpError::range_error(e.to_string()))?,
+            )
+        }
         "removeAlpha" => Step::RemoveAlpha,
         "extend" => Step::Extend {
             margins: [int(1), int(2), int(3), int(4)],
@@ -957,6 +1105,7 @@ fn parse_output(value: Option<&Value>) -> std::result::Result<Output, OpError> {
                     "gif" => Format::Gif,
                     "tiff" => Format::Tiff,
                     "jxl" => Format::Jxl,
+                    "raw" => Format::Raw,
                     other => {
                         return Err(OpError::type_error(format!(
                             "unknown image format {other:?}"
@@ -965,6 +1114,7 @@ fn parse_output(value: Option<&Value>) -> std::result::Result<Output, OpError> {
                 });
             }
             ("lossless", Value::Bool(b)) => *options = options.with_lossless(*b),
+            ("depth", Value::String(name)) => output.depth = Some(parse_depth(name)?),
             ("progressive", Value::Bool(b)) => *options = options.with_progressive(*b),
             ("effort", Value::Number(n)) => {
                 *options = options.with_effort(byte(*n)).map_err(invalid)?;
@@ -1243,14 +1393,14 @@ mod tests {
             Step::RemoveAlpha,
         ];
         for step in steps {
-            let out = pipeline(image.clone(), OpenOptions::default(), vec![step.clone()]);
+            let out = pipeline(image.clone(), Open::default(), vec![step.clone()]);
             assert!(out.is_ok(), "{step:?}");
         }
     }
 
     #[test]
     fn pages_defaults_to_one() {
-        let image = pipeline(png(4, 4), OpenOptions::default(), vec![]).unwrap();
+        let image = pipeline(png(4, 4), Open::default(), vec![]).unwrap();
         assert_eq!(image.pages(), 1);
         let open = parse_open(Some(&Value::Object(vec![(
             "page".to_string(),
@@ -1264,7 +1414,7 @@ mod tests {
     fn resizes_with_one_side_given() {
         let (out, _) = encode(
             png(40, 20),
-            OpenOptions::default(),
+            Open::default(),
             vec![step(vec![
                 s("resize"),
                 Value::Number(10.0),
@@ -1282,7 +1432,7 @@ mod tests {
 
     #[test]
     fn grayscale_keeps_alpha() {
-        let image = pipeline(png(4, 4), OpenOptions::default(), vec![Step::Grayscale]).unwrap();
+        let image = pipeline(png(4, 4), Open::default(), vec![Step::Grayscale]).unwrap();
         assert_eq!(image.metadata().unwrap().pixel, PixelFormat::GrayA8);
     }
 
@@ -1290,7 +1440,7 @@ mod tests {
     fn failures_carry_the_stable_code() {
         let error = encode(
             b"not an image".to_vec(),
-            OpenOptions::default(),
+            Open::default(),
             vec![],
             Output::default(),
         )
@@ -1447,7 +1597,7 @@ mod tests {
     fn extend_trim_and_composite_apply() {
         let image = pipeline(
             png(4, 4),
-            OpenOptions::default(),
+            Open::default(),
             vec![Step::Extend {
                 margins: [1, 2, 3, 4],
                 with: ExtendWith::Background,
@@ -1464,7 +1614,7 @@ mod tests {
         );
         let bordered = encode(
             png(4, 4),
-            OpenOptions::default(),
+            Open::default(),
             vec![Step::Extend {
                 margins: [2, 2, 2, 2],
                 with: ExtendWith::Background,
@@ -1476,7 +1626,7 @@ mod tests {
         .0;
         let trimmed = pipeline(
             bordered,
-            OpenOptions::default(),
+            Open::default(),
             vec![Step::Trim {
                 background: None,
                 threshold: 10.0,
@@ -1488,10 +1638,10 @@ mod tests {
         assert_eq!(trimmed.trim_offset(), Some((2, 2)));
         let composed = pipeline(
             png(8, 8),
-            OpenOptions::default(),
+            Open::default(),
             vec![Step::Composite(vec![OverlayStep {
                 bytes: png(2, 2),
-                open: OpenOptions::default(),
+                open: Open::default(),
                 steps: vec![Step::Flip],
                 blend: Blend::Multiply,
                 gravity: Position::Centre,
@@ -1505,7 +1655,7 @@ mod tests {
 
     #[test]
     fn metadata_and_stats_report_sharp_fields() {
-        let image = pipeline(png(4, 4), OpenOptions::default(), vec![]).unwrap();
+        let image = pipeline(png(4, 4), Open::default(), vec![]).unwrap();
         let Value::Object(fields) = metadata(&image).unwrap() else {
             panic!()
         };
@@ -1536,6 +1686,102 @@ mod tests {
         assert_eq!(channels.len(), 4);
         // The helper fills alpha with 200 too, so the image is not opaque.
         assert!(stats.contains(&("isOpaque".to_string(), Value::Bool(false))));
+    }
+
+    #[test]
+    fn raw_and_created_sources_open_and_round_trip() {
+        let raw = |w: f64, h: f64, c: f64, depth: &str| {
+            object(vec![(
+                "raw",
+                object(vec![
+                    ("width", Value::Number(w)),
+                    ("height", Value::Number(h)),
+                    ("channels", Value::Number(c)),
+                    ("depth", s(depth)),
+                ]),
+            )])
+        };
+        let open = parse_open(Some(&raw(2.0, 1.0, 3.0, "uchar"))).unwrap();
+        let output = Output {
+            format: Some(Format::Raw),
+            ..Output::default()
+        };
+        let pixels = vec![1, 2, 3, 4, 5, 6];
+        let (out, format) = encode(pixels.clone(), open.clone(), vec![], output.clone()).unwrap();
+        assert_eq!((out, format), (pixels, Format::Raw));
+        // Widened on the way out: two bytes a sample.
+        let wide = Output {
+            depth: Some(SampleKind::U16),
+            ..output
+        };
+        assert_eq!(encode(vec![9; 6], open, vec![], wide).unwrap().0.len(), 12);
+        assert!(parse_open(Some(&raw(2.0, 1.0, 5.0, "uchar"))).is_err());
+        assert!(parse_open(Some(&raw(0.0, 1.0, 1.0, "uchar"))).is_err());
+        assert!(parse_open(Some(&raw(2.0, 1.0, 1.0, "double"))).is_err());
+        // Grey and alpha at 16 bits is not a pixel format Pixels has.
+        assert!(parse_open(Some(&raw(2.0, 1.0, 2.0, "ushort"))).is_err());
+
+        let create = parse_open(Some(&object(vec![(
+            "create",
+            object(vec![
+                ("width", Value::Number(2.0)),
+                ("height", Value::Number(2.0)),
+                ("channels", Value::Number(4.0)),
+                (
+                    "background",
+                    Value::Array(vec![
+                        Value::Number(1.0),
+                        Value::Number(2.0),
+                        Value::Number(3.0),
+                        Value::Number(4.0),
+                    ]),
+                ),
+            ]),
+        )])))
+        .unwrap();
+        let canvas = encode(
+            Vec::new(),
+            create,
+            vec![],
+            Output {
+                format: Some(Format::Raw),
+                ..Output::default()
+            },
+        )
+        .unwrap()
+        .0;
+        assert_eq!(canvas, [1, 2, 3, 4].repeat(4));
+
+        // The limit applies to a raw source, as it does at a file's header.
+        let mut limited = parse_open(Some(&raw(2.0, 2.0, 1.0, "uchar"))).unwrap();
+        limited.limits = Limits::default().with_max_pixels(3);
+        let error = pipeline(vec![0; 4], limited, vec![]).unwrap_err();
+        assert_eq!(error.code().as_str(), "limit_exceeded");
+    }
+
+    #[test]
+    fn parses_convolve() {
+        let convolve = |w: f64, h: f64, taps: Vec<f64>| {
+            parse_step(&Value::Array(vec![
+                s("convolve"),
+                Value::Number(w),
+                Value::Number(h),
+                Value::Array(taps.into_iter().map(Value::Number).collect()),
+            ]))
+        };
+        assert!(matches!(
+            convolve(3.0, 1.0, vec![1.0, 2.0, 1.0]),
+            Ok(Step::Convolve(_))
+        ));
+        assert!(convolve(2.0, 1.0, vec![1.0, 1.0]).is_err());
+        assert!(convolve(3.0, 3.0, vec![1.0; 4]).is_err());
+        let image = pipeline(
+            png(4, 4),
+            Open::default(),
+            vec![convolve(3.0, 3.0, vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(image.metadata().unwrap().width, 4);
     }
 
     #[test]
