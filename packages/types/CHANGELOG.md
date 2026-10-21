@@ -20,6 +20,12 @@ itself.
   and `Archive`'s async metadata iterator (DECISIONS D174). `ArchiveFilter` is a glob, a list of
   globs, a `RegExp` or a predicate; `ExtractOptions` adds `filter` to the
   limits `extract()` takes; `ArchiveOptions` adds `level`.
+- `runtime:images` (DECISIONS D181): `Image.extend`, `trim`, `composite`,
+  `keepExif`, `keepXmp`, `keepMetadata`, `withXmp`, `withMetadata`, `jxl` and
+  `stats`; the format methods' new options; `"jxl"` in `ImageFormat`; and
+  `Blend`, `ExtendOptions`, `TrimOptions`, `CompositeOverlay`,
+  `ChromaSubsampling`, `PaletteOptions`, `ChannelStats` and `ImageStats`.
+  `ImageMetadata` gains `channels` and sharp's optional source fields.
 
 ### Changed
 

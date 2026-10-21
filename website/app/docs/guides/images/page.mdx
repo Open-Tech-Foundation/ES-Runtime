@@ -8,7 +8,7 @@ import { Callout } from "@opentf/web-docs";
 # Images
 
 [`runtime:images`](/api/images) decodes, transforms and encodes JPEG, PNG,
-WebP, AVIF, GIF and TIFF. Work on bytes needs no capability.
+WebP, AVIF, GIF, TIFF and JPEG XL. Work on bytes needs no capability.
 
 ## A thumbnail
 
@@ -56,7 +56,8 @@ To accept less, or more, pass `maxPixels`:
 new Image(bytes, { maxPixels: 40_000_000 });   // 40 MP, about a 7700×5200 photo
 ```
 
-Location data goes with the rest of the EXIF: outputs never carry it.
+Location data goes with the rest of the EXIF: outputs drop it unless you
+chain `keepExif()`.
 
 ## Several sizes from one source
 
@@ -131,11 +132,42 @@ places the image): `"center"` (default), the edges and the corners.
 `metadata()` also reports `pages` — how many pages the source holds, for
 multi-page TIFF opened with `new Image(bytes, { page: n })`.
 
+## Watermarks
+
+`composite` draws images over this one, the first lowest, with sharp's
+options. A logo in a corner:
+
+```js
+import { file } from "runtime:fs";
+
+const marked = await new Image(bytes)
+  .resize(1600)
+  .composite([{ input: file("brand/logo.png"), gravity: "southeast" }])
+  .jpeg({ quality: 85 })
+  .bytes();
+```
+
+An overlay is an `Image` or anything one takes, so it can be resized in its
+own chain: `{ input: new Image(logo).resize(200) }`. `tile: true` repeats it
+across the image, and `blend` picks how it combines (`"multiply"`,
+`"screen"`, `"soft-light"`, …).
+
+## Keeping camera data
+
+Outputs drop EXIF and XMP. To keep them, for a photo archive rather than a
+public upload:
+
+```js
+const archived = await new Image(file("raw/photo.jpg")).keepMetadata().avif().bytes();
+```
+
+`withMetadata({ density: 300 })` also writes a print resolution, and
+`metadata()` reports what a file carries: `exif`, `xmp`, `icc`, `density`,
+`orientation` and more.
+
 ## Current limitations
 
-For now the module covers thumbnails and format conversion: compositing and
-text rendering, rotation between the right angles, multi-frame output,
-progressive JPEG, the encoder tuning knobs and a HEIC codec are not there
-yet. What that means next to sharp, `Bun.Image` and Deno's
+Text rendering, rotation between the right angles, multi-frame output and a
+HEIC codec are not there yet. What that means next to sharp, `Bun.Image` and Deno's
 `createImageBitmap` is measured row by row on the
 [comparison page](/docs/comparison).

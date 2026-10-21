@@ -85,7 +85,8 @@ fn bytes_in_and_out_need_no_capability() {
         r#"
 import {{ Image }} from "runtime:images";
 const image = new Image({});
-eq(await image.metadata(), {{ width: 32, height: 32, format: "png", pixelFormat: "rgba8", hasAlpha: true, animation: null, pages: 1 }}, "metadata");
+const meta = await image.metadata();
+eq([meta.width, meta.height, meta.format, meta.pixelFormat, meta.channels, meta.hasAlpha, meta.animation, meta.pages], [32, 32, "png", "rgba8", 4, true, null, 1], "metadata");
 const webp = await image.resize(16).webp().bytes();
 eq((await new Image(webp).metadata()).width, 16, "resized");
 console.log("ok");
@@ -107,7 +108,7 @@ fn every_format_round_trips() {
 import {{ Image }} from "runtime:images";
 const image = new Image({}).resize(20, 10);
 eq((await image.metadata()).width, 20, "metadata of a chain");
-for (const format of ["jpeg", "png", "webp", "avif", "gif", "tiff"]) {{
+for (const format of ["jpeg", "png", "webp", "avif", "gif", "tiff", "jxl"]) {{
   const blob = await image[format]().blob();
   eq(blob.type, `image/${{format}}`, `${{format}} type`);
   const meta = await new Image(blob).metadata();
@@ -165,8 +166,15 @@ const input = {};
 const pending = new Image(input).metadata();
 input.fill(0);
 eq((await pending).width, 32, "read before the change");
+// With overlays too: the base and every overlay are taken at the call.
+const base = {}, overlay = base.slice();
+const composed = new Image(base).composite([{{ input: overlay }}]).metadata();
+base.fill(0);
+overlay.fill(0);
+eq((await composed).width, 32, "overlays read before the change");
 console.log("ok");
 "#,
+        bytes_literal("alpha.png"),
         bytes_literal("alpha.png")
     );
     assert_eq!(
@@ -289,7 +297,12 @@ await rejects(new Image(png).crop({{ left: 30, top: 0, width: 10, height: 10 }})
 throws(() => new Image("photo.jpg"), (e) => eq(e.name, "TypeError", "path string"), "path string");
 throws(() => new Image(new SharedArrayBuffer(8)), (e) => eq(e.name, "TypeError", "shared"), "shared");
 throws(() => new Image(png).rotate(45), (e) => eq(e.name, "RangeError", "rotate"), "rotate");
-throws(() => new Image(png).png({{ palette: true }}), (e) => eq(e.name, "TypeError", "palette"), "palette");
+throws(() => new Image(png).png({{ progressive: true }}), (e) => eq(e.name, "TypeError", "png progressive"), "png progressive");
+throws(() => new Image(png).avif({{ lossless: true }}), (e) => eq(e.name, "TypeError", "avif lossless"), "avif lossless");
+throws(() => new Image(png).webp({{ effort: 7 }}), (e) => eq(e.name, "RangeError", "webp effort"), "webp effort");
+throws(() => new Image(png).png({{ colours: 1 }}), (e) => eq(e.name, "RangeError", "colours"), "colours");
+throws(() => new Image(png).png({{ colours: 8, colors: 16 }}), (e) => eq(e.name, "TypeError", "colours and colors"), "colours and colors");
+throws(() => new Image(png).jpeg({{ chromaSubsampling: "4:2:2" }}), (e) => eq(e.name, "TypeError", "chroma"), "chroma");
 throws(() => new Image(png).jpeg({{ quality: 0 }}), (e) => eq(e.name, "RangeError", "quality"), "quality");
 throws(() => new Image(png).resize(), (e) => eq(e.name, "TypeError", "resize"), "resize");
 await rejects(new Image(png).write("out.png"), (e) => eq(e.name, "TypeError", "write path"), "write path");
@@ -381,6 +394,150 @@ console.log("ok");
         run("images_adjust.mjs", &source, &["--deny-all"]).trim(),
         "ok"
     );
+}
+
+/// The encoder options of Pixels 0.4 and 0.5 reach the file: a palette PNG,
+/// progressive and 4:4:4 JPEG, and the GIF and WebP knobs, each read back
+/// from the output's own header.
+#[test]
+fn encoder_options_reach_the_file() {
+    let png = bytes_literal("alpha.png");
+    let jpg = bytes_literal("oriented.jpg");
+    let source = format!(
+        r#"
+import {{ Image }} from "runtime:images";
+const png = {png}, jpg = {jpg};
+const meta = async (image) => new Image(await image.bytes()).metadata();
+eq((await meta(new Image(png).png())).isPalette, false, "truecolour by default");
+eq((await meta(new Image(png).png({{ palette: true }}))).isPalette, true, "palette");
+eq((await meta(new Image(png).png({{ colors: 4, dither: false }}))).isPalette, true, "colors implies a palette");
+const level0 = await new Image(png).png({{ compressionLevel: 0 }}).bytes();
+const level9 = await new Image(png).png({{ compressionLevel: 9 }}).bytes();
+eq(level0.length > level9.length, true, "compressionLevel");
+const photo = new Image(jpg);
+eq((await meta(photo.jpeg())).isProgressive, false, "baseline");
+eq((await meta(photo.jpeg({{ progressive: true }}))).isProgressive, true, "progressive");
+eq((await meta(photo.jpeg({{ quality: 70, chromaSubsampling: "4:4:4" }}))).chromaSubsampling, "4:4:4", "jpeg 4:4:4");
+eq((await meta(photo.jpeg({{ quality: 70 }}))).chromaSubsampling, "4:2:0", "jpeg 4:2:0");
+eq((await meta(photo.avif({{ chromaSubsampling: "4:4:4", effort: 2 }}))).chromaSubsampling, "4:4:4", "avif 4:4:4");
+eq((await meta(photo.gif({{ colours: 16, dither: 0.5 }}))).format, "gif", "gif options");
+eq((await meta(photo.webp({{ effort: 0, alphaQuality: 50 }}))).format, "webp", "webp effort");
+eq((await meta(new Image(png).webp({{ nearLossless: true, quality: 60 }}))).format, "webp", "nearLossless");
+eq((await meta(photo.jxl({{ lossless: true }}))).format, "jxl", "jxl lossless");
+console.log("ok");
+"#
+    );
+    assert_eq!(
+        run("images_encoders.mjs", &source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// EXIF and XMP are stripped unless kept; `withXmp` and `withMetadata({
+/// density })` write their own; `metadata()` reports what the file says.
+#[test]
+fn metadata_is_stripped_unless_kept() {
+    let png = bytes_literal("alpha.png");
+    let jpg = bytes_literal("oriented.jpg");
+    let source = format!(
+        r#"
+import {{ Image }} from "runtime:images";
+const png = {png}, jpg = {jpg};
+const meta = async (image) => new Image(await image.bytes()).metadata();
+const source = await new Image(jpg).metadata();
+eq(source.exif instanceof Uint8Array, true, "source exif");
+eq(source.orientation, 6, "source orientation");
+eq(source.hasProfile, false, "no profile");
+eq("density" in (await new Image(png).metadata()), false, "absent fields are left out");
+eq("exif" in (await meta(new Image(jpg).jpeg())), false, "exif stripped");
+const kept = await meta(new Image(jpg).keepExif().jpeg());
+eq(kept.exif instanceof Uint8Array, true, "keepExif");
+eq(kept.orientation, 1, "orientation reset once upright");
+eq("exif" in (await meta(new Image(jpg).keepMetadata().png())), true, "keepMetadata into png");
+const xmp = '<x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta>';
+const written = await meta(new Image(png).withXmp(xmp).png());
+eq(new TextDecoder().decode(written.xmp), xmp, "withXmp");
+const dense = await meta(new Image(png).withMetadata({{ density: 300 }}).png());
+eq(Math.round(dense.density), 300, "density");
+throws(() => new Image(png).withMetadata({{ orientation: 3 }}), (e) => eq(e.name, "TypeError", "orientation"), "orientation");
+throws(() => new Image(png).withXmp(1), (e) => eq(e.name, "TypeError", "withXmp"), "withXmp");
+console.log("ok");
+"#
+    );
+    assert_eq!(
+        run("images_metadata.mjs", &source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// `extend`, `trim`, `composite` and `stats`: the canvas grows and shrinks
+/// back, overlays draw from any input an Image takes, and a `file()` overlay
+/// is read under `FileRead` like any other file.
+#[test]
+fn extend_trim_composite_and_stats() {
+    place("alpha.png", "images_overlay.png");
+    let png = bytes_literal("alpha.png");
+    let jpg = bytes_literal("oriented.jpg");
+    let source = format!(
+        r##"
+import {{ Image }} from "runtime:images";
+import {{ file }} from "runtime:fs";
+const png = {png}, jpg = {jpg};
+const size = async (image) => {{ const m = await image.metadata(); return [m.width, m.height]; }};
+const photo = new Image(jpg);
+eq(await size(photo.extend(4)), [56, 72], "extend all sides");
+eq(await size(photo.extend({{ left: 3, bottom: 2, extendWith: "mirror" }})), [51, 66], "extend some");
+eq((await photo.extend({{ top: 1, background: "#ff000080" }}).metadata()).hasAlpha, true, "translucent margin adds alpha");
+
+const framed = photo.extend({{ top: 4, left: 6, right: 2, bottom: 1, background: "#00ff00" }}).trim({{ threshold: 40 }});
+const trimmed = await framed.metadata();
+eq([trimmed.width, trimmed.height, trimmed.trimOffsetLeft, trimmed.trimOffsetTop], [48, 64, -6, -4], "trim");
+eq("trimOffsetLeft" in (await photo.metadata()), false, "no trim, no offset");
+throws(() => photo.trim({{ margin: 2 }}), (e) => eq(e.name, "TypeError", "margin"), "margin");
+throws(() => photo.trim({{ threshold: -1 }}), (e) => eq(e.name, "RangeError", "threshold"), "threshold");
+
+const plain = await photo.png().bytes();
+const marked = await photo.composite([
+  {{ input: png, gravity: "southeast" }},
+  {{ input: new Image(png).resize(8), left: 2, top: 2, blend: "multiply" }},
+  {{ input: new Blob([png]), tile: true, blend: "soft-light" }},
+  {{ input: file("images_overlay.png"), gravity: "north" }},
+]).png().bytes();
+const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+eq(same(marked, plain), false, "overlays drawn");
+eq(await size(new Image(marked)), [48, 64], "size kept");
+eq((await photo.composite([{{ input: png }}]).metadata()).hasAlpha, false, "RGBA over RGB stays RGB");
+throws(() => photo.composite([{{ input: png, left: 1 }}]), (e) => eq(e.name, "TypeError", "left alone"), "left alone");
+throws(() => photo.composite([{{ input: png, blend: "burn" }}]), (e) => eq(e.name, "TypeError", "blend"), "blend");
+throws(() => photo.composite([{{ input: "logo.png" }}]), (e) => eq(e.name, "TypeError", "path"), "path");
+throws(() => photo.composite({{ input: png }}), (e) => eq(e.name, "TypeError", "array"), "array");
+
+const stats = await photo.stats();
+eq(stats.channels.length, 3, "stats channels");
+eq(Object.keys(stats.channels[0]), ["min", "max", "sum", "squaresSum", "mean", "stdev", "minX", "minY", "maxX", "maxY"], "channel stats");
+eq([stats.isOpaque, typeof stats.entropy, typeof stats.sharpness, Object.keys(stats.dominant)], [true, "number", "number", ["r", "g", "b"]], "stats");
+eq((await new Image(png).stats()).channels.length, 4, "alpha has stats");
+console.log("ok");
+"##
+    );
+    assert_eq!(
+        run("images_canvas.mjs", &source, &["--allow-read"]).trim(),
+        "ok"
+    );
+
+    let denied = exec(
+        "images_overlay_denied.mjs",
+        &format!(
+            r#"
+import {{ Image }} from "runtime:images";
+import {{ file }} from "runtime:fs";
+await new Image({png}).composite([{{ input: file("images_overlay.png") }}]).bytes();
+"#
+        ),
+        &["--deny-all"],
+    );
+    assert!(!denied.status.success());
+    assert!(stderr(&denied).contains("FileRead"), "{}", stderr(&denied));
 }
 
 /// A worker has the module and the spawner too.

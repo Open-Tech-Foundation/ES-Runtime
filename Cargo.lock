@@ -3121,13 +3121,14 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "otf-pixels"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "972636f7e71f39c9e52476e2ed4d9bb03ae53af4fb20faf198bac91735a4fb90"
+checksum = "0f0c93c549abc93bd878441cdccb932a1fb3a9c2f3342dcc06403ba201234488"
 dependencies = [
  "otf-pixels-codec-avif",
  "otf-pixels-codec-gif",
  "otf-pixels-codec-jpeg",
+ "otf-pixels-codec-jxl",
  "otf-pixels-codec-png",
  "otf-pixels-codec-raw",
  "otf-pixels-codec-tiff",
@@ -3138,18 +3139,18 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-avif"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac269ba9773bdf860a603487152ebbef6370d47029e9eeb7be691af171060fa5"
+checksum = "0cf49ce8b00eedd15aba317c8c495b479d866882391083d429c3a2c3da5d748b"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-codec-gif"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "016c5a1cd278cb1d3de7d88c9ce5e83dd4e5ab874e9adf39a2c421120941fc0d"
+checksum = "424ecee5ab126e2a359e1cefe0a9d64f9edd9fc0f5ccfe743462e1b2508902f5"
 dependencies = [
  "otf-pixels-compress",
  "otf-pixels-core",
@@ -3157,18 +3158,27 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-jpeg"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13444ac22e80cf6beec29070a138bc959df2f68fa03e8805b82036136ce15057"
+checksum = "76fea4add7f63065824eddbb01147c4a3964d9ea9bb21f3f9fe63f8426f6c67e"
+dependencies = [
+ "otf-pixels-core",
+]
+
+[[package]]
+name = "otf-pixels-codec-jxl"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fd092c1e211bb034bca1361719d09fdc36b290579220d9f24e8bd250708d17c"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-codec-png"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08df32018b87a9767e7e75b56ebe7558eb5cf147ecef79ba6304614805cb3798"
+checksum = "565857abefff4677ecb63f25d0e991ae50911149a2102f3b570a4ae453338fd9"
 dependencies = [
  "otf-pixels-compress",
  "otf-pixels-core",
@@ -3176,18 +3186,18 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-raw"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a69435e1fff0624f63abf9ae9b94d689fd84f38f050f263a7670bbc0c0fd8e9"
+checksum = "5dd33653b703b9ee0fabb08614ed74a5a7cceab5956681445cab10a7013992dc"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-codec-tiff"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdf301ce9163c29ec74837be4bd4cef17dc9e1b4b7320e17528cbb80402e76b7"
+checksum = "7adda327d2ac219d3bf0fb2eae36f3108e214865a24de1f1e05746d8fb2038d4"
 dependencies = [
  "otf-pixels-compress",
  "otf-pixels-core",
@@ -3195,30 +3205,30 @@ dependencies = [
 
 [[package]]
 name = "otf-pixels-codec-webp"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97a2c364b84f6d6c801f896369e58dbd1e914ba9771f34846ef98c772a1ad2d8"
+checksum = "00eae0af4ad186efd38fcb9b248bc3ab69f0535a7451d10ea1d6aa16e6f88819"
 dependencies = [
  "otf-pixels-core",
 ]
 
 [[package]]
 name = "otf-pixels-compress"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9a9167c5fe73c2ae06915e31753d05a85045a74542a7cbcf2f6bd60f2346522"
+checksum = "8f0537a5a91115d982c6fd4045edfdd4d195fc51a01ca43c6188f1a0d60a5f37"
 
 [[package]]
 name = "otf-pixels-core"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6d1e42aba0ae5a29f735858cada2a2bf7f5cbe0d61c56bbfa5e23cbdc1d47db"
+checksum = "eae9fa2c5e863b80a4628c31d009c20596f565b86eb704e5b10084b442e7fd54"
 
 [[package]]
 name = "otf-pixels-ops"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba420972a8616e96a69effefaf6191c83621719057cbec76a82518cf6a52353c"
+checksum = "855581df3716f1082f6620738b3bb94a96d5e5bb09c51e3c36d9752f053897af"
 dependencies = [
  "otf-pixels-core",
 ]

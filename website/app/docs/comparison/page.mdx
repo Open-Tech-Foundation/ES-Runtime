@@ -288,10 +288,10 @@ the OS codecs, so macOS/Windows differ.
 | Rotate 90° | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Rotate 45° (any angle) | <No /> | <Yes /> | <No /> | <No /> |
 | Blur | <Yes /> | <Yes /> | <No /> | <No /> |
-| Composite | <No /> | <Yes /> | <No /> | <No /> |
+| Composite | <Yes /> | <Yes /> | <No /> | <No /> |
 | Text overlay | <No /> | <Yes /> | <No /> | <No /> |
 | Animated output keeps frames | <No /> | <Yes /> | <No /> | <No /> |
-| Progressive JPEG | <No /> | <Yes /> | <Yes /> | <No /> |
+| Progressive JPEG | <Yes /> | <Yes /> | <Yes /> | <No /> |
 
 ### Behaviour & safety
 
@@ -305,7 +305,7 @@ the OS codecs, so macOS/Windows differ.
 
 - **Formats:** the six everywhere on esrun/sharp; Bun follows the OS; Deno writes PNG/JPEG only (WebP/AVIF requests return PNG per spec).
 - **HEIC:** esrun `ERR_IMAGE_FORMAT_UNSUPPORTED` — convert to AVIF/JPEG; Bun <Partial />, `img.heic({ quality: 80 })` on macOS/Windows; sharp here lacks the HEVC plugin; Deno none.
-- **Operations:** thumbnails only — no free rotation, compositing, text, multi-frame output, progressive JPEG, or encoder knobs. Beyond that, use sharp.
+- **Operations:** sharp's compositing, `extend`/`trim`, encoder options and metadata keeping — no free rotation, text or multi-frame output. For those, use sharp.
 - **Safety:** 400 MP bomb refused at header by all but Deno; sharp skips EXIF unless asked and its errors carry no code; Deno decode blocks the loop.
 - **Speed:** [Benchmarks](/docs/benchmarks#images).
 

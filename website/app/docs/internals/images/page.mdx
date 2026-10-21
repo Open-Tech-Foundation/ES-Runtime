@@ -38,9 +38,20 @@ memory exists.
 
 Pixels are pulled through the pipeline in tiles, so a resize of a large
 baseline JPEG, TIFF or non-interlaced PNG holds a band of the image rather than
-all of it. WebP, AVIF, GIF, progressive JPEG and interlaced PNG have no
-streamable prefix and are buffered whole by their decoder. The encoded input
+all of it. WebP, AVIF, GIF, JPEG XL, progressive JPEG and interlaced PNG have
+no streamable prefix and are buffered whole by their decoder. The encoded input
 is held in full: a `file()` is read into memory before it is decoded.
+
+Two steps break the streaming. `trim` cannot know its output size until it
+has seen the pixels, so the chain before it runs when the pipeline is built and
+its result is held whole; a `resize` placed before it keeps that result small.
+A progressive JPEG output holds the image's quantized coefficients, two bytes
+per sample, until the last scan is written, where baseline streams.
+
+A `composite` overlay is a pipeline of its own, joined to the base's graph.
+Its encoded bytes cross to the host with the base's, and a `file()` overlay is
+read in JavaScript through `runtime:fs` before the call, so the op that runs the
+pipeline only ever reads the file its own source names.
 
 ## Speed
 

@@ -3291,6 +3291,8 @@ The day before, the same reasoning had been taken one step further and an out-of
 
 *(Update 2026-10-14: Pixels 0.3.0 added sharp's per-pixel adjustments, resize `position`/`without_reduction` and multi-page TIFF reading, and the module exposes them — `negate`, `gamma`, `linear`, `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha`, `removeAlpha`, named `extractChannel`, `modulate({ lightness })`, `page` and `metadata().pages`. `composite`, text overlay and animated output stay out as decided above.)*
 
+*(Update 2026-10-21: Pixels 0.5.0 brought `composite`, `extend`, `trim`, the encoder options, metadata keeping, JPEG XL and `stats()`; D181 exposes them.)*
+
 ### D160 — `runtime:serialization` reads and writes YAML with its own parser · *Accepted (2026-10-13)*
 
 **Context:** `YAML` was backed by `serde_yaml` 0.9, which is deprecated and depends on `unsafe-libyaml`, a c2rust translation of libyaml into unsafe Rust. Its repository was archived on 2024-03-25, and RUSTSEC-2024-0449 now fails `cargo deny` with no safe upgrade. The suggested replacements are other crates (saphyr, noyalib). Bun ships its own YAML 1.2 parser and says it passes the official yaml-test-suite.
@@ -3754,3 +3756,25 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 **Not here:** Windows. `anchor.rs` falls back to path-based resolution there (no `*at` family in `std` or `rustix`), and the `Tree` does the same, checking each component with `symlink_metadata` before use — the old window, marked as such. Closing it needs `NtCreateFile` with a `RootDirectory`, which is its own decision.
 
 **Consequences:** `SystemFileSystem::with_read_allowlist` and its siblings move to `Jail`; the embedding constructors change accordingly (the crates are not published, D66). `archive_ops` loses `ensure_no_symlink` and `extraction_paths`; staged files are moved into place with `renameat` instead of copied, so a commit is no longer a second write of every byte.
+
+### D181 — `runtime:images` on otf-pixels 0.5: sharp's names for what Bun's chain lacks · *Accepted (2026-10-21)* · *amends D159*
+
+**Context:** otf-pixels 0.4.0 and 0.5.0 (2026-10-20, 2026-10-21) added what D159 listed as missing because Pixels lacked it: `composite` with sharp's 25 blend modes, gravity and tiling; `extend` and `trim`; progressive JPEG, palette PNG and the PNG compression level; sharp's encoder options (`effort`, `chromaSubsampling`, `alphaQuality`, `nearLossless`, `colours`, `dither`); keeping or replacing EXIF and XMP and writing a density; JPEG XL input and output; and sharp's `metadata()` and `stats()`. Bun's `Image` has none of these except `progressive` and the PNG palette options (`compressionLevel`, `palette`, `colors`, boolean `dither`), which D159 refused by name. sharp has all of them.
+
+**Decision (maintainer, 2026-10-21):**
+
+- **Expose them under sharp's names and option shapes,** as D159 did for operations Bun lacks: `extend(n | { top, right, bottom, left, extendWith, background })`, `trim({ background, threshold, lineArt })`, `composite([{ input, blend, gravity, left, top, tile }])`, `keepExif()`, `keepXmp()`, `keepMetadata()`, `withXmp(string)`, `withMetadata({ density })`, `stats()`, `jxl({ quality, lossless })`, and the format options. Bun's spellings are accepted where they differ: `colors` beside `colours`, and a boolean `dither` beside sharp's level.
+- **`metadata()` keeps D159's chain-point size and adds sharp's source fields** (`orientation`, `density`, `resolutionUnit`, `isProgressive`, `isPalette`, `bitsPerSample`, `chromaSubsampling`, `background`, `compression`, `comments`, `hasProfile`, `icc`, `exif`, `xmp`, `channels`), each absent when the file does not state it, as in sharp. After a `trim` it reports sharp's `trimOffsetLeft` and `trimOffsetTop`, negated as sharp reports them, so code ported from sharp's `info` reads the same numbers.
+- **A `composite` overlay is any `Image` input or an `Image`,** and travels as a nested pipeline in the step list. A `file()` overlay is read in JavaScript through `runtime:fs` when the terminal is called, so it is `FileRead` and jailed as any read, and the op keeps D159's rule that it reads only the file its own source names. Every byte source, base and overlays, is copied synchronously at the call, so D159's "copied when the terminal is called" still holds.
+- **EXIF and XMP stay stripped by default.** Keeping them is opt-in, as in sharp; an upload server keeps stripping location data without asking.
+- **AVIF stays 4:2:0 by default,** as Pixels and D159 have it. sharp defaults to 4:4:4, which costs about a third more bytes for sharper colour edges; `avif({ chromaSubsampling: "4:4:4" })` asks for it.
+- **What Pixels lacks is refused by name:** `png({ progressive, quality, effort })`, `avif({ lossless })`, `jxl({ distance, effort })`, `trim({ margin })`, `withMetadata({ orientation })`.
+
+**Rejected:**
+- **`withExif(object)`.** sharp builds EXIF from an object keyed by IFD; Pixels takes a whole TIFF-structured block. A bytes-taking `withExif` would share sharp's name but not its argument.
+- **A separate `sourceMetadata()`.** Two methods for one question; sharp has one, and the chain-point fields D159 chose are named the same as sharp's source ones.
+- **Positive trim offsets under a new name.** It would read better, but code moving from sharp would silently get the opposite sign.
+
+**Consequences:** the binary carries the JPEG XL codec (Pixels' `jxl` feature, on by default). The comparison page's Composite and Progressive JPEG rows change for esrun; `bench/images/features/esrun.mjs` probes `composite` in sharp's array form.
+
+**Not here:** text overlay, rotation by other angles, multi-frame output, `withExif`, and HEIC, as before.

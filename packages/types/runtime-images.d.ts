@@ -72,7 +72,83 @@ declare module "runtime:images" {
     position?: Position;
   }
 
-  export type ImageFormat = "jpeg" | "png" | "webp" | "avif" | "gif" | "tiff";
+  export type ImageFormat = "jpeg" | "png" | "webp" | "avif" | "gif" | "tiff" | "jxl";
+
+  /** sharp's blend modes. */
+  export type Blend =
+    | "clear"
+    | "source"
+    | "over"
+    | "in"
+    | "out"
+    | "atop"
+    | "dest"
+    | "dest-over"
+    | "dest-in"
+    | "dest-out"
+    | "dest-atop"
+    | "xor"
+    | "add"
+    | "saturate"
+    | "multiply"
+    | "screen"
+    | "overlay"
+    | "darken"
+    | "lighten"
+    | "colour-dodge"
+    | "color-dodge"
+    | "colour-burn"
+    | "color-burn"
+    | "hard-light"
+    | "soft-light"
+    | "difference"
+    | "exclusion";
+
+  export interface ExtendOptions {
+    top?: number;
+    right?: number;
+    bottom?: number;
+    left?: number;
+    /** What fills the margin. Default `"background"`. */
+    extendWith?: "background" | "copy" | "repeat" | "mirror";
+    /** Default opaque black; a translucent colour adds alpha. */
+    background?: Colour;
+  }
+
+  export interface TrimOptions {
+    /** The border colour. Default: the top-left pixel's. */
+    background?: Colour;
+    /** How far a channel may differ and still be border. Default 10. */
+    threshold?: number;
+    /** Keep one-pixel lines (no median). Default false. */
+    lineArt?: boolean;
+  }
+
+  /** One image for `composite`, drawn in array order, the first lowest. */
+  export interface CompositeOverlay {
+    /** An Image, or what `new Image` takes. */
+    input: Image | ImageInput;
+    /** Default `"over"`. */
+    blend?: Blend;
+    /** Where it sits unless `left` and `top` place it. Default `"center"`. */
+    gravity?: Position;
+    /** With `top`: the overlay's top-left corner. Give both or neither. */
+    left?: number;
+    top?: number;
+    /** Repeat it across the image. Default false. */
+    tile?: boolean;
+  }
+
+  export type ChromaSubsampling = "4:2:0" | "4:4:4";
+
+  export interface PaletteOptions {
+    /** Palette size, 2–256. */
+    colours?: number;
+    /** Bun's and sharp's other spelling of `colours`. */
+    colors?: number;
+    /** Error diffusion, 0–1; `true` is 1 and `false` 0. */
+    dither?: number | boolean;
+  }
 
   export type PixelFormat =
     | "gray8"
@@ -85,17 +161,75 @@ declare module "runtime:images" {
     | "rgbf32"
     | "rgbaf32";
 
+  /**
+   * `width`, `height`, `pixelFormat`, `channels`, `hasAlpha` and the trim
+   * offsets describe the image at this point in the chain; the rest is what
+   * the source file says about itself, absent when it says nothing.
+   */
   export interface ImageMetadata {
     width: number;
     height: number;
     /** The source's format. */
     format: ImageFormat;
     pixelFormat: PixelFormat;
+    channels: number;
     hasAlpha: boolean;
     /** What an animated file holds, or null for a still. */
     animation: { frames: number; loop: number; durations: number[] } | null;
     /** How many pages the source document holds. Always 1 except for TIFF. */
     pages: number;
+    /** After a `trim`, minus the left and top of the box kept, as sharp reports them. */
+    trimOffsetLeft?: number;
+    trimOffsetTop?: number;
+    /** The EXIF orientation, 1–8. */
+    orientation?: number;
+    /** Bits per stored sample, which may be fewer than `pixelFormat` holds. */
+    bitsPerSample?: number;
+    /** Pixels per inch. */
+    density?: number;
+    /** The unit the file states its density in. */
+    resolutionUnit?: "inch" | "cm";
+    isProgressive?: boolean;
+    isPalette?: boolean;
+    /** JPEG and AVIF. */
+    chromaSubsampling?: string;
+    /** The background colour the file names (PNG, GIF), in its own samples. */
+    background?: { r: number; g: number; b: number } | { gray: number };
+    /** The compression scheme where a format has several. */
+    compression?: string;
+    /** PNG text chunks and JPEG and GIF comments. */
+    comments?: { keyword: string; text: string }[];
+    hasProfile?: boolean;
+    icc?: Uint8Array<ArrayBuffer>;
+    exif?: Uint8Array<ArrayBuffer>;
+    xmp?: Uint8Array<ArrayBuffer>;
+  }
+
+  /** One channel's statistics, in its own sample scale. */
+  export interface ChannelStats {
+    min: number;
+    max: number;
+    sum: number;
+    squaresSum: number;
+    mean: number;
+    stdev: number;
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  }
+
+  export interface ImageStats {
+    /** Each channel, alpha included. */
+    channels: ChannelStats[];
+    /** No alpha channel, or every pixel opaque. */
+    isOpaque: boolean;
+    /** Greyscale histogram entropy, in bits. */
+    entropy: number;
+    /** The standard deviation of the greyscale Laplacian. */
+    sharpness: number;
+    /** The most common sRGB colour. */
+    dominant: { r: number; g: number; b: number };
   }
 
   /** The codes `runtime:images` rejects with. */
@@ -148,16 +282,50 @@ declare module "runtime:images" {
     ensureAlpha(alpha?: number): Image;
     /** Drop the alpha channel without compositing. */
     removeAlpha(): Image;
+    /** Grow the canvas by `n` pixels on every side, or by the margins given. */
+    extend(extend: number | ExtendOptions): Image;
+    /** Cut away a border; runs the chain before it in memory. */
+    trim(options?: TrimOptions): Image;
+    /** Draw images over this one, the first lowest. */
+    composite(overlays: CompositeOverlay[]): Image;
 
-    jpeg(options?: { quality?: number }): Image;
-    png(): Image;
-    webp(options?: { quality?: number; lossless?: boolean }): Image;
-    avif(options?: { quality?: number }): Image;
-    gif(): Image;
+    /** Copy the source's EXIF into the output. */
+    keepExif(): Image;
+    /** Copy the source's XMP into the output. */
+    keepXmp(): Image;
+    /** Copy the source's EXIF and XMP. */
+    keepMetadata(): Image;
+    /** Write this XMP packet in place of the source's. */
+    withXmp(xmp: string): Image;
+    /** Keep EXIF and XMP; `density` writes a resolution in DPI. */
+    withMetadata(options?: { density?: number }): Image;
+
+    jpeg(options?: { quality?: number; progressive?: boolean; chromaSubsampling?: ChromaSubsampling }): Image;
+    png(options?: { compressionLevel?: number; palette?: boolean } & PaletteOptions): Image;
+    webp(options?: {
+      quality?: number;
+      lossless?: boolean;
+      nearLossless?: boolean;
+      /** 0–6, default 4. */
+      effort?: number;
+      /** 0–100, default 100. */
+      alphaQuality?: number;
+    }): Image;
+    avif(options?: {
+      quality?: number;
+      /** Default `"4:2:0"`. */
+      chromaSubsampling?: ChromaSubsampling;
+      /** 0–9, default 4. */
+      effort?: number;
+    }): Image;
+    gif(options?: PaletteOptions): Image;
     tiff(): Image;
+    jxl(options?: { quality?: number; lossless?: boolean }): Image;
 
     /** The image at this point in the chain, from its header. */
     metadata(): Promise<ImageMetadata>;
+    /** Pixel statistics of the result; runs the chain. */
+    stats(): Promise<ImageStats>;
     /** The encoded image; without a format method, in the source's format. */
     bytes(): Promise<Uint8Array<ArrayBuffer>>;
     /** The encoded image as a Blob of the format's media type. */

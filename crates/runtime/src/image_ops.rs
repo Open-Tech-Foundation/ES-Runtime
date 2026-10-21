@@ -26,8 +26,9 @@ use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{FileSystem, ProviderError, TaskSpawner};
 use otf_pixels::{
-    Channel, EncodeOptions, Filter, Fit, Format, Image, Limits, Modulate, OpenOptions, PixelFormat,
-    PixelsError, Position, ResizeOptions,
+    Background, Blend, Channel, ChromaSubsampling, Density, EncodeOptions, Extend, ExtendWith,
+    Filter, Fit, Format, Image, Limits, Modulate, OpenOptions, Overlay, PixelFormat, PixelsError,
+    Position, ResizeOptions, ResolutionUnit, Trim,
 };
 
 use crate::Result;
@@ -86,14 +87,43 @@ enum Step {
     Recomb4([[f32; 4]; 4]),
     EnsureAlpha(f32),
     RemoveAlpha,
+    Extend {
+        /// Top, right, bottom, left.
+        margins: [u32; 4],
+        with: ExtendWith,
+        background: [u8; 4],
+    },
+    Trim {
+        background: Option<[u8; 4]>,
+        threshold: f32,
+        line_art: bool,
+    },
+    /// Overlays in drawing order, the first lowest.
+    Composite(Vec<OverlayStep>),
 }
 
-/// The encode target; `None` keeps the source's format.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// One `composite` overlay: a whole pipeline of its own, already in bytes —
+/// `images.js` reads a `file()` overlay through `runtime:fs` before the call,
+/// so the op's capability stays the one its base source declares.
+#[derive(Debug, Clone, PartialEq)]
+struct OverlayStep {
+    bytes: Vec<u8>,
+    open: OpenOptions,
+    steps: Vec<Step>,
+    blend: Blend,
+    gravity: Position,
+    offset: Option<(i64, i64)>,
+    tile: bool,
+}
+
+/// The encode target; `None` keeps the source's format. `xmp` and `density`
+/// replace what the source carries.
+#[derive(Debug, Clone, Default, PartialEq)]
 struct Output {
     format: Option<Format>,
-    quality: Option<u8>,
-    lossless: bool,
+    options: EncodeOptions,
+    xmp: Option<Vec<u8>>,
+    density: Option<f64>,
 }
 
 /// Registers the `runtime:images` ops.
@@ -102,8 +132,14 @@ pub(crate) fn install(
     fs: Option<Arc<dyn FileSystem>>,
     spawner: Option<Arc<dyn TaskSpawner>>,
 ) -> Result<()> {
-    // (name, source is a file, destination is a file)
-    for (name, from_file) in [("image_metadata", false), ("image_metadata_file", true)] {
+    // (name, source is a file, what it reports)
+    type Report = fn(&Image) -> std::result::Result<Value, PixelsError>;
+    for (name, from_file, report) in [
+        ("image_metadata", false, metadata as Report),
+        ("image_metadata_file", true, metadata),
+        ("image_stats", false, stats),
+        ("image_stats_file", true, stats),
+    ] {
         let (fs, spawner) = (fs.clone(), spawner.clone());
         let mut decl = OpDecl::r#async(name, move |mut args| {
             let (fs, spawner) = (fs.clone(), spawner.clone());
@@ -112,7 +148,7 @@ pub(crate) fn install(
                 let (source, open, steps) = parsed?;
                 let bytes = read_source(&fs, source).await?;
                 let result = offload(spawner, move || {
-                    pipeline(bytes, open, &steps).and_then(|image| metadata(&image))
+                    pipeline(bytes, open, steps).and_then(|image| report(&image))
                 })
                 .await?;
                 Ok(result.unwrap_or_else(failure))
@@ -145,7 +181,7 @@ pub(crate) fn install(
             Box::pin(async move {
                 let ((source, open, steps), output, dest) = parsed?;
                 let bytes = read_source(&fs, source).await?;
-                let encoded = offload(spawner, move || encode(bytes, open, &steps, output)).await?;
+                let encoded = offload(spawner, move || encode(bytes, open, steps, output)).await?;
                 let encoded = match encoded {
                     Ok(encoded) => encoded,
                     Err(error) => return Ok(failure(error)),
@@ -216,7 +252,7 @@ async fn read_source(
 fn pipeline(
     bytes: Vec<u8>,
     open: OpenOptions,
-    steps: &[Step],
+    steps: Vec<Step>,
 ) -> std::result::Result<Image, PixelsError> {
     let mut image = Image::from_stream_with(Cursor::new(bytes), open)?;
     for step in steps {
@@ -225,8 +261,8 @@ fn pipeline(
     Ok(image)
 }
 
-fn apply(image: Image, step: &Step) -> std::result::Result<Image, PixelsError> {
-    Ok(match *step {
+fn apply(image: Image, step: Step) -> std::result::Result<Image, PixelsError> {
+    Ok(match step {
         Step::Resize {
             width,
             height,
@@ -284,6 +320,45 @@ fn apply(image: Image, step: &Step) -> std::result::Result<Image, PixelsError> {
         Step::Recomb4(matrix) => image.recomb_rgba(matrix),
         Step::EnsureAlpha(level) => image.ensure_alpha(level),
         Step::RemoveAlpha => image.remove_alpha(),
+        Step::Extend {
+            margins: [top, right, bottom, left],
+            with,
+            background,
+        } => image.extend(
+            Extend::new(top, right, bottom, left)
+                .extend_with(with)
+                .with_background(background),
+        ),
+        Step::Trim {
+            background,
+            threshold,
+            line_art,
+        } => {
+            let mut trim = Trim::default()
+                .with_threshold(threshold)?
+                .line_art(line_art);
+            if let Some(rgba) = background {
+                trim = trim.with_background(rgba);
+            }
+            image.trim(trim)
+        }
+        Step::Composite(overlays) => {
+            let overlays = overlays
+                .into_iter()
+                .map(|overlay| {
+                    let mut placed =
+                        Overlay::new(pipeline(overlay.bytes, overlay.open, overlay.steps)?)
+                            .with_blend(overlay.blend)
+                            .with_gravity(overlay.gravity)
+                            .tiled(overlay.tile);
+                    if let Some((x, y)) = overlay.offset {
+                        placed = placed.at(x, y);
+                    }
+                    Ok(placed)
+                })
+                .collect::<std::result::Result<Vec<_>, PixelsError>>()?;
+            image.composite_overlays(overlays)
+        }
     })
 }
 
@@ -304,22 +379,34 @@ fn keep_aspect(width: u32, height: u32, src_width: u32, src_height: u32) -> (u32
 fn encode(
     bytes: Vec<u8>,
     open: OpenOptions,
-    steps: &[Step],
+    steps: Vec<Step>,
     output: Output,
 ) -> std::result::Result<(Vec<u8>, Format), PixelsError> {
-    let image = pipeline(bytes, open, steps)?;
+    let mut image = pipeline(bytes, open, steps)?;
     let format = match output.format {
         Some(format) => format,
         None => image.metadata()?.format,
     };
-    let options = match output.quality {
-        Some(quality) => EncodeOptions::with_quality(quality)?,
-        None => EncodeOptions::default(),
+    if let Some(xmp) = output.xmp {
+        image = image.with_xmp(Some(xmp));
     }
-    .with_lossless(output.lossless);
-    Ok((image.output(format, options).bytes()?, format))
+    if let Some(dpi) = output.density {
+        image = image.with_density(Some(Density::dpi(dpi)));
+    }
+    Ok((image.output(format, output.options).bytes()?, format))
 }
 
+fn num(n: impl Into<f64>) -> Value {
+    Value::Number(n.into())
+}
+
+fn field(key: &str, value: Value) -> (String, Value) {
+    (key.to_string(), value)
+}
+
+/// The size, pixel format and trim at this point in the chain, then what the
+/// source file says about itself, under sharp's names. A field the file does
+/// not state is left out, as sharp leaves it out.
 fn metadata(image: &Image) -> std::result::Result<Value, PixelsError> {
     let meta = image.metadata()?;
     let animation = match image.animation() {
@@ -345,22 +432,131 @@ fn metadata(image: &Image) -> std::result::Result<Value, PixelsError> {
         ]),
         None => Value::Null,
     };
-    Ok(Value::Object(vec![(
-        "ok".to_string(),
+    let mut fields = vec![
+        field("width", num(meta.width)),
+        field("height", num(meta.height)),
+        field("format", Value::String(meta.format.as_str().to_string())),
+        field(
+            "pixelFormat",
+            Value::String(meta.pixel.as_str().to_string()),
+        ),
+        field("channels", num(meta.pixel.channels() as u32)),
+        field("hasAlpha", Value::Bool(meta.pixel.has_alpha())),
+        field("animation", animation),
+        field("pages", num(image.pages())),
+    ];
+    // sharp reports where the trimmed image's origin lies in it: negated.
+    if let Some((left, top)) = image.trim_offset() {
+        fields.push(field("trimOffsetLeft", num(-f64::from(left))));
+        fields.push(field("trimOffsetTop", num(-f64::from(top))));
+    }
+    if let Some(source) = image.source_metadata() {
+        fields.push(field("orientation", num(source.orientation.exif())));
+        if let Some(bits) = source.bits_per_sample {
+            fields.push(field("bitsPerSample", num(bits)));
+        }
+        if let Some(density) = source.density {
+            fields.push(field("density", num(density.x_dpi())));
+            let unit = match density.unit {
+                ResolutionUnit::Centimetre => "cm",
+                _ => "inch",
+            };
+            fields.push(field("resolutionUnit", Value::String(unit.to_string())));
+        }
+        fields.push(field("isProgressive", Value::Bool(source.progressive)));
+        fields.push(field("isPalette", Value::Bool(source.palette)));
+        if let Some(subsampling) = source.chroma_subsampling {
+            fields.push(field(
+                "chromaSubsampling",
+                Value::String(subsampling.to_string()),
+            ));
+        }
+        match source.background {
+            Some(Background::Grey(level)) => {
+                fields.push(field(
+                    "background",
+                    Value::Object(vec![field("gray", num(level))]),
+                ));
+            }
+            Some(Background::Rgb(r, g, b)) => {
+                fields.push(field(
+                    "background",
+                    Value::Object(vec![
+                        field("r", num(r)),
+                        field("g", num(g)),
+                        field("b", num(b)),
+                    ]),
+                ));
+            }
+            _ => {}
+        }
+        if let Some(compression) = source.compression {
+            fields.push(field("compression", Value::String(compression.to_string())));
+        }
+        if !source.comments.is_empty() {
+            let comments = source
+                .comments
+                .iter()
+                .map(|c| {
+                    Value::Object(vec![
+                        field("keyword", Value::String(c.keyword.clone())),
+                        field("text", Value::String(c.text.clone())),
+                    ])
+                })
+                .collect();
+            fields.push(field("comments", Value::Array(comments)));
+        }
+        fields.push(field("hasProfile", Value::Bool(source.has_profile())));
+        for (key, block) in [
+            ("icc", &source.icc),
+            ("exif", &source.exif),
+            ("xmp", &source.xmp),
+        ] {
+            if let Some(block) = block {
+                fields.push(field(key, Value::Bytes(block.to_vec())));
+            }
+        }
+    }
+    Ok(Value::Object(vec![field("ok", Value::Object(fields))]))
+}
+
+/// sharp's `stats()` of the pipeline's result.
+fn stats(image: &Image) -> std::result::Result<Value, PixelsError> {
+    let stats = image.stats()?;
+    let channels = stats
+        .channels
+        .iter()
+        .map(|c| {
+            Value::Object(vec![
+                field("min", num(c.min)),
+                field("max", num(c.max)),
+                field("sum", num(c.sum)),
+                field("squaresSum", num(c.squares_sum)),
+                field("mean", num(c.mean)),
+                field("stdev", num(c.stdev)),
+                field("minX", num(c.min_x)),
+                field("minY", num(c.min_y)),
+                field("maxX", num(c.max_x)),
+                field("maxY", num(c.max_y)),
+            ])
+        })
+        .collect();
+    let [r, g, b] = stats.dominant;
+    Ok(Value::Object(vec![field(
+        "ok",
         Value::Object(vec![
-            ("width".to_string(), Value::Number(f64::from(meta.width))),
-            ("height".to_string(), Value::Number(f64::from(meta.height))),
-            (
-                "format".to_string(),
-                Value::String(meta.format.as_str().to_string()),
+            field("channels", Value::Array(channels)),
+            field("isOpaque", Value::Bool(stats.is_opaque)),
+            field("entropy", num(stats.entropy)),
+            field("sharpness", num(stats.sharpness)),
+            field(
+                "dominant",
+                Value::Object(vec![
+                    field("r", num(r)),
+                    field("g", num(g)),
+                    field("b", num(b)),
+                ]),
             ),
-            (
-                "pixelFormat".to_string(),
-                Value::String(meta.pixel.as_str().to_string()),
-            ),
-            ("hasAlpha".to_string(), Value::Bool(meta.pixel.has_alpha())),
-            ("animation".to_string(), animation),
-            ("pages".to_string(), Value::Number(f64::from(image.pages()))),
         ]),
     )]))
 }
@@ -447,36 +643,10 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
                 other => return Err(OpError::type_error(format!("unknown fit {other:?}"))),
             };
             let filter = parse_filter(parts.get(4).and_then(Value::as_str).unwrap_or("lanczos3"))?;
-            let background = match parts.get(5) {
-                Some(Value::Array(rgba)) => {
-                    let c = |i: usize| rgba.get(i).and_then(Value::as_number).unwrap_or(0.0) as u8;
-                    [c(0), c(1), c(2), c(3)]
-                }
-                _ => [0, 0, 0, 0],
-            };
+            let background = rgba(parts.get(5)).unwrap_or([0, 0, 0, 0]);
             let without_enlargement = matches!(parts.get(6), Some(Value::Bool(true)));
-            let position = match parts.get(7).and_then(Value::as_str).unwrap_or("center") {
-                "center" | "centre" => Position::Centre,
-                "north" | "top" => Position::North,
-                "northeast" | "right top" => Position::NorthEast,
-                "east" | "right" => Position::East,
-                "southeast" | "right bottom" => Position::SouthEast,
-                "south" | "bottom" => Position::South,
-                "southwest" | "left bottom" => Position::SouthWest,
-                "west" | "left" => Position::West,
-                "northwest" | "left top" => Position::NorthWest,
-                "attention" | "entropy" => {
-                    return Err(OpError::type_error(
-                        "position \"attention\" and \"entropy\" need saliency, which is not supported",
-                    ));
-                }
-                other => {
-                    return Err(OpError::type_error(format!(
-                        "unknown position {other:?}: center, north, northeast, east, \
-                         southeast, south, southwest, west or northwest"
-                    )));
-                }
-            };
+            let position =
+                parse_position(parts.get(7).and_then(Value::as_str).unwrap_or("center"))?;
             let without_reduction = matches!(parts.get(8), Some(Value::Bool(true)));
             Step::Resize {
                 width: int(1),
@@ -596,7 +766,152 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
         }
         "ensureAlpha" => Step::EnsureAlpha(num(1) as f32),
         "removeAlpha" => Step::RemoveAlpha,
+        "extend" => Step::Extend {
+            margins: [int(1), int(2), int(3), int(4)],
+            with: match parts.get(5).and_then(Value::as_str).unwrap_or("background") {
+                "background" => ExtendWith::Background,
+                "copy" => ExtendWith::Copy,
+                "repeat" => ExtendWith::Repeat,
+                "mirror" => ExtendWith::Mirror,
+                other => {
+                    return Err(OpError::type_error(format!(
+                        "unknown extendWith {other:?}: background, copy, repeat or mirror"
+                    )));
+                }
+            },
+            background: rgba(parts.get(6)).unwrap_or([0, 0, 0, 255]),
+        },
+        "trim" => {
+            let threshold = parts.get(2).and_then(Value::as_number).unwrap_or(10.0);
+            if !threshold.is_finite() || threshold < 0.0 {
+                return Err(OpError::range_error("trim threshold must not be negative"));
+            }
+            Step::Trim {
+                background: rgba(parts.get(1)),
+                threshold: threshold as f32,
+                line_art: matches!(parts.get(3), Some(Value::Bool(true))),
+            }
+        }
+        "composite" => {
+            let Some(Value::Array(overlays)) = parts.get(1) else {
+                return Err(OpError::type_error("composite takes an array of overlays"));
+            };
+            Step::Composite(
+                overlays
+                    .iter()
+                    .map(parse_overlay)
+                    .collect::<std::result::Result<_, _>>()?,
+            )
+        }
         other => return Err(OpError::type_error(format!("unknown image step {other:?}"))),
+    })
+}
+
+/// `{ bytes, open, steps, blend, gravity, left, top, tile }`, as `images.js`
+/// resolves a `composite` overlay.
+fn parse_overlay(value: &Value) -> std::result::Result<OverlayStep, OpError> {
+    let Value::Object(fields) = value else {
+        return Err(OpError::type_error("a composite overlay must be an object"));
+    };
+    let get = |key: &str| fields.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+    let bytes = get("bytes")
+        .and_then(Value::as_bytes)
+        .ok_or_else(|| OpError::type_error("a composite overlay must be bytes"))?
+        .to_vec();
+    let steps = match get("steps") {
+        Some(Value::Array(steps)) => steps
+            .iter()
+            .map(parse_step)
+            .collect::<std::result::Result<_, _>>()?,
+        _ => Vec::new(),
+    };
+    let offset = match (
+        get("left").and_then(Value::as_number),
+        get("top").and_then(Value::as_number),
+    ) {
+        (Some(left), Some(top)) => Some((left as i64, top as i64)),
+        (None, None) => None,
+        _ => {
+            return Err(OpError::type_error(
+                "a composite overlay needs both left and top, or neither",
+            ));
+        }
+    };
+    Ok(OverlayStep {
+        bytes,
+        open: parse_open(get("open"))?,
+        steps,
+        blend: parse_blend(get("blend").and_then(Value::as_str).unwrap_or("over"))?,
+        gravity: parse_position(get("gravity").and_then(Value::as_str).unwrap_or("center"))?,
+        offset,
+        tile: matches!(get("tile"), Some(Value::Bool(true))),
+    })
+}
+
+/// `[r, g, b, a]` bytes, or `None` if `value` is not an array.
+fn rgba(value: Option<&Value>) -> Option<[u8; 4]> {
+    let Some(Value::Array(rgba)) = value else {
+        return None;
+    };
+    let c = |i: usize| rgba.get(i).and_then(Value::as_number).unwrap_or(0.0) as u8;
+    Some([c(0), c(1), c(2), c(3)])
+}
+
+/// sharp's nine gravities and their aliases.
+fn parse_position(name: &str) -> std::result::Result<Position, OpError> {
+    Ok(match name {
+        "center" | "centre" => Position::Centre,
+        "north" | "top" => Position::North,
+        "northeast" | "right top" => Position::NorthEast,
+        "east" | "right" => Position::East,
+        "southeast" | "right bottom" => Position::SouthEast,
+        "south" | "bottom" => Position::South,
+        "southwest" | "left bottom" => Position::SouthWest,
+        "west" | "left" => Position::West,
+        "northwest" | "left top" => Position::NorthWest,
+        "attention" | "entropy" => {
+            return Err(OpError::type_error(
+                "position \"attention\" and \"entropy\" need saliency, which is not supported",
+            ));
+        }
+        other => {
+            return Err(OpError::type_error(format!(
+                "unknown position {other:?}: center, north, northeast, east, \
+                 southeast, south, southwest, west or northwest"
+            )));
+        }
+    })
+}
+
+/// sharp's 25 blend modes, under its names (both spellings of the colour ones).
+fn parse_blend(name: &str) -> std::result::Result<Blend, OpError> {
+    Ok(match name {
+        "clear" => Blend::Clear,
+        "source" => Blend::Source,
+        "over" => Blend::Over,
+        "in" => Blend::In,
+        "out" => Blend::Out,
+        "atop" => Blend::Atop,
+        "dest" => Blend::Dest,
+        "dest-over" => Blend::DestOver,
+        "dest-in" => Blend::DestIn,
+        "dest-out" => Blend::DestOut,
+        "dest-atop" => Blend::DestAtop,
+        "xor" => Blend::Xor,
+        "add" => Blend::Add,
+        "saturate" => Blend::Saturate,
+        "multiply" => Blend::Multiply,
+        "screen" => Blend::Screen,
+        "overlay" => Blend::Overlay,
+        "darken" => Blend::Darken,
+        "lighten" => Blend::Lighten,
+        "colour-dodge" | "color-dodge" => Blend::ColourDodge,
+        "colour-burn" | "color-burn" => Blend::ColourBurn,
+        "hard-light" => Blend::HardLight,
+        "soft-light" => Blend::SoftLight,
+        "difference" => Blend::Difference,
+        "exclusion" => Blend::Exclusion,
+        other => return Err(OpError::type_error(format!("unknown blend {other:?}"))),
     })
 }
 
@@ -617,15 +932,20 @@ fn parse_filter(name: &str) -> std::result::Result<Filter, OpError> {
     })
 }
 
+/// The format method's options and the metadata the chain keeps or sets. The
+/// ranges are checked in `images.js`; Pixels' own check backs them here.
 fn parse_output(value: Option<&Value>) -> std::result::Result<Output, OpError> {
-    let mut output = Output {
-        format: None,
-        quality: None,
-        lossless: false,
-    };
+    let mut output = Output::default();
     let Some(Value::Object(fields)) = value else {
         return Ok(output);
     };
+    let invalid = |e: PixelsError| OpError::range_error(e.to_string());
+    let byte = |n: f64| n.clamp(0.0, 255.0) as u8;
+    // Quality first: it starts the options, and the rest refine them.
+    if let Some((_, Value::Number(q))) = fields.iter().find(|(k, _)| k == "quality") {
+        output.options = EncodeOptions::with_quality(byte(*q)).map_err(invalid)?;
+    }
+    let options = &mut output.options;
     for (key, value) in fields {
         match (key.as_str(), value) {
             ("format", Value::String(name)) => {
@@ -636,6 +956,7 @@ fn parse_output(value: Option<&Value>) -> std::result::Result<Output, OpError> {
                     "avif" => Format::Avif,
                     "gif" => Format::Gif,
                     "tiff" => Format::Tiff,
+                    "jxl" => Format::Jxl,
                     other => {
                         return Err(OpError::type_error(format!(
                             "unknown image format {other:?}"
@@ -643,8 +964,47 @@ fn parse_output(value: Option<&Value>) -> std::result::Result<Output, OpError> {
                     }
                 });
             }
-            ("quality", Value::Number(q)) => output.quality = Some(q.clamp(0.0, 255.0) as u8),
-            ("lossless", Value::Bool(b)) => output.lossless = *b,
+            ("lossless", Value::Bool(b)) => *options = options.with_lossless(*b),
+            ("progressive", Value::Bool(b)) => *options = options.with_progressive(*b),
+            ("effort", Value::Number(n)) => {
+                *options = options.with_effort(byte(*n)).map_err(invalid)?;
+            }
+            ("compressionLevel", Value::Number(n)) => {
+                *options = options.with_compression_level(byte(*n)).map_err(invalid)?;
+            }
+            ("palette", Value::Bool(b)) => *options = options.with_palette(*b),
+            ("colours", Value::Number(n)) => {
+                *options = options
+                    .with_colours(n.clamp(0.0, f64::from(u16::MAX)) as u16)
+                    .map_err(invalid)?;
+            }
+            ("dither", Value::Number(n)) => {
+                *options = options.with_dither(*n as f32).map_err(invalid)?;
+            }
+            ("alphaQuality", Value::Number(n)) => {
+                *options = options.with_alpha_quality(byte(*n)).map_err(invalid)?;
+            }
+            ("nearLossless", Value::Bool(b)) => *options = options.with_near_lossless(*b),
+            ("chromaSubsampling", Value::String(s)) => {
+                *options = options.with_chroma_subsampling(match s.as_str() {
+                    "4:2:0" => ChromaSubsampling::Yuv420,
+                    "4:4:4" => ChromaSubsampling::Yuv444,
+                    other => {
+                        return Err(OpError::type_error(format!(
+                            "unknown chromaSubsampling {other:?}: \"4:2:0\" or \"4:4:4\""
+                        )));
+                    }
+                });
+            }
+            ("keepExif", Value::Bool(b)) => *options = options.with_keep_exif(*b),
+            ("keepXmp", Value::Bool(b)) => *options = options.with_keep_xmp(*b),
+            ("xmp", Value::Bytes(bytes)) => output.xmp = Some(bytes.clone()),
+            ("density", Value::Number(dpi)) => {
+                if !(dpi.is_finite() && *dpi > 0.0) {
+                    return Err(OpError::range_error("density must be a positive number"));
+                }
+                output.density = Some(*dpi);
+            }
             _ => {}
         }
     }
@@ -883,25 +1243,21 @@ mod tests {
             Step::RemoveAlpha,
         ];
         for step in steps {
-            let out = pipeline(
-                image.clone(),
-                OpenOptions::default(),
-                std::slice::from_ref(&step),
-            );
+            let out = pipeline(image.clone(), OpenOptions::default(), vec![step.clone()]);
             assert!(out.is_ok(), "{step:?}");
         }
     }
 
     #[test]
     fn pages_defaults_to_one() {
-        let image = pipeline(png(4, 4), OpenOptions::default(), &[]).unwrap();
+        let image = pipeline(png(4, 4), OpenOptions::default(), vec![]).unwrap();
         assert_eq!(image.pages(), 1);
         let open = parse_open(Some(&Value::Object(vec![(
             "page".to_string(),
             Value::Number(1.0),
         )])))
         .unwrap();
-        assert!(pipeline(png(4, 4), open, &[]).is_err());
+        assert!(pipeline(png(4, 4), open, vec![]).is_err());
     }
 
     #[test]
@@ -909,16 +1265,12 @@ mod tests {
         let (out, _) = encode(
             png(40, 20),
             OpenOptions::default(),
-            &[step(vec![
+            vec![step(vec![
                 s("resize"),
                 Value::Number(10.0),
                 Value::Number(0.0),
             ])],
-            Output {
-                format: None,
-                quality: None,
-                lossless: false,
-            },
+            Output::default(),
         )
         .unwrap();
         let meta = Image::from_stream(Cursor::new(out))
@@ -930,7 +1282,7 @@ mod tests {
 
     #[test]
     fn grayscale_keeps_alpha() {
-        let image = pipeline(png(4, 4), OpenOptions::default(), &[Step::Grayscale]).unwrap();
+        let image = pipeline(png(4, 4), OpenOptions::default(), vec![Step::Grayscale]).unwrap();
         assert_eq!(image.metadata().unwrap().pixel, PixelFormat::GrayA8);
     }
 
@@ -939,18 +1291,251 @@ mod tests {
         let error = encode(
             b"not an image".to_vec(),
             OpenOptions::default(),
-            &[],
-            Output {
-                format: None,
-                quality: None,
-                lossless: false,
-            },
+            vec![],
+            Output::default(),
         )
         .unwrap_err();
         let Value::Object(fields) = failure(error) else {
             panic!()
         };
         assert_eq!(fields[0], ("error".to_string(), s("unsupported")));
+    }
+
+    fn object(fields: Vec<(&str, Value)>) -> Value {
+        Value::Object(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn parses_extend_trim_and_composite() {
+        assert_eq!(
+            step(vec![
+                s("extend"),
+                Value::Number(1.0),
+                Value::Number(2.0),
+                Value::Number(3.0),
+                Value::Number(4.0),
+                s("mirror"),
+            ]),
+            Step::Extend {
+                margins: [1, 2, 3, 4],
+                with: ExtendWith::Mirror,
+                background: [0, 0, 0, 255],
+            }
+        );
+        assert!(
+            parse_step(&Value::Array(vec![
+                s("extend"),
+                Value::Number(1.0),
+                Value::Number(1.0),
+                Value::Number(1.0),
+                Value::Number(1.0),
+                s("smear")
+            ]))
+            .is_err()
+        );
+        assert_eq!(
+            step(vec![
+                s("trim"),
+                Value::Null,
+                Value::Number(20.0),
+                Value::Bool(true)
+            ]),
+            Step::Trim {
+                background: None,
+                threshold: 20.0,
+                line_art: true,
+            }
+        );
+        assert!(
+            parse_step(&Value::Array(vec![
+                s("trim"),
+                Value::Null,
+                Value::Number(-1.0)
+            ]))
+            .is_err()
+        );
+
+        let overlay = |extra: Vec<(&str, Value)>| {
+            let mut fields = vec![("bytes", Value::Bytes(png(2, 2)))];
+            fields.extend(extra);
+            parse_step(&Value::Array(vec![
+                s("composite"),
+                Value::Array(vec![object(fields)]),
+            ]))
+        };
+        let Step::Composite(overlays) = overlay(vec![
+            ("blend", s("color-dodge")),
+            ("gravity", s("southeast")),
+            ("left", Value::Number(-3.0)),
+            ("top", Value::Number(4.0)),
+            ("tile", Value::Bool(true)),
+        ])
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(overlays[0].blend, Blend::ColourDodge);
+        assert_eq!(overlays[0].gravity, Position::SouthEast);
+        assert_eq!(overlays[0].offset, Some((-3, 4)));
+        assert!(overlays[0].tile);
+        assert!(overlay(vec![("blend", s("burn"))]).is_err());
+        assert!(overlay(vec![("left", Value::Number(1.0))]).is_err());
+        assert!(
+            parse_step(&Value::Array(vec![
+                s("composite"),
+                Value::Array(vec![object(vec![])])
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_encoder_options() {
+        let output = parse_output(Some(&object(vec![
+            ("format", s("jxl")),
+            ("quality", Value::Number(70.0)),
+            ("progressive", Value::Bool(true)),
+            ("effort", Value::Number(2.0)),
+            ("compressionLevel", Value::Number(9.0)),
+            ("colours", Value::Number(16.0)),
+            ("dither", Value::Number(0.5)),
+            ("alphaQuality", Value::Number(40.0)),
+            ("nearLossless", Value::Bool(true)),
+            ("chromaSubsampling", s("4:4:4")),
+            ("keepExif", Value::Bool(true)),
+            ("keepXmp", Value::Bool(true)),
+            ("xmp", Value::Bytes(b"<x/>".to_vec())),
+            ("density", Value::Number(300.0)),
+        ])))
+        .unwrap();
+        let o = output.options;
+        assert_eq!(output.format, Some(Format::Jxl));
+        assert_eq!(o.quality, 70);
+        assert!(o.progressive && o.near_lossless && o.keep_exif && o.keep_xmp);
+        assert_eq!(
+            (
+                o.effort,
+                o.compression_level,
+                o.colours,
+                o.dither,
+                o.alpha_quality
+            ),
+            (Some(2), Some(9), Some(16), Some(0.5), 40)
+        );
+        assert_eq!(o.chroma_subsampling, Some(ChromaSubsampling::Yuv444));
+        assert_eq!(output.xmp.as_deref(), Some(&b"<x/>"[..]));
+        assert_eq!(output.density, Some(300.0));
+        for bad in [
+            ("compressionLevel", Value::Number(10.0)),
+            ("colours", Value::Number(1.0)),
+            ("dither", Value::Number(2.0)),
+            ("chromaSubsampling", s("4:2:2")),
+            ("density", Value::Number(0.0)),
+        ] {
+            assert!(
+                parse_output(Some(&object(vec![bad.clone()]))).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extend_trim_and_composite_apply() {
+        let image = pipeline(
+            png(4, 4),
+            OpenOptions::default(),
+            vec![Step::Extend {
+                margins: [1, 2, 3, 4],
+                with: ExtendWith::Background,
+                background: [9, 9, 9, 255],
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                image.metadata().unwrap().width,
+                image.metadata().unwrap().height
+            ),
+            (10, 8)
+        );
+        let bordered = encode(
+            png(4, 4),
+            OpenOptions::default(),
+            vec![Step::Extend {
+                margins: [2, 2, 2, 2],
+                with: ExtendWith::Background,
+                background: [0, 0, 0, 255],
+            }],
+            Output::default(),
+        )
+        .unwrap()
+        .0;
+        let trimmed = pipeline(
+            bordered,
+            OpenOptions::default(),
+            vec![Step::Trim {
+                background: None,
+                threshold: 10.0,
+                line_art: false,
+            }],
+        )
+        .unwrap();
+        assert_eq!(trimmed.metadata().unwrap().width, 4);
+        assert_eq!(trimmed.trim_offset(), Some((2, 2)));
+        let composed = pipeline(
+            png(8, 8),
+            OpenOptions::default(),
+            vec![Step::Composite(vec![OverlayStep {
+                bytes: png(2, 2),
+                open: OpenOptions::default(),
+                steps: vec![Step::Flip],
+                blend: Blend::Multiply,
+                gravity: Position::Centre,
+                offset: Some((1, 1)),
+                tile: false,
+            }])],
+        )
+        .unwrap();
+        assert_eq!(composed.metadata().unwrap().width, 8);
+    }
+
+    #[test]
+    fn metadata_and_stats_report_sharp_fields() {
+        let image = pipeline(png(4, 4), OpenOptions::default(), vec![]).unwrap();
+        let Value::Object(fields) = metadata(&image).unwrap() else {
+            panic!()
+        };
+        let Value::Object(meta) = &fields[0].1 else {
+            panic!()
+        };
+        let keys: Vec<&str> = meta.iter().map(|(k, _)| k.as_str()).collect();
+        for key in [
+            "channels",
+            "orientation",
+            "isProgressive",
+            "isPalette",
+            "hasProfile",
+        ] {
+            assert!(keys.contains(&key), "{key}");
+        }
+        assert!(!keys.contains(&"density") && !keys.contains(&"trimOffsetLeft"));
+
+        let Value::Object(fields) = stats(&image).unwrap() else {
+            panic!()
+        };
+        let Value::Object(stats) = &fields[0].1 else {
+            panic!()
+        };
+        let Some((_, Value::Array(channels))) = stats.iter().find(|(k, _)| k == "channels") else {
+            panic!()
+        };
+        assert_eq!(channels.len(), 4);
+        // The helper fills alpha with 200 too, so the image is not opaque.
+        assert!(stats.contains(&("isOpaque".to_string(), Value::Bool(false))));
     }
 
     #[test]
@@ -960,7 +1545,7 @@ mod tests {
             Value::Number(100.0),
         )])))
         .unwrap();
-        let error = pipeline(png(20, 20), open, &[])
+        let error = pipeline(png(20, 20), open, vec![])
             .and_then(|i| i.metadata())
             .unwrap_err();
         assert_eq!(error.code().as_str(), "limit_exceeded");

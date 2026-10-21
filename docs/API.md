@@ -3319,7 +3319,7 @@ import { Image } from "runtime:images";
 import { file } from "runtime:fs";
 
 const image = new Image(await request.bytes());  // at most 268 MP unless maxPixels says otherwise
-await image.metadata();                    // { width, height, format, pixelFormat, hasAlpha, animation, pages }
+await image.metadata();                    // { width, height, format, pixelFormat, hasAlpha, … }
 const thumb = await image.resize(400, 400, { fit: "cover" }).webp({ quality: 80 }).bytes();
 await image.resize(1600).avif().write(file("public/large.avif"));
 ```
@@ -3366,9 +3366,37 @@ sent to several sizes.
 | `recomb(matrix)` | Mix channels through a 3×3 or 4×4 matrix of finite numbers. |
 | `ensureAlpha(alpha = 1)` | Add an alpha channel at `alpha` (0 to 1) if there is none. |
 | `removeAlpha()` | Drop the alpha channel without compositing. |
+| `extend(n \| { top?, right?, bottom?, left?, extendWith?, background? })` | Grow the canvas by `n` on every side, or by each margin given. `extendWith` fills the margin with `"background"` (default), `"copy"` (the edge, repeated), `"repeat"` or `"mirror"`; `background` defaults to opaque black, and a translucent one adds alpha. |
+| `trim({ background?, threshold?, lineArt? })` | Cut away a border near `background` (default: the top-left pixel's colour), within `threshold` (default `10`). `lineArt` keeps one-pixel lines. The chain before it runs in memory, so trim after shrinking. `margin` is a `TypeError`. |
+| `composite(overlays)` | Draw images over this one. See [Composite](#composite). |
 
 A colour is `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or
 `{ r, g, b, alpha }` with `alpha` from 0 to 1.
+
+### Composite
+
+`composite([...overlays])` draws each overlay in order, the first lowest, as
+sharp's does. Each is an object:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `input` | — | An `Image` (with its own chain and open options), or anything `new Image` takes. A `file()` is read when the terminal is called, under **FileRead**. |
+| `blend` | `"over"` | One of sharp's modes: `"clear"`, `"source"`, `"over"`, `"in"`, `"out"`, `"atop"`, `"dest"`, `"dest-over"`, `"dest-in"`, `"dest-out"`, `"dest-atop"`, `"xor"`, `"add"`, `"saturate"`, `"multiply"`, `"screen"`, `"overlay"`, `"darken"`, `"lighten"`, `"colour-dodge"`, `"colour-burn"`, `"hard-light"`, `"soft-light"`, `"difference"`, `"exclusion"` (`"color-dodge"` and `"color-burn"` too). |
+| `gravity` | `"center"` | Where the overlay sits: the same nine names as `position`. |
+| `left`, `top` | — | Its top-left corner, in pixels; may be negative. They take precedence over `gravity`. Give both or neither. |
+| `tile` | `false` | Repeat it across the image, aligned by `gravity` or starting at `left`/`top`. |
+
+The base and the overlays need not share a pixel format: an RGBA logo over an
+RGB photo stays RGB, and a mode that can erase (`"clear"`, `"dest-out"`, …)
+adds alpha. The bytes of every overlay are copied when the terminal is called,
+as the base's are.
+
+```js
+const watermarked = await new Image(photo)
+  .composite([{ input: file("logo.png"), gravity: "southeast" }])
+  .jpeg()
+  .bytes();
+```
 
 ### Resize options
 
@@ -3417,27 +3445,62 @@ the source's format. The format never comes from a destination's extension.
 
 | Method | Options | Notes |
 | --- | --- | --- |
-| `jpeg(options?)` | `quality` 1–100, default 80 | Baseline. `progressive` is a `TypeError`. Transparency is composited over black. |
-| `png(options?)` | — | 8- or 16-bit, as the pixels are. `compressionLevel`, `palette`, `colors` and `dither` are a `TypeError`. |
-| `webp(options?)` | `quality` 1–100, default 80; `lossless` | Lossy by default. Alpha is always lossless. |
-| `avif(options?)` | `quality` 1–100, default 80 | 8-bit 4:2:0. `lossless` is a `TypeError`. |
-| `gif()` | — | One frame, palette-quantized. |
+| `jpeg(options?)` | `quality` 1–100 (80); `progressive`; `chromaSubsampling` `"4:2:0"` or `"4:4:4"` | Baseline unless `progressive`. Chroma is 4:2:0 below quality 90 and 4:4:4 from it unless given. Transparency is composited over black. |
+| `png(options?)` | `compressionLevel` 0–9; `palette`; `colours` (or `colors`) 2–256 (256); `dither` 0–1 (1), or a boolean | 8- or 16-bit, as the pixels are. `colours` or `dither` implies `palette`. `progressive`, `quality` and `effort` are a `TypeError`. |
+| `webp(options?)` | `quality` 1–100 (80); `lossless`; `nearLossless`; `effort` 0–6 (4); `alphaQuality` 0–100 (100) | Lossy by default. `nearLossless` is lossless with small changes `quality` allows. |
+| `avif(options?)` | `quality` 1–100 (80); `chromaSubsampling` (`"4:2:0"`); `effort` 0–9 (4) | 8-bit. Unlike sharp, 4:2:0 by default. `lossless` is a `TypeError`. |
+| `gif(options?)` | `colours` (or `colors`) 2–256; `dither` 0–1, or a boolean | One frame, palette-quantized. |
 | `tiff()` | — | |
+| `jxl(options?)` | `quality` 1–100 (80); `lossless` | JPEG XL. Lossy (VarDCT) by default; an image with alpha is written lossless. `distance` and `effort` are a `TypeError`. |
 
-Every format decodes and encodes on every platform. JPEG input may be
-progressive; output is baseline.
+Every format decodes and encodes on every platform, JPEG XL included.
 
-### Terminals and `metadata()`
+### Metadata in the output
+
+EXIF and XMP are stripped from every output unless kept, which removes camera
+data and location from uploads. The ICC profile is always kept.
+
+| Method | Effect |
+| --- | --- |
+| `keepExif()` | Copy the source's EXIF into a JPEG, PNG, WebP, AVIF, TIFF or JPEG XL output. Once `autoOrient` has turned the pixels upright, its orientation says 1. |
+| `keepXmp()` | Copy the source's XMP. |
+| `keepMetadata()` | Both. |
+| `withXmp(xmp)` | Write the string `xmp` as the XMP packet, in place of the source's. |
+| `withMetadata({ density? })` | Keep both, and write `density` (pixels per inch) as the resolution: JPEG's JFIF header, PNG's `pHYs`, TIFF's tags. `orientation` is a `TypeError`. |
+
+### Terminals
 
 | Method | Resolves to |
 | --- | --- |
-| `metadata()` | `{ width, height, format, pixelFormat, hasAlpha, animation, pages }` at this point in the chain, read from the header without decoding pixels: `new Image(x).resize(400).metadata()` reports the resized size. `format` is the source's. `pixelFormat` is `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. `animation` is `{ frames, loop, durations }` (milliseconds per frame) or `null`. `pages` is how many pages the source document holds — always 1 except for TIFF. |
+| `metadata()` | The image at this point in the chain, read from headers without decoding pixels. See [Metadata](#metadata). |
+| `stats()` | sharp's pixel statistics of the result: `channels` (each `{ min, max, sum, squaresSum, mean, stdev, minX, minY, maxX, maxY }`, alpha included), `isOpaque`, `entropy`, `sharpness` and the `dominant` sRGB colour `{ r, g, b }`. It runs the chain. |
 | `bytes()` | The encoded image, a `Uint8Array`. |
-| `blob()` | A `Blob` whose `type` is the format's media type (`image/webp`, …). |
+| `blob()` | A `Blob` whose `type` is the format's media type (`image/webp`, `image/jxl`, …). |
 | `write(destination)` | Encodes into `destination`, a `runtime:fs` `file()`, and resolves to the number of bytes written. A path string is a `TypeError`. |
 
-EXIF and XMP are never written to an output, which also strips location data
-from uploads.
+### Metadata
+
+`metadata()` reports `width`, `height`, `pixelFormat`, `channels` and
+`hasAlpha` as the chain leaves them: `new Image(x).resize(400).metadata()`
+reports the resized size. Everything else is what the source file says about
+itself, under sharp's names, and a field the file does not state is absent.
+
+| Field | Description |
+| --- | --- |
+| `format` | The source's: `"jpeg"`, `"png"`, `"webp"`, `"avif"`, `"gif"`, `"tiff"` or `"jxl"`. |
+| `pixelFormat` | `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. |
+| `animation` | `{ frames, loop, durations }` (milliseconds per frame), or `null` for a still. |
+| `pages` | Pages in the source document; 1 except for TIFF. |
+| `trimOffsetLeft`, `trimOffsetTop` | After a `trim`: minus the left and top of the box kept, as sharp reports them. |
+| `orientation` | The EXIF orientation, 1–8. |
+| `bitsPerSample` | Bits per stored sample, which may be fewer than the pixel format holds (a 4-bit PNG). |
+| `density`, `resolutionUnit` | Pixels per inch, and `"inch"` or `"cm"` as the file states it. |
+| `isProgressive`, `isPalette` | Progressive JPEG or interlaced PNG/GIF; samples index a palette. |
+| `chromaSubsampling` | JPEG and AVIF: `"4:2:0"`, `"4:4:4"`, … |
+| `background` | The colour a PNG or GIF names: `{ r, g, b }` or `{ gray }`, in the file's own samples. |
+| `compression` | The scheme, where a format has several. |
+| `comments` | `[{ keyword, text }]`: PNG text chunks, JPEG and GIF comments. |
+| `hasProfile`, `icc`, `exif`, `xmp` | Whether there is an ICC profile, and the ICC, EXIF and XMP bytes as `Uint8Array`s. |
 
 ### Errors
 

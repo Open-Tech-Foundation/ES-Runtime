@@ -59,9 +59,25 @@ namespace) is unstable and may change between minor releases until the API freez
   with a filter writes only what it takes and still validates the whole
   archive. `level` (1–9, default 6) sets the gzip or deflate level. Globs
   compile in one place shared with `runtime:fs`'s `Glob`.
+- `runtime:images` moves to otf-pixels 0.5.0 and exposes what it added, under
+  sharp's names (DECISIONS D181): `composite([{ input, blend, gravity, left,
+  top, tile }])` with sharp's 25 blend modes, `extend`, `trim`, `stats()`,
+  `keepExif()`, `keepXmp()`, `keepMetadata()`, `withXmp()` and
+  `withMetadata({ density })`; JPEG XL input and `jxl()` output; JPEG
+  `progressive` and `chromaSubsampling`; PNG `compressionLevel`, `palette`,
+  `colours`/`colors` and `dither`; WebP `effort`, `alphaQuality` and
+  `nearLossless`; AVIF `effort` and `chromaSubsampling`; GIF `colours` and
+  `dither`. `metadata()` adds sharp's source fields (`orientation`,
+  `density`, `isProgressive`, `isPalette`, `exif`, `xmp`, `icc`, …), each
+  absent when the file does not state it, and `trimOffsetLeft`/`Top` after a
+  trim.
 
 ### Changed
 
+- `runtime:images`: `jpeg({ progressive })` and `png({ compressionLevel,
+  palette, colors, dither })`, previously a `TypeError`, now work.
+  `png({ progressive, quality, effort })`, `jxl({ distance, effort })`,
+  `trim({ margin })` and `withMetadata({ orientation })` are refused by name.
 - One `Jail` resolves every path the program names, for `runtime:fs`,
   `runtime:wasi` and `runtime:db` alike (DECISIONS D180). The two filesystems
   and the database VFS previously each held their own copy of the jail and the

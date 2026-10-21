@@ -196,7 +196,8 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
 | `img.dataurl()` | `` `data:image/webp;base64,${(await img.webp().bytes()).toBase64()}` `` | |
 | `new Response(img)` | `new Response(await img.bytes(), { headers: { "content-type": "image/webp" } })` | An `Image` is not a body yet. |
 | `img.width`, `img.height` after a terminal | `(await img.metadata()).width` | `metadata()` works at any point in a chain, before anything is encoded. |
-| `metadata()` → `{ width, height, format }` | `{ width, height, format, pixelFormat, hasAlpha, animation, pages }` | A superset. |
+| `metadata()` → `{ width, height, format }` | `{ width, height, format, pixelFormat, hasAlpha, animation, pages, … }` | A superset, with sharp's source fields. |
+| `jpeg({ progressive })`, `png({ compressionLevel, palette, colors, dither })` | The same | `dither` may also be sharp's level from 0 to 1. |
 
 #### Not available
 
@@ -204,8 +205,6 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
 | --- | --- |
 | `heic()`, HEIC input | No HEIC codec. Convert to AVIF or JPEG before upload. |
 | `placeholder()` | No ThumbHash yet. A tiny `resize(16).webp()` inlined as a data URL is the nearest. |
-| `jpeg({ progressive })` | Baseline JPEG only. The option is a `TypeError`. |
-| `png({ compressionLevel, palette, colors, dither })` | A `TypeError`. `gif()` writes a palette image. |
 | `mks2013`, `mks2021` filters | `"lanczos3"` (the default) or `"mitchell"`. |
 | `Bun.Image.fromClipboard()` and the clipboard helpers | None. A server has no clipboard. |
 | `Bun.Image.backend` | None. There is one backend. |
@@ -220,7 +219,12 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
   `modulate({ lightness })`, the adjustments `negate`, `gamma`, `linear`,
   `threshold`, `tint`, `greyscale`, `recomb`, `ensureAlpha` and `removeAlpha`,
   and multi-page TIFF (`page`, `metadata().pages`).
-- `gif()` and `tiff()` output.
+- `composite`, `extend`, `trim` and `stats()`, with sharp's options.
+- `keepExif`, `keepXmp`, `keepMetadata`, `withXmp` and `withMetadata({ density })`.
+- sharp's encoder options: JPEG `chromaSubsampling`, WebP `effort`,
+  `alphaQuality` and `nearLossless`, AVIF `effort` and `chromaSubsampling`,
+  GIF `colours` and `dither`.
+- `gif()`, `tiff()` and `jxl()` output, and JPEG XL input.
 - AVIF and TIFF on Linux, where Bun has neither.
 - The `toSrgb` and `animated` options.
 

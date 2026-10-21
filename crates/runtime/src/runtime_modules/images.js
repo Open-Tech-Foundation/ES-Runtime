@@ -68,11 +68,47 @@ const ERROR_CODES = {
   limit_exceeded: "ERR_IMAGE_TOO_MANY_PIXELS",
 };
 
-// Bun options Pixels has no encoder support for. Refused by name rather than
-// ignored, so a program ported from Bun learns at the call, not from the file.
+// sharp's 25 blend modes; the colour ones in both spellings.
+const BLENDS = new Set([
+  "clear",
+  "source",
+  "over",
+  "in",
+  "out",
+  "atop",
+  "dest",
+  "dest-over",
+  "dest-in",
+  "dest-out",
+  "dest-atop",
+  "xor",
+  "add",
+  "saturate",
+  "multiply",
+  "screen",
+  "overlay",
+  "darken",
+  "lighten",
+  "colour-dodge",
+  "color-dodge",
+  "colour-burn",
+  "color-burn",
+  "hard-light",
+  "soft-light",
+  "difference",
+  "exclusion",
+]);
+const EXTEND_WITH = new Set(["background", "copy", "repeat", "mirror"]);
+const CHROMA = new Set(["4:2:0", "4:4:4"]);
+
+// sharp options Pixels has no support for. Refused by name rather than
+// ignored, so a program ported from sharp learns at the call, not from the file.
 const UNSUPPORTED_OPTIONS = {
-  jpeg: ["progressive"],
-  png: ["compressionLevel", "palette", "colors", "dither"],
+  png: ["progressive", "quality", "effort"],
+  avif: ["lossless"],
+  jxl: ["distance", "effort"],
+  trim: ["margin"],
+  withMetadata: ["orientation"],
 };
 
 function fail(result) {
@@ -109,7 +145,7 @@ function sourceOf(input) {
   if (typeof input === "string" || input instanceof URL) {
     throw new TypeError("an Image takes bytes, a Blob or a file(); pass file(path) from runtime:fs to read a file");
   }
-  if (isFile(input)) return { path: input[FILE_BODY]() };
+  if (isFile(input)) return { path: input[FILE_BODY](), file: input };
   if (input instanceof Blob) return { bytes: input[BLOB_BYTES]() };
   let buffer;
   if (input instanceof ArrayBuffer) buffer = input;
@@ -203,10 +239,82 @@ function linearSide(value, what) {
   throw new TypeError(`${what} must be a number or three numbers`);
 }
 
-function refuseUnsupported(format, o) {
-  for (const key of UNSUPPORTED_OPTIONS[format] ?? []) {
-    if (o[key] !== undefined) throw new TypeError(`${format}({ ${key} }) is not supported`);
+function refuseUnsupported(method, o) {
+  for (const key of UNSUPPORTED_OPTIONS[method] ?? []) {
+    if (o[key] !== undefined) throw new TypeError(`${method}({ ${key} }) is not supported`);
   }
+}
+
+function integer(value, what, min, max) {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new RangeError(`${what} must be an integer from ${min} to ${max}`);
+  }
+  return value;
+}
+
+function chroma(value) {
+  if (value === undefined) return undefined;
+  if (!CHROMA.has(value)) throw new TypeError('chromaSubsampling must be "4:2:0" or "4:4:4"');
+  return value;
+}
+
+// A palette's size and dithering, shared by png() and gif(). `colors` is
+// sharp's other spelling and Bun's only one; Bun's `dither` is a boolean,
+// sharp's a level from 0 to 1, and both are taken.
+function paletteOptions(o, what) {
+  if (o.colours !== undefined && o.colors !== undefined && o.colours !== o.colors) {
+    throw new TypeError(`${what}: colours and colors disagree`);
+  }
+  const out = {};
+  const colours = integer(o.colours ?? o.colors, "colours", 2, 256);
+  if (colours !== undefined) out.colours = colours;
+  if (typeof o.dither === "boolean") out.dither = o.dither ? 1 : 0;
+  else if (o.dither !== undefined) {
+    if (typeof o.dither !== "number" || !(o.dither >= 0 && o.dither <= 1)) {
+      throw new RangeError("dither must be from 0 to 1, or a boolean");
+    }
+    out.dither = o.dither;
+  }
+  return out;
+}
+
+// Copies an option object, leaving out what is undefined.
+function defined(object) {
+  return Object.fromEntries(Object.entries(object).filter(([, v]) => v !== undefined));
+}
+
+function integerOffset(value, what) {
+  if (!Number.isInteger(value)) throw new TypeError(`${what} must be an integer`);
+  return value;
+}
+
+function margin(value, what) {
+  if (value === undefined) return 0;
+  return offset(value, what);
+}
+
+// An overlay as `composite` records it: its pipeline (an Image's, or a new
+// one's) and sharp's placement options. Resolved to bytes at the terminal.
+function overlayOf(entry) {
+  const o = optionsObject(entry, "composite");
+  if (!("input" in o)) throw new TypeError("a composite overlay needs an input");
+  const image = o.input instanceof Image ? o.input : new Image(o.input);
+  const blend = o.blend ?? "over";
+  if (!BLENDS.has(blend)) throw new TypeError(`blend must be one of ${[...BLENDS].join(", ")}`);
+  const gravity = o.gravity ?? "center";
+  if (!POSITIONS.has(gravity)) {
+    throw new TypeError("gravity must be center, north, northeast, east, southeast, south, southwest, west or northwest");
+  }
+  if ((o.left === undefined) !== (o.top === undefined)) {
+    throw new TypeError("a composite overlay needs both left and top, or neither");
+  }
+  const placement = { blend, gravity, tile: Boolean(o.tile) };
+  if (o.left !== undefined) {
+    placement.left = integerOffset(o.left, "left");
+    placement.top = integerOffset(o.top, "top");
+  }
+  return { image, placement };
 }
 
 const MIME = {
@@ -216,6 +324,7 @@ const MIME = {
   avif: "image/avif",
   gif: "image/gif",
   tiff: "image/tiff",
+  jxl: "image/jxl",
 };
 
 /**
@@ -227,33 +336,77 @@ export class Image {
   #open;
   #steps;
   #output;
+  #keep;
 
   /**
    * `input` is a Uint8Array, an ArrayBuffer, any view, a Blob, or a
    * runtime:fs `file()`. Options: `maxPixels` (268 MP), `autoOrient` (true),
    * `toSrgb` (true), `animated` (false), `page` (0: the first page of a
-   * multi-page TIFF).
+   * multi-page TIFF). JPEG, PNG, WebP, AVIF, GIF, TIFF and JPEG XL are
+   * read.
    */
   constructor(input, options) {
     if (input === DERIVE) {
-      [this.#source, this.#open, this.#steps, this.#output] = options;
+      [this.#source, this.#open, this.#steps, this.#output, this.#keep] = options;
       return;
     }
     this.#source = sourceOf(input);
     this.#open = openOptions(options);
     this.#steps = [];
     this.#output = null;
+    this.#keep = {};
   }
 
-  #with(step, output = this.#output) {
+  #with(step, output = this.#output, keep = this.#keep) {
     const steps = step === null ? this.#steps : [...this.#steps, step];
-    return new Image(DERIVE, [this.#source, this.#open, steps, output]);
+    return new Image(DERIVE, [this.#source, this.#open, steps, output, keep]);
+  }
+
+  #keeping(keep) {
+    return this.#with(null, this.#output, { ...this.#keep, ...keep });
+  }
+
+  // The steps with each composite overlay resolved to `{ bytes, open, steps }`
+  // and its placement. A file() overlay is read here, through runtime:fs, so
+  // it needs FileRead exactly as reading that file would; the op itself then
+  // reads nothing but its own source. Every byte source is copied (and every
+  // file read started) synchronously, so the bytes used are the ones there
+  // when the terminal was called, as without overlays.
+  #snapshotSteps(pending) {
+    return this.#steps.map((step) => {
+      if (step[0] !== "composite") return step;
+      return ["composite", step[1].map(({ image, placement }) => image.#snapshot(pending, placement))];
+    });
+  }
+
+  // `placement` is filled in, not spread, so a file's bytes land in the
+  // object the op receives.
+  #snapshot(pending, placement) {
+    const source = this.#source;
+    const overlay = { ...placement, open: this.#open, steps: this.#snapshotSteps(pending) };
+    if (source.file !== undefined) {
+      pending.push(source.file.bytes().then((bytes) => (overlay.bytes = bytes)));
+    } else {
+      overlay.bytes = source.bytes.slice();
+    }
+    return overlay;
   }
 
   #call(kind, ...rest) {
     const fromFile = this.#source.path !== undefined;
     const name = `image_${kind}${fromFile ? "_file" : ""}`;
-    return ops[name](fromFile ? this.#source.path : this.#source.bytes, this.#open, this.#steps, ...rest);
+    const invoke = (source, steps) => ops[name](source, this.#open, steps, ...rest);
+    if (!this.#steps.some((step) => step[0] === "composite")) {
+      return invoke(fromFile ? this.#source.path : this.#source.bytes, this.#steps);
+    }
+    const pending = [];
+    const steps = this.#snapshotSteps(pending);
+    const source = fromFile ? this.#source.path : this.#source.bytes.slice();
+    return Promise.all(pending).then(() => invoke(source, steps));
+  }
+
+  #encoding() {
+    return { ...this.#output, ...this.#keep };
   }
 
   /**
@@ -460,35 +613,168 @@ export class Image {
     return this.#with(["removeAlpha"]);
   }
 
-  /** Encode as JPEG. `quality` 1–100, default 80. */
+  /**
+   * Grow the canvas: `n` pixels on every side, or `{ top, right, bottom,
+   * left }`. `extendWith` fills the margin with `"background"` (default),
+   * `"copy"` (the edge), `"repeat"` or `"mirror"`; `background` defaults to
+   * opaque black, and a translucent one adds alpha.
+   */
+  extend(extend) {
+    if (typeof extend === "number") {
+      const n = offset(extend, "extend");
+      return this.#with(["extend", n, n, n, n, "background", [0, 0, 0, 255]]);
+    }
+    const o = optionsObject(extend, "extend");
+    const extendWith = o.extendWith ?? "background";
+    if (!EXTEND_WITH.has(extendWith)) {
+      throw new TypeError("extendWith must be background, copy, repeat or mirror");
+    }
+    return this.#with([
+      "extend",
+      margin(o.top, "top"),
+      margin(o.right, "right"),
+      margin(o.bottom, "bottom"),
+      margin(o.left, "left"),
+      extendWith,
+      o.background === undefined ? [0, 0, 0, 255] : colour(o.background, "background"),
+    ]);
+  }
+
+  /**
+   * Cut away a border near `background` (default: the top-left pixel's
+   * colour), within `threshold` (default 10). `lineArt` keeps one-pixel
+   * lines. Runs the chain before it in memory, so trim after shrinking.
+   */
+  trim(options) {
+    const o = optionsObject(options, "trim");
+    refuseUnsupported("trim", o);
+    const threshold = finite(o.threshold ?? 10, "threshold");
+    if (threshold < 0) throw new RangeError("threshold must not be negative");
+    const background = o.background === undefined ? null : colour(o.background, "background");
+    return this.#with(["trim", background, threshold, Boolean(o.lineArt)]);
+  }
+
+  /**
+   * Draw images over this one, the first lowest. Each is `{ input, blend,
+   * gravity, left, top, tile }`: `input` an Image or what one takes, `blend`
+   * one of sharp's modes (default "over"), `gravity` where it sits (default
+   * "center") unless `left` and `top` place it, and `tile` repeats it.
+   */
+  composite(overlays) {
+    if (!Array.isArray(overlays)) throw new TypeError("composite takes an array of overlays");
+    return this.#with(["composite", overlays.map(overlayOf)]);
+  }
+
+  /** Copy the source's EXIF into the output, which strips it by default. */
+  keepExif() {
+    return this.#keeping({ keepExif: true });
+  }
+
+  /** Copy the source's XMP into the output, which strips it by default. */
+  keepXmp() {
+    return this.#keeping({ keepXmp: true });
+  }
+
+  /** Copy the source's EXIF and XMP. The ICC profile is always kept. */
+  keepMetadata() {
+    return this.#keeping({ keepExif: true, keepXmp: true });
+  }
+
+  /** Write `xmp`, an XMP packet, in place of the source's. */
+  withXmp(xmp) {
+    if (typeof xmp !== "string") throw new TypeError("withXmp takes a string");
+    return this.#keeping({ keepXmp: true, xmp: new TextEncoder().encode(xmp) });
+  }
+
+  /** Keep EXIF and XMP, and with `density` write that resolution in DPI. */
+  withMetadata(options) {
+    const o = optionsObject(options, "withMetadata");
+    refuseUnsupported("withMetadata", o);
+    const keep = { keepExif: true, keepXmp: true };
+    if (o.density !== undefined) {
+      if (finite(o.density, "density") <= 0) throw new RangeError("density must be positive");
+      keep.density = o.density;
+    }
+    return this.#keeping(keep);
+  }
+
+  /**
+   * Encode as JPEG: `quality` 1–100 (default 80), `progressive`, and
+   * `chromaSubsampling` ("4:2:0", or "4:4:4"; by default 4:4:4 from
+   * quality 90).
+   */
   jpeg(options) {
     const o = optionsObject(options, "jpeg");
-    refuseUnsupported("jpeg", o);
-    return this.#with(null, { format: "jpeg", quality: quality(o.quality) });
+    return this.#with(
+      null,
+      defined({
+        format: "jpeg",
+        quality: quality(o.quality),
+        progressive: o.progressive === undefined ? undefined : Boolean(o.progressive),
+        chromaSubsampling: chroma(o.chromaSubsampling),
+      }),
+    );
   }
 
-  /** Encode as PNG. */
+  /**
+   * Encode as PNG: `compressionLevel` 0–9, or a palette image with
+   * `palette`, `colours` (2–256) and `dither` (0–1); either of the last two
+   * implies a palette.
+   */
   png(options) {
-    refuseUnsupported("png", optionsObject(options, "png"));
-    return this.#with(null, { format: "png" });
+    const o = optionsObject(options, "png");
+    refuseUnsupported("png", o);
+    return this.#with(
+      null,
+      defined({
+        format: "png",
+        compressionLevel: integer(o.compressionLevel, "compressionLevel", 0, 9),
+        palette: o.palette === undefined ? undefined : Boolean(o.palette),
+        ...paletteOptions(o, "png"),
+      }),
+    );
   }
 
-  /** Encode as WebP: lossy at `quality` (default 80), or `lossless`. */
+  /**
+   * Encode as WebP: lossy at `quality` (default 80), or `lossless`, or
+   * `nearLossless`; `effort` 0–6 (default 4) and lossy `alphaQuality` 0–100.
+   */
   webp(options) {
     const o = optionsObject(options, "webp");
-    return this.#with(null, { format: "webp", quality: quality(o.quality), lossless: Boolean(o.lossless) });
+    return this.#with(
+      null,
+      defined({
+        format: "webp",
+        quality: quality(o.quality),
+        lossless: Boolean(o.lossless),
+        nearLossless: o.nearLossless === undefined ? undefined : Boolean(o.nearLossless),
+        effort: integer(o.effort, "effort", 0, 6),
+        alphaQuality: integer(o.alphaQuality, "alphaQuality", 0, 100),
+      }),
+    );
   }
 
-  /** Encode as AVIF (8-bit 4:2:0) at `quality`, default 80. */
+  /**
+   * Encode as 8-bit AVIF at `quality` (default 80): `chromaSubsampling`
+   * "4:2:0" (default) or "4:4:4", and `effort` 0–9 (default 4).
+   */
   avif(options) {
     const o = optionsObject(options, "avif");
-    if (o.lossless) throw new TypeError("avif({ lossless }) is not supported");
-    return this.#with(null, { format: "avif", quality: quality(o.quality) });
+    refuseUnsupported("avif", o);
+    return this.#with(
+      null,
+      defined({
+        format: "avif",
+        quality: quality(o.quality),
+        chromaSubsampling: chroma(o.chromaSubsampling),
+        effort: integer(o.effort, "effort", 0, 9),
+      }),
+    );
   }
 
-  /** Encode as a single-frame GIF. */
-  gif() {
-    return this.#with(null, { format: "gif" });
+  /** Encode as a single-frame GIF of `colours` (2–256) with `dither` (0–1). */
+  gif(options) {
+    return this.#with(null, { format: "gif", ...paletteOptions(optionsObject(options, "gif"), "gif") });
   }
 
   /** Encode as TIFF. */
@@ -496,24 +782,44 @@ export class Image {
     return this.#with(null, { format: "tiff" });
   }
 
+  /** Encode as JPEG XL: lossy at `quality` (default 80), or `lossless`. */
+  jxl(options) {
+    const o = optionsObject(options, "jxl");
+    refuseUnsupported("jxl", o);
+    return this.#with(null, defined({ format: "jxl", quality: quality(o.quality), lossless: Boolean(o.lossless) }));
+  }
+
   /**
-   * `{ width, height, format, pixelFormat, hasAlpha, animation, pages }` at
-   * this point in the chain, read from the header without decoding pixels.
-   * `format` is the source's; `animation` is `{ frames, loop, durations }`
-   * or null; `pages` counts the source document's pages (1 except for TIFF).
+   * The image at this point in the chain, read from headers without
+   * decoding pixels: `width`, `height`, `pixelFormat`, `channels` and
+   * `hasAlpha` as the chain leaves it, `trimOffsetLeft`/`trimOffsetTop`
+   * after a trim, and what the source says about itself under sharp's
+   * names — `format`, `animation`, `pages`, `orientation`, `density`,
+   * `isProgressive`, `isPalette`, `icc`, `exif`, `xmp` and the rest. A
+   * field the file does not state is absent.
    */
   async metadata() {
     return settle(await this.#call("metadata"));
   }
 
+  /**
+   * sharp's pixel statistics of the result: per channel `min`, `max`,
+   * `sum`, `squaresSum`, `mean`, `stdev` and where the extremes are, and
+   * `isOpaque`, `entropy`, `sharpness` and the `dominant` colour. Runs the
+   * chain.
+   */
+  async stats() {
+    return settle(await this.#call("stats"));
+  }
+
   /** The encoded image. Without a format method, in the source's format. */
   async bytes() {
-    return settle(await this.#call("encode", this.#output)).bytes;
+    return settle(await this.#call("encode", this.#encoding())).bytes;
   }
 
   /** The encoded image as a Blob whose `type` is its media type. */
   async blob() {
-    const { bytes, format } = settle(await this.#call("encode", this.#output));
+    const { bytes, format } = settle(await this.#call("encode", this.#encoding()));
     return new Blob([bytes], { type: MIME[format] });
   }
 
@@ -526,7 +832,7 @@ export class Image {
     if (!isFile(destination)) {
       throw new TypeError("write takes a file() from runtime:fs");
     }
-    return settle(await this.#call("write", this.#output, destination[FILE_BODY]()));
+    return settle(await this.#call("write", this.#encoding(), destination[FILE_BODY]()));
   }
 
   get [Symbol.toStringTag]() {
