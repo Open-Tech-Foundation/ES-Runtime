@@ -8,10 +8,9 @@
 //! guest reaching a file goes through exactly the same two checks — the
 //! capability, then the jail — as `runtime:fs` does.
 //!
-//! The jail is the async one's, not a weaker copy of it: every content-bearing
-//! operation resolves through [`confine`](crate::system_fs::confine) and then
-//! **pins** the parent directory open (see [`crate::anchor`]), acting by
-//! descriptor. A path checked and then used by name is two lookups the
+//! The jail is the async one's — the same [`Jail`] value, not a copy of it
+//! (D180): every content-bearing operation resolves through it and then
+//! **pins** the parent directory open, acting by descriptor. A path checked and then used by name is two lookups the
 //! filesystem can change between, so this door follows none of them: a
 //! component swapped for a symlink after the check is refused, never followed.
 
@@ -24,13 +23,9 @@ use es_runtime_providers::{
     DirEntry, FileStat, ProviderError, SyncFd, SyncFileSystem, SyncOpenOptions, SyncWhence,
 };
 
-use crate::anchor::{Anchored, OpenMode, anchor};
-use crate::path;
-use crate::path_allowlist::{Access, PathAllowlist};
-use crate::refusal::Refusal;
-use crate::system_fs::{
-    confine, file_stat, reject_empty, reject_root_mutation, reject_trailing_slash_on_a_file,
-};
+use crate::jail::{Jail, OpenMode};
+use crate::path_allowlist::Access;
+use crate::system_fs::file_stat;
 
 /// What a handle refers to. A directory is kept as a path rather than an OS
 /// handle: WASI uses directory fds only as anchors for path resolution, and
@@ -40,172 +35,32 @@ enum Handle {
     Dir(PathBuf),
 }
 
-/// A [`SyncFileSystem`] over the real OS, jailed to `root`. Relative paths
-/// resolve against `base` (the runtime's working directory).
+/// A [`SyncFileSystem`] over the real OS, reaching only what its [`Jail`]
+/// admits — the same jail as the async filesystem's, not a copy of it.
 pub struct SystemSyncFileSystem {
-    base: PathBuf,
-    root: PathBuf,
+    jail: Arc<Jail>,
     /// Open handles. A `Mutex` because the trait is `Sync`; contention is nil in
     /// practice (the runtime drives one thread).
     open: Mutex<HashMap<SyncFd, Handle>>,
     next_fd: Mutex<SyncFd>,
-    /// Paths reads / writes may touch (`--allow-read` / `--allow-write`, D38).
-    /// `None` ⇒ anywhere inside the root jail. The same lists the async
-    /// filesystem holds: `runtime:fs` and `runtime:wasi` are two doors onto one
-    /// filesystem, and a policy that differed between them would be a bug
-    /// wearing a feature's clothes.
-    allow_read: Option<Arc<PathAllowlist>>,
-    allow_write: Option<Arc<PathAllowlist>>,
-    /// The roots each access kind may resolve under — the jail, plus anything
-    /// the command line named outside it (D54). Same lists as the async
-    /// filesystem's, for the same reason the allowlists are shared.
-    read_roots: Vec<PathBuf>,
-    write_roots: Vec<PathBuf>,
 }
 
 impl SystemSyncFileSystem {
-    /// Builds a jailed synchronous filesystem: relative paths resolve under
-    /// `base`, every access is confined to the canonicalized `root`.
+    /// A synchronous filesystem over a fresh jail: relative paths resolve under
+    /// `base`, every access is confined to `root`. For scope lists, build the
+    /// [`Jail`] and use [`with_jail`](Self::with_jail).
     pub fn new(base: impl AsRef<Path>, root: impl AsRef<Path>) -> Self {
-        let root =
-            path::canonicalize(root.as_ref()).unwrap_or_else(|_| root.as_ref().to_path_buf());
+        Self::with_jail(Arc::new(Jail::new(base, root)))
+    }
+
+    /// A synchronous filesystem over `jail` — pass the async filesystem's, so
+    /// `runtime:fs` and `runtime:wasi` are two doors onto one policy.
+    pub fn with_jail(jail: Arc<Jail>) -> Self {
         SystemSyncFileSystem {
-            base: base.as_ref().to_path_buf(),
-            read_roots: vec![root.clone()],
-            write_roots: vec![root.clone()],
-            root,
+            jail,
             open: Mutex::new(HashMap::new()),
             next_fd: Mutex::new(1),
-            allow_read: None,
-            allow_write: None,
         }
-    }
-
-    /// Scopes reads to `allow` — `esrun --allow-read=<paths>` (D38). An entry
-    /// inside the jail narrows it; one outside adds that subtree (D54).
-    #[must_use]
-    pub fn with_read_allowlist(mut self, allow: PathAllowlist) -> Self {
-        self.read_roots = crate::system_fs::roots_with(&self.root, &allow);
-        self.allow_read = Some(Arc::new(allow));
-        self
-    }
-
-    /// Scopes writes to `allow` — `esrun --allow-write=<paths>` (D38).
-    #[must_use]
-    pub fn with_write_allowlist(mut self, allow: PathAllowlist) -> Self {
-        self.write_roots = crate::system_fs::roots_with(&self.root, &allow);
-        self.allow_write = Some(Arc::new(allow));
-        self
-    }
-
-    /// The roots an access of this kind may resolve under.
-    fn roots(&self, access: Access) -> &[PathBuf] {
-        match access {
-            Access::Read => &self.read_roots,
-            Access::Write => &self.write_roots,
-        }
-    }
-
-    /// Applies the scope list to an already-resolved path — after
-    /// canonicalization, never before, or a symlink walks out of the list.
-    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, Refusal> {
-        let list = match access {
-            Access::Read => self.allow_read.as_deref(),
-            Access::Write => self.allow_write.as_deref(),
-        };
-        match list {
-            Some(allow) => allow.check(&real, access).map(|()| real),
-            None => Ok(real),
-        }
-    }
-
-    /// Resolves `p` against `base` and confines it to `root`. Re-canonicalizes on
-    /// every call, exactly as the async jail does: caching a validated path would
-    /// let a later symlink swap escape it.
-    fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
-        let raw = reject_empty(p)?;
-        let abs = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            self.base.join(raw)
-        };
-        // The refusals name what the program wrote, never the canonical path
-        // they were decided on (D141); and the trailing-separator check, which
-        // stats the target, waits until the scope list has admitted it.
-        let resolved = confine(&abs, self.roots(access))
-            .and_then(|resolved| reject_root_mutation(resolved, self.roots(access), access))
-            .and_then(|resolved| self.scoped(resolved, access))
-            .map_err(|refused| refused.named(p))?;
-        reject_trailing_slash_on_a_file(p, &resolved)?;
-        Ok(resolved)
-    }
-
-    /// The three refusals every resolution passes, in order — the jail, the
-    /// root-mutation guard, the scope list — on an absolute path. The same as
-    /// [`SystemFileSystem::admit`](crate::system_fs::SystemFileSystem), so both
-    /// doors agree on what is reachable.
-    fn admit(&self, abs: &Path, access: Access) -> Result<PathBuf, Refusal> {
-        let resolved = confine(abs, self.roots(access))?;
-        self.scoped(
-            reject_root_mutation(resolved, self.roots(access), access)?,
-            access,
-        )
-    }
-
-    /// Like [`jailed`](Self::jailed) but without resolving the **final**
-    /// component: the parent chain is canonicalized and confined, then the last
-    /// name is reattached literally.
-    ///
-    /// `mkdir`, `remove` and `rename` need this. Removing or renaming a symlink
-    /// is about the link, not what it points at: resolving the whole path would
-    /// delete the file at the other end, or refuse a link that points out of the
-    /// jail rather than removing the link. The parent is still fully resolved
-    /// and jailed, so the name being acted on is provably inside the root.
-    fn jailed_nofollow(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
-        let raw = reject_empty(p)?;
-        let abs = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            self.base.join(raw)
-        };
-        // A path that names a **root itself** — `.`, `./`, `data/..`, or the
-        // root's own absolute path — has no parent this may resolve: resolved
-        // whole instead, which is also where the root-mutation guard lives.
-        if let Ok(real) = path::canonicalize(&abs)
-            && self.roots(access).contains(&real)
-        {
-            return reject_root_mutation(real, self.roots(access), access)
-                .and_then(|real| self.scoped(real, access))
-                .map_err(|refused| refused.named(p));
-        }
-        let (parent, name) = match (abs.parent(), abs.file_name()) {
-            (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
-            // No final component to hold back (a bare root); fall through.
-            _ => return self.admit(&abs, access).map_err(|refused| refused.named(p)),
-        };
-        let resolved = confine(&parent, self.roots(access))
-            .map(|parent| parent.join(name))
-            .and_then(|resolved| reject_root_mutation(resolved, self.roots(access), access))
-            .and_then(|resolved| self.scoped(resolved, access))
-            .map_err(|refused| refused.named(p))?;
-        reject_trailing_slash_on_a_file(p, &resolved)?;
-        Ok(resolved)
-    }
-
-    /// A jailed path **pinned to the directory it resolved in** — the async
-    /// jail's anchoring, so a component swapped for a symlink between the check
-    /// and the syscall cannot point the operation out of the root. The check's
-    /// answer is only real if the syscall acts where the check looked.
-    fn anchored(&self, p: &str, access: Access) -> Result<Anchored, ProviderError> {
-        let real = self.jailed(p, access)?;
-        anchor(&real, self.roots(access), p)
-    }
-
-    /// [`anchored`](Self::anchored) without resolving the final component — for
-    /// an operation about the link rather than what it points at.
-    fn anchored_nofollow(&self, p: &str, access: Access) -> Result<Anchored, ProviderError> {
-        let real = self.jailed_nofollow(p, access)?;
-        anchor(&real, self.roots(access), p)
     }
 
     /// Runs `f` against the handle for `fd`, holding the table lock for the call.
@@ -256,11 +111,12 @@ impl SyncFileSystem for SystemSyncFileSystem {
         // is `openat` against that descriptor with `O_NOFOLLOW` at the final
         // name, so a component swapped for a symlink between the check and the
         // call cannot point the open somewhere the check did not agree to.
-        let anchored = self.anchored(path, access)?;
+        let anchored = self.jail.anchored(path, access)?;
         if writes && options.read {
             // A handle that also reads needs the read scope too, and the
             // fd-based `read` below has no path left to re-check it against.
-            self.scoped(anchored.path().to_path_buf(), Access::Read)
+            self.jail
+                .scoped(anchored.path().to_path_buf(), Access::Read)
                 .map_err(|refused| refused.named(path))?;
         }
 
@@ -337,13 +193,13 @@ impl SyncFileSystem for SystemSyncFileSystem {
     }
 
     fn stat(&self, path: &str) -> Result<FileStat, ProviderError> {
-        let resolved = self.jailed(path, Access::Read)?;
+        let resolved = self.jail.jailed(path, Access::Read)?;
         let meta = std::fs::metadata(&resolved).map_err(|e| io(path, e))?;
         Ok(file_stat(&meta))
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, ProviderError> {
-        let resolved = self.jailed(path, Access::Read)?;
+        let resolved = self.jail.jailed(path, Access::Read)?;
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&resolved).map_err(|e| io(path, e))? {
             let entry = entry.map_err(|e| io(path, e))?;
@@ -359,25 +215,29 @@ impl SyncFileSystem for SystemSyncFileSystem {
     }
 
     fn mkdir(&self, path: &str) -> Result<(), ProviderError> {
-        self.anchored_nofollow(path, Access::Write)?.mkdir()
+        self.jail.anchored_nofollow(path, Access::Write)?.mkdir()
     }
 
     fn remove_file(&self, path: &str) -> Result<(), ProviderError> {
         // Not `jailed`: removing a symlink removes the link, so the final
         // component must not be resolved — otherwise this would be a decision
         // about the file at the other end of it.
-        self.anchored_nofollow(path, Access::Write)?.unlink(false)
+        self.jail
+            .anchored_nofollow(path, Access::Write)?
+            .unlink(false)
     }
 
     fn remove_dir(&self, path: &str) -> Result<(), ProviderError> {
-        self.anchored_nofollow(path, Access::Write)?.unlink(true)
+        self.jail
+            .anchored_nofollow(path, Access::Write)?
+            .unlink(true)
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), ProviderError> {
         // Both ends pinned, and neither final component resolved: renaming a
         // symlink moves the link.
-        let from = self.anchored_nofollow(from, Access::Write)?;
-        let to = self.anchored_nofollow(to, Access::Write)?;
+        let from = self.jail.anchored_nofollow(from, Access::Write)?;
+        let to = self.jail.anchored_nofollow(to, Access::Write)?;
         from.rename_to(&to)
     }
 }
@@ -385,6 +245,7 @@ impl SyncFileSystem for SystemSyncFileSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::path_allowlist::PathAllowlist;
     use es_runtime_common::ErrorCode;
 
     fn fs_in(name: &str) -> (SystemSyncFileSystem, PathBuf) {
@@ -454,9 +315,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("data")).unwrap();
         std::fs::write(dir.join("data/ok.txt"), b"fine").unwrap();
         std::fs::write(dir.join("secrets.env"), b"TOKEN=1").unwrap();
-        let fs = SystemSyncFileSystem::new(&dir, &dir)
-            .with_read_allowlist(PathAllowlist::parse(["data"], &dir).unwrap())
-            .with_write_allowlist(PathAllowlist::parse(["out"], &dir).unwrap());
+        let fs = SystemSyncFileSystem::with_jail(Arc::new(
+            Jail::new(&dir, &dir)
+                .with_read_allowlist(PathAllowlist::parse(["data"], &dir).unwrap())
+                .with_write_allowlist(PathAllowlist::parse(["out"], &dir).unwrap()),
+        ));
 
         let opts = SyncOpenOptions {
             read: true,
@@ -648,8 +511,10 @@ mod tests {
         let (_, dir) = fs_in("spelling");
         std::fs::create_dir_all(dir.join("data")).unwrap();
         let root = crate::path::canonicalize(&dir).unwrap();
-        let fs = SystemSyncFileSystem::new(&root, &root)
-            .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap());
+        let fs = SystemSyncFileSystem::with_jail(Arc::new(
+            Jail::new(&root, &root)
+                .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap()),
+        ));
         for (written, err) in [
             ("../x", fs.stat("../x").err().unwrap()),
             ("secrets.env", fs.stat("secrets.env").err().unwrap()),

@@ -54,6 +54,20 @@ namespace) is unstable and may change between minor releases until the API freez
   Unicode case folding. Zip timestamps after 2107 clamp to 2107 instead of
   becoming 1980, and a cancelled `stream()` stops its reader thread.
 
+### Changed
+
+- One `Jail` resolves every path the program names, for `runtime:fs`,
+  `runtime:wasi` and `runtime:db` alike (DECISIONS D180). The two filesystems
+  and the database VFS previously each held their own copy of the jail and the
+  scope lists, kept in step by hand; they now share one value, built once per
+  run. Pinning a path by descriptor is reachable only through it. A new CI
+  check, `tsr fs-discipline`, refuses direct `std::fs`/`tokio::fs` calls in the
+  runtime's crates outside a reviewed list of files and reasons. For embedders:
+  `with_read_allowlist`/`with_write_allowlist` move from `SystemFileSystem` and
+  `SystemSyncFileSystem` to `Jail`; build one and pass it to
+  `SystemFileSystem::with_jail`, `SystemSyncFileSystem::with_jail` and
+  `SystemEmbeddedDb::new`.
+
 ### Fixed
 
 - A `runtime:db` SQLite file is held by one process again, so a second process

@@ -47,10 +47,10 @@ use turso_core::{
     SqliteDialect, Statement, StepResult, TempStore, Value as TursoValue, WallClockInstant,
 };
 
+use crate::jail::Jail;
 #[cfg(unix)]
-use crate::anchor::OpenMode;
+use crate::jail::OpenMode;
 use crate::path_allowlist::Access;
-use crate::system_fs::SystemFileSystem;
 
 /// The per-value type tags of the row encoding (see [`EmbeddedDb`]). Carried
 /// because SQLite declares types on columns and stores them on values: a column
@@ -71,7 +71,7 @@ const TAG_BLOB: u8 = 4;
 /// the entire reason this type exists.
 struct JailedVfs {
     inner: PlatformIO,
-    fs: Arc<SystemFileSystem>,
+    fs: Arc<Jail>,
     /// Which half of the filesystem grant an open is judged against. A
     /// read-only database resolves under the read roots and a writable one
     /// under the write roots, so `--allow-read=./data` alone opens a database
@@ -343,7 +343,7 @@ struct CursorEntry {
 /// An [`EmbeddedDb`] over `turso_core`, jailed to the filesystem provider it is
 /// built with.
 pub struct SystemEmbeddedDb {
-    fs: Arc<SystemFileSystem>,
+    fs: Arc<Jail>,
     conns: Arc<Mutex<HashMap<u64, Arc<ConnEntry>>>>,
     cursors: Arc<Mutex<HashMap<u64, Arc<Mutex<CursorEntry>>>>>,
     next_id: Arc<AtomicU64>,
@@ -356,7 +356,7 @@ impl SystemEmbeddedDb {
     /// than a root of its own, is what makes `--allow-read` and `--allow-write`
     /// mean the same thing for a database as for a file. A second jail
     /// configured separately would be a second policy to keep in step.
-    pub fn new(fs: Arc<SystemFileSystem>) -> Self {
+    pub fn new(fs: Arc<Jail>) -> Self {
         Self {
             fs,
             conns: Arc::new(Mutex::new(HashMap::new())),
@@ -1003,7 +1003,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("esrun-db-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let fs = Arc::new(SystemFileSystem::new(&root, &root));
+        let fs = Arc::new(Jail::new(&root, &root));
         (root, SystemEmbeddedDb::new(fs))
     }
 
@@ -1072,7 +1072,7 @@ mod tests {
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::create_dir_all(root.join("other")).unwrap();
         let fs = Arc::new(
-            SystemFileSystem::new(&root, &root)
+            Jail::new(&root, &root)
                 .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap())
                 .with_write_allowlist(PathAllowlist::parse(["data"], &root).unwrap()),
         );

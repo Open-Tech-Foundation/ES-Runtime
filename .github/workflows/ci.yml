@@ -41,6 +41,7 @@ jobs:
       - uses: ./.github/actions/setup-tsr
       - run: tsr fmt
       - run: tsr path-discipline
+      - run: tsr fs-discipline
 
   clippy:
     name: clippy -D warnings

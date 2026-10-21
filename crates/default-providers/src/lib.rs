@@ -18,7 +18,6 @@
 #![forbid(unsafe_code)]
 
 mod accept_backoff;
-mod anchor;
 mod body_deadline;
 mod broadcast;
 mod checkout;
@@ -31,6 +30,7 @@ mod esm_resolve;
 mod first_byte;
 mod host_allowlist;
 mod import_policy;
+mod jail;
 mod listener;
 mod modules;
 mod net;
@@ -67,6 +67,7 @@ pub use driver::{DriveFailure, Driver};
 pub use entropy::OsEntropy;
 pub use host_allowlist::HostAllowlist;
 pub use import_policy::ImportPolicy;
+pub use jail::Jail;
 pub use modules::{DenyModuleLoader, FsModuleLoader};
 pub use net::ReqwestTransport;
 pub use node_modules::NodeModuleLoader;

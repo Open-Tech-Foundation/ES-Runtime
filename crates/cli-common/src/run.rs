@@ -14,10 +14,11 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
-    ImportPolicy, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub,
-    ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
-    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, WorkerProcess, path,
+    ImportPolicy, Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub,
+    ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb,
+    SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
+    SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers,
+    WorkerProcess, path,
 };
 use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
 
@@ -844,23 +845,22 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // only a path typed here can, which is the deployment operator naming a
     // location the project does not contain. A TLS certificate under
     // /etc/letsencrypt is the case this exists for.
-    // Both filesystem views take the same lists: `runtime:fs` and `runtime:wasi`
-    // are two doors onto one filesystem, and a policy that differed between
-    // them would be a bug wearing a feature's clothes.
-    let mut file_system = SystemFileSystem::new(&base_dir, &fs_root);
-    let mut sync_file_system = SystemSyncFileSystem::new(&base_dir, &fs_root);
+    // One jail for every door onto the filesystem (D180): `runtime:fs`,
+    // `runtime:wasi` and the embedded database's files resolve through the same
+    // `Jail` value, so there is one policy to get right rather than three kept
+    // in step by hand.
+    let mut jail = Jail::new(&base_dir, &fs_root);
     if let Some(allow) = &allow_read {
-        file_system = file_system.with_read_allowlist(allow.clone());
-        sync_file_system = sync_file_system.with_read_allowlist(allow.clone());
+        jail = jail.with_read_allowlist(allow.clone());
     }
     if let Some(allow) = &allow_write {
-        file_system = file_system.with_write_allowlist(allow.clone());
-        sync_file_system = sync_file_system.with_write_allowlist(allow.clone());
+        jail = jail.with_write_allowlist(allow.clone());
     }
-    let file_system = Arc::new(file_system);
+    let jail = Arc::new(jail);
+    let file_system = Arc::new(SystemFileSystem::with_jail(jail.clone()));
     // The same view, synchronously, for `runtime:wasi` — WASI's syscalls cannot
-    // await. Same base and same jail, so both paths agree on what is reachable.
-    let sync_file_system = Arc::new(sync_file_system);
+    // await.
+    let sync_file_system = Arc::new(SystemSyncFileSystem::with_jail(jail.clone()));
     // Held here as well as in the providers: the interrupt watcher below needs
     // to ask the signal registry what the guest is watching, and to tell the
     // HTTP servers to stop accepting.
@@ -906,7 +906,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // view, so a database is scoped by `--allow-read`/`--allow-write` exactly
     // as a file is — and the write-ahead log the engine opens beside it is
     // judged by the same list, rather than by nothing.
-    .with_embedded_db(Arc::new(SystemEmbeddedDb::new(file_system.clone())))
+    .with_embedded_db(Arc::new(SystemEmbeddedDb::new(jail.clone())))
     .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(system_net))
     .with_http_server(http_server.clone())

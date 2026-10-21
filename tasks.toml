@@ -92,6 +92,10 @@ run = "bash scripts/copyleft-confined.sh"
 [tasks.path-discipline]
 run = "bash scripts/path-discipline.sh"
 
+# One jail (D180): direct filesystem I/O only in the files listed, with why.
+[tasks.fs-discipline]
+run = "bash scripts/fs-discipline.sh"
+
 [tasks.audit]
 run = "cargo audit"
 
