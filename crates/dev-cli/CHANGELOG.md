@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-21
+
 ### Fixed
 
 - `cargo test` run from a terminal no longer hangs in the `create` tests. Tests
