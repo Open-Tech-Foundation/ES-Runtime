@@ -11688,13 +11688,16 @@ impl Drop for Supervisor {
 }
 
 fn stop_supervisor(child: &mut std::process::Child) {
+    // The group is signalled directly, not through a `kill` binary: how one
+    // spells a negative group varies between implementations, and Ubuntu
+    // 24.04's (procps-ng 4.0.4) sends `-TERM -<pgid>` to every process the
+    // user owns — the CI runner's own among them.
     #[cfg(unix)]
+    if let Some(group) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
     {
-        let group = child.id();
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(format!("-{group}"))
-            .status();
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
         std::thread::sleep(Duration::from_millis(300));
     }
     let _ = child.kill();

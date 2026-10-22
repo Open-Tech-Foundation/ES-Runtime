@@ -26,6 +26,14 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- The dev-loop tests stop the supervisor by signalling its process group
+  directly rather than running `kill -TERM -<pgid>`. Implementations of the
+  `kill` binary disagree on how to spell a negative group: Ubuntu 24.04's
+  (procps-ng 4.0.4) signals every process the user owns instead. That is
+  what ended the Ubuntu CI job "cancelled", runner and all, at the first
+  test to stop a supervisor,
+  `a_browser_only_change_reloads_without_restarting_the_server`.
+
 - `esdev upgrade` no longer asks "Do you want to continue?" after it was told
   to upgrade. Without a terminal — a container, a CI job, a provisioning
   script — the question could not be answered and the upgrade failed with
