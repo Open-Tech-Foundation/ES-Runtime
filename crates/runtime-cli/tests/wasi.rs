@@ -513,6 +513,7 @@ console.log("ENVCOUNT:", new DataView(memory.buffer).getUint32(0, true));
 /// Worker flips `dir` between a real directory and a symlink to a directory
 /// outside the jail. It reports how each successful read was classified, then
 /// terminates the Worker so the process can exit with the race still in flight.
+#[cfg(unix)]
 const RACE_MAIN_JS: &str = r#"
 import { WASI } from "runtime:wasi";
 
@@ -559,6 +560,7 @@ console.log("RACE " + JSON.stringify({ reads, inside, denied, escapes }));
 /// test. Every step is awaited and swallowed on failure: the Worker must stay
 /// alive for the whole run, because a dead swapper would let the guest look
 /// safe by never racing it at all.
+#[cfg(unix)]
 const RACE_SWAPPER_JS: &str = r#"
 import * as fs from "runtime:fs";
 
@@ -593,6 +595,10 @@ for (;;) {
 /// The race is real concurrency, so the assertion is "never leaks" rather than
 /// "leaks once": anchored, zero escapes is the only possible result. Unanchored,
 /// the same loop reads the outside file tens of thousands of times.
+///
+/// Unix only: Windows acts by path and keeps this race (DECISIONS D83), so
+/// "never leaks" is not a promise it makes.
+#[cfg(unix)]
 #[test]
 fn wasi_path_open_cannot_follow_a_swapped_directory_out_of_the_jail() {
     let dir = workdir("race");

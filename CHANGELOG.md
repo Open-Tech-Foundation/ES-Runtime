@@ -47,6 +47,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- The WASI swapped-directory race test runs on Unix only. Windows resolves
+  by path and keeps that race (DECISIONS D83), so the test asserted a
+  guarantee Windows does not make, and failed the `windows-latest` leg.
+
 - The default heap ceiling follows a systemd unit's `MemoryMax=` and any
   limit on its slice. esrun read only the root of the cgroup tree, which is the
   process's own cgroup inside a container with a private cgroup namespace and
